@@ -1,62 +1,61 @@
-{ lib, flakeRoot, ... }:
+# nix-unit cases for the with-observability example.
+#
+# PARTIAL migration. The source/file-layout assertions are now Rust policy
+# lints in packages/d2b-contract-tests/tests/policy_examples_observability.rs.
+# The example-level flake check is covered by the root
+# `eval-with-observability` check; this file keeps the resolved value cases.
+#
+# Covered here: the targeted `nix eval` of
+# examples/with-observability#nixosConfigurations.demo.config.d2b,
+# reconstructed through the root flake's mkEval helper to avoid the example
+# flake's `path:../..` mutable-lock fragility.
+{ mkEval, flakeRoot, ... }:
 
 let
-  config =
-    import (flakeRoot + "/examples/with-observability/configuration.nix") {
-      inherit lib;
-    };
-  work = config.d2b.realms.work;
+  configMod = import (flakeRoot + "/examples/with-observability/configuration.nix");
+  cfg = (mkEval [ configMod ]).config.d2b;
 in
 {
-  "examples-with-observability/cutover-acknowledged" = {
-    expr = config.d2b.acceptDestructiveV2Cutover;
+  "examples-with-observability/obs-enable" = {
+    expr = cfg.observability.enable;
     expected = true;
   };
 
-  "examples-with-observability/stack-enabled" = {
-    expr = config.d2b.observability.enable;
+  "examples-with-observability/obs-vm-name" = {
+    expr = cfg.observability.vmName;
+    expected = "sys-obs";
+  };
+
+  "examples-with-observability/obs-env-name" = {
+    expr = cfg.observability.env;
+    expected = "obs";
+  };
+
+  "examples-with-observability/obs-env-declared" = {
+    expr = builtins.hasAttr cfg.observability.env cfg.envs;
     expected = true;
   };
 
-  "examples-with-observability/work-realm" = {
-    expr = {
-      inherit (work) path;
-      providerType = work.providers.runtime-local.type;
-      implementationId =
-        work.providers.runtime-local.implementationId;
-    };
-    expected = {
-      path = "work.local-root";
-      providerType = "runtime";
-      implementationId = "cloud-hypervisor";
-    };
+  "examples-with-observability/obs-vm-declared" = {
+    expr = builtins.hasAttr cfg.observability.vmName cfg.vms;
+    expected = true;
   };
 
-  "examples-with-observability/workload-uses-guest-component" = {
-    expr = {
-      providerRefs = work.workloads.work-app.providerRefs;
-      autostart = work.workloads.work-app.autostart;
-      imports = map toString work.workloads.work-app.config.imports;
-    };
-    expected = {
-      providerRefs.runtime = "runtime-local";
-      autostart = true;
-      imports = [
-        (toString
-          (flakeRoot
-            + "/nixos-modules/components/observability/guest.nix"))
-      ];
-    };
+  "examples-with-observability/work-env-declared" = {
+    expr = builtins.hasAttr "work" cfg.envs;
+    expected = true;
   };
 
-  "examples-with-observability/legacy-vm-env-absent" = {
-    expr = {
-      hasVms = config.d2b ? vms;
-      hasEnvs = config.d2b ? envs;
-    };
-    expected = {
-      hasVms = false;
-      hasEnvs = false;
-    };
+  "examples-with-observability/work-app-declared" = {
+    expr = builtins.hasAttr "work-app" cfg.vms;
+    expected = true;
+  };
+
+  "examples-with-observability/work-app-obs-enable" = {
+    expr =
+      if builtins.hasAttr "work-app" cfg.vms
+      then cfg.vms."work-app".observability.enable
+      else false;
+    expected = true;
   };
 }

@@ -367,7 +367,6 @@ impl ResolvedRunnerIntentBuilder {
             vm_name: self.vm_name,
             role_id: self.role_id,
             role: self.role,
-            source: crate::bundle_resolver::ResolvedRunnerSource::ExplicitProcessNode,
             binary_path: self.binary_path,
             argv: self.argv,
             env: self.env,

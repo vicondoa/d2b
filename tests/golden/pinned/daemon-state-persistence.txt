@@ -1,9 +1,8 @@
 # daemon-state-persistence — d2bd daemon-spawn #[test]. Successor of
 # tests/daemon-state-persistence.sh, which exercised daemon restart state
-# reconciliation. The successor asserts adoption before authenticated dispatch
-# and continued supervision across the restart.
+# reconciliation, restored pidfd-table stop behavior, and state-file clearing.
 # This integration test runs in the default cargo test --workspace pass gated
 # by tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh. One bare libtest path per line.
 #
-daemon_state_persistence::restores_pidfd_table_before_component_session_dispatch
+daemon_state_persistence::restores_pidfd_table_and_clears_after_vm_stop

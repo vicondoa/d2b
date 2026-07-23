@@ -20,7 +20,6 @@
 
   networking.hostName = "demo";
   system.stateVersion = "25.11";
-  d2b.acceptDestructiveV2Cutover = true;
 
   # The single host-side user this example references. They are
   # the SSH principal into the workload VM below.
@@ -50,30 +49,48 @@
     yubikey.enable = false;
   };
 
-  d2b.realms.personal = {
-    path = "personal";
-    placement = "host-local";
-    broker = {
-      enable = true;
-      hostMutation = true;
-    };
-    network = {
-      mode = "declared";
-      lanSubnet = "10.99.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    providers.runtime = {
-      type = "runtime";
-      implementationId = "cloud-hypervisor";
-    };
-    workloads.personal-dev = {
-      providerRefs.runtime = "runtime";
-      config = {
-        networking.hostName = lib.mkDefault "personal-dev";
-        users.users.alice = {
-          isNormalUser = true;
-          uid = 1000;
-        };
+  # --------------------------------------------------------------
+  # d2b.envs.personal — one isolated environment
+  # --------------------------------------------------------------
+  # Declaring this attribute set is enough for d2b to render
+  # the full per-env plumbing — see this example's README for the
+  # itemised list of bridges, VMs, and services that materialise.
+  d2b.envs.personal = {
+    lanSubnet    = "10.99.0.0/24";
+    uplinkSubnet = "192.0.2.0/30";
+  };
+
+  # --------------------------------------------------------------
+  # d2b.vms.personal-dev — one headless workload VM
+  # --------------------------------------------------------------
+  # No `graphics.enable`, `audio.enable`, `tpm.enable`, or
+  # `usbip.yubikey`. This is the bare-minimum d2b consumer:
+  # plain DHCP guest networking, framework-managed SSH key, and
+  # nothing else. Layer components on from the
+  # `graphics-workstation` example next.
+  d2b.vms.personal-dev = {
+    enable = true;
+
+    # Bind to the env declared above. Together with `index`, this
+    # derives the VM's MAC, IP (10.99.0.10), dnsmasq reservation,
+    # and tap name — no imperative wiring required.
+    env   = "personal";
+    index = 10;
+
+    # `d2b switch personal-dev --apply` will SSH in as this user
+    # using the framework-managed Ed25519 key generated under
+    # /var/lib/d2b/keys/ on every activation.
+    ssh.user = "alice";
+
+    # NixOS module merged INTO THE GUEST (not the host). Keep
+    # this minimal — the framework already handles networking,
+    # SSH keys, and the per-VM /nix/store.
+    config = {
+      networking.hostName = lib.mkDefault "personal-dev";
+
+      users.users.alice = {
+        isNormalUser = true;
+        uid = 1000;
       };
     };
   };

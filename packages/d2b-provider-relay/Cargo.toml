@@ -1,9 +1,7 @@
 [package]
 name = "d2b-provider-relay"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -19,14 +17,14 @@ workspace = true
 # Send bearer (not the SAS rule key) because ACA Entra Relay substreams are not
 # reliable enough for Waypipe. All secret material has a redacted Debug.
 [dependencies]
-d2b-realm-core = { workspace = true }
-d2b-realm-provider = { workspace = true }
-async-trait.workspace = true
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
 hmac = "0.12"
-sha2.workspace = true
+sha2 = "0.10"
 base64 = "0.22"
 urlencoding = "2"
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", features = ["ring"] }
 futures-util = "0.3"
@@ -37,5 +35,5 @@ tracing = "0.1"
 libc = "0.2"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tempfile = "3"

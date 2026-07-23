@@ -14,13 +14,11 @@
 #     This PRESERVES the message-substring check (unlike a throw-only
 #     `expectedError` migration).
 #   * Bucket B (eval THROWS before config.assertions is computable — e.g.
-#     structural provider/identity checks): `tryEval`
+#     the platform gate, or graphics with waylandUser = null): `tryEval`
 #     cannot capture the throw message, so assert only THAT eval is rejected
 #     (`evalSucceeded == false`). The expected message is retained in
-#     tests/unit/nix/eval-cases/assertions.nix for traceability. Platform
-#     gates (`platform-gate-graphics-aarch64`, `platform-gate-audio-aarch64`)
-#     are ordinary `config.assertions` entries and fall through to Bucket A
-#     below, not this bucket.
+#     tests/unit/nix/eval-cases/assertions.nix for traceability. These three cases
+#     also constitute the aarch64 platform-rejection coverage.
 { lib, nixpkgsFlake, d2bModule, ... }:
 
 let
@@ -29,12 +27,15 @@ let
     inherit d2bModule;
   };
 
+  # The cases that throw before config.assertions is computable. Listed
+  # explicitly (not inferred from the live evalSucceeded) so that a Bucket-A
+  # case which regresses into a throw is caught (its evalSucceeded flips to
+  # false and the Bucket-A assertion below fails) rather than silently
+  # passing as "it threw".
   bucketB = [
-    "audio-requires-audio-provider-binding"
     "graphics-without-wayland-user"
-    "realm-name-invalid"
-    "wayland-requires-display-provider-binding"
-    "workload-name-invalid"
+    "platform-gate-audio-aarch64"
+    "platform-gate-graphics-aarch64"
   ];
 
   mkCase = name: result:

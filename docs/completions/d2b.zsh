@@ -49,7 +49,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (launch)
 _arguments "${_arguments_options[@]}" : \
-'--item=[Configured launcher item id. Required\: the v2 launch contract carries only a configured item id and has no default-item selection signal]:ITEM:_default' \
+'--item=[Configured launcher item id. Omit to use the declared default or sole item]:ITEM:_default' \
 '(--human)--json[Emit a structured JSON result]' \
 '(--json)--human[Force human-readable output]' \
 '-h[Print help]' \
@@ -670,7 +670,7 @@ esac
 ;;
 (shell)
 _arguments "${_arguments_options[@]}" : \
-'--name=[Configured shell id for attach, or server-issued handle for detach/kill]:NAME:_default' \
+'--name=[Persistent shell session name. Omit to use the target'\''s configured default]:NAME:_default' \
 '--force[Detach an existing attached client before attaching to this session]' \
 '(--human)--json[Render machine-readable JSON]' \
 '(--json)--human[Render human-readable output]' \
@@ -808,6 +808,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (exec)
 _arguments "${_arguments_options[@]}" : \
+'*--env=[Set an environment variable in the guest command (\`KEY=VALUE\`). Repeatable]:KEY=VALUE:_default' \
+'--cwd=[Working directory for the guest command]:DIR:_default' \
 '-d[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`d2b vm exec <vm> {list|logs|status|kill}\`]' \
 '--detach[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`d2b vm exec <vm> {list|logs|status|kill}\`]' \
 '-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`; use \`-it\` for an interactive shell]' \
@@ -1871,8 +1873,8 @@ esac
 (( $+functions[_d2b_commands] )) ||
 _d2b_commands() {
     local commands; commands=(
-'list:List typed daemon workload projections over ComponentSession' \
-'status:Show typed daemon workload status plus bridge health' \
+'list:List declared VMs with daemon runtime state when d2bd is reachable' \
+'status:Show per-VM runtime status plus bridge health' \
 'launch:Launch a trusted configured workload item through its runtime provider' \
 'usb:USB attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs' \
@@ -2151,8 +2153,8 @@ _d2b__subcmd__generations_commands() {
 (( $+functions[_d2b__subcmd__help_commands] )) ||
 _d2b__subcmd__help_commands() {
     local commands; commands=(
-'list:List typed daemon workload projections over ComponentSession' \
-'status:Show typed daemon workload status plus bridge health' \
+'list:List declared VMs with daemon runtime state when d2bd is reachable' \
+'status:Show per-VM runtime status plus bridge health' \
 'launch:Launch a trusted configured workload item through its runtime provider' \
 'usb:USB attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs' \

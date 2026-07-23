@@ -1,6 +1,6 @@
 # Security-key CTAPHID proxy — guest-side component.
-# Imported into a realm-owned local VM workload configuration when that
-# workload requests FIDO security-key mediation.
+# Imported into the GUEST NixOS config by host.nix whenever a VM sets
+# `d2b.vms.<name>.usb.securityKey.enable = true`.
 #
 # This module wires:
 #   - The `uhid` kernel module so the frontend binary can open /dev/uhid.
@@ -19,7 +19,7 @@
 # libfido2 and Firefox as a standard FIDO2/CTAPHID authenticator.
 # `fido2-token -L` inside the guest should enumerate it immediately
 # after the module is activated.
-{ config, lib, pkgs, d2bWorkloadId, d2bInputs, ... }:
+{ config, lib, pkgs, name, d2bInputs, ... }:
 
 let
   cfg = config.d2b.securityKey;
@@ -68,7 +68,7 @@ in
     # The service is Restart=always to recover from vsock disconnects and
     # host broker restarts automatically.
     systemd.services.d2b-sk-frontend = {
-      description = "d2b virtual FIDO/CTAPHID security-key frontend";
+      description = "d2b virtual FIDO/CTAPHID security-key frontend (vm ${name})";
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" "systemd-udev-settle.service" ];
       startLimitIntervalSec = 0;
@@ -76,7 +76,7 @@ in
       # yet at service start, but the binary will retry on failure.
 
       environment = {
-        D2B_SK_VM_ID = d2bWorkloadId;
+        D2B_SK_VM_ID = name;
         D2B_SK_VSOCK_PORT = toString cfg.vsockPort;
         # /dev/uhid is always at this path on Linux.
         D2B_SK_UHID_PATH = "/dev/uhid";

@@ -1,11 +1,6 @@
-{ mkEval, lib, flakeRoot, ... }:
+{ mkEval, lib, ... }:
 
 let
-  identity = import (flakeRoot + "/nixos-modules/v2-identity.nix");
-  observabilityRealmId = identity.deriveRealmId "local-root";
-  observabilityWorkloadId =
-    identity.deriveWorkloadId observabilityRealmId "sys-obs";
-
   base = { lib, ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -19,27 +14,9 @@ let
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    d2b.acceptDestructiveV2Cutover = true;
-    d2b.realms.work = {
-      path = "work";
-      placement = "host-local";
-      broker = {
-        enable = true;
-        hostMutation = true;
-      };
-      network = {
-        mode = "declared";
-        lanSubnet = "10.20.0.0/24";
-        uplinkSubnet = "192.0.2.0/30";
-      };
-      providers.runtime = {
-        type = "runtime";
-        implementationId = "cloud-hypervisor";
-      };
-      workloads.app = {
-        providerRefs.runtime = "runtime";
-        config = { };
-      };
+    d2b.envs.work = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
     };
   };
 
@@ -94,57 +71,6 @@ in
     };
   };
 
-  "bundle-artifacts/realm-private-central-etc" = {
-    expr = lib.genAttrs [
-      "realm-controllers.json"
-      "realm-identity.json"
-    ] (name: {
-      mode = cfgDaemon.environment.etc."d2b/${name}".mode;
-      user = cfgDaemon.environment.etc."d2b/${name}".user;
-      group = cfgDaemon.environment.etc."d2b/${name}".group;
-    });
-    expected = lib.genAttrs [
-      "realm-controllers.json"
-      "realm-identity.json"
-    ] (_: {
-      mode = "0640";
-      user = "root";
-      group = "d2bd";
-    });
-  };
-
-  "bundle-artifacts/realm-private-classifications" = {
-    expr = {
-      bundleVersion = cfgDaemon.d2b._bundle.bundle.data.bundleVersion;
-      schemaVersion = cfgDaemon.d2b._bundle.bundle.data.schemaVersion;
-      bundle = {
-        inherit (cfgDaemon.d2b._bundle.bundle) classification sensitivity;
-      };
-      controllers = {
-        inherit (cfgDaemon.d2b._bundle.realmControllersJson) classification sensitivity;
-      };
-      identity = {
-        inherit (cfgDaemon.d2b._bundle.realmIdentityJson) classification sensitivity;
-      };
-    };
-    expected = {
-      bundleVersion = 13;
-      schemaVersion = "v2";
-      bundle = {
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-      };
-      controllers = {
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-      };
-      identity = {
-        classification = "contractPrivateNonSecret";
-        sensitivity = "nonSecret";
-      };
-    };
-  };
-
   "bundle-artifacts/default-json-text" = {
     expr = cfgDaemon.d2b._bundle.extraArtifacts.defaultedJson.jsonText;
     expected = builtins.toJSON cfgDaemon.d2b._bundle.extraArtifacts.defaultedJson.data;
@@ -192,9 +118,7 @@ in
           };
         }) ]).config;
       in {
-        closureKeys = lib.filter
-          (name: builtins.elem name [ "data" "enableEtc" "installFileName" "path" ])
-          (lib.sort lib.lessThan (builtins.attrNames cfg.d2b._bundle.closures));
+        closureKeys = lib.sort lib.lessThan (builtins.attrNames cfg.d2b._bundle.closures);
         defaultedInstalled = cfg.environment.etc ? "d2b/defaulted.json";
         collisionInstalled =
           (cfg.environment.etc ? "d2b/data")
@@ -203,7 +127,7 @@ in
           || (cfg.environment.etc ? "d2b/enableEtc");
       };
     expected = {
-      closureKeys = [ "data" "enableEtc" "installFileName" "path" ];
+      closureKeys = [ "data" "enableEtc" "installFileName" "path" "sys-work-net" ];
       defaultedInstalled = true;
       collisionInstalled = false;
     };
@@ -239,40 +163,5 @@ in
         }) ]).config;
       in cfg.environment.etc."d2b/defaulted.json";
     expectedError = { };
-  };
-
-  "bundle-artifacts/observability-vsock-path-derived-when-disabled" = {
-    expr = {
-      enabled = cfgDaemon.d2b._manifestData._observability.enabled;
-      obsVsockHostSocket =
-        cfgDaemon.d2b._manifestData._observability.obsVsockHostSocket;
-    };
-    expected = {
-      enabled = false;
-      obsVsockHostSocket =
-        "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
-    };
-  };
-
-  "bundle-artifacts/observability-vsock-path-matches-canonical-row-when-enabled" = {
-    expr =
-      let
-        cfgObservability = (mkEval [ base defaultedArtifact ({ ... }: {
-          d2b.observability.enable = true;
-        }) ]).config;
-      in {
-        enabled = cfgObservability.d2b._manifestData._observability.enabled;
-        obsVsockHostSocket =
-          cfgObservability.d2b._manifestData._observability.obsVsockHostSocket;
-        canonicalRowPath =
-          cfgObservability.d2b._realmObservability.endpoints.stackVsock.path;
-      };
-    expected = {
-      enabled = true;
-      obsVsockHostSocket =
-        "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
-      canonicalRowPath =
-        "/var/lib/d2b/r/${observabilityRealmId}/w/${observabilityWorkloadId}/vsock.sock";
-    };
   };
 }

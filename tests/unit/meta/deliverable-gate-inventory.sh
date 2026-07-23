@@ -55,15 +55,11 @@ for mapping in "${MAPPINGS[@]}"; do
         # Find a *.rs file matching the leaf segment.
         leaf="${gate##*::}"
         crate="${gate#cargo:}"; crate="${crate%%::*}"
-        # Search one file at a time so finding an early match cannot SIGPIPE a
-        # grep/xargs producer under pipefail.
-        while IFS= read -r -d '' source; do
-          if grep -q -- "$leaf" "$source"; then
-            found=1
-            break
-          fi
-        done < <(find "$ROOT/packages/$crate" -name "*.rs" -print0 2>/dev/null)
-        [ "$found" -eq 0 ] || break
+        # Heuristic: search packages/<crate>/src for a file containing the leaf segment
+        if find "$ROOT/packages/$crate" -name "*.rs" -print0 2>/dev/null | xargs -0 grep -l "$leaf" 2>/dev/null | head -1 >/dev/null 2>&1; then
+          found=1
+          break
+        fi
         ;;
       tests/*|docs/*)
         if [ -e "$ROOT/$gate" ]; then

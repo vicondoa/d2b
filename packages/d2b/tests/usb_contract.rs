@@ -4,13 +4,13 @@
 //! Spawns the real `d2b` binary and asserts the USBIP CLI surface stays
 //! byte-stable against the committed goldens under tests/golden/cli-output/:
 //!   * `usb --help` matches usb-help.txt;
-//!   * `usb attach bm6ccueaqlr7wd2cskza 1-2 --dry-run` matches usb-attach-dry-run.txt;
-//!   * `usb detach bm6ccueaqlr7wd2cskza 1-2 --dry-run` matches usb-detach-dry-run.txt.
+//!   * `usb attach corp-vm 1-2 --dry-run` matches usb-attach-dry-run.txt;
+//!   * `usb detach corp-vm 1-2 --dry-run` matches usb-detach-dry-run.txt.
 //!
 //! The dry-run subcommands need the fixture-smoke bundle (D2B_FIXTURES) so
-//! bm6ccueaqlr7wd2cskza resolves in the manifest. The dry-run output is host-independent
+//! corp-vm resolves in the manifest. The dry-run output is host-independent
 //! deterministic text (no daemon mutation), so no system-state / daemon-state
-//! sandbox is required here — only that bm6ccueaqlr7wd2cskza exists in the manifest.
+//! sandbox is required here — only that corp-vm exists in the manifest.
 //!
 //! Requires D2B_FIXTURES (the fixture-smoke output dir), delivered by the
 //! dedicated CLI-contract step in tests/tools/rust-workspace-checks.sh. When unset
@@ -79,14 +79,11 @@ fn usb_attach_dry_run_matches_golden() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
-    let out = run_usb(
-        &fixtures,
-        &["usb", "attach", "bm6ccueaqlr7wd2cskza", "1-2", "--dry-run"],
-    );
+    let out = run_usb(&fixtures, &["usb", "attach", "corp-vm", "1-2", "--dry-run"]);
     assert_matches_golden(
         &out,
         "usb-attach-dry-run.txt",
-        "usb attach bm6ccueaqlr7wd2cskza 1-2 --dry-run",
+        "usb attach corp-vm 1-2 --dry-run",
     );
 }
 
@@ -96,13 +93,10 @@ fn usb_detach_dry_run_matches_golden() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
-    let out = run_usb(
-        &fixtures,
-        &["usb", "detach", "bm6ccueaqlr7wd2cskza", "1-2", "--dry-run"],
-    );
+    let out = run_usb(&fixtures, &["usb", "detach", "corp-vm", "1-2", "--dry-run"]);
     assert_matches_golden(
         &out,
         "usb-detach-dry-run.txt",
-        "usb detach bm6ccueaqlr7wd2cskza 1-2 --dry-run",
+        "usb detach corp-vm 1-2 --dry-run",
     );
 }

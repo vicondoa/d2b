@@ -1,12 +1,31 @@
-# d2b.realms.<realm> — realm-owned control-plane declarations.
-{ config, lib, ... }:
+# d2b.realms.<realm>.* — realm-native control-plane option foundation.
+#
+# This file declares the public realm-native Nix schema.  Extended
+# sub-option groups live in focused companion files:
+#
+#   options-realms-network.nix    — d2b.realms.<realm>.network.*
+#                                   Full env-replacement shape:
+#                                   bridge/subnet/uplink/externalNetwork/
+#                                   mDNS/port-forward.
+#   options-realms-workloads.nix  — d2b.realms.<realm>.workloads.*
+#                                   Per-workload declarations with kind
+#                                   support for local-vm and qemu-media,
+#                                   plus desktop-launcher metadata.
+#
+# Host-local realms materialise control-plane users, groups, sockets, and
+# unit definitions.  Existing `d2b.envs` and `d2b.vms.<vm>.env` remain the
+# active runtime substrate during the metadata-first migration; see
+# docs/how-to/migrate-d2b-v1-2-to-v2.md for the transition guide.
+{ lib, config, ... }:
 
 let
-  labelType = lib.types.strMatching "^[a-z][a-z0-9-]{0,127}$";
-  realmPathType =
-    lib.types.strMatching "^[a-z][a-z0-9-]{0,127}(\\.[a-z][a-z0-9-]{0,127})*$";
-  absolutePathType = lib.types.strMatching "^/.*$";
-  fingerprintType = lib.types.strMatching "^sha256:[0-9a-f]{64}$";
+  outerConfig = config;
+
+  label = "^[a-z][a-z0-9-]*$";
+  realmPath = "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$";
+  providerKind = "^[a-z][a-z0-9-]*$";
+  absolutePath = "^/.*$";
+  fingerprint = "^sha256:[0-9a-f]{64}$";
 
   placementKinds = [
     "host-local"
@@ -16,493 +35,461 @@ let
     "provider-agent"
     "provider-specific"
   ];
-  providerBackedPlacements = [
-    "provider-controller"
-    "provider-agent"
-    "provider-specific"
-  ];
-  providerAuthorities = [
-    "runtime"
-    "infrastructure"
-    "transport"
-    "substrate"
-    "credential"
-    "display"
-    "network"
-    "storage"
-    "device"
-    "audio"
-    "observability"
-  ];
 
-  enabledRealms = lib.filterAttrs (_: realm: realm.enable) config.d2b.realms;
-  enabledRealmList = builtins.attrValues enabledRealms;
-  enabledRealmPaths = map (realm: realm.path) enabledRealmList;
-  unique = values: builtins.length values == builtins.length (lib.unique values);
-  validLabel = value:
-    builtins.isString value
-    && builtins.stringLength value <= 128
-    && builtins.match "^[a-z][a-z0-9-]*$" value != null;
-
-  # `launcher` is reserved for the polkit-launcher group (`d2b`) singleton;
-  # no framework module ever auto-declares a workload with this exact name,
-  # so it is unconditionally rejected.
-  reservedWorkloadExactName = name: name == "launcher";
-
-  # `sys-` is reserved for d2b's own auto-declared stack workloads (e.g. the
-  # observability sink named by `d2b.observability.vmName`, default
-  # `sys-obs`). `network` is reserved for the auto-declared net VM workload
-  # created by options-realms-workloads.nix when `network.mode == "declared"`.
-  # A workload only clears these reservations when the owning framework
-  # module attests to it via the internal `_frameworkReservedName` marker
-  # (see options-realms-workloads.nix and components/observability/default.nix);
-  # an operator-declared workload can never set that marker itself, so any
-  # collision on these names fails closed instead of silently merging.
-  reservedWorkloadPrefixOrName = name:
-    lib.hasPrefix "sys-" name || name == "network";
-
-  realmByPath = lib.listToAttrs
-    (map (realm: {
-      name = realm.path;
-      value = realm;
-    }) enabledRealmList);
-  hasParentCycle = path: seen:
-    if builtins.elem path seen then true
-    else
-      let
-        realm = realmByPath.${path} or null;
-      in
-      realm != null
-      && realm.parent != null
-      && builtins.hasAttr realm.parent realmByPath
-      && hasParentCycle realm.parent (seen ++ [ path ]);
-
-  realmType = lib.types.submodule ({ name, config, ... }: {
-    imports = [
-      ./options-realms-network.nix
-      ./options-realms-providers.nix
-      ./options-realms-workloads.nix
-    ];
-    freeformType = null;
-
+  providerType = lib.types.submodule ({ name, ... }: {
+    freeformType = lib.types.attrsOf lib.types.unspecified;
     options = {
       enable = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Whether this realm is part of the evaluated d2b configuration.";
+        description = "Whether this provider declaration is active for the realm.";
       };
 
       id = lib.mkOption {
-        type = labelType;
-        default = name;
-        description = "Stable realm identifier; defaults to the attribute name.";
-      };
-
-      name = lib.mkOption {
         type = lib.types.str;
         default = name;
-        description = "Human-readable realm name.";
+        description = "Stable provider identifier within the realm.";
       };
 
-      parent = lib.mkOption {
-        type = lib.types.nullOr realmPathType;
+      kind = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching providerKind);
         default = null;
-        description = "Canonical path of the enabled parent realm, or null for a root realm.";
-      };
-
-      path = lib.mkOption {
-        type = realmPathType;
-        default =
-          if config.parent == null
-          then config.id
-          else "${config.id}.${config.parent}";
-        defaultText =
-          lib.literalExpression ''if parent == null then id else "''${id}.''${parent}"'';
-        description = "Canonical most-specific-first realm path.";
-      };
-
-      placement = lib.mkOption {
-        type = lib.types.enum placementKinds;
-        default = "host-local";
-        description = "Placement of this realm's controller.";
-      };
-
-      placementProvider = lib.mkOption {
-        type = lib.types.nullOr labelType;
-        default = null;
+        example = "aca";
         description = ''
-          Provider instance that owns a provider-backed controller placement.
-          It must name an enabled entry in this realm's providers set.
+          Provider family or adapter name. This is descriptive schema
+          foundation only; no provider adapter is instantiated from this
+          option in the current scope.
         '';
       };
 
-      providerSpecificPlacement = lib.mkOption {
-        type = lib.types.nullOr labelType;
+      placement = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum placementKinds);
         default = null;
-        description = "Provider-defined placement, valid only for provider-specific placement.";
+        description = ''
+          Optional provider-specific placement override. When null, the
+          provider inherits `d2b.realms.<realm>.placement`.
+        '';
       };
 
-      allowedUsers = lib.mkOption {
+      capabilityRefs = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
-        description = "Host users granted direct access to this realm's local public endpoint.";
+        description = "Opaque references to provider capability bundles or advertisements.";
       };
 
-      allowedGroups = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
-        description = "Host groups granted direct access to this realm's local public endpoint.";
-      };
-
-      defaultWorkloadNamespace = lib.mkOption {
-        type = realmPathType;
-        default = config.path;
-        defaultText = lib.literalExpression "path";
-        description = "Realm path used to qualify workload declarations by default.";
-      };
-
-      network = {
-        mode = lib.mkOption {
-          type = lib.types.enum [ "none" "declared" "external" ];
-          default = "none";
-          description = ''
-            Realm network ownership. none claims no network resources, declared
-            creates realm-owned resources, and external records an externally
-            managed network boundary.
-          '';
-        };
-
-        cidrRefs = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = [ ];
-          description = "Opaque references to realm-owned address allocations.";
-        };
-      };
-
-      discovery = {
-        enable = lib.mkEnableOption "dynamic realm discovery";
-
-        domain = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Optional discovery domain or namespace.";
-        };
-
-        configRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque reference to non-secret discovery configuration.";
-        };
-      };
-
-      policy = {
-        allowUnsafeLocal = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Permit a systemd-user runtime provider in this realm.";
-        };
-
-        bundleRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque reference to the realm policy bundle.";
-        };
-
-        bundlePath = lib.mkOption {
-          type = lib.types.nullOr absolutePathType;
-          default = null;
-          description = "Absolute runtime path to a realm policy bundle artifact.";
-        };
-
-        defaultDeny = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = "Start realm policy from default-deny.";
-        };
-      };
-
-      keys = {
-        realmIdentityRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque realm identity metadata reference; never key material.";
-        };
-
-        realmIdentityFingerprint = lib.mkOption {
-          type = lib.types.nullOr fingerprintType;
-          default = null;
-          description = "SHA-256 fingerprint of the realm identity metadata.";
-        };
-
-        controllerKeyRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque controller credential reference; never key material.";
-        };
-
-        controllerCredentialFingerprint = lib.mkOption {
-          type = lib.types.nullOr fingerprintType;
-          default = null;
-          description = "SHA-256 fingerprint of the controller credential metadata.";
-        };
-
-        trustBundleRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque trust-bundle reference.";
-        };
-
-        enrollmentRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque realm-enrollment reference.";
-        };
-
-        rotationPolicyRef = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Opaque key-rotation policy reference.";
-        };
-      };
-
-      paths = {
-        stateDir = lib.mkOption {
-          type = absolutePathType;
-          default = "/var/lib/d2b/realms/${config.id}";
-          description = "Declarative realm state root; runtime emission replaces names with short IDs.";
-        };
-
-        auditDir = lib.mkOption {
-          type = absolutePathType;
-          default = "/var/lib/d2b/audit/realms/${config.id}";
-          description = "Declarative realm audit root; runtime emission replaces names with short IDs.";
-        };
-
-        runDir = lib.mkOption {
-          type = absolutePathType;
-          default = "/run/d2b/realms/${config.id}";
-          description = "Declarative realm runtime root; runtime emission replaces names with short IDs.";
-        };
-
-        publicSocket = lib.mkOption {
-          type = absolutePathType;
-          default = "${config.paths.runDir}/public.sock";
-          description = "Realm public endpoint path.";
-        };
-
-        brokerSocket = lib.mkOption {
-          type = absolutePathType;
-          default = "${config.paths.runDir}/broker.sock";
-          description = "Realm broker endpoint path.";
-        };
-      };
-
-      broker = {
-        enable = lib.mkEnableOption "this realm's confined privileged broker";
-
-        hostMutation = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Allow allocator-approved host mutation leases for this realm broker.";
-        };
+      configRef = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Opaque reference to non-secret provider configuration material. Do not
+          put credentials directly in Nix; use enrollment/key refs below.
+        '';
       };
     };
   });
 in
 {
   options.d2b.realms = lib.mkOption {
-    type = lib.types.attrsOf realmType;
-    default = { };
-    description = "Realm-owned d2b 2.0 control-plane configuration.";
-  };
+    description = ''
+      Realm-native control-plane declarations.  A realm is the unit of
+      daemon, broker, state, audit, provider, relay, policy, and workload
+      namespace ownership in the v2 model.
 
-  config.assertions =
-    [
+      Each realm may declare:
+        - `network.*`   — env-replacement network shape (bridges, subnets,
+                          external network, mDNS, port-forwards).
+        - `workloads.*` — per-workload declarations (kind = local-vm or
+                          qemu-media) with desktop-launcher metadata.
+
+      Host-local realms materialise deterministic control-plane units and
+      access principals.  The v2 migration is metadata-first: `d2b.envs` and
+      `d2b.vms` remain the active runtime substrate until an operator
+      completes the transition.  See
+      docs/how-to/migrate-d2b-v1-2-to-v2.md for the step-by-step guide.
+    '';
+    default = { };
+    type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }:
+      let
+        realmConfig = config;
+        realmStateDir = "${toString outerConfig.d2b.site.stateDir}/realms/${realmConfig.id}";
+        realmLogDir = "/var/lib/d2b/audit/realms/${realmConfig.id}";
+        realmRunDir = "/run/d2b/realms/${realmConfig.id}";
+      in
       {
-        assertion =
-          lib.all
-            (realmName:
-              validLabel realmName
-              && !(builtins.elem realmName [ "all" "d2b" ]))
-            (builtins.attrNames enabledRealms);
-        message =
-          "Enabled d2b.realms attribute names must be canonical labels and "
-          + "must not use the reserved target labels all or d2b.";
-      }
-      {
-        assertion = unique (map (realm: realm.id) enabledRealmList);
-        message = "Enabled d2b.realms entries must have unique ids.";
-      }
-      {
-        assertion = unique enabledRealmPaths;
-        message = "Enabled d2b.realms entries must have unique canonical paths.";
-      }
-      {
-        assertion =
-          !(lib.any
-            (path: hasParentCycle path [ ])
-            enabledRealmPaths);
-        message = "Enabled d2b.realms parent links must form an acyclic tree.";
-      }
-    ]
-    ++ lib.concatMap
-      (realmName:
-        let
-          realm = enabledRealms.${realmName};
-          providerNames =
-            builtins.attrNames (lib.filterAttrs (_: provider: provider.enable) realm.providers);
-          providerIds =
-            map (provider: provider.id)
-              (builtins.attrValues
-                (lib.filterAttrs (_: provider: provider.enable) realm.providers));
-          placementIsProviderBacked =
-            builtins.elem realm.placement providerBackedPlacements;
-          placementProvider =
-            if realm.placementProvider == null
-            then null
-            else realm.providers.${realm.placementProvider} or null;
-        in
-        [
-          {
-            assertion =
-              lib.all validLabel (builtins.attrNames realm.providers);
-            message =
-              "Provider attribute names in d2b.realms.${realmName} must be canonical labels.";
-          }
-          {
-            assertion =
-              lib.all
-                (workloadName:
-                  validLabel workloadName
-                  && !(builtins.elem workloadName [ "all" "d2b" ]))
-                (builtins.attrNames realm.workloads);
-            message =
-              "Workload attribute names in d2b.realms.${realmName} must be "
-              + "canonical labels and must not use all or d2b.";
-          }
-          {
-            assertion =
-              lib.all
-                (workload:
-                  lib.all
-                    (providerType: builtins.elem providerType providerAuthorities)
-                    (builtins.attrNames workload.providerRefs))
-                (builtins.attrValues realm.workloads);
-            message =
-              "Workload providerRefs in d2b.realms.${realmName} must use a "
-              + "closed provider authority name.";
-          }
-          {
-            assertion =
-              lib.all
-                (workload:
-                  !workload.enable
-                  || builtins.hasAttr "runtime" workload.providerRefs)
-                (builtins.attrValues realm.workloads);
-            message =
-              "Every enabled workload in d2b.realms.${realmName} must bind "
-              + "providerRefs.runtime explicitly.";
-          }
-          {
-            assertion =
-              realm.parent == null || builtins.elem realm.parent enabledRealmPaths;
-            message =
-              "d2b.realms.${realmName}.parent must name an enabled realm path.";
-          }
-          {
-            assertion = unique providerIds;
-            message = "Enabled providers in d2b.realms.${realmName} must have unique ids.";
-          }
-          {
-            assertion =
-              unique
-                (map (workload: workload.id)
-                  (builtins.attrValues
-                    (lib.filterAttrs (_: workload: workload.enable) realm.workloads)));
-            message = "Enabled workloads in d2b.realms.${realmName} must have unique ids.";
-          }
-          {
-            assertion =
-              placementIsProviderBacked
-              == (realm.placementProvider != null);
-            message =
-              "d2b.realms.${realmName}.placementProvider must be set exactly "
-              + "for provider-backed realm placements.";
-          }
-          {
-            assertion =
-              realm.placementProvider == null
-              || (builtins.elem realm.placementProvider providerNames
-                && placementProvider != null
-                && placementProvider.enable);
-            message =
-              "d2b.realms.${realmName}.placementProvider must name an enabled provider.";
-          }
-          {
-            assertion =
-              (realm.placement == "provider-specific")
-              == (realm.providerSpecificPlacement != null);
-            message =
-              "d2b.realms.${realmName}.providerSpecificPlacement must be set "
-              + "exactly for provider-specific placement.";
-          }
-        ]
-        ++ lib.concatLists (lib.mapAttrsToList
-          (workloadName: workload:
-            let
-              runtimeRef = workload.providerRefs.runtime or null;
-              provider =
-                if runtimeRef == null
-                then null
-                else realm.providers.${runtimeRef} or null;
-              frameworkOwnsReservedName =
-                workload._frameworkReservedName or false;
-            in
-            [
-              {
-                assertion =
-                  !workload.enable
-                  || (provider != null
-                    && provider.enable
-                    && provider.type == "runtime");
-                message =
-                  "d2b.realms.${realmName}.workloads.${workloadName}.providerRefs.runtime "
-                  + "must name an enabled runtime provider in the same realm.";
-              }
-              {
-                assertion = !(reservedWorkloadExactName workloadName);
-                message =
-                  "d2b.realms.${realmName}.workloads.${workloadName}: "
-                  + "'launcher' is reserved for the polkit-launcher group "
-                  + "(d2b); pick another workload name.";
-              }
-              {
-                assertion =
-                  !(reservedWorkloadPrefixOrName workloadName)
-                  || frameworkOwnsReservedName;
-                message =
-                  "d2b.realms.${realmName}.workloads.${workloadName}: names "
-                  + "starting with 'sys-' and the exact name 'network' are "
-                  + "reserved for d2b's own auto-declared workloads (the "
-                  + "net VM workload created when network.mode = "
-                  + "\"declared\", and stack workloads such as "
-                  + "d2b.observability.vmName's sys-obs). Rename this "
-                  + "workload; it is not the framework's own auto-declared "
-                  + "entry.";
-              }
-              {
-                assertion =
-                  !workload.enable
-                  || provider == null
-                  || provider.implementationId != "systemd-user"
-                  || realm.policy.allowUnsafeLocal;
-                message =
-                  "d2b.realms.${realmName}.workloads.${workloadName} selects "
-                  + "the systemd-user unsafe-local runtime implementation; "
-                  + "set d2b.realms.${realmName}.policy.allowUnsafeLocal = "
-                  + "true to opt in explicitly.";
-              }
-            ])
-          realm.workloads))
-      (builtins.attrNames enabledRealms);
+        imports = [
+          ./options-realms-network.nix
+          ./options-realms-workloads.nix
+        ];
+        freeformType = null;
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Whether this realm declaration participates in future realm-native planning.";
+          };
+
+          id = lib.mkOption {
+            type = lib.types.strMatching label;
+            default = name;
+            description = ''
+              Stable realm id. Defaults to the attribute name and is used to
+              derive local paths until explicitly overridden.
+            '';
+          };
+
+          name = lib.mkOption {
+            type = lib.types.str;
+            default = name;
+            description = "Human-readable realm name; defaults to the attribute name.";
+          };
+
+          parent = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching realmPath);
+            default = null;
+            example = "work";
+            description = ''
+              Optional parent realm path. Enabled child realms must point at an
+              enabled parent path, and the parent graph must remain acyclic.
+            '';
+          };
+
+          path = lib.mkOption {
+            type = lib.types.strMatching realmPath;
+            default =
+              if realmConfig.parent == null
+              then realmConfig.id
+              else "${realmConfig.id}.${realmConfig.parent}";
+            defaultText = lib.literalExpression "if parent == null then id else id + \".\" + parent";
+            example = "payments.work";
+            description = ''
+              Canonical realm path, written most-specific first for target
+              addresses such as `<workload>.<realm>[.<ancestor>].d2b`.
+            '';
+          };
+
+          placement = lib.mkOption {
+            type = lib.types.enum placementKinds;
+            default = "host-local";
+            description = ''
+              Controller placement for this realm. `provider-specific` is an
+              escape hatch for adapters that need a named placement before the
+              shared enum grows.
+            '';
+          };
+
+          placementProvider = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "aca";
+            description = ''
+              Provider identifier that owns provider-backed controller
+              placements. Required when `placement` is `provider-controller`,
+              `provider-agent`, or `provider-specific`; must be null for local
+              placements.
+            '';
+          };
+
+          providerSpecificPlacement = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "aca-managed-sandbox";
+            description = ''
+              Provider-defined placement name used only when `placement =
+              "provider-specific"`. It is inert schema metadata in this scope.
+            '';
+          };
+
+          allowedUsers = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "alice" ];
+            description = ''
+              Host users intended to receive direct access to this realm's
+              local public socket. Host-local realms map these users into a
+              deterministic realm socket-access group; users must still be
+              declared elsewhere in the host configuration.
+            '';
+          };
+
+          allowedGroups = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "realm-work" ];
+            description = ''
+              Host groups intended to receive direct access to this realm's
+              local public socket. It is preserved as direct-access metadata
+              for controllers that can apply ACLs without making users members
+              of the daemon's own group.
+            '';
+          };
+
+          defaultWorkloadNamespace = lib.mkOption {
+            type = lib.types.strMatching realmPath;
+            default = realmConfig.id;
+            defaultText = lib.literalExpression "id";
+            description = ''
+              Default workload namespace for unqualified workload declarations
+              inside this realm. Later scopes will use it for realm-qualified
+              target resolution; current `d2b.vms` names are unchanged.
+            '';
+          };
+
+          env = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching label);
+            default = null;
+            example = "work";
+            description = ''
+              Transitional bridge to an existing `d2b.envs.<env>` network. It
+              records intended membership only; it does not create, rename, or
+              migrate envs, net VMs, or workload VM `env` assignments.
+            '';
+          };
+
+          network = {
+            envs = lib.mkOption {
+              type = lib.types.listOf (lib.types.strMatching label);
+              default = [ ];
+              example = [ "work" ];
+              description = ''
+                Additional existing `d2b.envs` names associated with this realm
+                during the transition from env groups to realms. Runtime network
+                behaviour remains driven by `d2b.envs` until later scopes.
+              '';
+            };
+
+            mode = lib.mkOption {
+              type = lib.types.enum [ "none" "inherit-env" "declared" "external" ];
+              default = "none";
+              description = ''
+                Realm network model.
+
+                `none`         — no bridges, net VM, or host network
+                                 resources are claimed.  Safe default for
+                                 metadata-only realm declarations.
+                `inherit-env`  — delegates network to an existing
+                                 `d2b.envs.<env>` entry in `network.envs`.
+                                 Bridge lifecycle remains controlled by the
+                                 env.
+                `declared`     — the realm owns the network declaration.
+                                 `network.lanSubnet` and
+                                 `network.uplinkSubnet` must be set.
+                                 d2b materialises bridges + net VM under a
+                                 realm-derived name.
+                `external`     — externally managed network; no d2b
+                                 bridges are created.
+              '';
+            };
+
+            cidrRefs = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = "Opaque references to realm-owned CIDR/address allocation records.";
+            };
+          };
+
+          providers = lib.mkOption {
+            type = lib.types.attrsOf providerType;
+            default = { };
+            description = ''
+              Provider declarations owned by this realm. Entries are inert
+              configuration records in this scope; provider daemons/adapters are
+              not started from them yet.
+            '';
+          };
+
+          relay = {
+            enable = lib.mkEnableOption "realm relay reachability metadata";
+
+            mode = lib.mkOption {
+              type = lib.types.enum [ "disabled" "static" "discovery" ];
+              default = "disabled";
+              description = ''
+                Relay configuration mode. The default is non-claiming and does
+                not open listeners, connect relays, or alter routing.
+              '';
+            };
+
+            endpoints = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = "Non-secret relay endpoint names or refs for static relay mode.";
+            };
+
+            credentialRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Opaque reference to relay credential material held outside the
+                host Nix store. Plaintext credentials do not belong in this option.
+              '';
+            };
+          };
+
+          discovery = {
+            enable = lib.mkEnableOption "dynamic realm discovery metadata";
+
+            domain = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "work.example.invalid";
+              description = "Optional discovery domain or namespace for this realm.";
+            };
+
+            configRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Opaque reference to discovery configuration material.";
+            };
+          };
+
+          policy = {
+            allowUnsafeLocal = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Explicitly permit `kind = "unsafe-local"` workloads in this
+                realm. These processes run as the authenticated requesting uid
+                and provide no VM or provider-managed isolation boundary.
+              '';
+            };
+
+            bundleRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Opaque reference to the realm policy bundle.";
+            };
+
+            bundlePath = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching absolutePath);
+              default = null;
+              description = "Optional absolute runtime path to a realm policy bundle artifact.";
+            };
+
+            defaultDeny = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Future realm policy starts from default-deny unless a later policy bundle says otherwise.";
+            };
+          };
+
+          keys = {
+            realmIdentityRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Opaque reference to this realm's identity key metadata. This is
+                only a locator; private or public key material does not belong
+                in Nix.
+              '';
+            };
+
+            realmIdentityFingerprint = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching fingerprint);
+              default = null;
+              description = "SHA-256 fingerprint for the realm identity key metadata, never key material.";
+            };
+
+            controllerKeyRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Opaque reference to this realm controller's signing/encryption
+                credential metadata. This is a locator only; signing or
+                encryption key material does not belong in Nix.
+              '';
+            };
+
+            controllerCredentialFingerprint = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching fingerprint);
+              default = null;
+              description = "SHA-256 fingerprint for the controller-generation credential metadata, never credential material.";
+            };
+
+            trustBundleRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Opaque reference to trusted parent/peer realm key material.";
+            };
+
+            enrollmentRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Opaque reference to realm enrollment material stored outside the Nix store.";
+            };
+
+            rotationPolicyRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Opaque reference to future key-rotation policy metadata.";
+            };
+          };
+
+          paths = {
+            stateDir = lib.mkOption {
+              type = lib.types.strMatching absolutePath;
+              default = realmStateDir;
+              defaultText = lib.literalExpression "config.d2b.site.stateDir + \"/realms/<realm>\"";
+              description = ''
+                Derived realm state directory. Host-local realm controller
+                units create and own it through tmpfiles.
+              '';
+            };
+
+            auditDir = lib.mkOption {
+              type = lib.types.strMatching absolutePath;
+              default = realmLogDir;
+              defaultText = lib.literalExpression "\"/var/lib/d2b/audit/realms/<realm>\"";
+              description = ''
+                Derived per-realm audit directory. The default is deliberately
+                outside `paths.stateDir` so daemon-owned mutable state cannot
+                replace or spoof the broker-owned audit stream.
+              '';
+            };
+
+            runDir = lib.mkOption {
+              type = lib.types.strMatching absolutePath;
+              default = realmRunDir;
+              defaultText = lib.literalExpression "\"/run/d2b/realms/<realm>\"";
+              description = "Derived per-realm runtime directory.";
+            };
+
+            publicSocket = lib.mkOption {
+              type = lib.types.strMatching absolutePath;
+              default = "${realmRunDir}/public.sock";
+              defaultText = lib.literalExpression "paths.runDir + \"/public.sock\"";
+              description = "Realm public socket path for host-local controller units.";
+            };
+
+            brokerSocket = lib.mkOption {
+              type = lib.types.strMatching absolutePath;
+              default = "${realmRunDir}/broker.sock";
+              defaultText = lib.literalExpression "paths.runDir + \"/broker.sock\"";
+              description = "Realm broker socket path when host mutation is enabled.";
+            };
+          };
+
+          broker = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Opt-in for a realm-local privileged broker. A host-local realm
+                materialises broker units only when both this and
+                `hostMutation` are true.
+              '';
+            };
+
+            hostMutation = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Whether this realm is intended to request host-mutation leases
+                from the local-root allocator. Host-local broker units are
+                materialised only when this is true and broker.enable is true.
+              '';
+            };
+          };
+        };
+      }));
+  };
 }

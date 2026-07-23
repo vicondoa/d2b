@@ -9,10 +9,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::services::wayland::{
-    Observation, ObservationOperation, ObservationOutcome, ObservationSink,
-};
-
 /// Bounded reason code for client-drop events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DropReason {
@@ -216,31 +212,6 @@ impl DiagRateLimiter {
     }
 }
 
-impl ObservationSink for DiagRateLimiter {
-    fn record(&mut self, observation: Observation) {
-        let operation = match observation.operation {
-            ObservationOperation::Open => "open",
-            ObservationOperation::Inspect => "inspect",
-            ObservationOperation::Close => "close",
-            ObservationOperation::Ready => "ready",
-            ObservationOperation::Cancel => "cancel",
-        };
-        let outcome = match observation.outcome {
-            ObservationOutcome::Success => "success",
-            ObservationOutcome::Denied => "denied",
-            ObservationOutcome::Unavailable => "unavailable",
-            ObservationOutcome::Cancelled => "cancelled",
-        };
-        let target = self.vm.clone();
-        self.emit("control-observation", operation, || {
-            format!(
-                "[d2b-wlproxy] target={target} event=control-observation \
-                 operation={operation} outcome={outcome}"
-            )
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,19 +318,5 @@ mod tests {
         let label = bounded_diag_label(&format!("{}{}", "x".repeat(128), "\nsecret"));
         assert!(label.len() <= DIAG_LABEL_MAX_BYTES + "...".len());
         assert!(!label.contains('\n'));
-    }
-
-    #[test]
-    fn observability_adapter_uses_only_closed_operation_and_outcome_labels() {
-        let mut diag = DiagRateLimiter::new("workload".to_owned());
-        diag.record(Observation {
-            operation: ObservationOperation::Open,
-            outcome: ObservationOutcome::Denied,
-        });
-        assert!(
-            diag.buckets
-                .keys()
-                .any(|key| { key.event == "control-observation" && key.label == "open" })
-        );
     }
 }

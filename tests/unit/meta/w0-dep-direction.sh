@@ -86,6 +86,10 @@ is_member() {
 }
 
 # External (non-member) crates a pure contract crate must never depend on.
+# d2b-priv-broker lives in a SEPARATE workspace (excluded from
+# packages/Cargo.toml), so it never appears in the member set — name it
+# explicitly, along with any other d2b-* host/daemon crate caught by the
+# glob in check_dep below.
 is_external_forbidden() {
   case "$1" in
     prost | prost-types) return 0 ;;
@@ -96,8 +100,9 @@ is_external_forbidden() {
 # Classify one resolved dependency name against a pure crate's allowlist.
 # Forbidden iff it is NOT whitelisted and is any of: a workspace member
 # (catches d2b, xtask, the sibling contract crates), any `d2b`/
-# `d2b-*` crate (catches every host/daemon/broker crate), or an external
-# forbidden crate (prost).
+# `d2b-*` crate (catches the separate-workspace d2b-priv-broker and
+# every host/daemon crate, member or not), or an external forbidden crate
+# (prost).
 check_dep() {
   local crate="$1" allowed="$2" dep="$3"
   case "$allowed" in *" $dep "*) return 0 ;; esac
@@ -154,11 +159,9 @@ check_pure_crate() {
 check_pure_crate d2b-realm-core
 # d2b-realm-provider: only the core contract crate.
 check_pure_crate d2b-realm-provider d2b-realm-core
-# d2b-realm-router owns the authenticated generated realm service rail in
-# addition to pure routing, so its canonical contract and session edges are
-# intentional while transport implementations remain forbidden.
+# d2b-realm-router (s8): core + provider only, when it lands.
 check_pure_crate d2b-realm-router \
-  d2b-contracts d2b-realm-core d2b-realm-provider d2b-session
+  d2b-realm-core d2b-realm-provider
 # d2b-realm-transport (s5): trait/mock home; core + provider only.
 check_pure_crate d2b-realm-transport \
   d2b-realm-core d2b-realm-provider

@@ -18,28 +18,6 @@ shell gate, you almost certainly want a nix-unit case (type 1) or a Rust test
 
 When in doubt, push the test *down* the tiers (toward type 1), not up.
 
-## Test authors, validators, and reviewers
-
-These are separate responsibilities:
-
-- **Test authors** add or update coverage in the closed taxonomy below, update
-  the orchestration manifest when required, and run focused preflight while
-  iterating. Authoring a test does not certify the final candidate.
-- **Validators** execute the manifest-required local, integration, host, live,
-  or hardware commands against the exact immutable wave tree and import
-  command/result evidence with the canonical delivery `xtask` tooling.
-  Validators do not review.
-- **Reviewers** inspect the exact tree, test design, dependency/contract changes,
-  and external evidence status as members of the end-of-wave panel. Reviewers
-  never execute tests, builds, evals, or other gates.
-
-After focused preflight, the integrator uses Git Town to open or update the
-ordinary GitHub PR stack and then snapshots that exact open PR/parent-graph
-state. GitHub CI, the final validator lane, and the ten-role panel proceed
-concurrently on that tree. Any content change
-invalidates both validator evidence and panel signoff. Pending lanes are valid
-on an open PR but never make it merge-eligible.
-
 ## Taxonomy — name, definition, home, how it runs
 
 ### Layer 1 — static gate (hermetic, fast, every PR + local via `make check`)
@@ -61,8 +39,8 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 
 | # | Type | What it is | Lives in | Runs **where** |
 |---|------|------------|----------|----------------|
-| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **final local validator lane after the PR opens; not GitHub CI** |
-| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **final NixOS/KVM validator lane after the PR opens; not GitHub CI** |
+| 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` — **local host/manual pre-PR; not the PR pipeline** |
+| 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` — **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
 | 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | `D2B_LIVE=1` / sudo — **manual, never CI** |
 | 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | **manual on a host with the devices** |
 
@@ -85,7 +63,7 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
    `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
-   `cargo xtask gen-*` from `packages/` and commit — do **not** add a new gate.
+   `cargo run -p xtask -- gen-*` and commit — do **not** add a new gate.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
    device?** → the matching Layer-2 tier (9–12). Justify why Layer 1 cannot
    cover it; reach for the *lowest* tier that works (a native fd-passing test
@@ -96,8 +74,7 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
 Retirement is ledger-tracked. Create
 `tests/migration-state.d/<name>.toml` (`status = "retired"`,
 `successor_ids = [...]`), remove the script, sweep its references out of the
-entry-point wrappers (`tests/static*.sh`), manifest, and CI, keep its basename
-in the
+orchestrators (`tests/static*.sh`) and CI, keep its basename in the
 `tests/tools/gen-migration-ledger.sh` inventory, then
 `bash tests/tools/gen-migration-ledger.sh && bash tests/tools/gen-migration-ledger.sh --check`.
 If the successor is a fail-closed native/contract test, pin its exact
@@ -108,7 +85,7 @@ If the successor is a fail-closed native/contract test, pin its exact
 
 ```
 tests/
-├── static.sh / runner.sh / test-*.sh                         Make entry-point wrappers
+├── static.sh / runner.sh / test-*.sh                         orchestrators (entry points)
 ├── lib.sh / cli-rust-native-common.sh                              shared shell harness
 ├── README.md / AGENTS.md                                           docs (human guide + this file)
 ├── migration-ledger.toml / migration-state.d/                      retirement ledger + records
@@ -120,84 +97,41 @@ tests/
 │   ├── meta/                                                       meta gates (closed set)
 │   └── gates/                                                      drift/perf gates (closed set)
 ├── integration/
-│   ├── containers/                                                 type 9 podman (make test-integration; final validator lane)
+│   ├── containers/                                                 type 9 podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                              distro pins/fixtures
 │   └── live/                                                        type 11 D2B_LIVE (manual)
 └── host-integration/
-    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; final validator lane)
+    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                   type 12 device tests (manual)
 ```
 
 Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
 
-The destructive realm-host cutover may update frozen Rust policy tests only
-through the exact `w7_contract_test_migrations` rows in
-`delivery/shared-contracts.json`. Each selector and companion migration pin is
-owned by the declarative component deleting its legacy source; there is no
-general W7 exception for `packages/d2b-contract-tests/`.
-
 ## Layer-1 orchestration manifest
 
-`tests/layer1-jobs.json` is the declarative source of truth for the Layer-1
-PR/local graph and Rust `xtask` is the sole orchestration implementation for
-manifest validation, parallel local execution, check discovery, and workflow
-rendering. The existing `make` targets remain contributor-facing entry points;
-they delegate to this canonical path.
-
-The direct commands, run from `packages/`, are:
-
-```bash
-cargo xtask layer1 validate
-cargo xtask layer1 run-local
-cargo xtask layer1 workflow write
-cargo xtask layer1 workflow check
-cargo xtask layer1 checks list
-```
-
-Test authors edit the manifest when changing which `make test-*` targets belong
-to the PR-equivalent graph and regenerate
-`.github/workflows/pr-l1-static-fast.yml` through the canonical `xtask`/Make
-entry point. Validators execute the resulting matrix and import external,
-tree-bound results. Reviewers inspect coverage and evidence status but do not
-invoke the manifest runner or any gate.
+`tests/layer1-jobs.json` is the source of truth for the Layer-1 PR/local gate
+graph. Edit it when changing which `make test-*` targets belong to the
+PR-equivalent gate, then run `make layer1-workflow` to regenerate
+`.github/workflows/pr-l1-static-fast.yml`. `make test-drift` runs
+`make layer1-workflow-check` via the manifest tool and fails if the committed
+workflow was edited by hand or not regenerated.
 
 The generated workflow intentionally exposes one stable final `check` job for
 branch protection. Keep intermediate job/matrix names as generated
 implementation details unless a required-context migration explicitly needs
 them preserved.
 
-The same delivery tooling owns immutable snapshots, evidence import, panel
-record validation, identical-content proof, wave sealing, and merge
-eligibility. Run `cargo xtask delivery wave help` from `packages/` for its
-machine-readable command/option index. Those payloads live outside the
-repository; never add evidence or panel output to this manifest or another
-tracked test artifact.
+### Standalone Rust workspaces
 
-Snapshot authority may be the historical `delivery/manifest.json` or one
-selected `delivery/manifests/w<N>.json`. The selected tracked path must match
-and fingerprint its declared wave. Delivery rejects a second checked-in
-authority for the same wave and still requires the exact ordered Git Town
-branch, PR, and parent graph.
+Most Rust crates are members of `packages/Cargo.toml`, but some crates are
+intentionally excluded because they require a distinct safety or dependency
+policy. The privileged broker lives at `packages/d2b-priv-broker/`; the
+persistent-shell feasibility helper lives at
+`packages/d2b-guest-shell-runner/`.
 
-Wave ownership checks are parent-authoritative: validators invoke
-`make -C <trusted-parent-worktree> wave-policy-check
-CANDIDATE_ROOT=<wave-worktree>`. The checker and policy therefore come from the
-exact clean Git Town parent commit corroborated by the candidate's ordinary
-GitHub PR, not from the tree under review. It also walks and corroborates every
-wave ancestor back to the shared root. Tests for this surface must cover
-candidate checker/policy replacement, fake, partial, or self parent graphs,
-Git replacement/graft/shallow metadata, positive owner classification, prefix
-root symlink/gitlink changes hidden by local submodule-ignore configuration,
-frozen implementation, and cross-wave paths.
-
-### Unified Rust workspace
-
-Every maintained host and guest crate is a member of `packages/Cargo.toml` and
-uses `packages/Cargo.lock`. Crate-specific safety and feature policy remains
-focused: the broker's default, `layer1-bootstrap`, and `fake-backends` passes
-and the guest shell runner's `real-libshpool` pass run with `-p` from the root
-workspace. Type 2 unit tests live under `src/**`, Type 3 binary/integration
-tests live under `packages/<crate>/tests/*.rs`, and Type 6 supply-chain
-assertions use the canonical lockfile. Do not add a new top-level `tests/*.sh`;
-extend the existing manifest-driven Rust/static entry points.
+Tests for those excluded workspaces still follow the same taxonomy: Type 2 unit
+tests live under `src/**`, Type 3 binary/integration tests live under
+`packages/<crate>/tests/*.rs`, and Type 6 static/supply-chain assertions live in
+existing `flake.checks.<system>.*` entries. Do not add a new top-level
+`tests/*.sh`; extend the existing Rust/static orchestrators by manifest path.

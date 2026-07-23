@@ -73,9 +73,10 @@ d2b_flake_ref() {
 
 d2b_cargo_config_path() {
   case "${1:-workspace}" in
-    workspace|broker|guest-shell-runner|fuzz)
-      printf '%s\n' "$(d2b_repo_root)/packages/.cargo/config.toml"
-      ;;
+    workspace) printf '%s\n' "$(d2b_repo_root)/packages/.cargo/config.toml" ;;
+    broker) printf '%s\n' "$(d2b_repo_root)/packages/d2b-priv-broker/.cargo/config.toml" ;;
+    guest-shell-runner) printf '%s\n' "$(d2b_repo_root)/packages/d2b-guest-shell-runner/.cargo/config.toml" ;;
+    fuzz) printf '%s\n' "$(d2b_repo_root)/packages/d2b-core/fuzz/.cargo/config.toml" ;;
     *)
       fail "unknown cargo target scope: ${1:-<empty>}"
       return 1
@@ -85,19 +86,13 @@ d2b_cargo_config_path() {
 
 d2b_cargo_target_dir() {
   local scope="${1:-workspace}" config target_dir base
-  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
-    base="${CARGO_TARGET_DIR:-$D2B_VALIDATION_OUTPUT_DIR/cargo-target}/$scope"
-    mkdir -p "$base" || return 1
-    printf '%s\n' "$base"
-    return 0
-  fi
   config=$(d2b_cargo_config_path "$scope") || return 1
   if [ ! -f "$config" ]; then
     fail "missing cargo config: $config"
     return 1
   fi
   # Honor an explicit [build].target-dir if present; otherwise use the
-  # cargo default ("<workspace-root>/target"). With the
+  # cargo default ("<workspace-root>/target") for the scope. With the
   # Sccache-based dedup design, target-dir is intentionally NOT
   # set, so each worktree gets its own per-worktree target/ and
   # compiled-output dedup happens cross-worktree via sccache.
@@ -107,38 +102,16 @@ d2b_cargo_target_dir() {
     return 0
   fi
   case "$scope" in
-    workspace|broker|guest-shell-runner|fuzz)
-      base="$(d2b_repo_root)/packages/target"
-      ;;
+    workspace) base="$(d2b_repo_root)/packages/target" ;;
+    broker) base="$(d2b_repo_root)/packages/d2b-priv-broker/target" ;;
+    guest-shell-runner) base="$(d2b_repo_root)/packages/d2b-guest-shell-runner/target" ;;
+    fuzz) base="$(d2b_repo_root)/packages/d2b-core/fuzz/target" ;;
     *)
       fail "unknown cargo target scope: $scope"
       return 1
       ;;
   esac
   printf '%s\n' "$base"
-}
-
-d2b_cargo_gate_target_dir() {
-  local scope="${1:?d2b_cargo_gate_target_dir: missing scope}"
-  local toolchain="${2:?d2b_cargo_gate_target_dir: missing toolchain}"
-  case "$scope" in
-    workspace|broker|broker-layer1|broker-fakebackends|guest-shell-runner) ;;
-    *)
-      fail "unknown cargo gate target scope: $scope"
-      return 1
-      ;;
-  esac
-  case "$toolchain" in
-    ""|*[!A-Za-z0-9._-]*)
-      fail "unsafe cargo gate toolchain label: $toolchain"
-      return 1
-      ;;
-  esac
-  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
-    printf '%s\n' "$D2B_VALIDATION_OUTPUT_DIR/cargo-gate-targets/$toolchain/$scope"
-    return 0
-  fi
-  printf '%s\n' "$(d2b_repo_root)/packages/.d2b-gate-targets/$toolchain/$scope"
 }
 
 d2b_cargo_bin_path() {
@@ -155,23 +128,9 @@ d2b_prepend_path() {
 }
 
 d2b_activate_rust_toolchain_path() {
-  local channel="${1:-}"
-  local required_tool
   if [ -n "${D2B_RUST_TOOLCHAIN_PATH:-}" ]; then
     d2b_prepend_path "$D2B_RUST_TOOLCHAIN_PATH"
     return 0
-  fi
-  if [ -n "$channel" ]; then
-    local candidate
-    for candidate in "$HOME"/.rustup/toolchains/"$channel"-*/bin; do
-      for required_tool in cargo rustc rustfmt cargo-fmt cargo-clippy clippy-driver; do
-        [ -x "$candidate/$required_tool" ] || continue 2
-      done
-      D2B_RUST_TOOLCHAIN_PATH="$candidate"
-      export D2B_RUST_TOOLCHAIN_PATH
-      d2b_prepend_path "$candidate"
-      return 0
-    done
   fi
   return 1
 }
@@ -488,12 +447,7 @@ _d2b_cleanup_scratch() {
 
 d2b_mktemp() {
   local pattern="${1:?d2b_mktemp: missing pattern}" root scratch registry quoted_path
-  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
-    root="$D2B_VALIDATION_OUTPUT_DIR/test-scratch"
-    mkdir -p "$root" || return 1
-  else
-    root=$(d2b_repo_root)
-  fi
+  root=$(d2b_repo_root)
   scratch=$(mktemp -d -p "$root" "$pattern") || return 1
   registry=$(d2b_scratch_registry_path)
   : >> "$registry"
@@ -694,30 +648,15 @@ flake.nixosModules.default
             launcherUsers = [ "alice" ];
             yubikey.enable = false;
           };
-          d2b.acceptDestructiveV2Cutover = true;
-          d2b.realms.work = {
-            path = "work";
-            placement = "host-local";
-            allowedUsers = [ "alice" ];
-            broker = {
-              enable = true;
-              hostMutation = true;
-            };
-            network = {
-              mode = "declared";
-              lanSubnet = "10.20.0.0/24";
-              uplinkSubnet = "192.0.2.0/30";
-            };
-            providers.runtime = {
-              type = "runtime";
-              implementationId = "cloud-hypervisor";
-            };
-            workloads.corp-vm = {
-              providerRefs.runtime = "runtime";
-              config = {
-                networking.hostName = lib.mkDefault "corp-vm";
-                users.users.alice = { isNormalUser = true; uid = 1000; };
-              };
+          d2b.envs.work = {
+            lanSubnet = "10.20.0.0/24";
+            uplinkSubnet = "192.0.2.0/30";
+          };
+          d2b.vms.corp-vm = {
+            enable = true; env = "work"; index = 10; ssh.user = "alice";
+            config = {
+              networking.hostName = lib.mkDefault "corp-vm";
+              users.users.alice = { isNormalUser = true; uid = 1000; };
             };
           };
         })

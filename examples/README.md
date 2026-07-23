@@ -6,19 +6,19 @@ directories. Read the per-directory README first.
 | Path | Audience | Notes |
 | --- | --- | --- |
 | [`minimal/`](./minimal/) | Checked headless starter | Canonical flake behind the doc-friendly [`personal-dev/`](./personal-dev/) alias. |
-| [`personal-dev/`](./personal-dev/) | README alias | Pointer to the `minimal/` realm workload. |
-| [`graphics-workstation/`](./graphics-workstation/) | Desktop workload | Requires a Wayland compositor on the host. |
-| [`multi-env/`](./multi-env/) (`demo`) | Two isolated realms | Demonstrates separate work and personal network boundaries. |
-| [`multi-env/`](./multi-env/) (`multi-env-daemon-experimental`) | Realm network-knob variant | Exercises realm MTU, MSS clamping, and east-west policy. |
-| [`with-observability/`](./with-observability/) | Realm observability | Demonstrates generated telemetry resources. |
+| [`personal-dev/`](./personal-dev/) | Rust-first README alias | README-only pointer to `minimal/`; VM name `personal-dev`. |
+| [`graphics-workstation/`](./graphics-workstation/) | Desktop VM with Wayland + audio + USBIP | Requires a Wayland compositor on the host. |
+| [`multi-env/`](./multi-env/) (`demo`) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight. |
+| [`multi-env/`](./multi-env/) (`multi-env-daemon-experimental`) | Two isolated envs + network-knob variant | Exercises per-env `mtu` / `mssClamp` / `lan.allowEastWest` plus the site-level `allowUnsafeEastWest` acknowledgement. |
+| [`with-observability/`](./with-observability/) | Single workload VM + auto-declared observability stack | Grafana/Prometheus/Loki/Tempo on a dedicated `obs` env. |
 | [`with-entra-id/`](./with-entra-id/) | Checked Entra-ID composition | Canonical flake behind the doc-friendly [`work-entra/`](./work-entra/) alias. |
-| [`work-entra/`](./work-entra/) | README alias | Pointer to the Entra-enabled realm workload. |
+| [`work-entra/`](./work-entra/) | Rust-first README alias | README-only pointer to `with-entra-id/`; VM name `work-entra`. |
 
 ## Alias-directory policy
 
 `personal-dev/` and `work-entra/` intentionally do **not** ship a
 `flake.nix`. They are lightweight alias READMEs so the docs can use
-stable workload names while CI keeps one checked flake per scenario
+stable VM names while CI keeps one checked flake per scenario
 (`minimal/` and `with-entra-id/`).
 
 ## `flake.lock` policy
@@ -27,7 +27,7 @@ Examples that are primarily meant to evaluate the in-tree framework
 via `d2b.url = "path:../.."` do **not** commit a `flake.lock`
 (currently `minimal/`, `graphics-workstation/`, `multi-env/`, and
 `with-observability/`). Even when an example spells out shared inputs
-such as `nixpkgs` or `home-manager`, the point is still to
+such as `nixpkgs`, `microvm`, or `home-manager`, the point is still to
 exercise the local checkout; a committed lock would be stale by
 construction and `tests/static.sh` regenerates a local lock on first
 eval anyway.

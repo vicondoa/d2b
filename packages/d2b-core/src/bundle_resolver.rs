@@ -22,9 +22,9 @@
 //! # Design
 //!
 //! `BundleResolver` loads the trusted bundle artifacts from disk
-//! (`bundle.json` + the `host.json`, `processes.json`, optional
-//! `allocator.json`, `manifest.json`, and per-VM `closures/<vm>.json`
-//! paths it points at) and builds a deterministic
+//! (`bundle.json` + the `host.json`, `processes.json`,
+//! `manifest.json`, and per-VM `closures/<vm>.json` paths it points
+//! at) and builds a deterministic
 //! intent table keyed by a documented `BundleOpId` encoding:
 //!
 //! | Intent          | `BundleOpId` format                                       | Source data                                                       |
@@ -64,7 +64,6 @@
 //!   role→binary mapping; the resolver shape keeps that wiring drop
 //!   purely additive.
 
-use crate::allocator_config::{AllocatorJson, AllocatorProcessLaunch};
 use crate::bundle::Bundle;
 use crate::closures::ClosureMetadata;
 use crate::error::Error;
@@ -101,12 +100,10 @@ pub struct BundleResolver {
     pub processes: ProcessesJson,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
-    pub allocator: Option<AllocatorJson>,
     pub realm_controllers: Option<RealmControllersJson>,
     pub realm_identity: Option<RealmIdentityConfigJson>,
     pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     pub unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
-    provider_registry_v2_bytes: Option<Vec<u8>>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
@@ -135,12 +132,10 @@ struct ParsedBundleArtifacts {
     processes: ProcessesJson,
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
-    allocator: Option<AllocatorJson>,
     realm_controllers: Option<RealmControllersJson>,
     realm_identity: Option<RealmIdentityConfigJson>,
     realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
-    provider_registry_v2_bytes: Option<Vec<u8>>,
     manifest: ManifestV04,
     closures: Vec<ClosureMetadata>,
 }
@@ -283,9 +278,6 @@ pub struct ResolvedRunnerIntent {
     pub vm_name: String,
     pub role_id: String,
     pub role: ProcessRole,
-    /// Whether the executable and argv came from the explicit process node or
-    /// from the compatibility-only legacy runner synthesis.
-    pub source: ResolvedRunnerSource,
     pub binary_path: PathBuf,
     pub argv: Vec<String>,
     pub env: Vec<String>,
@@ -312,16 +304,6 @@ pub struct ResolvedRunnerIntent {
     pub umask: Option<u32>,
 }
 
-/// Provenance of a resolved runner specification.
-///
-/// Provider-v2 mappings may bind only explicit process-node runner specs.
-/// Legacy fallback remains available solely to pre-v2 lifecycle paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolvedRunnerSource {
-    ExplicitProcessNode,
-    LegacyFallback,
-}
-
 /// Single-entry user-NS mapping. See [`ResolvedRunnerIntent::user_namespace`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserNamespaceSpec {
@@ -336,23 +318,16 @@ impl ResolvedRunnerIntent {
     /// legacy spawn specification return `None`.
     pub fn from_process_node(vm_name: &str, node: &ProcessNode) -> Option<Self> {
         let role_name = runner_role_name(&node.role)?;
-        let (binary_path, argv, source) = match node.binary_path.as_deref() {
+        let (binary_path, argv) = match node.binary_path.as_deref() {
             Some(binary_path)
                 if binary_path.starts_with('/')
                     && !node.argv.is_empty()
                     && !node.argv[0].is_empty()
                     && !is_placeholder_runner_spec(binary_path, &node.argv, role_name) =>
             {
-                (
-                    binary_path.to_owned(),
-                    node.argv.clone(),
-                    ResolvedRunnerSource::ExplicitProcessNode,
-                )
+                (binary_path.to_owned(), node.argv.clone())
             }
-            _ => {
-                let (binary_path, argv) = legacy_runner_spec(vm_name, &node.role)?;
-                (binary_path, argv, ResolvedRunnerSource::LegacyFallback)
-            }
+            _ => legacy_runner_spec(vm_name, &node.role)?,
         };
         // v1.1.1fu11 (Option B): start with the baseline D2B_VM
         // env var, then append any node-specific env entries from the
@@ -378,7 +353,6 @@ impl ResolvedRunnerIntent {
             vm_name: vm_name.to_owned(),
             role_id: node.id.0.clone(),
             role: node.role.clone(),
-            source,
             binary_path: PathBuf::from(binary_path),
             argv,
             env,
@@ -721,9 +695,8 @@ impl BundleVerifyPolicy {
     /// 0640 mode. Used by unit tests that materialise bundles in a
     /// per-test temp directory (cargo test runs as the invoking user,
     /// not root, so the production owner/mode check would reject every
-    /// such bundle). Outside of `#[cfg(test)]` paths, only d2bd's hidden
-    /// `--allow-unprivileged-runtime-dir` integration-test path may use this
-    /// policy; normal daemon and broker paths must use [`Self::production`].
+    /// such bundle). Outside of `#[cfg(test)]` paths, callers must use
+    /// [`Self::production`].
     #[doc(hidden)]
     pub fn for_tests() -> Self {
         // rustix is the workspace's libc replacement; getuid()/getgid()
@@ -1018,12 +991,10 @@ impl BundleResolver {
                 processes,
                 storage: None,
                 sync: None,
-                allocator: None,
                 realm_controllers: None,
                 realm_identity: None,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
-                provider_registry_v2_bytes: None,
                 manifest,
                 closures,
             },
@@ -1040,12 +1011,10 @@ impl BundleResolver {
             processes,
             storage,
             sync,
-            allocator,
             realm_controllers,
             realm_identity,
             realm_workloads_launcher_v2,
             unsafe_local_workloads,
-            provider_registry_v2_bytes,
             manifest,
             closures,
         } = artifacts;
@@ -1078,12 +1047,10 @@ impl BundleResolver {
             processes,
             storage,
             sync,
-            allocator,
             realm_controllers,
             realm_identity,
             realm_workloads_launcher_v2,
             unsafe_local_workloads,
-            provider_registry_v2_bytes,
             manifest,
             nft_intents,
             route_intents,
@@ -1130,12 +1097,10 @@ impl BundleResolver {
                 processes,
                 storage,
                 sync,
-                allocator: None,
                 realm_controllers,
                 realm_identity,
                 realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
-                provider_registry_v2_bytes: None,
                 manifest,
                 closures: Vec::new(),
             },
@@ -1173,7 +1138,6 @@ impl BundleResolver {
         })?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
-        let allocator = load_optional_allocator_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
             load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
         let realm_identity = load_optional_realm_identity_artifact(&bundle, bundle_root, policy)?;
@@ -1181,8 +1145,6 @@ impl BundleResolver {
             load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
         let unsafe_local_workloads =
             load_optional_unsafe_local_workloads_artifact(&bundle, bundle_root, policy)?;
-        let provider_registry_v2_bytes =
-            load_optional_provider_registry_v2_artifact(&bundle, bundle_root, policy)?;
         // The public manifest (vms.json) lives under /run/current-system/…
         // which is root-owned 0444; skip the private-artifact policy for it.
         let manifest = ManifestV04::from_path(manifest_path)?;
@@ -1195,12 +1157,10 @@ impl BundleResolver {
                 processes,
                 storage,
                 sync,
-                allocator,
                 realm_controllers,
                 realm_identity,
                 realm_workloads_launcher_v2,
                 unsafe_local_workloads,
-                provider_registry_v2_bytes,
                 manifest,
                 closures,
             },
@@ -1213,22 +1173,6 @@ impl BundleResolver {
 
     pub fn audit_bundle_hash(&self) -> &str {
         &self.audit_bundle_hash
-    }
-
-    pub fn provider_registry_v2_bytes(&self) -> Option<&[u8]> {
-        self.provider_registry_v2_bytes.as_deref()
-    }
-
-    /// Resolve one integrity-loaded, exactly validated realm-child launch
-    /// authority row. Missing or malformed lookup keys have no fallback.
-    pub fn find_realm_child_launch_record(
-        &self,
-        realm_id: &str,
-        controller_generation: &str,
-    ) -> Option<&AllocatorProcessLaunch> {
-        self.allocator
-            .as_ref()?
-            .find_process_launch(realm_id, controller_generation)
     }
 
     pub fn find_unsafe_local_workload(&self, target: &str) -> Option<&UnsafeLocalWorkload> {
@@ -1269,16 +1213,6 @@ impl BundleResolver {
 
     pub fn find_runner_intent(&self, id: &str) -> Option<&ResolvedRunnerIntent> {
         self.runner_intents.get(id)
-    }
-
-    pub fn find_vm_start_intent(&self, id: &str) -> Option<ResolvedVmStartIntent> {
-        self.processes.vms.iter().find_map(|vm| {
-            vm.nodes.iter().find_map(|node| {
-                (intent_id_vm_start(&vm.vm, &node.id.0) == id)
-                    .then(|| self.resolve_vm_start_intent(&vm.vm, &node.id.0))
-                    .flatten()
-            })
-        })
     }
 
     pub fn find_socket_intent(&self, id: &str) -> Option<&ResolvedSocketIntent> {
@@ -2968,31 +2902,6 @@ fn load_optional_sync_artifact(
     Ok(Some(sync))
 }
 
-fn load_optional_allocator_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<AllocatorJson>, Error> {
-    let Some(allocator_ref) = bundle.allocator_path.as_deref() else {
-        return Ok(None);
-    };
-    let allocator_path = resolve_bundle_ref(bundle_root, allocator_ref);
-    let bytes = secure_open_and_read(&allocator_path, policy)?;
-    verify_artifact_hash(
-        &allocator_path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        allocator_ref,
-    )?;
-    let allocator: AllocatorJson = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::manifest_parse_error("allocator.json", manifest_parse_reason(&error.to_string()))
-    })?;
-    allocator.validate().map_err(|error| {
-        Error::manifest_parse_error("allocator.json", manifest_parse_reason(&error.to_string()))
-    })?;
-    Ok(Some(allocator))
-}
-
 fn load_optional_realm_controllers_artifact(
     bundle: &Bundle,
     bundle_root: &Path,
@@ -3072,25 +2981,6 @@ fn load_optional_unsafe_local_workloads_artifact(
         .validate()
         .map_err(|error| Error::manifest_parse_error("unsafe-local-workloads.json", error))?;
     Ok(Some(artifact))
-}
-
-fn load_optional_provider_registry_v2_artifact(
-    bundle: &Bundle,
-    bundle_root: &Path,
-    policy: &BundleVerifyPolicy,
-) -> Result<Option<Vec<u8>>, Error> {
-    let Some(provider_registry_ref) = bundle.provider_registry_v2_path.as_deref() else {
-        return Ok(None);
-    };
-    let path = resolve_bundle_ref(bundle_root, provider_registry_ref);
-    let bytes = secure_open_and_read(&path, policy)?;
-    verify_artifact_hash(
-        &path,
-        &bytes,
-        bundle.artifact_hashes.as_ref(),
-        provider_registry_ref,
-    )?;
-    Ok(Some(bytes))
 }
 
 fn load_optional_realm_workloads_launcher_v2_artifact(
@@ -3229,8 +3119,6 @@ mod tests {
                 realm_identity_path: None,
                 realm_workloads_launcher_v2_path: None,
                 unsafe_local_workloads_path: None,
-                provider_registry_v2_path: None,
-                observability_secrets_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -3577,8 +3465,6 @@ mod tests {
             realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
             unsafe_local_workloads_path: None,
-            provider_registry_v2_path: None,
-            observability_secrets_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),
@@ -4414,41 +4300,6 @@ mod tests {
         assert!(
             super::resolve_runner_node(&dag, &dag.nodes[0]).is_none(),
             "video must fail closed when processes.json omits the patched crosvm video binary/argv"
-        );
-    }
-
-    #[test]
-    fn runner_resolution_records_explicit_vs_legacy_source() {
-        let mut node = ProcessNode {
-            id: NodeId("cloud-hypervisor".to_owned()),
-            role: ProcessRole::CloudHypervisorRunner,
-            unit: None,
-            binary_path: Some("/bin/cloud-hypervisor".to_owned()),
-            argv: vec!["cloud-hypervisor".to_owned()],
-            env: Vec::new(),
-            profile: crate::test_support::RoleProfileBuilder::new()
-                .with_profile_id("cloud-hypervisor")
-                .with_uid(0)
-                .with_gid(0)
-                .build(),
-            readiness: Vec::new(),
-            plan_ops: Vec::new(),
-            network_interfaces: Vec::new(),
-        };
-        assert_eq!(
-            ResolvedRunnerIntent::from_process_node("work", &node)
-                .expect("explicit runner resolves")
-                .source,
-            ResolvedRunnerSource::ExplicitProcessNode
-        );
-
-        node.binary_path = None;
-        node.argv.clear();
-        assert_eq!(
-            ResolvedRunnerIntent::from_process_node("work", &node)
-                .expect("legacy compatibility runner resolves")
-                .source,
-            ResolvedRunnerSource::LegacyFallback
         );
     }
 

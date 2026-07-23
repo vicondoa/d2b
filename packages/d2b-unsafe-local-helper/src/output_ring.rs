@@ -1,11 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
-
-pub(crate) const DEFAULT_RING_BYTES: usize = 512 * 1024;
-pub(crate) const MAX_RING_BYTES: usize = 8 * 1024 * 1024;
-pub(crate) const MAX_TOTAL_RING_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct RingRead {
@@ -17,10 +13,22 @@ pub(crate) struct RingRead {
     pub timed_out: bool,
 }
 
+struct RingState {
+    bytes: VecDeque<u8>,
+    start_cursor: u64,
+    end_cursor: u64,
+    eof: bool,
+}
+
+pub(crate) struct OutputRing {
+    capacity: usize,
+    state: Mutex<RingState>,
+    changed: Condvar,
+}
+
 impl fmt::Debug for RingRead {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RingRead")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RingRead")
             .field("data_len", &self.data.len())
             .field("next_cursor", &self.next_cursor)
             .field("eof", &self.eof)
@@ -31,135 +39,18 @@ impl fmt::Debug for RingRead {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RingReservationError {
-    InvalidCapacity,
-    Exhausted,
-}
-
-#[derive(Debug, Default)]
-struct BudgetState {
-    reserved: usize,
-}
-
-#[derive(Clone)]
-pub(crate) struct OutputBudget {
-    state: Arc<Mutex<BudgetState>>,
-    limit: usize,
-}
-
-impl fmt::Debug for OutputBudget {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let reserved = self
-            .state
-            .lock()
-            .map(|state| state.reserved)
-            .unwrap_or(self.limit);
-        formatter
-            .debug_struct("OutputBudget")
-            .field("limit", &self.limit)
-            .field("reserved", &reserved)
-            .finish()
-    }
-}
-
-impl Default for OutputBudget {
-    fn default() -> Self {
-        Self::new(MAX_TOTAL_RING_BYTES)
-    }
-}
-
-impl OutputBudget {
-    pub(crate) fn new(limit: usize) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(BudgetState::default())),
-            limit: limit.min(MAX_TOTAL_RING_BYTES),
-        }
-    }
-
-    pub(crate) fn reserve(&self, capacity: usize) -> Result<RingReservation, RingReservationError> {
-        if !(1..=MAX_RING_BYTES).contains(&capacity) {
-            return Err(RingReservationError::InvalidCapacity);
-        }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| RingReservationError::Exhausted)?;
-        let next = state
-            .reserved
-            .checked_add(capacity)
-            .ok_or(RingReservationError::Exhausted)?;
-        if next > self.limit {
-            return Err(RingReservationError::Exhausted);
-        }
-        state.reserved = next;
-        Ok(RingReservation {
-            budget: Arc::clone(&self.state),
-            capacity,
-        })
-    }
-
-    #[cfg(test)]
-    fn reserved(&self) -> usize {
-        self.state.lock().unwrap().reserved
-    }
-}
-
-pub(crate) struct RingReservation {
-    budget: Arc<Mutex<BudgetState>>,
-    capacity: usize,
-}
-
-impl RingReservation {
-    pub(crate) fn capacity(&self) -> usize {
-        self.capacity
-    }
-}
-
-impl fmt::Debug for RingReservation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RingReservation")
-            .field("capacity", &self.capacity)
-            .finish()
-    }
-}
-
-impl Drop for RingReservation {
-    fn drop(&mut self) {
-        if let Ok(mut state) = self.budget.lock() {
-            state.reserved = state.reserved.saturating_sub(self.capacity);
-        }
-    }
-}
-
-struct RingState {
-    bytes: VecDeque<u8>,
-    start_cursor: u64,
-    end_cursor: u64,
-    eof: bool,
-}
-
-pub(crate) struct OutputRing {
-    reservation: RingReservation,
-    state: Mutex<RingState>,
-    changed: Condvar,
-}
-
 impl fmt::Debug for OutputRing {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("OutputRing")
-            .field("capacity", &self.reservation.capacity())
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutputRing")
+            .field("capacity", &self.capacity)
             .finish_non_exhaustive()
     }
 }
 
 impl OutputRing {
-    pub(crate) fn new(reservation: RingReservation) -> Self {
-        let capacity = reservation.capacity();
-        Self {
-            reservation,
+    pub(crate) fn new(capacity: usize) -> Option<Self> {
+        (capacity > 0).then(|| Self {
+            capacity,
             state: Mutex::new(RingState {
                 bytes: VecDeque::with_capacity(capacity),
                 start_cursor: 0,
@@ -167,7 +58,7 @@ impl OutputRing {
                 eof: false,
             }),
             changed: Condvar::new(),
-        }
+        })
     }
 
     pub(crate) fn append(&self, input: &[u8]) {
@@ -175,7 +66,7 @@ impl OutputRing {
             return;
         };
         for byte in input {
-            if state.bytes.len() == self.reservation.capacity() {
+            if state.bytes.len() == self.capacity {
                 state.bytes.pop_front();
                 state.start_cursor = state.start_cursor.saturating_add(1);
             }
@@ -215,9 +106,10 @@ impl OutputRing {
                 timed_out = true;
                 break;
             }
+            let remaining = deadline.saturating_duration_since(now);
             let (next, result) = self
                 .changed
-                .wait_timeout(state, deadline.saturating_duration_since(now))
+                .wait_timeout(state, remaining)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state = next;
             if result.timed_out() {
@@ -238,14 +130,15 @@ impl OutputRing {
             .take(take)
             .copied()
             .collect::<Vec<_>>();
+        let data_is_empty = data.is_empty();
         let next_cursor = effective_cursor.saturating_add(data.len() as u64);
         RingRead {
-            timed_out: timed_out && data.is_empty() && !state.eof,
             data,
             next_cursor,
             eof: state.eof && next_cursor >= state.end_cursor,
             dropped_bytes,
             truncated: dropped_bytes > 0 || available > take,
+            timed_out: timed_out && data_is_empty && !state.eof,
         }
     }
 }
@@ -253,31 +146,64 @@ impl OutputRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
-    fn reservations_are_bounded_and_released() {
-        let budget = OutputBudget::new(10);
-        let first = budget.reserve(6).unwrap();
-        assert_eq!(budget.reserved(), 6);
+    fn cursor_reads_wrap_and_report_exact_gap() {
+        let ring = OutputRing::new(5).unwrap();
+        ring.append(b"abc");
         assert_eq!(
-            budget.reserve(5).unwrap_err(),
-            RingReservationError::Exhausted
+            ring.read(0, 2, false, Duration::ZERO),
+            RingRead {
+                data: b"ab".to_vec(),
+                next_cursor: 2,
+                eof: false,
+                dropped_bytes: 0,
+                truncated: true,
+                timed_out: false,
+            }
         );
-        drop(first);
-        assert_eq!(budget.reserved(), 0);
-        assert!(budget.reserve(0).is_err());
-        assert!(budget.reserve(MAX_RING_BYTES + 1).is_err());
+
+        ring.append(b"defgh");
+        let wrapped = ring.read(0, 16, false, Duration::ZERO);
+        assert_eq!(wrapped.data, b"defgh");
+        assert_eq!(wrapped.next_cursor, 8);
+        assert_eq!(wrapped.dropped_bytes, 3);
+        assert!(wrapped.truncated);
     }
 
     #[test]
-    fn cursor_wrap_is_exact_and_debug_redacts_bytes() {
-        let budget = OutputBudget::new(8);
-        let ring = OutputRing::new(budget.reserve(5).unwrap());
-        ring.append(b"private-terminal-canary");
-        let read = ring.read(0, 16, false, Duration::ZERO);
-        assert_eq!(read.data, b"anary");
-        assert_eq!(read.dropped_bytes, 18);
-        assert!(read.truncated);
+    fn wait_wakes_for_output_and_eof() {
+        let ring = Arc::new(OutputRing::new(32).unwrap());
+        let producer = Arc::clone(&ring);
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            producer.append(b"ready");
+            producer.close();
+        });
+        let read = ring.read(0, 32, true, Duration::from_secs(1));
+        writer.join().unwrap();
+        assert_eq!(read.data, b"ready");
+        assert!(read.eof);
+        assert!(!read.timed_out);
+    }
+
+    #[test]
+    fn wait_timeout_is_bounded_and_empty() {
+        let ring = OutputRing::new(8).unwrap();
+        let started = Instant::now();
+        let read = ring.read(0, 8, true, Duration::from_millis(10));
+        assert!(read.timed_out);
+        assert!(read.data.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn debug_never_exposes_ring_bytes() {
+        let canary = b"private-terminal-canary";
+        let ring = OutputRing::new(64).unwrap();
+        ring.append(canary);
+        let read = ring.read(0, 64, false, Duration::ZERO);
         assert!(!format!("{ring:?}").contains("private-terminal-canary"));
         assert!(!format!("{read:?}").contains("private-terminal-canary"));
     }

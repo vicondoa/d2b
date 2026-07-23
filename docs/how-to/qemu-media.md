@@ -1,54 +1,157 @@
-# Run a QEMU media workload
+# How to run a qemu-media VM
 
-QEMU media workloads are realm-owned, manual-start workloads. Declare a
-runtime provider and bind the workload to it:
+This runbook uses the neutral VM name `dark-live` and does not depend on
+any specific live image. Use it for either a raw image file or a
+physical USB block device.
+
+Running sensitive external media inside QEMU is convenient, but it is not
+equivalent to bare-metal boot. The host OS, compositor, and QEMU process
+can observe the session. `lockMemory` addresses host swap for guest RAM
+when the host can satisfy QEMU's mem-lock request; `dump=off` addresses
+QEMU/process core dumps. Host kernel crash dumps require separate host-level
+policy.
+
+## 1. Declare the VM
+
+For a direct raw image file:
 
 ```nix
-d2b.realms = {
-  local-root = {
-    path = "local-root";
-    placement = "host-local";
+d2b.vms.dark-live = {
+  enable = true;
+  runtime.kind = "qemu-media";
+  env = "dark";
+  index = 10;
+  autostart = false;
+
+  qemuMedia = {
+    resources = {
+      memoryMiB = 4096;
+      vcpu = 2;
+    };
+
+    security = {
+      lockMemory = true;
+    };
+
+    source = {
+      kind = "image-file";
+      path = "/var/lib/d2b/images/dark-live.raw";
+      format = "raw";
+      readOnly = true;
+    };
+
   };
 
-  dark = {
-    parent = "local-root";
-    path = "dark.local-root";
-    placement = "host-local";
-    allowedUsers = [ "alice" ];
-    network = {
-      mode = "declared";
-      lanSubnet = "10.60.0.0/24";
-      uplinkSubnet = "203.0.113.0/30";
-    };
+  ui.border.activeColor = "#301934";
+};
+```
 
-    providers.media = {
-      type = "runtime";
-      implementationId = "qemu-media";
-      configRef = "dark-live-media";
-      capabilities = [ "qmp-media-attach" ];
-    };
+For physical USB media, keep only opaque refs in Nix:
 
-    workloads.dark-live = {
-      provider = "media";
-      autostart = false;
-    };
+```nix
+d2b.vms.dark-live.qemuMedia = {
+  resources = {
+    memoryMiB = 4096;
+    vcpu = 2;
+  };
+
+  security.lockMemory = true;
+
+  source = {
+    kind = "physical-usb";
+    ref = "boot";
+    usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
+    format = "raw";
+    readOnly = true;
+  };
+
+  removableSlots.backup.source = {
+    kind = "physical-usb";
+    ref = "backup";
+    format = "raw";
+    readOnly = true;
   };
 };
 ```
 
-Apply the host configuration, then start the canonical target:
+Rebuild the host and restart `d2bd` so it reloads the updated
+bundle.
 
-```console
-$ sudo nixos-rebuild switch --flake .#host
-$ d2b up dark-live.dark.local-root.d2b --apply
+The `usbSelector.byIdName` value is the basename of a stable
+`/dev/disk/by-id/*` symlink for the physical USB block device, not a
+path and not a transient busid. For example, if the host has
+`/dev/disk/by-id/usb-Example_Dark_Live_0001-0:0`, configure
+`usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";`. Do not
+commit real serial numbers or host-specific device identifiers to shared
+examples or issue text.
+
+## 2. Probe physical USB media
+
+Skip this section for `image-file` sources.
+
+```bash
+d2b usb probe
 ```
 
-The realm controller starts QEMU paused and owns its pidfd. Media attachment
-is resolved from the provider's private `configRef`; do not put host device
-paths or transient USB selectors in public workload metadata.
+Probe output is redacted: it shows the transient busid selector without
+by-id names, serials, block paths, or registry paths. If the boot-drive
+slot shows `enrollable` rather than `enrolled`, verify that the
+qemu-media source has the intended `usbSelector.byIdName` and re-run
+`d2b usb probe`; `d2b status <vm>` shows the registry state when
+you need to distinguish `missing`, `present`, and `stale`. There is no
+public enrollment verb.
 
-Stop the workload through the same controller:
+## 3. Start and inspect
 
-```console
-$ d2b down dark-live.dark.local-root.d2b --apply
+```bash
+d2b vm start dark-live --dry-run
+d2b vm start dark-live --apply
+d2b list
+d2b status dark-live
 ```
+
+The dry-run should show `host-reconcile → qemu-media`. After start,
+status should show the qemu-media runner, QMP readiness, source refs,
+source kind/format/read-only policy, and registry state. The host QEMU
+window is routed through the d2b Wayland proxy, which draws the default
+VM identity border itself. If you intentionally disable the proxy border,
+the generated niri rule can match the proxy-rewritten app-id prefix
+`d2b.dark-live.` instead.
+
+## 4. Hotplug configured media
+
+For physical USB removable slots:
+
+```bash
+d2b usb attach dark-live 1-2.3 --dry-run
+d2b usb attach dark-live 1-2.3 --apply
+d2b usb detach dark-live 1-2.3 --apply
+```
+
+For qemu-media VMs these commands do not start USBIP runners and do not
+SSH into a guest. They dispatch broker-owned QMP attach/detach plans and
+redact the runtime selector from success output.
+
+## 5. Capture validation evidence
+
+Record:
+
+- `d2b vm start dark-live --dry-run`
+- `d2b vm start dark-live --apply`
+- `d2b status dark-live`
+- `d2b usb probe`
+- any `usb attach` and `usb detach` dry-run/apply output
+- broker audit rows for `QemuMediaBoot`, `QemuMediaAttach`, and
+  `QemuMediaDetach`
+
+Do not copy raw physical identifiers into issue comments or PR text.
+Use the redacted CLI summaries and audit fields.
+
+## 6. Stop
+
+```bash
+d2b vm stop dark-live --apply
+```
+
+See [the qemu-media reference](../reference/qemu-media.md) for the full
+runtime and security contract.

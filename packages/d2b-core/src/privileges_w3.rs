@@ -51,6 +51,7 @@ pub enum W3BrokerOperation {
     UpdateHostsFile,
     BindUnixSocket,
     SetSocketAcl,
+    GuestControlSign,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
     /// Open the FIDO/CTAP hidraw node for the broker-configured device
@@ -85,6 +86,7 @@ impl W3BrokerOperation {
             Self::UpdateHostsFile => "UpdateHostsFile",
             Self::BindUnixSocket => "BindUnixSocket",
             Self::SetSocketAcl => "SetSocketAcl",
+            Self::GuestControlSign => "GuestControlSign",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
             Self::SecurityKeyOpenDevice => "SecurityKeyOpenDevice",
@@ -115,6 +117,7 @@ impl W3BrokerOperation {
             Self::UpdateHostsFile,
             Self::BindUnixSocket,
             Self::SetSocketAcl,
+            Self::GuestControlSign,
             Self::ModprobeIfAllowed,
             Self::UsbipBindFirewallRule,
             Self::SecurityKeyOpenDevice,
@@ -165,6 +168,11 @@ impl W3BrokerOperation {
                 audit: true,
                 destructive: true,
                 secret_access: false,
+            },
+            Self::GuestControlSign => W3OperationFlags {
+                audit: true,
+                destructive: false,
+                secret_access: true,
             },
             Self::ModprobeIfAllowed => W3OperationFlags {
                 audit: true,
@@ -223,6 +231,17 @@ mod tests {
         assert!(W3BrokerOperation::PrepareStateDir.flags().destructive);
         assert!(W3BrokerOperation::ApplyNftables.flags().destructive);
         assert!(!W3BrokerOperation::UsbipBindFirewallRule.flags().destructive);
+    }
+
+    #[test]
+    fn only_guest_control_sign_grants_secret_access() {
+        for op in W3BrokerOperation::all() {
+            assert_eq!(
+                op.flags().secret_access,
+                *op == W3BrokerOperation::GuestControlSign,
+                "unexpected secret_access flag for {op:?}"
+            );
+        }
     }
 
     #[test]

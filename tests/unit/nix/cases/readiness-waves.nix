@@ -1,82 +1,70 @@
-# Destructive-cutover readiness and realm-native schema checks.
-{ mkEval, lib, ... }:
+# nix-unit cases migrated from tests/readiness-waves-eval.sh.
+#
+# Eval-time gate that the p0..p7 daemon-only rollout waves are present in
+# the `d2b.defaultSwitchReadiness` option schema, that p0 defaults to
+# implemented=false / validated=false (so the daemon doesn't auto-attest a
+# wave that hasn't shipped + been validated), and that the obsolete
+# `d2b.daemonExperimental.enable` compatibility option now defaults
+# `true` (the daemon-only control plane is always enabled; see ADR 0015).
+#
+# Uses `mkEval` (== nixosSystem with the d2b module set) over a minimal
+# host config — no VMs required — and reads the rendered
+# `config.d2b.defaultSwitchReadiness` attrset directly. The bash gate
+# hardcoded system = "x86_64-linux"; these cases are schema/value
+# assertions whose results are platform-independent, so they contribute to
+# the nix-unit check on every system unguarded.
+{ mkEval, ... }:
 
 let
-  base = {
+  base = { lib, ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
     boot.initrd.includeDefaultModules = false;
     fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
-
-    d2b.realms.work = {
-      path = "work";
-      providers.runtime = {
-        type = "runtime";
-        implementationId = "cloud-hypervisor";
-      };
-      workloads.desktop.providerRefs.runtime = "runtime";
+    users.users.alice = { isNormalUser = true; uid = 1000; };
+    d2b.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+      yubikey.enable = false;
+    };
+    d2b.envs.work = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
     };
   };
 
-  unacknowledged = mkEval [ base ];
-  acknowledged = mkEval [
-    base
-    { d2b.acceptDestructiveV2Cutover = true; }
-  ];
-  cfg = acknowledged.config;
+  cfg = (mkEval [ base ]).config;
+  rw = cfg.d2b.defaultSwitchReadiness;
+  waveNames = builtins.attrNames rw;
+  hasWave = w: builtins.elem w waveNames;
 in
 {
-  "readiness-waves/destructive-ack-defaults-false" = {
-    expr = unacknowledged.config.d2b.acceptDestructiveV2Cutover;
+  "readiness-waves/has-p0" = { expr = hasWave "p0"; expected = true; };
+  "readiness-waves/has-p1" = { expr = hasWave "p1"; expected = true; };
+  "readiness-waves/has-p2" = { expr = hasWave "p2"; expected = true; };
+  "readiness-waves/has-p3" = { expr = hasWave "p3"; expected = true; };
+  "readiness-waves/has-p4" = { expr = hasWave "p4"; expected = true; };
+  "readiness-waves/has-p5" = { expr = hasWave "p5"; expected = true; };
+  "readiness-waves/has-p6" = { expr = hasWave "p6"; expected = true; };
+  "readiness-waves/has-p7" = { expr = hasWave "p7"; expected = true; };
+
+  # p0 defaults to implemented=false so the daemon doesn't auto-attest a
+  # phase until it is explicitly shipped and validated.
+  "readiness-waves/p0-implemented-default" = {
+    expr = rw.p0.implemented;
+    expected = false;
+  };
+  "readiness-waves/p0-validated-default" = {
+    expr = rw.p0.validated;
     expected = false;
   };
 
-  "readiness-waves/destructive-ack-fails-closed" = {
-    expr = lib.any
-      (assertion:
-        !assertion.assertion
-        && lib.hasInfix
-          "d2b.acceptDestructiveV2Cutover must be set"
-          assertion.message)
-      unacknowledged.config.assertions;
+  # daemonExperimental.enable is now an obsolete compatibility option whose
+  # default is true; the daemon-only control plane is always enabled.
+  "readiness-waves/daemon-auto-default" = {
+    expr = cfg.d2b.daemonExperimental.enable;
     expected = true;
-  };
-
-  "readiness-waves/destructive-ack-enables-realm-schema" = {
-    expr = lib.all (assertion: assertion.assertion) cfg.assertions;
-    expected = true;
-  };
-
-  "readiness-waves/legacy-vm-option-absent" = {
-    expr = acknowledged.options.d2b ? vms;
-    expected = false;
-  };
-
-  "readiness-waves/legacy-env-option-absent" = {
-    expr = acknowledged.options.d2b ? envs;
-    expected = false;
-  };
-
-  "readiness-waves/canonical-realm-target" = {
-    expr =
-      let workload = builtins.head cfg.d2b._index.workloads.enabledList;
-      in {
-        inherit (workload)
-          canonicalTarget
-          realmPath
-          workloadName
-          providerRefs;
-        runtimeImplementation =
-          workload.providerBindings.runtime.implementationId;
-      };
-    expected = {
-      canonicalTarget = "desktop.work.local-root.d2b";
-      realmPath = "work.local-root";
-      workloadName = "desktop";
-      providerRefs.runtime = "runtime";
-      runtimeImplementation = "cloud-hypervisor";
-    };
   };
 }

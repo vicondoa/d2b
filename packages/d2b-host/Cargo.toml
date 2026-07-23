@@ -1,9 +1,7 @@
 [package]
 name = "d2b-host"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -24,15 +22,14 @@ default = []
 # Opt-in test backends used by scope agents to drive fake/recorded I/O
 # without touching the real netlink / cgroup / nft surfaces. Real
 # implementations live behind the default build.
-fake-backends = ["d2b-realm-core/test-support"]
+fake-backends = []
 
 [dependencies]
-d2b-realm-core = { workspace = true }
-d2b-realm-provider = { workspace = true }
-d2b-core = { workspace = true }
-d2b-contracts = { workspace = true, features = ["broker", "v2-services"] }
-d2b-session-unix = { workspace = true, features = ["host-socket"] }
-async-trait.workspace = true
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -46,8 +43,6 @@ rustix = { workspace = true }
 nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
 libc = "0.2"
 sha2 = { workspace = true }
-zeroize.workspace = true
-tokio = { workspace = true, features = ["net", "time"] }
 # `miniz_oxide` is a raw-DEFLATE decoder; d2b-host wraps it in a
 # tiny inline gzip header/trailer skipper so the W3 kernel-module
 # probe can read `/proc/config.gz` as a secondary kernel-config
@@ -59,8 +54,8 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["with-all
 
 [dev-dependencies]
 nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
-d2b-core = { workspace = true, features = ["test-support"] }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
-tokio = { workspace = true, features = ["net"] }
-ttrpc = { workspace = true, default-features = false, features = ["async"] }
+tokio = { version = "1", features = ["net"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }

@@ -14,6 +14,22 @@ via a VM-start preflight wired into d2bd
 
 This page documents the current ownership matrix the daemon enforces.
 
+## Gateway credential state
+
+Realm gateway credentials are not part of the per-VM ownership matrix. They
+live under each gateway's `d2b.gateways.<name>.stateDir` (default
+`/var/lib/d2b/gateways/<name>` inside the gateway guest), not under
+`/var/lib/d2b/vms/<vm>/`. The host NixOS module does not create or
+manage these credential files; they are enrolled inside the guest:
+
+| Path | Owner | Group | Mode | Rationale |
+|---|---|---|---|---|
+| `credential.sealed.json` | `d2bd` (inside gateway guest) | `d2bd` | `0600` | Encrypted relay/provider credential envelope. The host daemon does not read or mint from it. |
+| `seal.key` | `d2bd` (inside gateway guest) | `d2bd` | `0600` | Guest-local 32-byte sealing key. Losing it requires re-enrollment and provider-side credential rotation. |
+
+`allowHostRelayCredentials` is retired; host-side gateway credential reads
+and Relay Send bearer minting are rejected.
+
 ## CRITICAL: hardlink-farm carve-out
 
 > Critical detail: the per-VM hardlink farm shares inodes with

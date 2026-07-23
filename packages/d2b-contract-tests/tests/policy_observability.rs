@@ -13,10 +13,6 @@
 //!   * tests/tempo-budget-eval.sh -> tempo_stack_signoz_backend_and_collector +
 //!     tempo_guest_collector_shape + tempo_security_observability_and_retired_backends
 //!   * tests/wave-evidence-schema-eval.sh -> wave_evidence_schema_cross_check
-//!   * tests/unit/nix/cases/observability.nix
-//!     "observability/no-second-registration-path" ->
-//!     observability_has_no_second_registration_path (relocated from a Nix
-//!     source-text/path scan to this Rust policy lint)
 
 use std::collections::BTreeSet;
 
@@ -399,24 +395,19 @@ fn tempo_guest_collector_shape() {
 }
 
 // ===========================================================================
-// Realm-owned collector, secrets, endpoint, and projection posture.
+// Migrated from tests/tempo-budget-eval.sh (part 3 of 3): collector
+// self-telemetry, ClickHouse/secrets security posture, host-activation vsock
+// ACL wiring, loopback bind posture, retired-backend denylist, host options,
+// and the ADR Spec-corrections record.
 // ===========================================================================
 #[test]
 fn tempo_security_observability_and_retired_backends() {
     let host_opts_rel = "nixos-modules/options-observability.nix";
     let adr_rel = "docs/adr/0026-native-signoz-observability.md";
     let secrets_rel = "nixos-modules/observability-host-secrets.nix";
-    let rows_rel = "nixos-modules/realm-observability-rows.nix";
+    let host_activation_rel = "nixos-modules/host-activation.nix";
 
-    for rel in [
-        OBS_STACK,
-        OBS_HOST,
-        OBS_GUEST,
-        host_opts_rel,
-        adr_rel,
-        secrets_rel,
-        rows_rel,
-    ] {
+    for rel in [OBS_STACK, OBS_HOST, OBS_GUEST, host_opts_rel, adr_rel] {
         assert!(
             repo_path_exists(rel),
             "tempo-budget-eval: missing file: {rel}"
@@ -429,8 +420,9 @@ fn tempo_security_observability_and_retired_backends() {
     let host_opts = read_repo_file(host_opts_rel);
     let adr = read_repo_file(adr_rel);
     let secrets = read_repo_file(secrets_rel);
-    let rows = read_repo_file(rows_rel);
+    let host_activation = read_repo_file(host_activation_rel);
 
+    // collector self-telemetry tokens are present across stack/host/guest.
     for token in [
         "prometheus/self",
         "d2b-host-otel-collector",
@@ -443,79 +435,62 @@ fn tempo_security_observability_and_retired_backends() {
         );
     }
 
+    // collector pipelines are source-specific, not a shared otlp receiver.
     assert!(
         stack.contains("pipelines = sourcePipelines")
             && !stack.contains(r#"receivers = [ "otlp" ]"#),
         "tempo-budget-eval: collector must route through source-specific receiver pipelines"
     );
+
+    // ClickHouse passwords are URL-encoded before DSN interpolation.
     assert!(
-        stack.contains("@uri") && stack.contains("pw_uri"),
-        "tempo-budget-eval: ClickHouse credentials must be encoded before DSN interpolation"
+        stack.contains("@uri")
+            && !stack.contains("password=$pw\"")
+            && !stack.contains("password=$SIGNOZ_CLICKHOUSE_PASSWORD"),
+        "tempo-budget-eval: ClickHouse passwords embedded in DSN query strings must be \
+         URL-encoded"
     );
+
+    // ClickHouse default user keeps a local-only auth method.
     assert!(
         stack.contains(r#"<password remove="1"/>"#)
             && stack.contains("<no_password/>")
             && stack.contains("<ip>127.0.0.1</ip>"),
-        "tempo-budget-eval: ClickHouse default user must retain local-only authentication"
+        "tempo-budget-eval: ClickHouse default user must not be left without an auth method"
     );
+
+    // SigNoz OTel collector runs the static d2b config (no OpAMP manager).
     assert!(
         !stack.contains("--manager-config") && !stack.contains("conf/opamp.yaml"),
-        "tempo-budget-eval: static d2b receivers must not enable OpAMP manager mode"
+        "tempo-budget-eval: SigNoz OTel collector must not enable OpAMP manager mode for \
+         static d2b receivers"
     );
 
-    for token in [
-        "builtins.length rows.secrets == 3",
-        r#"secret.owner == "realm-broker""#,
-        "Observability credentials must be emitted as realm-broker-owned",
-    ] {
-        assert!(
-            secrets.contains(token),
-            "tempo-budget-eval: declarative realm secret posture missing {token:?}"
-        );
-    }
-    for forbidden in ["chmod ", "chown ", "install -d", "mkdir ", "setfacl "] {
-        assert!(
-            !secrets.contains(forbidden),
-            "tempo-budget-eval: observability secret declarations must not gain repair authority: {forbidden}"
-        );
-    }
-
-    for token in [
-        r#"(entry.binding.axis or null) == "local-observability""#,
-        "frozen-provider-registry-v2",
-        "bounded = true;",
-        "rawAuditAccess = false;",
-        "rawRepairStateAccess = false;",
-        r#"redaction = "positive-allowlist";"#,
-        r#"policy = "positive-allowlist";"#,
-        r#""commandOutput""#,
-        r#""credentials""#,
-        r#""rawAudit""#,
-        r#""secret""#,
-        r#"owner = "realm-broker";"#,
-        r#"clients = [ "d2b-host-otel-collector" ];"#,
-        r#"readers = [ "d2b-host-otel-collector" ];"#,
-    ] {
-        assert!(
-            rows.contains(token),
-            "tempo-budget-eval: frozen bounded projection contract missing {token:?}"
-        );
-    }
+    // observability secrets are readable through the read-only virtiofs share
+    // but protected by a host parent dir.
     assert!(
-        host.contains("rows.endpoints.hostEgress.path")
-            && host.contains(r#"row.kind == "bounded-projection""#)
-            && !host.contains("/var/lib/d2b/vms/")
-            && !host.contains("/run/d2b/otel/host-egress.sock")
-            && !host.contains("export_dir=")
-            && !host.contains("setfacl -m u:d2b-host-otel-collector"),
-        "tempo-budget-eval: host collector must consume canonical realm endpoints and projections"
+        secrets.contains(r#"chmod 0444 "$file""#) && secrets.contains("root:root 0700"),
+        "tempo-budget-eval: observability secrets must be readable through the read-only \
+         virtiofs share"
     );
 
+    // workload OTLP relays inherit/connect to the obs VM vsock socket ACLs.
+    assert!(
+        any_line_matches(&host_activation, r"otel_obs_connect_uids=.*vsock-relay")
+            && host_activation.contains(r#"setfacl -d -m "u:$obs_uid:rw" "$obs_state_dir""#)
+            && host_activation.contains(r#"setfacl -m "u:$obs_uid:rw,m::rw" "$obs_vsock""#),
+        "tempo-budget-eval: observed workload relay UIDs must get effective obs vsock socket ACLs"
+    );
+
+    // backend binds are loopback-oriented and only the SigNoz UI port is opened.
     assert!(
         stack.contains("127.0.0.1")
             && stack.contains("networking.firewall.allowedTCPPorts = [ cfg.signoz.listenPort ]"),
-        "tempo-budget-eval: stack must keep backend ports loopback-only and expose only the UI"
+        "tempo-budget-eval: stack must keep backend ports loopback-only and open only the \
+         SigNoz UI port"
     );
+
+    // no retired backend is declared in the stack.
     for retired in [
         r"services\.grafana",
         r"services\.prometheus",
@@ -528,6 +503,8 @@ fn tempo_security_observability_and_retired_backends() {
             "tempo-budget-eval: stack still declares retired backend matching /{retired}/"
         );
     }
+
+    // host options expose the SigNoz option surface.
     for option in [
         "signoz = {",
         "listenPort",
@@ -540,43 +517,11 @@ fn tempo_security_observability_and_retired_backends() {
             "tempo-budget-eval: host options missing {option}"
         );
     }
+
+    // ADR records the manifestVersion Spec corrections.
     assert!(
         adr.contains("Spec corrections") && adr.contains("manifestVersion"),
         "tempo-budget-eval: ADR must record manifestVersion Spec corrections"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Relocated from tests/unit/nix/cases/observability.nix
-// "observability/no-second-registration-path".
-//
-// The realm-observability rows module is the sole registration path for the
-// native SigNoz observability provider: there must be no companion
-// `provider-registry-v2-extensions/observability.nix` fragment duplicating
-// that registration (unlike the other provider axes, which each declare
-// their own `providers = ...` fragment), and the rows module must still cite
-// the frozen-registry rationale for why it does not. A missing/duplicate
-// companion file is a repo-tree/source-shape invariant, not an evaluable
-// module value, so it belongs here rather than as a Nix eval case.
-// ---------------------------------------------------------------------------
-#[test]
-fn observability_has_no_second_registration_path() {
-    let fragment_rel = "nixos-modules/provider-registry-v2-extensions/observability.nix";
-    assert!(
-        !repo_path_exists(fragment_rel),
-        "observability provider registration must not gain a second path via {fragment_rel}"
-    );
-
-    let rows_rel = "nixos-modules/realm-observability-rows.nix";
-    let rows = read_repo_file(rows_rel);
-    assert!(
-        !rows.contains("providers ="),
-        "{rows_rel}: realm-observability-rows.nix must not grow its own \
-         `providers = ...` registration fragment"
-    );
-    assert!(
-        rows.contains("frozen-provider-registry-v2"),
-        "{rows_rel}: realm-observability-rows.nix must cite the frozen-provider-registry-v2 rationale"
     );
 }
 

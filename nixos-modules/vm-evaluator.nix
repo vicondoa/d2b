@@ -1,203 +1,81 @@
+# nixos-modules/vm-evaluator.nix
+#
+# D2b-owned per-VM NixOS evaluator. Replaces the upstream
+# `inputs.microvm.nixosModules.host` per-VM evaluation
+# pipeline (which used `microvm.vms = lib.mapAttrs ...` + the
+# microvm.nix host module's `lib.evalModules` invocation).
+#
+# Usage from `host.nix`:
+#
+#   composeVm = (import ./vm-evaluator.nix { inherit inputs; })
+#     { inherit config lib pkgs; };
+#   d2b.vms = lib.mapAttrs (name: vm: vm // {
+#     computed = composeVm name vm;
+#   }) cfg.vms;
+#
+# The resulting `d2b.vms.<name>.computed.config` is a fully-
+# evaluated NixOS config attrset containing:
+#   - `config.system.build.toplevel` (the per-VM closure)
+#   - `config.microvm.*` (the runner options from vm-options.nix
+#     above; consumer-set or default)
+#   - everything else a NixOS module evaluation produces (boot,
+#     networking, services, etc. — driven by the consumer's
+#     `vm.config` module list).
 { inputs }:
-
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.d2b;
-  inherit (lib) mkOption types;
 
-  workloadGuestOptions =
-    { config, d2bRealmId, d2bWorkloadId, d2bRoleIds, ... }:
-    let
-      roleSocket = roleKind: file:
-        "/run/d2b/r/${d2bRealmId}/w/${d2bWorkloadId}/roles/${
-          d2bRoleIds.${roleKind}
-        }/${file}";
-    in
-    {
-      options.microvm = {
-        hypervisor = mkOption {
-          type = types.enum [ "cloud-hypervisor" "qemu" ];
-          default = "cloud-hypervisor";
-        };
-        vcpu = mkOption {
-          type = types.ints.positive;
-          default = 1;
-        };
-        mem = mkOption {
-          type = types.ints.positive;
-          default = 512;
-        };
-        hotplugMem = mkOption {
-          type = types.ints.unsigned;
-          default = 0;
-        };
-        hotpluggedMem = mkOption {
-          type = types.ints.unsigned;
-          default = 0;
-        };
-        hugepageMem = mkOption {
-          type = types.bool;
-          default = false;
-        };
-        balloon = mkOption {
-          type = types.bool;
-          default = false;
-        };
-        initialBalloonMem = mkOption {
-          type = types.ints.unsigned;
-          default = 0;
-        };
-        deflateOnOOM = mkOption {
-          type = types.bool;
-          default = false;
-        };
-        storeOnDisk = mkOption {
-          type = types.bool;
-          default = false;
-        };
-        storeDisk = mkOption {
-          type = types.nullOr types.path;
-          default = null;
-        };
-        writableStoreOverlay = mkOption {
-          type = types.nullOr types.str;
-          default = null;
-        };
-        kernel = mkOption {
-          type = types.attrsOf types.unspecified;
-          default = pkgs.linuxPackages.kernel;
-        };
-        kernelParams = mkOption {
-          type = types.listOf types.str;
-          default = [ ];
-        };
-        initrdPath = mkOption {
-          type = types.path;
-          default = config.system.build.initialRamdisk + "/initrd";
-        };
-        vsock = {
-          cid = mkOption {
-            type = types.ints.positive;
-            readOnly = true;
-          };
-          socket = mkOption {
-            type = types.str;
-            readOnly = true;
-          };
-        };
-        interfaces = mkOption {
-          type = types.listOf types.attrs;
-          default = [ ];
-        };
-        shares = mkOption {
-          type = types.listOf types.attrs;
-          default = [ ];
-        };
-        devices = mkOption {
-          type = types.listOf types.attrs;
-          default = [ ];
-        };
-        volumes = mkOption {
-          type = types.listOf types.attrs;
-          default = [ ];
-        };
-        cloud-hypervisor = {
-          package = mkOption {
-            type = types.package;
-            default = pkgs.cloud-hypervisor;
-          };
-          extraArgs = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-          };
-          platformOEMStrings = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-          };
-        };
-        virtiofsd = {
-          package = mkOption {
-            type = types.package;
-            default = pkgs.virtiofsd;
-          };
-          threadPoolSize = mkOption {
-            type = types.either types.ints.positive (types.enum [ "auto" ]);
-            default = "auto";
-          };
-          group = mkOption {
-            type = types.nullOr types.str;
-            default = null;
-          };
-          extraArgs = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-          };
-        };
-        graphics = {
-          enable = mkOption {
-            type = types.bool;
-            default = false;
-          };
-          crosvmPackage = mkOption {
-            type = types.package;
-            default = pkgs.crosvm;
-          };
-          renderNodeOnly = mkOption {
-            type = types.bool;
-            default = false;
-          };
-          socket = mkOption {
-            type = types.str;
-            default =
-              if config.microvm.graphics.renderNodeOnly
-              then roleSocket "gpu-render-node" "gpu.sock"
-              else roleSocket "gpu" "gpu.sock";
-          };
-        };
-      };
+  # Build a per-VM NixOS evaluation using the host's nixpkgs path.
+  # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint —
+  # it sets up `pkgs`, the module system, and the standard NixOS
+  # module set. We layer our d2b-owned vm-options.nix on top so
+  # the per-VM config can set `microvm.mem`, etc.
+  #
+  # The caller (host.nix's composeVm wrapper) already merges
+  # `./base.nix`, `./guest-sshd-host-keys.nix`, the per-component
+  # guest modules, and `vm.config` (the consumer's module list)
+  # into the `composedConfig` it passes here, so we do NOT layer
+  # those again — double-imports of `./base.nix` would multiply
+  # evaluate the framework baseline.
+  # Build a per-VM NixOS evaluation using the host's nixpkgs path.
+  # The caller passes a LIST of modules (`composedModules`) that
+  # together describe the per-VM config. We layer vm-options.nix
+  # and the per-VM `_module.args.name` on top.
+  evalVm = name: composedModules:
+    import (pkgs.path + "/nixos/lib/eval-config.nix") {
+      modules = [
+        ./vm-options.nix
+        ./vm-guest-base.nix
+        ./guest-control.nix
+        # Inherit host nixpkgs policy so per-VM evals honor the consumer's
+        # allowUnfree / overlays / security fixes without re-stating them in
+        # each per-VM module.
+        {
+          nixpkgs.config = config.nixpkgs.config;
+          nixpkgs.overlays = config.nixpkgs.overlays;
+        }
+        { _module.args.name = name; }
+      ] ++ composedModules;
+      specialArgs =
+        { inherit inputs; }
+        // cfg.site.extraSpecialArgs
+        // { d2bInputs = inputs; };
+      inherit (pkgs.stdenv.hostPlatform) system;
     };
 
-  evalWorkload = workload: composedModules:
+  composeVm = name: composedModules:
     let
-      roles = cfg._index.roles.byWorkloadId.${workload.workloadId} or [ ];
-      roleIds = lib.listToAttrs (map
-        (role: {
-          name = role.roleKind;
-          value = role.roleId;
-        })
-        roles);
-      evaluated = import (pkgs.path + "/nixos/lib/eval-config.nix") {
-        modules = [
-          workloadGuestOptions
-          ./vm-guest-base.nix
-          ./guest-control.nix
-          {
-            nixpkgs.config = config.nixpkgs.config;
-            nixpkgs.overlays = config.nixpkgs.overlays;
-          }
-          {
-            _module.args.name = workload.workloadId;
-          }
-        ] ++ composedModules;
-        specialArgs =
-          {
-            inherit inputs;
-            d2bInputs = inputs;
-            d2bRealmId = workload.realmId;
-            d2bWorkloadId = workload.workloadId;
-            d2bRoleIds = roleIds;
-          }
-          // cfg.site.extraSpecialArgs;
-        inherit (pkgs.stdenv.hostPlatform) system;
-      };
-    in
-    {
+      evaluated = evalVm name composedModules;
+    in {
       inherit (evaluated) config options;
-      inherit roleIds;
     };
 in
 {
-  _composeWorkload = evalWorkload;
+  # The module body exposes composeVm via a top-level let-binding
+  # for host.nix consumers, plus an empty `config = {}` block to
+  # satisfy NixOS module loading rules.
+  _composeVm = composeVm;
   config = { };
 }

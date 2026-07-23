@@ -4,11 +4,14 @@
 //! config and provides three lookup operations:
 //!
 //! - canonical target (`workload.realm.d2b`) → legacy VM name
+//! - workload id (unambiguous short alias) → legacy VM name
 //! - legacy VM name → [`WorkloadIdentity`] (for list/status output)
 //!
 //! All lookups are fail-closed: canonical targets that do not exist return
-//! [`TargetResolutionError::NotFound`]. Bare workload identifiers are never
-//! interpreted as aliases.
+//! [`TargetResolutionError::NotFound`]; workload ids that match more than
+//! one workload return [`TargetResolutionError::AliasConflict`]. Legacy VM
+//! names that are not in the index pass through unchanged so the existing
+//! local fast path is never broken.
 //!
 //! Only workloads with an `identity` field populated in the realm controllers
 //! config contribute to the index. Workloads with `identity: None` (pre-W15
@@ -30,6 +33,11 @@ pub enum TargetResolution {
         canonical_target: String,
         vm_name: String,
     },
+    /// Workload id (short alias) resolved unambiguously to a legacy VM name.
+    ResolvedFromWorkloadId {
+        workload_id: String,
+        vm_name: String,
+    },
 }
 
 impl TargetResolution {
@@ -38,6 +46,7 @@ impl TargetResolution {
         match self {
             Self::LegacyVmName(name) => name,
             Self::ResolvedFromCanonicalTarget { vm_name, .. } => vm_name,
+            Self::ResolvedFromWorkloadId { vm_name, .. } => vm_name,
         }
     }
 }
@@ -84,6 +93,8 @@ impl TargetResolutionError {
 pub struct WorkloadTargetIndex {
     /// canonical target string → legacy VM name
     by_canonical_target: HashMap<String, String>,
+    /// workload id → all matching legacy VM names (used for ambiguity detection)
+    by_workload_id: HashMap<String, Vec<String>>,
     /// legacy VM name → WorkloadIdentity (for list/status injection)
     by_vm_name: HashMap<String, WorkloadIdentity>,
 }
@@ -107,6 +118,11 @@ impl WorkloadTargetIndex {
                 let canonical = identity.canonical_target.to_canonical();
 
                 index.by_canonical_target.insert(canonical, vm_name.clone());
+                index
+                    .by_workload_id
+                    .entry(identity.workload_id.as_str().to_owned())
+                    .or_default()
+                    .push(vm_name.clone());
                 index.by_vm_name.insert(vm_name, identity.clone());
             }
         }
@@ -133,11 +149,15 @@ impl WorkloadTargetIndex {
     ///    target and look it up by exact match — returns `NotFound` if absent.
     /// 2. If the string is a known legacy VM name (present in
     ///    `known_legacy_vm_names`), pass it through unchanged.
-    /// 3. Fall through as a `LegacyVmName` (caller is responsible for
+    /// 3. Otherwise try the string as a workload id short alias:
+    ///    - Exactly one match → `ResolvedFromWorkloadId`.
+    ///    - More than one match → `AliasConflict` (fail closed).
+    /// 4. Fall through as a `LegacyVmName` (caller is responsible for
     ///    validating that it actually exists in the manifest).
     ///
     /// The `known_legacy_vm_names` set is the caller's manifest key set; it
-    /// distinguishes explicitly known legacy names from canonical targets.
+    /// prevents the workload-id alias path from shadowing a VM name that
+    /// happens to equal a workload id declared in a different realm.
     pub fn resolve_target(
         &self,
         target: &str,
@@ -161,7 +181,28 @@ impl WorkloadTargetIndex {
             return Ok(TargetResolution::LegacyVmName(target.to_owned()));
         }
 
-        // Bare identifiers are legacy VM names only; there is no realm alias.
+        // Step 3: workload id short alias.
+        if let Some(candidates) = self.by_workload_id.get(target) {
+            match candidates.as_slice() {
+                [vm_name] => {
+                    return Ok(TargetResolution::ResolvedFromWorkloadId {
+                        workload_id: target.to_owned(),
+                        vm_name: vm_name.clone(),
+                    });
+                }
+                [_, _, ..] => {
+                    return Err(TargetResolutionError::AliasConflict {
+                        workload_id: target.to_owned(),
+                        candidates: candidates.clone(),
+                    });
+                }
+                // Empty vec shouldn't happen (we only insert non-empty), but
+                // fall through to step 4 gracefully.
+                _ => {}
+            }
+        }
+
+        // Step 4: treat as legacy VM name and let the caller validate.
         Ok(TargetResolution::LegacyVmName(target.to_owned()))
     }
 }
@@ -465,11 +506,11 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Target resolution — bare identifiers never become realm aliases
+    // Target resolution — workload id alias
     // ------------------------------------------------------------------
 
     #[test]
-    fn bare_workload_id_is_not_resolved_as_an_alias() {
+    fn resolve_workload_id_alias_unambiguous_succeeds() {
         let config = controllers_json_with_workloads(&format!(
             "[{}]",
             workload_with_identity("builder", "dev", "builder")
@@ -478,26 +519,42 @@ mod tests {
         // "builder" is not a known legacy VM name for the caller.
         let result = index
             .resolve_target("builder", &known_vms(&[]))
-            .expect("bare identifier remains a legacy VM name");
+            .expect("unambiguous workload id resolves");
         assert_eq!(result.vm_name(), "builder");
-        assert!(matches!(result, TargetResolution::LegacyVmName(_)));
+        assert!(matches!(
+            result,
+            TargetResolution::ResolvedFromWorkloadId { .. }
+        ));
     }
 
     #[test]
-    fn duplicate_workload_ids_do_not_create_alias_resolution() {
+    fn resolve_workload_id_alias_ambiguous_fails_closed() {
+        // Two workloads with the same workload_id but different vm_names.
         let w1 = workload_with_identity("builder", "work", "builder-work");
         let w2 = workload_with_identity("builder", "dev", "builder-dev");
         // canonical targets already differ: builder.work.d2b vs builder.dev.d2b
         let config = controllers_json_with_workloads(&format!("[{w1}, {w2}]"));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
-        let result = index
+        let err = index
             .resolve_target("builder", &known_vms(&[]))
-            .expect("bare identifier remains a legacy VM name");
-        assert!(matches!(result, TargetResolution::LegacyVmName(_)));
+            .expect_err("ambiguous workload id must fail closed");
+        match &err {
+            TargetResolutionError::AliasConflict {
+                workload_id,
+                candidates,
+            } => {
+                assert_eq!(workload_id, "builder");
+                assert_eq!(candidates.len(), 2);
+            }
+            other => panic!("expected AliasConflict, got {other:?}"),
+        }
+        assert!(err.message().contains("ambiguous"));
     }
 
     #[test]
-    fn resolve_legacy_vm_name_remains_explicit() {
+    fn resolve_legacy_vm_name_takes_priority_over_workload_id_alias() {
+        // A workload id "corp-vm" exists in the index, but "corp-vm" is also a
+        // known legacy VM name. The fast path wins and no alias resolution runs.
         let config = controllers_json_with_workloads(&format!(
             "[{}]",
             workload_with_identity("corp-vm", "work", "corp-vm")
@@ -506,6 +563,7 @@ mod tests {
         let result = index
             .resolve_target("corp-vm", &known_vms(&["corp-vm"]))
             .expect("legacy VM name takes priority");
+        // Must be LegacyVmName, not ResolvedFromWorkloadId.
         assert!(matches!(result, TargetResolution::LegacyVmName(_)));
         assert_eq!(result.vm_name(), "corp-vm");
     }

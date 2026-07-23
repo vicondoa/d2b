@@ -33,11 +33,11 @@ tests/
 │   ├── meta/                                                    meta gates (guard the test infra; closed set)
 │   └── gates/                                                   drift + perf gates (closed set)
 ├── integration/                   ── Layer 2 ──
-│   ├── containers/                                              type 9: podman (final validator lane after PR opens)
+│   ├── containers/                                              type 9: podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                           distro pins + fixtures
 │   └── live/                                                    type 11: D2B_LIVE live-host (manual)
 └── host-integration/
-    ├── *.nix                                                    type 10: runNixOSTest (final validator lane after PR opens)
+    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
@@ -49,7 +49,7 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | Command | Runs | Where |
 |---------|------|-------|
 | `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
-| `make test` | `test-unit` + `test-integration` | local host; use only when that combined scope is the intended validator lane |
+| `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
@@ -58,8 +58,8 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
-| `make test-integration` | type-9 podman container tests | **final validator lane after the PR opens** (podman; not GitHub CI) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks | **final validator lane after the PR opens** on a local NixOS/KVM host (not GitHub CI; TCG fallback) |
+| `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | PR-equivalent Layer-1 gate from `tests/layer1-jobs.json` with bounded local parallelism | local |
@@ -83,12 +83,6 @@ is generated from it by `make layer1-workflow` and checked by
 Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel and exposes a
 stable final `check` rollup job intended for branch protection.
 
-Those Make targets delegate to Rust `xtask`. Direct invocations run from
-`packages/`: `cargo xtask layer1 validate`, `cargo xtask layer1 run-local`,
-`cargo xtask layer1 workflow <write|check>`, and `cargo xtask layer1 checks
-list`. The delivery command/option index is `cargo xtask delivery wave help`;
-the `delivery` namespace is mandatory.
-
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
 stable aggregator over the shards + the non-`checks` outputs job). The aarch64
@@ -98,10 +92,10 @@ flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
 sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
 `D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job because
 the fixture checks run in the flake shard set; tune `D2B_CHECK_JOBS` and
-`D2B_FLAKE_JOBS` for host capacity. When required, `make test-integration` and
-`make test-host-integration` run after the PR opens as the final validator
-lane. They are concurrent with GitHub CI and panel review and are not replaced
-by PR pipeline jobs.
+`D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
+`make test-integration` and `make test-host-integration` on the host before the
+PR is opened; those manual integration tiers are not replaced by PR pipeline
+jobs.
 
 Useful knobs:
 - `D2B_NO_SCCACHE=1` — disable sccache in the rust gate.
@@ -114,24 +108,6 @@ Useful knobs:
   runs the broker's three feature passes (default / layer1-bootstrap /
   fake-backends) concurrently with the main workspace, on deterministic target
   dirs so the sccache cache key stays stable.
-
-## PR and final-validation order
-
-1. Commit the candidate and run the smallest relevant focused preflight, such
-   as one crate test, one nix-unit shard, or one `make test-*` target.
-2. Open or update the ordinary PR and Git Town parent graph, then create the immutable
-   delivery snapshot for that exact open PR state.
-3. Run GitHub CI, the manifest-required final validator lane, and the ten-role
-   panel concurrently against that snapshot. Reviewers inspect; they do not run
-   tests.
-4. Import validator and panel attestations into external delivery state and
-   seal the candidate. A pending lane is valid on an open PR but never permits
-   merge.
-
-PRs carry only dependency, base/head/tree, `candidate_id`/`content_id`, and
-check-status summaries with optional external status links. Do not paste raw
-command output, evidence payloads, panel records, seals, or run/model
-provenance into the PR or source tree.
 
 ## Adding a test
 
@@ -148,9 +124,8 @@ Layer 1:
   or missing paths so the test never touches the operator's live daemon.
 - Rendered-artifact ↔ DTO/doc contract → a contract test in
   `packages/d2b-contract-tests/`.
-- Generated docs/schemas/CLI freshness → already a drift gate; regenerate from
-  `packages/` with `cargo xtask gen-*`, then run `make test-drift`. Do **not**
-  add a new shell gate.
+- Generated docs/schemas/CLI freshness → already a drift gate; regenerate with
+  `cargo run -p xtask -- gen-*`. Do **not** add a new shell gate.
 
 Only reach for Layer 2 (containers / VMs / live-host / hardware) when a foreign
 userland, a real systemd boot, a live host, or a physical device is genuinely

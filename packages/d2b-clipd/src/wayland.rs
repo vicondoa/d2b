@@ -24,11 +24,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_source_v1,
 };
 
-use crate::policy::{
-    MAX_OFFER_MIME_TYPES, is_bounded_secret_hint, is_mime_allowed, normalize_mime,
-};
-
-const MAX_PENDING_DATA_OFFERS: usize = 64;
+use crate::policy::{has_secret_hint, is_mime_allowed};
 
 // ─── Public event type ───────────────────────────────────────────────────────
 
@@ -118,8 +114,7 @@ impl DataControlSource {
 
 #[derive(Debug, Default)]
 struct PendingOffer {
-    allowed_mimes: Vec<String>,
-    has_secret: bool,
+    mimes: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -209,20 +204,12 @@ impl WlState {
 
     /// Handle a new offer object created by a `data_offer` device event.
     fn on_data_offer_ext(&mut self, offer: ext_data_control_offer_v1::ExtDataControlOfferV1) {
-        if self.pending.len() >= MAX_PENDING_DATA_OFFERS {
-            offer.destroy();
-            return;
-        }
         let id = offer.id().protocol_id();
         self.pending.insert(id, PendingOffer::default());
         self.live.insert(id, DataControlOffer::Ext(offer));
     }
 
     fn on_data_offer_zwlr(&mut self, offer: zwlr_data_control_offer_v1::ZwlrDataControlOfferV1) {
-        if self.pending.len() >= MAX_PENDING_DATA_OFFERS {
-            offer.destroy();
-            return;
-        }
         let id = offer.id().protocol_id();
         self.pending.insert(id, PendingOffer::default());
         self.live.insert(id, DataControlOffer::Zwlr(offer));
@@ -231,17 +218,7 @@ impl WlState {
     /// Handle `offer(mime_type)` on a pending offer.
     fn on_offer_mime(&mut self, proxy_id: u32, mime_type: String) {
         if let Some(pending) = self.pending.get_mut(&proxy_id) {
-            if is_bounded_secret_hint(&mime_type) {
-                pending.has_secret = true;
-                return;
-            }
-            if !is_mime_allowed(&mime_type) || pending.allowed_mimes.len() == MAX_OFFER_MIME_TYPES {
-                return;
-            }
-            let mime_type = normalize_mime(&mime_type);
-            if !pending.allowed_mimes.contains(&mime_type) {
-                pending.allowed_mimes.push(mime_type);
-            }
+            pending.mimes.push(mime_type);
         }
     }
 
@@ -284,8 +261,13 @@ impl WlState {
         // compositor, or in rare race conditions (offer destroyed before selection).
         let live = self.live.remove(&id);
 
-        let has_secret = pending.has_secret;
-        let allowed_mimes = pending.allowed_mimes;
+        let all_mimes: Vec<String> = pending.mimes.clone();
+        let has_secret = has_secret_hint(all_mimes.iter().map(String::as_str));
+        let allowed_mimes: Vec<String> = pending
+            .mimes
+            .into_iter()
+            .filter(|m| is_mime_allowed(m))
+            .collect();
 
         // Emit the event regardless so the host clipboard can track attribution
         // and clear stale state.  offer is None when no allowed MIME types exist
@@ -427,10 +409,10 @@ impl Dispatch<ext_data_control_source_v1::ExtDataControlSourceV1, u64> for WlSta
     ) {
         use ext_data_control_source_v1::Event;
         match event {
-            Event::Send { mime_type, fd } if is_mime_allowed(&mime_type) => {
+            Event::Send { mime_type, fd } => {
                 state.events.push(HostClipboardEvent::SourceSendRequest {
                     source_id,
-                    mime_type: normalize_mime(&mime_type),
+                    mime_type,
                     fd,
                 });
             }
@@ -503,10 +485,10 @@ impl Dispatch<zwlr_data_control_source_v1::ZwlrDataControlSourceV1, u64> for WlS
     ) {
         use zwlr_data_control_source_v1::Event;
         match event {
-            Event::Send { mime_type, fd } if is_mime_allowed(&mime_type) => {
+            Event::Send { mime_type, fd } => {
                 state.events.push(HostClipboardEvent::SourceSendRequest {
                     source_id,
-                    mime_type: normalize_mime(&mime_type),
+                    mime_type,
                     fd,
                 });
             }
@@ -606,16 +588,8 @@ impl DataControlClient {
             }
             _ => return Err(DataControlError::ProtocolUnavailable),
         };
-        let mut offered = Vec::new();
         for mime in mimes {
-            if offered.len() == MAX_OFFER_MIME_TYPES || !is_mime_allowed(mime) {
-                continue;
-            }
-            let mime = normalize_mime(mime);
-            if !offered.contains(&mime) {
-                source.offer_mime(mime.clone());
-                offered.push(mime);
-            }
+            source.offer_mime(mime.clone());
         }
         Ok((source, source_id))
     }
@@ -715,25 +689,22 @@ mod tests {
         state.on_offer_mime(5, "x-kde-passwordManagerHint".to_owned());
 
         let pending = state.pending.remove(&5).expect("pending");
-        assert!(pending.has_secret, "password hint must be detected");
+        assert_eq!(pending.mimes.len(), 4);
+
+        // Filtering happens in finalize_selection.
+        let all: Vec<String> = pending.mimes.clone();
+        let has_secret = has_secret_hint(all.iter().map(String::as_str));
+        let allowed: Vec<String> = pending
+            .mimes
+            .into_iter()
+            .filter(|m| is_mime_allowed(m))
+            .collect();
+        assert!(has_secret, "password hint must be detected");
         assert_eq!(
-            pending.allowed_mimes,
+            allowed,
             ["text/plain", "text/html"],
             "only allowlisted mimes"
         );
-    }
-
-    #[test]
-    fn pending_offer_deduplicates_and_bounds_mimes() {
-        let mut state = WlState::new();
-        state.pending.insert(5, PendingOffer::default());
-        for _ in 0..MAX_OFFER_MIME_TYPES * 2 {
-            state.on_offer_mime(5, "text/plain".to_owned());
-        }
-        state.on_offer_mime(5, "x".repeat(crate::policy::MAX_MIME_TYPE_BYTES + 1));
-        let pending = state.pending.remove(&5).unwrap();
-        assert_eq!(pending.allowed_mimes, ["text/plain"]);
-        assert!(!pending.has_secret);
     }
 
     #[test]
@@ -755,8 +726,7 @@ mod tests {
         state.pending.insert(
             7,
             PendingOffer {
-                allowed_mimes: Vec::new(),
-                has_secret: false,
+                mimes: vec!["application/octet-stream".to_owned()],
             },
         );
         state.finalize_selection(7);

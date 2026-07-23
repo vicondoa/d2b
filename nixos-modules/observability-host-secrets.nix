@@ -1,44 +1,189 @@
-{ config, lib, ... }:
+# Host-side secret provisioning for the observability stack.
+#
+# v0.2.0 originally generated the observability UI credentials inside
+# the stack VM via `system.activationScripts`. That put secrets in the
+# wrong place: anything on the HOST that needs them (a launcher, an
+# external health probe, a backup of stack credentials) had to cross the
+# VM boundary to read them. The trust flow was pointing the wrong way.
+#
+# This module fixes that by generating both secrets on the HOST and
+# sharing them into the stack VM read-only over virtiofs. The flow
+# is identical in structure to the per-VM `host-keys/` share
+# managed by `host-keys.nix` + `store.nix`:
+#
+#   Host:    `<stateDir>/observability/*` (root:root 0444 under a
+#            root:root 0700 parent)
+#   Share:   virtiofs tag `d2b-obs-sec` → stack-VM mount
+#            `/run/d2b-obs-secrets/` (read-only)
+#   Guest:   stack services' `LoadCredential`
+#            points at the in-VM mount path (see
+#            `components/observability/stack.nix`).
+#
+# Consumers no longer need to declare anything inside the stack VM
+# to gain host-side access to the admin password: `sudo cat
+# <stateDir>/observability/grafana-admin-password` from the host is
+# the supported path. A focused sudoers rule on the host (in
+# `/etc/nixos`) is the consumer's responsibility; the framework
+# does not assume one operator name.
+#
+# Active only when `d2b.observability.enable = true`.
+{ config, pkgs, lib, ... }:
 
 let
-  cfg = config.d2b.observability;
-  rows = import ./realm-observability-rows.nix {
-    inherit config lib;
-  };
+  cfg = config.d2b;
+  obsCfg = cfg.observability;
+
+  hostSecretsDir = "${cfg.site.stateDir}/observability";
+  hostSecretKeyPath = "${hostSecretsDir}/grafana-secret-key";
+  hostAdminPasswordPath = "${hostSecretsDir}/grafana-admin-password";
+  hostSignozJwtSecretPath = "${hostSecretsDir}/signoz-jwt-secret";
+  hostSignozRootPasswordPath = "${hostSecretsDir}/signoz-root-password";
+  hostClickHousePasswordPath = "${hostSecretsDir}/clickhouse-password";
+
+  guestSecretsMountPoint = "/run/d2b-obs-secrets";
+
+  manageSecretKey = obsCfg.grafana.secretKeyFile == null;
+  manageAdminPassword = obsCfg.grafana.adminPasswordFile == null;
+  signozSecretSpecs = [
+    {
+      name = "SignozJwtSecret";
+      path = hostSignozJwtSecretPath;
+      source = obsCfg.signoz.jwtSecretFile;
+      minSize = 32;
+      bytes = 64;
+    }
+    {
+      name = "SignozRootPassword";
+      path = hostSignozRootPasswordPath;
+      source = obsCfg.signoz.rootPasswordFile;
+      minSize = 16;
+      bytes = 48;
+    }
+    {
+      name = "ClickHousePassword";
+      path = hostClickHousePasswordPath;
+      source = obsCfg.signoz.clickhousePasswordFile;
+      minSize = 16;
+      bytes = 48;
+    }
+  ];
 in
 {
-  config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion =
-          builtins.length rows.secrets == 3
-          && lib.all
-            (secret:
-              secret.owner == "realm-broker"
-              && lib.hasPrefix
-                "/var/lib/d2b/r/${rows.workload.realmId}/w/${rows.workload.workloadId}/"
-                secret.path)
-            rows.secrets;
-        message =
-          "Observability credentials must be emitted as realm-broker-owned "
-          + "workload resources under the canonical short-ID state root.";
-      }
-    ];
+  config = lib.mkIf obsCfg.enable (lib.mkMerge [
+    # Host-side activation: idempotently generate both secrets at
+    # activation. Same pattern as `host-keys.nix`: atomic install via
+    # tempfile + `mv -f`, repair perms on every activation.
+    {
+      system.activationScripts = lib.mkMerge [
+        (lib.mkIf (manageSecretKey || manageAdminPassword || signozSecretSpecs != [ ]) {
+          d2bObservabilityHostSecretsDir = lib.stringAfter [ "users" ] ''
+            ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root \
+              ${lib.escapeShellArg hostSecretsDir}
+          '';
+        })
+        (lib.mkIf manageSecretKey {
+          d2bObservabilityHostSecretKey = lib.stringAfter
+            [ "d2bObservabilityHostSecretsDir" ] ''
+            file=${lib.escapeShellArg hostSecretKeyPath}
+            if [ -s "$file" ] && [ "$(${pkgs.coreutils}/bin/stat -c %s "$file")" -ge 32 ]; then
+              :
+            else
+              umask 077
+              tmp="$file.tmp.$$"
+              ${pkgs.coreutils}/bin/rm -f "$tmp"
+              ${pkgs.coreutils}/bin/head -c 64 /dev/urandom \
+                | ${pkgs.coreutils}/bin/base64 > "$tmp"
+              ${pkgs.coreutils}/bin/chmod 0400 "$tmp"
+              ${pkgs.coreutils}/bin/chown root:root "$tmp"
+              ${pkgs.coreutils}/bin/mv -f "$tmp" "$file"
+            fi
+            ${pkgs.coreutils}/bin/chmod 0400 "$file"
+            ${pkgs.coreutils}/bin/chown root:root "$file"
+          '';
+        })
+        (lib.mkIf manageAdminPassword {
+          d2bObservabilityHostAdminPassword = lib.stringAfter
+            [ "d2bObservabilityHostSecretsDir" ] ''
+            file=${lib.escapeShellArg hostAdminPasswordPath}
+            if [ -s "$file" ]; then
+              :
+            else
+              umask 077
+              tmp="$file.tmp.$$"
+              ${pkgs.coreutils}/bin/rm -f "$tmp"
+              ${pkgs.coreutils}/bin/head -c 48 /dev/urandom \
+                | ${pkgs.coreutils}/bin/base64 > "$tmp"
+              ${pkgs.coreutils}/bin/chmod 0400 "$tmp"
+              ${pkgs.coreutils}/bin/chown root:root "$tmp"
+              ${pkgs.coreutils}/bin/mv -f "$tmp" "$file"
+            fi
+            ${pkgs.coreutils}/bin/chmod 0400 "$file"
+            ${pkgs.coreutils}/bin/chown root:root "$file"
+          '';
+        })
+        (builtins.listToAttrs (map
+          (spec: {
+            name = "d2bObservabilityHost${spec.name}";
+            value = lib.stringAfter [ "d2bObservabilityHostSecretsDir" ] (
+              if spec.source != null then ''
+                ${pkgs.coreutils}/bin/install -m 0444 -o root -g root \
+                  ${lib.escapeShellArg (toString spec.source)} \
+                  ${lib.escapeShellArg spec.path}
+              '' else ''
+              file=${lib.escapeShellArg spec.path}
+              if [ -s "$file" ] && [ "$(${pkgs.coreutils}/bin/stat -c %s "$file")" -ge ${toString spec.minSize} ]; then
+                :
+              else
+                umask 077
+                tmp="$file.tmp.$$"
+                ${pkgs.coreutils}/bin/rm -f "$tmp"
+                ${pkgs.coreutils}/bin/head -c ${toString spec.bytes} /dev/urandom \
+                  | ${pkgs.coreutils}/bin/base64 > "$tmp"
+                ${pkgs.coreutils}/bin/chmod 0444 "$tmp"
+                ${pkgs.coreutils}/bin/chown root:root "$tmp"
+                ${pkgs.coreutils}/bin/mv -f "$tmp" "$file"
+              fi
+              ${pkgs.coreutils}/bin/chmod 0444 "$file"
+              ${pkgs.coreutils}/bin/chown root:root "$file"
+            ''
+            );
+          })
+          signozSecretSpecs))
+      ];
+    }
 
-    # Register the observability secret-generation rows in the private
-    # bundle so the realm broker has a canonical, non-secret-value
-    # authority to provision them from — mirroring storage.json/sync.json's
-    # "typed row + single repair owner" contract. Only metadata (source
-    # path, generated size, minimum size, mode) crosses into the bundle;
-    # no secret bytes are ever materialised here.
-    d2b._bundle.extraArtifacts.observabilitySecretsJson = {
-      data = {
-        schemaVersion = "v1";
-        secrets = rows.secrets;
-      };
-      installFileName = "observability-secrets.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-    };
-  };
+    {
+      system.activationScripts.d2bObservabilityHostSecretShareAcls =
+        lib.stringAfter [ "d2bObservabilityHostSecretsDir" ] ''
+          set -u
+          processes=/etc/d2b/processes.json
+          if [ -r "$processes" ]; then
+            obs_uid="$(${pkgs.jq}/bin/jq -r --arg vm ${lib.escapeShellArg obsCfg.vmName} '.vms[] | select(.vm == $vm) | .nodes[] | select(.id == "virtiofsd-d2b-obs-sec") | .profile.uid' "$processes" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)"
+            case "$obs_uid" in
+              ""|null) ;;
+              *[!0-9]*) ;;
+              *)
+                ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:--x" ${lib.escapeShellArg cfg.site.stateDir} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:r-x" ${lib.escapeShellArg hostSecretsDir} 2>/dev/null || true
+                for secret in ${lib.escapeShellArg hostSecretsDir}/*; do
+                  [ -f "$secret" ] || continue
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:r--" "$secret" 2>/dev/null || true
+                done
+                ;;
+            esac
+          fi
+        '';
+    }
+
+    # NOTE: the matching virtiofs share into sys-obs is
+    # declared in `nixos-modules/host.nix`'s composedConfig pass
+    # (v1.1 moved it out of store.nix to avoid module-system infinite
+    # recursion). The share lives inside the per-VM
+    # `microvm.shares` list at
+    # `config.d2b._computed.sys-obs.config.microvm.shares`.
+    # Adding the share from here would lose to the mkForce in
+    # host.nix. Coordinating via host.nix also lines up the obs
+    # secrets share with the other framework-managed shares
+    # (`ro-store`, `d2b-meta`, `d2b-hkeys`).
+  ]);
 }

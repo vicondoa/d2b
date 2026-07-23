@@ -5,88 +5,59 @@ let
     inputs.nixpkgs.lib.nixosSystem = { modules, ... }: mkEval modules;
     nixosModules.default = { };
   };
-  shell = scenario:
-    builtins.fromJSON
-      (import
-        (flakeRoot + "/tests/unit/nix/eval-cases/guest-shell-policy-eval.nix") {
-          inherit system pkgs scenario;
-          flake = flakeShim;
-        });
+  shell = scenario: import (flakeRoot + "/tests/unit/nix/eval-cases/guest-shell-policy-eval.nix") {
+    inherit system pkgs scenario;
+    flake = flakeShim;
+  };
 in
 {
   "guest-shell-policy/enabled-positive" = {
-    expr = {
-      inherit (shell "enabled")
-        controlEnable defaultName execEnable maxAttached maxSessions
-        processWorkloadIdentity shellEnable;
-    };
-    expected = {
-      controlEnable = true;
-      defaultName = "default";
-      execEnable = true;
-      maxAttached = 4;
-      maxSessions = 8;
-      processWorkloadIdentity = true;
-      shellEnable = true;
-    };
+    expr = shell "enabled";
+    expected = "{\"defaultName\":\"default\",\"linger\":true,\"maxAttached\":1,\"maxSessions\":8,\"scenario\":\"enabled\"}";
   };
+
   "guest-shell-policy/defaults-positive" = {
-    expr = {
-      inherit (shell "defaults") controlEnable execEnable shellEnable;
-    };
-    expected = {
-      controlEnable = true;
-      execEnable = false;
-      shellEnable = false;
-    };
+    expr = shell "defaults";
+    expected = "{\"defaultName\":\"default\",\"enabled\":false,\"scenario\":\"defaults\"}";
   };
+
   "guest-shell-policy/custom-positive" = {
-    expr = {
-      inherit (shell "custom") defaultName maxAttached maxSessions;
-    };
-    expected = {
-      defaultName = "ops_1";
-      maxAttached = 4;
-      maxSessions = 16;
-    };
+    expr = shell "custom";
+    expected = "{\"defaultName\":\"ops_1\",\"linger\":true,\"maxAttached\":2,\"maxSessions\":16,\"scenario\":\"custom\"}";
   };
-  "guest-shell-policy/control-is-host-forced" = {
-    expr = {
-      inherit (shell "shell-no-control") controlEnable shellEnable;
-    };
-    expected = { controlEnable = true; shellEnable = true; };
+
+  "guest-shell-policy/shell-no-control-rejected" = {
+    expr = shell "shell-no-control";
+    expectedError = { };
   };
-  "guest-shell-policy/shell-implies-exec" = {
-    expr = {
-      inherit (shell "shell-no-exec") execEnable shellEnable;
-    };
-    expected = { execEnable = true; shellEnable = true; };
+
+  "guest-shell-policy/shell-no-exec-rejected" = {
+    expr = shell "shell-no-exec";
+    expectedError = { };
   };
+
   "guest-shell-policy/shell-no-user-rejected" = {
     expr = shell "shell-no-user";
     expectedError = { };
   };
+
   "guest-shell-policy/shell-root-user-rejected" = {
     expr = shell "shell-root-user";
     expectedError = { };
   };
+
   "guest-shell-policy/shell-invalid-name-rejected" = {
     expr = shell "shell-invalid-name";
     expectedError = { };
   };
-  "guest-shell-policy/shell-session-limit-rejected" = {
+
+  "guest-shell-policy/shell-too-many-attached-rejected" = {
     expr = shell "shell-too-many-attached";
     expectedError = { };
   };
-  "guest-shell-policy/qemu-process-is-realm-owned" = {
-    expr = {
-      inherit (shell "shell-qemu-media")
-        computedGuest materializedSystemdUnit runtimeKind;
-    };
-    expected = {
-      computedGuest = false;
-      materializedSystemdUnit = false;
-      runtimeKind = "qemu-media";
-    };
+
+  "guest-shell-policy/shell-qemu-media-rejected" = {
+    expr = shell "shell-qemu-media";
+    expectedError = { };
   };
 }

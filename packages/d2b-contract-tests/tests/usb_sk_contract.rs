@@ -1,4 +1,4 @@
-//! Contract tests for the USB security-key operator and broker contracts.
+//! Contract tests for the USB security-key proxy feature wire contracts.
 //!
 //! # Scope
 //!
@@ -6,7 +6,7 @@
 //! shapes, serde round-trips, deny_unknown_fields enforcement, and the
 //! broker capability set.
 //!
-//! Type 5 policy lints: verify that the broker operations appear in
+//! Type 5 policy lints: verify that the new broker operations appear in
 //! the privileges matrix, the dispositions doc, and the W3 capability
 //! set.
 
@@ -213,8 +213,7 @@ fn security_key_broker_apply_udev_rules_request_round_trips() {
 }
 
 // ---------------------------------------------------------------------------
-// Operator control wire: status and cancellation remain daemon requests.
-// Guest CTAPHID reports use the authenticated ComponentSession service instead.
+// Public wire: new variants round-trip via tag+content serde
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -258,7 +257,7 @@ fn public_response_usb_security_key_status_round_trips() {
 }
 
 // ---------------------------------------------------------------------------
-// Broker wire: operations appear in BrokerRequest and capabilities
+// Broker wire: new variants appear in BrokerRequest and capabilities
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -322,7 +321,7 @@ fn w3_operation_security_key_apply_udev_rules_is_destructive() {
 }
 
 // ---------------------------------------------------------------------------
-// Type 5: policy lints — operations appear in docs and privileges matrix
+// Type 5: policy lints — new operations appear in docs and privileges matrix
 // ---------------------------------------------------------------------------
 
 const DISPOSITIONS_DOC: &str = "docs/reference/broker-w2-dispositions.md";
@@ -342,8 +341,9 @@ fn security_key_operations_in_dispositions_doc() {
 }
 
 #[test]
-fn security_key_broker_operations_remain_explicitly_unimplemented() {
+fn security_key_operations_are_stubs_in_dispositions_doc() {
     let doc = read_repo_file(DISPOSITIONS_DOC);
+    // Phase 1: these must be stubs, not promoted-live.
     for op in ["SecurityKeyOpenDevice", "SecurityKeyApplyUdevRules"] {
         let line = doc
             .lines()
@@ -351,7 +351,7 @@ fn security_key_broker_operations_remain_explicitly_unimplemented() {
             .unwrap_or_else(|| panic!("{DISPOSITIONS_DOC} missing row for {op}"));
         assert!(
             line.contains("stubbed-unimplemented") || line.contains("future work"),
-            "{op} must match the production broker's explicit unimplemented disposition: {line}"
+            "{op} should be a stub in phase 1, got: {line}"
         );
     }
 }

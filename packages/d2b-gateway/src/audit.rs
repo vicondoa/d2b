@@ -18,7 +18,7 @@ pub enum GatewayAuditKind {
     DisplaySessionOpenAdmitted,
     /// A display-session open operation was denied/refused.
     DisplaySessionOpenDenied,
-    /// The display session reached Running after ComponentSession admission.
+    /// The display session reached Running (handshake verified; bytes flowing).
     DisplaySessionRunning,
     /// The display session closed.
     DisplaySessionClosed,

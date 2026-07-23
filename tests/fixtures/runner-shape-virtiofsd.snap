@@ -1,7 +1,7 @@
-# canonical realm-role argv
-microvm-virtiofsd@ucvmyzodoxhnswumcjsa-ro-store
---socket-path=/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/sqp27tqz36s4bzbwtpea/ro-store.sock
---shared-dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/store-view/live
+# argv
+microvm-virtiofsd@personal-dev-ro-store
+--socket-path=/run/d2b/vms/personal-dev/ro-store.sock
+--shared-dir=/var/lib/d2b/vms/personal-dev/store-view/live
 --thread-pool-size
 1
 --sandbox=chroot

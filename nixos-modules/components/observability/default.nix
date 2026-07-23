@@ -1,102 +1,14 @@
-# Realm observability composition.
-{ config, lib, ... }:
+# Observability component aggregator.
+#
+# Imported into the host's NixOS config from `nixos-modules/default.nix`.
+# Per-VM imports (`./guest.nix`) and obs-VM-only imports (`./stack.nix`)
+# happen elsewhere (via `host.nix` and `observability-vm.nix`
+# respectively), gated on per-VM and per-framework toggles. This file
+# is the HOST-side import path.
+{ ... }:
 
-let
-  cfg = config.d2b.observability;
-  rows = import ../../realm-observability-rows.nix {
-    inherit config lib;
-  };
-in
 {
   imports = [
     ./host.nix
   ];
-
-  options.d2b._realmObservability = lib.mkOption {
-    type = lib.types.attrs;
-    default = { };
-    internal = true;
-    visible = false;
-    description = "Canonical realm/workload observability resource rows.";
-  };
-
-  config = lib.mkIf cfg.enable {
-    d2b._realmObservability = rows;
-
-    d2b.realms.local-root = {
-      path = "local-root";
-      placement = "host-local";
-      providers.runtime-local = {
-        type = "runtime";
-        implementationId = "cloud-hypervisor";
-      };
-      providers.observability-local = {
-        type = "observability";
-        implementationId = "local";
-      };
-      workloads.${cfg.vmName} = {
-        providerRefs = {
-          runtime = "runtime-local";
-          observability = "observability-local";
-        };
-        autostart = true;
-        # Attests to the options-realms.nix reserved-`sys-`-prefix assertion
-        # that this exact workload name is the framework's own auto-declared
-        # observability stack, not an operator collision.
-        _frameworkReservedName = true;
-        config = {
-          imports = [ ./stack.nix ];
-          d2b.observability = {
-            enable = true;
-            vmName = cfg.vmName;
-            retention = cfg.retention;
-            grafana = cfg.grafana;
-            signoz = cfg.signoz;
-            transport.relayPackage = cfg.transport.relayPackage;
-            ingress.sources = rows.ingressSources;
-            alerts = cfg.alerts;
-            hostName = config.networking.hostName;
-          };
-          microvm = {
-            vcpu = lib.mkDefault 4;
-            mem = lib.mkDefault 8192;
-            volumes = lib.mkDefault [
-              {
-                image = "clickhouse.img";
-                mountPoint = "/var/lib/clickhouse";
-                size = 32768;
-                fsType = "ext4";
-                serial = "obs-clickhouse";
-                direct = true;
-              }
-              {
-                image = "zookeeper.img";
-                mountPoint = "/var/lib/zookeeper";
-                size = 2048;
-                fsType = "ext4";
-                serial = "obs-zookeeper";
-                direct = true;
-              }
-              {
-                image = "signoz.img";
-                mountPoint = "/var/lib/signoz";
-                size = 4096;
-                fsType = "ext4";
-                serial = "obs-signoz";
-                direct = true;
-              }
-              {
-                image = "signoz-otel.img";
-                mountPoint = "/var/lib/signoz-otel-collector";
-                size = 2048;
-                fsType = "ext4";
-                serial = "obs-otel";
-                direct = true;
-              }
-            ];
-          };
-        };
-      };
-    };
-  };
 }

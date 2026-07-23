@@ -1,9 +1,7 @@
 [package]
 name = "d2b-realm-core"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -12,9 +10,6 @@ doctest = false
 
 [lints]
 workspace = true
-
-[features]
-test-support = []
 
 # Pure, codec-neutral constellation model (ADR 0032). This crate is the
 # shared contract every later v2 crate depends on. It MUST NOT depend on

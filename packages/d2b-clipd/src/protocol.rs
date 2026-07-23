@@ -1,31 +1,27 @@
-//! Typed clipboard-picker domain values.
-//!
-//! The generated `d2b.clipboard.picker.v2` messages remain the only public wire
-//! DTOs. The ComponentSession composition layer converts admitted requests into
-//! these bounded values; this module does not provide a second wire format.
-
 use d2b_core::workload_identity::WorkloadTarget;
 use d2b_realm_core::WorkloadProviderKind;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
-
-pub const MAX_OFFERS_PER_PAGE: usize = 64;
-pub const MAX_RETAINED_OFFERS: usize = 256;
-pub const MAX_OPAQUE_ID_BYTES: usize = 64;
-pub const MAX_MIME_TYPE_BYTES: usize = 96;
-pub const MAX_PREVIEW_BYTES: usize = 2 * 1024;
-pub const MAX_THUMBNAIL_BYTES: usize = 256 * 1024;
-pub const MAX_APP_LABEL_BYTES: usize = 128;
 
 /// Exact d2b endpoint identity authenticated by a dedicated bridge listener.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClipboardEndpointIdentity {
     pub canonical_target: WorkloadTarget,
     pub provider_kind: WorkloadProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_vm_name: Option<String>,
 }
 
 impl ClipboardEndpointIdentity {
+    pub fn realm_kind(&self) -> RealmKind {
+        if self.provider_kind == WorkloadProviderKind::UnsafeLocal {
+            RealmKind::UnsafeLocal
+        } else {
+            RealmKind::Vm
+        }
+    }
+
     pub fn realm_label(&self) -> String {
         self.canonical_target.realm.target_form()
     }
@@ -60,64 +56,159 @@ impl ClipboardEndpointIdentity {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OpaquePickerId(String);
-
-impl OpaquePickerId {
-    pub fn parse(value: impl Into<String>) -> Result<Self, ProtocolError> {
-        let value = value.into();
-        let valid = !value.is_empty()
-            && value.len() <= MAX_OPAQUE_ID_BYTES
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-        valid.then_some(Self(value)).ok_or(ProtocolError::InvalidId)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtocolVersionRange {
+    pub min: u16,
+    pub max: u16,
 }
 
-impl std::fmt::Debug for OpaquePickerId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("OpaquePickerId(<redacted>)")
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientHello {
+    pub protocol_version_range: ProtocolVersionRange,
+    pub picker_version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClipboardTarget {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Select {
+    pub selected_protocol_version: u16,
+    pub request_id: String,
+    pub entry_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cancel {
+    pub selected_protocol_version: u16,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PickerToDaemonMessage {
+    ClientHello(ClientHello),
+    Select(Select),
+    Cancel(Cancel),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DaemonToPickerMessage {
+    OpenRequest(Box<OpenRequest>),
+    Close(CloseFrame),
+    Error(ErrorFrame),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenRequest {
+    pub selected_protocol_version: u16,
+    pub clipd_version: String,
+    pub picker_version: String,
+    pub request_id: String,
+    pub destination: DestinationMetadata,
+    pub requested_mime_type: String,
+    pub expires_at_unix_ms: u64,
+    pub placement_hints: Option<PlacementHint>,
+    pub candidates: Vec<Candidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloseFrame {
+    pub request_id: String,
+    pub code: crate::policy::ReasonCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorFrame {
+    pub request_id: String,
+    pub code: crate::policy::ReasonCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Candidate {
+    pub entry_id: String,
+    pub source_realm: String,
+    pub source_realm_kind: RealmKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_canonical_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_provider_kind: Option<WorkloadProviderKind>,
+    pub source_app: Option<String>,
+    pub source_app_id: Option<String>,
+    pub source_attribution: AttributionQuality,
+    pub preview_text: Option<String>,
+    pub content_type: String,
+    pub timestamp_unix_ms: u64,
+    pub thumbnail_png_base64: Option<String>,
+    pub byte_count: Option<u64>,
+    pub confirmation_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_preflight: Option<ClipboardCapabilityPreflight>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DestinationMetadata {
+    pub realm: String,
+    pub realm_kind: RealmKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<WorkloadProviderKind>,
+    pub application: Option<String>,
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    pub workspace: Option<String>,
+    pub output: Option<String>,
+    pub attribution: AttributionQuality,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_preflight: Option<ClipboardCapabilityPreflight>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardCapabilityPreflight {
+    pub status: ClipboardCapabilityPreflightStatus,
+    pub required_capabilities: Vec<String>,
+    pub advertised_capabilities: Vec<String>,
+    pub missing_capabilities: Vec<String>,
+    pub authority: ClipboardTransferAuthority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardCapabilityPreflightStatus {
+    Satisfied,
+    Denied,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardTransferAuthority {
+    PickerClipd,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementHint {
+    pub pointer_x: Option<f64>,
+    pub pointer_y: Option<f64>,
+    pub output_width: Option<i32>,
+    pub output_height: Option<i32>,
+    pub overlay_width: Option<i32>,
+    pub overlay_height: Option<i32>,
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RealmKind {
     Host,
-    Workload {
-        canonical_target: WorkloadTarget,
-        provider_kind: WorkloadProviderKind,
-    },
+    Vm,
+    UnsafeLocal,
 }
 
-impl ClipboardTarget {
-    pub fn workload(
-        canonical_target: &str,
-        provider_kind: WorkloadProviderKind,
-    ) -> Result<Self, ProtocolError> {
-        let canonical_target =
-            WorkloadTarget::parse(canonical_target).map_err(|_| ProtocolError::InvalidTarget)?;
-        Ok(Self::Workload {
-            canonical_target,
-            provider_kind,
-        })
-    }
-
-    pub fn canonical_label(&self) -> String {
-        match self {
-            Self::Host => "host.local.d2b".to_owned(),
-            Self::Workload {
-                canonical_target, ..
-            } => canonical_target.to_canonical(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AttributionQuality {
     ExactClient,
     FocusedWindowGuess,
@@ -125,306 +216,157 @@ pub enum AttributionQuality {
     BrokerInjectedDebug,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityPreflight {
-    Satisfied,
-    Denied,
-    Unknown,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct PickerOffer {
-    offer_id: OpaquePickerId,
-    source: ClipboardTarget,
-    destination: ClipboardTarget,
-    mime_type: String,
-    preview: Option<String>,
-    thumbnail_png: Option<Vec<u8>>,
-    source_application: Option<String>,
-    attribution: AttributionQuality,
-    capability_preflight: CapabilityPreflight,
-    byte_count: Option<u64>,
-    observed_at_unix_ms: u64,
-    expires_at_unix_ms: u64,
-    confirmation_required: bool,
-}
-
-impl std::fmt::Debug for PickerOffer {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PickerOffer")
-            .field("offer_id", &"<redacted>")
-            .field("source", &self.source.canonical_label())
-            .field("destination", &self.destination.canonical_label())
-            .field("mime_type", &self.mime_type)
-            .field("has_preview", &self.preview.is_some())
-            .field("has_thumbnail", &self.thumbnail_png.is_some())
-            .field("attribution", &self.attribution)
-            .field("capability_preflight", &self.capability_preflight)
-            .field("byte_count", &self.byte_count)
-            .field("observed_at_unix_ms", &self.observed_at_unix_ms)
-            .field("expires_at_unix_ms", &self.expires_at_unix_ms)
-            .field("confirmation_required", &self.confirmation_required)
-            .finish()
-    }
-}
-
-pub struct PickerOfferInput {
-    pub offer_id: OpaquePickerId,
-    pub source: ClipboardTarget,
-    pub destination: ClipboardTarget,
-    pub mime_type: String,
-    pub preview: Option<String>,
-    pub thumbnail_png: Option<Vec<u8>>,
-    pub source_application: Option<String>,
-    pub attribution: AttributionQuality,
-    pub capability_preflight: CapabilityPreflight,
-    pub byte_count: Option<u64>,
-    pub observed_at_unix_ms: u64,
-    pub expires_at_unix_ms: u64,
-    pub confirmation_required: bool,
-}
-
-impl PickerOffer {
-    pub fn new(input: PickerOfferInput) -> Result<Self, ProtocolError> {
-        if !valid_mime_type(&input.mime_type)
-            || input
-                .preview
-                .as_deref()
-                .is_some_and(|value| !valid_preview(value))
-            || input
-                .thumbnail_png
-                .as_ref()
-                .is_some_and(|value| value.is_empty() || value.len() > MAX_THUMBNAIL_BYTES)
-            || input
-                .source_application
-                .as_deref()
-                .is_some_and(|value| !valid_label(value))
-            || input.observed_at_unix_ms == 0
-            || input.expires_at_unix_ms <= input.observed_at_unix_ms
-        {
-            return Err(ProtocolError::InvalidOffer);
-        }
-        Ok(Self {
-            offer_id: input.offer_id,
-            source: input.source,
-            destination: input.destination,
-            mime_type: input.mime_type,
-            preview: input.preview,
-            thumbnail_png: input.thumbnail_png,
-            source_application: input.source_application,
-            attribution: input.attribution,
-            capability_preflight: input.capability_preflight,
-            byte_count: input.byte_count,
-            observed_at_unix_ms: input.observed_at_unix_ms,
-            expires_at_unix_ms: input.expires_at_unix_ms,
-            confirmation_required: input.confirmation_required,
-        })
-    }
-
-    pub fn offer_id(&self) -> &OpaquePickerId {
-        &self.offer_id
-    }
-
-    pub fn source(&self) -> &ClipboardTarget {
-        &self.source
-    }
-
-    pub fn destination(&self) -> &ClipboardTarget {
-        &self.destination
-    }
-
-    pub fn mime_type(&self) -> &str {
-        &self.mime_type
-    }
-
-    pub fn preview(&self) -> Option<&str> {
-        self.preview.as_deref()
-    }
-
-    pub fn thumbnail_png(&self) -> Option<&[u8]> {
-        self.thumbnail_png.as_deref()
-    }
-
-    pub fn source_application(&self) -> Option<&str> {
-        self.source_application.as_deref()
-    }
-
-    pub const fn attribution(&self) -> AttributionQuality {
-        self.attribution
-    }
-
-    pub const fn capability_preflight(&self) -> CapabilityPreflight {
-        self.capability_preflight
-    }
-
-    pub const fn byte_count(&self) -> Option<u64> {
-        self.byte_count
-    }
-
-    pub const fn expires_at_unix_ms(&self) -> u64 {
-        self.expires_at_unix_ms
-    }
-
-    pub const fn confirmation_required(&self) -> bool {
-        self.confirmation_required
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OfferQuery {
-    pub destination: ClipboardTarget,
-    pub page_size: usize,
-}
-
-impl OfferQuery {
-    pub fn new(destination: ClipboardTarget, page_size: usize) -> Result<Self, ProtocolError> {
-        if page_size == 0 || page_size > MAX_OFFERS_PER_PAGE {
-            return Err(ProtocolError::InvalidPageSize);
-        }
-        Ok(Self {
-            destination,
-            page_size,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OfferSelection {
-    pub selection_id: OpaquePickerId,
-    pub offer_id: OpaquePickerId,
-    pub destination: ClipboardTarget,
-}
-
-impl OfferSelection {
-    pub fn new(
-        selection_id: &str,
-        offer_id: &str,
-        destination: ClipboardTarget,
-    ) -> Result<Self, ProtocolError> {
-        Ok(Self {
-            selection_id: OpaquePickerId::parse(selection_id)?,
-            offer_id: OpaquePickerId::parse(offer_id)?,
-            destination,
-        })
-    }
-}
-
-fn valid_mime_type(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_MIME_TYPE_BYTES
-        && value.is_ascii()
-        && value.contains('/')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'+' | b'.'))
-}
-
-fn valid_preview(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_PREVIEW_BYTES
-        && value
-            .chars()
-            .all(|character| !character.is_control() || matches!(character, '\n' | '\t'))
-}
-
-fn valid_label(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_APP_LABEL_BYTES
-        && value
-            .chars()
-            .all(|character| !character.is_control() && character != '\u{7f}')
-}
-
-#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
-pub enum ProtocolError {
-    #[error("clipboard-picker-id-invalid")]
-    InvalidId,
-    #[error("clipboard-picker-target-invalid")]
-    InvalidTarget,
-    #[error("clipboard-picker-offer-invalid")]
-    InvalidOffer,
-    #[error("clipboard-picker-page-size-invalid")]
-    InvalidPageSize,
+pub fn negotiate_version(range: &ProtocolVersionRange, daemon_supported: u16) -> Option<u16> {
+    (range.min <= daemon_supported && daemon_supported <= range.max).then_some(daemon_supported)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn target(value: &str) -> ClipboardTarget {
-        ClipboardTarget::workload(value, WorkloadProviderKind::LocalVm).unwrap()
-    }
-
-    fn offer() -> PickerOffer {
-        PickerOffer::new(PickerOfferInput {
-            offer_id: OpaquePickerId::parse("offer-1").unwrap(),
-            source: ClipboardTarget::Host,
-            destination: target("browser.personal.d2b"),
-            mime_type: "text/plain".to_owned(),
-            preview: Some("bounded preview".to_owned()),
-            thumbnail_png: None,
-            source_application: Some("Editor".to_owned()),
-            attribution: AttributionQuality::ExactClient,
-            capability_preflight: CapabilityPreflight::Satisfied,
-            byte_count: Some(15),
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            confirmation_required: true,
-        })
-        .unwrap()
-    }
-
     #[test]
     fn endpoint_component_is_stable_and_provider_neutral() {
-        let endpoint = ClipboardEndpointIdentity {
+        let unsafe_local = ClipboardEndpointIdentity {
             canonical_target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
             provider_kind: WorkloadProviderKind::UnsafeLocal,
             legacy_vm_name: None,
         };
         assert_eq!(
-            endpoint.bridge_component(),
+            unsafe_local.bridge_component(),
             "endpoint-fc002cd9909aab17c2232e85"
         );
+
+        let legacy_vm = ClipboardEndpointIdentity {
+            canonical_target: WorkloadTarget::parse("work.local.d2b").unwrap(),
+            provider_kind: WorkloadProviderKind::LocalVm,
+            legacy_vm_name: Some("work".to_owned()),
+        };
+        assert_eq!(legacy_vm.bridge_component(), "work");
     }
 
     #[test]
-    fn canonical_targets_are_parsed_not_split() {
-        assert!(ClipboardTarget::workload("browser", WorkloadProviderKind::LocalVm).is_err());
-        assert_eq!(
-            target("browser.personal.d2b").canonical_label(),
-            "browser.personal.d2b"
-        );
-        assert_eq!(ClipboardTarget::Host.canonical_label(), "host.local.d2b");
-    }
-
-    #[test]
-    fn offer_metadata_and_selections_are_bounded() {
-        let offer = offer();
-        assert_eq!(offer.offer_id().as_str(), "offer-1");
-        assert_eq!(offer.preview(), Some("bounded preview"));
-        assert!(OpaquePickerId::parse("x".repeat(MAX_OPAQUE_ID_BYTES + 1)).is_err());
-        assert!(OfferQuery::new(target("browser.personal.d2b"), 0).is_err());
-        assert!(OfferQuery::new(target("browser.personal.d2b"), MAX_OFFERS_PER_PAGE + 1).is_err());
-    }
-
-    #[test]
-    fn malformed_display_metadata_fails_closed() {
-        let invalid = PickerOffer::new(PickerOfferInput {
-            offer_id: OpaquePickerId::parse("offer-1").unwrap(),
-            source: ClipboardTarget::Host,
-            destination: target("browser.personal.d2b"),
-            mime_type: "text/plain".to_owned(),
-            preview: Some("escape\u{1b}[31m".to_owned()),
-            thumbnail_png: None,
-            source_application: None,
-            attribution: AttributionQuality::FocusedWindowGuess,
-            capability_preflight: CapabilityPreflight::Unknown,
-            byte_count: None,
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            confirmation_required: false,
+    fn client_hello_contains_no_token_or_request_id() {
+        let hello = PickerToDaemonMessage::ClientHello(ClientHello {
+            protocol_version_range: ProtocolVersionRange { min: 1, max: 1 },
+            picker_version: "picker-test".to_owned(),
         });
-        assert_eq!(invalid.unwrap_err(), ProtocolError::InvalidOffer);
+
+        let json = serde_json::to_string(&hello).expect("serialize hello");
+        assert!(!json.contains("token"));
+        assert!(!json.contains("request_id"));
+        let decoded: PickerToDaemonMessage = serde_json::from_str(&json).expect("decode hello");
+        assert_eq!(decoded, hello);
+    }
+
+    #[test]
+    fn daemon_received_messages_reject_unknown_fields() {
+        let json = r#"{"type":"select","selected_protocol_version":1,"request_id":"r","entry_id":"e","extra":true}"#;
+        let err = serde_json::from_str::<PickerToDaemonMessage>(json).expect_err("extra field");
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn display_side_candidate_tolerates_additive_metadata() {
+        let json = r#"{
+          "entry_id":"e",
+          "source_realm":"Host",
+          "source_realm_kind":"host",
+          "source_canonical_target":null,
+          "source_app":null,
+          "source_app_id":null,
+          "source_attribution":"focused_window_guess",
+          "preview_text":"hello",
+          "content_type":"text/plain",
+          "timestamp_unix_ms":7,
+          "thumbnail_png_base64":null,
+          "byte_count":12,
+          "confirmation_required":false,
+          "capability_preflight":{
+            "status":"satisfied",
+            "required_capabilities":["clipboard"],
+            "advertised_capabilities":["clipboard"],
+            "missing_capabilities":[],
+            "authority":"picker_clipd"
+          },
+          "future_display_field":"ignored"
+        }"#;
+        let candidate: Candidate = serde_json::from_str(json).expect("candidate");
+        assert_eq!(candidate.entry_id, "e");
+        assert_eq!(
+            candidate.capability_preflight.as_ref().map(|p| p.status),
+            Some(ClipboardCapabilityPreflightStatus::Satisfied)
+        );
+    }
+
+    #[test]
+    fn daemon_open_request_can_carry_canonical_realm_metadata() {
+        let msg = DaemonToPickerMessage::OpenRequest(Box::new(OpenRequest {
+            selected_protocol_version: 1,
+            clipd_version: "0.0.0".to_owned(),
+            picker_version: "picker".to_owned(),
+            request_id: "req".to_owned(),
+            destination: DestinationMetadata {
+                realm: "builder".to_owned(),
+                realm_kind: RealmKind::Vm,
+                canonical_target: Some("builder.local.d2b".to_owned()),
+                provider_kind: Some(WorkloadProviderKind::LocalVm),
+                application: None,
+                app_id: None,
+                title: None,
+                workspace: None,
+                output: None,
+                attribution: AttributionQuality::ExactClient,
+                capability_preflight: Some(ClipboardCapabilityPreflight {
+                    status: ClipboardCapabilityPreflightStatus::Satisfied,
+                    required_capabilities: vec!["clipboard".to_owned()],
+                    advertised_capabilities: vec!["clipboard".to_owned()],
+                    missing_capabilities: Vec::new(),
+                    authority: ClipboardTransferAuthority::PickerClipd,
+                }),
+            },
+            requested_mime_type: "text/plain".to_owned(),
+            expires_at_unix_ms: 7,
+            placement_hints: None,
+            candidates: vec![Candidate {
+                entry_id: "entry".to_owned(),
+                source_realm: "builder".to_owned(),
+                source_realm_kind: RealmKind::Vm,
+                source_canonical_target: Some("builder.local.d2b".to_owned()),
+                source_provider_kind: Some(WorkloadProviderKind::LocalVm),
+                source_app: None,
+                source_app_id: None,
+                source_attribution: AttributionQuality::ExactClient,
+                preview_text: None,
+                content_type: "text/plain".to_owned(),
+                timestamp_unix_ms: 7,
+                thumbnail_png_base64: None,
+                byte_count: Some(4),
+                confirmation_required: false,
+                capability_preflight: Some(ClipboardCapabilityPreflight {
+                    status: ClipboardCapabilityPreflightStatus::Satisfied,
+                    required_capabilities: vec!["clipboard".to_owned()],
+                    advertised_capabilities: vec!["clipboard".to_owned()],
+                    missing_capabilities: Vec::new(),
+                    authority: ClipboardTransferAuthority::PickerClipd,
+                }),
+            }],
+        }));
+
+        let json = serde_json::to_string(&msg).expect("serialize open request");
+        assert!(json.contains(r#""canonical_target":"builder.local.d2b""#));
+        assert!(json.contains(r#""source_canonical_target":"builder.local.d2b""#));
+        assert!(json.contains(r#""authority":"picker_clipd""#));
+    }
+
+    #[test]
+    fn negotiates_supported_protocol() {
+        assert_eq!(
+            negotiate_version(&ProtocolVersionRange { min: 1, max: 1 }, 1),
+            Some(1)
+        );
+        assert_eq!(
+            negotiate_version(&ProtocolVersionRange { min: 2, max: 3 }, 1),
+            None
+        );
     }
 }

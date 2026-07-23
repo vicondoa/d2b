@@ -10,38 +10,11 @@ let
   nonNegativeInt = lib.types.ints.unsigned;
   systemdExecArg = arg: builtins.replaceStrings [ "%" "$" ] [ "%%" "$$" ] (lib.escapeShellArg arg);
   systemdExecArgs = args: lib.concatMapStringsSep " " systemdExecArg args;
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  clipdSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-clipd";
-    version = "2.0.0";
-    src = packagesSrc;
-    cargoLock = {
-      lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-    };
-    cargoBuildFlags = [ "--package" "d2b-clipd" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-clipd \
-        $out/bin/d2b-clipd 2>/dev/null \
-        || install -Dm755 target/release/d2b-clipd $out/bin/d2b-clipd
-      runHook postInstall
-    '';
-  };
 
   clipdExec =
     if cfg.clipd.executablePath != null then cfg.clipd.executablePath
     else if cfg.clipd.package != null then "${cfg.clipd.package}/bin/d2b-clipd"
-    else "${clipdSourcePackage}/bin/d2b-clipd";
+    else "${pkgs.coreutils}/bin/false";
 
   pickerExec =
     if cfg.picker.executablePath != null then cfg.picker.executablePath
@@ -57,80 +30,56 @@ EOF
     || (cfg.policy.crossRealm.enable && (cfg.modes.hostCrossRealmPicker || cfg.modes.vmCrossRealmPicker));
 
   niriProgramEnabled = config.programs.niri.enable or false;
-  indexedWorkloads = config.d2b._index.workloads.enabledList;
-  displayBindings = config.d2b._index.providerRegistryV2Mappings.display;
-  displayBindingFor = workload:
-    lib.findFirst
-      (binding: binding.workloadId == workload.workloadId)
-      null
-      displayBindings;
-  bridgeEndpointFor = workload:
-    let
-      runtime = workload.providerBindings.runtime or null;
-      display = displayBindingFor workload;
-      sameUid = runtime != null && runtime.implementationId == "systemd-user";
-      supportedRuntime =
-        runtime != null
-        && builtins.elem runtime.implementationId
-          [ "cloud-hypervisor" "qemu-media" "systemd-user" ];
-      waylandUserAllowed =
-        !sameUid
-        || (site.waylandUser != null
-          && lib.elem site.waylandUser
-            config.d2b.realms.${workload.realmName}.allowedUsers);
-      ownerPrincipal =
-        if sameUid
-        then site.waylandUser
-        else "d2b-role-${display.ownerRoleId}";
-    in
-    if display == null || !supportedRuntime || !waylandUserAllowed
-    then null
-    else {
-      inherit (workload) canonicalTarget realmId workloadId;
-      runtimeProviderId = runtime.providerId;
-      displayProviderId = display.providerId;
-      socketComponent = display.endpointIds.proxy;
-      inherit ownerPrincipal sameUid;
-      expectedUid =
-        if sameUid
-        then config.users.users.${site.waylandUser}.uid
-        else d2bLib.stablePrincipalId ownerPrincipal;
+  bridgeVmSet =
+    (lib.filterAttrs (_name: vm:
+      vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
+    ) (d2bLib.normalNixosVms config.d2b.vms))
+    // (d2bLib.qemuMediaVms config.d2b.vms);
+  bridgeVms = lib.attrNames bridgeVmSet;
+  indexedWorkloads = config.d2b._index.realms.workloads.enabled;
+  indexedWorkloadForVm = vm:
+    lib.findFirst (workload: workload.legacyVmName == vm) null indexedWorkloads;
+  bridgeVmEndpoint = vm:
+    let workload = indexedWorkloadForVm vm;
+    in {
+      canonicalTarget =
+        if workload == null then "${vm}.local.d2b" else workload.canonicalTarget;
+      providerKind =
+        if workload == null then "local-vm" else workload.providerKind;
+      legacyVmName = vm;
+      socketComponent = vm;
+      expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
     };
-  bridgeEndpoints = lib.filter (endpoint: endpoint != null)
-    (map bridgeEndpointFor indexedWorkloads);
-  bridgeWorkloads = map (endpoint: endpoint.canonicalTarget) bridgeEndpoints;
-  bridgePeers = map (endpoint: {
-    inherit (endpoint)
-      canonicalTarget realmId workloadId runtimeProviderId displayProviderId expectedUid;
-  }) bridgeEndpoints;
-  userServiceEndpointUsers = lib.unique (
-    site.adminUsers
-    ++ site.launcherUsers
-    ++ lib.concatMap
-      (realm: config.d2b.realms.${realm.realmName}.allowedUsers)
-      config.d2b._index.realms.enabledList
-  );
-  waylandUserHasEndpointTraversal =
-    config.d2b.daemonExperimental.enable
-    && lib.elem site.waylandUser userServiceEndpointUsers;
+  unsafeLocalWorkloads = lib.filter
+    (workload:
+      workload.kind == "unsafe-local"
+      && site.waylandUser != null
+      && lib.elem site.waylandUser
+        config.d2b.realms.${workload.realmName}.allowedUsers)
+    indexedWorkloads;
+  unsafeLocalEndpoint = workload: {
+    canonicalTarget = workload.canonicalTarget;
+    providerKind = "unsafe-local";
+    legacyVmName = null;
+    socketComponent =
+      "endpoint-${builtins.substring 0 24 (builtins.hashString "sha256" workload.canonicalTarget)}";
+    expectedUid = config.users.users.${site.waylandUser}.uid;
+  };
+  bridgeEndpoints =
+    map bridgeVmEndpoint bridgeVms
+    ++ map unsafeLocalEndpoint unsafeLocalWorkloads;
+  bridgePeers = map (vm: {
+    vmName = vm;
+    expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
+  }) bridgeVms;
   waylandUid = toString config.users.users.${site.waylandUser}.uid;
   waylandGroup = config.users.users.${site.waylandUser}.group;
-  userEndpointTmpfiles =
-    lib.optional (!waylandUserHasEndpointTraversal)
-      "a+ /run/d2b - - - - u:${site.waylandUser}:--x"
-    ++ [
-      "d /run/d2b/u 0711 root root -"
-      "z /run/d2b/u 0711 root root -"
-      "d /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
-      "z /run/d2b/u/${waylandUid} 0700 ${site.waylandUser} ${waylandGroup} -"
-      "d /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
-      "z /run/d2b/u/${waylandUid}/clipd 0700 ${site.waylandUser} ${waylandGroup} -"
-    ];
   clipdBridgeRootTmpfiles =
     lib.optionals (cfg.enable && bridgeEndpoints != [ ]) (
       [
         "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
         "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "a+ /run/d2b - - - - u:${site.waylandUser}:--x"
         "a+ ${cfg.runtime.bridgeRoot} - - - - u:${site.waylandUser}:--x"
         "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
         "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
@@ -139,22 +88,18 @@ EOF
         "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 root root -"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:${site.waylandUser}:--x"
       ]
-      ++ lib.concatMap
-        (endpoint:
-          if endpoint.sameUid
-          then [
-            "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
-            "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
-          ]
-          else [
-            "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0770 ${site.waylandUser} ${endpoint.ownerPrincipal} -"
-            "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${endpoint.socketComponent} 0770 ${site.waylandUser} ${endpoint.ownerPrincipal} -"
-            "a+ /run/d2b - - - - u:${endpoint.ownerPrincipal}:--x"
-            "a+ ${cfg.runtime.bridgeRoot} - - - - u:${endpoint.ownerPrincipal}:--x"
-            "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:${endpoint.ownerPrincipal}:--x"
-            "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:${endpoint.ownerPrincipal}:--x"
-          ])
-        bridgeEndpoints
+      ++ lib.concatMap (vm: [
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "a+ /run/d2b - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot} - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"
+      ]) bridgeVms
+      ++ lib.concatMap (workload: [
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+      ]) unsafeLocalWorkloads
     );
 
   configJson = builtins.toJSON {
@@ -176,7 +121,7 @@ EOF
     runtime = {
       bridgeRoot = cfg.runtime.bridgeRoot;
       bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<endpoint>/${cfg.runtime.bridgeSocketName}";
-      inherit bridgeWorkloads;
+      inherit bridgeVms;
       inherit bridgePeers;
       inherit bridgeEndpoints;
       parentProvisioning = "d2bd-broker-lifecycle";
@@ -184,6 +129,10 @@ EOF
     };
   } + "\n";
 
+  serviceArgs =
+    [ "--config" "/etc/d2b/clipboard.json" ]
+    ++ lib.optionals (pickerExec != null) [ "--picker" pickerExec ]
+    ++ [ "--bridge-root" cfg.runtime.bridgeRoot ];
 in
 {
   options.d2b.site.clipboard = {
@@ -198,8 +147,10 @@ in
         default = null;
         example = lib.literalExpression "pkgs.d2b-clipd";
         description = ''
-          Package providing `bin/d2b-clipd`. When unset, d2b builds the
-          authenticated clipboard service from this framework revision.
+          Package providing `bin/d2b-clipd`. The crate/package may be
+          supplied by a later integration lane; this module intentionally
+          accepts an external package reference and does not build the daemon
+          itself.
         '';
       };
 
@@ -280,17 +231,17 @@ in
         onVmLock = lib.mkOption {
           type = lib.types.enum [ "keep" "quarantine" "drop" ];
           default = "quarantine";
-          description = "Retention action for entries attributed to a workload when it locks.";
+          description = "Retention action for entries attributed to a VM when it locks.";
         };
         onVmPause = lib.mkOption {
           type = lib.types.enum [ "keep" "quarantine" "drop" ];
           default = "quarantine";
-          description = "Retention action for entries attributed to a workload when it pauses.";
+          description = "Retention action for entries attributed to a VM when it pauses.";
         };
         onVmStop = lib.mkOption {
           type = lib.types.enum [ "keep" "quarantine" "drop" ];
           default = "drop";
-          description = "Retention action for entries attributed to a workload when it stops.";
+          description = "Retention action for entries attributed to a VM when it stops.";
         };
         onVmDestroy = lib.mkOption {
           type = lib.types.enum [ "drop" ];
@@ -461,7 +412,7 @@ in
       captureVmClipboard = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Capture allowed workload clipboard selections through the Wayland bridge.";
+        description = "Capture allowed VM clipboard selections through the Wayland bridge.";
       };
       hostCrossRealmPicker = lib.mkOption {
         type = lib.types.bool;
@@ -471,7 +422,7 @@ in
       vmCrossRealmPicker = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Allow workload-destination cross-realm picker prompts when trusted intent exists.";
+        description = "Allow VM-destination cross-realm picker prompts when trusted intent exists.";
       };
       primarySelection = lib.mkOption {
         type = lib.types.enum [ "deny" ];
@@ -492,9 +443,8 @@ in
         description = ''
           Broker-provisioned root for per-user/per-workload clipboard bridge
           sockets. The effective template is
-          `<bridgeRoot>/<uid>/bridge/<endpoint>/<bridgeSocketName>`, where the
-          endpoint is the opaque proxy endpoint id from the canonical display
-          provider binding.
+          `<bridgeRoot>/<uid>/bridge/<endpoint>/<bridgeSocketName>`, where
+          canonical non-VM targets use a stable hash-shortened endpoint component.
           The user service must not create `/run/d2b` parents; d2bd and the
           broker own parent creation, traversal ACLs, endpoint ACLs, and teardown.
         '';
@@ -503,7 +453,7 @@ in
         type = lib.types.strMatching "^[A-Za-z0-9_.-]+\\.sock$";
         default = "clip.sock";
         readOnly = true;
-        description = "Basename for each per-workload internal clipboard bridge socket.";
+        description = "Basename for each per-VM internal clipboard bridge socket.";
       };
     };
   };
@@ -603,55 +553,22 @@ in
       text = configJson;
       mode = "0644";
     };
-    systemd.tmpfiles.rules = clipdBridgeRootTmpfiles ++ userEndpointTmpfiles;
-
-    systemd.user.sockets = lib.genAttrs [
-      "d2b-clipd-control"
-      "d2b-clipd-picker"
-      "d2b-clipd-bridge"
-    ] (unitName:
-      let purpose = lib.removePrefix "d2b-clipd-" unitName;
-      in {
-        description = "d2b authenticated clipboard ${purpose} endpoint";
-        wantedBy = [ "sockets.target" ];
-        unitConfig.ConditionUser = site.waylandUser;
-        socketConfig = {
-          ListenSequentialPacket = "/run/d2b/u/%U/clipd/${purpose}.sock";
-          FileDescriptorName = "clipboard-${purpose}";
-          SocketMode = "0600";
-          DirectoryMode = "0700";
-          RemoveOnStop = true;
-          Service = "d2b-clipd.service";
-        };
-      });
+    systemd.tmpfiles.rules = clipdBridgeRootTmpfiles;
 
     systemd.user.services.d2b-clipd = {
       description = "d2b clipboard authority daemon";
       documentation = [
         "file:/etc/d2b/clipboard.json"
       ];
+      wantedBy = [ "graphical-session.target" ];
       partOf = [ "graphical-session.target" ];
-      requires = [
-        "d2b-clipd-control.socket"
-        "d2b-clipd-picker.socket"
-        "d2b-clipd-bridge.socket"
-      ];
-      after = [
-        "graphical-session.target"
-        "d2b-clipd-control.socket"
-        "d2b-clipd-picker.socket"
-        "d2b-clipd-bridge.socket"
-      ];
-      unitConfig = {
-        ConditionUser = site.waylandUser;
-        AssertEnvironment = [ "WAYLAND_DISPLAY" ]
-          ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
-      };
+      after = [ "graphical-session.target" ];
+      unitConfig.AssertEnvironment = [ "WAYLAND_DISPLAY" ]
+        ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
       serviceConfig = {
         Type = "simple";
-        ExecStart = systemdExecArgs [ clipdExec ];
+        ExecStart = systemdExecArgs ([ clipdExec ] ++ serviceArgs);
         Restart = "on-failure";
-        RestartPreventExitStatus = "78";
         RestartSec = "2s";
         UMask = "0077";
         NoNewPrivileges = true;

@@ -1,185 +1,175 @@
+use std::sync::LazyLock;
+
 use d2b_contract_tests::load_full_bundle_resolver_from_env;
 use d2b_core::{
     bundle_resolver::BundleResolver,
-    processes::{ProcessNode, ProcessRole, VmProcessDag},
+    processes::{ProcessNode, ProcessRole},
 };
+use regex::Regex;
 
-fn resolver_or_skip(test: &str) -> Option<BundleResolver> {
+static NIX_STORE_HASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/nix/store/[a-z0-9]{32}-").expect("valid store regex"));
+static RUN_USER_UID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/run/user/[0-9]+").expect("valid run/user regex"));
+
+fn full_resolver_or_skip(test: &str) -> Option<BundleResolver> {
     match load_full_bundle_resolver_from_env() {
         Some(resolver) => Some(resolver),
         None => {
-            eprintln!("SKIP {test}: D2B_FIXTURES_FULL unset");
+            eprintln!("SKIP {test}: D2B_FIXTURES_FULL unset (runner-shape fixture unavailable)");
             None
         }
     }
 }
 
-fn nodes_with_role(
+fn first_node_with_role(
     resolver: &BundleResolver,
     role: ProcessRole,
-) -> Vec<(&VmProcessDag, &ProcessNode)> {
-    resolver
-        .processes
-        .vms
-        .iter()
-        .flat_map(|dag| {
-            let role = role.clone();
-            dag.nodes
-                .iter()
-                .filter(move |node| node.role == role)
-                .map(move |node| (dag, node))
-        })
-        .collect()
-}
-
-fn identity(dag: &VmProcessDag) -> (&str, &str) {
-    let identity = dag
-        .workload_identity
-        .as_ref()
-        .expect("realm runner must carry workload identity");
-    (identity.realm_id.as_str(), identity.workload_id.as_str())
-}
-
-fn has_arg_fragment(node: &ProcessNode, fragment: &str) -> bool {
-    node.argv.iter().any(|arg| arg.contains(fragment))
-}
-
-#[test]
-fn cloud_hypervisor_runner_shape_matches_realm_roles() {
-    let test = "cloud_hypervisor_runner_shape_matches_realm_roles";
-    let Some(resolver) = resolver_or_skip(test) else {
-        return;
-    };
-    let nodes = nodes_with_role(&resolver, ProcessRole::CloudHypervisorRunner);
-    assert!(
-        !nodes.is_empty(),
-        "{test}: fixture has no Cloud Hypervisor role"
-    );
-    for (dag, node) in nodes {
-        let (realm_id, workload_id) = identity(dag);
-        assert_eq!(node.argv.first(), Some(&format!("microvm@{workload_id}")));
-        assert_eq!(
-            node.profile.mount_policy.device_binds,
-            vec!["/dev/kvm".to_owned(), "/dev/vhost-net".to_owned()]
-        );
-        assert!(has_arg_fragment(
-            node,
-            &format!("/var/lib/d2b/r/{realm_id}/w/{workload_id}/vsock.sock")
-        ));
-        assert!(has_arg_fragment(
-            node,
-            &format!("/run/d2b/r/{realm_id}/w/{workload_id}/roles/")
-        ));
-        for forbidden in ["/var/lib/d2b/vms/", "/run/d2b/vms/", "/run/d2b-video/"] {
-            assert!(
-                !node.argv.iter().any(|arg| arg.contains(forbidden)),
-                "{test}: canonical argv leaked legacy path {forbidden:?}"
-            );
+) -> Option<(&str, &ProcessNode)> {
+    for dag in &resolver.processes.vms {
+        for node in &dag.nodes {
+            if node.role == role {
+                return Some((dag.vm.as_str(), node));
+            }
         }
     }
+    None
 }
 
-#[test]
-fn virtiofsd_runner_shape_preserves_adr0021_and_store_farm() {
-    let test = "virtiofsd_runner_shape_preserves_adr0021_and_store_farm";
-    let Some(resolver) = resolver_or_skip(test) else {
-        return;
-    };
-    let nodes = nodes_with_role(&resolver, ProcessRole::Virtiofsd);
-    assert!(!nodes.is_empty(), "{test}: fixture has no virtiofsd roles");
-    for (dag, node) in nodes {
-        let (realm_id, workload_id) = identity(dag);
-        assert!(node.profile.caps.is_empty());
-        assert_eq!(
-            node.profile.seccomp_policy_ref.as_deref(),
-            Some("w1-virtiofsd")
-        );
-        let user_ns = node
-            .profile
-            .user_namespace
-            .as_ref()
-            .expect("ADR 0021 requires broker-prepared virtiofsd user namespace");
-        assert_eq!(user_ns.host_uid_for_zero, node.profile.uid);
-        assert_eq!(user_ns.host_gid_for_zero, node.profile.gid);
-        assert!(node.argv.iter().any(|arg| arg == "--sandbox=chroot"));
-        assert!(
-            node.argv
-                .iter()
-                .any(|arg| arg == "--inode-file-handles=never")
-        );
-        assert!(has_arg_fragment(
-            node,
-            &format!("/run/d2b/r/{realm_id}/w/{workload_id}/roles/")
-        ));
-        if node
-            .argv
-            .first()
-            .is_some_and(|arg| arg.ends_with("-ro-store"))
-        {
-            assert!(has_arg_fragment(
-                node,
-                &format!("/var/lib/d2b/r/{realm_id}/w/{workload_id}/store-view/live")
-            ));
-            assert!(node.argv.iter().any(|arg| arg == "--readonly"));
-        }
-        assert!(!has_arg_fragment(node, "--shared-dir=/nix/store"));
-    }
+fn normalize_arg(arg: &str) -> String {
+    let normalized = NIX_STORE_HASH.replace_all(arg, "/nix/store/<HASH>-");
+    RUN_USER_UID
+        .replace_all(&normalized, "/run/user/<UID>")
+        .into_owned()
 }
 
-#[test]
-fn swtpm_runner_shape_uses_persistent_realm_state() {
-    let test = "swtpm_runner_shape_uses_persistent_realm_state";
-    let Some(resolver) = resolver_or_skip(test) else {
+fn normalized_argv(node: &ProcessNode) -> Vec<String> {
+    node.argv.iter().map(|arg| normalize_arg(arg)).collect()
+}
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_owned()).collect()
+}
+
+fn assert_role_shape(
+    test_name: &str,
+    role: ProcessRole,
+    expected_vm: &str,
+    expected_argv: &[&str],
+    expected_device_binds: &[&str],
+) {
+    let Some(resolver) = full_resolver_or_skip(test_name) else {
         return;
     };
-    let nodes = nodes_with_role(&resolver, ProcessRole::Swtpm);
-    assert_eq!(nodes.len(), 1, "{test}: fixture must render one swtpm role");
-    let (dag, node) = nodes[0];
-    let (realm_id, workload_id) = identity(dag);
+    let (vm, node) = first_node_with_role(&resolver, role)
+        .unwrap_or_else(|| panic!("fixture-smoke-full has no {test_name} node"));
+
     assert_eq!(
-        node.argv.first(),
-        Some(&format!("microvm-swtpm@{workload_id}"))
+        vm, expected_vm,
+        "{test_name} first matching VM drifted from the runner-shape snapshot source"
     );
-    assert!(has_arg_fragment(
-        node,
-        &format!("dir=/var/lib/d2b/r/{realm_id}/w/{workload_id}/tpm")
-    ));
-    assert!(has_arg_fragment(
-        node,
-        &format!(
-            "/run/d2b/r/{realm_id}/w/{workload_id}/roles/{}/tpm.sock",
-            node.id.0
-        )
-    ));
-    assert!(!node.argv.iter().any(|arg| arg.contains("/swtpm")));
+    assert_eq!(
+        normalized_argv(node),
+        strings(expected_argv),
+        "{test_name} normalized argv drifted from the runner-shape snapshot"
+    );
+    assert_eq!(
+        node.profile.mount_policy.device_binds,
+        strings(expected_device_binds),
+        "{test_name} deviceBinds drifted from the runner-shape snapshot"
+    );
 }
 
 #[test]
-fn graphics_video_and_usbip_shapes_are_mediated() {
-    let test = "graphics_video_and_usbip_shapes_are_mediated";
-    let Some(resolver) = resolver_or_skip(test) else {
-        return;
-    };
-    let gpu = nodes_with_role(&resolver, ProcessRole::Gpu);
-    let video = nodes_with_role(&resolver, ProcessRole::Video);
-    let usbip = nodes_with_role(&resolver, ProcessRole::Usbip);
-    assert!(!gpu.is_empty(), "{test}: fixture has no GPU role");
-    assert_eq!(video.len(), 1, "{test}: fixture must have one video role");
-    assert_eq!(usbip.len(), 1, "{test}: fixture must have one USBIP role");
-    for (_, node) in gpu.into_iter().chain(video) {
-        assert!(node.profile.mount_policy.device_binds.is_empty());
-        assert!(
-            node.argv.iter().any(|arg| arg == "/proc/self/fd/10")
-                || node
-                    .env
-                    .iter()
-                    .any(|entry| entry == "LIBVA_DRM_DEVICE=/proc/self/fd/10")
-        );
-        for forbidden in ["/dev/nvidia", "/dev/vfio", "/dev/udmabuf"] {
-            assert!(!node.argv.iter().any(|arg| arg.contains(forbidden)));
-        }
-    }
-    let (_, usbip) = usbip[0];
-    assert!(usbip.binary_path.is_none() && usbip.argv.is_empty());
-    assert!(usbip.profile.mount_policy.device_binds.is_empty());
+fn cloud_hypervisor_runner_shape_matches_rendered_snapshot() {
+    assert_role_shape(
+        "cloud_hypervisor_runner_shape_matches_rendered_snapshot",
+        ProcessRole::CloudHypervisorRunner,
+        "corp-full",
+        &[
+            "microvm@corp-full",
+            "--cpus",
+            "boot=1",
+            "--watchdog",
+            "--kernel",
+            "/nix/store/<HASH>-linux-6.18.33-dev/vmlinux",
+            "--initramfs",
+            "/nix/store/<HASH>-initrd-linux-6.18.33/initrd",
+            "--cmdline",
+            "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nofb video=off root=fstab loglevel=4 lsm=landlock,yama,bpf init=/nix/store/<HASH>-nixos-system-corp-full-26.05pre-git/init",
+            "--seccomp",
+            "true",
+            "--memory",
+            "shared=on,size=512M",
+            "--platform",
+            "oem_strings=[io.systemd.credential:vmm.notify_socket=vsock-stream:2:8888]",
+            "--console",
+            "null",
+            "--serial",
+            "tty",
+            "--vsock",
+            "cid=1110,socket=/var/lib/d2b/vms/corp-full/vsock.sock",
+            "--gpu",
+            "socket=/run/d2b/vms/corp-full/gpu.sock",
+            "--fs",
+            "socket=/run/d2b/vms/corp-full/ro-store.sock,tag=ro-store",
+            "socket=/run/d2b/vms/corp-full/d2b-meta.sock,tag=d2b-meta",
+            "socket=/run/d2b/vms/corp-full/d2b-hkeys.sock,tag=d2b-hkeys",
+            "socket=/run/d2b/vms/corp-full/d2b-ssh-host.sock,tag=d2b-ssh-host",
+            "socket=/run/d2b/vms/corp-full/guest-control/d2b-gctl.sock,tag=d2b-gctl",
+            "--api-socket",
+            "/var/lib/d2b/vms/corp-full/corp-full.sock",
+            "--net",
+            "mac=02:76:53:AE:57:0A,tap=work-l10",
+            "--tpm",
+            "socket=/run/d2b/vms/corp-full/tpm.sock",
+            "--vhost-user-media",
+            "socket=/run/d2b-video/corp-full/video.sock",
+            "--generic-vhost-user",
+            "socket=/run/d2b/vms/corp-full/snd.sock,virtio_id=25,queue_sizes=[64,64,64,64]",
+        ],
+        &["/dev/kvm", "/dev/vhost-net"],
+    );
+}
+
+#[test]
+fn virtiofsd_runner_shape_matches_rendered_snapshot() {
+    assert_role_shape(
+        "virtiofsd_runner_shape_matches_rendered_snapshot",
+        ProcessRole::Virtiofsd,
+        "corp-full",
+        &[
+            "microvm-virtiofsd@corp-full-ro-store",
+            "--socket-path=/run/d2b/vms/corp-full/ro-store.sock",
+            "--shared-dir=/var/lib/d2b/vms/corp-full/store-view/live",
+            "--thread-pool-size",
+            "1",
+            "--sandbox=chroot",
+            "--inode-file-handles=never",
+            "--cache=auto",
+            "--readonly",
+        ],
+        &[],
+    );
+}
+
+#[test]
+fn swtpm_runner_shape_matches_rendered_snapshot() {
+    assert_role_shape(
+        "swtpm_runner_shape_matches_rendered_snapshot",
+        ProcessRole::Swtpm,
+        "corp-full",
+        &[
+            "microvm-swtpm@corp-full",
+            "socket",
+            "--tpmstate",
+            "dir=/var/lib/d2b/vms/corp-full/swtpm",
+            "--ctrl",
+            "type=unixio,path=/run/d2b/vms/corp-full/tpm.sock,mode=0660",
+            "--tpm2",
+            "--flags",
+            "startup-clear",
+        ],
+        &[],
+    );
 }

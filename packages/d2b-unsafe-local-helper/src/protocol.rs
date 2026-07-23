@@ -1,10 +1,6 @@
-//! Compatibility message handling for the retained helper data plane. New
-//! runtime operations are admitted exclusively by
-//! [`crate::services::runtime_systemd_user::RuntimeSystemdUserService`]; this
-//! module does not select or create an endpoint.
-
 use crate::runtime::{RuntimeError, ScopeRuntime};
 use crate::systemd::UserScopeManager;
+use d2b_contracts::UNSAFE_LOCAL_HELPER_SOCKET_PATH;
 use d2b_contracts::unsafe_local_wire::{
     DaemonToUnsafeLocalHelper, HELPER_SOCKET_BUFFER_REQUEST_BYTES, HelperFailureCode,
     HelperHeartbeat, HelperHello, HelperOperationRejected, MAX_HELPER_FRAME_SIZE,
@@ -314,6 +310,10 @@ fn drain_response_wakeup(response_wakeup: &UnixStream) -> Result<(), ProtocolErr
             Err(_) => return Err(ProtocolError::QueueClosed),
         }
     }
+}
+
+pub fn default_helper_socket_path() -> &'static Path {
+    Path::new(UNSAFE_LOCAL_HELPER_SOCKET_PATH)
 }
 
 fn connect_control_socket(path: &Path, expected_daemon_uid: u32) -> Result<Socket, ProtocolError> {
@@ -721,8 +721,6 @@ mod tests {
         let (payload_read, _payload_write) =
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
         let raw = payload_read.as_raw_fd();
-        let proc_path = std::path::PathBuf::from(format!("/proc/self/fd/{raw}"));
-        let original_identity = std::fs::read_link(&proc_path).unwrap();
         let result = send_queued_response(
             &sender,
             QueuedResponse {
@@ -731,13 +729,6 @@ mod tests {
             },
         );
         assert_eq!(result, Err(ProtocolError::ConnectFailed));
-        match std::fs::read_link(&proc_path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Ok(current_identity) => assert_ne!(
-                current_identity, original_identity,
-                "failed send retained ownership of the original fd"
-            ),
-            Err(error) => panic!("failed to inspect released fd: {error}"),
-        }
+        assert!(!std::path::Path::new(&format!("/proc/self/fd/{raw}")).exists());
     }
 }

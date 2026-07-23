@@ -66,7 +66,7 @@ intentionally want them on the same L2 broadcast domain. Today,
 `d2b.realms.<realm>.env` and `network.envs` point at existing
 `d2b.envs` bridges; sharing that env means sharing the bridge, net VM, DHCP/NAT
 surface, and east-west policy. Work, personal, provider, and remote-host realms
-that require isolation should use separate envs and L2 bridges.
+that require isolation should use separate envs, gateway guests, and L2 bridges.
 
 ## Step 2: add host-local realm metadata
 
@@ -337,10 +337,9 @@ d2b vm display list --json | jq '.sessions[] | {canonicalTarget, identitySource,
 Provider-managed sandboxes and remote full-host nodes are separate models.
 Do not reuse one as the other:
 
-- Azure Container Apps sandboxes use the canonical
-  `azure-container-apps` runtime provider. Its exact capabilities are plan,
-  ensure, start, stop, inspect, adopt, and destroy; other provider authorities
-  are not implied.
+- Azure Container Apps sandboxes advertise `provider-managed-isolation` and the
+  capabilities the ACA adapter can honestly support. Current execute-only ACA
+  sandboxes do not advertise `persistent-shell` or a guestd endpoint.
 - Remote full-host nodes must be real full d2b hosts. Registration rejects
   provider-managed-isolation capability sets even if the node is mislabeled as a
   full host.
@@ -357,14 +356,14 @@ d2b.realms.work.providers.aca = {
 };
 ```
 
-The realm provider fields are planning metadata in the current Nix schema.
-They do not compose an ACA or Relay provider agent. Do not recreate the old
-gateway files or enrollment flow, and do not fall back to SSH, raw provider
-shells, raw guest-control tunnels, or host-held relay credentials.
+If an old gateway/ACA setup cannot provide the new non-secret references and
+capability declarations, recreate or re-enroll it explicitly. Do not fall back to
+SSH, raw provider shells, raw guest-control tunnels, or host-held relay
+credentials.
 
 ## Step 7: cleanup only after verification
 
-Do not delete old provider state during activation. Cleanup is an
+Do not delete old gateway/provider state during activation. Cleanup is an
 operator action after verification:
 
 1. Confirm all local VMs still start, stop, and report status.

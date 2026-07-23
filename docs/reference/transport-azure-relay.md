@@ -2,21 +2,20 @@
 
 **Diataxis category:** reference.
 
-`d2b-provider-transport-azure-relay` exposes Azure Relay Hybrid Connections as a
+`d2b-provider-relay` exposes Azure Relay Hybrid Connections as a
 constellation byte transport. Relay provides reachability only: peer-session
 handshake, authentication binding, frame caps, capability negotiation, and
 named-stream authorization stay in the constellation router/mux layers.
 
 ## Credential roles
 
-| Operation | Relay role | Credential source |
+| Side | Relay role | Credential source |
 | --- | --- | --- |
-| Provider-agent listener | `listen` | Distinct opaque credential lease resolved by the co-located relay control port. |
-| Provider-agent connector | `connect` | Distinct opaque credential lease resolved by the co-located relay control port. |
+| Gateway listener | `listen` | Gateway-owned sealed credential envelope, unsealed inside the gateway guest. |
+| Sandbox sender | `connect` | Managed-identity Entra bearer or a gateway-minted short-lived Relay Send SAS bearer. |
 
-Credential material remains in the credential-owning provider agent. Canonical
-provider requests carry only lease and binding identifiers; they never carry
-Relay keys or bearer bytes.
+Long-lived Relay rule keys are never passed to provider-managed sandboxes.
+`RelayCredential` and `RelayConnect` redact bearer material in `Debug`.
 
 ## Transport provider
 
@@ -32,11 +31,5 @@ Relay keys or bearer bytes.
 - adapters above it must still pass the shared
   [transport conformance matrix](./transport-conformance-matrix.md).
 
-The production control port owns WebSocket and TLS behavior. The canonical
-provider contract exposes no endpoint URL, CA bundle, credential, or free-form
-transport payload.
-
-The host production registry does not currently compose Azure Relay. It is
-constructed only by the generic provider-agent composer with an agent-local
-control port and co-located credential provider; realm Relay option fields are
-metadata, not a deployment recipe.
+The provider accepts an optional extra CA bundle for sandbox egress-proxy
+environments. Gateway-side listeners normally use the platform web PKI roots.

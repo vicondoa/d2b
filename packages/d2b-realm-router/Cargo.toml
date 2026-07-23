@@ -1,9 +1,7 @@
 [package]
 name = "d2b-realm-router"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -19,27 +17,22 @@ workspace = true
 # codec-neutral contract crates (core + provider); MUST NOT depend on
 # prost/codec, a transport impl, or host-only internals (dep-direction gate).
 [dependencies]
-d2b-contracts = { workspace = true, features = ["v2-services"] }
-d2b-realm-core = { workspace = true }
-d2b-realm-provider = { workspace = true }
-d2b-session = { workspace = true }
-async-trait.workspace = true
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 # The peer-session boundary reads/writes length-delimited frames over a
 # transport ByteStream (AsyncRead + AsyncWrite). Only the io traits are
 # needed here; no runtime/network features (the dep-direction gate still
 # forbids a codec/transport-impl dependency).
-tokio = { workspace = true, default-features = false, features = ["io-util", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["io-util"] }
 chacha20poly1305 = "0.10"
 hmac = "0.12"
-protobuf.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2.workspace = true
+sha2 = "0.10"
 subtle = "2"
 tracing = "0.1"
-ttrpc.workspace = true
 
 [dev-dependencies]
-d2b-realm-transport = { workspace = true }
-d2b-realm-codec-protobuf = { workspace = true }
-tokio = { workspace = true, default-features = false, features = ["io-util", "macros", "rt", "sync"] }
+d2b-realm-transport = { path = "../d2b-realm-transport", version = "0.0.0-bootstrap" }
+d2b-realm-codec-protobuf = { path = "../d2b-realm-codec-protobuf", version = "0.0.0-bootstrap" }
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "sync"] }

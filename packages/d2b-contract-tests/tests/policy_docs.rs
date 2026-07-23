@@ -6,7 +6,7 @@
 //! from the hermetic Nix sandbox workspace build), so repo-file access is sound.
 //!
 //! Migrated gates:
-//!   * tests/agents-md-rewrite-eval.sh    -> agents_md_reflects_realm_local_control_plane
+//!   * tests/agents-md-rewrite-eval.sh    -> agents_md_reflects_daemon_only_end_state
 //!   * tests/manpage-completeness-eval.sh -> manpage_documents_every_top_level_subcommand
 //!   * tests/kernel-module-matrix-eval.sh -> kernel_module_matrix_source_doc_parity
 //!     + kernel_module_missing_typed_error_contract
@@ -28,22 +28,21 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Migrated from tests/agents-md-rewrite-eval.sh.
 //
-// Asserts AGENTS.md reflects the accepted ADR 0045 realm-local process and
-// concurrent-delivery contracts while retaining ADR 0015's no-bash and
-// no-per-workload-unit invariants. Historical / retired context is allowed when
-// the line is explicitly marked as such.
+// Asserts AGENTS.md reflects the daemon-only end-state (ADR 0015): no line may
+// describe the bash CLI or a per-VM systemd template as a *live* framework
+// surface. Historical / retired / "deleted in" context is allowed when the line
+// is explicitly marked as such.
 //
-// Two halves:
-//   * Positive invariants — the rewrite must surface the realm-local end state,
-//     cross-reference ADRs 0045 and 0015, describe separate parent-spawned,
-//     pidfd-supervised child controller/broker processes, and require concurrent
-//     validation/panel lanes whose reviewers never execute tests.
+// Two halves, ported verbatim from the bash gate:
+//   * Positive invariants — the rewrite must surface the daemon-only end-state
+//     section explicitly, cross-reference ADR 0015, and mention d2bd /
+//     d2b-priv-broker.socket / SpawnRunner.
 //   * Negative invariants — a per-line scan: any line matching a forbidden
 //     legacy-as-live pattern is a violation UNLESS the same line also carries an
 //     explicit historical / retired marker (matched case-insensitively).
 // ---------------------------------------------------------------------------
 #[test]
-fn agents_md_reflects_realm_local_control_plane() {
+fn agents_md_reflects_daemon_only_end_state() {
     let rel = "AGENTS.md";
     assert!(
         repo_path_exists(rel),
@@ -53,40 +52,24 @@ fn agents_md_reflects_realm_local_control_plane() {
 
     // --- Positive invariants (grep -qE, per-line) -------------------------
     assert!(
-        any_line_matches(&agents, r"^## Realm-local control-plane end state$"),
-        "AGENTS.md is missing the realm-local control-plane end-state section"
-    );
-    assert!(
-        any_line_matches(&agents, r"0045-provider-and-transport-framework\.md"),
-        "AGENTS.md does not cross-reference accepted ADR 0045"
+        any_line_matches(&agents, r"^## Daemon-only end-state \(P6 onward\)"),
+        "AGENTS.md is missing the '## Daemon-only end-state (P6 onward)' section"
     );
     assert!(
         any_line_matches(&agents, r"0015-daemon-only-clean-break\.md"),
-        "AGENTS.md does not retain the historical ADR 0015 cross-reference"
+        "AGENTS.md does not cross-reference docs/adr/0015-daemon-only-clean-break.md"
     );
     assert!(
-        any_line_matches(&agents, r"parent-spawn(s|ed)"),
-        "AGENTS.md does not require parent-spawned child realm processes"
+        any_line_matches(&agents, r"d2bd"),
+        "AGENTS.md does not mention d2bd"
     );
     assert!(
-        any_line_matches(&agents, r"pidfd-supervised"),
-        "AGENTS.md does not require pidfd supervision for child realm processes"
+        any_line_matches(&agents, r"d2b-priv-broker\.socket"),
+        "AGENTS.md does not mention d2b-priv-broker.socket (socket-activation contract)"
     );
     assert!(
-        any_line_matches(&agents, r"run concurrently against that"),
-        "AGENTS.md does not require concurrent final delivery lanes"
-    );
-    assert!(
-        any_line_matches(&agents, r"they never run tests, builds, evals"),
-        "AGENTS.md does not preserve reviewer/validator separation"
-    );
-    assert!(
-        any_line_matches(&agents, r"no per-workload systemd templates"),
-        "AGENTS.md does not retain the no-per-workload-unit invariant"
-    );
-    assert!(
-        any_line_matches(&agents, r"no legacy bash CLI"),
-        "AGENTS.md does not retain the no-bash-CLI invariant"
+        any_line_matches(&agents, r"SpawnRunner"),
+        "AGENTS.md does not describe broker SpawnRunner for TPM/USBIP/GPU rewire"
     );
 
     // --- Negative invariants (per-line forbidden scan w/ allowed marker) --
@@ -104,7 +87,7 @@ fn agents_md_reflects_realm_local_control_plane() {
     )
     .expect("valid forbidden regex");
     let allowed_marker_re = Regex::new(
-        r"(?i)retired|removed|deleted|legacy|historical|no longer|no per-|no per-VM|no per-workload|end-state|P6|pre-v1|v0\.4|ADR 0015|ADR 0045|denylist|ph6-|rewire|rewritten|migration|supersedes|reintroduce|Don't|There is no|not mention|moved into|either moved|fail-closed|-style",
+        r"(?i)retired|removed|deleted|legacy|historical|no longer|no per-|no per-VM|end-state|P6|pre-v1|v0\.4|ADR 0015|denylist|ph6-|rewire|rewritten|migration|supersedes|reintroduce|Don't|There is no|not mention|moved into|either moved|fail-closed|-style",
     )
     .expect("valid allowed-marker regex");
 
@@ -124,88 +107,10 @@ fn agents_md_reflects_realm_local_control_plane() {
 
     assert!(
         violations.is_empty(),
-        "agents-md-rewrite-eval: {} line(s) describe retired surfaces as live; see ADRs 0015 and 0045:\n{}",
+        "agents-md-rewrite-eval: {} line(s) describe retired surfaces as live; see ADR 0015:\n{}",
         violations.len(),
         violations.join("\n")
     );
-}
-
-#[test]
-fn delivery_panel_example_matches_hardened_attestation_schema() {
-    let agents = read_repo_file("AGENTS.md");
-    for command in [
-        "cargo xtask delivery wave help",
-        "cargo xtask delivery wave panel-request",
-        "cargo xtask delivery wave panel-attest",
-    ] {
-        assert!(
-            agents.contains(command),
-            "AGENTS.md is missing canonical delivery command: {command}"
-        );
-    }
-
-    let marker = "Each role then supplies one strict";
-    let after_marker = agents
-        .split_once(marker)
-        .expect("AGENTS.md panel attestation marker")
-        .1;
-    let json = after_marker
-        .split_once("```json\n")
-        .expect("AGENTS.md panel JSON opening fence")
-        .1
-        .split_once("\n```")
-        .expect("AGENTS.md panel JSON closing fence")
-        .0;
-    let record: Value = serde_json::from_str(json).expect("valid panel attestation example");
-    let object = record.as_object().expect("panel example is an object");
-    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    let expected = [
-        "artifact_kind",
-        "schema_version",
-        "role",
-        "candidate_id",
-        "content_id",
-        "snapshot_sha256",
-        "model_version",
-        "provider",
-        "run_id",
-        "receipt_locator",
-        "output_sha256",
-        "signoff",
-        "recommendations",
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    assert_eq!(
-        actual, expected,
-        "panel example must contain exactly the strict serde field set"
-    );
-    assert_eq!(record["artifact_kind"], "d2b-delivery/panel-receipt");
-    assert_eq!(record["schema_version"], 1);
-    assert_eq!(record["role"], "software");
-    assert_eq!(record["model_version"], "gemini-3.1-pro-preview");
-    assert_eq!(record["provider"], "github-copilot");
-    assert_eq!(
-        record["receipt_locator"],
-        "github-copilot://runs/run-001/software"
-    );
-    assert_eq!(record["signoff"], true);
-    assert_eq!(record["recommendations"], serde_json::json!([]));
-    for field in [
-        "candidate_id",
-        "content_id",
-        "snapshot_sha256",
-        "output_sha256",
-    ] {
-        let digest = record[field].as_str().expect("digest is a string");
-        assert!(
-            digest.len() == 64
-                && digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-            "{field} must be a lowercase SHA-256 digest"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,11 +215,15 @@ fn ui_color_contract_docs_match_schema_surface() {
 }
 
 #[test]
-fn destructive_v2_cutover_docs_match_realm_native_surface() {
+fn activation_docs_do_not_describe_host_side_guest_activation() {
+    let cli = read_repo_file("docs/reference/cli-contract.md");
+    let daemon_api = read_repo_file("docs/reference/daemon-api.md");
     let readme = read_repo_file("README.md");
     let design = read_repo_file("docs/explanation/design.md");
 
     for (rel, content) in [
+        ("docs/reference/cli-contract.md", cli.as_str()),
+        ("docs/reference/daemon-api.md", daemon_api.as_str()),
         ("README.md", readme.as_str()),
         ("docs/explanation/design.md", design.as_str()),
     ] {
@@ -332,22 +241,30 @@ fn destructive_v2_cutover_docs_match_realm_native_surface() {
         }
     }
 
-    for required in ["d2b.acceptDestructiveV2Cutover = true;", "d2b.realms.work"] {
-        assert!(
-            readme.contains(required),
-            "README must show the explicit destructive v2 opt-in and realm-native declaration: {required}"
-        );
-    }
     for required in [
-        "PID1 owns only four unsuffixed local-root units",
-        "d2b.realms.work",
-        "Bundle version 12",
+        "guestd to activate that prepared toplevel",
+        "Stopped/offline VMs fail closed",
+        "`boot --apply` is the explicit way to stage a new toplevel",
+        "There is no host-side execution of guest activation scripts",
     ] {
         assert!(
-            design.contains(required),
-            "realm-native design is missing destructive-cutover contract wording: {required}"
+            cli.contains(required),
+            "cli-contract activation docs are missing required safe-activation wording: {required}"
         );
     }
+    assert!(
+        daemon_api
+            .contains("Live activation (`Switch`, `Test`, and live `Rollback`) is not a broker"),
+        "daemon-api must state live activation is not a broker script-execution surface"
+    );
+    assert!(
+        readme.contains("guestd activates the prepared toplevel"),
+        "README must explain that guestd activates prepared toplevels inside the VM"
+    );
+    assert!(
+        design.contains("The broker never runs the guest's activation program"),
+        "design overview must document the host-systemd isolation boundary"
+    );
 }
 
 /// Faithful port of the bash gate's `awk` extraction of the `enum NativeCommand`

@@ -1,164 +1,181 @@
-use std::fmt;
+use d2b_contracts::terminal_wire::{TerminalSize, TerminalStatus};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 
-pub(crate) const CREATE_METHOD_ID: u32 = 2_967_550_554;
-pub(crate) const ATTACH_METHOD_ID: u32 = 2_881_761_703;
-pub(crate) const DETACH_METHOD_ID: u32 = 4_237_767_817;
-pub(crate) const LIST_METHOD_ID: u32 = 2_008_733_898;
-pub(crate) const INSPECT_METHOD_ID: u32 = 535_990_562;
-pub(crate) const KILL_METHOD_ID: u32 = 2_470_444_226;
-pub(crate) const CANCEL_METHOD_ID: u32 = 299_551_284;
+pub(crate) const SUPERVISOR_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const MAX_SUPERVISOR_FRAME_BYTES: usize = 16 * 1024;
 
-pub(crate) const MAX_ID_BYTES: usize = 64;
-pub(crate) const MAX_REQUEST_LIFETIME_MS: u64 = 15 * 60 * 1_000;
-pub(crate) const MAX_FUTURE_CLOCK_SKEW_MS: u64 = 30 * 1_000;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SupervisorRequest {
+    pub version: u32,
+    pub request_id: u64,
+    pub action: SupervisorAction,
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellMethod {
-    Create,
-    Attach,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "op",
+    content = "args",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum SupervisorAction {
+    Status,
+    Attach {
+        #[serde(default)]
+        force: bool,
+        initial_terminal_size: TerminalSize,
+    },
     Detach,
-    List,
-    Inspect,
     Kill,
-    Cancel,
 }
 
-impl ShellMethod {
-    pub const fn method_id(self) -> u32 {
-        match self {
-            Self::Create => CREATE_METHOD_ID,
-            Self::Attach => ATTACH_METHOD_ID,
-            Self::Detach => DETACH_METHOD_ID,
-            Self::List => LIST_METHOD_ID,
-            Self::Inspect => INSPECT_METHOD_ID,
-            Self::Kill => KILL_METHOD_ID,
-            Self::Cancel => CANCEL_METHOD_ID,
-        }
-    }
-
-    pub const fn mutating(self) -> bool {
-        matches!(
-            self,
-            Self::Create | Self::Attach | Self::Detach | Self::Kill
-        )
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SupervisorResponse {
+    pub version: u32,
+    pub request_id: u64,
+    pub result: SupervisorResult,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct ShellRequest {
-    pub method: ShellMethod,
-    pub request_id: [u8; 16],
-    pub idempotency_key: Option<[u8; 32]>,
-    pub issued_at_unix_ms: u64,
-    pub expires_at_unix_ms: u64,
-    pub session_generation: u64,
-    pub realm_id: String,
-    pub workload_id: String,
-    pub resource_id: String,
-    pub operation_id: String,
-    pub stream_id: String,
-    pub attachment_indexes: Vec<u32>,
-    pub output_ring_bytes: usize,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum SupervisorResult {
+    Status {
+        running: bool,
+        attached: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_status: Option<TerminalStatus>,
+    },
+    Attached {
+        force_evicted: bool,
+    },
+    Detached {
+        detached: bool,
+    },
+    KillAccepted,
+    Rejected {
+        code: SupervisorFailure,
+    },
 }
 
-impl fmt::Debug for ShellRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ShellRequest")
-            .field("method", &self.method)
-            .field("has_idempotency_key", &self.idempotency_key.is_some())
-            .field("attachment_count", &self.attachment_indexes.len())
-            .field("output_ring_bytes", &self.output_ring_bytes)
-            .finish_non_exhaustive()
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SupervisorFailure {
+    InvalidRequest,
+    AlreadyAttached,
+    Closed,
+    Internal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellState {
-    Running,
-    Attached,
-    Exited,
-    Degraded,
+pub(crate) enum SupervisorProtocolError {
+    Io,
+    InvalidFrame,
+    FrameTooLarge,
+    VersionMismatch,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct ShellSummary {
-    pub resource_id: String,
-    pub state: ShellState,
-}
-
-impl fmt::Debug for ShellSummary {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ShellSummary")
-            .field("resource_id", &"<redacted>")
-            .field("state", &self.state)
-            .finish()
+pub(crate) fn write_frame<T: Serialize>(
+    stream: &mut UnixStream,
+    value: &T,
+) -> Result<(), SupervisorProtocolError> {
+    let body = serde_json::to_vec(value).map_err(|_| SupervisorProtocolError::InvalidFrame)?;
+    if body.is_empty() || body.len() > MAX_SUPERVISOR_FRAME_BYTES {
+        return Err(SupervisorProtocolError::FrameTooLarge);
     }
+    let length = u32::try_from(body.len()).map_err(|_| SupervisorProtocolError::FrameTooLarge)?;
+    stream
+        .write_all(&length.to_le_bytes())
+        .and_then(|()| stream.write_all(&body))
+        .map_err(|_| SupervisorProtocolError::Io)
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct ShellResponse {
-    pub state: ShellState,
-    pub operation_id: String,
-    pub resource_id: String,
-    pub stream_id: String,
-    pub attachment_indexes: Vec<u32>,
-    pub shells: Vec<ShellSummary>,
-}
-
-impl fmt::Debug for ShellResponse {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ShellResponse")
-            .field("state", &self.state)
-            .field("attachment_count", &self.attachment_indexes.len())
-            .field("shell_count", &self.shells.len())
-            .finish_non_exhaustive()
+pub(crate) fn read_frame<T: DeserializeOwned>(
+    stream: &mut UnixStream,
+) -> Result<T, SupervisorProtocolError> {
+    let mut prefix = [0u8; 4];
+    stream
+        .read_exact(&mut prefix)
+        .map_err(|_| SupervisorProtocolError::Io)?;
+    let length = u32::from_le_bytes(prefix) as usize;
+    if length == 0 || length > MAX_SUPERVISOR_FRAME_BYTES {
+        return Err(SupervisorProtocolError::FrameTooLarge);
     }
+    let mut body = vec![0u8; length];
+    stream
+        .read_exact(&mut body)
+        .map_err(|_| SupervisorProtocolError::Io)?;
+    serde_json::from_slice(&body).map_err(|_| SupervisorProtocolError::InvalidFrame)
 }
 
-pub(crate) fn valid_id(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    !value.is_empty()
-        && value.len() <= MAX_ID_BYTES
-        && matches!(bytes.next(), Some(first) if first.is_ascii_lowercase())
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+pub(crate) fn validate_request(request: &SupervisorRequest) -> Result<(), SupervisorProtocolError> {
+    (request.version == SUPERVISOR_PROTOCOL_VERSION)
+        .then_some(())
+        .ok_or(SupervisorProtocolError::VersionMismatch)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn frozen_method_ids_match_inventory() {
-        assert_eq!(ShellMethod::Create.method_id(), CREATE_METHOD_ID);
-        assert_eq!(ShellMethod::Attach.method_id(), ATTACH_METHOD_ID);
-        assert_eq!(ShellMethod::Detach.method_id(), DETACH_METHOD_ID);
-        assert_eq!(ShellMethod::List.method_id(), LIST_METHOD_ID);
-        assert_eq!(ShellMethod::Inspect.method_id(), INSPECT_METHOD_ID);
-        assert_eq!(ShellMethod::Kill.method_id(), KILL_METHOD_ID);
-        assert_eq!(ShellMethod::Cancel.method_id(), CANCEL_METHOD_ID);
+    fn request() -> SupervisorRequest {
+        SupervisorRequest {
+            version: SUPERVISOR_PROTOCOL_VERSION,
+            request_id: 7,
+            action: SupervisorAction::Status,
+        }
     }
 
     #[test]
-    fn request_debug_redacts_all_identifiers() {
-        let canary = "private-shell-canary";
-        let request = ShellRequest {
-            method: ShellMethod::Create,
-            request_id: [7; 16],
-            idempotency_key: Some([8; 32]),
-            issued_at_unix_ms: 1,
-            expires_at_unix_ms: 2,
-            session_generation: 3,
-            realm_id: canary.into(),
-            workload_id: canary.into(),
-            resource_id: canary.into(),
-            operation_id: canary.into(),
-            stream_id: canary.into(),
-            attachment_indexes: vec![],
-            output_ring_bytes: 1,
-        };
-        assert!(!format!("{request:?}").contains(canary));
+    fn private_protocol_is_correlated_strict_and_bounded() {
+        let encoded = serde_json::to_vec(&request()).unwrap();
+        let decoded: SupervisorRequest = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, request());
+
+        let unknown = br#"{"version":1,"requestId":7,"action":{"op":"status"},"path":"no"}"#;
+        assert!(serde_json::from_slice::<SupervisorRequest>(unknown).is_err());
+        let trailing = [encoded.as_slice(), b"{}"].concat();
+        assert!(serde_json::from_slice::<SupervisorRequest>(&trailing).is_err());
+    }
+
+    #[test]
+    fn stream_decoder_rejects_oversized_and_truncated_frames() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        writer
+            .write_all(&((MAX_SUPERVISOR_FRAME_BYTES + 1) as u32).to_le_bytes())
+            .unwrap();
+        assert_eq!(
+            read_frame::<SupervisorRequest>(&mut reader),
+            Err(SupervisorProtocolError::FrameTooLarge)
+        );
+
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        writer.write_all(&10u32.to_le_bytes()).unwrap();
+        writer.write_all(b"short").unwrap();
+        drop(writer);
+        assert_eq!(
+            read_frame::<SupervisorRequest>(&mut reader),
+            Err(SupervisorProtocolError::Io)
+        );
+    }
+
+    #[test]
+    fn protocol_version_is_closed() {
+        let mut old = request();
+        old.version = 0;
+        assert_eq!(
+            validate_request(&old),
+            Err(SupervisorProtocolError::VersionMismatch)
+        );
     }
 }

@@ -55,16 +55,16 @@ d2b.realms.host = {
 };
 ```
 
-Rebuild the host, log in through a PAM-backed session, and verify the
-authenticated runtime and shell services are reachable:
+Rebuild the host, log in through a PAM-backed session, and verify the user
+helper is active:
 
 ```bash
+systemctl --user status d2b-unsafe-local-helper.service
 d2b shell tools.host.d2b list
 ```
 
-The runtime agent and supervisor use `d2b.runtime.systemd-user.v2` and
-`d2b.shell.v2` ComponentSessions. Version or identity mismatch fails closed;
-there is no legacy helper protocol, static, SSH, or host-shell fallback.
+The daemon must negotiate `unsafe-local-shell-v1`. Version skew fails with an
+update recommendation; there is no static, SSH, or host-shell fallback.
 
 ## Attach to the default shell
 
@@ -135,13 +135,18 @@ d2b shell work kill --name build
 
 Use `list` first if you need to discover the configured default name.
 
-## Provider-managed targets
+## Gateway-backed targets
 
-A provider-managed target supports persistent shells only when its runtime
-advertises the positive `persistent-shell` capability through its authenticated
-provider agent. The ACA runtime provider does not gain shell capability by
-implication. There is no gateway-guest fallback, provider-native shell
-fallback, or SSH fallback.
+`d2b shell list`, `detach`, and `kill` route gateway-backed realm targets
+through the selected gateway in current generations. Interactive gateway-backed
+`attach` still fails closed on the host facade until semantic gateway attach
+lands; for that case, enter the realm gateway first, then run the shell command
+from inside that gateway boundary:
+
+```bash
+d2b realm enter work
+work-gw$ d2b shell <target>
+```
 
 ## Avoid co-locating untrusted same-UID services
 
@@ -150,6 +155,6 @@ already running as the same workload UID can reach that AF_UNIX socket. Do not
 co-locate untrusted same-UID services with persistent admin shells.
 
 Unsafe-local has the same trust limitation on the host uid. Its shell survives
-CLI, d2bd, and runtime-agent reconnects while the verified transient user scope
-stays alive. Logging out terminates the non-lingering user manager and its
-shells by design.
+CLI, d2bd, and helper reconnects while the verified transient user scope stays
+alive. Logging out terminates the non-lingering user manager and its shells by
+design.

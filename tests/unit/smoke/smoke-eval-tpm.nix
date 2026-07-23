@@ -1,93 +1,170 @@
+# tests/unit/smoke/smoke-eval-tpm.nix — regression coverage for the TPM host-side
+# hardening surface.
+#
+# Mirrors tests/unit/smoke/smoke-eval.nix but declares one TPM-enabled graphics VM,
+# one TPM-enabled headless VM, and one graphics-only control VM, then
+# inspects the rendered host activation scripts + swtpm sidecar services
+# to prove three invariants:
+#
+#   1. `d2bTpmStatePerms` grants the swtpm user `--x` on every
+#      TPM VM's parent state dir (graphics and headless).
+#   2. `d2b-<vm>-swtpm.service` carries the pre-start stale-session
+#      flush helper, grants the socket to the correct runner identity,
+#      and orders headless TPM sidecars before `microvm@<vm>`.
+#   3. `d2bMigrateOwnership` exists, is gated on `tpm.enable`, and
+#      keeps the running-VM guard + orphan-owner repair logic without
+#      traversing symlinks.
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
 }:
 
 let
   inherit (pkgs) lib;
-  identity = import ../../../nixos-modules/v2-identity.nix;
-  realmId = identity.deriveRealmId "work.local-root";
-  workloadId = identity.deriveWorkloadId realmId "desktop";
-  swtpmRoleId = identity.deriveRoleId realmId workloadId "swtpm";
-  expectedSocket =
-    "/run/d2b/r/${realmId}/w/${workloadId}/roles/${swtpmRoleId}/tpm.sock";
 
-  resources = lib.evalModules {
-    modules = [
-      ../../../nixos-modules/options-realms.nix
-      ../../../nixos-modules/index.nix
-      ../../../nixos-modules/realm-device-rows.nix
-      ({ lib, ... }: {
-        options.assertions = lib.mkOption {
-          type = lib.types.listOf lib.types.attrs;
-          default = [ ];
-        };
-        config.d2b.realms.work = {
-          path = "work.local-root";
-          providers.runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          providers.devices = {
-            type = "device";
-            implementationId = "host-mediated";
-          };
-          workloads.desktop = {
-            providerRefs = {
-              runtime = "runtime";
-              device = "devices";
-            };
-            tpm.enable = true;
-          };
-        };
-      })
-    ];
-  };
-  tpmRow = builtins.head resources.config.d2b._index.devices.list;
-  tpmLease = builtins.head
-    resources.config.d2b._index.devices.allocatorLeaseRequests;
+  flake = builtins.getFlake "git+file://${toString ./../../..}";
+  nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
 
-  guest = import (pkgs.path + "/nixos/lib/eval-config.nix") {
+  nixos = nixosSystem {
     inherit system;
-    specialArgs = {
-      d2bRealmId = realmId;
-      d2bWorkloadId = workloadId;
-      d2bRoleIds.swtpm = swtpmRoleId;
-    };
     modules = [
-      ../../../nixos-modules/components/tpm.nix
+      flake.nixosModules.default
       ({ lib, ... }: {
-        options.microvm = lib.mkOption {
-          type = lib.types.attrs;
-          default = { };
+        boot.loader.grub.enable = false;
+        boot.loader.systemd-boot.enable = false;
+        boot.initrd.includeDefaultModules = false;
+        fileSystems."/" = {
+          device = "tmpfs";
+          fsType = "tmpfs";
         };
-        config = {
-          boot.loader.grub.enable = false;
-          boot.loader.systemd-boot.enable = false;
-          boot.initrd.includeDefaultModules = false;
-          fileSystems."/" = {
-            device = "tmpfs";
-            fsType = "tmpfs";
+        environment.etc."machine-id".text = "00000000000000000000000000000000";
+        system.stateVersion = "25.11";
+
+        users.users.alice = {
+          isNormalUser = true;
+          uid = 1000;
+        };
+
+        d2b.site = {
+          waylandUser = "alice";
+          launcherUsers = [ "alice" ];
+          yubikey.enable = false;
+        };
+
+        d2b.envs.work = {
+          lanSubnet    = "10.20.0.0/24";
+          uplinkSubnet = "192.0.2.0/30";
+        };
+
+        # Graphics + TPM enabled VM. The framework should emit both the
+        # graphics-side state-dir ACLs and the TPM parent-dir traverse
+        # ACL for its dedicated swtpm user.
+        d2b.vms.tpm-vm = {
+          enable = true;
+          env = "work";
+          index = 12;
+          ssh.user = "alice";
+          graphics.enable = true;
+          tpm.enable = true;
+          config = {
+            networking.hostName = lib.mkDefault "tpm-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
           };
-          system.stateVersion = "25.11";
         };
+
+        d2b.vms.plain-vm = {
+          enable = true;
+          env = "work";
+          index = 13;
+          ssh.user = "alice";
+          graphics.enable = true;
+          config = {
+            networking.hostName = lib.mkDefault "plain-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
+
+        d2b.vms.headless-tpm = {
+          enable = true;
+          env = "work";
+          index = 14;
+          ssh.user = "alice";
+          tpm.enable = true;
+          config = {
+            networking.hostName = lib.mkDefault "headless-tpm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
+
       })
     ];
   };
 
-  extraArgs = guest.config.microvm.cloud-hypervisor.extraArgs;
+  hasTpmActivationScript =
+    builtins.hasAttr "d2bTpmStatePerms"
+      nixos.config.system.activationScripts;
+  hasMigrationScript =
+    builtins.hasAttr "d2bMigrateOwnership"
+      nixos.config.system.activationScripts;
+  tpmGuest = nixos.config.d2b._computed."tpm-vm".config;
+  plainGuest = nixos.config.d2b._computed."plain-vm".config;
+  hasTpmFlushService =
+    builtins.hasAttr "tpm2-flush-sessions"
+      tpmGuest.systemd.services;
+  plainHasTpmFlushService =
+    builtins.hasAttr "tpm2-flush-sessions"
+      plainGuest.systemd.services;
+  tpmFlushService = tpmGuest.systemd.services."tpm2-flush-sessions";
+  tpmSrkService = tpmGuest.systemd.services.tpm2-srk-provision;
+
+  # The per-VM
+  # `d2b-<vm>-swtpm.service` units were deleted along with
+  # host-sidecars.nix. The TPM sidecar is now spawned by the
+  # d2b priv-broker as `SpawnRunner{role: Swtpm}`; the
+  # equivalent pre-start session-flush + socket ACL handoff lives
+  # in `packages/d2b-priv-broker/src/runners/swtpm.rs`. The
+  # legacy per-VM systemd assertions (ExecStartPre/ExecStartPost,
+  # microvm@ wants/after wiring, host-sidecars.nix flush helper
+  # source check) are deferred to a forthcoming
+  # broker-swtpm-runner-eval.
+  #
+  # The host-side state-dir hardening *is* preserved: the
+  # `d2bTpmStatePerms` and `d2bMigrateOwnership`
+  # activation scripts still live in host-activation.nix because
+  # they prepare /var/lib/d2b/vms/<vm>/swtpm for the broker
+  # runner to chown into at fork time. We keep the presence
+  # checks; the textual-fragment assertions that named the
+  # deleted per-VM sidecar users are dropped (the broker
+  # negotiates ownership at runtime instead of statically
+  # naming `d2b-<vm>-swtpm`).
   checks = [
-    (if extraArgs == [ "--tpm" "socket=${expectedSocket}" ] then null else
-      throw "smoke-eval-tpm: cloud-hypervisor TPM socket is not canonical")
-    (if builtins.hasAttr "tpm2-flush-sessions" guest.config.systemd.services
-      then null else throw "smoke-eval-tpm: stale-session flush service is missing")
-    (if builtins.hasAttr "tpm2-srk-provision" guest.config.systemd.services
-      then null else throw "smoke-eval-tpm: SRK provisioning service is missing")
-    (if tpmRow.roleId == swtpmRoleId && tpmRow.endpointPath == expectedSocket
-      then null else throw "smoke-eval-tpm: TPM resource row is not canonical")
-    (if tpmLease.resourceId == "device-tpm-${workloadId}"
-      && tpmLease.share == "exclusive"
-      then null else throw "smoke-eval-tpm: TPM allocator lease is not workload-exclusive")
+    (if hasTpmActivationScript then null else
+      throw "smoke-eval-tpm: system.activationScripts.d2bTpmStatePerms is missing")
+    (if hasMigrationScript then null else
+      throw "smoke-eval-tpm: system.activationScripts.d2bMigrateOwnership is missing")
+    (if hasTpmFlushService then null else
+      throw "smoke-eval-tpm: TPM guest is missing tpm2-flush-sessions.service")
+    (if ! plainHasTpmFlushService then null else
+      throw "smoke-eval-tpm: non-TPM guest unexpectedly has tpm2-flush-sessions.service")
+    (if tpmFlushService.environment.TPM2TOOLS_TCTI == "device:/dev/tpmrm0" then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must pin TPM2TOOLS_TCTI to /dev/tpmrm0")
+    (if lib.elem "sysinit.target" tpmFlushService.wantedBy then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must be wanted by sysinit.target")
+    (if (tpmFlushService.unitConfig.DefaultDependencies or null) == false then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must disable default dependencies")
+    (if lib.elem "tpm2-srk-provision.service" tpmFlushService.before then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must run before SRK provisioning")
+    (if lib.elem "tpm2-flush-sessions.service" tpmSrkService.after then null else
+      throw "smoke-eval-tpm: tpm2-srk-provision must order after tpm2-flush-sessions")
   ];
 in
-builtins.deepSeq checks
-  (pkgs.runCommand "d2b-smoke-eval-realm-tpm" { } "touch $out")
+  builtins.deepSeq checks
+    nixos.config.system.build.toplevel

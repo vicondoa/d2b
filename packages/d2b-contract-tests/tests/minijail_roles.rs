@@ -6,9 +6,11 @@
 //! the fixture-contract layer (this crate, gated by the D2B_FIXTURES step in
 //! `tests/tools/rust-workspace-checks.sh`), not the doc/source-grep policy layer.
 //!
-//! Each local-VM workload emits a `cloud-hypervisor` role and a set of
-//! `virtiofsd` shares, so both role-profile families are present in the smoke
-//! fixture. Other feature-role validators are out of scope here.
+//! Each VM emits a `cloud-hypervisor` runner and a set of `virtiofsd` shares,
+//! so both roles' profiles are present in the fixture-smoke bundle (corp-vm +
+//! sys-work-net). The other minijail-validators (gpu/swtpm/audio/video/usbip)
+//! need feature-enabled VMs that the smoke fixture does not contain and are out
+//! of scope here.
 //!
 //! Layer split (faithful to the bash gates):
 //!   * The bash gates' Layer-1 / Phase-1 (eval-only) profile-shape assertions
@@ -43,8 +45,48 @@
 
 use d2b_contract_tests::{load_bundle_resolver_from_env, read_repo_file, repo_path_exists};
 use d2b_core::processes::ProcessRole;
+use regex::Regex;
 
 const MINIJAIL_PROFILES_NIX: &str = "nixos-modules/minijail-profiles.nix";
+
+/// Whether any single line of `content` matches `pattern`. Mirrors `grep`'s
+/// per-line evaluation faithfully (so a `\s*` can never span a newline
+/// boundary). Copied from `tests/policy_daemon.rs::any_line_matches`.
+fn any_line_matches(content: &str, pattern: &str) -> bool {
+    let re = Regex::new(pattern).expect("valid regex");
+    content.lines().any(|line| re.is_match(line))
+}
+
+/// Whether `pattern` matches anywhere in `content`, allowing matches to span
+/// newlines (the pattern is responsible for using `\s*`/`\s+` between tokens).
+/// Used to assert a multi-line Nix expression exists verbatim.
+fn whole_text_matches(content: &str, pattern: &str) -> bool {
+    let re = Regex::new(pattern).expect("valid regex");
+    re.is_match(content)
+}
+
+/// Extract the inclusive line range from the first line matching `start_pat`
+/// through the first subsequent line matching `end_pat`. Mirrors the bash
+/// gate's `awk '/start/{active=1} active{print} active&&/end/{exit}'` block
+/// extraction.
+fn extract_block(content: &str, start_pat: &str, end_pat: &str) -> Option<String> {
+    let start_re = Regex::new(start_pat).expect("valid start regex");
+    let end_re = Regex::new(end_pat).expect("valid end regex");
+    let mut active = false;
+    let mut block: Vec<&str> = Vec::new();
+    for line in content.lines() {
+        if !active && start_re.is_match(line) {
+            active = true;
+        }
+        if active {
+            block.push(line);
+            if end_re.is_match(line) {
+                return Some(block.join("\n"));
+            }
+        }
+    }
+    None
+}
 
 // ===========================================================================
 // tests/minijail-validator-cloud-hypervisor.sh
@@ -81,21 +123,31 @@ fn cloud_hypervisor_tap_fd_profile_declares_empty_capabilities() {
     );
 }
 
-/// The canonical role profile consumes an allocator-supplied network
-/// interface and never grants CAP_NET_ADMIN to the workload runner.
+/// Phase-1b (persistent-tap fallback): the cloud-hypervisor runner profile must
+/// retain EXACTLY `["CAP_NET_ADMIN"]`. The fixture-smoke bundle renders only the
+/// default tap-fd mode, so the persistent-tap branch is unreachable from the
+/// artifacts; its coverage is preserved by asserting the exact conditional in
+/// `nixos-modules/minijail-profiles.nix` that grounds both branches:
+///
+/// ```nix
+/// capabilities = lib.optionals
+///   (cfg.site.ch.netHandoffMode == "persistent-tap")
+///   [ "CAP_NET_ADMIN" ];
+/// ```
 #[test]
-fn cloud_hypervisor_role_profile_has_no_network_capability_escape_hatch() {
+fn cloud_hypervisor_persistent_tap_cap_net_admin_source_logic() {
     assert!(
         repo_path_exists(MINIJAIL_PROFILES_NIX),
         "missing {MINIJAIL_PROFILES_NIX}"
     );
     let src = read_repo_file(MINIJAIL_PROFILES_NIX);
+    let pattern = r#"capabilities\s*=\s*lib\.optionals\s*\(\s*cfg\.site\.ch\.netHandoffMode\s*==\s*"persistent-tap"\s*\)\s*\[\s*"CAP_NET_ADMIN"\s*\]\s*;"#;
     assert!(
-        src.contains("capabilities ? [ ],")
-            && !src.contains("CAP_NET_ADMIN")
-            && !src.contains("netHandoffMode"),
-        "canonical workload role profiles must default to no capabilities and must not \
-         restore a VM-mode CAP_NET_ADMIN escape hatch"
+        whole_text_matches(&src, pattern),
+        "cloud-hypervisor profile must grant CAP_NET_ADMIN iff netHandoffMode == \
+         \"persistent-tap\" (empty otherwise); the canonical \
+         `lib.optionals (… == \"persistent-tap\") [ \"CAP_NET_ADMIN\" ]` conditional was not \
+         found in {MINIJAIL_PROFILES_NIX}"
     );
 }
 
@@ -135,15 +187,7 @@ fn cloud_hypervisor_rendered_jail_shape() {
             );
             assert_eq!(
                 p.cgroup_placement.subtree,
-                format!(
-                    "d2b.slice/r-{}/workloads/w-{}/{}",
-                    dag.workload_identity
-                        .as_ref()
-                        .expect("canonical workload DAG identity")
-                        .realm_id,
-                    dag.vm,
-                    node.id.0
-                ),
+                format!("d2b.slice/{}/cloud-hypervisor", dag.vm),
                 "cloud-hypervisor {} (vm {}) cgroup subtree drift",
                 p.profile_id,
                 dag.vm
@@ -164,7 +208,7 @@ fn cloud_hypervisor_rendered_jail_shape() {
             );
             assert_eq!(
                 p.seccomp_policy_ref.as_deref(),
-                Some("w1-cloud-hypervisor"),
+                Some("w1-cloud-hypervisor-runner"),
                 "cloud-hypervisor {} (vm {}) seccompPolicyRef drift",
                 p.profile_id,
                 dag.vm
@@ -177,8 +221,12 @@ fn cloud_hypervisor_rendered_jail_shape() {
 // tests/minijail-validator-virtiofsd.sh
 // ===========================================================================
 
-/// The normalized share-profile composer must preserve the ADR 0021
-/// broker-pre-established user namespace contract.
+/// Layer-1 `assert_profile_source`: the virtiofsd profile in
+/// `nixos-modules/minijail-profiles.nix` MUST match the ADR-0021 broker-pre-NS
+/// shape exactly — the carve-out marker string + `exceptionRef`, zero host
+/// `CAP_*` tokens inside the profile block, `requiresStartRoot = false`, a
+/// `userNamespace = { hostUidForZero, hostGidForZero }` mapping, and the closed
+/// `seccompPolicyRef = "w1-virtiofsd"` allowlist.
 #[test]
 fn virtiofsd_profile_source_shape_matches_adr_0021() {
     assert!(
@@ -187,26 +235,59 @@ fn virtiofsd_profile_source_shape_matches_adr_0021() {
     );
     let src = read_repo_file(MINIJAIL_PROFILES_NIX);
 
+    // The carve-out marker string + exceptionRef anchor (anywhere in file).
+    let carve_out = "ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS";
     assert!(
-        src.contains(r#"role = roleRowFor workload.workloadId "virtiofsd";"#)
-            && src.contains(r#"processRole = "virtiofsd";"#),
-        "virtiofsd profiles must be derived from the workload's canonical role row"
+        src.contains(carve_out),
+        "virtiofsdRootException string '{carve_out}' not found in {MINIJAIL_PROFILES_NIX}"
     );
     assert!(
-        src.contains("requiresStartRoot = false;")
-            && src.contains("capabilities = [ ];")
-            && !src.contains("requiresStartRoot = true;"),
-        "virtiofsd profiles must start without root and grant zero host capabilities"
+        any_line_matches(&src, r"exceptionRef\s*=\s*virtiofsdRootException"),
+        "virtiofsd profile is missing exceptionRef = virtiofsdRootException in {MINIJAIL_PROFILES_NIX}"
+    );
+
+    // Extract the virtiofsd profile block: from `role = "virtiofsd";` through
+    // the closing `exceptionRef = virtiofsdRootException;` line (the bash awk
+    // block extraction).
+    let block = extract_block(
+        &src,
+        r#"role\s*=\s*"virtiofsd";"#,
+        r"exceptionRef\s*=\s*virtiofsdRootException;",
+    )
+    .expect("could not locate virtiofsd profile block in minijail-profiles.nix");
+
+    // Zero host CAP_* tokens inside the block (ADR 0021: broker-pre-NS gives
+    // full caps inside the user NS; the host needs none).
+    let cap_token = Regex::new(r#""CAP_[A-Z_]+""#).expect("valid regex");
+    let cap_hits: Vec<&str> = block.lines().filter(|l| cap_token.is_match(l)).collect();
+    assert!(
+        cap_hits.is_empty(),
+        "virtiofsd profile must declare ZERO host caps (ADR 0021); found CAP_* tokens: {cap_hits:?}"
+    );
+
+    // requiresStartRoot MUST be false (never `= true`).
+    assert!(
+        !any_line_matches(&block, r"requiresStartRoot\s*=\s*true"),
+        "virtiofsd profile must declare requiresStartRoot = false (ADR 0021 retires the root carve-out)"
+    );
+
+    // userNamespace single-entry mapping must be declared.
+    assert!(
+        any_line_matches(&block, r"userNamespace\s*="),
+        "virtiofsd profile must declare userNamespace = {{ ... }} (ADR 0021)"
     );
     assert!(
-        src.contains("hostUidForZero = uid;")
-            && src.contains("hostGidForZero = gid;")
-            && src.contains(r#"then "d2b-gctlfs-${workload.workloadId}""#),
-        "virtiofsd profiles must map fake root to the role principal, with a narrower \
-         guest-control share principal"
+        any_line_matches(&block, r"hostUidForZero\s*="),
+        "virtiofsd profile userNamespace must include hostUidForZero (ADR 0021)"
     );
     assert!(
-        src.contains(r#"seccompPolicyRef = "w1-virtiofsd";"#),
+        any_line_matches(&block, r"hostGidForZero\s*="),
+        "virtiofsd profile userNamespace must include hostGidForZero (ADR 0021)"
+    );
+
+    // Steady-state seccomp policy reference must be the closed w1-virtiofsd allowlist.
+    assert!(
+        any_line_matches(&block, r#"seccompPolicyRef\s*=\s*"w1-virtiofsd""#),
         "virtiofsd profile missing seccompPolicyRef = \"w1-virtiofsd\""
     );
 }
@@ -310,7 +391,7 @@ fn virtiofsd_ro_store_rendered_adr_0021_invariants() {
 
             // The read-only store share additionally serves /nix/store read-only
             // and passes --readonly.
-            if p.profile_id.ends_with("-ro-store") {
+            if p.profile_id.ends_with("-virtiofsd-ro-store") {
                 ro_store_seen += 1;
                 assert!(
                     p.mount_policy.nix_store_read_only,
@@ -354,11 +435,16 @@ fn qemu_media_profile_source_is_fd_backed_and_device_closed() {
         "missing {MINIJAIL_PROFILES_NIX}"
     );
     let src = read_repo_file(MINIJAIL_PROFILES_NIX);
+    let block = extract_block(
+        &src,
+        r#"role\s*=\s*"qemu-media-runner";"#,
+        r"controllers\s*=\s*serviceControllers;",
+    )
+    .expect("could not locate qemu-media profile block in minijail-profiles.nix");
+
     assert!(
-        src.contains(r#""qemu-media-runner" = "w1-qemu-media";"#)
-            && src.contains("capabilities ? [ ],"),
-        "qemu-media canonical role profile must use the closed seccomp policy and \
-         empty default capability set"
+        any_line_matches(&block, r"capabilities\s*=\s*\[\s*\]"),
+        "qemu-media profile must declare an empty host capability set"
     );
     for cap in [
         "CAP_SYS_ADMIN",
@@ -367,55 +453,65 @@ fn qemu_media_profile_source_is_fd_backed_and_device_closed() {
         "CAP_NET_ADMIN",
     ] {
         assert!(
-            !src.contains(cap),
+            !block.contains(cap),
             "qemu-media profile must not mention forbidden capability {cap}"
         );
     }
     assert!(
-        src.contains(
-            r#""d2b.slice/r-${role.realmId}/workloads/w-${role.workloadId}/${role.roleId}""#
+        any_line_matches(&block, r#"seccompPolicyRef\s*=\s*"w1-qemu-media";"#),
+        "qemu-media profile must declare the mandatory w1-qemu-media seccomp policy"
+    );
+    assert!(
+        any_line_matches(
+            &block,
+            r"namespaces\s*=\s*defaultNamespaces\s*//\s*\{\s*pid\s*=\s*true;\s*\};"
         ),
-        "qemu-media profile must use canonical realm/workload/role cgroup placement"
-    );
-}
-
-/// A generic-profile regression briefly let qemu-media-runner inherit
-/// cloud-hypervisor's full device-bind list (including
-/// /dev/vhost-net, which qemu-media must never expose as a path — vhost-net
-/// stays inherited-fd only per docs/reference/privileges.md) and dropped the
-/// private pid namespace both qemu-media-runner and video need to contain
-/// their forked/reaped child processes. Pin the source shape so both stay
-/// role-scoped rather than defaulting to a single shared list/flag.
-#[test]
-fn qemu_media_device_binds_and_pid_namespace_are_role_scoped() {
-    assert!(
-        repo_path_exists(MINIJAIL_PROFILES_NIX),
-        "missing {MINIJAIL_PROFILES_NIX}"
-    );
-    let src = read_repo_file(MINIJAIL_PROFILES_NIX);
-    assert!(
-        src.contains(r#"then [ "/dev/kvm" "/dev/vhost-net" ]"#)
-            && src.contains(r#"else if processRole == "qemu-media-runner""#)
-            && src.contains(r#"then [ "/dev/kvm" ]"#),
-        "deviceBindsFor must give qemu-media-runner ONLY /dev/kvm; \
-         /dev/vhost-net must remain cloud-hypervisor-runner-exclusive"
+        "qemu-media profile must request a private pid namespace so /dev masking installs a private procfs"
     );
     assert!(
-        src.contains("pidNamespace = builtins.elem role.processRole")
-            && src.contains(r#"[ "video" "qemu-media-runner" ]"#),
-        "video and qemu-media-runner must each get a private pid namespace to \
-         contain/reap forked child processes"
+        any_line_matches(&block, r#"readOnlyPaths\s*=\s*\[\s*"/"\s*\];"#),
+        "qemu-media profile must make the root mount read-only"
+    );
+    assert!(
+        any_line_matches(&block, r#"deviceBinds\s*=\s*\[\s*"/dev/kvm"\s*\]"#),
+        "qemu-media fd-backed mode must expose only /dev/kvm by path"
+    );
+    assert!(
+        any_line_matches(&block, r"bindMounts\s*=\s*\[\s*\]"),
+        "qemu-media fd-backed mode must not bind broad media/display paths"
+    );
+    for forbidden in ["/dev/bus/usb", "/dev/net/tun", "/dev/vhost-net"] {
+        assert!(
+            !block.contains(forbidden),
+            "qemu-media profile must not bind forbidden device path {forbidden}"
+        );
+    }
+    assert!(
+        block.contains(r#""/run/d2b/vms/${name}""#) && block.contains("(stateDirOf name)"),
+        "qemu-media writable paths must stay scoped to per-VM runtime/state directories"
     );
 }
 
 #[test]
-fn qemu_media_profile_is_selected_by_canonical_role_kind() {
-    let src = read_repo_file("nixos-modules/role-process-rows.nix");
+fn qemu_media_activation_acl_source_splits_kvm_from_vhost_net() {
+    let src = read_repo_file("nixos-modules/host-activation.nix");
     assert!(
-        src.contains(r#""qemu-media" = "qemu-media-runner";"#)
-            && src.contains("else roleName role.roleKind;")
-            && src.contains("nodeId = roleId;"),
-        "qemu-media confinement must be selected from a normalized canonical role row"
+        src.contains(
+            r#"select(.role == "cloud-hypervisor-runner" or .role == "gpu" or .role == "qemu-media-runner")"#
+        ),
+        "qemu-media runner UID must be classified as KVM-consuming for focused /dev/kvm ACLs"
+    );
+    assert!(
+        src.contains(r#"select(.role == "cloud-hypervisor-runner" or .role == "gpu")"#),
+        "vhost-net ACL classifier must remain separate from KVM consumers"
+    );
+    assert!(
+        src.contains("stale_qemu_media_uid"),
+        "activation must revoke stale qemu-media display/KVM ACLs"
+    );
+    assert!(
+        src.contains("setfacl -x \"u:$stale_qemu_media_uid\" /dev/vhost-net"),
+        "qemu-media fd-backed mode must actively revoke stale /dev/vhost-net ACLs"
     );
 }
 

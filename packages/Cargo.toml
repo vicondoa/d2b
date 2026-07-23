@@ -1,68 +1,38 @@
 [workspace]
 resolver = "2"
+exclude = ["d2b-priv-broker", "d2b-guest-shell-runner"]
 members = [
-    "d2b",
-    "d2b-azure-vm-fake-sdk",
-    "d2b-client",
-    "d2b-clipd",
-    "d2b-contract-tests",
-    "d2b-contracts",
-    "d2b-core",
-    "d2b-core/fuzz",
-    "d2b-daemon-access",
-    "d2b-exec-runner",
-    "d2b-gateway",
-    "d2b-gateway-runtime",
-    "d2b-guest-shell-runner",
-    "d2b-guestd",
-    "d2b-host",
     "d2b-host-activation-helper",
-    "d2b-notify",
-    "d2b-priv-broker",
-    "d2b-provider",
-    "d2b-provider-aca",
-    "d2b-provider-audio-pipewire-vhost-user",
-    "d2b-provider-credential-entra",
-    "d2b-provider-credential-managed-identity",
-    "d2b-provider-credential-secret-service",
-    "d2b-provider-device-host-mediated",
-    "d2b-provider-display-wayland",
-    "d2b-provider-host",
-    "d2b-provider-infrastructure-azure-vm",
-    "d2b-provider-network-local-realm",
-    "d2b-provider-observability-local",
-    "d2b-provider-relay",
-    "d2b-provider-runtime-azure-container-apps",
-    "d2b-provider-runtime-azure-vm",
-    "d2b-provider-runtime-local",
-    "d2b-provider-storage-local",
-    "d2b-provider-substrate-host",
-    "d2b-provider-toolkit",
-    "d2b-provider-transport-azure-relay",
-    "d2b-provider-transport-local",
-    "d2b-realm-codec-protobuf",
+    "d2b-core",
     "d2b-realm-core",
     "d2b-realm-provider",
-    "d2b-realm-router",
     "d2b-realm-transport",
-    "d2b-session",
-    "d2b-session-unix",
-    "d2b-sk-frontend",
-    "d2b-state",
-    "d2b-ttrpc-api-fit-spike",
-    "d2b-unsafe-local-helper",
+    "d2b-realm-codec-protobuf",
+    "d2b-realm-router",
+    "d2b-daemon-access",
+    "d2b-host-providers",
+    "d2b-provider-aca",
+    "d2b-provider-relay",
+    "d2b-gateway",
+    "d2b-gateway-runtime",
+    "d2b-host",
+    "d2b-guestd",
     "d2b-userd",
-    "d2b-wayland-proxy",
+    "d2b-unsafe-local-helper",
+    "d2b-exec-runner",
+    "d2b-sk-frontend",
+    "d2b-contracts",
+    "d2b",
     "d2bd",
+    "d2b-clipd",
+    "d2b-notify",
+    "d2b-wayland-proxy",
+    "d2b-contract-tests",
     "xtask",
 ]
 
 [workspace.package]
-version = "2.0.0"
-edition = "2024"
-rust-version = "1.94.1"
 license = "Apache-2.0"
-repository = "https://github.com/vicondoa/d2b"
 
 [workspace.lints.clippy]
 all = "warn"
@@ -80,69 +50,34 @@ unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 
 [workspace.dependencies]
-d2b = { path = "d2b", version = "2.0.0" }
-d2b-azure-vm-fake-sdk = { path = "d2b-azure-vm-fake-sdk", version = "2.0.0", default-features = false }
-d2b-client = { path = "d2b-client", version = "2.0.0", default-features = false }
-d2b-clipd = { path = "d2b-clipd", version = "2.0.0" }
-d2b-contracts = { path = "d2b-contracts", version = "2.0.0", default-features = false }
-d2b-core = { path = "d2b-core", version = "2.0.0" }
-d2b-daemon-access = { path = "d2b-daemon-access", version = "2.0.0", default-features = false }
-d2b-exec-runner = { path = "d2b-exec-runner", version = "2.0.0" }
-d2b-gateway = { path = "d2b-gateway", version = "2.0.0" }
-d2b-gateway-runtime = { path = "d2b-gateway-runtime", version = "2.0.0" }
-d2b-guestd = { path = "d2b-guestd", version = "2.0.0" }
-d2b-host = { path = "d2b-host", version = "2.0.0" }
-d2b-provider = { path = "d2b-provider", version = "2.0.0", default-features = false }
-d2b-provider-aca = { path = "d2b-provider-aca", version = "2.0.0" }
-d2b-provider-audio-pipewire-vhost-user = { path = "d2b-provider-audio-pipewire-vhost-user", version = "2.0.0", default-features = false }
-d2b-provider-credential-entra = { path = "d2b-provider-credential-entra", version = "2.0.0", default-features = false }
-d2b-provider-credential-managed-identity = { path = "d2b-provider-credential-managed-identity", version = "2.0.0", default-features = false }
-d2b-provider-credential-secret-service = { path = "d2b-provider-credential-secret-service", version = "2.0.0", default-features = false }
-d2b-provider-device-host-mediated = { path = "d2b-provider-device-host-mediated", version = "2.0.0", default-features = false }
-d2b-provider-display-wayland = { path = "d2b-provider-display-wayland", version = "2.0.0", default-features = false }
-d2b-provider-host = { path = "d2b-provider-host", version = "2.0.0" }
-d2b-provider-infrastructure-azure-vm = { path = "d2b-provider-infrastructure-azure-vm", version = "2.0.0", default-features = false }
-d2b-provider-network-local-realm = { path = "d2b-provider-network-local-realm", version = "2.0.0", default-features = false }
-d2b-provider-observability-local = { path = "d2b-provider-observability-local", version = "2.0.0", default-features = false }
-d2b-provider-relay = { path = "d2b-provider-relay", version = "2.0.0" }
-d2b-provider-runtime-azure-container-apps = { path = "d2b-provider-runtime-azure-container-apps", version = "2.0.0", default-features = false }
-d2b-provider-runtime-azure-vm = { path = "d2b-provider-runtime-azure-vm", version = "2.0.0", default-features = false }
-d2b-provider-runtime-local = { path = "d2b-provider-runtime-local", version = "2.0.0", default-features = false }
-d2b-provider-storage-local = { path = "d2b-provider-storage-local", version = "2.0.0", default-features = false }
-d2b-provider-substrate-host = { path = "d2b-provider-substrate-host", version = "2.0.0", default-features = false }
-d2b-provider-toolkit = { path = "d2b-provider-toolkit", version = "2.0.0", default-features = false }
-d2b-provider-transport-azure-relay = { path = "d2b-provider-transport-azure-relay", version = "2.0.0", default-features = false }
-d2b-provider-transport-local = { path = "d2b-provider-transport-local", version = "2.0.0", default-features = false }
-d2b-realm-codec-protobuf = { path = "d2b-realm-codec-protobuf", version = "2.0.0" }
-d2b-realm-core = { path = "d2b-realm-core", version = "2.0.0" }
-d2b-realm-provider = { path = "d2b-realm-provider", version = "2.0.0" }
-d2b-realm-router = { path = "d2b-realm-router", version = "2.0.0" }
-d2b-realm-transport = { path = "d2b-realm-transport", version = "2.0.0" }
-d2b-session = { path = "d2b-session", version = "2.0.0", default-features = false }
-d2b-session-unix = { path = "d2b-session-unix", version = "2.0.0", default-features = false }
-d2b-state = { path = "d2b-state", version = "2.0.0", default-features = false }
-d2b-wayland-proxy = { path = "d2b-wayland-proxy", version = "2.0.0" }
-async-trait = "0.1"
-command-fds = "0.3"
-futures = "0.3"
-futures-util = "0.3"
-libc = "0.2"
-nix = { version = "0.29", default-features = false }
-oo7 = { version = "0.6", default-features = false, features = ["native_crypto", "tokio"] }
-protobuf = "=3.7.2"
-protobuf-codegen = "=3.7.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "0.8", features = ["derive"] }
+# W3 host-prepare low-level dependencies. `rustix` lands in the
+# integrator prep so d2b-host stubs can compile and so the supply-
+# chain gate (cargo-deny + cargo-audit through flake.nix's pinned
+# advisory DB) covers it before scope agents consume it.
+#
+# `rtnetlink` and `nftnl` are intentionally NOT declared here: panel
+# review for the W3 prep commit ruled they ship with the scope commit
+# that first consumes them (s2 for rtnetlink, s3 for nftables) so the
+# license / advisory whitelist update lands in the same commit that
+# adds the consumer. See plan.md §"W3 broker variant additions" — the
+# wire contract for routes/nft is fully encoded in d2b-contracts here,
+# so scope agents have everything they need to pull these crates in.
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
+# W3 s2: declared in workspace.dependencies so future scope work (and
+# the eventual production netlink backend in d2b-priv-broker) can
+# opt into rtnetlink via `{ workspace = true }`. Not yet consumed by
+# any workspace member, so the resolved Cargo.lock is unchanged. The
+# trait-based netlink backend in `d2b_host::netlink` lets the L1c
+# canary matrix exercise every fail-closed path through a fake
+# backend without `CAP_NET_ADMIN`.
 rtnetlink = "0.14"
+# W3 s3: sha2 lands here so d2b-host's nft drift-detection digest
+# is byte-stable across builds and consumers. The nftnl native binding
+# is intentionally NOT pulled in — see
+# `docs/adr/0013-w3-firewall-coexistence-policy.md` for the panel-
+# rationalized fallback (typed NftBatch + `nft -f -` text rendering,
+# verified by the broker's hash readback).
 sha2 = "0.10"
-signal-hook = "0.4"
-snow = { version = "=0.10.0", features = ["risky-raw-split"] }
-thiserror = "2"
-tokio = { version = "1", default-features = false }
-tracing = "0.1"
-ttrpc = { version = "=0.9.0", default-features = false }
-ttrpc-codegen = "=0.6.0"
-zeroize = "1"
-zbus = "5.16"

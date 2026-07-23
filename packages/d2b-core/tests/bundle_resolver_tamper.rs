@@ -9,7 +9,7 @@
 //! `chown` and is skipped automatically when the process is not root.
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
-use d2b_core::error::{BundleError, Error, ManifestError};
+use d2b_core::error::{BundleError, Error};
 use sha2::Digest as _;
 use std::fs;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -183,7 +183,7 @@ fn minimal_vms_json() -> Vec<u8> {
     .expect("vms json serializes")
 }
 
-fn unsafe_local_workloads_json_with_identity(runtime_kind: &str, provider_id: &str) -> Vec<u8> {
+fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schemaVersion": "v2",
         "workloads": [{
@@ -192,8 +192,8 @@ fn unsafe_local_workloads_json_with_identity(runtime_kind: &str, provider_id: &s
                 "realmId": "host",
                 "realmPath": ["host"],
                 "canonicalTarget": "tools.host.d2b",
-                "runtimeKind": runtime_kind,
-                "providerId": provider_id
+                "runtimeKind": "unsafe-local",
+                "providerId": "unsafe-local"
             },
             "defaultItemId": "browser",
             "items": [{
@@ -207,13 +207,6 @@ fn unsafe_local_workloads_json_with_identity(runtime_kind: &str, provider_id: &s
         }]
     }))
     .expect("unsafe-local workloads json serializes")
-}
-
-/// The real values `nixos-modules/unsafe-local-workloads-json.nix` emits: the
-/// same-uid systemd-user runtime implementation id and an opaque, per-realm
-/// derived provider id (never the legacy `unsafe-local` placeholder).
-fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
-    unsafe_local_workloads_json_with_identity("systemd-user", "wrk-tools-systemd-user")
 }
 
 /// Write all sibling artifacts the resolver needs into `dir`.
@@ -251,151 +244,6 @@ fn assert_tampered(err: &Error, expected_reason: &str) {
         }
         other => panic!("expected BundleTampered({expected_reason:?}), got {other:?}"),
     }
-}
-
-fn allocator_child(role: &str) -> serde_json::Value {
-    let prefix = if role == "controller" {
-        "ctrl"
-    } else {
-        "broker"
-    };
-    let namespace = |kind: &str| {
-        serde_json::json!({
-            "refId": format!("{prefix}-{kind}-ns"),
-            "digest": format!("sha256:{}", "1".repeat(64))
-        })
-    };
-    serde_json::json!({
-        "role": role,
-        "processId": format!("{prefix}-process-1"),
-        "executableRef": format!("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{prefix}/bin/{prefix}"),
-        "executableDigest": format!("sha256:{}", "2".repeat(64)),
-        "configRef": format!("{prefix}-config-v2"),
-        "configDigest": format!("sha256:{}", "3".repeat(64)),
-        "uid": if role == "controller" { 61001 } else { 61002 },
-        "gid": if role == "controller" { 61001 } else { 61002 },
-        "listenerRef": format!("{prefix}-listener"),
-        "bootstrapSessionRef": format!("{prefix}-bootstrap"),
-        "cgroupRef": format!("{prefix}-cgroup"),
-        "cgroupDigest": format!("sha256:{}", "4".repeat(64)),
-        "stateRootRef": format!("{prefix}-state-root"),
-        "auditRootRef": format!("{prefix}-audit-root"),
-        "namespaces": {
-            "user": namespace("user"),
-            "mount": namespace("mount"),
-            "network": namespace("network"),
-            "ipc": namespace("ipc"),
-            "pid": namespace("pid"),
-            "cgroup": namespace("cgroup")
-        },
-        "resourceRefs": [format!("{prefix}-resource-a")],
-        "leaseRefs": [format!("{prefix}-lease-a")],
-        "spawn": {
-            "clone3WithPidfd": true,
-            "directCgroupPlacement": true,
-            "noNewPrivileges": true,
-            "emptyInitialCapabilities": true,
-            "executableOnlyArgv": true,
-            "closedEnvironment": true,
-            "inheritedFdAuthorityOnly": true
-        }
-    })
-}
-
-fn allocator_launch_row() -> serde_json::Value {
-    let mut row = serde_json::json!({
-        "realmId": "work",
-        "realmPath": "work",
-        "controllerGeneration": "generation-1",
-        "controller": allocator_child("controller"),
-        "broker": allocator_child("broker")
-    });
-    let row_digest = sha256_hex(&serde_json::to_vec(&row).expect("serialize launch row"));
-    row.as_object_mut().expect("row object").insert(
-        "launchRecordDigest".to_owned(),
-        serde_json::Value::String(row_digest),
-    );
-    row
-}
-
-fn allocator_artifact(rows: Vec<serde_json::Value>) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": "v2",
-        "allocator": {
-            "enabled": true,
-            "runtimeState": "metadata-only",
-            "rootSocket": "/run/d2b/allocator/local-root.sock",
-            "stateDir": "/var/lib/d2b/allocator",
-            "leaseLedger": "/var/lib/d2b/allocator/leases.jsonl",
-            "auditDir": "/var/lib/d2b/allocator/audit",
-            "runtime": {"spawnsService": false, "socketActivated": false}
-        },
-        "realms": [{
-            "realmName": "work",
-            "realmId": "work",
-            "realmPath": "work",
-            "enabled": true,
-            "placement": "host-local",
-            "hostMutation": false
-        }],
-        "processLaunch": rows,
-        "invariants": {
-            "noRuntimeAllocatorService": true,
-            "preservesEnvRuntimeSourceOfTruth": true,
-            "privateMetadataOnly": true
-        }
-    }))
-    .expect("allocator artifact")
-}
-
-fn write_allocator_bundle(dir: &Path, allocator: &[u8]) -> std::path::PathBuf {
-    let policy = current_user_policy();
-    let host = minimal_host_json();
-    let processes = minimal_processes_json();
-    let pre_hash = serde_json::to_vec(&serde_json::json!({
-        "artifactHashes": null,
-        "bundleVersion": 13,
-        "schemaVersion": "v2",
-        "publicManifestPath": "vms.json",
-        "hostPath": "host.json",
-        "processesPath": "processes.json",
-        "privilegesPath": "privileges.json",
-        "allocatorPath": "allocator.json",
-        "closures": [],
-        "minijailProfiles": [],
-        "managedKeys": {
-            "keysDir": "/var/lib/d2b/keys",
-            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
-            "overrides": []
-        },
-        "generation": {
-            "generator": "test",
-            "sourceRevision": null,
-            "generatedAt": null
-        }
-    }))
-    .expect("bundle pre-hash");
-    let bundle = bundle_json_with_full_hashes(
-        &pre_hash,
-        serde_json::json!({
-            "host.json": sha256_hex(&host),
-            "processes.json": sha256_hex(&processes),
-            "allocator.json": sha256_hex(allocator)
-        }),
-    );
-
-    for (name, bytes) in [
-        ("bundle.json", bundle.as_slice()),
-        ("host.json", host.as_slice()),
-        ("processes.json", processes.as_slice()),
-        ("allocator.json", allocator),
-    ] {
-        let path = dir.join(name);
-        write_private(&path, bytes);
-        set_mode_to(&path, policy.required_mode);
-    }
-    fs::write(dir.join("vms.json"), minimal_vms_json()).expect("write vms");
-    dir.join("bundle.json")
 }
 
 // ---------------------------------------------------------------
@@ -621,19 +469,16 @@ fn minimal_realm_workloads_launcher_v2_json() -> Vec<u8> {
     .expect("launcher v2 fixture serializes")
 }
 
-fn write_unsafe_local_bundle_with(
-    dir: &Path,
-    policy: &BundleVerifyPolicy,
-    unsafe_local: &[u8],
-) -> std::path::PathBuf {
+fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
     let host = minimal_host_json();
     let processes = minimal_processes_json();
     let launcher_v2 = minimal_realm_workloads_launcher_v2_json();
+    let unsafe_local = minimal_unsafe_local_workloads_json();
     let hashes = serde_json::json!({
         "host.json": sha256_hex(&host),
         "processes.json": sha256_hex(&processes),
         "realm-workloads-launcher-v2.json": sha256_hex(&launcher_v2),
-        "unsafe-local-workloads.json": sha256_hex(unsafe_local)
+        "unsafe-local-workloads.json": sha256_hex(&unsafe_local)
     });
     let bundle = bundle_json_with_full_hashes(&unsafe_local_bundle_pre_hash(), hashes);
     let bundle_path = dir.join("bundle.json");
@@ -645,7 +490,7 @@ fn write_unsafe_local_bundle_with(
     write_private(&host_path, &host);
     write_private(&processes_path, &processes);
     write_private(&launcher_v2_path, &launcher_v2);
-    write_private(&unsafe_local_path, unsafe_local);
+    write_private(&unsafe_local_path, &unsafe_local);
     fs::write(dir.join("vms.json"), minimal_vms_json()).expect("write vms.json");
     for path in [
         &bundle_path,
@@ -657,10 +502,6 @@ fn write_unsafe_local_bundle_with(
         set_mode_to(path, policy.required_mode);
     }
     bundle_path
-}
-
-fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
-    write_unsafe_local_bundle_with(dir, policy, &minimal_unsafe_local_workloads_json())
 }
 
 #[test]
@@ -705,75 +546,6 @@ fn rejects_tampered_unsafe_local_workloads_artifact() {
     let error = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect_err("tampered unsafe-local artifact rejects");
     assert_tampered(&error, "hash");
-}
-
-/// Regression coverage for the `UnsafeLocalWorkload::validate` /
-/// `LocalVmConfiguredWorkload::validate` runtime/provider identity check:
-/// a correctly-hashed (non-tampered) artifact that carries the legacy,
-/// never-emitted `unsafe-local`/`nixos` placeholder identity must still be
-/// rejected as an invalid schema, not silently accepted. Accepting it would
-/// mean the resolver's validation can never reject a genuinely malformed
-/// artifact — a self-inflicted parsing denial-of-service surface, since a
-/// real Nix-emitted bundle (which always uses `systemd-user` /
-/// `cloud-hypervisor` / `qemu-media`) would then be indistinguishable from
-/// this stale placeholder shape.
-#[test]
-fn rejects_unsafe_local_workloads_artifact_with_legacy_placeholder_identity() {
-    let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-    let legacy = unsafe_local_workloads_json_with_identity("unsafe-local", "unsafe-local");
-    let bundle_path = write_unsafe_local_bundle_with(dir.path(), &policy, &legacy);
-    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("legacy placeholder runtimeKind/providerId must fail schema validation");
-    match error {
-        Error::Manifest(ManifestError::ParseError { artifact, .. }) => {
-            assert_eq!(artifact, "unsafe-local-workloads.json");
-        }
-        other => panic!("expected Manifest ParseError, got {other:?}"),
-    }
-}
-
-/// A `LocalVmConfiguredWorkload` with the legacy `nixos` placeholder
-/// `runtimeKind` (the field the Nix emitter never produces; it always emits
-/// `cloud-hypervisor` or `qemu-media`) must also fail schema validation
-/// rather than parse silently.
-#[test]
-fn rejects_local_vm_workload_with_legacy_placeholder_runtime_kind() {
-    let dir = TempDir::new().expect("tempdir");
-    let policy = current_user_policy();
-    let legacy = serde_json::to_vec(&serde_json::json!({
-        "schemaVersion": "v2",
-        "workloads": [],
-        "localVmWorkloads": [{
-            "identity": {
-                "workloadId": "corp-vm",
-                "realmId": "host",
-                "realmPath": ["host"],
-                "canonicalTarget": "corp-vm.host.d2b",
-                "runtimeKind": "nixos",
-                "providerId": "wrk-corp-vm-cloud-hypervisor"
-            },
-            "defaultItemId": "browser",
-            "items": [{
-                "type": "exec",
-                "id": "browser",
-                "name": "Browser",
-                "icon": {"name": "firefox"},
-                "argv": ["firefox"],
-                "graphical": true
-            }]
-        }]
-    }))
-    .expect("legacy local-vm workload fixture serializes");
-    let bundle_path = write_unsafe_local_bundle_with(dir.path(), &policy, &legacy);
-    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
-        .expect_err("legacy placeholder runtimeKind must fail schema validation");
-    match error {
-        Error::Manifest(ManifestError::ParseError { artifact, .. }) => {
-            assert_eq!(artifact, "unsafe-local-workloads.json");
-        }
-        other => panic!("expected Manifest ParseError, got {other:?}"),
-    }
 }
 
 // ---------------------------------------------------------------
@@ -935,87 +707,6 @@ fn tamper_missing_bundle_hash_unknown_schema_fails_closed() {
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect_err("unknown schemaVersion without bundleHash should be rejected");
     assert_tampered(&err, "missing-bundle-hash");
-}
-
-#[test]
-fn allocator_launch_authority_is_integrity_loaded_and_exactly_resolved() {
-    let dir = TempDir::new().expect("tempdir");
-    let bundle_path = write_allocator_bundle(
-        dir.path(),
-        &allocator_artifact(vec![allocator_launch_row()]),
-    );
-    let resolver = BundleResolver::load_with_policy(&bundle_path, &current_user_policy())
-        .expect("allocator authority bundle loads");
-
-    let row = resolver
-        .find_realm_child_launch_record("work", "generation-1")
-        .expect("exact authority row");
-    assert_eq!(row.controller.uid, 61001);
-    assert_eq!(row.broker.uid, 61002);
-    assert!(
-        resolver
-            .find_realm_child_launch_record("work", "generation-2")
-            .is_none()
-    );
-    assert!(
-        resolver
-            .find_realm_child_launch_record("Work", "generation-1")
-            .is_none()
-    );
-}
-
-#[test]
-fn allocator_launch_authority_has_no_missing_row_fallback() {
-    let dir = TempDir::new().expect("tempdir");
-    let bundle_path = write_allocator_bundle(dir.path(), &allocator_artifact(Vec::new()));
-    let resolver = BundleResolver::load_with_policy(&bundle_path, &current_user_policy())
-        .expect("empty allocator authority loads");
-    assert!(
-        resolver
-            .find_realm_child_launch_record("work", "generation-1")
-            .is_none()
-    );
-}
-
-#[test]
-fn allocator_launch_authority_rejects_duplicate_and_mismatched_rows() {
-    for allocator in [
-        allocator_artifact(vec![allocator_launch_row(), allocator_launch_row()]),
-        {
-            let mut row = allocator_launch_row();
-            row["realmPath"] = serde_json::json!("personal");
-            allocator_artifact(vec![row])
-        },
-    ] {
-        let dir = TempDir::new().expect("tempdir");
-        let bundle_path = write_allocator_bundle(dir.path(), &allocator);
-        let error = BundleResolver::load_with_policy(&bundle_path, &current_user_policy())
-            .expect_err("invalid allocator row must fail load");
-        assert!(matches!(error, Error::Manifest(_)));
-    }
-}
-
-#[test]
-fn allocator_launch_authority_rejects_artifact_tampering() {
-    let dir = TempDir::new().expect("tempdir");
-    let bundle_path = write_allocator_bundle(
-        dir.path(),
-        &allocator_artifact(vec![allocator_launch_row()]),
-    );
-    let allocator_path = dir.path().join("allocator.json");
-    let mut allocator: serde_json::Value =
-        serde_json::from_slice(&fs::read(&allocator_path).expect("read allocator"))
-            .expect("parse allocator");
-    allocator["processLaunch"][0]["controller"]["uid"] = serde_json::json!(61003);
-    write_private(
-        &allocator_path,
-        &serde_json::to_vec(&allocator).expect("serialize tamper"),
-    );
-    set_mode_to(&allocator_path, current_user_policy().required_mode);
-
-    let error = BundleResolver::load_with_policy(&bundle_path, &current_user_policy())
-        .expect_err("tampered allocator must fail");
-    assert_tampered(&error, "hash");
 }
 
 // ---------------------------------------------------------------

@@ -48,11 +48,6 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("multi-user.target")
 
-    guestd = machine.succeed("systemctl cat d2b-guestd.service")
-    assert "LoadCredential=d2b-guest-session-v2:/run/d2b-guest-control-host/d2b-guest-session-v2" in guestd
-    assert "--workload-id" in guestd
-    assert "guest_control_token" not in guestd
-
     # The shell pool daemon is declared but dormant: guestd owns when it starts
     # or adopts the pool.
     machine.succeed("systemctl cat d2b-shpool-daemon.service")

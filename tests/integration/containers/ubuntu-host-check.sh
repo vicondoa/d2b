@@ -64,5 +64,5 @@ printf '%s\n' "$output" >&2
 
 nlc_assert_contains "$output" "ID=ubuntu" "os-release"
 nlc_assert_contains "$output" 'VERSION_ID="24.04"' "os-release"
-nlc_assert_contains "$output" "d2b-guestd 2.0.0" "d2b-guestd --version"
+nlc_assert_contains "$output" "d2b-guestd 0.0.0-bootstrap" "d2b-guestd --version"
 nlc_ok "d2b-guestd-static executes on Ubuntu 24.04 under rootless podman"

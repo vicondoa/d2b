@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]

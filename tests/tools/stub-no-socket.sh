@@ -12,7 +12,7 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 d2b_activate_rust_toolchain_path || true
 
 manifest="$ROOT/packages/Cargo.toml"
-workspace_target_dir=${D2B_WORKSPACE_GATE_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}
+workspace_target_dir=$(d2b_cargo_target_dir workspace)
 if [ ! -f "$manifest" ]; then
   fail "missing Rust workspace manifest: $manifest"
   exit 1
@@ -174,7 +174,7 @@ run_stub() {
     "$xdg_before" "$tmp_before"
 }
 
-run_stub d2b "d2b 2.0.0"
-run_stub d2bd "d2bd 2.0.0"
+run_stub d2b "d2b 0.0.0-bootstrap (bootstrap stub)"
+run_stub d2bd "d2bd 0.0.0-bootstrap (bootstrap stub)"
 
 ok "Rust stubs left no socket/file runtime state"

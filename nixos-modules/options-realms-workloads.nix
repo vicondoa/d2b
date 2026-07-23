@@ -1,259 +1,621 @@
-# d2b.realms.<realm>.workloads.<workload> — provider-bound workloads.
-{ config, lib, ... }:
+# d2b.realms.<realm>.workloads.<workload> — realm-native workload
+# declaration schema.
+#
+# This file is imported as a fragment inside the d2b.realms.<realm>
+# submodule (see options-realms.nix).  It declares the
+# `workloads` attrsOf-submodule option and all per-workload sub-options.
+#
+# Supported kinds
+# ---------------
+# "local-vm"   — NixOS guest running on Cloud Hypervisor, managed by
+#                d2bd.  Mirrors d2b.vms.<vm> with runtime.kind = "nixos".
+# "qemu-media" — External-media QEMU runner.  Mirrors
+#                d2b.vms.<vm> with runtime.kind = "qemu-media".
+# "provider-placeholder"
+#              — Placeholder for a provider-managed workload whose
+#                runtime is not instantiated locally.  Schema foundation
+#                only; no daemon process is started.
+# "unsafe-local"— Host-user process runtime with no isolation boundary.
+#                Requires explicit realm policy opt-in.
+#
+# State path policy
+# -----------------
+# Each workload maps its primary state directory 1:1 to the legacy
+# /var/lib/d2b/vms/<workload-id> path by default.  No activation-time
+# state migration occurs; if the workload-id matches an existing
+# d2b.vms name the paths are identical and existing data is preserved.
+{ lib, config, name, ... }:
 
 let
-  labelType = lib.types.strMatching "^[a-z][a-z0-9-]{0,127}$";
+  realmId = config.id;
 
-  launcherItemType = lib.types.submodule ({ name, ... }: {
+  # Regex types re-used from options-vms.nix for consistency.
+  qemuMediaRefType = lib.types.strMatching "^[a-z][a-z0-9-]{0,62}$";
+  qemuMediaByIdNameType = lib.types.strMatching "^[A-Za-z0-9._:+-]{1,255}$";
+
+  qemuMediaSourceType = lib.types.submodule {
     freeformType = null;
     options = {
-      type = lib.mkOption {
-        type = lib.types.enum [ "exec" "shell" ];
-        default = "exec";
-        description = "Provider-neutral launcher item operation.";
+      ref = lib.mkOption {
+        type = lib.types.nullOr qemuMediaRefType;
+        default = null;
+        example = "installer-usb";
+        description = "Opaque media reference for physical-usb sources.";
       };
 
-      name = lib.mkOption {
-        type = lib.types.str;
-        default = name;
-        description = "Human-readable launcher item name.";
+      path = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "^/.*$");
+        default = null;
+        example = "/var/lib/d2b/images/installer.img";
+        description = "Absolute host path for an image-file source.";
       };
 
-      icon = {
-        id = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Optional XDG icon theme id.";
-        };
-
-        name = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Optional symbolic icon name.";
-        };
+      usbSelector = lib.mkOption {
+        type = lib.types.nullOr (lib.types.submodule {
+          freeformType = null;
+          options = {
+            byIdName = lib.mkOption {
+              type = qemuMediaByIdNameType;
+              example = "usb-Example_Flash_Disk_123456-0:0";
+              description = "Exact /dev/disk/by-id basename used to resolve the physical USB source at runtime.";
+            };
+          };
+        });
+        default = null;
+        description = "Optional stable selector for physical-usb sources.";
       };
 
-      argv = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
-        description = "Private configured argv for an exec launcher item.";
+      kind = lib.mkOption {
+        type = lib.types.enum [ "physical-usb" "image-file" ];
+        default = "physical-usb";
+        description = "Source class for the opaque media reference.";
       };
 
-      graphical = lib.mkOption {
+      format = lib.mkOption {
+        type = lib.types.enum [ "raw" "qcow2" "iso" ];
+        default = "raw";
+        description = "QEMU block format hint. The unsafe QEMU format-probing default is never used.";
+      };
+
+      readOnly = lib.mkOption {
         type = lib.types.bool;
-        default = false;
-        description = "Whether this item requires the mediated display provider.";
+        default = true;
+        description = "Whether the media source is attached read-only.";
+      };
+    };
+  };
+
+  qemuMediaSlotType = lib.types.submodule ({ name, ... }: {
+    freeformType = null;
+    options = {
+      source = lib.mkOption {
+        type = lib.types.nullOr qemuMediaSourceType;
+        default = null;
+        description = "Optional media source currently inserted in removable slot ${name}.";
+      };
+
+      readOnly = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Default read-only policy for media inserted into this slot.";
       };
     };
   });
 
-  workloadType = lib.types.submodule ({ name, ... }: {
+  # Desktop launcher action type.
+  launcherActionType = lib.types.submodule {
     freeformType = null;
     options = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether this workload is active.";
-      };
-
       id = lib.mkOption {
-        type = labelType;
-        default = name;
-        description = "Stable workload identifier; defaults to the attribute name.";
-      };
-
-      name = lib.mkOption {
         type = lib.types.str;
-        default = name;
-        description = "Human-readable workload name.";
+        example = "open-terminal";
+        description = "Machine-stable identifier for this desktop action.";
       };
 
-      providerRefs = lib.mkOption {
-        type = lib.types.attrsOf labelType;
-        default = { };
-        example = {
-          runtime = "vm";
-          device = "devices";
-          display = "wayland";
-        };
-        description = ''
-          Explicit bindings from a closed provider authority name to an enabled
-          provider instance in this realm. Runtime-backed workloads must bind
-          `runtime`; feature options bind their matching device, display,
-          audio, network, storage, or transport authority.
-        '';
+      label = lib.mkOption {
+        type = lib.types.str;
+        example = "Open Terminal";
+        description = "Human-readable label for this desktop launcher action.";
       };
 
-      config = lib.mkOption {
-        type = lib.types.deferredModule;
-        default = { };
-        description = "Declarative workload module consumed by the selected runtime provider.";
+      command = lib.mkOption {
+        type = lib.types.str;
+        example = "d2b vm exec workstation -- bash -l";
+        description = "Shell command invoked when the action is triggered.";
       };
+    };
+  };
 
-      autostart = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether the owning realm controller starts this workload automatically.";
-      };
-
-      tpm.enable = lib.mkEnableOption "a stateful TPM 2.0 device for this workload";
-
-      graphics = {
-        enable = lib.mkEnableOption "mediated GPU graphics for this workload";
-
-        videoSidecar = lib.mkEnableOption "the mediated H.264 video decode sidecar";
-
-        videoNvidiaDecode = lib.mkEnableOption "NVIDIA device mediation for the video sidecar";
-
-        renderNodeOnly = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Expose only the mediated render-node role.";
-        };
-      };
-
-      audio = {
-        enable = lib.mkEnableOption "vhost-user audio mediation for this workload";
-
-        allowMicByDefault = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Initial microphone policy; runtime grants remain provider-mediated.";
+  launcherItemType = lib.types.submodule ({ name, ... }: {
+    freeformType = null;
+    options = {
+        type = lib.mkOption {
+          type = lib.types.enum [ "exec" "shell" ];
+          default = "exec";
+          description = ''
+            Provider-neutral launcher item kind. `exec` dispatches configured
+            argv through the workload provider. `shell` opens the workload's
+            persistent-shell capability.
+          '';
         };
 
-        allowSpeakerByDefault = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Initial speaker policy; runtime grants remain provider-mediated.";
-        };
-      };
-
-      usbip.enable = lib.mkEnableOption "exclusive USBIP device mediation for this workload";
-
-      securityKey.enable =
-        lib.mkEnableOption "mediated FIDO security-key ceremonies for this workload";
-
-      display.wayland = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Attach the workload to its explicitly bound Wayland display provider.";
-      };
-
-      guestControl.vsockRelay = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Render the authenticated guest-control vsock relay role.";
-      };
-
-      shell = {
-        enable = lib.mkEnableOption "persistent-shell capability for this workload";
-
-        defaultName = lib.mkOption {
-          type = lib.types.strMatching "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$";
-          default = "default";
-          description = "Default persistent shell session name.";
-        };
-
-        maxSessions = lib.mkOption {
-          type = lib.types.ints.between 1 64;
-          default = 8;
-          description = "Maximum persistent shell sessions for this workload.";
-        };
-      };
-
-      _frameworkReservedName = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        internal = true;
-        visible = false;
-        description = ''
-          Internal attestation, set only by a framework module (this file's
-          own auto-declared `network` workload, or components/observability
-          via its auto-declared `sys-*` stack workload), that this workload's
-          otherwise-reserved name is legitimately framework-owned. Operator
-          configuration must never set this option: it exists solely so the
-          reserved-name assertions in options-realms.nix can distinguish a
-          framework auto-declaration from an operator name collision.
-        '';
-      };
-
-      launcher = {
-        enable = lib.mkEnableOption "desktop launcher metadata for this workload";
-
-        label = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Optional desktop display label.";
+        name = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "Human-readable launcher item name.";
         };
 
         icon = {
           id = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            description = "Optional XDG icon theme id.";
+            description = "Optional XDG icon theme id for this launcher item.";
           };
 
           name = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            description = "Optional symbolic icon name.";
+            description = "Optional symbolic icon name for this launcher item.";
           };
         };
 
-        defaultItem = lib.mkOption {
-          type = lib.types.nullOr labelType;
-          default = null;
-          description = "Launcher item selected when no item is specified.";
-        };
-
-        items = lib.mkOption {
-          type = lib.types.attrsOf launcherItemType;
-          default = { };
-          description = "Provider-neutral launcher items keyed by stable item id.";
-        };
-
-        capabilities = lib.mkOption {
-          type = lib.types.listOf labelType;
+        argv = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
           default = [ ];
-          description = "Capabilities required by this workload's launcher.";
+          example = [ "firefox" "https://observe.example.test/" ];
+          description = ''
+            Configured argv for an `exec` item. This is encoded as an argv
+            vector, never as a shell command string. It remains private bundle
+            data and is never returned to public launcher clients.
+          '';
         };
-      };
+
+        graphical = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Whether an `exec` item requires the d2b Wayland proxy. Graphical
+            items never fall back to the direct compositor path.
+          '';
+        };
     };
   });
+
+  workloadSubmodule = lib.types.submodule ({ name, config, ... }:
+    let
+      workloadId = config.id;
+      # stateDir default respects legacyVmName so existing on-disk state
+      # (TPM, store-view, guest-control token, …) is preserved when the
+      # workload wraps a legacy d2b.vms entry.  No activation-time migration
+      # ever occurs; the path is purely a default override.
+      defaultStateDir =
+        if config.kind == "unsafe-local"
+        then null
+        else if config.legacyVmName != null
+        then "/var/lib/d2b/vms/${config.legacyVmName}"
+        else "/var/lib/d2b/vms/${workloadId}";
+      defaultRunDir =
+        if config.kind == "unsafe-local"
+        then null
+        else "/run/d2b/vms/${workloadId}";
+    in
+    {
+      freeformType = null;
+      options = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether this workload is active in the realm.";
+        };
+
+        id = lib.mkOption {
+          type = lib.types.strMatching "^[a-z][a-z0-9-]*$";
+          default = name;
+          description = ''
+            Stable workload identifier.  Defaults to the attribute name.
+            Used to derive state paths and unit names.
+          '';
+        };
+
+        kind = lib.mkOption {
+          type = lib.types.enum [ "local-vm" "qemu-media" "provider-placeholder" "unsafe-local" ];
+          default = "local-vm";
+          description = ''
+            Runtime family for this workload.
+
+            `local-vm`            — NixOS guest on Cloud Hypervisor; d2bd
+                                    supervises the lifecycle DAG.
+            `qemu-media`          — External-media QEMU runner for live/
+                                    installer media or opaque OS images.
+            `provider-placeholder`— Schema-only placeholder for a
+                                    provider-managed workload; no local
+                                    runtime process is started.
+            `unsafe-local`         — Host-user process runtime with no
+                                    isolation boundary. Requires explicit
+                                    realm policy opt-in.
+          '';
+        };
+
+        legacyVmName = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "^[a-z][a-z0-9-]*$");
+          default = null;
+          example = "laptop";
+          description = ''
+            Optional reference to an existing `d2b.vms.<name>` entry.
+            When set, the workload's state path defaults to the legacy
+            VM's path without any activation-time state migration.  Use
+            this during the env→realm network transition to keep state
+            at the existing location while adding realm metadata.
+          '';
+        };
+
+        stateDir = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "^/.*$");
+          default = defaultStateDir;
+          defaultText = lib.literalExpression
+            "\"/var/lib/d2b/vms/<legacyVmName>\" or \"/var/lib/d2b/vms/<workload-id>\"";
+          description = ''
+            Primary state directory for this workload.  When `legacyVmName`
+            is set the default maps to `/var/lib/d2b/vms/<legacyVmName>`,
+            preserving existing on-disk state (TPM, store-view, audio state,
+            guest-control token, …) without any activation-time migration.
+            When `legacyVmName` is null the default is
+            `/var/lib/d2b/vms/<workload-id>`. It is null for
+            `kind = "unsafe-local"` because the provider owns no host VM
+            state path.
+          '';
+        };
+
+        runDir = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "^/.*$");
+          default = defaultRunDir;
+          defaultText = lib.literalExpression "\"/run/d2b/vms/<workload-id>\"";
+          description = ''
+            Runtime directory for this workload. It is null for
+            `kind = "unsafe-local"` because user scopes are owned by the
+            authenticated user's systemd manager.
+          '';
+        };
+
+        shell = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Enable persistent-shell semantics for this workload.";
+          };
+
+          defaultName = lib.mkOption {
+            type = lib.types.str;
+            default = "default";
+            example = "host";
+            description = "Default persistent-shell name.";
+          };
+
+          maxSessions = lib.mkOption {
+            type = lib.types.ints.between 1 64;
+            default = 8;
+            description = "Maximum persistent shell sessions for this workload.";
+          };
+        };
+
+        # ----------------------------------------------------------------
+        # local-vm options
+        # ----------------------------------------------------------------
+
+        localVm = {
+          memoryMiB = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            example = 4096;
+            description = ''
+              Guest RAM in MiB for `kind = "local-vm"`.  When null the
+              NixOS guest configuration declares its own `microvm.mem`.
+            '';
+          };
+
+          vcpus = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            example = 4;
+            description = ''
+              Virtual CPU count for `kind = "local-vm"`.  When null
+              the guest configuration declares `microvm.vcpu`.
+            '';
+          };
+
+          networkIndex = lib.mkOption {
+            type = lib.types.nullOr (lib.types.ints.between 10 250);
+            default = null;
+            example = 20;
+            description = ''
+              Workload IP index within the realm's LAN subnet.
+              The workload's IP = <lan-subnet-prefix>.<networkIndex>.
+              Must be unique within the realm when set.
+            '';
+          };
+
+          config = lib.mkOption {
+            type = lib.types.deferredModule;
+            default = { };
+            example = lib.literalExpression "{ imports = [ ../../vms/laptop.nix ]; }";
+            description = ''
+              NixOS module merged into the local-vm guest's configuration.
+              Equivalent to `d2b.vms.<vm>.config`.
+            '';
+          };
+
+          autostart = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Start this workload at host boot.";
+          };
+
+          ssh = {
+            user = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "alice";
+              description = "Username for d2b-driven SSH / guest-exec access to this workload.";
+            };
+          };
+
+          graphics = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Enable virtio-gpu + Wayland cross-domain for this workload.";
+            };
+          };
+
+          tpm = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Enable swtpm-backed TPM 2.0 device for this workload.";
+            };
+          };
+        };
+
+        # ----------------------------------------------------------------
+        # qemu-media options
+        # ----------------------------------------------------------------
+
+        qemuMedia = {
+          source = lib.mkOption {
+            type = lib.types.nullOr qemuMediaSourceType;
+            default = null;
+            description = "Primary OS/boot media source for `kind = \"qemu-media\"`.";
+          };
+
+          removableSlots = lib.mkOption {
+            type = lib.types.attrsOf qemuMediaSlotType;
+            default = { };
+            description = "Named removable-media slots for the QEMU media runner.";
+          };
+
+          bootDrive = {
+            slot = lib.mkOption {
+              type = lib.types.strMatching "^(boot|[a-z][a-z0-9-]{0,62})$";
+              default = "boot";
+              description = ''
+                Slot selected as the intended boot drive.  `boot` selects
+                `qemuMedia.source`; any other value names a
+                `qemuMedia.removableSlots.<slot>` entry.
+              '';
+            };
+          };
+
+          resources = {
+            memoryMiB = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 4096;
+              description = "Guest RAM for the qemu-media workload, in MiB.";
+            };
+
+            vcpu = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 2;
+              description = "Virtual CPU count for the qemu-media workload.";
+            };
+          };
+
+          security = {
+            lockMemory = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Lock guest RAM with QEMU mem-lock=on.";
+            };
+
+            excludeMemoryFromCoreDump = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Exclude qemu-media guest RAM from QEMU memory dumps.";
+            };
+
+            disableMemoryMerge = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Disable Kernel Samepage Merging for qemu-media guest RAM.";
+            };
+          };
+        };
+
+        # ----------------------------------------------------------------
+        # Desktop launcher metadata
+        # ----------------------------------------------------------------
+
+        launcher = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether to include this workload in generated desktop-launcher
+              metadata (`.desktop` file entries, Waybar display lists,
+              d2b-wlterm integration, etc.).
+            '';
+          };
+
+          label = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "Work Laptop";
+            description = ''
+              Human-readable display label for this workload in desktop
+              launchers.  When null, the workload id is used.
+            '';
+          };
+
+          icon = {
+            id = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "computer-laptop";
+              description = ''
+                XDG icon theme id for this workload's launcher icon.  Used
+                when generating `.desktop` files and desktop-metadata JSON.
+              '';
+            };
+
+            name = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "laptop";
+              description = ''
+                Short symbolic icon name; used as a fallback when `icon.id`
+                does not resolve in the running icon theme.
+              '';
+            };
+          };
+
+          app = {
+            command = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "d2b vm exec workstation -- bash -l";
+              description = ''
+                Primary application/launch command for this workload.
+                Emitted as the `Exec=` field in generated `.desktop`
+                metadata.  When null, d2b derives a default based on the
+                workload kind and available guest-control capabilities.
+              '';
+            };
+
+            targetRealm = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              defaultText = lib.literalExpression "\"<workload-id>.<realm-id>.d2b\"";
+              description = ''
+                Canonical realm-qualified target address for desktop tooling
+                that needs to route to this workload.  When null, d2b derives
+                `<workload-id>.<realm-id>.d2b`.
+              '';
+            };
+          };
+
+          actions = lib.mkOption {
+            type = lib.types.listOf launcherActionType;
+            default = [ ];
+            description = ''
+              Additional named actions exposed in the desktop launcher (e.g.
+              "Open Terminal", "Restart VM").  Each action is emitted as a
+              `[Desktop Action <id>]` section in generated `.desktop` metadata.
+            '';
+          };
+
+          defaultItem = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching "^[a-z][a-z0-9-]*$");
+            default = null;
+            example = "browser";
+            description = ''
+              Launcher item selected when `d2b launch` omits `--item`. When
+              null, a single declared item is selected automatically; multiple
+              items require an explicit item id.
+            '';
+          };
+
+          items = lib.mkOption {
+            type = lib.types.attrsOf launcherItemType;
+            default = { };
+            example = lib.literalExpression ''
+              {
+                browser = {
+                  type = "exec";
+                  name = "Firefox";
+                  icon.name = "firefox";
+                  argv = [ "firefox" ];
+                  graphical = true;
+                };
+                terminal = {
+                  type = "shell";
+                  name = "Terminal";
+                  icon.name = "terminal";
+                };
+              }
+            '';
+            description = ''
+              Generic provider-neutral launcher items keyed by stable item id.
+              Item presentation is independent of the executable: Firefox and
+              any URL-specific browser launch are ordinary `exec` items.
+            '';
+          };
+
+          capabilities = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "guest-exec" "persistent-shell" "graphics" ];
+            description = ''
+              Optional capability identifiers required for this workload's
+              launcher to function correctly.  Desktop tooling may use these
+              to pre-flight capability availability and surface actionable
+              messages when a required capability is absent.
+
+              Well-known values: `guest-exec`, `persistent-shell`,
+              `graphics`, `audio`, `tpm`, `usb-security-key`.
+            '';
+          };
+        };
+      };
+    });
 in
 {
   options.workloads = lib.mkOption {
-    type = lib.types.attrsOf workloadType;
+    type = lib.types.attrsOf workloadSubmodule;
     default = { };
     description = ''
-      Realm-owned workloads with closed feature configuration and explicit
-      typed provider bindings. Legacy VM kinds, aliases, state mappings, and
-      provider placeholders are not part of this schema.
+      Realm-owned workload declarations.  Each workload maps to a runtime
+      entity supervised by d2bd: a local NixOS VM (`kind = "local-vm"`),
+      an external-media QEMU runner (`kind = "qemu-media"`), a schema-only
+      provider placeholder (`kind = "provider-placeholder"`), or an explicit
+      same-UID host process provider (`kind = "unsafe-local"`).
+
+      Workload state directories default to the legacy
+      `/var/lib/d2b/vms/<workload-id>` path, preserving on-disk state
+      for any workload whose id matches an existing `d2b.vms.<vm>` name.
     '';
-  };
-
-  # A realm that owns its network declaration (network.mode == "declared")
-  # auto-declares its own net VM as an ordinary provider-bound workload
-  # named "network", bound to the reserved cloud-hypervisor runtime
-  # provider "network-vm-runtime". This is a self-referential sibling
-  # default (config.network.mode -> config.workloads/providers) resolved
-  # entirely within this realm instance's own submodule fixed point; it
-  # never reads the fully-merged `d2b.realms` and so cannot recurse. The
-  # guest module import (./net.nix) is deferred here; the realm-derived
-  # network guest arguments (`realmNetwork`) are threaded in later from
-  # host.nix, which is free to read the already-computed realm-network
-  # rows without creating a cycle.
-  config = lib.mkIf (config.network.mode == "declared") {
-    providers.network-vm-runtime = {
-      type = "runtime";
-      implementationId = "cloud-hypervisor";
-    };
-
-    workloads.network = {
-      providerRefs.runtime = "network-vm-runtime";
-      autostart = true;
-      config.imports = [ ./net.nix ];
-      _frameworkReservedName = true;
-    };
+    example = lib.literalExpression ''
+      {
+        laptop = {
+          kind = "local-vm";
+          legacyVmName = "laptop";
+          localVm.ssh.user = "alice";
+          localVm.graphics.enable = true;
+          launcher = {
+            enable = true;
+            label = "Work Laptop";
+            icon.id = "computer-laptop";
+            capabilities = [ "guest-exec" "graphics" ];
+          };
+        };
+        installer = {
+          kind = "qemu-media";
+          qemuMedia.source = {
+            kind = "physical-usb";
+            ref = "installer-usb";
+          };
+          launcher.enable = true;
+          launcher.label = "Live Installer";
+        };
+      }
+    '';
   };
 }

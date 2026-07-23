@@ -12,5 +12,5 @@
     "UsbipProxyReconcile",
     "GuestdUsbipImport(attach)"
   ],
-  "vm": "bm6ccueaqlr7wd2cskza"
+  "vm": "corp-vm"
 }

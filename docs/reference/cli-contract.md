@@ -62,19 +62,17 @@ family on the local `d2bd` public socket.
 The provider-neutral command is:
 
 ```text
-d2b launch <canonical-target> --item <item-id>
+d2b launch <canonical-target> [--item <item-id>]
 ```
 
-The frozen `d2b.terminal.v2` `ConfiguredLaunchSelection` carries only a
-`configured_item_id` under `ExecAuthority::CONFIGURED_LAUNCH`; there is no
-default-item selection signal on the wire, so `--item` is required — the CLI
-never guesses `defaultItem` or a sole item on the caller's behalf. The
-resulting terminal request never carries argv, uid, environment, cwd, display
-paths, process ids, or unit names; the CLI opens it through the same
-authenticated `ComponentSession` v2 path used by `vm exec` and `shell`. There
-is no host-shell or SSH fallback: what the selected item actually runs (an
-exec, a persistent shell, or another provider-defined action) is a
-daemon/provider decision, not a CLI-side branch.
+The public request carries only the canonical target, configured item id, and
+an idempotency operation id. It never carries argv, uid, environment, cwd,
+display paths, process ids, or unit names. An `exec` item dispatches through the
+selected provider. A local-VM `shell` item dispatches existing persistent-shell
+semantics. An unsafe-local `shell` item requires `unsafe-local-shell-v1` and
+invokes `d2b shell` with the workload's canonical target; there is no host-shell
+or SSH fallback. When `--item` is omitted, the CLI selects `defaultItem`, then
+an only item, otherwise returns the available item ids and names.
 
 For local-VM exec items, d2bd derives an opaque guest exec id from the
 authenticated requester, operation id, target, and item id. Guestd persists that
@@ -91,27 +89,24 @@ and never fall back.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Launch committed (a detached outcome). |
-| `1` | Daemon unavailable (`daemon-down`) or target not found at open-terminal time (a race after resolution). |
-| `2` | `--item` omitted, target/item not found, or the bare workload id is ambiguous. |
-| `42` | Daemon-internal or CLI-internal failure driving launch. |
-| `69` | The provider/transport fails after daemon connection. |
-| `75` | Resource exhausted (for example the operation is temporarily busy). |
-| `76` | Protocol response, non-canonical daemon target, or operation-id conflict. |
-| `77` | Caller lacks launcher/admin authority. |
-| `130` | Operation cancelled (for example by an interrupt signal). |
+| `0` | Launch committed or was already committed for the operation id. |
+| `2` | Target/item not found, or omitted item is ambiguous. |
+| `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. |
+| `69` | Provider prerequisite or transport unavailable. |
+| `70` | Capability unavailable, provider mismatch, or required feature/version skew. |
+| `76` | Protocol response or operation-id conflict. |
 
 ## Command reference
 
 ### `launch`
 
-**Synopsis:** `d2b launch <TARGET> --item <ITEM> [--human] [--json]`
+**Synopsis:** `d2b launch <TARGET> [--item <ITEM>] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--item <ITEM>` | string | required | Configured launcher item id. Required: the v2 launch contract carries only a configured item id and has no default-item selection signal to fall back on. |
+| `--item <ITEM>` | string | unset | Select the configured launcher item id. When omitted, use `defaultItem`, then a sole item, otherwise return the available ids and names. |
 | `--json` | boolean | `false` | Emit the stable machine-readable launch result on stdout. |
 | `--human` | boolean | `false` | Force the human launch confirmation on stdout. |
 
@@ -125,15 +120,12 @@ and never fall back.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Launch committed (a detached outcome). | — |
-| `1` | Daemon unavailable, or target not found at open-terminal time (a race after resolution). | [`daemon-down`](./error-codes.md#daemon-down) |
-| `2` | `--item` omitted, target/item not found, or the bare workload id is ambiguous. | [`usage`](./error-codes.md#usage) |
-| `42` | Daemon-internal or CLI-internal failure driving launch. | [`internal`](./error-codes.md#exec-internal) |
-| `69` | The provider/transport fails after daemon connection. | workload launch error |
-| `75` | Resource exhausted (for example the operation is temporarily busy). | workload launch error |
-| `76` | Protocol response, non-canonical daemon target, or operation-id conflict. | workload launch error |
-| `77` | Caller lacks launcher/admin authority. | workload launch error |
-| `130` | Operation cancelled (for example by an interrupt signal). | — |
+| `0` | Launch committed or was already committed. | — |
+| `2` | Target/item not found, or omitted item is ambiguous. | [`usage`](./error-codes.md#usage) |
+| `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. | workload launch error |
+| `69` | Provider prerequisite or transport unavailable. | workload launch error |
+| `70` | Capability unavailable, provider mismatch, or required feature/version skew. | workload launch error |
+| `76` | Protocol response or operation-id conflict. | workload launch error |
 
 **Human example**
 
@@ -153,7 +145,6 @@ launched tools.host.d2b item browser (committed)
   "disposition": "committed"
 }
 ```
-
 
 ### `list`
 
@@ -177,9 +168,8 @@ launched tools.host.d2b item browser (committed)
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Daemon unavailable, unexpected daemon reply, local probe, or manifest-read failure. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | Unexpected daemon reply, local probe, or manifest-read failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `69` | The daemon session or transport fails after connection. | `client-session-*`, `client-transport-failed` |
 
 **Human example**
 
@@ -253,9 +243,6 @@ d2b-owned host selection and triggers paste replay for the focused target.
 If the picker cannot be launched or its handshake fails, `d2b-clipd` reports a
 typed failure instead of silently writing clipboard data.
 
-`d2b clipboard picker` remains a deprecated alias for this command and emits a
-warning directing operators to `d2b clipboard arm`.
-
 **Flags**
 
 | Flag | Type | Default | Semantics |
@@ -267,19 +254,22 @@ warning directing operators to `d2b clipboard arm`.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Reserved for a completed authenticated picker request. | — |
-| `2` | Authenticated picker control is unavailable. | [`usage`](./error-codes.md#usage) |
+| `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | — |
+| `2` | The control socket was unavailable, malformed, timed out, or returned a daemon error. | [`usage`](./error-codes.md#usage) |
 
-Clipboard operations use the fixed per-user ComponentSession endpoints under
-`/run/d2b/u/<uid>/clipd/`. Until the authenticated picker request is available
-through the CLI client, `clipboard arm` fails closed without opening another
-control transport.
+The CLI connects to `$XDG_RUNTIME_DIR/d2b-clipd/clipd.sock`, sends one bounded
+arm request, and applies five-second read and write deadlines to the
+control socket so a wedged `d2b-clipd` cannot hang the terminal. The
+daemon owns all clipboard state and transfer FDs; this command only asks
+the daemon to open the picker for d2b-owned paste replay.
 
 **Human examples**
 
 ```text
 $ d2b clipboard arm
-authenticated clipboard picker control is unavailable
+picker opened
+$ d2b clipboard arm
+picker_not_configured
 ```
 
 **`--json` examples**
@@ -301,13 +291,6 @@ authenticated clipboard picker control is unavailable
 ### `realm enter`
 
 **Synopsis:** `d2b realm enter <realm>`
-
-> **Compatibility surface.** The current CLI still implements the legacy
-> gateway-entrypoint commands and wire types documented in this section.
-> `d2b.gateways` no longer provisions their backing guest, however, and there is
-> no supported Nix deployment recipe for one. This reference records existing
-> parser and protocol behavior; it is not guidance to recreate gateway
-> configuration or artifacts manually.
 
 Enters the local gateway VM for a gateway-backed realm by opening an
 interactive `vm exec` session to the gateway workload. The host resolves
@@ -335,12 +318,11 @@ used by routed VM targets.
 
 **Synopsis:** `d2b op inspect [--trace-id <id> --span-id <id>] [--human | --json]`
 
-Reads the local manifest and rendered realm-entrypoint table. The command
-reports bounded local VM/gateway counts, configured realm rows, and optional
-trace context. Its only implemented degraded cases are an unavailable
-manifest, an unavailable realm-entrypoint table, and a configured gateway that
-is not running. It does not inspect providers or sinks and never falls back to
-SSH, host-held realm credentials, or generic tunnels.
+Inspects current local constellation operation state without making the host a
+global telemetry owner. The command reports bounded local VM/gateway counts,
+configured realm states, optional trace context, and degraded partial results
+for unavailable gateways or sinks. It never falls back to SSH, host-held realm
+credentials, or generic tunnels.
 
 ### `realm run`
 
@@ -366,11 +348,6 @@ realm gateway through the same local guest-control exec path. It does not
 make the host persist a remote node/workload registry.
 
 ### `vm display`
-
-This namespace is reserved but hidden from generated help and completions until
-the typed ComponentSession display handler exists. Direct invocation fails
-closed with the standard `not-yet-implemented` envelope (exit 78); the shapes
-below remain the future typed contract and do not describe current availability.
 
 **Synopsis:**
 
@@ -730,9 +707,8 @@ daemon-side runtime-view contract and reads it from d2bd's public socket.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Daemon unavailable or unexpected probe failure. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | Unexpected probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag, unsupported `--json` shape, or unknown VM. | [`usage`](./error-codes.md#usage) |
-| `69` | The daemon session or transport fails after connection. | `client-session-*`, `client-transport-failed` |
 
 **Human example**
 
@@ -1315,7 +1291,7 @@ until the daemon handler ships.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Daemon unavailable, console launch failure, or output read failure. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | Console launch or output read failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console — provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
@@ -3094,20 +3070,25 @@ same public `ShellOp` shape, but d2bd resolves bundle-owned policy and the exact
 requester-UID helper, then multiplexes the validated helper terminal fd behind
 an opaque public attachment handle. List/detach/kill use helper management
 operations. Disconnect and `closeAttach` detach only; kill tears down only the
-verified shell scope.
+verified shell scope. Gateway-backed management forms
+(`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
+VM is running, and run the same `d2b shell <target> ...` command inside the
+gateway VM over the typed `vm exec` guest-control path. The host does not load
+realm credentials, provider transports, raw guest-control frames, SSH, or
+provider-native shell APIs.
 
 All shell actions remain admin-only. Launcher authorization for configured exec
 items does not extend to shell. Unsafe-local policy (`defaultName` and
 `maxSessions`) never appears in the public request and cannot be supplied by a
 client.
 
-There is no supported gateway-guest shell fallback: do not enter a gateway
-guest and rerun the command. A realm-gateway or provider-managed target may
-expose persistent shells only through an authenticated provider agent that
-positively advertises the `persistent-shell` capability; every target is
-dispatched through the same typed v2 terminal path, and a target the
-daemon/router cannot serve fails closed with a typed diagnostic rather than
-any CLI-side legacy handling.
+Interactive gateway `attach` is fail-closed in this generation with an
+actionable `gateway-shell-attach-unavailable` error. Use
+`d2b realm enter <realm>` and run `d2b shell <target>` inside the
+gateway until semantic ADR 0039 shell attach is implemented. [ADR
+0039](../adr/0039-constellation-persistent-shell-routing.md) defines the final
+constellation route: gateway-backed targets forward through the selected gateway
+and require the remote node or provider agent to advertise `persistent-shell`.
 
 **Flags**
 
@@ -3182,15 +3163,18 @@ default detached  false     true
 
 The JSON field remains named `vm` for the current schema. For local VM targets
 it contains the resolved backing VM name; for unsafe-local it carries the
-configured canonical workload target.
+configured canonical workload target. Gateway-backed management commands
+forward the requested target through the selected gateway; the in-gateway
+response keeps its own current schema until a future output-version bump can
+rename this field to `target`.
 
 **Exit codes**
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including idempotent detach/kill no-op results. |
-| `1` | Daemon unavailable, unexpected daemon reply, or local protocol/serialization failure. |
-| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, or non-TTY attach. |
+| `1` | Unexpected daemon reply or local protocol/serialization failure. |
+| `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed interactive attach before semantic shell attach support lands. |
 | `42` | Internal scope/daemon failure. |
 | `69` | Daemon/helper/user-manager/terminal transport unavailable or timed out. |
 | `70` | Required shell capability or `unsafe-local-shell-v1` is unavailable. |
@@ -3209,7 +3193,7 @@ supervisor metadata, paths, argv, env, cwd, transcripts, or terminal bytes.
 
 ### `vm exec`
 
-**Synopsis:** `d2b vm exec [-i] [-t] [-d|--detach] [--json|--human] <vm> -- <cmd> [args…]`
+**Synopsis:** `d2b vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json|--human] <vm> -- <cmd> [args…]`
 
 **Detached management synopsis:**
 
@@ -3250,6 +3234,8 @@ supports attached, interactive, detached, and detached-management forms.
 | `-d`, `--detach` | boolean | `false` | Start a non-interactive detached exec and print its `exec_id`. Incompatible with `-i`/`-t`. |
 | `-i`, `--interactive` | boolean | `false` | Forward host stdin. Must be paired with `-t`; `-t` implies stdin forwarding. |
 | `-t`, `--tty` | boolean | `false` | Allocate a guest PTY and put the host terminal in raw mode. Human-only. |
+| `--env` | `KEY=VALUE` | repeatable | Add one environment variable to the guest command after policy filtering. |
+| `--cwd` | path | unset | Working directory for the guest command. |
 | `--json` | boolean | `false` | Emit a single terminal JSON envelope. Human-only interactive modes reject this flag. |
 | `--human` | boolean | `false` | Force human output. |
 | `--stdout-offset` | byte offset | `0` | `logs` only. Resume retained stdout from this byte offset; accepts `--stdout-offset N` or `--stdout-offset=N`. |
@@ -3378,7 +3364,7 @@ runs a periodic reaper for terminal records and retained-log slots.
 | `0` | cli | Detached create/list/status/logs/kill succeeded. |
 | `0`–`255` | guest | Attached guest command `WIFEXITED` status passes through unchanged. |
 | `128+N` | guest | An attached guest command was killed by signal `N` (`WIFSIGNALED`). |
-| `2` | cli / guest-control | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`guest-control-invalid-program`) for an empty/leading-`-` program. |
+| `2` | cli / guest-control | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, malformed `--env`, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`guest-control-invalid-program`) for an empty/leading-`-` program. |
 | `69` | transport | The guest-control transport was unreachable, a per-op/establishment deadline elapsed, or `guestd` disappeared before the exec reported a terminal status (`guest-control-transport-unavailable`, `guest-control-timeout`, `guest-control-lost-guestd`). |
 | `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`, `guest-control-exec-detached-unavailable`). No SSH fallback. |
 | `75` | guest-control | The exec session table is at capacity, `Start` was rate limited, or an established session was cancelled/reaped before a terminal guest status arrived (`exec-session-capacity`, `exec-session-rate-limited`, `exec-session-cancelled`, `exec-session-reaped`). |

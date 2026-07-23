@@ -5,8 +5,8 @@
 #
 # The split of responsibility is:
 #
-#   d2b realm/workload provider binding   (in flake.nix)
-#     -> selects the host-local runtime
+#   d2b.vms.work-entra.tpm.enable = true   (in flake.nix)
+#     -> wires swtpm on the host, exposes /dev/tpmrm0 in the guest
 #
 #   entrablau.* (here)
 #     -> Himmelblau daemon, PAM/NSS, Intune compliance shimming
@@ -39,7 +39,9 @@
   # file is read on its own.
   security.tpm2.enable = true;
 
-  # In-guest workload user.
+  # In-guest user. Matches `d2b.vms.work-entra.ssh.user` from
+  # flake.nix so the framework's authorized-key injection lands
+  # in the right ~/.ssh/authorized_keys.
   users.users.alice = {
     isNormalUser = true;
     uid = 1000;

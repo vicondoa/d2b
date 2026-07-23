@@ -1,591 +1,489 @@
-{ flakeRoot, lib, ... }:
+{ mkEval, lib, system, ... }:
 
 let
-  evalIndex = realms:
-    (lib.evalModules {
-      modules = [
-        (flakeRoot + "/nixos-modules/index.nix")
-        ({ lib, ... }: {
-          options.d2b.realms = lib.mkOption {
-            type = lib.types.attrs;
-            default = { };
-          };
-          config.d2b.realms = realms;
-        })
-      ];
-    }).config.d2b._index;
+  x86 = system == "x86_64-linux";
 
-  evalAssertions = realms:
-    (lib.evalModules {
-      modules = [
-        (flakeRoot + "/nixos-modules/index.nix")
-        (flakeRoot + "/nixos-modules/assertions.nix")
-        ({ lib, ... }: {
-          options.assertions = lib.mkOption {
-            type = lib.types.listOf lib.types.attrs;
-            default = [ ];
-          };
-          options.d2b.realms = lib.mkOption {
-            type = lib.types.attrs;
-            default = { };
-          };
-          config.d2b.realms = realms;
-        })
-      ];
-    }).config.assertions;
+  fixture = { lib, ... }: {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+    environment.etc."machine-id".text = "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    users.users.alice = { isNormalUser = true; uid = 1000; };
 
-  fixture = {
-    dev = {
-      enable = true;
-      id = "dev";
-      name = "Development";
-      path = "dev.local-root";
-      placement = "host-local";
-      providers = {
-        primary = {
-          enable = true;
-          id = "primary";
-          primaryAuthority = "runtime";
-          implementation = "cloud-hypervisor";
-          capabilityRefs = [ "exec" "exec" "shell" ];
-          configRef = "provider-config-1";
-        };
-        local-storage = {
-          enable = true;
-          id = "local";
-          primaryAuthority = "storage";
-          implementation = "local";
-        };
-        local-transport = {
-          id = "local-transport";
-          primaryAuthority = "transport";
-          implementation = "unix-stream";
-        };
-        devices = {
-          id = "devices";
-          primaryAuthority = "device";
-          implementation = "host-mediated";
-        };
-        sound = {
-          id = "sound";
-          primaryAuthority = "audio";
-          implementation = "pipewire";
-        };
-        wayland = {
-          id = "wayland";
-          primaryAuthority = "display";
-          implementation = "wayland";
-        };
-      };
-      workloads.personal-dev = {
+    d2b.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+      yubikey.enable = true;
+      allowUnsafeEastWest = true;
+    };
+    d2b.hostLanCidrs = [ "172.16.0.0/12" "10.0.0.0/8" ];
+    d2b.observability.enable = true;
+
+    d2b.envs.zeta = {
+      lanSubnet = "10.50.0.0/24";
+      uplinkSubnet = "198.51.100.0/30";
+      hostBlocklist = [ "203.0.113.0/24" "192.168.0.0/16" ];
+    };
+    d2b.envs.empty = {
+      lanSubnet = "10.40.0.0/24";
+      uplinkSubnet = "203.0.113.0/30";
+    };
+    d2b.envs.disabled = {
+      enable = false;
+      lanSubnet = "10.60.0.0/24";
+      uplinkSubnet = "203.0.113.4/30";
+    };
+    d2b.envs.alpha = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+      lan.allowEastWest = true;
+      mtu = 1280;
+      mssClamp = true;
+      externalNetwork = {
         enable = true;
-        id = "personal-dev";
-        runtime = {
-          provider = "primary";
-          implementation = "cloud-hypervisor";
-        };
-        providerRefs = {
-          runtime = "primary";
-          device = "devices";
-          audio = "sound";
-          display = "wayland";
-        };
-        capabilityRefs = [ "guest-control" ];
-        shell.enable = true;
-        tpm.enable = true;
-        graphics = {
+        attachment = {
           enable = true;
-          videoSidecar = true;
+          interface = "eno1";
         };
-        audio.enable = true;
-        usbip.enable = true;
-        securityKey.enable = true;
-        launcher = {
+        egress = {
           enable = true;
-          label = "Personal Development";
-          capabilities = [ "guest-control" "window-forwarding" ];
+          allowedCidrs = [ "192.168.1.0/24" ];
+        };
+        portForwards = [{
+          protocol = "tcp";
+          listenPort = 8443;
+          vm = "app";
+          targetPort = 443;
+          sourceCidrs = [ "192.168.1.0/24" ];
+        }];
+        mdns = {
+          enable = true;
+          publishWorkstation = true;
         };
       };
     };
+
+    d2b.vms.zed = {
+      env = "zeta";
+      index = 12;
+      ssh.user = "alice";
+      tpm.enable = true;
+      usbip = {
+        yubikey = true;
+        busids = [ "1-1.4" "1-1.2" ];
+      };
+      audio.enable = x86;
+      observability.enable = true;
+      guest.control.enable = true;
+      guest.exec.enable = true;
+      guest.shell = {
+        enable = true;
+        defaultName = "ops";
+        maxSessions = 3;
+        maxAttached = 2;
+      };
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+
+    d2b.vms.app = {
+      env = "alpha";
+      index = 10;
+      ssh.user = "alice";
+      graphics = {
+        enable = x86;
+        videoSidecar = x86;
+      };
+      observability.enable = true;
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+
+    d2b.vms.media = {
+      runtime.kind = "qemu-media";
+      env = "alpha";
+      index = 20;
+      usbip.yubikey = true;
+      qemuMedia = {
+        source = {
+          ref = "installer-usb";
+          format = "iso";
+        };
+        removableSlots.tools.source = {
+          ref = "tools-usb";
+          format = "iso";
+          usbSelector.byIdName = "usb-Test_Tools_0001-0:0";
+        };
+      };
+    };
+
+    d2b.vms.disabled = {
+      enable = false;
+      env = "zeta";
+      index = 99;
+      tpm.enable = true;
+    };
   };
 
-  index = evalIndex fixture;
-  realm = builtins.head index.realms.list;
-  workload = builtins.head index.workloads.list;
-  primary = index.providers.byId.f7z3k5e3awgn43aljt2a;
-  cloudHypervisorRole = index.roles.byId."7xrbjonser3hpi7hqojq";
-  attempt = value: (builtins.tryEval (builtins.deepSeq value true)).success;
+  cfg = (mkEval [ fixture ]).config;
+  cfgYubikeyDisabled = (mkEval [ fixture ({ lib, ... }: {
+    d2b.site.yubikey.enable = lib.mkForce false;
+  }) ]).config;
+  index = cfg.d2b._index;
+  expectedVmNames = [
+    "app"
+    "media"
+    "sys-alpha-net"
+    "sys-empty-net"
+    "sys-obs"
+    "sys-obs-net"
+    "sys-zeta-net"
+    "zed"
+  ];
 in
 {
-  "index/canonical-identities-and-lookups" = {
+  "index/shape-and-sorting" = {
     expr = {
-      schemaVersion = index.schemaVersion;
-      realm = {
-        inherit (realm) realmId realmPath parentPath parentRealmId
-          canonicalTargetSuffix;
-      };
-      workload = {
-        inherit (workload) workloadId canonicalTarget capabilityRefs
-          providerBindings providerRefs;
-      };
-      provider = {
-        inherit (primary) providerId providerType implementationId capabilityRefs configRef;
-      };
-      role = {
-        inherit (cloudHypervisorRole) roleId roleKind realmId workloadId;
-      };
-      byTarget = index.workloads.byCanonicalTarget.${workload.canonicalTarget}.workloadId;
+      enabledEnvNames = index.enabledEnvNames;
+      enabledVmNames = index.enabledVmNames;
+      normalNixosVmNames = index.normalNixosVmNames;
+      qemuMediaVmNames = index.qemuMediaVmNames;
+      netVmNames = index.netVmNames;
+      workloadNamesByEnv = index.workloadNamesByEnv;
     };
     expected = {
-      schemaVersion = 2;
-      realm = {
-        realmId = "yl2hpmks5td5dkeso6qq";
-        realmPath = "dev.local-root";
-        parentPath = "local-root";
-        parentRealmId = "cvudgfqzh442wwtozs7q";
-        canonicalTargetSuffix = "dev.local-root.d2b";
+      enabledEnvNames = [ "alpha" "empty" "obs" "zeta" ];
+      enabledVmNames = expectedVmNames;
+      normalNixosVmNames = [
+        "app"
+        "sys-alpha-net"
+        "sys-empty-net"
+        "sys-obs"
+        "sys-obs-net"
+        "sys-zeta-net"
+        "zed"
+      ];
+      qemuMediaVmNames = [ "media" ];
+      netVmNames = [ "sys-alpha-net" "sys-empty-net" "sys-obs-net" "sys-zeta-net" ];
+      workloadNamesByEnv = {
+        alpha = [ "app" "media" ];
+        empty = [ ];
+        obs = [ "sys-obs" ];
+        zeta = [ "zed" ];
       };
-      workload = {
-        workloadId = "q5h7jtqteem7kua4tfva";
-        canonicalTarget = "personal-dev.dev.local-root.d2b";
-        capabilityRefs = [
-          "guest-control"
-          "persistent-shell"
-          "pty"
-          "window-forwarding"
-        ];
-        providerRefs = {
-          audio = "sound";
-          device = "devices";
-          display = "wayland";
-          runtime = "primary";
-        };
-        providerBindings = {
-          audio = {
-            implementationId = "pipewire";
-            providerId = "3laykn2hk5ojcazs4r4a";
-            providerType = "audio";
-          };
-          device = {
-            implementationId = "host-mediated";
-            providerId = "btzjn55n4j2qrxovy3nq";
-            providerType = "device";
-          };
-          display = {
-            implementationId = "wayland";
-            providerId = "4bm4k2vr7eqbzubhskjq";
-            providerType = "display";
-          };
-          runtime = {
-            implementationId = "cloud-hypervisor";
-            providerId = "f7z3k5e3awgn43aljt2a";
-            providerType = "runtime";
-          };
-        };
-      };
-      provider = {
-        providerId = "f7z3k5e3awgn43aljt2a";
-        providerType = "runtime";
-        implementationId = "cloud-hypervisor";
-        capabilityRefs = [ "exec" "shell" ];
-        configRef = "provider-config-1";
-      };
-      role = {
-        roleId = "7xrbjonser3hpi7hqojq";
-        roleKind = "cloud-hypervisor";
-        realmId = "yl2hpmks5td5dkeso6qq";
-        workloadId = "q5h7jtqteem7kua4tfva";
-      };
-      byTarget = "q5h7jtqteem7kua4tfva";
     };
   };
 
-  "index/enumerates-closed-role-set" = {
-    expr = map (row: row.roleKind) index.roles.list;
-    expected = [
-      "audio"
-      "cloud-hypervisor"
-      "gpu"
-      "gpu-render-node"
-      "guest-control-health"
-      "security-key-frontend"
-      "store-virtiofs-preflight"
-      "swtpm"
-      "swtpm-pre-start-flush"
-      "usbip"
-      "video"
-      "virtiofsd"
-      "vsock-relay"
-      "wayland-proxy"
-    ];
-  };
-
-  "index/runtime-paths-use-only-short-identities" = {
-    expr =
-      let
-        paths = map (row: row.path) index.storage.list;
-        ids = map (row: row.resourceId) index.storage.list;
-        rolePath = (builtins.head
-          index.resources.byRoleId."7xrbjonser3hpi7hqojq").path;
-      in
-      {
-        noHumanRealmName = builtins.all
-          (path: !(lib.hasInfix "Development" path) && !(lib.hasInfix "/dev/" path))
-          paths;
-        noHumanWorkloadName = builtins.all
-          (path: !(lib.hasInfix "personal-dev" path)) paths;
-        noConfiguredProviderName = builtins.all
-          (path: !(lib.hasInfix "primary" path)
-            && !(lib.hasInfix "local-storage" path))
-          paths;
-        allPathsUnderFixedAnchors = builtins.all
-          (path:
-            lib.hasPrefix "/etc/d2b/" path
-            || lib.hasPrefix "/var/lib/d2b/" path
-            || lib.hasPrefix "/var/cache/d2b/" path
-            || lib.hasPrefix "/run/d2b/" path)
-          paths;
-        resourceIdsUnique = lib.length ids == lib.length (lib.unique ids);
-        inherit rolePath;
-      };
-
-    expected = {
-      noHumanRealmName = true;
-      noHumanWorkloadName = true;
-      noConfiguredProviderName = true;
-      allPathsUnderFixedAnchors = true;
-      resourceIdsUnique = true;
-      rolePath = "/run/d2b/r/yl2hpmks5td5dkeso6qq/w/q5h7jtqteem7kua4tfva/roles/7xrbjonser3hpi7hqojq";
-    };
-  };
-
-  "index/provider-registry-mappings-have-resource-parity" = {
-    expr =
-      let
-        mappings = index.providerRegistryV2Mappings;
-        transport = builtins.head mappings.transport;
-        display = builtins.head mappings.display;
-        resourceIds = lib.attrNames index.resources.byId;
-        displayIds = lib.attrValues display.endpointIds;
-      in
-      {
-        transportShape = builtins.attrNames transport;
-        transportIdsExist = builtins.all
-          (resourceId: builtins.elem resourceId resourceIds)
-          transport.transportBindingIds;
-        transportResourceKinds = map
-          (resourceId: index.resources.byId.${resourceId}.kind)
-          transport.transportBindingIds;
-        substrate = mappings.substrate;
-        displayShape = builtins.attrNames display;
-        displayIdsDistinct =
-          lib.length displayIds == lib.length (lib.unique displayIds);
-        displayIdsExist = builtins.all
-          (resourceId: builtins.elem resourceId resourceIds)
-          displayIds;
-        displayResourceKinds = map
-          (resourceId: index.resources.byId.${resourceId}.kind)
-          displayIds;
-        displayResourceOwners = map
-          (resourceId:
-            let resource = index.resources.byId.${resourceId};
-            in {
-              inherit (resource) providerId realmId roleId workloadId;
-            })
-          displayIds;
-        ownerRoleKind = index.roles.byId.${display.ownerRoleId}.roleKind;
-      };
-    expected =
-      let display = builtins.head index.providerRegistryV2Mappings.display;
-      in
-      {
-        transportShape = [
-          "controllerRole"
-          "implementationId"
-          "providerId"
-          "realmId"
-          "transportBindingIds"
-        ];
-        transportIdsExist = true;
-        transportResourceKinds = [ "transport-binding" ];
-        substrate = [ ];
-        displayShape = [
-          "controllerRole"
-          "endpointIds"
-          "implementationId"
-          "ownerRoleId"
-          "providerId"
-          "realmId"
-          "workloadId"
-        ];
-        displayIdsDistinct = true;
-        displayIdsExist = true;
-        displayResourceKinds = [
-          "display-endpoint-cross-domain"
-          "display-endpoint-proxy"
-          "display-endpoint-wayland"
-          "display-endpoint-waypipe"
-        ];
-        displayResourceOwners = map
-          (_: {
-            inherit (display) providerId realmId workloadId;
-            roleId = display.ownerRoleId;
-          })
-          (lib.attrValues display.endpointIds);
-        ownerRoleKind = "wayland-proxy";
-      };
-  };
-
-  "index/provider-registry-mappings-satisfy-extension-contracts" = {
-    expr =
-      let
-        mappings = index.providerRegistryV2Mappings;
-        transportExtension = import
-          (flakeRoot + "/nixos-modules/provider-registry-v2-extensions/transport.nix")
-          { inherit lib; };
-        displayExtension = import
-          (flakeRoot + "/nixos-modules/provider-registry-v2-extensions/display.nix")
-          { inherit lib; };
-        transportEntry = builtins.head
-          (transportExtension.mkEntries mappings.transport);
-        displayEntry = builtins.head
-          (displayExtension.mkEntries mappings.display);
-      in
-      {
-        transportProviderId = transportEntry.descriptor.providerId;
-        transportPlacement = transportEntry.descriptor.placement;
-        transportAxis = transportEntry.binding.axis;
-        transportBindingIds = transportEntry.binding.transportBindingIds;
-        displayProviderId = displayEntry.descriptor.providerId;
-        displayPlacement = displayEntry.descriptor.placement;
-        displayAxis = displayEntry.binding.axis;
-        displayWorkloadId = displayEntry.binding.workloadId;
-        displayOwnerRoleId = displayEntry.binding.ownerRoleId;
-        displayEndpointIds = displayEntry.binding.endpointIds;
-      };
-    expected =
-      let
-        transport = builtins.head index.providerRegistryV2Mappings.transport;
-        display = builtins.head index.providerRegistryV2Mappings.display;
-      in
-      {
-        transportProviderId = transport.providerId;
-        transportPlacement = {
-          kind = "trusted-first-party-in-process";
-          inherit (transport) realmId controllerRole;
-        };
-        transportAxis = "local-transport";
-        transportBindingIds = transport.transportBindingIds;
-        displayProviderId = display.providerId;
-        displayPlacement = {
-          kind = "trusted-first-party-in-process";
-          inherit (display) realmId controllerRole;
-        };
-        displayAxis = "local-display";
-        displayWorkloadId = display.workloadId;
-        displayOwnerRoleId = display.ownerRoleId;
-        displayEndpointIds = display.endpointIds;
-      };
-  };
-
-  "index/provider-registry-mappings-include-local-root-substrate" = {
-    expr =
-      let
-        mappings = (evalIndex {
-          local-root = {
-            path = "local-root";
-            providers.host = {
-              type = "substrate";
-              implementationId = "nixos";
-            };
-          };
-        }).providerRegistryV2Mappings;
-        substrateExtension = import
-          (flakeRoot + "/nixos-modules/provider-registry-v2-extensions/substrate.nix")
-          { inherit lib; };
-        entry = builtins.head
-          (substrateExtension.mkEntries mappings.substrate);
-      in
-      {
-        count = lib.length mappings.substrate;
-        row = builtins.head mappings.substrate;
-        placement = entry.descriptor.placement;
-        axis = entry.binding.axis;
-      };
-    expected =
-      let
-        localRootId = (import
-          (flakeRoot + "/nixos-modules/v2-identity.nix")).deriveRealmId
-            "local-root";
-        providerId = (import
-          (flakeRoot + "/nixos-modules/v2-identity.nix")).deriveProviderId
-            localRootId "substrate" "host";
-      in
-      {
-        count = 1;
-        axis = "local-substrate";
-        placement = {
-          kind = "trusted-first-party-in-process";
-          realmId = localRootId;
-          controllerRole = "local-root-controller";
-        };
-        row = {
-          controllerRole = "local-root-controller";
-          implementationId = "nixos";
-          inherit providerId;
-          realmId = localRootId;
-        };
-      };
-  };
-
-  "index/display-mapping-requires-one-provider" = {
-    expr = attempt ((evalIndex {
-      dev = {
-        path = "dev.local-root";
-        providers.runtime = {
-          type = "runtime";
-          implementationId = "cloud-hypervisor";
-        };
-        providers.wayland = {
-          type = "display";
-          implementationId = "wayland";
-        };
-        workloads.app = {
-          provider = "runtime";
-          launcher.items.app.graphical = true;
-        };
-      };
-    }).providerRegistryV2Mappings.display);
-    expected = false;
-  };
-
-  "index/display-provider-can-bind-multiple-workloads-explicitly" = {
-    expr =
-      let
-        shared = evalIndex {
-          dev = {
-            path = "dev.local-root";
-            providers = {
-              runtime = {
-                type = "runtime";
-                implementationId = "cloud-hypervisor";
-              };
-              wayland = {
-                type = "display";
-                implementationId = "wayland";
-              };
-            };
-            workloads = {
-              first = {
-                providerRefs = {
-                  runtime = "runtime";
-                  display = "wayland";
-                };
-                launcher.items.app.graphical = true;
-              };
-              second = {
-                providerRefs = {
-                  runtime = "runtime";
-                  display = "wayland";
-                };
-                launcher.items.app.graphical = true;
-              };
-            };
-          };
-        };
-        mappings = shared.providerRegistryV2Mappings.display;
-        configuredProviderIds = map
-          (workload: workload.providerBindings.display.providerId)
-          shared.workloads.enabledList;
-      in
-      {
-        count = builtins.length mappings;
-        adapterIdsUnique =
-          builtins.length (lib.unique (map (mapping: mapping.providerId) mappings))
-          == 2;
-        configuredAuthorityShared =
-          builtins.length (lib.unique configuredProviderIds) == 1;
-      };
-    expected = {
-      count = 2;
-      adapterIdsUnique = true;
-      configuredAuthorityShared = true;
-    };
-  };
-
-  "index/duplicate-realm-paths-fail-closed" = {
-    expr = attempt ((evalIndex {
-      first.path = "dev.local-root";
-      second.path = "dev.local-root";
-    }).identities.realmIds);
-    expected = false;
-  };
-
-  "index/duplicate-provider-identities-fail-closed" = {
-    expr = attempt ((evalIndex {
-      dev = {
-        path = "dev.local-root";
-        providers = {
-          first = {
-            id = "primary";
-            primaryAuthority = "runtime";
-            implementation = "cloud-hypervisor";
-          };
-          second = {
-            id = "primary";
-            primaryAuthority = "runtime";
-            implementation = "cloud-hypervisor";
-          };
-        };
-      };
-    }).identities.providerIds);
-    expected = false;
-  };
-
-  "index/realm-only-assertions-accept-normalized-fixture" = {
-    expr = builtins.all (assertion: assertion.assertion)
-      (evalAssertions fixture);
+  "index/env-meta-compat-alias" = {
+    expr = cfg.d2b._envMeta == index.envMeta;
     expected = true;
   };
 
-  "index/realm-only-assertions-reject-parent-cycles" = {
-    expr = builtins.all (assertion: assertion.assertion) (evalAssertions {
-      first = {
-        path = "first.local-root";
-        parent = "second.local-root";
-      };
-      second = {
-        path = "second.local-root";
-        parent = "first.local-root";
-      };
-    });
-    expected = false;
-  };
-
-  "index/realm-only-assertions-reject-missing-provider-bindings" = {
-    expr = builtins.all (assertion: assertion.assertion) (evalAssertions {
-      dev = {
-        path = "dev.local-root";
-        workloads.app.runtime = {
-          provider = "missing";
-          implementation = "cloud-hypervisor";
+  "index/allow-east-west-metadata" = {
+    expr = {
+      alpha = index.envMeta.alpha.allowEastWest;
+      zeta = index.envMeta.zeta.allowEastWest;
+      alphaBridge = index.envMeta.alpha.lanBridge;
+      alphaWorkloads = index.envMeta.alpha.workloads;
+    };
+    expected = {
+      alpha = true;
+      zeta = false;
+      alphaBridge = "br-alpha-lan";
+      alphaWorkloads = {
+        app = {
+          ip = "10.20.0.10";
+          mac = "02:70:C9:07:75:0A";
+          hostName = "app";
+        };
+        media = {
+          ip = "10.20.0.20";
+          mac = "02:70:C9:07:75:14";
+          hostName = "media";
         };
       };
-    });
-    expected = false;
+    };
   };
 
-  "index/realm-only-assertions-reject-provider-type-mismatches" = {
-    expr = builtins.all (assertion: assertion.assertion) (evalAssertions {
-      dev = {
-        path = "dev.local-root";
-        providers.storage = {
-          type = "storage";
-          implementationId = "local";
+  "index/guest-journal-bounded" = {
+    expr = cfg.d2b._computed.zed.config.services.journald.extraConfig;
+    expected = ''
+      SystemMaxUse=512M
+      SystemKeepFree=512M
+      RuntimeMaxUse=128M
+    '';
+  };
+
+  "index/home-lan-metadata" = {
+    expr = {
+      envNames = index.externalNetwork.envNames;
+      alpha = index.envMeta.alpha.externalNetwork;
+      alphaFromExternalNetworkIndex = index.externalNetwork.envMeta.alpha.externalNetwork;
+    };
+    expected = {
+      envNames = [ "alpha" ];
+      alpha = {
+        enable = true;
+        attachment = {
+          enable = true;
+          interface = "eno1";
+          mode = "macvtap";
+          macvtapMode = "bridge";
+          macAddress = "02:4A:E9:D5:17:03";
+          hostIfName = "alpha-h0";
+          guestIfName = "external0";
+          ipv4 = {
+            method = "dhcp";
+            address = null;
+            gateway = null;
+            dns = [ ];
+          };
         };
-        workloads.app.provider = "storage";
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+          masquerade = true;
+        };
+        portForwards = [{
+          listenPort = 8443;
+          protocol = "tcp";
+          vm = "app";
+          sourceCidrs = [ "192.168.1.0/24" ];
+          targetIp = "10.20.0.10";
+          targetPort = 443;
+        }];
+        mdns = {
+          enable = true;
+          reflector.enable = true;
+          dnsmasqLocal = {
+            enable = false;
+            port = 53530;
+          };
+          publishWorkstation = true;
+        };
       };
-    });
-    expected = false;
+      alphaFromExternalNetworkIndex = {
+        enable = true;
+        attachment = {
+          enable = true;
+          interface = "eno1";
+          mode = "macvtap";
+          macvtapMode = "bridge";
+          macAddress = "02:4A:E9:D5:17:03";
+          hostIfName = "alpha-h0";
+          guestIfName = "external0";
+          ipv4 = {
+            method = "dhcp";
+            address = null;
+            gateway = null;
+            dns = [ ];
+          };
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+          masquerade = true;
+        };
+        portForwards = [{
+          listenPort = 8443;
+          protocol = "tcp";
+          vm = "app";
+          sourceCidrs = [ "192.168.1.0/24" ];
+          targetIp = "10.20.0.10";
+          targetPort = 443;
+        }];
+        mdns = {
+          enable = true;
+          reflector.enable = true;
+          dnsmasqLocal = {
+            enable = false;
+            port = 53530;
+          };
+          publishWorkstation = true;
+        };
+      };
+    };
+  };
+
+  "index/component-and-usbip-subsets" = {
+    expr = {
+      graphics = index.components.graphics.vmNames;
+      audio = index.components.audio.vmNames;
+      video = index.components.video.vmNames;
+      tpm = index.components.tpm.vmNames;
+      usbip = index.components.usbip.vmNames;
+      usbipEnvNames = index.usbip.envNames;
+      activeUsbipEnvNames = index.usbip.activeEnvNames;
+      usbipVmNamesByEnv = index.usbip.vmNamesByEnv;
+      usbipBackendPorts = index.usbip.backendPorts;
+      zetaBusidLocks = index.usbip.busidLocksByEnv.zeta;
+      zetaHostBlocklist = index.envMeta.zeta.hostBlocklist;
+    };
+
+    expected = {
+      graphics = lib.optional x86 "app";
+      audio = lib.optional x86 "zed";
+      video = lib.optional x86 "app";
+      tpm = [ "zed" ];
+      usbip = [ "media" "zed" ];
+      usbipEnvNames = [ "alpha" "zeta" ];
+      activeUsbipEnvNames = [ "alpha" "zeta" ];
+      usbipVmNamesByEnv = {
+        alpha = [ "media" ];
+        empty = [ ];
+        obs = [ ];
+        zeta = [ "zed" ];
+      };
+      usbipBackendPorts = {
+        alpha = 3241;
+        empty = 3242;
+        obs = 3243;
+        zeta = 3244;
+      };
+      zetaBusidLocks = [{
+        vm = "zed";
+        lockOwner = "daemon";
+        scope = "per-busid";
+        busIds = [ "1-1.2" "1-1.4" ];
+      }];
+      zetaHostBlocklist = [
+        "10.0.0.0/8"
+        "10.20.0.0/24"
+        "10.40.0.0/24"
+        "172.16.0.0/12"
+        "192.0.2.0/30"
+        "192.168.0.0/16"
+        "203.0.113.0/24"
+        "203.0.113.0/30"
+      ];
+    };
+  };
+
+  "index/site-yubikey-disabled-suppresses-runtime-usbip" = {
+    expr = {
+      declaredVmOptIns = cfgYubikeyDisabled.d2b._index.usbip.vmNames;
+      declaredEnvOptIns = cfgYubikeyDisabled.d2b._index.usbip.envNames;
+      activeEnvNames = cfgYubikeyDisabled.d2b._index.usbip.activeEnvNames;
+      busidLocksByEnv = cfgYubikeyDisabled.d2b._index.usbip.busidLocksByEnv;
+      hostJsonLocks = lib.listToAttrs (map
+        (env: { name = env.env; value = env.usbipBusidLocks; })
+        cfgYubikeyDisabled.d2b._bundle.hostJson.data.environments);
+      hostJsonBackendPorts = lib.listToAttrs (map
+        (env: { name = env.env; value = env.usbipBackendPort or null; })
+        cfgYubikeyDisabled.d2b._bundle.hostJson.data.environments);
+    };
+    expected = {
+      declaredVmOptIns = [ "media" "zed" ];
+      declaredEnvOptIns = [ "alpha" "zeta" ];
+      activeEnvNames = [ ];
+      busidLocksByEnv = {
+        alpha = [ ];
+        empty = [ ];
+        obs = [ ];
+        zeta = [ ];
+      };
+      hostJsonLocks = {
+        alpha = [ ];
+        empty = [ ];
+        obs = [ ];
+        zeta = [ ];
+      };
+      hostJsonBackendPorts = {
+        alpha = null;
+        empty = null;
+        obs = null;
+        zeta = null;
+      };
+    };
+  };
+
+  "index/observability-and-shell-subsets" = {
+    expr = {
+      observed = index.components.observability.vmNames;
+      sourcePorts = index.observability.sourcePorts;
+      relayVmNames = index.observability.relayVmNames;
+      byRole = index.observability.byRole;
+      backendPorts = index.observability.backendPorts;
+      shellVmNames = index.guestShell.vmNames;
+      shellLimits = index.guestShell.limits;
+    };
+    expected = {
+      observed = [ "app" "zed" ];
+      sourcePorts = {
+        app = 14318;
+        zed = 14319;
+      };
+      relayVmNames = [ "app" "zed" ];
+      byRole = {
+        host = [ "host" ];
+        workload = [ "app" "zed" ];
+        relay = [ "app" "zed" ];
+        stack = [ "sys-obs" ];
+      };
+      backendPorts = {
+        grafana = 3000;
+        signoz = 8080;
+        otlpGrpc = 4317;
+        otlpHttp = 4318;
+        hostRelayVsock = 14317;
+      };
+      shellVmNames = [ "zed" ];
+      shellLimits = {
+        zed = {
+          enable = true;
+          defaultName = "ops";
+          maxSessions = 3;
+          maxAttached = 2;
+          controlEnabled = true;
+          execEnabled = true;
+        };
+      };
+    };
+  };
+
+  "index/qemu-media-and-runtime-subsets" = {
+    expr = {
+      manualOnlyVmNames = index.qemuMedia.manualOnlyVmNames;
+      runtimeMediaVmNames = index.qemuMedia.runtimeMediaVmNames;
+      sources = index.qemuMedia.sources;
+      runtimeKinds = index.runtime.kinds;
+      mediaRuntimeKind = index.runtime.byVm.media.kind;
+      providerIds = map (row: row.provider.id) index.runtime.providers;
+    };
+    expected = {
+      manualOnlyVmNames = [ "media" ];
+      runtimeMediaVmNames = [ "media" ];
+      sources = [
+        {
+          vm = "media";
+          mediaRef = "installer-usb";
+          slot = "boot";
+          sourceKind = "physical-usb";
+          format = "iso";
+          readOnly = true;
+          registryScope = "root-only-runtime-state";
+        }
+        {
+          vm = "media";
+          mediaRef = "tools-usb";
+          slot = "tools";
+          sourceKind = "physical-usb";
+          format = "iso";
+          readOnly = true;
+          registryScope = "root-only-runtime-state";
+          usbSelector.byIdName = "usb-Test_Tools_0001-0:0";
+        }
+      ];
+      runtimeKinds = [ "nixos" "qemu-media" ];
+      mediaRuntimeKind = "qemu-media";
+      providerIds = [ "local-cloud-hypervisor" "local-qemu-media" ];
+    };
+  };
+
+  "index/computed-net-vms-remain-reachable" = {
+    expr =
+      builtins.hasAttr "sys-alpha-net" cfg.d2b._computed
+      && cfg.d2b._computed.sys-alpha-net.config.networking.hostName == "sys-alpha-net";
+    expected = true;
   };
 }

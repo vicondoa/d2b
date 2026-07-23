@@ -1,9 +1,0 @@
-syntax = "proto3";
-package d2b.tty.v2;
-import "common.proto";
-service TtyService {
-  rpc EnterRawMode(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc RestoreMode(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Inspect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
-  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
-}

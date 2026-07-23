@@ -243,22 +243,15 @@ mod tests {
         SwtpmArgvInput {
             swtpm_binary_path: "/nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm"
                 .to_owned(),
-            vm_name: "ucvmyzodoxhnswumcjsa".to_owned(),
-            state_dir:
-                "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm".to_owned(),
-            ctrl_socket_path:
-                "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/ctrl.sock"
-                    .to_owned(),
-            server_socket_path: "/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/x32sq7fxfsib6wmcybhq/tpm.sock".to_owned(),
+            vm_name: "corp-vm".to_owned(),
+            state_dir: "/var/lib/d2b/vms/corp-vm/tpm".to_owned(),
+            ctrl_socket_path: "/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock".to_owned(),
+            server_socket_path: "/run/d2b/vms/corp-vm/swtpm.sock".to_owned(),
             uid: 1100,
             gid: 1100,
-            log_path:
-                "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/swtpm.log"
-                    .to_owned(),
+            log_path: "/var/lib/d2b/vms/corp-vm/tpm/swtpm.log".to_owned(),
             log_level: 20,
-            pid_path:
-                "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/swtpm.pid"
-                    .to_owned(),
+            pid_path: "/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid".to_owned(),
             startup_clear: true,
             extra_args: Vec::new(),
         }
@@ -268,10 +261,8 @@ mod tests {
         SwtpmIoctlFlushInput {
             swtpm_ioctl_binary_path:
                 "/nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm_ioctl".to_owned(),
-            vm_name: "ucvmyzodoxhnswumcjsa".to_owned(),
-            ctrl_socket_path:
-                "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/ctrl.sock"
-                    .to_owned(),
+            vm_name: "corp-vm".to_owned(),
+            ctrl_socket_path: "/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock".to_owned(),
         }
     }
 
@@ -310,22 +301,16 @@ mod tests {
         assert_eq!(argv[2], "--tpm2");
 
         let joined = argv.join(" ");
+        assert!(joined.contains("--tpmstate dir=/var/lib/d2b/vms/corp-vm/tpm"));
         assert!(joined.contains(
-            "--tpmstate dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm"
+            "--ctrl type=unixio,path=/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100"
         ));
         assert!(joined.contains(
-            "--ctrl type=unixio,path=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100"
-        ));
-        assert!(joined.contains(
-            "--server type=unixio,path=/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/x32sq7fxfsib6wmcybhq/tpm.sock,mode=0660,uid=1100,gid=1100"
+            "--server type=unixio,path=/run/d2b/vms/corp-vm/swtpm.sock,mode=0660,uid=1100,gid=1100"
         ));
         assert!(joined.contains("--flags startup-clear"));
-        assert!(joined.contains(
-            "--log file=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/swtpm.log,level=20"
-        ));
-        assert!(joined.contains(
-            "--pid file=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/swtpm.pid"
-        ));
+        assert!(joined.contains("--log file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.log,level=20"));
+        assert!(joined.contains("--pid file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid"));
         assert!(joined.contains("--daemon=false"));
     }
 
@@ -338,8 +323,7 @@ mod tests {
                 "/nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm_ioctl".to_owned(),
                 "-i".to_owned(),
                 "--unix".to_owned(),
-                "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/ctrl.sock"
-                    .to_owned(),
+                "/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock".to_owned(),
             ]
         );
     }
@@ -348,7 +332,7 @@ mod tests {
     fn exec_arg0_for_long_lived() {
         assert_eq!(
             exec_arg0(&audit_swtpm_input()).unwrap(),
-            "microvm-swtpm@ucvmyzodoxhnswumcjsa"
+            "microvm-swtpm@corp-vm"
         );
     }
 
@@ -356,7 +340,7 @@ mod tests {
     fn exec_arg0_for_flush() {
         assert_eq!(
             exec_arg0_flush(&audit_flush_input()).unwrap(),
-            "microvm-swtpm-flush@ucvmyzodoxhnswumcjsa"
+            "microvm-swtpm-flush@corp-vm"
         );
     }
 

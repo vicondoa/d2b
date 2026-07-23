@@ -1,5 +1,11 @@
-use d2b_contracts::broker_wire::{BrokerErrorResponse, BrokerResponse};
+use std::os::fd::AsRawFd;
+
+use d2b_contracts::broker_wire::{
+    BrokerErrorResponse, BrokerResponse, RunHostInstallResponse, RunMigrateResponse,
+};
+#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts::{broker_wire::RunHostInstallRequest, types::BundleOpId};
+#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},
     bundle_resolver::{
@@ -10,18 +16,26 @@ use d2b_core::{
     manifest_v04::ManifestV04,
     processes::ProcessesJson,
 };
+use d2b_priv_broker::protocol::{recv_json_frame, send_json_frame};
+#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_priv_broker::{
     ops::exec_reconcile::{IpRouteVerb, ReconcileExecError, ReconcileExecutor, UsbipSubcommand},
     runtime::{dispatch_run_host_install_response, dispatch_run_host_install_response_for_intent},
 };
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+#[cfg(not(feature = "layer1-bootstrap"))]
 use std::path::{Path, PathBuf};
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 const HOST_JSON_FIXTURE: &str =
     include_str!("../../../tests/fixtures/deny-unknown/host-valid.json");
+#[cfg(not(feature = "layer1-bootstrap"))]
 const MANIFEST_FIXTURE: &str = include_str!("../../../tests/golden/manifest_v04/baseline-vms.json");
+#[cfg(not(feature = "layer1-bootstrap"))]
 const LIVE_HANDLER_ACTION: &str =
     "Inspect the broker audit log for the failing live executor's underlying syscall.";
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn run_host_install_request(intent_ref: &str) -> RunHostInstallRequest {
     RunHostInstallRequest {
         bundle_installer_intent_ref: BundleOpId::new(intent_ref),
@@ -32,6 +46,7 @@ fn run_host_install_request(intent_ref: &str) -> RunHostInstallRequest {
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
     let host: HostJson = serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
     let manifest =
@@ -50,8 +65,6 @@ fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
         realm_identity_path: None,
         realm_workloads_launcher_v2_path: None,
         unsafe_local_workloads_path: None,
-        provider_registry_v2_path: None,
-        observability_secrets_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: BundleManagedKeys::default(),
@@ -70,6 +83,7 @@ fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
     BundleResolver::from_artifacts(bundle, host, processes, manifest)
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn writable_artifact_path(name: &str) -> PathBuf {
     let base = std::env::var_os("CARGO_TARGET_TMPDIR")
         .map(PathBuf::from)
@@ -77,6 +91,7 @@ fn writable_artifact_path(name: &str) -> PathBuf {
     base.join("w15-install-negative").join(name)
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn writable_install_intent() -> ResolvedInstallerIntent {
     ResolvedInstallerIntent {
         intent_id: "installer:host".to_owned(),
@@ -104,6 +119,7 @@ fn writable_install_intent() -> ResolvedInstallerIntent {
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn writable_host_runtime() -> HostRuntimeArtifact {
     HostRuntimeArtifact {
         path: writable_artifact_path("runtime/host-runtime.json"),
@@ -117,9 +133,11 @@ fn writable_host_runtime() -> HostRuntimeArtifact {
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug, Default)]
 struct FailingWriteExecutor;
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 impl ReconcileExecutor for FailingWriteExecutor {
     fn apply_nft_script(
         &self,
@@ -211,6 +229,78 @@ impl ReconcileExecutor for FailingWriteExecutor {
 }
 
 #[test]
+fn run_host_install_response_serializes_and_round_trips_via_send_json_frame() {
+    let (left, right) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+
+    let body = BrokerResponse::RunHostInstall(RunHostInstallResponse {
+        installed: true,
+        enabled: false,
+        started: false,
+        artifacts_written: vec!["/etc/systemd/system/d2bd.service".to_owned()],
+    });
+    send_json_frame(left.as_raw_fd(), &body).expect("send body");
+
+    let decoded = recv_json_frame::<BrokerResponse>(right.as_raw_fd())
+        .expect("recv frame")
+        .expect("frame present");
+    assert_eq!(decoded, body);
+}
+
+#[test]
+fn run_migrate_response_serializes_and_round_trips_via_send_json_frame() {
+    let (left, right) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+
+    let body = BrokerResponse::RunMigrate(RunMigrateResponse {
+        migrated_vm_count: 3,
+        notes: vec!["W15 marker test".to_owned()],
+    });
+    send_json_frame(left.as_raw_fd(), &body).expect("send body");
+
+    let decoded = recv_json_frame::<BrokerResponse>(right.as_raw_fd())
+        .expect("recv frame")
+        .expect("frame present");
+    assert_eq!(decoded, body);
+}
+
+#[test]
+fn broker_error_response_for_bundle_resolver_unavailable_serializes_cleanly() {
+    let (left, right) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+
+    let body = BrokerResponse::Error(BrokerErrorResponse {
+        kind: "Broker.BundleResolverUnavailable".to_owned(),
+        operation: "BundleResolver".to_owned(),
+        target_wave: Some("W12".to_owned()),
+        message: "Broker started without a loadable bundle".to_owned(),
+        action: "Land bundle at /var/lib/d2b/current-bundle/manifest.json".to_owned(),
+    });
+    send_json_frame(left.as_raw_fd(), &body).expect("send body");
+
+    let decoded = recv_json_frame::<BrokerResponse>(right.as_raw_fd())
+        .expect("recv frame")
+        .expect("frame present");
+    assert_eq!(decoded, body);
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[test]
 fn bundle_resolver_unavailable_returns_typed_error() {
     let request = run_host_install_request("installer:host");
 
@@ -228,6 +318,7 @@ fn bundle_resolver_unavailable_returns_typed_error() {
     );
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 #[test]
 fn bundle_intent_missing_returns_typed_error() {
     let resolver = installer_bundle_resolver("/var/lib/d2b/current-bundle/vms.json");
@@ -248,6 +339,7 @@ fn bundle_intent_missing_returns_typed_error() {
     );
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 #[test]
 fn live_run_host_install_propagates_write_failure() {
     let request = run_host_install_request("installer:host");

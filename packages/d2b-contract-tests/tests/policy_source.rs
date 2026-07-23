@@ -21,12 +21,15 @@
 //! so it is excluded from its own scan — the forbidden-pattern regex string it
 //! carries can never flag itself.
 //!
-//! syn-ast-walk note: the standalone `tests/tools/no-bash-ast-walker/` cargo
-//! tool owns syntax-aware Rust policy checks without adding parser dependencies
-//! to the shared workspace. In addition to shell execution, it parses exact
-//! provider call sites and resolves import and type aliases so formatting or
-//! qualified paths cannot evade those checks. The per-line regex here remains
-//! the broad source-level shell-execution backstop.
+//! syn-ast-walk note (no-bash-exec): the bash gate's third mode handed off to
+//! the standalone `tests/tools/no-bash-ast-walker/` cargo tool (a `syn`-based
+//! AST walker), falling back to `check` mode whenever that tool was absent.
+//! Porting the AST walker into this crate would require adding `syn` as a
+//! dev-dependency, which is out of scope for this migration; the standalone
+//! walker tool remains in place. The per-line regex `check` mode ported here is
+//! a strict superset of the walker's literal detection at the source-line level
+//! (it matches the same `Command::new("…bash"|"…sh")` literals and more), so the
+//! ADR 0017 regression invariant is preserved.
 
 use std::collections::BTreeSet;
 use std::process::Command;
@@ -75,172 +78,6 @@ fn git_listed_files(roots: &[&str]) -> Vec<String> {
     files.into_iter().collect()
 }
 
-#[test]
-fn rust_workspace_is_single_and_versioned() {
-    let root_manifest =
-        read_repo_file_opt("packages/Cargo.toml").expect("packages/Cargo.toml must exist");
-    for required in [
-        "version = \"2.0.0\"",
-        "edition = \"2024\"",
-        "rust-version = \"1.94.1\"",
-        "\"d2b-priv-broker\"",
-        "\"d2b-guest-shell-runner\"",
-        "\"d2b-core/fuzz\"",
-        "\"d2b-ttrpc-api-fit-spike\"",
-    ] {
-        assert!(
-            root_manifest.contains(required),
-            "workspace manifest missing {required}"
-        );
-    }
-
-    let root = repo_root();
-    let files = git_listed_files(&["packages"]);
-    let lockfiles: Vec<_> = files
-        .iter()
-        .filter(|rel| rel.ends_with("Cargo.lock") && root.join(rel).exists())
-        .map(String::as_str)
-        .collect();
-    assert_eq!(
-        lockfiles,
-        vec!["packages/Cargo.lock"],
-        "packages must have exactly one canonical Cargo.lock"
-    );
-
-    for rel in files
-        .iter()
-        .filter(|rel| rel.ends_with("Cargo.toml") && *rel != "packages/Cargo.toml")
-        .filter(|rel| root.join(rel).exists())
-    {
-        let manifest = read_repo_file_opt(rel).expect("read package manifest");
-        assert!(
-            !manifest.contains("\n[workspace]\n") && !manifest.starts_with("[workspace]\n"),
-            "nested workspace is forbidden: {rel}"
-        );
-        for inherited in [
-            "version.workspace = true",
-            "edition.workspace = true",
-            "rust-version.workspace = true",
-            "repository.workspace = true",
-            "license.workspace = true",
-        ] {
-            assert!(
-                manifest.contains(inherited),
-                "{rel} must inherit {inherited}"
-            );
-        }
-        assert!(
-            !manifest.contains("0.0.0-bootstrap"),
-            "{rel} retains bootstrap version metadata"
-        );
-    }
-}
-
-#[test]
-fn guest_session_credential_codec_has_one_shared_authority() {
-    const AUTHORITY: &str = "packages/d2b-contracts/src/v2_component_session.rs";
-    let authority = read_repo_file(AUTHORITY);
-    assert!(authority.contains("GuestSessionCredentialV1"));
-    assert!(authority.contains("pub struct GuestSessionCredentialBytes"));
-    assert!(authority.contains("pub struct GuestBootstrapPsk"));
-    assert!(authority.contains("GUEST_SESSION_CREDENTIAL_MAGIC"));
-    assert!(authority.contains(concat!("D2B", "GSV2")));
-    assert!(authority.contains("requires_clone::<GuestSessionCredentialBytes>()"));
-    assert!(authority.contains("requires_serialize::<GuestSessionCredentialBytes>()"));
-    assert!(authority.contains("pub struct GuestBootstrapPsk {\n    bytes: Zeroizing<Vec<u8>>"));
-    assert!(!authority.contains("Zeroizing<[u8; 32]>"));
-    assert!(authority.contains("let psk = decode_psk(&mut bootstrap_reader)?"));
-    for forbidden_impl in [
-        "impl Clone for GuestSessionCredentialBytes",
-        "impl Serialize for GuestSessionCredentialBytes",
-        "impl serde::Serialize for GuestSessionCredentialBytes",
-        "impl Deref for GuestSessionCredentialBytes",
-    ] {
-        assert!(
-            !authority.contains(forbidden_impl),
-            "opaque encoded credential bytes must not expose {forbidden_impl}"
-        );
-    }
-
-    let forbidden = [
-        concat!("D2B", "GSV2"),
-        concat!("SESSION_", "MATERIAL_MAGIC"),
-        concat!("fn decode_", "session_material"),
-        concat!("fn decode_", "guest_session_credential"),
-    ];
-    for path in git_listed_files(&["packages"]) {
-        if path == AUTHORITY || !path.ends_with(".rs") {
-            continue;
-        }
-        let Some(source) = read_repo_file_opt(&path) else {
-            continue;
-        };
-        for pattern in forbidden {
-            assert!(
-                !source.contains(pattern),
-                "independent guest session credential codec marker {pattern:?} in {path}"
-            );
-        }
-    }
-}
-
-#[test]
-fn guest_configured_launches_codec_has_one_shared_authority() {
-    const AUTHORITY: &str = "packages/d2b-contracts/src/v2_guest_configured_launches.rs";
-    let authority = read_repo_file(AUTHORITY);
-    for required in [
-        "GuestConfiguredLaunchesV1",
-        "GuestConfiguredLaunchEntryV1",
-        "GuestConfiguredLaunchesBytes",
-        concat!("GUEST_CONFIGURED_", "LAUNCHES_MAGIC"),
-        concat!("D2B", "CLV2"),
-    ] {
-        assert!(
-            authority.contains(required),
-            "configured-launch codec authority is missing {required}"
-        );
-    }
-    for forbidden_impl in [
-        "impl Clone for GuestConfiguredLaunchEntryV1",
-        "impl Serialize for GuestConfiguredLaunchEntryV1",
-        "impl serde::Serialize for GuestConfiguredLaunchEntryV1",
-        "impl Clone for GuestConfiguredLaunchesV1",
-        "impl Serialize for GuestConfiguredLaunchesV1",
-        "impl serde::Serialize for GuestConfiguredLaunchesV1",
-        "impl Clone for GuestConfiguredLaunchesBytes",
-        "impl Serialize for GuestConfiguredLaunchesBytes",
-        "impl serde::Serialize for GuestConfiguredLaunchesBytes",
-        "impl Deref for GuestConfiguredLaunchesBytes",
-    ] {
-        assert!(
-            !authority.contains(forbidden_impl),
-            "configured-launch catalog must not expose {forbidden_impl}"
-        );
-    }
-
-    let forbidden = [
-        concat!("D2B", "CLV2"),
-        concat!("const GUEST_CONFIGURED_", "LAUNCHES_MAGIC"),
-        concat!("const CONFIGURED_", "LAUNCHES_MAGIC"),
-        concat!("fn decode_", "configured_launches"),
-        concat!("fn decode_", "configured_launch_catalog"),
-    ];
-    for path in git_listed_files(&["packages"]) {
-        if path == AUTHORITY || !path.ends_with(".rs") {
-            continue;
-        }
-        let Some(source) = read_repo_file_opt(&path) else {
-            continue;
-        };
-        for pattern in forbidden {
-            assert!(
-                !source.contains(pattern),
-                "independent guest configured-launch codec marker {pattern:?} in {path}"
-            );
-        }
-    }
-}
-
 /// Whether `rel` lives under an excluded directory component, mirroring the
 /// bash gate's `rg -g '!**/target/**' -g '!**/tests/**' -g '!**/.git/**'`
 /// globs. A `**/X/**` glob excludes paths where `X` is a *directory* component
@@ -259,6 +96,7 @@ fn nix_package_source_filters_are_path_segment_based() {
     let files = [
         "nixos-modules/host-daemon.nix",
         "nixos-modules/host-broker.nix",
+        "nixos-modules/host-activation.nix",
         "nixos-modules/processes-json.nix",
     ];
 
@@ -282,43 +120,12 @@ fn nix_package_source_filters_are_path_segment_based() {
         "nixos-modules/lib.nix: cleanRustPackagesSource must exclude only a directory segment named `target`"
     );
 
+    let gateway_vm = read_repo_file("nixos-modules/gateway-vm.nix");
     assert!(
-        !repo_path_exists("nixos-modules/gateway-vm.nix"),
-        "the legacy gateway VM synthesizer must remain deleted"
+        !gateway_vm.contains("cleanSourceWith") && !gateway_vm.contains("filterSource"),
+        "nixos-modules/gateway-vm.nix: gateway VMs must consume _hostToolPackages, \
+         not define an ad-hoc Rust source filter"
     );
-
-    let network = read_repo_file("nixos-modules/network.nix");
-    for forbidden in [
-        "cfg.gateways",
-        "gatewayVm",
-        "cfg.envs",
-        "d2b.vms",
-        "systemd.network",
-        "networking.nat",
-    ] {
-        assert!(
-            !network.contains(forbidden),
-            "realm network emitter retained legacy host materialization {forbidden:?}"
-        );
-    }
-    let relay_policy =
-        read_repo_file("packages/d2b-contract-tests/tests/policy_host_realm_relay.rs");
-    assert!(
-        !relay_policy.contains("\"nixos-modules/gateway-vm.nix\""),
-        "credential policy must not allow the deleted gateway VM synthesizer"
-    );
-
-    let net_guest = read_repo_file("nixos-modules/net.nix");
-    for required in [
-        "\"10-eth-dhcp\" = lib.mkForce",
-        "matchConfig.MACAddress = \"00:00:00:00:00:00\";",
-        "enable = false;",
-    ] {
-        assert!(
-            net_guest.contains(required),
-            "net VM DHCP neutralizer is missing source contract {required:?}"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------

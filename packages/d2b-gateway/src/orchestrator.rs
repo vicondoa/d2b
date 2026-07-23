@@ -1,8 +1,9 @@
 //! The async display-session orchestrator (ADR 0032 P0, design §3). It
 //! composes the proven pieces — a detached in-sandbox agent (ACA exec), the
 //! host relay listener, and the operator display endpoint — driving the
-//! [`SessionLedger`] state machine. Display admission is authorized by the
-//! established ComponentSession, not a relay prologue.
+//! [`SessionLedger`] state machine and minting + binding the one-shot
+//! [`SessionBinding`] so display bytes are admitted only by the verified
+//! handshake.
 //!
 //! Every side effect is an **injected dependency** ([`GatewayDeps`]), so the
 //! orchestrator is exhaustively unit-testable with mocks and never needs live
@@ -15,12 +16,13 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::audit::{GatewayAudit, GatewayAuditEvent, GatewayAuditKind, display_envelope};
 use crate::error::GatewayError;
+use crate::handshake::{DisplaySessionId, SessionBinding, SessionSecret};
 use crate::ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionState, TargetKey};
 use crate::types::{AppCommand, DisplaySessionContext};
-use crate::types::{DisplaySessionId, SessionBinding, SessionSecret};
 use d2b_realm_core::{AuthzDecision, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
 
-/// How long a display-session capability is valid before `not_after`.
+/// How long a minted session credential is valid (seconds) before
+/// `not_after`. The agent must complete its handshake within this window.
 pub const DEFAULT_SESSION_TTL_SECS: u64 = 120;
 
 /// The relay coordinates + secret the gateway hands the in-sandbox agent over
@@ -29,7 +31,7 @@ pub const DEFAULT_SESSION_TTL_SECS: u64 = 120;
 pub struct AgentSpawnRequest {
     /// The session being established.
     pub ctx: DisplaySessionContext,
-    /// Non-authoritative correlation data bound to the ComponentSession.
+    /// The bound binding the agent must MAC and send as its handshake.
     pub binding: SessionBinding,
     /// The one-shot secret `S` (delivered over the ACA control plane only).
     pub secret: SessionSecret,
@@ -71,18 +73,24 @@ pub trait GatewayWorkload: Send + Sync {
     async fn cleanup(&self, handle: &AgentHandle) -> Result<(), GatewayError>;
 }
 
-/// Arming the relay listener after ComponentSession authentication.
+/// Arming the host relay listener that verifies the session handshake before
+/// bridging any byte to the operator display endpoint. The implementation
+/// owns the verification (it has the secret + the authorizing binding); the
+/// orchestrator only sequences it.
 #[async_trait]
 pub trait DisplayListener: Send + Sync {
-    /// Arm the listener for an already-authenticated session.
+    /// Arm the listener for `ctx`, verifying a handshake bound to `binding`
+    /// under `secret` before forwarding bytes. Resolves once the listener is
+    /// registered and ready to accept the sender rendezvous.
     async fn arm(
         &self,
         ctx: &DisplaySessionContext,
         binding: &SessionBinding,
         secret: &SessionSecret,
     ) -> Result<ListenerHandle, GatewayError>;
-    /// Compatibility callback for implementations that report readiness after
-    /// authenticated session admission.
+    /// Wait for the agent's verified handshake to complete (bytes are now
+    /// flowing). Returns `Ok(())` on a verified handshake, or a typed error
+    /// (e.g. timeout / auth failure) otherwise.
     async fn await_handshake(&self, handle: &ListenerHandle) -> Result<(), GatewayError>;
     /// Tear down an armed listener. Idempotent.
     async fn close(&self, handle: &ListenerHandle) -> Result<(), GatewayError>;
@@ -338,16 +346,16 @@ impl GatewayOrchestrator {
             }
         };
 
-        // AgentSpawning -> AwaitingAuthentication
+        // AgentSpawning -> AwaitingHandshake
         self.ledger()?
-            .transition(id, SessionState::AwaitingAuthentication)?;
+            .transition(id, SessionState::AwaitingHandshake)?;
         if let Err(err) = self.deps.listener.await_handshake(&listener).await {
             let _ = self.deps.workload.cleanup(&agent).await;
             let _ = self.deps.listener.close(&listener).await;
             return Err(err);
         }
 
-        // AwaitingAuthentication -> Running
+        // AwaitingHandshake -> Running
         self.ledger()?.transition(id, SessionState::Running)?;
         Ok(OpenSession {
             session_id: id.clone(),
@@ -471,7 +479,7 @@ pub struct ContextSeed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SECRET_LEN;
+    use crate::handshake::SECRET_LEN;
     use d2b_realm_core::{
         CorrelationId, NodeId, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
     };
@@ -505,7 +513,7 @@ mod tests {
     struct MockListener {
         arms: AtomicUsize,
         closes: AtomicUsize,
-        fail_admission: bool,
+        fail_handshake: bool,
     }
     #[async_trait]
     impl DisplayListener for MockListener {
@@ -519,8 +527,10 @@ mod tests {
             Ok(ListenerHandle(format!("lst-{}", ctx.session_id)))
         }
         async fn await_handshake(&self, _h: &ListenerHandle) -> Result<(), GatewayError> {
-            if self.fail_admission {
-                return Err(GatewayError::RelayUnavailable);
+            if self.fail_handshake {
+                return Err(GatewayError::DisplayAuthFailed(
+                    crate::handshake::HandshakeError::BadMac,
+                ));
             }
             Ok(())
         }
@@ -743,16 +753,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_admission_failure_fails_closed_no_bytes() {
+    async fn handshake_failure_fails_closed_no_bytes() {
         let w = Arc::new(MockWorkload::default());
         let l = Arc::new(MockListener {
-            fail_admission: true,
+            fail_handshake: true,
             ..Default::default()
         });
         let orch = GatewayOrchestrator::new(deps(w.clone(), l.clone()), 1, LedgerLimits::default());
         let (tk, cs, app) = seed();
         let err = orch.open(tk, cs, app, 42).await.unwrap_err();
-        assert!(matches!(err, GatewayError::RelayUnavailable));
+        assert!(matches!(err, GatewayError::DisplayAuthFailed(_)));
         // The agent was spawned + listener armed, but never reached Running.
         let id = DisplaySessionId::new("s0");
         assert_eq!(orch.state(&id), Some(SessionState::Failed));

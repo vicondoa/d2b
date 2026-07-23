@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod name;
 pub mod output;
-pub mod services;
 pub mod socket;
 
 #[cfg(feature = "real-libshpool")]

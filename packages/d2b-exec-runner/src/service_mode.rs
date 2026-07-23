@@ -964,24 +964,20 @@ mod tests {
     use d2b_exec_runner::RunnerEnv;
     use d2b_exec_runner::filering::FileRingReader;
 
-    static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
     fn scratch_slot() -> (PathBuf, RunnerPaths) {
         // Always place test scratch under the system temp dir (respects TMPDIR,
         // falls back to /tmp) — never the repo-relative "." which leaks
         // runner-svc-* dirs into the worktree.
         let base = std::env::temp_dir();
         let dir = base.join(format!(
-            "runner-svc-{}-{}-{}",
+            "runner-svc-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos(),
-            SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                .as_nanos()
         ));
         let paths = RunnerPaths::new(&dir, 3);
-        std::fs::create_dir(&dir).unwrap();
         std::fs::create_dir_all(paths.slot_dir()).unwrap();
         (dir, paths)
     }
@@ -1475,10 +1471,6 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03.service
             stderr: b"hello stderr".to_vec(),
             fail: false,
         };
-        let cfg = SuperviseConfig {
-            grace: Duration::from_secs(60),
-            ..fast_cfg()
-        };
         let result = supervise(
             &spec("/bin/true", 0),
             &paths,
@@ -1492,7 +1484,7 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03.service
             Arc::new(FlagCancel {
                 flag: Arc::new(AtomicBool::new(false)),
             }),
-            &cfg,
+            &fast_cfg(),
         );
         assert_eq!(result, RunnerResult::Done);
         assert_eq!(read_phase(&paths), StatusPhase::Exited(7));
@@ -1785,6 +1777,7 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03.service
             proc: Arc::clone(&proc),
             read_fd: StdMutex::new(Some(read_fd)),
         };
+        let start = std::time::Instant::now();
         let result = supervise(
             &spec("/bin/true", 0),
             &paths,
@@ -1800,8 +1793,12 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03.service
             }),
             &fast_cfg(),
         );
-        // Returning while the pipe write-end is still held proves the drain
-        // wait is bounded without depending on host scheduler latency.
+        // The bounded drain wait must let supervise return promptly even though
+        // the pipe write-end is still held open.
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "supervise hung on a lingering pipe holder"
+        );
         assert_eq!(result, RunnerResult::Done);
         assert_eq!(read_phase(&paths), StatusPhase::Exited(0));
         // Releasing the write end lets the detached drain thread finish cleanly.

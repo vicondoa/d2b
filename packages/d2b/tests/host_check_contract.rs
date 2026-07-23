@@ -43,6 +43,8 @@ use serde_json::{Map, Value, json};
 
 use d2b_contracts::cli_output::{HostCheckOutputV2, HostCheckSeverityV2};
 
+use common::TestPeer;
+
 /// The fixture-smoke output dir, or `None` when D2B_FIXTURES is unset.
 fn fixtures_dir() -> Option<String> {
     std::env::var("D2B_FIXTURES").ok()
@@ -158,31 +160,62 @@ fn write_fixture(dir: &Path, name: &str, value: &Value) -> PathBuf {
     path
 }
 
-/// Build a test-owned, integrity-valid bundle tree. When `drift` is set,
-/// additionally rewrite `closures/bm6ccueaqlr7wd2cskza.json` to break runner parity
-/// (mirrors `d2b_cli_smoke_bundle_tree_runner_drift`).
+/// Copy the fixture-smoke artifacts into `dir` and rewrite `bundle.json` so its
+/// `hostPath` / `processesPath` / `privilegesPath` are RELATIVE — see the
+/// module-level hermeticity note. When `drift` is set, additionally rewrite
+/// `closures/corp-vm.json` to break runner parity (mirrors
+/// `d2b_cli_smoke_bundle_tree_runner_drift`).
 fn build_hermetic_bundle_tree(fixtures: &str, dir: &Path, drift: bool) {
-    common::build_hermetic_bundle_tree(Path::new(fixtures), dir);
+    fs::create_dir_all(dir.join("closures")).expect("mk closures dir");
+
+    // fs::write (not fs::copy) so the destinations are writable (the
+    // nix-store sources are 0444) and re-rewritable for the drift case.
+    for name in [
+        "host.json",
+        "processes.json",
+        "manifest.json",
+        "privileges.json",
+    ] {
+        if let Ok(bytes) = fs::read(format!("{fixtures}/{name}")) {
+            fs::write(dir.join(name), bytes).unwrap_or_else(|err| panic!("write {name}: {err}"));
+        }
+    }
+    for entry in fs::read_dir(format!("{fixtures}/closures")).expect("read fixture closures dir") {
+        let entry = entry.expect("closures dir entry");
+        let bytes = fs::read(entry.path()).expect("read fixture closure");
+        fs::write(dir.join("closures").join(entry.file_name()), bytes).expect("write closure");
+    }
+
+    let bundle_bytes =
+        fs::read(format!("{fixtures}/bundle.json")).expect("read fixture bundle.json");
+    let mut bundle: Value = serde_json::from_slice(&bundle_bytes).expect("decode bundle.json");
+    let obj = bundle.as_object_mut().expect("bundle is a JSON object");
+    obj.insert("hostPath".to_owned(), json!("host.json"));
+    obj.insert("processesPath".to_owned(), json!("processes.json"));
+    obj.insert("privilegesPath".to_owned(), json!("privileges.json"));
+    fs::write(
+        dir.join("bundle.json"),
+        serde_json::to_vec_pretty(&bundle).expect("serialize bundle.json"),
+    )
+    .expect("write rewritten bundle.json");
 
     if drift {
-        let path = dir.join("closures").join("bm6ccueaqlr7wd2cskza.json");
-        let bytes = fs::read(&path).expect("read bm6ccueaqlr7wd2cskza closure");
-        let mut closure: Value =
-            serde_json::from_slice(&bytes).expect("decode bm6ccueaqlr7wd2cskza closure");
+        let path = dir.join("closures").join("corp-vm.json");
+        let bytes = fs::read(&path).expect("read corp-vm closure");
+        let mut closure: Value = serde_json::from_slice(&bytes).expect("decode corp-vm closure");
         let obj = closure.as_object_mut().expect("closure is a JSON object");
         obj.insert("runnerParityOk".to_owned(), json!(false));
         let drifted = obj
             .get("runnerParityPath")
             .and_then(Value::as_str)
             .map(|current| format!("{current}-drift"))
-            .expect("bm6ccueaqlr7wd2cskza closure declares runnerParityPath");
+            .expect("corp-vm closure declares runnerParityPath");
         obj.insert("runnerParityPath".to_owned(), json!(drifted));
         fs::write(
             &path,
             serde_json::to_vec_pretty(&closure).expect("serialize drift closure"),
         )
         .expect("write drift closure");
-        common::refresh_bundle_integrity(dir, &["closures/bm6ccueaqlr7wd2cskza.json"]);
     }
 }
 
@@ -286,17 +319,17 @@ fn host_check_built_in_kernel_modules_pass() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     };
-    // Drop kvm from loadedModules and mark it built-in instead.
+    // Drop kvm_intel from loadedModules and mark it built-in instead.
     let scenario = Scenario::new(&fixtures, false, "host-builtin.json", |value| {
         let modules = value["loadedModules"]
             .as_array()
             .expect("loadedModules array")
             .iter()
-            .filter(|m| m.as_str() != Some("kvm"))
+            .filter(|m| m.as_str() != Some("kvm_intel"))
             .cloned()
             .collect::<Vec<_>>();
         value["loadedModules"] = Value::Array(modules);
-        value["builtInModules"] = json!(["kvm"]);
+        value["builtInModules"] = json!(["kvm_intel"]);
     });
     let out = scenario.run(&["--json"], &[]);
 
@@ -305,8 +338,8 @@ fn host_check_built_in_kernel_modules_pass() {
     let finding = output
         .findings
         .iter()
-        .find(|f| f.id == "kernel-module:kvm")
-        .expect("kernel-module:kvm finding present");
+        .find(|f| f.id == "kernel-module:kvm_intel")
+        .expect("kernel-module:kvm_intel finding present");
     assert_eq!(finding.severity, HostCheckSeverityV2::Pass);
     assert!(
         finding.message.contains("built into the running kernel"),
@@ -533,4 +566,128 @@ fn host_check_human_groups_findings_by_severity() {
         stdout.contains("PASS"),
         "--human groups findings under a PASS header; got:\n{stdout}"
     );
+}
+
+// --- Daemon-backed cases ---------------------------------------------------
+
+#[test]
+fn daemon_host_check_pass_runs_full_probe_battery() {
+    let Some(fixtures) = fixtures_dir() else {
+        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
+        return;
+    };
+    let scenario = Scenario::new(&fixtures, false, "host-pass.json", |_| {});
+    let Some(daemon) =
+        common::spawn_d2bd_host_check(&scenario.tree, &scenario.fixture, &TestPeer::launcher())
+    else {
+        eprintln!("SKIP: D2B_TEST_D2BD_BIN unset (daemon-spawn harness unavailable)");
+        return;
+    };
+
+    let response = common::daemon_host_check_response(&daemon.socket_path, false);
+    let _ = daemon.wait();
+
+    assert_eq!(response["summary"]["failures"].as_u64(), Some(0));
+    assert_eq!(response["summary"]["warnings"].as_u64(), Some(0));
+    for name in [
+        "kernel-module:kvm",
+        "nftables-table",
+        "firewall-coexistence",
+        "runner-parity",
+    ] {
+        assert!(
+            has_check(&response, name),
+            "daemon host-check battery missing check {name}; checks:\n{}",
+            check_names(&response).join(", ")
+        );
+    }
+}
+
+#[test]
+fn daemon_host_check_fails_closed_on_old_kernel_and_missing_cgroup_v2() {
+    let Some(fixtures) = fixtures_dir() else {
+        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
+        return;
+    };
+    let scenario = Scenario::new(&fixtures, false, "host-daemon-fail.json", |value| {
+        value["kernelRelease"] = json!("6.5.0-d2b");
+        value["cgroupV2Present"] = json!(false);
+    });
+    let Some(daemon) =
+        common::spawn_d2bd_host_check(&scenario.tree, &scenario.fixture, &TestPeer::launcher())
+    else {
+        eprintln!("SKIP: D2B_TEST_D2BD_BIN unset (daemon-spawn harness unavailable)");
+        return;
+    };
+
+    let response = common::daemon_host_check_response(&daemon.socket_path, false);
+    let _ = daemon.wait();
+
+    assert!(
+        response["summary"]["failures"].as_u64().unwrap_or(0) >= 2,
+        "old kernel + missing cgroup-v2 yield >= 2 failures; summary:\n{}",
+        response["summary"]
+    );
+    assert_eq!(check_status(&response, "kernel-version"), Some("fail"));
+    assert_eq!(check_status(&response, "cgroup-v2"), Some("fail"));
+}
+
+#[test]
+fn daemon_host_check_strict_runner_parity_fails() {
+    let Some(fixtures) = fixtures_dir() else {
+        eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
+        return;
+    };
+    let scenario = Scenario::new(&fixtures, true, "host-pass.json", |_| {});
+    let Some(daemon) =
+        common::spawn_d2bd_host_check(&scenario.tree, &scenario.fixture, &TestPeer::launcher())
+    else {
+        eprintln!("SKIP: D2B_TEST_D2BD_BIN unset (daemon-spawn harness unavailable)");
+        return;
+    };
+
+    let response = common::daemon_host_check_response(&daemon.socket_path, true);
+    let _ = daemon.wait();
+
+    assert!(
+        response["summary"]["failures"].as_u64().unwrap_or(0) > 0,
+        "strict runner-parity drift yields a failure; summary:\n{}",
+        response["summary"]
+    );
+    assert_eq!(check_status(&response, "runner-parity"), Some("fail"));
+}
+
+/// Status string of the first `checks[]` entry named `name`, if any.
+fn check_status<'a>(response: &'a Value, name: &str) -> Option<&'a str> {
+    response["checks"]
+        .as_array()?
+        .iter()
+        .find(|check| check.get("name").and_then(Value::as_str) == Some(name))
+        .and_then(|check| check.get("status").and_then(Value::as_str))
+}
+
+/// Whether any `checks[]` entry is named `name`.
+fn has_check(response: &Value, name: &str) -> bool {
+    response["checks"]
+        .as_array()
+        .map(|checks| {
+            checks
+                .iter()
+                .any(|check| check.get("name").and_then(Value::as_str) == Some(name))
+        })
+        .unwrap_or(false)
+}
+
+/// All `checks[]` names, for diagnostics on assertion failure.
+fn check_names(response: &Value) -> Vec<String> {
+    response["checks"]
+        .as_array()
+        .map(|checks| {
+            checks
+                .iter()
+                .filter_map(|check| check.get("name").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }

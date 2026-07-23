@@ -4,9 +4,10 @@
 
 The realm identity lifecycle contract defines metadata for enrollment,
 controller generations, key rotation, revocation, teardown, recovery, and
-redacted identity audit events. Nix emits deterministic, non-secret identity
-configuration rows in canonical realm-path order. The rows are configuration
-inputs only; they do not load credentials or perform lifecycle operations.
+redacted identity audit events. It is a DTO and schema contract only. The
+current runtime still uses the existing global `d2bd` public socket and the
+`d2b.envs` VM substrate; live realm routing, relay sessions, provider
+controllers, and policy/session enforcement remain future work.
 
 The schema roots are generated into
 [`schemas/v2/d2b-realm-core.json`](./schemas/v2/d2b-realm-core.json) and
@@ -31,11 +32,6 @@ These values are safe metadata for schemas, diagnostics, and audit
 correlation. They must not be treated as private keys, public key bytes,
 provider credentials, relay credentials, session secrets, signed credential
 material, or endpoint authority.
-
-`/etc/d2b/realm-identity.json` contains only enabled realms that declare at
-least one such reference or fingerprint. Realm paths are encoded
-most-specific-first. Child process launch records refer to this file but never
-embed key material.
 
 `RealmIdentityMetadata` records the realm, identity reference, identity
 fingerprint, lifecycle status, creation time, and optional expiry. Status is a

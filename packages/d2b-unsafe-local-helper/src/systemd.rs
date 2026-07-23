@@ -69,10 +69,6 @@ pub struct ScopeInspection {
 }
 
 pub trait UserScopeManager: Send + Sync + 'static {
-    fn authenticated_uid(&self) -> u32 {
-        nix::unistd::getuid().as_raw()
-    }
-
     fn manager_environment(&self) -> Result<ManagerEnvironment, ScopeError>;
     fn start_scope(
         &self,
@@ -84,55 +80,20 @@ pub trait UserScopeManager: Send + Sync + 'static {
     fn stop_scope(&self, scope: &VerifiedScope) -> Result<(), ScopeError>;
 }
 
+#[derive(Debug, Default)]
 pub struct SystemdUserScopeManager {
-    owner_uid: u32,
     connection: Mutex<Option<Connection>>,
-}
-
-impl fmt::Debug for SystemdUserScopeManager {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SystemdUserScopeManager")
-            .field("owner_uid", &"<redacted>")
-            .field(
-                "connected",
-                &self.connection.lock().is_ok_and(|value| value.is_some()),
-            )
-            .finish()
-    }
-}
-
-impl Default for SystemdUserScopeManager {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl SystemdUserScopeManager {
     pub fn new() -> Self {
-        Self {
-            owner_uid: nix::unistd::getuid().as_raw(),
-            connection: Mutex::new(None),
-        }
-    }
-
-    pub fn for_authenticated_uid(owner_uid: u32) -> Result<Self, ScopeError> {
-        if owner_uid == 0 || owner_uid != nix::unistd::getuid().as_raw() {
-            return Err(ScopeError::IdentityMismatch);
-        }
-        Ok(Self {
-            owner_uid,
-            connection: Mutex::new(None),
-        })
+        Self::default()
     }
 
     fn with_connection<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, ScopeError>,
     ) -> Result<T, ScopeError> {
-        if self.owner_uid == 0 || self.owner_uid != nix::unistd::getuid().as_raw() {
-            return Err(ScopeError::IdentityMismatch);
-        }
         let mut cached = self
             .connection
             .lock()
@@ -211,10 +172,6 @@ impl SystemdUserScopeManager {
 }
 
 impl UserScopeManager for SystemdUserScopeManager {
-    fn authenticated_uid(&self) -> u32 {
-        self.owner_uid
-    }
-
     fn manager_environment(&self) -> Result<ManagerEnvironment, ScopeError> {
         self.with_connection(|connection| {
             let manager = Self::manager_proxy(connection)?;
@@ -491,19 +448,5 @@ mod tests {
         )));
 
         assert_eq!(map_user_manager_error(error), ScopeError::Timeout);
-    }
-
-    #[test]
-    fn manager_is_bound_to_exact_authenticated_non_root_uid() {
-        let uid = nix::unistd::getuid().as_raw();
-        if uid != 0 {
-            let manager = SystemdUserScopeManager::for_authenticated_uid(uid).unwrap();
-            assert_eq!(manager.authenticated_uid(), uid);
-            assert!(!format!("{manager:?}").contains(&uid.to_string()));
-        }
-        assert!(matches!(
-            SystemdUserScopeManager::for_authenticated_uid(uid.saturating_add(1)),
-            Err(ScopeError::IdentityMismatch)
-        ));
     }
 }

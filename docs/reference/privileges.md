@@ -1,10 +1,10 @@
 # Reference: broker privileged operation matrix
 
-> Diataxis: reference. Stable catalog of the bundle-resolved privileged
-> intents that `d2b-priv-broker` may perform for an authenticated realm
-> controller. The wire source of truth is the generated
-> `d2b.broker.v2.BrokerService`; this page indexes the internal operation
-> names selected after request admission and intent resolution.
+> Diataxis: reference. Stable catalog of every closed-enum operation
+> the privileged broker (`d2b-priv-broker`) is allowed to perform
+> on behalf of the unprivileged `d2bd` daemon. The wire-level
+> source of truth is `d2b_contracts::BrokerRequest`; this page is the
+> human-readable index keyed by operation name.
 
 Every row carries three policy flags:
 
@@ -17,8 +17,10 @@ Every row carries three policy flags:
 - **secret** — `yes` for operations whose implementation reads secret
   material or whose audit record may reference secret-material
   identifiers. `redacted-only` rows carry only derived/redacted metadata:
-  `UsbipBind` records normalized device identity plus serial HMAC
-  correlations, never guest credential bytes, signature bytes, raw serial, raw
+  for example `GuestControlSign` records token-transcript metadata
+  (`transcript_len`, `peer_cid_present`, `capabilities_hash_present`),
+  and `UsbipBind` records normalized device identity plus serial HMAC
+  correlations, never the per-VM token, signature bytes, raw serial, raw
   sysfs path, or device path.
 
 Unknown variants and unknown fields in security-sensitive artifacts
@@ -52,13 +54,12 @@ are denied (`defaultForUnknown: deny`).
 >
 > 2. **Broker private socket** at `/run/d2b/priv.sock` (owned
 >    `root:d2bd` mode `0660` per `nixos-modules/host-broker.nix`).
->    PID1 or the local-root allocator pre-binds this listener; the broker
->    has no fallback bind path. The broker verifies the exact Unix peer
->    credentials before completing a Noise NN ComponentSession handshake.
->    The authenticated offer is fixed to `privileged-broker`,
->    `d2b.broker.v2`, host-local Unix seqpacket, directional Unix identity
->    evidence, and the appropriate controller/broker roles. The broker
->    does not directly classify launcher or admin users.
+>    Only the `d2bd` uid can `connect(2)` here. The broker accepts
+>    ONLY the `d2bd` peer; it does NOT directly classify launcher /
+>    admin users. The daemon forwards the upstream authz-class
+>    identifier to the broker with each per-op request; the broker
+>    trusts the daemon's upstream classification and uses it as the
+>    authz-class input to its per-op deny matrix in the table below.
 >
 > The authz classes named in the **Allowed groups** column
 > (`d2b-launcher`, `d2b-admin`) are DISTINCT from the Linux
@@ -80,10 +81,11 @@ are denied (`defaultForUnknown: deny`).
 > to `d2b-launcher` or `d2b-admin` and never enter the
 > `launcherUsers`/`adminUsers` uid lookup or the broker's authz
 > chain. Realm or provider workload credentials are distinct from
-> both: they remain in the exact credential-owning provider agent and are
-> never placed on the host daemon or its config. Provider agents have no
-> direct host-broker channel; only opaque, co-located credential leases may
-> cross the provider contract.
+> both: they are held inside a gateway guest VM and are never placed
+> on the host daemon or its config. A gateway guest has no direct
+> channel to the broker — the host daemon manages it as a local
+> workload VM — and its realm credentials, policy, and audit log
+> live entirely inside the guest.
 
 > **Host shutdown exception.** The guarded host-shutdown hook is the only
 > local lifecycle exception to the normal launcher/admin uid lookup. When
@@ -96,33 +98,7 @@ are denied (`defaultForUnknown: deny`).
 > The existing shutdown guard remains responsible for ensuring the hook exits
 > without mutation during ordinary daemon restarts.
 
-> **Configured launch is a public daemon operation, not a broker operation.**
-> `launch` is authorized per workload/realm for the `d2b-launcher` and
-> `d2b-admin` classes, is audited as a destructive runtime action, has no secret
-> access, and does not require the privileged broker. It therefore appears in
-> `PrivilegesJson.publicOperations` and the generated
-> `OperationAuthz.operation` enum, but not in the broker-only catalog below.
-
-## Broker service transport
-
-Requests and responses use only the strict generated protobuf types. Unknown
-fields, invalid enums, stale session generations, expired deadlines, duplicate
-request IDs, and missing idempotency keys on mutating methods fail before
-backend dispatch. `Cancel` is generation-bound and signals only the matching
-active request.
-
-File descriptors are authenticated ComponentSession attachment packets, not an
-untyped JSON response side channel. Descriptor indexes must exactly match the
-typed request or response table and bind the service, method, request,
-generation, purpose, object type, and access. Unix transport validation
-requires `FD_CLOEXEC`, rejects unexpected or duplicate kernel objects, and
-retains one close owner through success, refusal, cancellation, and timeout.
-
-`Allocate` and `Spawn` are local-root allocator methods. Child realm
-controllers cannot invoke them; all other methods remain confined to the
-authenticated realm broker and its bundle-resolved authority.
-
-## Operation catalog
+## Operation catalog (PROTOCOL_VERSION = 2)
 
 The currently implemented broker operation catalog. Every row carries
 `audit: yes` and `defaultForUnknown: deny`.
@@ -192,6 +168,7 @@ broker request is emitted.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `PrepareStoreView` | fs (store view) | per VM | live | yes | no | `d2b-launcher` + `d2b-admin` | yes | deny | `generation`, `hardlink_farm_path`, `target_view_path` |
 | `StoreSync` | fs (hardlink farm) | per VM | live | yes (atomic `current` symlink swap) | no | `d2b-launcher` + `d2b-admin` | yes | deny | `bundle_closure_ref`, `generation`, `closure_count`, `hardlink_farm_path` |
+| `GuestControlSign` | guest-control token | per VM | live | no | redacted-only | `d2bd` | yes | deny | `vm_id`, `role`, `purpose`, `transcript_len`, `peer_cid_present`, `capabilities_hash_present` |
 | `SetupMountNamespace` | mount ns | per VM / role | live | partial (mount-root prep + bind target) | no | `d2b-launcher` + `d2b-admin` | yes | deny | `role_id`, `mount_root`, `mount_view_path`, `source_view_path` |
 | `DeregisterRunnerPidfd` | process registry | per VM / role | live | no | no | `d2b-launcher` + `d2b-admin` | yes | deny | `vm_id`, `role_id`, `removed` |
 | `DiskInit` | disk image | per VM | live | yes (create/format declared images; repair safe declared posture drift) | no | `d2bd` | yes | deny | `vm_id`, `ops_total`, `ops_created`, `ops_skipped`, `ops_repaired`, `ops_posture_repaired`, `target_paths_hash` |
@@ -210,15 +187,6 @@ protocol stays stable, but the current broker dispatches them to an
 | `RotateSecretById` | secret store | future work | yes | yes | Secret rotation is not implemented. |
 | `PauseBroker` | broker admin | future work | partial (state transition) | no | Broker pause tooling is not implemented. |
 | `ResumeBroker` | broker admin | future work | partial (state transition) | no | Broker resume tooling is not implemented. |
-
-Guest ComponentSession credential generation is realm-controller authority, not
-a privileged signing operation. The owning realm broker may materialize the
-controller-supplied bytes into its declared private runtime path, but it neither
-holds the parent private key nor derives a guest signature.
-The declarative omission of `GuestControlSign` is dependency-blocked until the
-live daemon/broker dispatch is removed. A tree that still has that live Rust
-operation must fail full privilege parity rather than filter the operation from
-the expected matrix.
 
 The wire goldens under `tests/golden/broker-wire/` cover one canonical
 encoding per reserved variant so handlers can be added without
@@ -318,7 +286,6 @@ seccomp policy are listed below.
 | Runner role | Replaces | Caps | Notes |
 | --- | --- | --- | --- |
 | `OtelHostBridge` | singleton `d2b-otel-host-bridge.service`; the current surface is broker `SpawnRunner{role: OtelHostBridge, …}` | empty | The bundle's `OtelHostBridge` runner intent MUST point at a VM whose `vm_name` equals `manifest._observability.vmName`; the broker refuses fail-closed via `Broker.OtelHostBridgeIntentInvalid` otherwise. Pre-opened vsock fds only; `AF_VSOCK` / `AF_UNIX` socket(2) is denied by `w1-otel-host-bridge` seccomp policy. Bind set: d2b OTel runtime dir `/run/d2b/otel` (RW), obs VM CH vsock host UDS dir (connect), and `/run/d2b/otel/host-egress.sock` (RW listen target). No `/dev` binds. Host-scoped profile `host-otel-host-bridge` (principal: `d2b-otel-bridge`, cgroup subtree: `d2b.slice/host/otel-host-bridge`). |
-| `VsockRelay` | per-VM observability relay; the current surface is broker `SpawnRunner{role: VsockRelay, …}` | empty | Before spawn, the broker resolves the VM state directory from the trusted manifest and checks the bundle-resolved `UNIX-LISTEN` endpoint. It accepts only a direct child named `vsock.sock_<decimal-port>`, refuses active listeners, symlinks, non-sockets, and out-of-scope paths, and removes a proven stale socket so a normal VM restart can rebind the relay. This cleanup is a `SpawnRunner` side-effect, not a separate broker op. |
 
 
 Sensitive path components are stable-hashed; user identity is stored
@@ -794,12 +761,6 @@ process starts. The broker adopts the fd via `SD_LISTEN_FDS`.
   upstream classification) result in `denied-refused` audit
   emission at the broker.
 
-The daemon receives broker `SCM_RIGHTS` messages with
-`MSG_CMSG_CLOEXEC`. Its ancillary buffer covers Linux's full 253-descriptor
-limit plus peer credentials. Received descriptors enter an owning parser before
-any frame validation; malformed or still-truncated ancillary data fails closed,
-and all installed descriptors are closed on every error path.
-
 ### Per-operation cap usage
 
 The table below maps each broker operation to the specific
@@ -853,7 +814,7 @@ validator (`tests/minijail-validator-<role>.sh`) which writes
 | `gpu` | `vm-<vm>-gpu` | empty (per-role smoke proves virgl/venus/cross-domain run under SCHED_OTHER) | device binds: `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`; mount `/run/user/<uid>/wayland-0` → `/run/d2b-gpu/<vm>/wayland-0`; ioctls: full `DRM_IOCTL_VIRTGPU_*` family (via DeviceClass::Dri) | `tests/minijail-validator-gpu.sh` (positive: DRM_IOCTL_VIRTGPU_GET_CAPS under profile; negative: ptrace → SIGSYS) |
 | `audio` | `vm-<vm>-audio` | `CAP_NET_RAW` (vhost-user-sound bind on PipeWire mediation path; AF_NETLINK for virtio-snd) | RO bind of `/run/user/<uid>/pipewire-0`; RW bind of `/run/d2b/vms/<vm>/snd.sock`; seccompPolicyRef = `w1-audio` | `tests/minijail-validator-audio.sh` |
 | `video` | `vm-<vm>-video` | empty | `deviceBinds = [ "/dev/dri/renderD128" ]` by default for virtio-media decode (virtio-media wire contract: `virtio_id=48`, 2×256 queues, 256 MiB SHM, `vring_base=0`); `graphics.videoNvidiaDecode = true` additionally allows `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` for the proprietary NVIDIA VA-API/NVDEC backend; `/dev` is masked and no broad bind is allowed; RW bind of `/run/d2b-video/<vm>/`; seccompPolicyRef = `w1-video`; principal is the dedicated `d2b-<vm>-video` uid | `tests/minijail-validator-video.sh` |
-| `vsock-relay` | `vm-<vm>-vsock-relay` | empty (pre-opened fds only, no AF_VSOCK socket creation in-role) | bind: `<manifest VM stateDir>/vsock.sock_<port>` listener plus the observability VM's inherited CH-vsock UDS; seccompPolicyRef = `w1-vsock-relay` (denies `socket(AF_VSOCK)` + `ptrace`). Before spawn, the broker removes only a non-listening socket whose exact parent is the manifest-resolved VM state directory and whose basename is `vsock.sock_<decimal-port>`; active, non-socket, symlink, and out-of-scope paths fail closed. | `packages/d2b-priv-broker/src/runtime.rs` unit coverage + `tests/minijail-validator-vsock-relay.sh` |
+| `vsock-relay` | `vm-<vm>-vsock-relay` | empty (pre-opened fds only, no AF_VSOCK socket creation in-role) | bind: per-VM `/var/lib/d2b/vms/<vm>/vsock.sock` (the inherited UDS); seccompPolicyRef = `w1-vsock-relay` (denies `socket(AF_VSOCK)` + `ptrace`) | `tests/minijail-validator-vsock-relay.sh` |
 | `usbip` backend | `vm-sys-<env>-usbipd-backend` | uid 0 carve-out + `CAP_NET_RAW` | host module `usbip-host` (not `vhci_hcd`, which is the guest module); long-lived per-env `usbipd` backend. `usbipd` must write the kernel `usbip_sockfd` sysfs attribute as host-root, so the broker gives this one runner a scoped root carve-out with a private PID namespace and fresh procfs; `/etc`, `/var`, `/home`, `/root`, `/run`, `/tmp`, `/boot`, `/mnt`, `/media`, `/srv`, and `/opt` masked; `/dev` masked; and only the currently locked `/dev/bus/usb/<bus>/<dev>` node(s) rebound writable. | `tests/minijail-validator-usbip.sh` |
 | `usbip` proxy | `vm-sys-<env>-usbipd-proxy` | empty | self-binding TCP proxy from `<env.hostUplinkIp>:3240` to `127.0.0.1:<backendPort>`; no device access | `tests/minijail-validator-usbip.sh` |
 | `otel-host-bridge` | (host-scoped) `d2b-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: `/run/d2b/otel`, CH vsock host socket, `host-egress.sock` (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | `tests/minijail-validator-otel-host-bridge.sh` |

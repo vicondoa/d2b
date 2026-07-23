@@ -1,123 +1,166 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-const SOCKET: &str = "/run/user/1000/d2b-shpool.sock";
-
-fn binary() -> Command {
-    Command::cargo_bin("d2b-guest-shell-runner").unwrap()
-}
-
 #[test]
-fn help_identifies_internal_data_plane_only() {
-    binary()
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Internal libshpool data-plane helper for d2b guest service",
-        ))
-        .stdout(predicate::str::contains("component-session").not())
-        .stdout(predicate::str::contains("--json").not());
-}
-
-#[test]
-fn rejects_legacy_json_control_flag() {
-    for subcommand in ["list", "detach", "kill"] {
-        let mut args = vec![subcommand, "--socket", SOCKET];
-        if subcommand != "list" {
-            args.extend(["--name", "default"]);
-        }
-        args.push("--json");
-        binary()
-            .args(args)
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("unexpected argument '--json'"));
-    }
-}
-
-#[test]
-fn rejects_template_names_before_backend_access() {
-    for subcommand in ["attach", "detach", "kill"] {
-        binary()
-            .args([subcommand, "--socket", SOCKET, "--name", "work-{workspace}"])
-            .assert()
-            .failure()
-            .stdout(predicate::str::is_empty())
-            .stderr(predicate::str::contains("unsupported character '{'"));
-    }
+fn rejects_template_names_before_runtime() {
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args([
+        "detach",
+        "--socket",
+        "/run/user/1000/d2b-shpool.sock",
+        "--name",
+        "work-{workspace}",
+        "--json",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("unsupported character '{'"));
 }
 
 #[test]
 #[cfg(not(feature = "real-libshpool"))]
-fn every_backend_mode_fails_closed_without_libshpool() {
-    let commands = [
-        vec!["daemon", "--socket", SOCKET, "--home", "/home/alice"],
-        vec!["attach", "--socket", SOCKET, "--name", "default"],
-        vec!["list", "--socket", SOCKET],
-        vec!["detach", "--socket", SOCKET, "--name", "default"],
-        vec!["kill", "--socket", SOCKET, "--name", "default"],
-    ];
+fn management_json_has_stable_shape() {
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args([
+        "kill",
+        "--socket",
+        "/run/user/1000/d2b-shpool.sock",
+        "--name",
+        "default",
+        "--json",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        r#""command":"kill","name":"default","result":"unsupported""#,
+    ));
+}
 
-    for args in commands {
-        binary()
-            .args(args)
+#[test]
+#[cfg(not(feature = "real-libshpool"))]
+fn list_json_reports_unsupported_shape() {
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args([
+        "list",
+        "--socket",
+        "/run/user/1000/d2b-shpool.sock",
+        "--json",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        r#""command":"list","name":"","result":"unsupported""#,
+    ));
+}
+
+#[test]
+#[cfg(not(feature = "real-libshpool"))]
+fn daemon_stub_reports_neutral_unsupported_error() {
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args([
+        "daemon",
+        "--socket",
+        "/run/user/1000/d2b-shpool.sock",
+        "--home",
+        "/home/alice",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+        "persistent shell daemon mode is not enabled in this helper build",
+    ))
+    .stderr(predicate::str::contains(r#"home="/home/alice""#));
+}
+
+#[test]
+#[cfg(not(feature = "real-libshpool"))]
+fn attach_stub_reports_neutral_unsupported_error() {
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args([
+        "attach",
+        "--socket",
+        "/run/user/1000/d2b-shpool.sock",
+        "--name",
+        "default",
+        "--force",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+        "persistent shell attach mode is not enabled in this helper build: force=true",
+    ));
+}
+
+#[test]
+#[cfg(not(feature = "real-libshpool"))]
+fn non_json_management_outputs_are_stable() {
+    for (subcommand, expected) in [
+        (
+            ["list", "--socket", "/run/user/1000/d2b-shpool.sock"].as_slice(),
+            "shell session listing is not implemented in this helper build",
+        ),
+        (
+            [
+                "detach",
+                "--socket",
+                "/run/user/1000/d2b-shpool.sock",
+                "--name",
+                "default",
+            ]
+            .as_slice(),
+            "detach for 'default' is not implemented in this helper build",
+        ),
+        (
+            [
+                "kill",
+                "--socket",
+                "/run/user/1000/d2b-shpool.sock",
+                "--name",
+                "default",
+            ]
+            .as_slice(),
+            "kill for 'default' is not implemented in this helper build",
+        ),
+    ] {
+        let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+        cmd.args(subcommand)
             .assert()
-            .failure()
-            .stdout(predicate::str::is_empty())
-            .stderr(predicate::str::contains(
-                "retained shell libshpool backend is unavailable",
-            ))
-            .stderr(predicate::str::contains(r#""command":"#).not())
-            .stderr(predicate::str::contains("/home/alice").not())
-            .stderr(predicate::str::contains(SOCKET).not());
+            .success()
+            .stdout(predicate::str::contains(expected));
+    }
+
+    #[test]
+    #[cfg(feature = "real-libshpool")]
+    fn real_attach_still_validates_name_before_connecting() {
+        let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+        cmd.args([
+            "attach",
+            "--socket",
+            "/run/user/1000/d2b-shpool.sock",
+            "--name",
+            "work-{workspace}",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unsupported character '{'"));
     }
 }
 
 #[test]
-#[cfg(feature = "real-libshpool")]
-fn real_attach_still_validates_name_before_connecting() {
-    binary()
-        .args(["attach", "--socket", SOCKET, "--name", "work-{workspace}"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("unsupported character '{'"));
-}
-
-#[test]
-fn rejects_overlong_external_socket_paths_without_reflecting_them() {
+fn rejects_overlong_socket_paths() {
     let long_path = format!("/run/user/1000/{}", "a".repeat(120));
-    binary()
-        .args(["list", "--socket", &long_path])
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args(["list", "--socket", &long_path, "--json"])
         .assert()
         .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("sockaddr_un"))
-        .stderr(predicate::str::contains(&long_path).not());
+        .stderr(predicate::str::contains("sockaddr_un"));
 }
 
 #[test]
-fn rejects_relative_external_socket_paths_without_reflecting_them() {
-    binary()
-        .args(["list", "--socket", "relative.sock"])
+fn rejects_relative_socket_paths() {
+    let mut cmd = Command::cargo_bin("d2b-guest-shell-runner").unwrap();
+    cmd.args(["list", "--socket", "relative.sock", "--json"])
         .assert()
         .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "libshpool socket path must be absolute",
-        ))
-        .stderr(predicate::str::contains("relative.sock").not());
-}
-
-#[test]
-fn rejects_relative_home_paths_without_reflecting_them() {
-    binary()
-        .args(["daemon", "--socket", SOCKET, "--home", "home/alice"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "libshpool home path must be absolute",
-        ))
-        .stderr(predicate::str::contains("home/alice").not());
+        .stderr(predicate::str::contains("socket path must be absolute"));
 }

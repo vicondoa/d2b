@@ -1,6 +1,6 @@
 # ADR 0043: Realm-native control plane
 
-- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
+- Status: Accepted
 - Date: 2026-07-05
 - Supersedes: [ADR 0032](0032-d2b-v2-constellation-control-plane.md)
 - Related: [ADR 0002](0002-non-root-daemon-and-privileged-broker.md)

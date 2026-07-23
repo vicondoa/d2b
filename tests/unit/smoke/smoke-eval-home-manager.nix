@@ -1,12 +1,11 @@
 # tests/unit/smoke/smoke-eval-home-manager.nix — v0.1.0 H4 regression test.
 #
-# Mirrors tests/unit/smoke/smoke-eval.nix but requests the Home Manager
-# workload capability and supplies guest Home Manager users. Exercises
-# the codepath that imports
+# Mirrors tests/unit/smoke/smoke-eval.nix but enables Home Manager on the
+# workload VM. Exercises the codepath that imports
 # `inputs.home-manager.nixosModules.home-manager` via
 # `nixos-modules/components/home-manager.nix`. Before v0.1.0 H4
 # the `home-manager` input wasn't declared on the root flake, so
-# any consumer that enabled the Home Manager workload path hit
+# any consumer that flipped `homeManager.enable = true` hit
 # `attribute 'home-manager' missing` at eval time. This test would
 # have caught that regression.
 #
@@ -47,37 +46,29 @@ let
           yubikey.enable = false;
         };
 
-        d2b.acceptDestructiveV2Cutover = true;
-        d2b.realms.work = {
-          path = "work";
-          placement = "host-local";
-          broker = {
+        d2b.envs.work = {
+          lanSubnet    = "10.20.0.0/24";
+          uplinkSubnet = "192.0.2.0/30";
+        };
+
+        d2b.vms.corp-vm = {
+          enable = true;
+          env = "work";
+          index = 10;
+          ssh.user = "alice";
+          homeManager = {
             enable = true;
-            hostMutation = true;
+            users.alice = { lib, ... }: {
+              home.username = "alice";
+              home.homeDirectory = "/home/alice";
+              home.stateVersion = "25.11";
+            };
           };
-          network = {
-            mode = "declared";
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-          providers.runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          workloads.corp-vm = {
-            providerRefs.runtime = "runtime";
-            launcher.capabilities = [ "home-manager" ];
-            config = {
-              networking.hostName = lib.mkDefault "corp-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
-              d2b.homeManager.users.alice = { lib, ... }: {
-                home.username = "alice";
-                home.homeDirectory = "/home/alice";
-                home.stateVersion = "25.11";
-              };
+          config = {
+            networking.hostName = lib.mkDefault "corp-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
             };
           };
         };

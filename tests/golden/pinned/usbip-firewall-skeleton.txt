@@ -10,7 +10,7 @@
 #   carveout_ordering_invariant_via_op,
 #   w6_ops_refused_with_unknown_operation_audit}
 # These #[cfg(test)] names are present under the default host workspace and
-# focused broker package test lists, so tests/tools/rust-workspace-checks.sh already runs
+# broker workspace test lists, so tests/tools/rust-workspace-checks.sh already runs
 # them; pinned fail-closed via tests/tools/assert-pinned-tests.sh.
 # Non-cargo residual: the retired script grepped usbip_firewall.rs for
 # UsbipBind/UsbipUnbind/UsbipProxyReconcile. That boundary is covered by
@@ -23,7 +23,7 @@ nftables::tests::usbip_carveout_inserted_before_generic
 nftables::tests::comment_marker_prefix_on_every_managed_rule
 nftables::tests::fake_backend_refuses_carveout_after_generic
 #
-# d2b-priv-broker (focused broker package cargo test [+ layer1-bootstrap]):
+# d2b-priv-broker (broker-workspace cargo test --workspace [+ layer1-bootstrap]):
 ops::usbip_firewall::tests::bind_firewall_rule_produces_audit_with_busid_and_hash
 ops::usbip_firewall::tests::carveout_ordering_invariant_via_op
 ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit

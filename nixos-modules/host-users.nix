@@ -2,148 +2,153 @@
 
 let
   cfg = config.d2b;
+  # Use the shared helper from nixos-modules/lib.nix instead of
+  # duplicating the formula here. The duplicate was a drift-risk: if
+  # minijail-profiles.nix's copy changed, broker setuid target would
+  # diverge from system passwd uid and the ownership-matrix bug would
+  # silently return.
   d2bLib = import ./lib.nix { inherit lib; };
-  identity = import ./v2-identity.nix;
   inherit (d2bLib) stablePrincipalId;
-
-  # Reuse the exact same enabled/host-local-scoped role rows that
-  # minijail-profiles.nix / processes-json.nix build their sandbox
-  # principals from (role-process-rows.nix, itself built over
-  # workload-process-rows.nix's host-local/runtime-eligible workload
-  # rows), so the accounts created here can never drift from the
-  # numeric uid/gid the sandbox profile independently derives for the
-  # identical principal string.
-  roleRows = import ./role-process-rows.nix { inherit config lib; };
-
-  # roleKinds that run with a REAL host uid/gid (see
-  # minijail-profiles.nix's `profileForRole`: every processRole gets
-  # `userNamespace = null` except "gpu-render-node", which fake-roots
-  # inside a private user namespace and therefore needs no distinct
-  # host account). These seven are the exact distinct sidecar/runner
-  # categories the framework's process and ownership contracts name.
-  hostPrincipalRoleKinds = [
-    "gpu"
-    "video"
-    "wayland-proxy"
-    "audio"
-    "swtpm"
-    "cloud-hypervisor"
-    "qemu-media"
-  ];
-
-  hostPrincipalRoles = lib.filter
-    (role: builtins.elem role.roleKind hostPrincipalRoleKinds)
-    roleRows;
-
-  rolePrincipal = role: "d2b-role-${identity.validateShortId role.roleId}";
-
-  # The narrow guest-control fs principal (minijail-profiles.nix
-  # `shareProfilesFor`, guest-control-host.nix, realm-storage-rows.nix)
-  # exists only for workloads with a "virtiofsd" role — i.e. only
-  # cloud-hypervisor-runtime workloads (qemu-media has no virtiofsd
-  # role at all; see index-resources.nix's `rolesFor`). guest-control-host.nix
-  # already declares this principal's *group* for its credential
-  # directory; the matching user account is declared here alongside
-  # every other role principal so the identity is complete and
-  # symmetric with the other seven categories.
-  gctlfsWorkloadIds = lib.unique (map
-    (role: role.workloadId)
-    (lib.filter (role: role.roleKind == "virtiofsd") roleRows));
-
-  gctlfsPrincipal = workloadId:
-    "d2b-gctlfs-${identity.validateShortId workloadId}";
-
-  # Sibling runtime-role principal for a workload, so the historical
-  # GPU sidecar <-> hypervisor runner cross-membership (needed for the
-  # shared virtio-gpu vsock/eventfd wiring) survives the move from
-  # per-VM-named groups to per-roleId principals.
-  runtimeRoleFor = workloadId:
-    lib.findFirst
-      (role: role.workloadId == workloadId
-        && builtins.elem role.roleKind [ "cloud-hypervisor" "qemu-media" ])
-      null
-      roleRows;
-
-  extraGroupsFor = role:
-    if role.roleKind == "gpu"
-    then
-      let runtimeRole = runtimeRoleFor role.workloadId;
-      in [ "kvm" ] ++ lib.optional (runtimeRole != null) (rolePrincipal runtimeRole)
-    else if role.roleKind == "audio"
-    then [ "audio" ]
-    else [ ];
-
-  roleGroupRows = map
-    (role: { name = rolePrincipal role; id = stablePrincipalId (rolePrincipal role); })
-    hostPrincipalRoles;
-  gctlfsGroupRows = map
-    (workloadId: {
-      name = gctlfsPrincipal workloadId;
-      id = stablePrincipalId (gctlfsPrincipal workloadId);
-    })
-    gctlfsWorkloadIds;
-  allPrincipalRows = roleGroupRows ++ gctlfsGroupRows;
-  principalNames = map (row: row.name) allPrincipalRows;
-  principalIds = map (row: row.id) allPrincipalRows;
+  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  hostLocalRealms =
+    lib.filter (realm: realm.placement == "host-local") cfg._index.realms.enabledList;
+  hostLocalRealmAllowedUsers =
+    lib.unique (lib.concatMap (realm: realm.allowedUsers) hostLocalRealms);
+  hostAccessUsers =
+    lib.unique (cfg.site.launcherUsers ++ hostLocalRealmAllowedUsers);
+  realmSocketGroupsForUser = user:
+    map
+      (realm: realm.controller.daemon.publicSocketGroup)
+      (lib.filter (realm: builtins.elem user realm.allowedUsers) hostLocalRealms);
+  hostAccessGroupsForUser = user:
+    lib.unique (
+      lib.optional (builtins.elem user cfg.site.launcherUsers) "d2b"
+      ++ realmSocketGroupsForUser user
+    );
+  waylandProxyVms =
+    (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms)
+    // qemuMediaVms;
 in
 {
-  imports = [
-    ./realm-users.nix
-    ./realm-access.nix
-  ];
-
+  # ---------------------------------------------------------------------------
+  # Per-VM dedicated system users for GPU + audio sidecars.
+  # Each per-VM sidecar runs as its own dedicated user
+  # (`d2b-<vm>-{gpu,snd,swtpm}`), NOT the host's Wayland user.
+  # The `d2b.site.launcherUsers` list controls who gets the
+  # canonical `d2b` lifecycle group.
+  # ---------------------------------------------------------------------------
   users.groups = {
-    # This remains the sole local-root lifecycle admission group.
+    # d2b: members of this group can call the daemon public socket.
+    # Add users to it via `d2b.site.launcherUsers`.
     d2b = { };
-  }
+    # DEPRECATED v1.2: kept as migration tombstone for the
+    # d2b-launcher{,s} → d2b rename. No module references the
+    # legacy groups; no user is a member. The empty declaration
+    # preserves the legacy gid in /etc/group so the
+    # d2bGroupMigration helper can match by numeric gid on direct
+    # upgrades. Slated for removal in v1.3 after one release of
+    # confirmed clean migration.
+    d2b-launcher = { };
+  } // (lib.listToAttrs (map
+    (realm:
+      lib.nameValuePair realm.controller.daemon.group {
+        gid = stablePrincipalId realm.controller.daemon.group;
+      })
+    hostLocalRealms))
   // (lib.listToAttrs (map
-    (role: lib.nameValuePair (rolePrincipal role) { gid = stablePrincipalId (rolePrincipal role); })
-    hostPrincipalRoles))
-  // (lib.listToAttrs (map
-    (workloadId: lib.nameValuePair (gctlfsPrincipal workloadId) {
-      gid = stablePrincipalId (gctlfsPrincipal workloadId);
-    })
-    gctlfsWorkloadIds));
+    (realm:
+      lib.nameValuePair realm.controller.daemon.publicSocketGroup {
+        gid = stablePrincipalId realm.controller.daemon.publicSocketGroup;
+      })
+    hostLocalRealms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-gpu" { gid = stablePrincipalId "d2b-${name}-gpu"; })
+    (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-video" { gid = stablePrincipalId "d2b-${name}-video"; })
+    (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-wlproxy" { gid = stablePrincipalId "d2b-${name}-wlproxy"; })
+    waylandProxyVms)
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-snd" { gid = stablePrincipalId "d2b-${name}-snd"; })
+    (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-swtpm" { gid = stablePrincipalId "d2b-${name}-swtpm"; })
+    (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-runner" { gid = stablePrincipalId "d2b-${name}-runner"; })
+    normalNixosVms)
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-qemu-media" { gid = stablePrincipalId "d2b-${name}-qemu-media"; })
+    qemuMediaVms);
 
   users.users = lib.mkMerge [
-    (lib.genAttrs (cfg.site.launcherUsers or [ ]) (_: {
-      extraGroups = [ "d2b" ];
+    # d2b lifecycle group membership for any user the site
+    # declares. We ONLY add the supplementary group — the user
+    # must already exist (declared elsewhere in the consumer's
+    # NixOS config). The assertions module enforces that.
+    #
+    # Realm socket groups are generated in the same fragment as the
+    # lifecycle group so overlapping users do not receive duplicate
+    # `d2b` entries from multiple internal definitions.
+    (lib.genAttrs hostAccessUsers (user: {
+      extraGroups = hostAccessGroupsForUser user;
     }))
     (lib.listToAttrs (map
-      (role:
-        let principal = rolePrincipal role;
-        in
-        lib.nameValuePair principal {
+      (realm:
+        lib.nameValuePair realm.controller.daemon.user {
           isSystemUser = true;
-          uid = stablePrincipalId principal;
-          group = principal;
-          extraGroups = extraGroupsFor role;
-          description =
-            "d2b ${role.roleKind} sidecar for workload ${role.workloadId} role ${role.roleId}";
+          uid = stablePrincipalId realm.controller.daemon.user;
+          group = realm.controller.daemon.group;
+          extraGroups = [ realm.controller.daemon.publicSocketGroup "d2bd" ];
+          description = "d2b realm daemon user for ${realm.path}";
         })
-      hostPrincipalRoles))
-    (lib.listToAttrs (map
-      (workloadId:
-        let principal = gctlfsPrincipal workloadId;
-        in
-        lib.nameValuePair principal {
-          isSystemUser = true;
-          uid = stablePrincipalId principal;
-          group = principal;
-          description =
-            "d2b narrow guest-control fs principal for workload ${workloadId}";
-        })
-      gctlfsWorkloadIds))
-  ];
-
-  assertions = [
-    {
-      assertion = builtins.length principalNames == builtins.length (lib.unique principalNames);
-      message = "d2b workload principal collision: canonical role/workload principal names must be unique";
-    }
-    {
-      assertion = builtins.length principalIds == builtins.length (lib.unique principalIds);
-      message = "d2b workload principal collision: stable UID/GID allocation must be unique";
-    }
+      hostLocalRealms))
+    (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-gpu" {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-${name}-gpu";
+        group = "d2b-${name}-gpu";
+        extraGroups = [ "kvm" "d2b-${name}-runner" ];
+        description = "d2b GPU+hypervisor sidecar for VM ${name}";
+      }) (lib.filterAttrs (_: vm: vm.graphics.enable) normalNixosVms))
+    (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-video" {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-${name}-video";
+        group = "d2b-${name}-video";
+        description = "d2b video decode sidecar for VM ${name}";
+      }) (lib.filterAttrs (_: vm: vm.graphics.enable && vm.graphics.videoSidecar) normalNixosVms))
+    (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-wlproxy" {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-${name}-wlproxy";
+        group = "d2b-${name}-wlproxy";
+        description = "d2b Wayland proxy sidecar for VM ${name}";
+      }) waylandProxyVms)
+    (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-snd" {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-${name}-snd";
+        group = "d2b-${name}-snd";
+        extraGroups = [ "audio" ];
+        description = "d2b audio sidecar for VM ${name}";
+      }) (lib.filterAttrs (_: vm: vm.audio.enable) normalNixosVms))
+    (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-swtpm" {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-${name}-swtpm";
+        group = "d2b-${name}-swtpm";
+        description = "d2b swtpm emulator for VM ${name}";
+      }) (lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms))
+    (lib.mapAttrs' (name: _:
+      lib.nameValuePair "d2b-${name}-qemu-media" {
+        isSystemUser = true;
+        uid = stablePrincipalId "d2b-${name}-qemu-media";
+        group = "d2b-${name}-qemu-media";
+        description = "d2b QEMU media runner for VM ${name}";
+      }) qemuMediaVms)
   ];
 }

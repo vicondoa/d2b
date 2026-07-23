@@ -23,44 +23,51 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Migrated from tests/supervisor-option-absent-eval.sh.
 //
-// The destructive realm-native cutover removes the VM schema and every
-// supervisor tombstone. Realm controllers own workload role processes and
-// supervise them by pidfd without per-workload systemd units.
+// v1.1 invariant gate asserting (a) the productive `supervisor = lib.mkOption`
+// declaration is gone from `nixos-modules/options-vms.nix`, and (b) the
+// top-level defense-in-depth assertion in `nixos-modules/assertions.nix` fires
+// on any per-VM `d2b.vms.<vm>.supervisor` definition with the friendly
+// ADR-0015 (daemon-only clean break) message. The per-submodule
+// `mkRemovedOptionModule` shim approach is incompatible with `attrsOf
+// submodule` semantics (no `assertions` option at the per-VM layer), so the
+// top-level fallback assertion is the sole supervisor-removal guard.
 // ---------------------------------------------------------------------------
 #[test]
 fn supervisor_option_absent() {
-    let legacy_options_rel = "nixos-modules/options-vms.nix";
+    // (a) productive declaration gone from options-vms.nix.
+    let options_rel = "nixos-modules/options-vms.nix";
     assert!(
-        !repo_path_exists(legacy_options_rel),
-        "destructive cutover must delete {legacy_options_rel}"
+        repo_path_exists(options_rel),
+        "supervisor-option-absent-eval: {options_rel} missing"
+    );
+    let options = read_repo_file(options_rel);
+    assert!(
+        !any_line_matches(&options, r"^\s*supervisor\s*=\s*lib\.mkOption"),
+        "supervisor-option-absent-eval: productive `supervisor = lib.mkOption` still present \
+         in {options_rel}"
     );
 
-    let workload_options_rel = "nixos-modules/options-realms-workloads.nix";
-    let workload_options = read_repo_file(workload_options_rel);
-    assert!(
-        !any_line_matches(&workload_options, r"^\s*supervisor\s*="),
-        "realm workload schema must not expose a supervisor option"
-    );
-
+    // (b) assertions.nix must exist and carry the top-level fallback assertion.
     let assertions_rel = "nixos-modules/assertions.nix";
+    assert!(
+        repo_path_exists(assertions_rel),
+        "supervisor-option-absent-eval: assertions.nix missing"
+    );
     let assertions = read_repo_file(assertions_rel);
     assert!(
-        !any_line_matches(
-            &assertions,
-            r"vm \? supervisor|vms\.\$\{name\}\.supervisor|removed in v1\.1"
-        ),
-        "realm-native assertions must not retain a supervisor tombstone"
+        any_line_matches(&assertions, r"vm \? supervisor|vms\.\$\{name\}\.supervisor"),
+        "supervisor-option-absent-eval: supervisor-fallback assertion missing from \
+         {assertions_rel}"
     );
 
-    let role_rows_rel = "nixos-modules/role-process-rows.nix";
-    let role_rows = read_repo_file(role_rows_rel);
+    // (b) friendly ADR-0015 message text present.
     assert!(
-        role_rows.contains(r#"supervision = "realm-controller-pidfd";"#),
-        "realm workload roles must be supervised by their realm controller"
-    );
-    assert!(
-        role_rows.contains("materializedSystemdUnit = false;"),
-        "realm workload roles must not materialize systemd units"
+        any_line_matches(
+            &assertions,
+            r"removed in v1\.1.*per ADR 0015|ADR 0015.*daemon-only clean break"
+        ),
+        "supervisor-option-absent-eval: ADR-0015 friendly message text missing from \
+         {assertions_rel}"
     );
 }
 

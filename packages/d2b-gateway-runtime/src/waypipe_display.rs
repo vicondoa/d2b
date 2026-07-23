@@ -39,8 +39,8 @@ impl WaypipeCompression {
 pub struct WaypipeRunnerConfig {
     /// Waypipe binary path.
     pub waypipe_bin: String,
-    /// Provider-agent binary path.
-    pub provider_agent_bin: String,
+    /// Gateway display relay binary path.
+    pub gateway_relay_bin: String,
     /// Host-side Unix socket for the operator compositor-side Waypipe client.
     pub host_socket: String,
     /// In-agent Wayland display name.
@@ -53,7 +53,7 @@ impl Default for WaypipeRunnerConfig {
     fn default() -> Self {
         Self {
             waypipe_bin: "waypipe".into(),
-            provider_agent_bin: "d2b-provider-agent".into(),
+            gateway_relay_bin: "d2b-gateway-relay".into(),
             host_socket: "/run/d2b/gateway-display/waypipe.sock".into(),
             display_name: "wayland-d2b".into(),
             compression: WaypipeCompression::Zstd,
@@ -93,10 +93,10 @@ pub fn guest_waypipe_server_argv(cfg: &WaypipeRunnerConfig, socket: &str) -> Vec
     ]
 }
 
-/// The reserved provider-agent process. It receives no legacy sender mode or
-/// ambient relay parameters.
+/// The gated relay sender that bridges the Waypipe socket after the handshake
+/// prologue verifies.
 pub fn gated_relay_sender_argv(cfg: &WaypipeRunnerConfig) -> Vec<String> {
-    vec![cfg.provider_agent_bin.clone()]
+    vec![cfg.gateway_relay_bin.clone(), "sender".into()]
 }
 
 /// A systemd service unit shape for Waypipe. The ACA container cannot run
@@ -211,7 +211,10 @@ mod tests {
             assert!(!argv.iter().any(|a| a.contains("clipboard")));
         }
         assert!(guest.windows(2).any(|w| w == ["--display", "wayland-d2b"]));
-        assert_eq!(gated_relay_sender_argv(&cfg), ["d2b-provider-agent"]);
+        assert_eq!(
+            gated_relay_sender_argv(&cfg),
+            ["d2b-gateway-relay", "sender"]
+        );
     }
 
     #[test]

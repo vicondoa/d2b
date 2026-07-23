@@ -1,12 +1,10 @@
 [package]
 name = "d2b-notify"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
-description = "Authenticated desktop observer and action services for d2b"
+description = "Reusable notification/event mechanism for d2b desktop UX"
 
 [lints]
 workspace = true
