@@ -10,7 +10,7 @@
 | Normative | Yes |
 | Owners | `d2b-provider-device-tpm` crate |
 | Depends on | `ADR-046-resources-device`, `ADR-046-resources-volume`, `ADR-046-resources-host-guest-process-user`, `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`, `ADR-046-primitive-resource-composition`, `ADR-046-resource-object-model`, `ADR-046-resource-reconciliation` |
-| Current code fit | Partial; v3 requires privilege-boundary inversion (controller → TpmEffectPort), controller Process resource, controller-created Device-owned Volume with exact canonical base fields, `userNamespace.mappingClass`, `tpmEndpointId` opaque handle, and crate split. |
+| Current code fit | Partial; v3 requires privilege-boundary inversion (controller → TpmEffectPort), controller Process resource, controller-created Device-owned Volume with exact canonical base fields, `userNamespace.mappingClass`, Device-owned TPM `Endpoint` resource, and crate split. |
 
 ---
 
@@ -29,9 +29,8 @@ is a `Guest`. The Provider:
   before each swtpm activation cycle to prevent stale session handles
   (`TPM_RC_SESSION_HANDLES`) — this flush is a **load-bearing invariant**
   and has no configurable skip path;
-- publishes an opaque `tpmEndpointId` (`TpmEndpointHandle`) in Device status
-  for the Guest runtime Provider to obtain the socket file descriptor via a
-  sealed LaunchTicket;
+- publishes a typed TPM `EndpointRef` in Device status for the Guest runtime
+  Provider to obtain the socket file descriptor via a sealed LaunchTicket;
 - preserves TPM identity state unconditionally: a `repairPolicy: fail-closed`
   + `createPolicy: create-if-never-provisioned` Volume entry ensures a
   missing or replaced swtpm directory after first provision is a hard
@@ -66,9 +65,9 @@ paths only):
 ```text
 src/
   controller.rs        — Device reconcile loop; TpmEffectPort consumer
-  effect_port.rs       — TpmEffectPort trait; TpmEndpointHandle opaque type
+  effect_port.rs       — TpmEffectPort trait; EndpointRef handoff
   effect_impl.rs       — ResourceClient-backed TpmEffectPort implementation
-  status.rs            — Device status builder (tpmEndpointId, markerStatus)
+  status.rs            — Device status builder (tpmEndpointRef, markerStatus)
   resources.rs         — Volume/Process/EphemeralProcess spec builders
   errors.rs            — TpmProviderError, TpmEffectError
   telemetry.rs         — typed OTEL span/metric helpers
@@ -78,7 +77,7 @@ tests/
   effect_fake.rs       — FakeTpmEffectPort; no broker import
   volume_create.rs     — controller-created Volume canonical fields
   flush_mandatory.rs   — flush always issued; no skip path
-  endpoint_handle.rs   — tpmEndpointId is opaque; no path string
+  endpoint_ref.rs      — tpmEndpointRef is a ResourceRef; no path string
   marker_fail_closed.rs — fail-closed marker → Device Failed
   finalizer.rs         — finalizer: Process deleted; Volume retained
   redaction.rs         — no path/UID/socket/pidfd in status/audit
@@ -184,10 +183,6 @@ spec:
       limit: 64
     fds:
       limit: 128
-  endpoints:
-    - name: controller-api
-      transport: unix
-      purpose: device-tpm-controller-api
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -271,7 +266,7 @@ policy violation.
 
 ```rust
 /// Injected async effect abstraction for the device-tpm Device controller.
-/// All parameters and return values are opaque resource IDs or handles.
+/// All parameters and return values are ResourceRefs or controller-internal opaque IDs.
 /// No path, UID, GID, pidfd, socket name, or broker wire type is accepted
 /// or returned.
 pub trait TpmEffectPort: Send + Sync + 'static {
@@ -315,24 +310,20 @@ pub trait TpmEffectPort: Send + Sync + 'static {
         process_id: &EphemeralProcessId,
     ) -> Result<(), TpmEffectError>;
 
-    /// Watch the swtpm Process's tpm endpoint.
-    /// Returns an opaque TpmEndpointHandle once the Process is Ready.
-    /// Never returns a socket path or file descriptor number.
+    /// Watch the swtpm Process's TPM Endpoint resource.
+    /// Returns `Endpoint/<name>` once the Process is Ready.
+    /// Never returns a socket path, raw endpoint ID, or file descriptor number.
     async fn watch_tpm_endpoint(
         &self,
         process_id: &ProcessId,
-    ) -> Result<TpmEndpointHandle, TpmEffectError>;
+    ) -> Result<EndpointRef, TpmEffectError>;
 }
-
-/// Opaque handle for a ready swtpm TPM socket endpoint.
-/// Wraps a bounded opaque string identifier. Never a filesystem path or fd number.
-/// Published as `tpmEndpointId` in Device status.
-pub struct TpmEndpointHandle(pub(crate) BoundedString<128>);
 ```
 
-All opaque types (`DeviceUid`, `VolumeId`, `ProcessId`, `EphemeralProcessId`,
-`ResourceRef`, `TpmEndpointHandle`) are bounded string newtypes in
-`d2b-contracts`. They carry no path, UID integer, or network address.
+All opaque/internal IDs (`DeviceUid`, `VolumeId`, `ProcessId`,
+`EphemeralProcessId`) and typed refs (`ResourceRef`, `EndpointRef`) are bounded
+newtypes in `d2b-contracts`. They carry no path, UID integer, or network
+address.
 
 ### 5.3 Port implementation
 
@@ -563,13 +554,6 @@ spec:
       limit: 32
     fds:
       limit: 64
-  endpoints:
-    - name: tpm
-      transport: unix
-      purpose: swtpm-tpm-socket
-    - name: ctrl
-      transport: unix
-      purpose: swtpm-control-socket
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -616,30 +600,75 @@ The rootfs is mounted read-only. The only writable path is `/state`, provided
 by the Volume mount (view `swtpm-process`, `path: ""`). swtpm writes NVRAM
 content and its working files directly under `/state`.
 
-### 8.4 Endpoints
+### 8.4 Endpoint resources (D092)
 
-Two private endpoints are declared. Neither endpoint name, socket path, nor
-address appears in Device spec, Device status, or any audit payload.
+`Provider/device-tpm` declares conformance to the standard `Endpoint` base
+schema. Two private Endpoint resources are controller-created and owned by the
+Device; neither socket path, address, fd number, nor credential appears in
+Device spec, Device status, audit, metrics, or CLI output.
 
-| Name | Purpose | Consumer |
-| --- | --- | --- |
-| `tpm` | swtpm TPM socket | Guest runtime Provider; opaque `tpmEndpointId` in Device status |
-| `ctrl` | swtpm control socket | Flush EphemeralProcess only; local fd attachment in LaunchTicket |
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: device-<uid-short>-tpm
+  zone: dev
+  ownerRef: Device/corp-vm-tpm
+spec:
+  providerRef: Provider/device-tpm
+  producerRef: Device/corp-vm-tpm
+  endpointClass: device
+  transport: fd-attachment
+  purpose: swtpm-tpm-socket
+  serviceFingerprint: device-tpm.d2bus.org/tpm/v1
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  lifecyclePolicy: recycle-with-producer
+---
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: device-<uid-short>-tpm-ctrl
+  zone: dev
+  ownerRef: Device/corp-vm-tpm
+spec:
+  providerRef: Provider/device-tpm
+  producerRef: Process/device-<uid-short>-swtpm
+  endpointClass: control
+  transport: fd-attachment
+  purpose: swtpm-control-socket
+  serviceFingerprint: device-tpm.d2bus.org/control/v1
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/device-tpm]
+  lifecyclePolicy: recycle-with-producer
+```
 
-The Zone runtime assigns opaque endpoint IDs at Process creation time. The
-Device controller obtains the `tpm` endpoint handle via
-`TpmEffectPort.watch_tpm_endpoint` and publishes it as `tpmEndpointId` in
-Device status (§10).
+The Device base status exposes `status.resource.endpointRefs.tpmEndpointRef: Endpoint/device-<uid-short>-tpm`.
+Consumers use EndpointRefs; Core/ProviderSupervisor resolves private fds only
+through authorized EffectPort/LaunchTicket flows. Unauthorized resolve fails
+`endpoint-resolve-denied`, and a swtpm restart bumps `endpointGeneration`,
+triggering dependent runtimes with `dependency-changed`.
 
 ### 8.5 Template and argv
 
 The exact swtpm argv is compiled by `system-minijail` from the `swtpm-socket`
 template in the signed component descriptor. Template parameters are resolved
-from the Volume mount path (`/state`), the endpoint socket names assigned by
-the Zone runtime, the `logLevel` from Device settings, and `--flags startup-clear`
+from the Volume mount path (`/state`), the EndpointRefs resolved through the LaunchTicket, the `logLevel` from Device settings, and `--flags startup-clear`
 (always compiled in; not controlled by any config field). No path, UID, GID, or
 binary path from spec or controller code reaches swtpm argv outside the
 template compilation step.
+
+### 8.6 Retained opaque handles
+
+Retained opaque values are limited to `DeviceUid`, `VolumeId`, `ProcessId`,
+`EphemeralProcessId`, pidfd observations, LaunchTicket fd indexes, per-session
+control-socket attachments, and operation IDs. They are controller-internal,
+high-churn, or lack independent lifecycle; stable TPM and control socket
+identities are promoted to `Endpoint` resources by D092.
 
 ---
 
@@ -690,7 +719,6 @@ spec:
       limit: 4
     fds:
       limit: 16
-  endpoints: []
   telemetry:
     metricsEnabled: false
     tracingEnabled: true
@@ -716,7 +744,7 @@ endpoint name. The Provider supervisor:
 
 1. Reads the swtpm Process's `ctrl` endpoint opaque ID after the Process is
    Running (pre-Ready).
-2. Opens the ctrl socket fd as a local LaunchTicket attachment (a validated,
+2. Resolves `Endpoint/device-<uid-short>-tpm-ctrl` and opens the ctrl socket fd as a local LaunchTicket attachment (a validated,
    CLOEXEC-cleared fd in the inherited fd table).
 3. The `swtpm-init-flush` template uses the inherited fd directly for the
    `swtpm_ioctl -i` call; no path traversal occurs.
@@ -740,9 +768,9 @@ Volume Ready (layoutPhase: Ready, markerStatus: verified)
   → create flush EphemeralProcess via TpmEffectPort.request_flush_process
   → wait flush.status.phase = Succeeded
   → set swtpm Process desiredLifecycle = running
-  → wait swtpm Process.status.phase = Ready
-  → TpmEffectPort.watch_tpm_endpoint → TpmEndpointHandle
-  → Device status: tpmEndpointId = handle; phase = Ready
+  → wait swtpm Process'status.phase = Ready
+  → TpmEffectPort.watch_tpm_endpoint → EndpointRef
+  → Device status.resource.endpointRefs.tpmEndpointRef = Endpoint/device-<uid-short>-tpm; phase = Ready
 ```
 
 If the flush reaches `Failed`, Device transitions to `Failed` with condition
@@ -798,7 +826,7 @@ Device-specific phases.
 | Phase | Meaning |
 | --- | --- |
 | `Pending` | Controller initializing; Volume not Ready or flush not Succeeded |
-| `Ready` | swtpm Process Ready; `tpmEndpointId` published; claim holder may proceed |
+| `Ready` | swtpm Process Ready; `tpmEndpointRef` published; claim holder may proceed |
 | `Degraded` | swtpm Process in restart backoff or health check failing |
 | `Failed` | Volume marker fail-closed, flush Failed, or swtpm maxRestarts exceeded |
 | `Deleted` | Terminal event only; core emits and removes the row |
@@ -821,6 +849,8 @@ status:
       - Guest/corp-vm
     claims: []
     provisionedAt: "2026-07-22T00:00:05Z"
+    endpointRefs:
+      tpmEndpointRef: "Endpoint/device-7f3a9e12b4c6-tpm" # EndpointRef; NOT a path
   provider:
     providerRef: Provider/device-tpm
     schemaId: "device-tpm.d2bus.org/Device/status"
@@ -831,7 +861,6 @@ status:
         stateVolumeRef: "Volume/device-7f3a9e12b4c6-tpm-state"   # ResourceRef; opaque to path
         swtpmProcessRef: "Process/device-7f3a9e12b4c6-swtpm"     # ResourceRef; for diagnostics
         markerStatus: "verified"         # verified|missing|replaced|unknown
-        tpmEndpointId: "<opaque-handle>" # TpmEndpointHandle; NOT a ResourceRef; NOT a path
         lastFlushRef: "EphemeralProcess/device-7f3a9e12b4c6-flush"
         lastFlushPhase: "Succeeded"
         lastFlushAt: "2026-07-22T00:00:09Z"
@@ -839,30 +868,29 @@ status:
 
 ### 10.4 Typed TPM provider details fields
 
-The fields below are TPM-specific and therefore live under
-`status.provider.details.tpm`; the Device claim/arbitration/presence base stays
-promoted to `status.resource`.
+The fields below are TPM-specific provider details and therefore live under
+`status.provider.details.tpm`; the Device claim/arbitration/presence base and
+typed `endpointRefs.tpmEndpointRef` stay promoted to `status.resource`.
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `stateVolumeRef` | ResourceRef string | `Volume/<name>` in same Zone. Opaque to filesystem path; never a path. |
 | `swtpmProcessRef` | ResourceRef string | `Process/<name>` in same Zone. Stable for diagnostics; not a PID. |
 | `markerStatus` | string | Volume marker status reflected from `Volume.status.markerStatus`: `verified`, `missing`, `replaced`, `unknown`. |
-| `tpmEndpointId` | string | **Opaque endpoint handle** (`TpmEndpointHandle`). NOT a `*Ref` ResourceRef. The Guest runtime presents this to the Zone runtime to receive the TPM socket fd via a sealed LaunchTicket. No path, address, or fd number is exposed. |
 | `lastFlushRef` | ResourceRef string | Most recent flush EphemeralProcess. |
 | `lastFlushPhase` | string | Phase of the most recent flush at last observation. |
 | `lastFlushAt` | string? | RFC 3339 UTC timestamp of last flush completion. |
 
-`tpmEndpointId` is named `Id` (not `Ref`) because it is not a canonical
-ResourceRef pointing to a typed resource. All `*Ref` fields in Device status
-and spec are canonical `ResourceType/<name>` strings in the same Zone.
+`status.resource.endpointRefs.tpmEndpointRef` is a canonical ResourceRef
+pointing at a typed `Endpoint` resource in the same Zone. There is no
+compatibility alias or opaque TPM endpoint ID in d2b 3.0.
 
 ### 10.5 Guest runtime endpoint handoff
 
 When the Guest runtime Provider needs the TPM socket for Cloud Hypervisor:
 
-1. Reads `Device.status.provider.details.tpm.tpmEndpointId` (opaque bounded string).
-2. Presents the opaque ID to the Zone runtime endpoint resolver.
+1. Reads `Device.status.resource.endpointRefs.tpmEndpointRef` (`Endpoint/<name>`).
+2. Presents the EndpointRef to the authorized Zone runtime endpoint resolver.
 3. Zone runtime returns an inherited fd attachment in the Guest's LaunchTicket.
 4. Cloud Hypervisor receives the socket fd (not a path) via the inherited fd table.
 
@@ -905,11 +933,11 @@ trigger: spec-generation-changed | dependency-changed | startup-relist | schedul
     - Set desiredLifecycle = running.
     - Pending/Launching → Device Pending; return pending.
     - Failed → Device Failed; condition TpmProcessFailed.
- 9. TpmEffectPort.watch_tpm_endpoint(swtpm_process_id) → TpmEndpointHandle
+ 9. TpmEffectPort.watch_tpm_endpoint(swtpm_process_id) → EndpointRef
 10. UpdateStatus (expected revision):
     - phase = Ready
     - status.resource.present = true; status.resource.health = healthy
-    - status.provider.details.tpm.tpmEndpointId = handle (opaque string; no path)
+    - status.resource.endpointRefs.tpmEndpointRef = EndpointRef (no path or raw locator)
     - status.provider.details.tpm.markerStatus from Volume.status
     - status.provider.details.tpm.stateVolumeRef / swtpmProcessRef / lastFlushRef (ResourceRefs)
 11. Emit Claim for holderRef from Device ownerRef or claim request.
@@ -956,7 +984,7 @@ at 300 s before `failed-terminal` with explicit audit record.
 | `MarkerVerified` | `marker-missing`, `marker-replaced`, `marker-unknown` |
 | `FlushSucceeded` | `flush-process-failed`, `flush-process-pending`, `flush-start-deadline-exceeded` |
 | `SwtpmReady` | `swtpm-process-failed`, `swtpm-process-pending`, `swtpm-process-crashed` |
-| `EndpointReady` | `endpoint-not-ready`, `endpoint-resolve-failed` |
+| `EndpointReady` | `endpoint-not-ready`, `endpoint-resolve-denied`, `endpoint-resolve-failed` |
 | `ClaimAdmitted` | `device-claim-already-held`, `device-claim-invalid` |
 
 ### 12.2 Error codes
@@ -969,7 +997,7 @@ at 300 s before `failed-terminal` with explicit audit record.
 | `flush-process-failed` | no | `swtpm_ioctl -i` exited non-zero or timed out. |
 | `swtpm-process-crashed` | yes | swtpm exited with signal before Ready. |
 | `swtpm-max-restarts-exceeded` | no | swtpm restart count > `maxRestarts`. |
-| `endpoint-resolve-failed` | yes | TpmEndpointHandle could not be resolved. |
+| `endpoint-resolve-failed` | yes | TPM EndpointRef could not be resolved. |
 | `device-claim-already-held` | no | Exclusive claim already active. |
 | `host-not-ready` | yes | executionRef Host not in Ready phase. |
 | `effect-port-error` | yes | TpmEffectPort returned a transient error. |
@@ -1028,7 +1056,7 @@ PID, or socket address.
 | `device-tpm.ensure-state-volume` | `ensure_state_volume` call |
 | `device-tpm.flush` | EphemeralProcess flush lifecycle |
 | `device-tpm.swtpm-start` | swtpm Process start or adopt |
-| `device-tpm.endpoint-ready` | TpmEndpointHandle resolution |
+| `device-tpm.endpoint-ready` | TPM EndpointRef resolution |
 | `device-tpm.finalize` | Finalizer execution |
 
 Span attributes: `zone` (string), `device_uid` (opaque ≤ 64 chars),
@@ -1112,8 +1140,8 @@ After controller restart:
 1. Re-list all Device resources.
 2. For each Ready/Degraded Device: `ensure_state_volume` and
    `request_swtpm_process` use `Get` semantics (resources already exist).
-3. If swtpm Process is already Ready: re-fetch the endpoint handle and
-   publish `tpmEndpointId`; no new flush.
+3. If swtpm Process is already Ready: re-fetch the TPM EndpointRef and
+   publish `tpmEndpointRef`; no new flush.
 4. New flush issued only if swtpm Process is not running or has exited.
 
 ### 16.4 Idempotency
@@ -1240,7 +1268,7 @@ policy test must pass.
 | Blocked by | ADR046-device-tpm-001 |
 | Evidence class | implemented-and-reachable |
 
-Implement `TpmEffectPort` trait, `TpmEndpointHandle` opaque type, and
+Implement `TpmEffectPort` trait, typed TPM EndpointRef handoff, and
 `FakeTpmEffectPort`. Prove: no `use d2b_priv_broker::` in non-test files.
 
 ### ADR046-device-tpm-003 — Controller reconcile state machine
@@ -1286,7 +1314,7 @@ Implement `build_swtpm_process_spec` in `resources.rs`. Tests prove:
 - `userNamespace: {mappingClass: process-principal-root}` (no numeric UID/GID fields).
 - `namespaceClasses: [pid, mount, user]`; `capabilityClasses: []`;
   `seccompClass: w1-swtpm`.
-- Two `EndpointSpec` entries: `tpm` and `ctrl`; no path.
+- Two Device-owned `Endpoint` resources: `tpm` and `ctrl`; no path.
 - `mounts[0].required: true` (canonical MountSpec field).
 - No socket path, binary path, UID integer, or GID integer in any spec field.
 
@@ -1314,13 +1342,13 @@ Implement `build_flush_ephemeral_process_spec` in `resources.rs`. Tests prove:
 | Evidence class | implemented-and-reachable |
 
 Implement `build_device_status` in `status.rs`. Tests prove:
-- `tpmEndpointId` is an opaque bounded string — NOT a `*Ref` ResourceRef field;
+- `tpmEndpointRef` is an `Endpoint/<name>` ResourceRef; no opaque endpoint ID compatibility alias;
   never a filesystem path.
 - `stateVolumeRef` and `swtpmProcessRef` are canonical `ResourceType/<name>` strings.
 - No path, socket name, UID, GID, PID, or pidfd in any status field.
 - `markerStatus` carries only: `verified`, `missing`, `replaced`, `unknown`.
 
-### ADR046-device-tpm-008 — Endpoint opaque handoff
+### ADR046-device-tpm-008 — EndpointRef handoff
 
 | Field | Value |
 | --- | --- |
@@ -1328,8 +1356,8 @@ Implement `build_device_status` in `status.rs`. Tests prove:
 | Blocked by | ADR046-device-tpm-007 |
 | Evidence class | implemented-and-reachable |
 
-Hermetic test: `tpmEndpointId` is opaque; no path. Integration test:
-Guest runtime Provider reads `tpmEndpointId` and obtains socket fd from Zone
+Hermetic test: `tpmEndpointRef` is an EndpointRef; no path. Integration test:
+Guest runtime Provider reads `tpmEndpointRef` and obtains socket fd from Zone
 runtime endpoint resolver; no path string in Guest spec or LaunchTicket API
 surface.
 
@@ -1421,7 +1449,7 @@ Move argv builders from `d2b-host/src/swtpm_argv.rs` to
 | `effect_fake.rs` | FakeTpmEffectPort records all calls; no broker import in crate |
 | `volume_create.rs` | Volume canonical fields: `cleanupPolicy: never`, `repairPolicy: fail-closed`, `sensitivity: secret-adjacent`, correct invariants, no ProviderStateSet extensions |
 | `flush_mandatory.rs` | Flush always issued; no skip; no `startupClear`; correct TTLs; no userNamespace |
-| `endpoint_handle.rs` | `tpmEndpointId` is opaque bounded string; NOT a ResourceRef; no path |
+| `endpoint_ref.rs` | `tpmEndpointRef` is an EndpointRef; no path or raw locator |
 | `marker_fail_closed.rs` | Marker replaced/missing → Device Failed; no auto-recovery; no second `ensure_state_volume` |
 | `finalizer.rs` | Process deleted; Volume retained; Deleted emitted by core |
 | `redaction.rs` | No path/UID/socket/pidfd in status, audit span attrs, or log records |
@@ -1434,7 +1462,7 @@ Move argv builders from `d2b-host/src/swtpm_argv.rs` to
 | --- | --- |
 | `basic_tpm_start.rs` | Host fixture: Device → Volume Ready → flush Succeeded → swtpm Ready |
 | `marker_tamper.rs` | Replace swtpm/ dir → Volume Failed → Device Failed; no auto-recovery |
-| `guest_endpoint.rs` | Guest reads opaque `tpmEndpointId`; receives socket fd; no path in LaunchTicket |
+| `guest_endpoint.rs` | Guest reads `tpmEndpointRef`; receives socket fd; no path in LaunchTicket |
 | `lifecycle_restart.rs` | Controller restart: adopts swtpm Process; Volume retained; no double-flush |
 
 ### 20.3 Existing contract tests (preserved)

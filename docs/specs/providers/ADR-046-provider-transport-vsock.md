@@ -332,10 +332,6 @@ spec:
       limit: 64
     fds:
       limit: 256
-  endpoints:
-    - name:      service-session
-      transport: unix
-      purpose:   transport-vsock-service
   mounts:
     - volumeRef:  Volume/transport-vsock--service--empty-state--<executionRef-short>
       view:       service
@@ -356,6 +352,57 @@ spec:
     maxRestarts:       10
     resetAfter:        "300s"
 ```
+
+The stable vsock service binding is a standard `Endpoint` resource, not an
+inline `ProcessSpec` field:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: transport-vsock-service
+  ownerRef: Process/transport-vsock-service
+spec:
+  providerRef: Provider/transport-vsock
+  producerRef: Process/transport-vsock-service
+  endpointClass: transport
+  transport: vsock
+  purpose: transport-vsock.d2bus.org/service
+  serviceFingerprint: transport-vsock.d2bus.org/service.v1
+  locality: cross-domain
+  visibility: zone-private
+  attachmentPolicy: none
+  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  lifecyclePolicy: producer-owned
+status:
+  phase: Ready
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: Available
+  leaseAvailability: Available
+  conditions: []
+```
+
+### Endpoint resources (D092)
+
+Stable allocator/listener bindings with visible lifecycle are standard
+`Endpoint` resources. Consumers refer to `Endpoint/<name>` and receive no raw
+CID, port, socket address, FD, or credential from `Endpoint.spec` or
+`Endpoint.status`; resolution is through the authorized EffectPort/LaunchTicket
+path, and unauthorized callers fail with `endpoint-resolve-denied`. A producer
+Process restart bumps `endpointGeneration`, which consumers observe as
+`dependency-changed`. ZoneLink session state remains owned by the core ZoneLink
+controller.
+
+### Retained opaque handles (D092)
+
+`OpaqueEndpointId`, `OpaqueBindingId`, per-session `OpenTransport` named
+streams, `OwnedTransport` byte-stream handles, transport connection handles,
+pidfds, FD indexes, and `operationId` values remain controller-internal or
+high-churn opaque handles. They are not stable resources and are not promoted to
+`Endpoint`.
 
 Prohibited fields (never present in any Process or EphemeralProcess spec):
 `binary`, `allowedSyscalls`, `allowedSocketFamilies`, `resourceRefs`,
@@ -380,7 +427,7 @@ rpc OpenTransport(OpenTransportRequest) -> OpenTransportResponse
 
 | Field | Type | Semantics |
 | --- | --- | --- |
-| `endpoint_id` | `OpaqueEndpointId` | Core-allocated endpoint identity (encodes peer CID; opaque to Provider) |
+| `endpoint_id` | `OpaqueEndpointId` | Core-allocated internal endpoint-resolution token (encodes peer CID; opaque to Provider; not an `Endpoint` resource) |
 | `binding_id` | `OpaqueBindingId` | Core-allocated binding identity (encodes allocated port; opaque to Provider) |
 | `role` | `TransportRole` | `Initiator` (parent-to-child connect) or `Responder` (child-side accept) |
 | `deadline_ms` | `u32` | Connect/accept deadline in ms from call arrival; range 1 000–60 000 |

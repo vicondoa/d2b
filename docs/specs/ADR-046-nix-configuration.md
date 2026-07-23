@@ -828,6 +828,17 @@ matching closed-enum reason) rather than applying a disruptive change in place.
 The operator applies it with `d2b upgrade <ref> --apply` (optionally
 `--recursive`).
 
+**Endpoint resources (D092).** A stable endpoint is the `Endpoint` ResourceType,
+never an inline field. Core creates a component's static `Endpoint` resources
+from the signed manifest's Endpoint templates, and dynamic controllers create
+their owned Endpoints; a static `Endpoint` may be Nix/API-authored only where
+the ResourceType schema permits. An authored `Endpoint` spec carries only closed
+`endpointClass`/`transport`/`locality`/`purpose` values and bounded fingerprints
+— never a raw path/address/CID/port/fd/credential (those resolve privately
+through the effect adapter at runtime). `ProcessSpec` carries no inline
+`endpoints`; a Process's stable endpoints are owned `Endpoint` resources with
+`producerRef`, and consumers reference `Endpoint/<name>`.
+
 ### Package closures into Guests
 
 Current source: `nixos-modules/closures-json.nix` — `pkgs.closureInfo` per VM,

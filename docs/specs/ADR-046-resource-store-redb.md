@@ -68,6 +68,7 @@ The runtime never silently creates an empty replacement.
 | `resources` | `(bound ResourceType, resource_name)` | Complete strict ResourceEnvelope plus internal owner UID |
 | `type_index` | `(bound ResourceType, resource_name)` | Immutable resource UID |
 | `owner_index` | `(owner UID, child UID)` | Child ResourceType/name and latest revision |
+| `producer_index` | `(producer UID, Endpoint UID)` | Endpoint producerRef reverse index (D092): resolves the `Endpoint` resources a `Process`/`Device`/`Guest`/`Host`/qualified producer realizes |
 | `controller_index` | `(controller binding ID, ResourceType, name)` | Resource UID |
 | `revision_log` | monotonically increasing u64 revision | Ordered bounded ChangeBatch |
 | `operations` | OperationId | Idempotency/request digest, resources, phase/outcome, accepted/finished revisions, retention |

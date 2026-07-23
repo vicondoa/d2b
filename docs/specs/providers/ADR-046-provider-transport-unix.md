@@ -601,12 +601,6 @@ spec:
     fds:
       limit: 512                      # bounded; credit system reserves headroom
 
-  endpoints:
-    - name: portal
-      transport: unix
-      purpose: transport-unix-portal   # core ZoneLink controller connects here
-      publicKey: null                  # KK static key enrolled during Provider install; not authored
-
   readiness:
     class: provider-defined            # service declares ready after portal endpoint handshake
     initialDelay: "0s"
@@ -637,6 +631,59 @@ The `Process` resource has `ownerRef: Provider/transport-unix`. The core
 ProviderDeployment aggregates `Provider/transport-unix` status from the
 Process phase and portal readiness condition. If the Process spec drifts, the
 ProviderDeployment reconciler restores it.
+
+The service's stable local portal is not an inline `ProcessSpec` field.
+ProviderDeployment creates this owned standard `Endpoint` child when the
+transport service Process is visible:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: transport-unix-portal
+  zone: k0
+  ownerRef: Process/transport-unix-service
+spec:
+  providerRef: Provider/transport-unix
+  producerRef: Process/transport-unix-service
+  endpointClass: transport
+  transport: unix
+  purpose: transport-unix.d2bus.org/portal
+  serviceFingerprint: transport-unix.d2bus.org/portal.v1
+  locality: host-local
+  visibility: zone-private
+  attachmentPolicy: none
+  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  lifecyclePolicy: producer-owned
+status:
+  phase: Ready
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: Available
+  leaseAvailability: NotRequired
+  conditions: []
+```
+
+### Endpoint resources (D092)
+
+Stable managed listener identities that survive long enough for another
+component to consume are standard `Endpoint` resources. Consumers refer to
+`Endpoint/<name>`; `Endpoint.spec` and `Endpoint.status` carry no raw Unix path,
+address, CID, port, FD number, or credential. Authorized resolution occurs only
+through the EffectPort/LaunchTicket path; unauthorized callers receive
+`endpoint-resolve-denied`. A transport service Process restart bumps the
+Endpoint `endpointGeneration`, and dependents observe `dependency-changed`.
+ZoneLink session state remains owned by the core ZoneLink controller.
+
+### Retained opaque handles (D092)
+
+Per-session `OpenTransport` named streams, `OwnedTransport` byte-stream handles,
+transport connection handles, pidfds, FD attachment indexes, and `operationId`
+values remain controller-internal or high-churn opaque handles under the D092
+promotion test. They are not `Endpoint` resources and are never used as stable
+resource identities.
 
 **Install ordering**: because the Provider declares no state Volume,
 ProviderDeployment creates the `Process` resource directly; the service reaches

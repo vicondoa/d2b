@@ -215,7 +215,6 @@ spec:
     fds:
       limit: 256
   networkUsage:  null
-  endpoints:     []
   readiness:
     class: ready-condition
     initialDelay: "0s"
@@ -294,10 +293,6 @@ spec:
         protocol: tcp
         purpose: usbip-backend
     allowEgress: false
-  endpoints:
-    - name:      backend
-      transport: tcp
-      purpose:   usbip-backend-listener   # adapter resolves bind addr from signed policy
   readiness:
     class: provider-defined
     initialDelay: "0s"
@@ -358,10 +353,6 @@ spec:
         protocol: tcp
         purpose: usbip-proxy-listener
     allowEgress: false
-  endpoints:
-    - name:      proxy
-      transport: tcp
-      purpose:   usbip-proxy-listener    # adapter resolves bind addr from Network status
   readiness:
     class: provider-defined
     initialDelay: "0s"
@@ -377,6 +368,90 @@ spec:
   adoptionPolicy: adopt-on-restart
   drainTimeout:   "5s"
 ```
+
+The daemon and proxy Processes produce their stable USBIP service identities as
+owned `Endpoint` resources, not inline `Process.spec` fields:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: device-b3a7f1d2c591-usbip-backend
+  zone: work
+  ownerRef: Device/corp-vm-usb
+spec:
+  providerRef: Provider/device-usbip
+  producerRef: Process/device-b3a7f1d2c591-daemon
+  endpointClass: device
+  transport: tcp
+  purpose: device-usbip.d2bus.org/backend-listener
+  serviceFingerprint: device-usbip.d2bus.org/UsbipBackend.v3
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: device-usbip.d2bus.org/proxy-only
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: device-b3a7f1d2c591-usbip-proxy
+  zone: work
+  ownerRef: Device/corp-vm-usb
+spec:
+  providerRef: Provider/device-usbip
+  producerRef: Process/device-b3a7f1d2c591-proxy
+  endpointClass: service
+  transport: tcp
+  purpose: device-usbip.d2bus.org/proxy-listener
+  serviceFingerprint: device-usbip.d2bus.org/UsbipRelay.v3
+  locality: cross-domain
+  visibility: authorized-consumers
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Endpoint resources (D092)
+
+`Provider/device-usbip` conforms to the standard `Endpoint` base schema. Stable
+USBIP attach/relay identities that can be independently consumed are owned
+`Endpoint` resources with `producerRef`; consumers use `Endpoint/<name>`.
+Endpoint spec/status never carries raw bind addresses, bus IDs, CIDs, ports,
+paths, fds, or credentials. Resolution occurs only through an authorized
+EffectPort/LaunchTicket; unauthorized resolution returns `endpoint-resolve-denied`.
+Producer restart bumps `Endpoint.status.endpointGeneration`, causing consumers to
+observe `dependency-changed` and reconnect through a fresh authorized ticket.
+
+## Retained opaque handles (D092 promotion test)
+
+- pidfds for daemon/proxy supervision stay process-local because they are
+  restart-time identity handles, not stable managed endpoint identities.
+- LaunchTicket fd indexes and inherited listener fds stay opaque; they are
+  per-launch attachment slots resolved under authorization.
+- Per-busid attach connection handles, `LeaseToken`, `FirewallToken`, and OFD
+  lock fds stay opaque because they are high-churn effect-port capabilities tied
+  to one operation or lease.
+- `operationId` and committed-revision proofs stay opaque correlation/idempotency
+  handles in the core Operation ledger.
+- `OwnedTransport`/ComponentSession transport handles stay in-memory transport
+  capabilities behind Endpoint resolution, not addressable resources.
 
 ### Guest-side effects (no Process resource)
 
@@ -1070,9 +1145,9 @@ The adapter enforces that:
 
 The proxy binds to the per-Zone Network uplink IP only (not `0.0.0.0`). The
 adapter derives this address from Network status through its own trusted
-channel; the controller never reads or passes an IP address. The proxy
-Process's `endpoints` entry declares only `{name, transport, purpose}`; the
-adapter resolves the actual bind address privately when the Process starts.
+channel; the controller never reads or passes an IP address. The proxy's owned
+`Endpoint` resource declares only stable semantic fields; the adapter resolves
+the actual bind address privately when the Process starts.
 
 ---
 
@@ -1299,9 +1374,9 @@ Implement creation/deletion of `device-<uid-short>-daemon` and
 `device-<uid-short>-proxy` Process resources using `ResourceMutationBatch`.
 Populate full canonical Process specs (providerRef system-minijail, executionRef,
 domain system, template ID, sandbox semantic classes, nested BudgetSpec,
-networkUsage with ports array, endpoints with name/transport/purpose only,
-readiness: provider-defined, restart policy) as defined in § Worker Process
-resources. Confirm no `spec.command`, argv, binary path, or raw bind address
+networkUsage with ports array, owned Endpoint resources for stable service
+identities, readiness: provider-defined, restart policy) as defined in § Worker
+Process resources. Confirm no `spec.command`, argv, binary path, or raw bind address
 appears in any Process spec field. Guest-side attach/detach are EffectPort
 calls; no Process resource is created in the Guest.
 

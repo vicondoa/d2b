@@ -28,7 +28,7 @@
 10. [Process templates](#10-process-templates)
 11. [Controller reconcile and finalize loop](#11-controller-reconcile-and-finalize-loop)
 12. [Guest boot sequence](#12-guest-boot-sequence)
-13. [QMP protocol via Process endpoint](#13-qmp-protocol-via-process-endpoint)
+13. [QMP protocol via Endpoint resource](#13-qmp-protocol-via-endpoint-resource)
 14. [Broker operations](#14-broker-operations)
 15. [RBAC and permission claims](#15-rbac-and-permission-claims)
 16. [Status, phases, and conditions](#16-status-phases-and-conditions)
@@ -250,7 +250,7 @@ plus provider-neutral `unsupported-capability`. `spec.provider` aligns with
 | `bios` | string | no | `"ovmf"` | `ovmf\|seabios` | Firmware type |
 | `pauseAtBoot` | bool | no | `true` | — | If true, start QEMU in `\-S` mode (paused); operator issues QMP `cont` to release |
 | `displayWindow` | bool | no | `false` | — | If true, controller creates a `WaylandSession` resource for `Provider/display-wayland` |
-| `serialConsole` | bool | no | `true` | — | Expose serial console via Process endpoint |
+| `serialConsole` | bool | no | `true` | — | Expose serial console via owned Endpoint resource |
 | `tablet` | bool | no | `true` | — | USB tablet input device (absolute pointer for Wayland) |
 | `rtcBase` | string | no | `"utc"` | `utc\|localtime` | RTC base |
 | `extraFeatures` | list\<string\> | no | `[]` | closed enum | Reserved; only values in Provider's signed capability descriptor are accepted |
@@ -569,7 +569,7 @@ The `display-wayland` Provider owns all proxy Process instances internally.
 
 1. creates/updates/deletes the `display-wayland.d2bus.org.WaylandSession`
    resource as an owner, and
-2. consumes the opaque endpoint attachment from that session's `Ready` status.
+2. consumes the EndpointRef attachment from that session's `Ready` status.
 
 If `spec.provider.settings.displayWindow = false`, the controller does not create a
 `WaylandSession` resource. QEMU runs headless (`-display none`).
@@ -655,14 +655,7 @@ spec:
       access: shared
       purpose: kvm-acceleration
 
-  # --- Endpoints ---
-  endpoints:
-    - name: qmp
-      transport: unix
-      purpose: qmp-control            # QMP socket; Process Provider creates it; no public path
-    - name: serial
-      transport: unix
-      purpose: serial-console         # serial console socket; private; no public path
+  # Stable QMP/serial endpoints are owned Endpoint resources, not inline Process fields.
 
   # --- Telemetry ---
   telemetry:
@@ -687,7 +680,7 @@ spec:
     timeout: "30s"                     # must match config.qmpReadyTimeoutSeconds
     failureThreshold: 1
     successThreshold: 1
-    class: provider-defined            # ready when QMP greeting received via Process endpoint
+    class: provider-defined            # ready when QMP greeting received via EndpointRef attachment
 
   healthCheck:
     enabled: true
@@ -718,8 +711,53 @@ spec:
   controller after the first successful QMP capability negotiation, received
   through the `qmp` endpoint connection attachment returned by the Process
   Provider. The controller does not probe any raw socket path.
-- No raw principals, argv strings, host paths, executable paths, or
+- No raw principals, argv strings, host paths, executable paths, endpoint locators, or
   credential bytes appear in this spec.
+
+The runner's stable control surfaces are created as owned Endpoint resources:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: media-vm-qmp
+  zone: dev
+  ownerRef: Guest/media-vm
+spec:
+  providerRef: Provider/runtime-qemu-media
+  producerRef: Process/media-vm-qemu
+  endpointClass: control
+  transport: unix
+  purpose: qmp-control
+  serviceFingerprint: runtime-qemu-media.d2bus.org/qmp/v1
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-qemu-media]
+  lifecyclePolicy: recycle-with-producer
+---
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: media-vm-serial
+  zone: dev
+  ownerRef: Guest/media-vm
+spec:
+  providerRef: Provider/runtime-qemu-media
+  producerRef: Process/media-vm-qemu
+  endpointClass: data
+  transport: unix
+  purpose: serial-console
+  serviceFingerprint: runtime-qemu-media.d2bus.org/serial/v1
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-qemu-media]
+  lifecyclePolicy: recycle-with-producer
+```
+
+Consumers use `Endpoint/media-vm-qmp` and `Endpoint/media-vm-serial`; no raw
+socket path, fd number, or address appears in spec or status.
 
 ---
 
@@ -776,7 +814,6 @@ spec:
       limit: 512
   networkUsage: null        # controller uses ComponentSession over d2b-bus; no tap
   deviceUsage: []
-  endpoints: []
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -928,24 +965,45 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
 
 ---
 
-## 13 QMP protocol via Process endpoint
+## 13 QMP protocol via Endpoint resource
 
-The QMP socket is a private `Process` endpoint declared in the runner spec
-(`endpoints[name=qmp, transport=unix, purpose=qmp-control]`). It is not a
-broker operation target and no public path is exposed.
+The QMP socket is represented by the owned `Endpoint/<guest>-qmp` resource with
+`producerRef: Process/<guest>-qemu`, `endpointClass: control`, and
+`transport: unix`. It is not a broker operation target and no public path is
+exposed.
 
 ### 13.1 Connection attachment delivery
 
 When the runner Process reaches `Ready`, the `system-minijail` Process
-Provider delivers a validated local connection attachment for each declared
-endpoint to the controller via the ProviderSupervisor ComponentSession
-channel. The attachment for the `qmp` endpoint is a sealed connection handle
-(an owned fd to the QMP socket). The attachment for the `serial` endpoint
-is delivered similarly.
+Provider delivers a validated local connection attachment for each authorized EndpointRef to the controller via the ProviderSupervisor
+ComponentSession channel. The attachment for `Endpoint/<guest>-qmp` is a sealed
+connection handle (an owned fd to the QMP socket). The attachment for
+`Endpoint/<guest>-serial` is delivered similarly.
 
 The controller uses the `qmp` attachment fd to negotiate the QMP capability
 exchange and then issue commands. Neither the fd number nor any socket path
 is written to the resource store, status fields, audit events, or OTEL spans.
+
+### Endpoint resources (D092)
+
+`Provider/runtime-qemu-media` declares conformance to the standard `Endpoint`
+base schema. Stable QMP and serial-control identities are owned `Endpoint`
+resources with `producerRef: Process/<guest>-qemu`; future stable vhost-user
+sound/video data surfaces follow the same pattern with `endpointClass: data`.
+Consumers use `Endpoint/<name>` ResourceRefs; raw socket paths, fd numbers, CIDs,
+ports, and credentials never appear in resource spec/status or CLI output.
+Core/ProviderSupervisor resolves private transports only through authorized
+EffectPort/LaunchTicket flows; unauthorized resolution fails
+`endpoint-resolve-denied`. A QEMU runner restart bumps `endpointGeneration` and
+triggers dependent consumers through `dependency-changed`.
+
+### Retained opaque handles
+
+The retained opaque values are the per-session QMP connection handle, serial
+connection handle, LaunchTicket fd indexes, pidfd/process observations,
+`OwnedTransport`, and operation IDs. They are controller-internal, high-churn,
+or lack independent lifecycle, so they are not promoted to resources by the
+D092 promotion test.
 
 ### 13.2 QMP command dispatch
 
@@ -982,8 +1040,8 @@ disposition of every current baseline broker op:
 | Baseline broker op | v3 disposition |
 | --- | --- |
 | `QemuMediaBoot` (opens image fd + starts QEMU) | Replaced by Volume virtio-blk attachment fd in LaunchTicket + Process resource creation |
-| `QemuMediaAttach` (opens image/usb fd, QMP blockdev-add) | Replaced by Volume attachment update + QMP command via Process endpoint connection |
-| `QemuMediaDetach` (QMP device_del, closes fd) | Replaced by Volume attachment delete + QMP command via Process endpoint connection |
+| `QemuMediaAttach` (opens image/usb fd, QMP blockdev-add) | Replaced by Volume attachment update + QMP command via EndpointRef connection |
+| `QemuMediaDetach` (QMP device_del, closes fd) | Replaced by Volume attachment delete + QMP command via EndpointRef connection |
 | `QemuMediaStop` (SIGTERM → SIGKILL) | Replaced by Process `desiredLifecycle: stopped`; `system-minijail` issues SIGTERM via pidfd |
 | `QemuMediaStatus` (parse /proc/pid/status) | Replaced by `Process.status` conditions; no /proc path access by Provider |
 | `QemuMediaQueryBlock` (QMP query-block) | Controller-internal; result stored in Volume attachment status |
@@ -1637,7 +1695,7 @@ attachment for the owning Guest. No path inspection.
 **Description:** When `spec.provider.settings.displayWindow = true`, controller
 creates/updates/deletes a `display-wayland.d2bus.org.WaylandSession` resource
 (§9) using the exact ResourceSpec defined by the `display-wayland` dossier.
-Watches for `Ready` and reads the opaque endpoint attachment from status
+Watches for `Ready` and reads the EndpointRef attachment from status
 (field names defined by `display-wayland` dossier).
 
 **Destination:** `src/controller/display.rs`
@@ -1646,7 +1704,7 @@ Watches for `Ready` and reads the opaque endpoint attachment from status
 - `tests/wayland_session_create.rs` — emitted resource type is
   `display-wayland.d2bus.org.WaylandSession`; no invented spec fields; no
   `managedBy` in metadata
-- `tests/wayland_session_attachment_read.rs` — opaque endpoint attachment
+- `tests/wayland_session_attachment_read.rs` — EndpointRef attachment
   parsed from status without inventing field names
 - `tests/wayland_session_missing_provider.rs` — displayProviderRef=null +
   displayWindow=true → Failed + `display-provider-not-configured`

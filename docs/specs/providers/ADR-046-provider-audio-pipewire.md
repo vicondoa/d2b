@@ -411,8 +411,8 @@ The host worker is a long-lived `vhost-user-sound` sidecar
 compositor's PipeWire session using a **pre-opened connected PipeWire FD**
 received via the operation-scoped typed attachment transfer routed by
 d2b-bus/ProviderSupervisor from the AudioMediator (see AudioMediator section).
-It exposes a `vhost-user` server endpoint over a Unix socket whose path is a
-controller-private sealed value. The owning Guest attaches it via the
+It exposes a `vhost-user` server as an owned `Endpoint` resource. The backing
+Unix socket locator is a controller-private sealed LaunchTicket value. The owning Guest attaches it via the
 `Guest.spec.audioExtension` arguments derived from the `runtime-audio`
 capability (e.g., `--generic-vhost-user socket=<sealed_path>,virtio_id=25,...`
 for Cloud Hypervisor). No `audioFrontend` spec field is involved.
@@ -447,10 +447,6 @@ spec:
     startRoot: false
     readOnlyRoot: true
     environmentClass: minimal
-  endpoints:
-    - name: vhost-user
-      transport: unix
-      purpose: vhost-user-server
   budget:
     cpu:
       limit: "500m"
@@ -510,10 +506,10 @@ spec:
   Maps to the `w1-audio` seccomp policy in the baseline minijail profile table.
 - `sandbox.startRoot: false` — the Process Provider must not elevate to root
   before exec.
-- `endpoints.name: vhost-user, transport: unix, purpose: vhost-user-server` —
-  the Process Provider creates the Unix socket for vhost-user before exec. The
-  socket path is an internal sealed value in the LaunchTicket, never exposed in
-  the resource spec or status.
+- `Endpoint/corp-vm-audio-vhost-user` is the owned service identity for the
+  vhost-user server. The Process Provider creates the backing Unix socket before
+  exec and seals its locator into the LaunchTicket; the locator never appears in
+  resource spec or status.
 - `budget` uses the canonical nested `cpu`/`memory`/`pids`/`fds` shape.
   `pids` and `fds` use the `{limit: N}` object form (not a bare scalar).
 - `restartPolicy.class: on-failure` — canonical class name.
@@ -595,10 +591,6 @@ spec:
     startRoot: false
     readOnlyRoot: true
     environmentClass: provider-defined
-  endpoints:
-    - name: audio-service
-      transport: unix
-      purpose: audio-pipewire-service
   budget:
     cpu:
       limit: "250m"
@@ -642,7 +634,7 @@ without specifying audio details:
 ```text
 attachmentTransfer:
   source: Process/audio-pipewire-mediator
-  sourceEndpoint: pipewire-portal
+  sourceHandle: pipewire-portal-fd
   destinationRole: inherited-fd
 ```
 
@@ -650,8 +642,8 @@ When the Process Provider receives the new worker Process resource, it does
 **not** resolve this transfer itself. Instead, d2b-bus/ProviderSupervisor
 orchestrates:
 
-1. ProviderSupervisor resolves the AudioMediator's active `pipewire-portal` FD
-   from its component-descriptor declaration.
+1. ProviderSupervisor resolves the AudioMediator's active `pipewire-portal-fd`
+   handle from its component-descriptor declaration.
 2. Validates the requesting subject (worker Process generation/UID) against the
    AudioMediator's ACL.
 3. Delivers the FD via an atomic seqpacket SCM_RIGHTS transfer bound to the
@@ -670,8 +662,8 @@ in the Process resource spec or any API response.
 ### `SetGrant` and `SetLevel` service
 
 The AudioMediator exposes a `SetGrant`/`SetLevel` typed ComponentSession service
-on its `audio-service` endpoint. The controller calls this service for every
-grant or level change on the cloud-hypervisor path.
+on `Endpoint/audio-pipewire-service`. The controller calls this service for
+every grant or level change on the cloud-hypervisor path.
 
 Service interface (conceptual):
 
@@ -811,10 +803,6 @@ spec:
     startRoot: false
     readOnlyRoot: true
     environmentClass: provider-defined
-  endpoints:
-    - name: audio-set
-      transport: vsock
-      purpose: guest-audio-set-service
   budget:
     cpu:
       limit: "250m"
@@ -843,6 +831,118 @@ spec:
 
 Like all Process resources, this spec contains no `executableRef`, `argv`, or
 `env` — these are signed component-template projections in the LaunchTicket.
+
+## Endpoint resources (D092)
+
+`Provider/audio-pipewire` declares standard `Endpoint` base-schema conformance.
+Stable vhost-user, AudioMediator, and GuestAudioAgent services are owned
+`Endpoint` resources with `producerRef`; they are not inline `Process.spec`
+fields. Consumers use `Endpoint/<name>` references. No raw socket path,
+PipeWire node path, CID, port, fd number, credential, level value, or content
+byte appears in Endpoint spec, Endpoint status, CLI output, audit, or telemetry.
+Resolution occurs only through an authorized EffectPort/LaunchTicket;
+unauthorized resolution returns `endpoint-resolve-denied`. Producer restarts
+bump `Endpoint.status.endpointGeneration`, causing consumers to receive a
+`dependency-changed` trigger.
+
+Representative owned Endpoint resources:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: corp-vm-audio-vhost-user
+  zone: dev
+  ownerRef: audio-pipewire.d2bus.org.AudioState/corp-vm-audio
+spec:
+  providerRef: Provider/audio-pipewire
+  producerRef: Process/corp-vm-audio-sidecar
+  endpointClass: data
+  transport: unix
+  purpose: audio-pipewire.d2bus.org/vhost-user-sound
+  serviceFingerprint: audio-pipewire.d2bus.org/vhost-user-sound.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: launch-ticket
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: audio-pipewire-service
+  zone: dev
+  ownerRef: Provider/audio-pipewire
+spec:
+  providerRef: Provider/audio-pipewire
+  producerRef: Process/audio-pipewire-mediator
+  endpointClass: service
+  transport: unix
+  purpose: audio-pipewire.d2bus.org/audio-control
+  serviceFingerprint: audio-pipewire.d2bus.org/AudioMediator.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-user-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: ag-4a7f2c1b-audio-set
+  zone: dev
+  ownerRef: audio-pipewire.d2bus.org.AudioState/corp-vm-audio
+spec:
+  providerRef: Provider/audio-pipewire
+  producerRef: Process/ag-4a7f2c1b
+  endpointClass: service
+  transport: vsock
+  purpose: audio-pipewire.d2bus.org/guest-audio-set
+  serviceFingerprint: audio-pipewire.d2bus.org/AudioSet.v3
+  locality: guest-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Retained opaque handles
+
+- pidfds: kernel Process supervision handles; they are authority-bearing and not
+  durable resource identities.
+- Per-connection/session handles: PipeWire core/node handles and
+  ComponentSession IDs are high-churn per session.
+- Named streams: audio control streams, when present, carry operation payloads
+  and do not identify a stable endpoint.
+- `OwnedTransport`: authenticated transport ownership remains an in-memory
+  ComponentSession capability.
+- fd indexes: the PipeWire portal FD and inherited vhost-user descriptors are
+  LaunchTicket-local slots and stay opaque under D092.
 
 ### Enforcement sequence
 
@@ -1579,7 +1679,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same baseline paths |
 | Reuse action | `adapt` — argv builder retained; becomes a signed component-template projection, not a live Process spec field |
 | Destination | `packages/d2b-provider-audio-pipewire/src/argv.rs` (component template renderer) |
-| Detailed design | `generate_audio_argv` remains the canonical argv builder for the `vhost-user-sound-worker` component template. The resulting argv/env/executableRef are sealed into the LaunchTicket. The per-Guest binary copy path enforcement remains via the LaunchTicket verifier. The live Process resource spec contains no argv or executableRef. The `--socket` argument is removed (vhost-user socket endpoint is declared in the component template, not argv). |
+| Detailed design | `generate_audio_argv` remains the canonical argv builder for the `vhost-user-sound-worker` component template. The resulting argv/env/executableRef are sealed into the LaunchTicket. The per-Guest binary copy path enforcement remains via the LaunchTicket verifier. The live Process resource spec contains no argv or executableRef. The `--socket` argument is removed; the vhost-user service identity is `Endpoint/corp-vm-audio-vhost-user`, while the backing locator is resolved into the LaunchTicket under authorization. |
 | Integration | The component template for `vhost-user-sound-worker` embeds the output of `generate_audio_argv`; the Process Provider resolves arg0 from the artifact catalog. |
 | Validation | `tests/argv.rs`: rejection matrix (Nix store path, symlink, cross-guest copy, empty name); no-socket-in-argv assertion; no-argv-in-process-spec assertion |
 | Removal proof | `d2b-host/src/audio_argv.rs` deleted after `d2bd` has no callers; confirmed by `cargo check -p d2b-host`. |
@@ -1639,7 +1739,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | None; new component |
 | Reuse action | `ADR-only` |
 | Destination | `packages/d2b-provider-audio-pipewire/src/mediator/mod.rs`; `src/bin/audio_pipewire_mediator.rs` |
-| Detailed design | Long-lived user-session Process. Maintains per-Guest map of `{AudioState UID → pw_core* connection, node_handle}`. Opens PipeWire connection naturally (same-UID compositor session). Passes pre-opened `pw_core` FD to worker via component-descriptor attachment on Process Provider launch request. Exposes `SetGrant`/`SetLevel` ComponentSession service on the `audio-service` endpoint (Noise_NN, local purpose, Unix transport, same-UID peer evidence). No EphemeralProcess, no wpctl binary, no node ID in any bus message or resource spec. `captureAlias` resolved via libpipewire registry (`pw_registry_events`). WPCTL_PATH and PW_DUMP_PATH are superseded. |
+| Detailed design | Long-lived user-session Process. Maintains per-Guest map of `{AudioState UID → pw_core* connection, node_handle}`. Opens PipeWire connection naturally (same-UID compositor session). Passes pre-opened `pw_core` FD to worker via component-descriptor attachment on Process Provider launch request. Exposes `SetGrant`/`SetLevel` ComponentSession service through `Endpoint/audio-pipewire-service` (Noise_NN, local purpose, Unix transport, same-UID peer evidence). No EphemeralProcess, no wpctl binary, no node ID in any bus message or resource spec. `captureAlias` resolved via libpipewire registry (`pw_registry_events`). WPCTL_PATH and PW_DUMP_PATH are superseded. |
 | Integration | Second binary in the `d2b-provider-audio-pipewire` package. Registered as a user-session service under `Provider/audio-pipewire`. |
 | Validation | `tests/mediator.rs`: FD handoff; SetGrant/SetLevel service calls; captureAlias registry resolution; node-id-sealed-not-in-bus; session-unavailable path; concurrent guest map isolation; teardown on deletion |
 | Removal proof | Supersedes `d2bd`'s `PipeWireHostController` direct session access; `d2bd` audio host controller deleted after e2e parity |
@@ -1669,7 +1769,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same |
 | Reuse action | `adapt` |
 | Destination | `packages/d2b-provider-audio-pipewire/tests/minijail_contract.rs` (provider-local); retain cross-bundle source greps in `d2b-contract-tests` |
-| Detailed design | Provider-local tests validate: (1) `spec.sandbox.capabilityClasses == []`; (2) `spec.sandbox.seccompClass == "audio-pipewire-worker"`; (3) `spec.sandbox.startRoot == false`; (4) `namespaceClasses` does not include `network`; (5) `spec.domain == "system"` and `spec.userRef` is absent (worker is system-domain; allocator principal is sealed); (6) no `executableRef`/`argv`/`env` fields in the live Process resource spec; (7) no `inherited-fd` endpoint in the live Process resource spec; (8) endpoint format `{name: vhost-user, transport: unix, purpose: vhost-user-server}`; (9) no socket path or PipeWire path in any serialized spec or status form; (10) no EphemeralProcess created by the controller. |
+| Detailed design | Provider-local tests validate: (1) `spec.sandbox.capabilityClasses == []`; (2) `spec.sandbox.seccompClass == "audio-pipewire-worker"`; (3) `spec.sandbox.startRoot == false`; (4) `namespaceClasses` does not include `network`; (5) `spec.domain == "system"` and `spec.userRef` is absent (worker is system-domain; allocator principal is sealed); (6) no `executableRef`/`argv`/`env` fields in the live Process resource spec; (7) no `inherited-fd` endpoint in the live Process resource spec; (8) owned `Endpoint/corp-vm-audio-vhost-user` has `producerRef: Process/corp-vm-audio-sidecar`; (9) no socket path or PipeWire path in any serialized spec or status form; (10) no EphemeralProcess created by the controller. |
 | Validation | `cargo test -p d2b-provider-audio-pipewire -- minijail` must pass; existing cross-bundle tests must continue to pass |
 | Removal proof | N/A (new provider-local test file; cross-bundle tests retained) |
 
@@ -1697,7 +1797,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | `packages/d2bd/src/audio_host_controller.rs` libpipewire enforcement patterns (reference only) |
 | Reuse action | `ADR-only` (new component; supersedes guestd wpctl dispatch path) |
 | Destination | `packages/d2b-provider-audio-pipewire/src/guest_agent/mod.rs`; `src/guest_agent/enforcement.rs`; `src/bin/audio_pipewire_guest_agent.rs` |
-| Detailed design | Long-lived user-domain Process running in the Guest under the guest workload user's UID. One Process resource per entry in `AudioState.spec.guestUsers`; each named by opaque UID digest (`ag-<digest>`) and carrying label `audio-pipewire.d2bus.org/role: guest-audio-agent`. `userRef` is the corresponding `User/<name>` Zone resource. Opens a PipeWire connection in the Guest's compositor session (same-UID, natural access). Exposes a typed `AudioSet` ComponentSession service on the `audio-set` endpoint (vsock transport, Guest→Zone d2b-bus). `AudioSet(mic, speaker, speakerLevel, micGain)` applies changes via libpipewire API (`pw_node_set_param` with `SPA_PARAM_Props`, `pw_stream_set_control`) on the guest virtio-snd PipeWire node. No wpctl binary, no command path, no EphemeralProcess. Controller calls ALL active GuestAudioAgent instances in parallel for each grant change and aggregates failures. `FakeGuestAudioAgent` is a test double behind `#[cfg(test)]`. |
+| Detailed design | Long-lived user-domain Process running in the Guest under the guest workload user's UID. One Process resource per entry in `AudioState.spec.guestUsers`; each named by opaque UID digest (`ag-<digest>`) and carrying label `audio-pipewire.d2bus.org/role: guest-audio-agent`. `userRef` is the corresponding `User/<name>` Zone resource. Opens a PipeWire connection in the Guest's compositor session (same-UID, natural access). Exposes a typed `AudioSet` ComponentSession service through an owned `Endpoint/ag-<digest>-audio-set` (vsock transport, Guest→Zone d2b-bus). `AudioSet(mic, speaker, speakerLevel, micGain)` applies changes via libpipewire API (`pw_node_set_param` with `SPA_PARAM_Props`, `pw_stream_set_control`) on the guest virtio-snd PipeWire node. No wpctl binary, no command path, no EphemeralProcess. Controller calls ALL active GuestAudioAgent instances in parallel for each grant change and aggregates failures. `FakeGuestAudioAgent` is a test double behind `#[cfg(test)]`. |
 | Integration | Third binary in the `d2b-provider-audio-pipewire` package. Declared as GuestAudioAgent Process resources by the audio-state-controller (one per guestUser; template: `guest-audio-agent`). System Process Provider (`Provider/system-systemd`) launches each inside the Guest under the respective guest workload user's UID. |
 | Validation | `tests/guest_agent.rs`: AudioSet service call → libpipewire apply; mute/route/level; session-unavailable path; reconnect state restore; no wpctl binary; no command path; N-agent creation (one per guestUser); parallel call and aggregated failure |
 | Removal proof | `d2b-guestd` wpctl audio dispatch path deleted after all Guests have GuestAudioAgent deployed and e2e parity test passes |

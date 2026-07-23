@@ -802,10 +802,6 @@ spec:
       limit: 64
     fds:
       limit: 256
-  endpoints:
-    - name: bus-client
-      transport: unix
-      purpose: d2b-bus-client
   readiness:
     class: provider-defined
     initialDelay: "1s"
@@ -820,8 +816,9 @@ spec:
 ```
 
 The controller sandbox declares `[mount, pid, ipc]` and inherits the execution
-target's network namespace; all communication goes via the `bus-client` unix
-endpoint. No `networkUsage` section is needed. No Process `config` section is needed;
+target's network namespace; all communication goes through the authorized
+d2b-bus ComponentSession supplied at launch. No `networkUsage` section is needed.
+No Process `config` section is needed;
 the controller derives its configuration from the Provider resource spec at
 registration time. `executionRef` is bound from `Provider.spec.config.controllerExecutionRef`
 at spawn time; the controller remains secret-free regardless of placement.
@@ -871,13 +868,6 @@ spec:
       limit: 32
     fds:
       limit: 128
-  endpoints:
-    - name: bus-client
-      transport: unix
-      purpose: d2b-bus-client
-    - name: kk-delivery
-      transport: unix
-      purpose: credential-kk-delivery
   readiness:
     class: provider-defined
     initialDelay: "1s"
@@ -890,6 +880,60 @@ spec:
     logLevel: info
     sensitiveLabels: false
 ```
+
+The agent Process produces its stable credential service identity as a separate
+owned `Endpoint` resource. The sensitive KK token-delivery session is not an
+Endpoint.
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: mi-agent-<credential-name>-credential-service
+  zone: <zone-id>
+  ownerRef: Credential/<credential-name>
+spec:
+  providerRef: Provider/credential-managed-identity
+  producerRef: Process/mi-agent-<credential-name>
+  endpointClass: service
+  transport: unix
+  purpose: credential-managed-identity.d2bus.org/credential-service
+  serviceFingerprint: credential.d2bus.org/CredentialService.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Endpoint resources (D092)
+
+`Provider/credential-managed-identity` conforms to the standard `Endpoint` base
+schema. The stable `d2b.credential.v3`-class ComponentSession service identity is
+an owned `Endpoint` resource with `producerRef`; consumers use
+`Endpoint/<name>`. Endpoint spec/status never carries IMDS URLs, raw endpoint
+locators, fd numbers, token bytes, subscription IDs, credential handles with
+authority, or secrets. Resolution occurs only through an authorized
+EffectPort/LaunchTicket; unauthorized resolution returns `endpoint-resolve-denied`.
+Producer restart bumps `Endpoint.status.endpointGeneration`, causing consumers to
+observe `dependency-changed` and reacquire through a fresh authorized ticket.
+
+## Retained opaque handles (D092 promotion test)
+
+- pidfds for controller/agent Processes are supervision handles, not resources.
+- LaunchTicket fd indexes for the injected IMDS/effect-port client and d2b-bus
+  connection remain per-launch opaque attachment slots.
+- `leaseHandle`, IMDS client aliases, `operationId`, and idempotency keys are
+  bounded non-secret handles revalidated before use.
+- `OwnedTransport`, ComponentSession IDs, and the sensitive Noise_KK token-delivery
+  session handle are high-churn in-memory capabilities and remain internal.
 
 #### IMDS access and LaunchTicket projection
 
@@ -1729,7 +1773,7 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Dependency/owner | `ADR046-credential-001`, `ADR046-credential-002`; `ADR046-credential-005`; `ADR046-credential-006` |
 | Description | Implement the controller/agent process split: separate `d2b-managed-identity-controller` binary (no IMDS client, no KK delivery) and `d2b-managed-identity-agent` binary (injected IMDS client via effect port, KK delivery). Controller manages Credential resources, spawns/monitors agent Processes. Agent receives `d2b.credential.v3` token-delivery methods and terminates Noise_KK delivery sessions. |
 | Destination | `packages/d2b-provider-credential-managed-identity/src/{controller.rs, agent.rs}`; `packages/d2b-provider-credential-managed-identity/{controller/main.rs, agent/main.rs}`; `packages/d2b-provider-credential-managed-identity/tests/topology.rs` |
-| Design | (1) Controller binary: watch/reconcile loop; no IMDS import; no Noise_KK delivery; spawns agent Process on Credential admission+dependency-ready (not on `phase=Ready`); uses canonical Process template (processClass/template/sandbox namespaceClasses `[mount,pid,ipc]`/capabilityClasses/seccompClass `strict`/startRoot/noNewPrivileges/environmentClass `minimal`/readOnlyRoot, BudgetSpec nested cpu/memory/pids/fds, endpoints `{name,transport unix,purpose}`, readiness `{class provider-defined,initialDelay,timeout,failureThreshold,successThreshold}`, TelemetrySpec metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); attaches LaunchTicket projecting `imdsEndpointAlias`+`credentialRef` at spawn time; `executionRef` bound from `Provider.spec.config.controllerExecutionRef`. (2) Agent binary: receives injected `ManagedIdentityCredentialClient` via effect port from co-located runtime Provider (client constructed by runtime Provider from LaunchTicket projection); `networkUsage: {networkRef: null, ports: [], allowEgress: false}`; inherits execution target network namespace (no `network` namespaceClass); no direct IMDS network; serves `AcquireToken`/`RefreshToken`/`RevokeToken`/live `InspectMetadata`; terminates Noise_KK delivery session; reports lease state to controller. (3) Controller monitors agent Process health via `ownerChildTrigger`; respawns on failure with bounded backoff. (4) Deleted-phase cleanup: controller drains/revokes, issues delete on agent Process resource, observes agent Process deletion watch event (no `phase=Deleted` row for agent Process), then clears `provider-revoke` finalizer only; Core atomically writes event-only Deleted revision + removes Credential row/index; audit subsystem appends deletion record from committed revision with exactly-once dedup; controller never commits store deletion or emits Deleted-phase closure audit record. (5) Agent validates `ExactSdkConsumer` via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (6) No principalRef/profileRef/endpoint-kind/Process-config/telemetry.componentRef/readiness.probe/timeoutMs/network.allowedEffects/budget.class/telemetry.class in either template. D087 status-first state model applies: `credential-managed-identity` declares no Provider state Volume, ProviderStateSet is optional/query-time and empty, and no Process receives a state mount or layout principal. Bounded non-secret lease observation (phase, expiry, audience, opaque non-authorizing lease ID, retry/outcome detail) lives in `Credential.status`; in-flight idempotency/retry lives in the core Operation ledger; token bytes remain transient process memory and are delivered only over Noise_KK sensitive sessions. Core aggregates Provider status; controller writes Credential/agent status only. |
+| Design | (1) Controller binary: watch/reconcile loop; no IMDS import; no Noise_KK delivery; spawns agent Process on Credential admission+dependency-ready (not on `phase=Ready`); uses canonical Process template (processClass/template/sandbox namespaceClasses `[mount,pid,ipc]`/capabilityClasses/seccompClass `strict`/startRoot/noNewPrivileges/environmentClass `minimal`/readOnlyRoot, BudgetSpec nested cpu/memory/pids/fds, no inline endpoint fields; owned credential-service Endpoint resource, readiness `{class provider-defined,initialDelay,timeout,failureThreshold,successThreshold}`, TelemetrySpec metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); attaches LaunchTicket projecting `imdsEndpointAlias`+`credentialRef` at spawn time; `executionRef` bound from `Provider.spec.config.controllerExecutionRef`. (2) Agent binary: receives injected `ManagedIdentityCredentialClient` via effect port from co-located runtime Provider (client constructed by runtime Provider from LaunchTicket projection); `networkUsage: {networkRef: null, ports: [], allowEgress: false}`; inherits execution target network namespace (no `network` namespaceClass); no direct IMDS network; serves `AcquireToken`/`RefreshToken`/`RevokeToken`/live `InspectMetadata`; terminates Noise_KK delivery session; reports lease state to controller. (3) Controller monitors agent Process health via `ownerChildTrigger`; respawns on failure with bounded backoff. (4) Deleted-phase cleanup: controller drains/revokes, issues delete on agent Process resource, observes agent Process deletion watch event (no `phase=Deleted` row for agent Process), then clears `provider-revoke` finalizer only; Core atomically writes event-only Deleted revision + removes Credential row/index; audit subsystem appends deletion record from committed revision with exactly-once dedup; controller never commits store deletion or emits Deleted-phase closure audit record. (5) Agent validates `ExactSdkConsumer` via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (6) No principalRef/profileRef/endpoint-kind/Process-config/telemetry.componentRef/readiness.probe/timeoutMs/network.allowedEffects/budget.class/telemetry.class in either template. D087 status-first state model applies: `credential-managed-identity` declares no Provider state Volume, ProviderStateSet is optional/query-time and empty, and no Process receives a state mount or layout principal. Bounded non-secret lease observation (phase, expiry, audience, opaque non-authorizing lease ID, retry/outcome detail) lives in `Credential.status`; in-flight idempotency/retry lives in the core Operation ledger; token bytes remain transient process memory and are delivered only over Noise_KK sensitive sessions. Core aggregates Provider status; controller writes Credential/agent status only. |
 | Validation | `tests/topology.rs` (see §topology.rs test matrix); `integration/host-guest-placement.nix` verifying both processes; `make test-rust`, `make test-integration`, `make test-host-integration` |
 
 ### ADR046-credential-005
@@ -1914,7 +1958,7 @@ audit record field set conformance, delivery session binding contract, RBAC
 | Agent Process `ownerRef` matches Credential UID: controller watch filter correctly associates agent Process events with the owning Credential | ownerRef watch correctness |
 | Controller `Status` method: returns stored `leaseState` without calling `FakeClient`; agent `FakeClient` call count unchanged | Controller-side Status |
 | Agent Process spec has `networkUsage.allowEgress=false`; agent receives `ManagedIdentityCredentialClient` via effect port (no direct network calls in agent binary) | Effect-port injection; no ambient egress |
-| Agent Process template: all required canonical fields present (processClass, template, namespaceClasses `[mount,pid,ipc]`, capabilityClasses `[]`, seccompClass `strict`, startRoot `false`, noNewPrivileges `true`, environmentClass `minimal`, readOnlyRoot `true`, budget nested cpu.request/cpu.limit/memory.request/memory.limit/pids.limit/fds.limit, endpoints transport `unix`/purpose, readiness class `provider-defined`/initialDelay/timeout/failureThreshold/successThreshold, telemetry metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); all excluded fields absent (principalRef, profileRef, endpoint.kind, Process config, telemetry.componentRef, readiness.probe/timeoutMs, network.allowedEffects, budget.class, telemetry.class); agent `networkUsage: {networkRef:null,ports:[],allowEgress:false}` | Canonical template shape |
+| Agent Process template: all required canonical fields present (processClass, template, namespaceClasses `[mount,pid,ipc]`, capabilityClasses `[]`, seccompClass `strict`, startRoot `false`, noNewPrivileges `true`, environmentClass `minimal`, readOnlyRoot `true`, budget nested cpu.request/cpu.limit/memory.request/memory.limit/pids.limit/fds.limit, no inline endpoint fields, owned credential-service Endpoint resource, readiness class `provider-defined`/initialDelay/timeout/failureThreshold/successThreshold, telemetry metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); all excluded fields absent (principalRef, profileRef, endpoint.kind, Process config, telemetry.componentRef, readiness.probe/timeoutMs, network.allowedEffects, budget.class, telemetry.class); agent `networkUsage: {networkRef:null,ports:[],allowEgress:false}` | Canonical template shape |
 | Controller binary (`controller/main.rs`) constructed with no `ManagedIdentityCredentialClient` import; `FakeClient` inaccessible from controller entry point | Controller secret-free invariant |
 
 ### `integration/` fixtures

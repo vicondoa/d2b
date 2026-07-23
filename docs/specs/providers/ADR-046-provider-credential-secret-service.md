@@ -555,8 +555,8 @@ the public Nix authoring surface.
 descriptor for `secret-service-controller` declares the required authenticated
 `dbus-session` FD attachment; the Process controller validates this attachment
 and threads it into the LaunchTicket's inherited FD table before the process is
-spawned. `spec` has no generic `attachments` array. Endpoints, when present,
-use the `{name, transport, purpose}` shape only.
+spawned. `spec` has no generic `attachments` array. Stable service identities
+are separate owned `Endpoint` resources, not inline Process fields.
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -593,7 +593,6 @@ spec:
       limit: 32                               # max 32 PIDs in the cgroup
     fds:
       limit: 64                               # max 64 open file descriptors
-  endpoints: []                               # no inbound network endpoints; bus-only
   networkUsage: null                          # no ambient network; all comms via d2b-bus portal
   readiness:
     initialDelay: 2s
@@ -602,6 +601,61 @@ spec:
     successThreshold: 1
     class: provider-defined                   # provider verifies d2b-bus registration
 ```
+
+The controller's stable credential service identity is a separate owned
+`Endpoint` resource:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: credential-ss-<generated>-credential-service
+  zone: <zone>
+  ownerRef: Provider/credential-secret-service
+spec:
+  providerRef: Provider/credential-secret-service
+  producerRef: Process/credential-ss-<generated>
+  endpointClass: service
+  transport: unix
+  purpose: credential-secret-service.d2bus.org/credential-service
+  serviceFingerprint: credential.d2bus.org/CredentialService.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Endpoint resources (D092)
+
+`Provider/credential-secret-service` conforms to the standard `Endpoint` base
+schema. The stable `d2b.credential.v3`-class ComponentSession service identity is
+an owned `Endpoint` resource with `producerRef`; consumers use
+`Endpoint/<name>`. Endpoint spec/status never carries Secret Service object
+paths, D-Bus addresses, fd numbers, lease handles with authority, token bytes,
+passwords, credential values, or other secrets. Resolution occurs only through
+an authorized EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, causing consumers to observe
+`dependency-changed` and reacquire through a fresh authorized ticket.
+
+## Retained opaque handles (D092 promotion test)
+
+- pidfds for the user-domain controller Process are supervision handles, not
+  stable endpoint identities.
+- The pre-opened D-Bus fd index is a LaunchTicket-local attachment slot and
+  remains opaque.
+- `OwnedTransport`, ComponentSession IDs, named streams, and the sensitive
+  Noise_KK delivery session handle are in-memory per-session capabilities.
+- `leaseHandle` and `operationId` values remain bounded, non-secret,
+  non-authorizing status/idempotency handles and are revalidated before use.
 
 ### 7.4 Injected port: pre-opened D-Bus FD
 
@@ -1063,7 +1117,7 @@ Applied to every `d2b.zones.<zone>.resources.<name>` entry with
   `sandbox.noNewPrivileges = true`, `sandbox.startRoot = false`,
   `sandbox.readOnlyRoot = true`; `budget.memory.limit = "64Mi"`,
   `budget.pids.limit = 32`, `budget.fds.limit = 64`; `networkUsage = null`;
-  `endpoints = []`; `readiness.class = "provider-defined"`. Any drift from this
+  owned `Endpoint` resource for the credential service; `readiness.class = "provider-defined"`. Any drift from this
   shape fails the test and blocks the PR.
 
 ### 12.4 Generation transition and cleanup contract
@@ -1155,7 +1209,7 @@ All controller handlers are async. The reconcile loop follows
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-secret-service/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeOo7Port`, lease lifecycle, locked state, canary enforcement, cardinality limits) |
 | Reuse action | copy and adapt |
 | Destination | `packages/d2b-provider-credential-secret-service/src/{lib.rs, controller.rs, service.rs, main.rs}`; `packages/d2b-provider-credential-secret-service/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs}`; `packages/d2b-provider-credential-secret-service/integration/{container-service.sh, host-placement.nix, guest-placement.nix, cleanup-rollback.sh}`; `packages/d2b-provider-credential-secret-service/README.md` |
-| Detailed design | Adapt `SecretServiceCredentialProvider` and `SecretServiceCredentialProviderFactory` to v3 `d2b.credential.v3` service; replace v2 `CredentialProvider` trait with v3 controller/service handler; retain `Oo7SecretServicePort` trait methods unchanged; ensure `SecretServiceOwner::Userd` placement guard rejects system-domain and guest-agent construction; validate `collectionAlias` against provider-internal charset (not `OpaqueAzureRef`; collection aliases may include spaces); integrate with Provider resource descriptor and controller toolkit; test that `credential_canary` never appears in any service response; create a Process resource per `(Zone, User, executionRef)` triple with `template = "secret-service-controller"` (plain string), canonical `sandbox` fields (`namespaceClasses`, `capabilityClasses`, `seccompClass`, `noNewPrivileges`, `startRoot`, `environmentClass`, `readOnlyRoot`), `budget` with nested `cpu`/`memory`/`pids`/`fds` sub-fields, `networkUsage: null`, `endpoints = []`, and `readiness.class = "provider-defined"`; component descriptor declares the required authenticated `dbus-session` FD attachment carried privately by the LaunchTicket; D087 status-first state model: no Provider state Volume is declared, ProviderStateSet is optional/query-time and empty, no Volume mount or layout principal is required, and the storage-need test is not met; bounded non-secret lease/acquisition/retry observation lives in `Credential.status` plus the core Operation ledger; any opaque status handle is non-secret, non-authorizing, bounded, safe for authorized status readers, and independently revalidated; no token/object-path/lease bytes persist anywhere; finalize() emits revoke outcome audit but MUST NOT emit the resource-deleted closure audit (audit subsystem only); controller writes only scoped Credential/Process health (core aggregates Provider status) |
+| Detailed design | Adapt `SecretServiceCredentialProvider` and `SecretServiceCredentialProviderFactory` to v3 `d2b.credential.v3` service; replace v2 `CredentialProvider` trait with v3 controller/service handler; retain `Oo7SecretServicePort` trait methods unchanged; ensure `SecretServiceOwner::Userd` placement guard rejects system-domain and guest-agent construction; validate `collectionAlias` against provider-internal charset (not `OpaqueAzureRef`; collection aliases may include spaces); integrate with Provider resource descriptor and controller toolkit; test that `credential_canary` never appears in any service response; create a Process resource per `(Zone, User, executionRef)` triple with `template = "secret-service-controller"` (plain string), canonical `sandbox` fields (`namespaceClasses`, `capabilityClasses`, `seccompClass`, `noNewPrivileges`, `startRoot`, `environmentClass`, `readOnlyRoot`), `budget` with nested `cpu`/`memory`/`pids`/`fds` sub-fields, `networkUsage: null`, no inline endpoint fields, an owned credential-service `Endpoint` resource, and `readiness.class = "provider-defined"`; component descriptor declares the required authenticated `dbus-session` FD attachment carried privately by the LaunchTicket; D087 status-first state model: no Provider state Volume is declared, ProviderStateSet is optional/query-time and empty, no Volume mount or layout principal is required, and the storage-need test is not met; bounded non-secret lease/acquisition/retry observation lives in `Credential.status` plus the core Operation ledger; any opaque status handle is non-secret, non-authorizing, bounded, safe for authorized status readers, and independently revalidated; no token/object-path/lease bytes persist anywhere; finalize() emits revoke outcome audit but MUST NOT emit the resource-deleted closure audit (audit subsystem only); controller writes only scoped Credential/Process health (core aggregates Provider status) |
 | Integration | Target: user-domain `Process` resource under `Host` or `Guest` (ADR-only ResourceType); d2b-bus routes `d2b.credential.v3` calls to this process; Credential controller reconciles status. Current v3 has no user-credential host process: v3 `d2b-userd` is a guest exec stub (exits 78 in service mode; no credential functionality; `test-only-or-preview`). This integration path is fully new (ADR-only) work. |
 | Data migration | Full reset; no migration from old `CredentialProvider` trait |
 | Validation | See §16 |
@@ -1213,7 +1267,7 @@ Full detail in `ADR-046-resources-credential` §Implementation work items.
 | `lockPolicy` state transitions | `fail-closed` returns error; `fail-degraded` sets Degraded status |
 | `SecretServiceLeaseRequest` Debug | Emits only generation/placement/operation_count/expiry; no provider_id or operation field |
 | `SecretServiceLeaseRef` Debug | Same redacted shape as request |
-| `controller_process_spec_golden` | `reconcile()` generates a Process resource with `template = "secret-service-controller"`, `sandbox.namespaceClasses = [mount, pid, ipc]` (no `user` class; `Provider/system-systemd` rejects it; same-UID execution via `spec.userRef`), `sandbox.capabilityClasses = []`, `sandbox.seccompClass = "default-strict"`, `sandbox.noNewPrivileges = true`, `sandbox.startRoot = false`, `sandbox.readOnlyRoot = true`, `budget.memory.limit = "64Mi"`, `budget.pids.limit = 32`, `budget.fds.limit = 64`, `networkUsage = null`, `endpoints = []`, `readiness.class = "provider-defined"` |
+| `controller_process_spec_golden` | `reconcile()` generates a Process resource with `template = "secret-service-controller"`, `sandbox.namespaceClasses = [mount, pid, ipc]` (no `user` class; `Provider/system-systemd` rejects it; same-UID execution via `spec.userRef`), `sandbox.capabilityClasses = []`, `sandbox.seccompClass = "default-strict"`, `sandbox.noNewPrivileges = true`, `sandbox.startRoot = false`, `sandbox.readOnlyRoot = true`, `budget.memory.limit = "64Mi"`, `budget.pids.limit = 32`, `budget.fds.limit = 64`, `networkUsage = null`, no inline endpoint fields, an owned credential-service `Endpoint` resource, `readiness.class = "provider-defined"` |
 | `finalize_does_not_emit_closure_audit` | `finalize()` emits a revoke outcome audit record but does not produce a `resource-deleted` closure event; verified by asserting no `Cleanup complete` record is captured by the test audit subscriber (closure record is audit-subsystem-only) |
 | `status_first_state_golden` | Provider descriptor declares `resourceTypes: [Credential]` only and no Provider state Volume; ProviderStateSet query returns an empty grouping; Process specs contain no state mount; bounded non-secret lease/acquisition/retry fields are written only to `Credential.status` and the core Operation ledger; status rejects oversize/provider-detail overrun and excludes token bytes, keys, PSKs, Secret Service object paths, private paths, raw provider error bodies, and authority-conferring handles |
 
@@ -1233,7 +1287,7 @@ Full detail in `ADR-046-resources-credential` §Implementation work items.
 | `idempotency_key_no_double_issue` | Duplicate `issue_lease` with same idempotency key returns same grant; `issue_calls` count does not increment on duplicate |
 | `revocation_on_provider_generation_immediate` | `revocation.onProviderGeneration=immediate`; `drain` handler calls `revoke_lease`; `leaseState=Revoked` |
 | `revocation_on_provider_generation_drain` | `revocation.onProviderGeneration=drain-leases`; drain handler does not call `revoke_lease`; lease expires by deadline |
-| `process_resource_created_with_correct_spec` | After first `reconcile()`, the owned Process resource exists with `template = "secret-service-controller"`, `sandbox.namespaceClasses = [mount, pid, ipc]` (no `user` class), `sandbox.capabilityClasses = []`, `sandbox.seccompClass = "default-strict"`, `sandbox.startRoot = false`, `sandbox.readOnlyRoot = true`, `budget.cpu` and `budget.memory` nested sub-fields present, `budget.pids.limit = 32`, `budget.fds.limit = 64`, `networkUsage = null`, `endpoints = []`, and `readiness.class = "provider-defined"` |
+| `process_resource_created_with_correct_spec` | After first `reconcile()`, the owned Process resource exists with `template = "secret-service-controller"`, `sandbox.namespaceClasses = [mount, pid, ipc]` (no `user` class), `sandbox.capabilityClasses = []`, `sandbox.seccompClass = "default-strict"`, `sandbox.startRoot = false`, `sandbox.readOnlyRoot = true`, `budget.cpu` and `budget.memory` nested sub-fields present, `budget.pids.limit = 32`, `budget.fds.limit = 64`, `networkUsage = null`, no inline endpoint fields, an owned credential-service `Endpoint` resource, and `readiness.class = "provider-defined"` |
 
 #### `tests/conformance.rs`
 

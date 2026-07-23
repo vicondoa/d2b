@@ -96,6 +96,26 @@ provider-neutral `unsupported-capability`.
 `spec.provider` aligns with `status.provider`. The `Provider` resource itself
 keeps the D075 `spec.{artifactId, config}` exception.
 
+### Endpoint resources (D092)
+
+`Volume.source.settings`, layout entries, named views, and mount-token delivery
+remain base Volume semantics, not endpoint declarations. `Provider/volume-local`
+currently declares no independently consumed stable service portal; if a future
+stable portal is visible, it MUST be an owned standard `Endpoint` resource with
+`spec.producerRef: Process/<name>`, a `d2bus.org` purpose, and consumers using
+`Endpoint/<name>`. `Endpoint.spec` and `Endpoint.status` MUST contain no raw host
+path, address, port, FD number, or credential; authorized resolution happens only
+through EffectPort/LaunchTicket, unauthorized callers receive
+`endpoint-resolve-denied`, and producer restart bumps `endpointGeneration` so
+consumers observe `dependency-changed`.
+
+### Retained opaque handles (D092)
+
+`VolumeMountToken`, per-session named streams, `OwnedTransport` byte-stream
+handles, transport connection handles, pidfds, FD indexes, layout operation
+handles, and `operationId` values remain controller-internal or high-churn
+opaque handles. They are not promoted to `Endpoint` resources.
+
 ---
 
 ## Volume source kinds
@@ -1025,7 +1045,6 @@ spec:
   budget: {}
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   desiredLifecycle: running
   restartPolicy:
@@ -1189,7 +1208,6 @@ spec:
   budget: {}
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   startDeadline: "60s"
   runtimeDeadline: "3600s"
@@ -1234,7 +1252,6 @@ spec:
   budget: {}
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   startDeadline: "60s"
   runtimeDeadline: "3600s"
@@ -1282,7 +1299,6 @@ spec:
   budget: {}
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   startDeadline: "60s"
   runtimeDeadline: "7200s"

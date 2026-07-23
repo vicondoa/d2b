@@ -158,6 +158,20 @@ field in `settings` is denied, a `settings` that restates/overrides a base field
 is rejected with `spec-provider-shadow`, and an over-limit envelope is rejected
 with the spec bounds error. The same validation runs at Nix build time.
 
+### Endpoint resource resolution (D092)
+
+`Endpoint` is a standard ResourceType and uses the ordinary
+`Get`/`List`/`Watch`/`UpdateSpec`/`UpdateStatus`/`Delete`/`Upgrade` verbs and
+Role/RoleBinding authorization. Its spec/status never carry a raw locator, so a
+`Get` returns only closed class/transport/locality/purpose values and bounded
+fingerprints. Resolving an `Endpoint` to a live transport/FD is **not** a public
+API verb: Core/ProviderSupervisor performs it privately through the
+EffectPort/LaunchTicket path when wiring an authorized consumer Process. A
+consumer that is not authorized (by RoleBinding and the Endpoint's
+`consumerPolicy`) to resolve an `Endpoint` is denied with `endpoint-resolve-denied`
+and receives no locator. A producer restart bumps `status.update`/
+`endpointGeneration`, firing the consumer's `dependency-changed` reconcile.
+
 ## Native RBAC resources
 
 ### Bootstrap authorization
@@ -387,6 +401,7 @@ Stable classes include:
 - expedited-quota-exceeded;
 - expedited-reconcile-pending;
 - upgrade-required;
+- endpoint-resolve-denied;
 - authorization-denied;
 - revision-expired;
 - backpressure;

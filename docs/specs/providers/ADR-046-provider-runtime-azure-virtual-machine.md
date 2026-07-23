@@ -575,10 +575,6 @@ spec:
     allowEgress: false              # no ambient network; all ARM calls via AzureEffectPort
     ports: []
   deviceUsage: []
-  endpoints:
-    - name: controller-internal
-      transport: unix
-      purpose: d2b-bus-controller-endpoint
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -600,6 +596,49 @@ spec:
     successThreshold: 1
   adoptionPolicy: adopt-on-restart
   drainTimeout: "30s"
+```
+
+Stable control/service surfaces are owned Endpoint resources rather than inline
+Process fields:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: azure-vm-controller
+  zone: system
+  ownerRef: Provider/runtime-azure-virtual-machine
+spec:
+  providerRef: Provider/runtime-azure-virtual-machine
+  producerRef: Process/azure-vm-controller-process
+  endpointClass: control
+  transport: unix
+  purpose: d2b-bus-controller-endpoint
+  serviceFingerprint: runtime-azure-virtual-machine.d2bus.org/controller/v1
+  locality: guest-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-azure-virtual-machine]
+  lifecyclePolicy: recycle-with-producer
+---
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: azure-vm-bootstrap
+  zone: system
+  ownerRef: Provider/runtime-azure-virtual-machine
+spec:
+  providerRef: Provider/runtime-azure-virtual-machine
+  producerRef: Process/azure-vm-bootstrap-svc-process
+  endpointClass: service
+  transport: unix
+  purpose: d2b-bus-service-endpoint
+  serviceFingerprint: runtime-azure-virtual-machine.d2bus.org/bootstrap/v1
+  locality: guest-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-azure-virtual-machine]
+  lifecyclePolicy: recycle-with-producer
 ```
 
 ### azure-vm-bootstrap-svc Process
@@ -641,10 +680,6 @@ spec:
     allowEgress: false
     ports: []
   deviceUsage: []
-  endpoints:
-    - name: bootstrap-listener
-      transport: unix
-      purpose: d2b-bus-service-endpoint
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -667,6 +702,27 @@ spec:
   adoptionPolicy: adopt-on-restart
   drainTimeout: "30s"
 ```
+
+### Endpoint resources (D092)
+
+`Provider/runtime-azure-virtual-machine` declares conformance to the standard
+`Endpoint` base schema. Stable controller and bootstrap service endpoints are
+owned `Endpoint` resources with `ownerRef` and `producerRef`; consumers use
+`Endpoint/<name>` ResourceRefs. No raw Unix path, relay URL, fd, credential, ARM
+URL, or guest-control locator appears in resource spec/status or CLI output.
+Resolution is only via authorized EffectPort/LaunchTicket flows; unauthorized
+resolve fails `endpoint-resolve-denied`. A producer restart bumps
+`endpointGeneration` and causes dependent consumers to receive
+`dependency-changed`. Per-session relay/transport handles remain internal and
+are not Endpoints.
+
+### Retained opaque handles
+
+Retained opaque values are `AzureOperationHandle`, `VmHandle`, credential lease
+handles, idempotency keys, operation IDs, per-session ComponentSession/relay
+transports, and LaunchTicket fd indexes. They are controller-internal,
+high-churn, non-authorizing, or lack independent lifecycle, so D092 keeps them
+opaque instead of promoting them to resources.
 
 ---
 
@@ -1293,7 +1349,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `d2bd/src/provider_registry.rs`: `AzureVmForbidden`, `AZURE_VM_IMPLEMENTATION_ID`; `d2b-realm-provider/src/provider.rs`: `InfrastructureProvider` (dead-reachable) |
 | Reuse action | Extract and adapt; DELETE `InfrastructureProvider` after this Provider is operational |
 | Destination | `src/{lib.rs,config.rs,schema.rs,error.rs,effect/mod.rs}` |
-| Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest spec.provider.settings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; `EndpointSpec` name/transport/purpose |
+| Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest spec.provider.settings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; Endpoint ResourceType templates with name/transport/purpose |
 | Validation | Provider catalog; descriptor fingerprint; schema/conformance tests |
 | Removal proof | `InfrastructureProvider` deleted; `AzureVmForbidden` removed after Provider resource model replaces registry |
 
@@ -1365,7 +1421,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `nixos-modules/options-realms-workloads.nix`: `WorkloadProviderKind::ProviderManaged` |
 | Reuse action | Adapt |
 | Destination | `nixos-modules/` (Provider/Guest resource emitters); crate Nix build |
-| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; `EndpointSpec` name/transport/purpose |
+| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; Endpoint ResourceType templates with name/transport/purpose |
 | Validation | Nix eval tests; `make test-flake`; `make test-drift` |
 | Removal proof | `d2b.realms.<r>.workloads.<w>` removed at v3 cutover |
 
@@ -1403,7 +1459,7 @@ Run with `cargo test -p d2b-provider-runtime-azure-virtual-machine`.
 
 | File | Coverage |
 | --- | --- |
-| `tests/conformance.rs` | `d2b-provider-toolkit::conformance::check_provider_conformance`; descriptor; schema exports; `SandboxSpec` semantic class fields present; `EndpointSpec` includes `purpose` field; `Volume` absent from exported ResourceTypes (only `Guest` exported; Volume owned/reconciled by core/volume-local) |
+| `tests/conformance.rs` | `d2b-provider-toolkit::conformance::check_provider_conformance`; descriptor; schema exports; `SandboxSpec` semantic class fields present; Endpoint ResourceType template includes `purpose` field; `Volume` absent from exported ResourceTypes (only `Guest` exported; Volume owned/reconciled by core/volume-local) |
 | `tests/lifecycle_hermetic.rs` | `FakeAzureEffectPort`; full non-blocking LRO state machine via `requeue-at`: `Absent → Provisioning → PskDelivering → Bootstrapping → Ready → Reconfiguring → Draining → Deleting → Finalized`; ARM 429 retry; ARM 409 → adoption; `ProvisionFailed`; `BootstrapFailed`; `DeletionAmbiguous` finalizer hold; post-commit audit append; controller as authorized `update-status` writer; `FakeAzureEffectPort` never exposes ARM poll URL to assertions |
 | `tests/bootstrap_hermetic.rs` | PSK single-use; sealed PSK ciphertext in Volume (plaintext never in Volume); `GrantBootstrapAdmission` single-session delivery; IKpsk2 snow 0.10 vectors; PSK expiry; tampered IKpsk2 rejected; enrollment record sealed; bootstrap-svc mount of controller Volume rejected with `volume-domain-mismatch`; bootstrap-svc receives only its own `admission` view dirfd |
 | `tests/credential_hermetic.rs` | Fake enrolled KK; `AcquireToken` → token bytes via `AzureEffectPort` only; token bytes absent from status/audit/OTEL; zeroized after ARM call; no ambient fallback fires |

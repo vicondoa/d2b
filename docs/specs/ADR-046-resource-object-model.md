@@ -479,10 +479,41 @@ Standard execution/shared:
 - Network;
 - Device;
 - User;
-- Credential.
+- Credential;
+- Endpoint.
 
-Provider-specific semantic ResourceTypes may extend the set through signed
-schemas/API bindings. They use this same envelope/status/ownership contract.
+There are 17 standard ResourceTypes (Endpoint added by D092). Provider-specific
+semantic ResourceTypes may extend the set through signed schemas/API bindings.
+They use this same envelope/status/ownership contract.
+
+## Entity promotion test and opaque-ID classification (D092)
+
+A stable managed identity MUST be a proper ResourceType (not an opaque `*Id`/
+`Handle`) when **any** of these holds:
+
+- it is stable across a reconcile pass or restart;
+- it is independently lifecycle/readiness/finalizer/lease managed;
+- it is referenced by another resource, controller, or Provider;
+- authorization/policy/audit applies to it independently;
+- it is visible in resource status or CLI;
+- the ownership/dependency graph needs it.
+
+An opaque ID or handle is permitted **only** when it is confined to one
+controller/process, not API/status-visible as a locator, has no independent
+lifecycle/authorization, and/or is per-connection/high-churn. Every retained
+public `*Id`/`Handle` documents its rationale. The frozen permitted-opaque set:
+
+| Opaque handle | Why it is not a resource |
+| --- | --- |
+| pidfd | Process-local, non-persistent, never crosses the bus (D022) |
+| fd index / inherited-fd slot | Per-launch LaunchTicket-local; not API/status-visible |
+| named stream id (per ComponentSession) | Per-session/high-churn; internal to one session |
+| transport byte-stream handle (`OwnedTransport`) | Per-session carriage handle held in one process (D081) |
+| reconcile operation token / `operationId` | In-flight, single-controller, core Operation ledger owned |
+| content/schema digest | A value, not a managed entity |
+
+Stable cross-boundary endpoint identities do **not** qualify as opaque and are
+the `Endpoint` ResourceType.
 
 ## Folded implementation detail
 
@@ -491,9 +522,10 @@ The following are not standalone ResourceTypes:
 - budgets/cgroups;
 - sandbox/namespace/seccomp/capability profiles;
 - files/directories/ACLs/views/mounts outside Volume;
-- process endpoints/ports/telemetry bindings;
+- process ports and telemetry bindings (stable endpoints are the `Endpoint`
+  ResourceType, D092);
 - controller instances;
-- pidfds;
+- pidfds and per-session named-stream/transport handles;
 - locks/leases internal to transactions/controllers;
 - syscalls/broker operations.
 

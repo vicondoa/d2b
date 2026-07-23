@@ -551,13 +551,6 @@ spec:
     fds:
       limit: 256
   networkUsage: null
-  endpoints:
-    - name: bounded-emitter-ingest
-      transport: unix
-      purpose: bounded-emitter-drain
-    - name: otlp-ingest
-      transport: unix
-      purpose: otlp-grpc-ingest
   readiness:
     class: provider-defined              # collector binary reports readiness when
                                          # emitter.sock drain loop is active
@@ -616,10 +609,6 @@ spec:
     fds:
       limit: 64
   networkUsage: null
-  endpoints:
-    - name: vsock-ingest
-      transport: vsock
-      purpose: private-ingest            # Zone-allocated vsock port; no d2b-bus
   readiness:
     class: provider-defined              # forwarder reports readiness on vsock bind
   restartPolicy:
@@ -635,6 +624,121 @@ The forwarder worker has **no bus service, no dependency alias authority, and no
 controller/CLI authority**. It is a pure worker: receive OTLP frames over vsock
 from the Guest, relay to `otlp.sock` in the Volume mount, enforce size bounds
 (max 4 MiB per frame), and apply session timeout.
+
+## Endpoint resources (D092)
+
+`Provider/observability-otel` declares standard `Endpoint` base-schema
+conformance. Stable collector ingest services and per-Guest forwarder ingest
+services are owned `Endpoint` resources with `producerRef`; they are not inline
+`Process.spec` fields. Consumers use `Endpoint/<name>` references. Endpoint
+spec/status/CLI/audit/telemetry never include raw socket paths, CIDs, ports,
+IP addresses, fd numbers, OTLP payload bytes, span/log bodies, or credentials.
+Resolution occurs only through an authorized EffectPort/LaunchTicket;
+unauthorized resolution returns `endpoint-resolve-denied`. Producer restart
+bumps `Endpoint.status.endpointGeneration`, which triggers `dependency-changed`
+for consumers.
+
+The runtime sockets tmpfs `Volume` remains the backing store for collector
+transport files; it is not the stable endpoint identity.
+
+Representative owned Endpoint resources:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: observability-otel-bounded-emitter-ingest
+  zone: work
+  ownerRef: Provider/observability-otel
+spec:
+  providerRef: Provider/observability-otel
+  producerRef: Process/observability-otel--collector--host-system
+  endpointClass: service
+  transport: unix
+  purpose: observability-otel.d2bus.org/bounded-emitter-drain
+  serviceFingerprint: observability-otel.d2bus.org/bounded-emitter.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: observability-otel-otlp-ingest
+  zone: work
+  ownerRef: Provider/observability-otel
+spec:
+  providerRef: Provider/observability-otel
+  producerRef: Process/observability-otel--collector--host-system
+  endpointClass: service
+  transport: unix
+  purpose: observability-otel.d2bus.org/otlp-grpc-ingest
+  serviceFingerprint: observability-otel.d2bus.org/otlp-grpc.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: telemetry-producer-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: observability-otel-vsock-ingest-<guest-uid-short>
+  zone: work
+  ownerRef: Provider/observability-otel
+spec:
+  providerRef: Provider/observability-otel
+  producerRef: Process/observability-otel--fwd-<guest-uid-short>
+  endpointClass: service
+  transport: vsock
+  purpose: observability-otel.d2bus.org/private-guest-ingest
+  serviceFingerprint: observability-otel.d2bus.org/guest-otlp-ingest.v3
+  locality: cross-domain
+  visibility: authorized-consumers
+  attachmentPolicy: launch-ticket
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Retained opaque handles
+
+- pidfds: Process supervision handles; not durable endpoint identities.
+- Per-connection/session handles: OTLP stream and export attempt handles are
+  high-churn flow-control state.
+- Named streams: bounded emitter streams carry telemetry records and do not
+  identify the stable ingest service.
+- `OwnedTransport`: ComponentSession transport ownership remains an in-memory
+  authenticated capability.
+- fd indexes: collector and forwarder descriptors are LaunchTicket-local slots
+  and stay opaque.
+
 ---
 
 ## Zone startup and bootstrap invariant
@@ -1382,8 +1486,9 @@ All test files must be present. Workspace policy rejects a missing `tests/` or
   `processClass: worker`) on new `Guest/*` resource.
 - Assert: forwarder Process spec has `capabilityClasses: []` and
   `startRoot: false`.
-- Assert: forwarder Process spec has a single `vsock-ingest` EndpointSpec and
-  no d2b-bus endpoint.
+- Assert: forwarder has one owned
+  `Endpoint/observability-otel-vsock-ingest-<guest-uid-short>` with
+  `producerRef` pointing at the forwarder Process and no d2b-bus endpoint.
 - Assert: controller handles `deletion-requested` hint: sets desired lifecycle to
   `Stopped` on all vsock-forwarder `Process` children and waits for finalizers;
   final deletion uses event-only Deleted-phase revision + post-commit audit.

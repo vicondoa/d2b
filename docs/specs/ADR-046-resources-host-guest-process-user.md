@@ -248,8 +248,15 @@ All fields listed are part of the spec unless noted status-only.
 | `budget` | BudgetSpec | `{}` | see BudgetSpec | Per-process resource limits. |
 | `networkUsage` | NetworkUsageSpec? | `null` | — | Network access specification. |
 | `deviceUsage` | `[DeviceUsageSpec]` | `[]` | 0..16 items | Device access specifications. |
-| `endpoints` | `[EndpointSpec]` | `[]` | 0..32 items | Service endpoints exposed by this process. |
 | `telemetry` | TelemetrySpec | `{}` | — | Telemetry/observability bindings. |
+
+`ProcessSpec` carries **no** inline `endpoints` field (D092). A stable endpoint a
+Process produces is a separate owned `Endpoint` resource (see § Endpoint
+ResourceType) with `producerRef: Process/<name>`; Core creates these from the
+owning component descriptor's Endpoint templates, or the owning controller
+creates them, and consumers reference `Endpoint/<name>`. Per-connection or
+high-churn carriage (named streams, `OwnedTransport` handles, inherited fds)
+remains internal and is not an Endpoint.
 
 `MountSpec`:
 
@@ -285,14 +292,11 @@ All fields listed are part of the spec unless noted status-only.
 | `access` | `shared\|exclusive` | `shared` | Exclusive requires the device's `exclusive` flag on the owning Host/Guest. |
 | `purpose` | string | `""` | Bounded usage purpose. Max 63 chars. |
 
-`EndpointSpec`:
-
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| `name` | string | required | Stable endpoint name; `^[a-z][a-z0-9-]*$`; max 63 chars. |
-| `transport` | `unix\|vsock\|tcp` | required | Endpoint transport class. |
-| `purpose` | string | required | Endpoint purpose; max 63 chars. |
-| `publicKey` | string? | `null` | Optional Noise static public key hex-encoded; max 128 chars. |
+`EndpointSpec` (folded): there is no inline `EndpointSpec` on `ProcessSpec`.
+Stable endpoints are the `Endpoint` ResourceType below; a former inline endpoint
+`{ name, transport, purpose, publicKey }` becomes an `Endpoint` resource with
+`producerRef` set to the producing Process. Ports are declared in
+`NetworkUsageSpec.ports`; telemetry bindings in `TelemetrySpec`.
 
 `TelemetrySpec`:
 
@@ -764,7 +768,6 @@ spec:
   budget: {}
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   # Process-specific fields:
   desiredLifecycle: running           # running|stopped
@@ -1117,7 +1120,6 @@ spec:
   budget: {}
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   # EphemeralProcess-specific fields:
   startDeadline: "60s"      # max time from spec commit to process start; default 60s
@@ -1447,6 +1449,76 @@ User uses no controller-managed finalizer. Deletion is blocked by the
 structural check when any Process `userRef` or Volume `ownerRef`/`groupRef`
 references this User. The operator must remove or update all such references
 before deletion succeeds.
+
+---
+
+## Endpoint
+
+`Endpoint` is a standard ResourceType (D092): the promoted, provider-neutral
+identity for a **stable managed endpoint** (a service/device/control/data/
+transport attachment point) that is referenced across a resource/controller/
+Provider boundary. Per-connection or high-churn carriage (named streams,
+`OwnedTransport` handles, inherited fds, `operationId`) is not an Endpoint.
+
+An `Endpoint` follows the D089 layered spec and D088 layered status. It carries
+**no** raw path, address, CID, port, fd, or credential; Core/ProviderSupervisor
+resolves the `Endpoint` resource to a private transport/FD only through the
+EffectPort/LaunchTicket path.
+
+### Endpoint base spec (Layer 2)
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `providerRef` | ResourceRef | required | `Provider/<name>` selecting the semantic Endpoint implementation/controller. |
+| `producerRef` | ResourceRef | required | The producing resource: `Process/<name>`, `Device/<name>`, `Guest/<name>`, `Host/<name>`, or a qualified `<provider>.d2bus.org.<Type>/<name>`. |
+| `endpointClass` | `service\|device\|transport\|control\|data` | required | Closed class of the endpoint. |
+| `transport` | `unix\|vsock\|tcp\|fd-attachment\|opaque-carriage` | required | Closed transport class only — never a raw path/address/CID/port/fd. |
+| `purpose` | string | required | Bounded stable purpose label; max 63 chars. |
+| `serviceFingerprint` | string? | `null` | Bounded service/schema fingerprint or capability class; no raw schema bytes. |
+| `locality` | `host-local\|guest-local\|cross-domain\|zone-local` | required | Closed locality/visibility class. |
+| `visibility` | `owner\|provider\|zone` | `provider` | Closed visibility scope for consumers. |
+| `attachmentPolicy` | object | `{ supported: false }` | Bounded attachment support/policy (supported, max attachments); no locator. |
+| `consumerPolicy` | object | `{}` | Bounded consumer policy / allowed consumer ref bounds. |
+| `lifecyclePolicy` | `pinned\|recycle-with-producer\|recreate-on-generation` | `recycle-with-producer` | Closed lifecycle/recycle policy. |
+| `provider` | ProviderExtension? | `null` | Optional canonical `spec.provider = { schemaId, schemaVersion, settings }` (D089); implementation-only, no locator. |
+
+### Endpoint base status (Layer 2)
+
+On top of the universal base (including `status.update`, D091), the Endpoint
+ResourceType base status carries:
+
+| Field | Values |
+| --- | --- |
+| `readiness` | `Pending\|Ready\|Degraded\|Unavailable\|Unknown` |
+| `observedProducerGeneration` | Numeric generation of the producer resource realized here |
+| `observedResourceGeneration` | Numeric generation of this Endpoint resource observed |
+| `endpointGeneration` | Numeric; bumped when the producer restarts/recycles so consumers re-resolve |
+| `connectionAvailability` | Closed enum `available\|draining\|unavailable` |
+| `leaseAvailability` | Closed enum `none\|available\|exhausted` |
+| `capability` | Closed capability-class observations |
+| `locality` | Observed closed locality class |
+| `transport` | Observed closed transport class |
+| `conditions` | Bounded standard conditions |
+
+No raw locator (path/address/CID/port/fd/credential) appears in status. A
+Provider-specific implementation extension uses the optional `status.provider`
+(D088), never restating a base field.
+
+### Ownership, resolution, and references
+
+- `metadata.ownerRef` gives the Endpoint its lifecycle and child-first deletion
+  (the owning component/Process/Device/Guest/Volume-`Export`). Core creates
+  static component Endpoints from the signed manifest's Endpoint templates;
+  dynamic controllers create their owned Endpoints. Static Endpoints may be
+  Nix/API-authored only where the ResourceType schema permits.
+- Consumers reference an endpoint by `Endpoint/<name>` ResourceRef and gain a
+  dependency edge; a producer restart bumps `endpointGeneration` and fires the
+  consumer's `dependency-changed` reconcile trigger.
+- Resolving an `Endpoint` to a live transport/FD requires authorization; an
+  unauthorized resolve is denied with a typed error and no locator is returned.
+- The virtiofs `Export` resource remains the attachment lifecycle owner and
+  references its `Endpoint` where the exported endpoint is independently
+  consumed (`ADR-046-resources-volume`).
 
 ---
 
@@ -1876,7 +1948,7 @@ d2b.zones.dev.resources.wayland-proxy = {
   "metadata": { "annotations": {}, "labels": {}, "name": "wayland-proxy", "ownerRef": "Provider/display-wayland", "zone": "dev" },
   "spec": {
     "budget": { "cpu": { "limit": "500m", "request": null }, "memory": { "limit": "128Mi", "request": null } },
-    "domain": "system", "endpoints": [], "executionRef": "Host/host-system", "mounts": [],
+    "domain": "system", "executionRef": "Host/host-system", "mounts": [],
     "processClass": "service",
     "providerRef": "Provider/system-systemd",
     "readiness": { "class": "ready-condition", "timeout": "30s" },

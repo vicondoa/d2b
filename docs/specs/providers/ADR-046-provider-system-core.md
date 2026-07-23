@@ -553,12 +553,65 @@ permissionClaims:
 
 ### 5.3 Services
 
-`Provider/system-core` exposes no d2b-bus services. It is a pure controller
-Provider; it reconciles resources and writes status. Operators and other
-controllers interact with it exclusively through the resource API
-(`d2b.resource.v3` service on d2b-bus).
+`Provider/system-core` exposes only its fixed host/user controller service to
+the Zone resource dispatcher. Operators and other controllers still interact
+with Host/User state through the resource API (`d2b.resource.v3` service on
+d2b-bus); they do not receive a provider-specific public method surface.
 
-### 5.4 Workers
+## 5.4 Endpoint resources (D092)
+
+`Provider/system-core` conforms to the standard `Endpoint` base schema for its
+fixed bootstrap controller service. Stable service identity is represented as an
+owned `Endpoint` resource with `producerRef`; consumers use `Endpoint/<name>`.
+Because `d2b-core-controller` is a bootstrap fixed process rather than a
+`Process` resource, the producer is the qualified fixed-controller resource below
+instead of an inline `Process.spec` field. Endpoint spec/status never carries raw
+socket paths, peer credentials, fd numbers, host paths, PIDs, or credentials.
+Resolution occurs only through an authorized EffectPort/LaunchTicket;
+unauthorized resolution returns `endpoint-resolve-denied`. Producer restart
+bumps `Endpoint.status.endpointGeneration`, causing dependents to observe
+`dependency-changed`.
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: system-core-host-user-control
+  zone: dev
+  ownerRef: Provider/system-core
+spec:
+  providerRef: Provider/system-core
+  producerRef: system-core.d2bus.org/FixedController/d2b-core-controller
+  endpointClass: control
+  transport: unix
+  purpose: system-core.d2bus.org/host-user-control
+  serviceFingerprint: system-core.d2bus.org/HostUserControl.v3
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: component-session
+  consumerPolicy: zone-runtime-only
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## 5.5 Retained opaque handles (D092 promotion test)
+
+- Inherited d2b-bus socketpair fd indexes are bootstrap attachment slots and stay
+  opaque.
+- `OwnedTransport` and ComponentSession generation handles are in-memory bus
+  capabilities behind Endpoint resolution, not addressable resources.
+- Resource revision cursors, checkpoints, and `operationId` values remain opaque
+  status/ledger correlation handles.
+- system-core is not a Process Provider and holds no pidfds across reconcile
+  calls; any observed PID remains a transient diagnostic, not an Endpoint.
+
+### 5.6 Workers
 
 `Provider/system-core` declares no worker Process templates. Workers are not
 required because:
@@ -584,8 +637,9 @@ trusted endpoint policy). They use:
 | `d2b.resource.v3` | ResourceClient — list, watch, update-status | outbound from handlers |
 | `d2b.resource.v3` | Receive reconcile hints from store post-commit dispatcher | inbound to handlers |
 
-No external service endpoint is registered on d2b-bus. No provider-specific
-service method is exposed.
+No public external service endpoint is registered on d2b-bus. The fixed
+host/user control Endpoint above remains provider-internal and does not expose
+provider-specific methods to operators or other controllers.
 
 ### 6.1 ResourceClient usage
 

@@ -332,15 +332,16 @@ status:
   resource:
     proxyProcessRef: Process/corp-vm-display-proxy
     guestFrontendProcessRef: Process/corp-vm-display-guest
+    waylandEndpointRef: Endpoint/corp-vm-wayland-cross-domain
+    waylandEndpointGeneration: 1
     policyDigest: sha256:<hex>
-    endpointRevision: <opaque>
 ```
 
-`proxyProcessRef`, `guestFrontendProcessRef`, `policyDigest`, and
-`endpointRevision` are opaque bounded strings in `status.resource`. No socket
-path, compositor socket name, user identity, window title, raw argv, PID, unit
-name, terminal/clipboard/notification byte, secret, or authority-conferring
-handle appears in any status layer.
+`proxyProcessRef`, `guestFrontendProcessRef`, `waylandEndpointRef`,
+`waylandEndpointGeneration`, and `policyDigest` are bounded observations in
+`status.resource`. No socket path, compositor socket name, user identity,
+window title, raw argv, PID, unit name, terminal/clipboard/notification byte,
+secret, or authority-conferring handle appears in any status layer.
 
 ### 5.3 Condition types
 
@@ -349,7 +350,7 @@ handle appears in any status layer.
 | `ProxyReady` | Host proxy Process is running and has emitted a readiness event |
 | `GuestFrontendReady` | Guest frontend Process is running and connected |
 | `PolicyApplied` | Compiled filter policy digest is current |
-| `GpuEndpointAvailable` | `device-gpu` Provider advertises cross-domain capability and endpoint ID |
+| `GpuEndpointAvailable` | `device-gpu` Provider advertises cross-domain capability and an authorized `EndpointRef` |
 | `UserPortalReady` | `display-user-portal` for `userRef` is available and has delivered a compositor fd |
 | `ClipboardBridgeReady` | Internal clipboard bridge to `clipboard-wayland` Provider is established; optional |
 | `CrossDomainTrusted` | `spec.crossDomainTrusted = true` and GPU sidecar advertises cross-domain context type |
@@ -523,10 +524,6 @@ spec:
    - deviceRef: Device/corp-vm-gpu
      access: shared
      purpose: wayland-cross-domain-endpoint
-  endpoints:
-   - name: wayland-listen
-     transport: unix
-     purpose: wayland-cross-domain-listen
   networkUsage: null
   readiness:
    initialDelay: "0s"
@@ -631,10 +628,6 @@ spec:
       limit: 16
     fds:
       limit: 64
-  endpoints:
-    - name: wayland-cross-domain
-      transport: vsock
-      purpose: wayland-cross-domain-guest
   networkUsage: null
   deviceUsage: []
   readiness:
@@ -679,6 +672,93 @@ missing GPU cross-domain context causes the Process to enter `Failed` phase;
 the controller sets `WaylandSession` to `Degraded`. The guest frontend worker,
 like the host proxy, has no d2b-bus authority after launch; all required fds
 and config arrive in the LaunchTicket.
+
+### 6.5 Endpoint resources (D092)
+
+`Provider/display-wayland` declares standard `Endpoint` base-schema conformance.
+Stable display endpoints are owned child resources, not inline `Process.spec`
+fields. Consumers refer to `Endpoint/<name>` and never receive raw Wayland
+socket paths, GPU device locators, CIDs, ports, fd numbers, or credentials from
+resource spec, status, CLI output, audit, or telemetry. Resolution occurs only
+through an authorized EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. A producing Process restart bumps
+`Endpoint.status.endpointGeneration`, which triggers dependent consumers with
+`dependency-changed`.
+
+Representative cross-domain Wayland Endpoint resources:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: corp-vm-wayland-cross-domain
+  zone: dev
+  ownerRef: display-wayland.d2bus.org.WaylandSession/corp-vm-display
+spec:
+  providerRef: Provider/display-wayland
+  producerRef: Process/corp-vm-display-proxy
+  endpointClass: data
+  transport: fd-attachment
+  purpose: display-wayland.d2bus.org/wayland-cross-domain
+  serviceFingerprint: display-wayland.d2bus.org/wayland-data.v3
+  locality: cross-domain
+  visibility: authorized-consumers
+  attachmentPolicy: launch-ticket
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: corp-vm-wayland-guest-frontend
+  zone: dev
+  ownerRef: display-wayland.d2bus.org.WaylandSession/corp-vm-display
+spec:
+  providerRef: Provider/display-wayland
+  producerRef: Process/corp-vm-display-guest
+  endpointClass: transport
+  transport: vsock
+  purpose: display-wayland.d2bus.org/guest-cross-domain
+  serviceFingerprint: display-wayland.d2bus.org/guest-frontend.v3
+  locality: cross-domain
+  visibility: authorized-consumers
+  attachmentPolicy: launch-ticket
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+Per-client Wayland connections are not `Endpoint` resources: they are
+short-lived controller-internal connection handles below the D092 promotion
+threshold.
+
+### 6.6 Retained opaque handles
+
+- pidfds: Process supervision tokens tied to kernel process identity; they are
+  not stable resource identities and remain authority-bearing handles.
+- Per-connection/session handles: compositor attachment grants and client
+  connection IDs are high-churn and private to a single LaunchTicket.
+- Named streams: clipboard/display helper streams are per-session payload
+  channels and never identify a stable service endpoint.
+- `OwnedTransport`: authenticated ComponentSession transport ownership remains
+  an in-memory session object, not a resource locator.
+- fd indexes: LaunchTicket-local descriptor numbers are meaningful only inside
+  one process launch and therefore stay opaque.
 
 ---
 
@@ -871,9 +951,10 @@ in the same Zone for `WaylandSession` resources to progress past `Pending`.
 
 The dependency contract:
 
-- `device-gpu` advertises an opaque capability/endpoint ID in the GPU Device
-  status when the VMM advertises the `cross-domain` context type. No socket
-  path or fd is exposed in the Device status or spec.
+- `device-gpu` advertises cross-domain capability and an authorized
+  `Endpoint/<device-gpu-cross-domain>` reference when the VMM advertises the
+  `cross-domain` context type. No socket path or fd is exposed in Device or
+  Endpoint status/spec.
 - `display-wayland` acquires the exact connected cross-domain fd through a
   typed `device-gpu` ComponentSession service/descriptor handoff, authenticated
   via an enrolled KK-profile ComponentSession between the two Provider
@@ -1266,15 +1347,17 @@ watches:
     labelSelector: {ownerKind: display-wayland.d2bus.org.WaylandSession}
   - resourceType: Volume
     labelSelector: {ownerKind: display-wayland.d2bus.org.WaylandSession}
+  - resourceType: Endpoint
+    labelSelector: {ownerKind: display-wayland.d2bus.org.WaylandSession}
   - resourceType: Device
     labelSelector: {purpose: wayland-cross-domain-endpoint}
 ownerTriggers:
   - parentType: display-wayland.d2bus.org.WaylandSession
-    childTypes: [Process, Volume]
+    childTypes: [Process, Volume, Endpoint]
 ```
 
 The controller watches `WaylandSession`, `WaylandPolicy`, session-owned `Process`
-and `Volume` resources, and `Device` resources advertising
+`Volume`, and `Endpoint` resources, and `Device` resources advertising
 `wayland-cross-domain-endpoint`. The session-owned `Volume` watch covers the
 runtime tmpfs Volume (§7.1) whose reconciliation status gates proxy launch.
 `display-wayland` declares no Provider state Volumes, so there are no

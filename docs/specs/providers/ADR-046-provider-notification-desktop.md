@@ -310,7 +310,6 @@ spec:
       limit: 32
     fds:
       limit: 256
-  endpoints: []
   readiness:
     initialDelay: "0s"
     timeout: "5s"
@@ -370,13 +369,6 @@ spec:
       limit: 16
     fds:
       limit: 128
-  endpoints:
-    - name: notification-sink
-      transport: unix
-      purpose: notification-desktop-sink
-    - name: notification-observer
-      transport: unix
-      purpose: notification-desktop-observer
   readiness:
     initialDelay: "0s"
     timeout: "3s"
@@ -436,13 +428,6 @@ spec:
       limit: 8
     fds:
       limit: 64
-  endpoints:
-    - name: notification-source
-      transport: unix
-      purpose: notification-desktop-source
-    - name: host-sink-client
-      transport: vsock
-      purpose: notification-source
   readiness:
     initialDelay: "0s"
     timeout: "3s"
@@ -472,6 +457,120 @@ workloads over an authenticated ComponentSession, validates and bounds-checks
 fields against the configured category filter, and forwards them as
 `NotificationRequest` records over the `DesktopNotificationSink` named stream
 to the `host-sink`.
+
+---
+
+## Endpoint resources (D092)
+
+`Provider/notification-desktop` declares standard `Endpoint` base-schema
+conformance. Stable notification service identities are owned `Endpoint`
+resources with `producerRef`; they are not inline `Process.spec` fields.
+Consumers use `Endpoint/<name>` references. Endpoint spec/status/CLI/audit/
+telemetry never include raw socket paths, D-Bus locators, notification content
+bytes, action payloads, fds, or credentials. Resolution occurs only through an
+authorized EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, which triggers `dependency-changed` for
+consumers.
+
+Representative owned Endpoint resources:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: notification-desktop-sink
+  zone: dev
+  ownerRef: Provider/notification-desktop
+spec:
+  providerRef: Provider/notification-desktop
+  producerRef: Process/notification-desktop-host-sink
+  endpointClass: service
+  transport: unix
+  purpose: notification-desktop.d2bus.org/host-sink
+  serviceFingerprint: notification-desktop.d2bus.org/DesktopNotificationSink.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: notification-desktop-observer
+  zone: dev
+  ownerRef: Provider/notification-desktop
+spec:
+  providerRef: Provider/notification-desktop
+  producerRef: Process/notification-desktop-host-sink
+  endpointClass: service
+  transport: unix
+  purpose: notification-desktop.d2bus.org/observer
+  serviceFingerprint: notification-desktop.d2bus.org/DesktopNotificationObserver.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: observer-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: notification-desktop-source-<guest-name>
+  zone: dev
+  ownerRef: Provider/notification-desktop
+spec:
+  providerRef: Provider/notification-desktop
+  producerRef: Process/notification-desktop-guest-source-<guest-name>
+  endpointClass: service
+  transport: vsock
+  purpose: notification-desktop.d2bus.org/guest-source
+  serviceFingerprint: notification-desktop.d2bus.org/NotificationSource.v3
+  locality: cross-domain
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Retained opaque handles
+
+- pidfds: Process supervision handles, not stable service identities.
+- Per-connection/session handles: action nonces, ComponentSession IDs, and
+  notification delivery IDs are high-churn interaction handles.
+- Named streams: `DesktopNotificationSink` and `DesktopNotificationObserver`
+  carry records; they are payload channels behind Endpoint resolution, not
+  Endpoint identities.
+- `OwnedTransport`: authenticated session transport ownership is an in-memory
+  capability.
+- fd indexes: pre-opened D-Bus and stream descriptors are LaunchTicket-local
+  numbers and remain opaque.
 
 ---
 

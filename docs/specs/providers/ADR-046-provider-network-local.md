@@ -906,11 +906,6 @@ spec:
     networkRef: Network/work-net
     ports: []
     allowEgress: true
-  endpoints:
-    - name: agent-service
-      transport: vsock
-      purpose: d2b.network.v3.agent/v1
-      # ComponentSession service endpoint; accessible to the host controller only
   desiredLifecycle: running
   restartPolicy:
     class: on-failure
@@ -936,6 +931,61 @@ spec:
   adoptionPolicy: adopt-on-restart
   drainTimeout: "10s"
 ```
+
+The agent's stable service binding is represented as an owned `Endpoint`
+resource:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: net-work-net-agent-service
+  zone: dev
+  ownerRef: Process/net-work-net-agent
+spec:
+  providerRef: Provider/network-local
+  producerRef: Process/net-work-net-agent
+  endpointClass: service
+  transport: vsock
+  purpose: network-local.d2bus.org/agent
+  serviceFingerprint: d2b.network.v3.agent/v1
+  locality: cross-domain
+  visibility: zone-private
+  attachmentPolicy: none
+  consumerPolicy: [provider-network-local.d2bus.org/controller]
+  lifecyclePolicy: producer-owned
+status:
+  phase: Ready
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: Available
+  leaseAvailability: NotRequired
+  conditions: []
+```
+
+#### Endpoint resources (D092)
+
+Stable network service bindings that are independently consumed are standard
+`Endpoint` resources. The net-agent service Endpoint above is one example; a
+future DHCP, DNS, or mDNS service binding that is consumed outside its owning
+Process would likewise be an Endpoint child with `producerRef` pointing at the
+service Process. Bridge/fabric realization, tap handles, route/nft state, and
+config Volume contents remain Network/Process realization state, not Endpoints.
+Consumers use `Endpoint/<name>`, raw addresses and ports never appear in
+`Endpoint.spec` or `Endpoint.status`, authorized resolution goes through
+EffectPort/LaunchTicket, unauthorized callers receive `endpoint-resolve-denied`,
+and a producer restart bumps `endpointGeneration` so consumers observe
+`dependency-changed`.
+
+#### Retained opaque handles (D092)
+
+Per-session named streams, `OwnedTransport` byte-stream handles, transport
+connection handles, pidfds, FD indexes, NetworkEffectPort operation handles,
+bridge/tap realization handles, and `operationId` values remain
+controller-internal or high-churn opaque handles. They are not promoted to
+`Endpoint` resources.
 
 #### 11.1.1 NetworkAgentService ComponentSession interface
 
@@ -1700,9 +1750,10 @@ bus-adjacent surface for guest-side interactions.
 
 ### 19.2 Service endpoint (agent)
 
-The net-agent service process exposes `d2b.network.v3.agent/v1` on a Noise-KK
-vsock endpoint.  Only the network-local controller is authorized to call this
-service (bound via the Zone's internal ComponentSession RBAC).
+The net-agent service process exposes `d2b.network.v3.agent/v1` through
+`Endpoint/net-work-net-agent-service`, a Noise-KK vsock Endpoint resource. Only
+the network-local controller is authorized to resolve and call this service
+(bound via the Zone's internal ComponentSession RBAC).
 
 ---
 

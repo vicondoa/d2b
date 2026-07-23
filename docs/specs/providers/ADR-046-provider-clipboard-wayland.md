@@ -261,7 +261,7 @@ Absent` in derived Provider status.
 
 When display-wayland is present and Ready, the framework sets up an enrolled
 KK ComponentSession transport from `Process/clipd-host` (consumer) to the
-`d2b.display.host-clipboard.v3` endpoint on display-wayland. The transport
+display-wayland `Endpoint/<host-clipboard-service>`. The transport
 uses Noise_KK_25519_ChaChaPoly_SHA256 with both static public keys registered
 in the Zone identity registry before handshake. Neither component receives a
 global route table.
@@ -313,10 +313,6 @@ spec:
       limit: 256
   networkUsage: null
   deviceUsage: []
-  endpoints:
-    - name: picker-coord
-      transport: unix
-      purpose: picker-session-coordination
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -348,7 +344,8 @@ spec:
 
 The clipboard-controller:
 
-- serves the internal `d2b.clipboard.picker-coord.v3` service on the `picker-coord` endpoint;
+- serves the internal `d2b.clipboard.picker-coord.v3` service on
+  `Endpoint/clipboard-picker-coord`;
 - creates `EphemeralProcess/picker-<id>` resources via the resource API per paste
   request that requires interactive confirmation;
 - receives `GuestStopped`, `GuestLocked`, `GuestDestroyed`, `GuestSuspended`
@@ -404,13 +401,6 @@ spec:
       limit: 1024
   networkUsage: null
   deviceUsage: []
-  endpoints:
-    - name: bridge
-      transport: unix
-      purpose: clipboard-bridge-wayland-proxy
-    - name: management
-      transport: unix
-      purpose: clipboard-management-api
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -442,16 +432,16 @@ spec:
 
 `clipd-host`:
 
-- serves `d2b.clipboard.bridge.v3` on the `bridge` endpoint (consumed by
+- serves `d2b.clipboard.bridge.v3` on `Endpoint/clipboard-bridge` (consumed by
   display-wayland's wayland-proxy);
-- serves `d2b.clipboard.v3` management API on the `management` endpoint
+- serves `d2b.clipboard.v3` management API on `Endpoint/clipboard-management`
   (consumed by authorized CLI/operator sessions);
 - opens one enrolled KK ComponentSession to display-wayland's
   `d2b.display.host-clipboard.v3` service to receive host selection events,
   focus attribution data, and to publish selections back to the host compositor;
 - opens one enrolled KK ComponentSession to the clipboard-controller's
-  `d2b.clipboard.picker-coord.v3` endpoint for picker session dispatch and
-  result delivery;
+  `Endpoint/clipboard-picker-coord` for picker session dispatch and result
+  delivery;
 - does not connect to WAYLAND_DISPLAY or NIRI_SOCKET directly;
 - does not own ResourceTypes;
 - holds clipboard history in bounded process memory only (never in any Volume).
@@ -501,7 +491,6 @@ spec:
       limit: 64
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry:
     metricsEnabled: false        # worker; no per-picker metrics stream
     tracingEnabled: true
@@ -542,6 +531,120 @@ spec:
 - `failedTtl: "24h"` — failed picker retained 24 hours for incident hold.
 - Controller writes status to the EphemeralProcess resource; never to
   `Provider/clipboard-wayland` directly.
+
+---
+
+## Endpoint resources (D092)
+
+`Provider/clipboard-wayland` declares standard `Endpoint` base-schema
+conformance. Stable clipboard service identities are owned `Endpoint` resources
+with `producerRef`; they are not inline `Process.spec` fields. Consumers use
+`Endpoint/<name>` references. Endpoint spec/status/CLI/audit/telemetry never
+include raw socket paths, compositor locators, clipboard bytes, MIME payloads,
+fds, or credentials. Resolution occurs only through an authorized
+EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, which triggers `dependency-changed` for
+consumers.
+
+Representative owned Endpoint resources:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: clipboard-picker-coord
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/clipboard-wayland
+  producerRef: Process/clipboard-controller
+  endpointClass: service
+  transport: unix
+  purpose: clipboard-wayland.d2bus.org/picker-coordination
+  serviceFingerprint: clipboard-wayland.d2bus.org/picker-coord.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: clipboard-bridge
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/clipboard-wayland
+  producerRef: Process/clipd-host
+  endpointClass: service
+  transport: unix
+  purpose: clipboard-wayland.d2bus.org/bridge
+  serviceFingerprint: clipboard-wayland.d2bus.org/bridge.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: clipboard-management
+  zone: dev
+  ownerRef: Provider/clipboard-wayland
+spec:
+  providerRef: Provider/clipboard-wayland
+  producerRef: Process/clipd-host
+  endpointClass: service
+  transport: unix
+  purpose: clipboard-wayland.d2bus.org/management
+  serviceFingerprint: clipboard-wayland.d2bus.org/management.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: operator-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Retained opaque handles
+
+- pidfds: kernel supervision handles for Process resources, not stable service
+  identities.
+- Per-connection/session handles: selection tokens, picker IDs, and
+  ComponentSession IDs are high-churn and scoped to one interaction.
+- Named streams: clipboard data/control streams carry bounded records or FDs and
+  never represent a stable managed endpoint.
+- `OwnedTransport`: authenticated session transport ownership remains an
+  in-memory capability.
+- fd indexes: `WAYLAND_SOCKET` and transfer-FD slots are LaunchTicket-local
+  descriptor numbers and stay opaque.
 
 ---
 
@@ -831,9 +934,10 @@ Initial → AwaitingDependency → Ready → Degraded (transient) → Ready
 ```
 
 - `AwaitingDependency`: display-wayland not yet Ready (if non-null); waiting
-  for clipd-host bridge endpoint to become reachable.
-- `Ready`: enrolled KK sessions established; bridge and management endpoints
-  accepting connections; picker-coord service available.
+  for `Endpoint/clipboard-bridge` to report Ready.
+- `Ready`: enrolled KK sessions established; `Endpoint/clipboard-bridge`,
+  `Endpoint/clipboard-management`, and `Endpoint/clipboard-picker-coord` are
+  accepting authorized connections.
 - `Degraded`: display-wayland transiently unavailable; clipd-host is restarting;
   new paste requests held in bounded queue (`maxRestarts` not yet exceeded).
 - `Failed`: Process exhausted maxRestarts; EphemeralProcess cleanup handler
@@ -873,9 +977,10 @@ single-flight priority lane.
 2. Open enrolled KK ComponentSession to display-wayland
    (`d2b.display.host-clipboard.v3`); subscribe `HostSelectionChangedEvent`
    and `HostFocusEvent` streams.
-3. Bind bridge endpoint (unix, `bridge`); signal readiness via provider-defined
-   mechanism to system-systemd.
-4. Bind management endpoint (unix, `management`).
+3. Resolve the backing locator for `Endpoint/clipboard-bridge` through the
+   LaunchTicket; signal readiness via provider-defined mechanism to
+   system-systemd.
+4. Resolve the backing locator for `Endpoint/clipboard-management`.
 5. Enter main event loop: bridge requests, host selection events, picker coord
    callbacks, management API calls.
 
@@ -1188,7 +1293,7 @@ binary. Key changes from baseline:
   client session (display_client.rs).
 - Replace NIRI_SOCKET NiriJsonClient with focus events from the display client.
 - Replace Unix bridge socket server with `d2b.clipboard.bridge.v3` ComponentSession
-  service on the `bridge` endpoint.
+  service on `Endpoint/clipboard-bridge`.
 - Remove all `SO_PEERCRED` peer config, bridge directories, and group ACL logic.
 - Port MIME allowlist, FD safety, audit, loop suppression, LRU history from
   d2b-clipd verbatim (algorithm preservation invariant).
@@ -1205,7 +1310,8 @@ Conformance gates: `make test-rust -p d2b-provider-clipboard-wayland`.
 Implement `Process/clipboard-controller` as a system-domain system-minijail
 Process. Responsibilities:
 
-- Serve `d2b.clipboard.picker-coord.v3` on `picker-coord` unix endpoint.
+- Serve `d2b.clipboard.picker-coord.v3` on
+  `Endpoint/clipboard-picker-coord`.
 - On `RequestPickerSession`: validate, create `EphemeralProcess/picker-<uuid>`
   via resource API with signed template `picker-session`, `processClass: worker`,
   `successfulTtl: "1h"`, `failedTtl: "24h"`, `startDeadline: "10s"`,

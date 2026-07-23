@@ -378,10 +378,6 @@ spec:
       limit: 256
   networkUsage: null
   deviceUsage: []
-  endpoints:
-    - name: health
-      transport: unix
-      purpose: health
   telemetry: {}
   desiredLifecycle: running
   restartPolicy:
@@ -490,7 +486,6 @@ spec:
       limit: 512
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   telemetry: {}
   startDeadline: "120s"
   runtimeDeadline: "600s"
@@ -531,6 +526,33 @@ Steps the runner performs using its inherited attachments:
 
 The controller never directly reads store paths, mutates profiles, or calls
 `nix-collect-garbage`.
+
+### 5.5 Endpoint resources (D092)
+
+`Provider/activation-nixos` declares standard `Endpoint` base-schema
+conformance but does not expose a stable cross-boundary service endpoint in this
+dossier. Controller health and activation-control channels are
+controller-internal ComponentSession details, and activation runners are
+one-shot workers with no inbound service. Therefore no activation-nixos
+`Endpoint` child resource is created for the Process examples above. If a
+future stable managed activation service is introduced, it must be an owned
+`Endpoint` resource with `producerRef`; consumers must use `Endpoint/<name>`,
+and raw locators must stay out of spec, status, CLI, audit, and telemetry.
+Resolution must go through an authorized EffectPort/LaunchTicket, unauthorized
+resolution must return `endpoint-resolve-denied`, and producer restarts must
+bump `Endpoint.status.endpointGeneration` to trigger `dependency-changed`.
+
+### 5.6 Retained opaque handles
+
+- pidfds: Process supervision handles, not stable service identities.
+- Per-connection/session handles: reconcile operation IDs and ComponentSession
+  handles are scoped to one activation or controller session.
+- Named streams: none are stable service identities in this dossier; any future
+  operation stream carries payload only.
+- `OwnedTransport`: authenticated bus transport ownership remains an in-memory
+  capability.
+- fd indexes: LaunchTicket effect descriptors are per-run slots and stay
+  opaque under D092.
 
 ---
 

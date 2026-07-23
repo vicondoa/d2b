@@ -585,10 +585,6 @@ spec:
     networkRef: <config.networkRef>
     ports: []
     allowEgress: true
-  endpoints:
-    - name: transport-service
-      transport: unix
-      purpose: relay-transport-service
   readiness:
     initialDelay: "0s"
     timeout: "60s"
@@ -674,10 +670,6 @@ spec:
     networkRef: <config.networkRef>
     ports: []
     allowEgress: true
-  endpoints:
-    - name: transport-service
-      transport: unix
-      purpose: relay-transport-service
   readiness:
     initialDelay: "0s"
     timeout: "60s"
@@ -692,6 +684,83 @@ spec:
     maxRestarts: null
     resetAfter: "300s"
 ```
+
+### Endpoint resources (D092)
+
+The relay services' stable transport portals are owned `Endpoint` resources,
+not inline `ProcessSpec` fields. They describe the visible stable binding while
+keeping Azure namespace/entity names, addresses, paths, ports, FDs, and
+credentials out of `Endpoint.spec` and `Endpoint.status`:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: transport-azure-relay-listener-service
+  ownerRef: Process/transport-azure-relay-listener
+spec:
+  providerRef: Provider/transport-azure-relay
+  producerRef: Process/transport-azure-relay-listener
+  endpointClass: transport
+  transport: opaque-carriage
+  purpose: transport-azure-relay.d2bus.org/listener
+  serviceFingerprint: transport-azure-relay.d2bus.org/listener.v1
+  locality: cross-domain
+  visibility: zone-private
+  attachmentPolicy: none
+  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  lifecyclePolicy: producer-owned
+status:
+  phase: Ready
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: Available
+  leaseAvailability: Available
+  conditions: []
+---
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: transport-azure-relay-sender-service
+  ownerRef: Process/transport-azure-relay-sender
+spec:
+  providerRef: Provider/transport-azure-relay
+  producerRef: Process/transport-azure-relay-sender
+  endpointClass: transport
+  transport: opaque-carriage
+  purpose: transport-azure-relay.d2bus.org/sender
+  serviceFingerprint: transport-azure-relay.d2bus.org/sender.v1
+  locality: cross-domain
+  visibility: zone-private
+  attachmentPolicy: none
+  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  lifecyclePolicy: producer-owned
+status:
+  phase: Ready
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: Available
+  leaseAvailability: Available
+  conditions: []
+```
+
+Consumers refer to `Endpoint/<name>` and resolve it only through the authorized
+EffectPort/LaunchTicket path; unauthorized callers receive
+`endpoint-resolve-denied`. A listener or sender Process restart bumps the child
+Endpoint `endpointGeneration`, which dependents observe as `dependency-changed`.
+ZoneLink session state remains owned by the core ZoneLink controller.
+
+### Retained opaque handles (D092)
+
+Per-session `OpenTransport` named streams, `OwnedTransport` byte-stream handles,
+relay transport connection handles, WebSocket/TLS carriage handles, pidfds, FD
+indexes, and `operationId` values are controller-internal or high-churn opaque
+handles. They are not `Endpoint` resources and are never exposed as stable
+resource identities.
 
 ### No static PID1 units
 
@@ -819,10 +888,11 @@ single-flight priority lane.
 
 ### Named opaque byte-stream properties
 
-The `TransportHandle` refers to a named byte stream exposed by the relay
-service process on its `transport-service` Unix endpoint (`EndpointSpec
-transport: unix`). Core and d2b-bus connect to this endpoint to exchange
-Noise record bytes. Key properties:
+The `TransportHandle` refers to a per-session named byte stream exposed by the
+relay service process after core resolves the D092 `Endpoint/<name>` under
+authorization. The named stream itself remains an internal high-churn handle;
+it is not an `Endpoint` and carries no raw locator. Core and d2b-bus exchange
+Noise record bytes over that stream. Key properties:
 
 - **TLS/WebSocket state stays in the Provider process.** The relay service
   owns the TLS handshake and WebSocket framing internally. It pumps bytes

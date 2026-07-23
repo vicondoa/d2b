@@ -196,7 +196,6 @@ provider:
   settings:
     vcpus: 2                  # int [1, 1024]; overrides Provider root default
     memoryMb: 512             # int [128, 524288]; overrides Provider root default
-    vsockCid: 3               # uint32 [3, 4294967294]; assigned by Nix config; must be unique per Host
     machineType: q35          # q35 | microvm; overrides root default
     consoleType: virtio       # virtio | serial; default virtio
     serialPort: false         # bool; emit --serial null (default) or --serial tty
@@ -206,17 +205,20 @@ provider:
                               # any Volume attachment uses virtiofs transport
 ```
 
-**Required fields**: `vsockCid` is required for every `runtime-cloud-hypervisor`
-Guest. All other fields are optional and inherit Provider root defaults.
+**Required fields**: no provider settings are required for every
+`runtime-cloud-hypervisor` Guest. Guest-control addressing is expressed by an
+owned `Endpoint` resource, not by a raw CID in `spec.provider.settings`. All
+settings inherit Provider root defaults unless set.
 
 **Invariants enforced at `validateSpec` time**:
 
-1. `vsockCid` must be unique among all `runtime-cloud-hypervisor` Guests in the
-   Zone. Collisions fail `validateSpec` with reason `vsock-cid-conflict`.
-2. `vcpus` must be ≥ 1 and ≤ 1024.
-3. `memoryMb` must be ≥ 128 and ≤ 524288.
-4. `memoryShared: false` combined with any virtiofs Volume attachment is a hard
+1. `vcpus` must be ≥ 1 and ≤ 1024.
+2. `memoryMb` must be ≥ 128 and ≤ 524288.
+3. `memoryShared: false` combined with any virtiofs Volume attachment is a hard
    spec error at admission time.
+4. Any Guest-control transport identity must be represented as an owned
+   `Endpoint` resource; raw CIDs, socket paths, or ports are rejected from
+   Guest spec and status.
 
 No raw argv string, store path, host path, socket path, credential bytes,
 broker operation name, or free-form kernel cmdline fragment is accepted in
@@ -240,7 +242,6 @@ spec:
     settings:
       vcpus: 4
       memoryMb: 4096
-      vsockCid: 3
 ```
 
 For `runtime-cloud-hypervisor`, `systemArtifactId` is **required**. A Guest
@@ -260,7 +261,7 @@ At build time the Nix compiler resolves the artifact catalog entry:
 | --- | --- | --- | --- |
 | `controllerExecutionRef` | Provider root config | Zone-wide; required | No per-Guest override; all VMM Processes use this Host |
 | `defaultVcpus`, `defaultMemoryMb`, `defaultMachineType`, `watchdog` | Provider root config | Zone-wide default for all Guests | Per-Guest `spec.provider.settings.vcpus`, `memoryMb`, `machineType`, `watchdogOverride` |
-| `vsockCid` | Per-Guest `spec.provider.settings` | Guest-unique | No inheritance; always required |
+| Guest-control transport identity | Owned `Endpoint` resource | Guest-unique stable endpoint | Controller-created; no raw CID in Guest spec/status |
 | `systemArtifactId` | Per-Guest top-level spec | Guest-unique system closure | No default; required |
 | `consoleType`, `serialPort`, `pvpanic` | Per-Guest `spec.provider.settings` | Individual VMM tuning | No inheritance |
 | `healthCheckInterval`, `healthCheckTimeout`, `healthCheckFailureThreshold`, `adoptionWindow`, `startupDeadline` | Provider root config | Zone-wide | Not per-Guest overridable in v3 initial catalog |
@@ -314,8 +315,9 @@ controller-created `Guest/<network-name>-net-vm`.
 - **mounts**: empty (virtiofs sockets are implementation details of
   `Provider/volume-virtiofs`; the VMM receives them through the supervisor
   ticket).
-- **endpoints**: one `{name: ch-api, transport: unix, purpose: ch-api-socket}`
-  endpoint for the CH API socket (internal to the Host; no `exported` field).
+- **Endpoint resources**: the controller creates owned `Endpoint` resources for
+  the CH API control socket and Guest-control vsock service. The VMM Process spec
+  has no inline endpoint list.
 - **cgroup**: placed directly in the delegated leaf:
   `z-<zone-id>/e-<guest-uid>/system/providers/p-<provider-id>/components/c-controller/process/`.
 - **Restart policy**: `on-failure`, `backoffBase: "1s"`, `backoffMax: "60s"`,
@@ -548,7 +550,7 @@ After a Guest `spec` durable commit:
 1. Receive trigger (spec-generation-changed, owned-resource-changed,
    dependency-ready, dependency-changed, deletion-requested, retry-due, etc.).
 2. Read fresh Guest spec snapshot plus owner-index VMM Process snapshot.
-3. Call `validateSpec`: check spec.provider.settings bounds, vsockCid uniqueness,
+3. Call `validateSpec`: check spec.provider.settings bounds, Endpoint resource shape,
    systemArtifactId catalog type, memoryShared+virtiofs invariant,
    controllerExecutionRef validity.
 4. Read dependency snapshots (Device/kvm and all declared Devices, all Networks,
@@ -739,11 +741,9 @@ as a JSON Schema artifact signed with the Provider package:
   "$id": "runtime-cloud-hypervisor.d2bus.org/Guest/spec",
   "type": "object",
   "additionalProperties": false,
-  "required": ["vsockCid"],
   "properties": {
     "vcpus":             { "type": "integer", "minimum": 1, "maximum": 1024 },
     "memoryMb":          { "type": "integer", "minimum": 128, "maximum": 524288 },
-    "vsockCid":          { "type": "integer", "minimum": 3, "maximum": 4294967294 },
     "machineType":       { "type": "string", "enum": ["q35", "microvm"] },
     "consoleType":       { "type": "string", "enum": ["virtio", "serial"] },
     "serialPort":        { "type": "boolean" },
@@ -829,7 +829,6 @@ d2b.zones.dev.resources.dev-vm = {
       settings = {
         vcpus       = 4;
         memoryMb    = 4096;
-        vsockCid    = 3;
         machineType = "q35";
         consoleType = "virtio";
       };
@@ -874,8 +873,7 @@ bundle; `metadata.managedBy` set at activation time, not in bundle):
         "consoleType": "virtio",
         "machineType": "q35",
         "memoryMb": 4096,
-        "vcpus": 4,
-        "vsockCid": 3
+        "vcpus": 4
       }
     },
     "systemArtifactId": "dev-vm-system",
@@ -889,8 +887,8 @@ Note:
   `spec.provider.settings`. The rendered JSON confirms this placement.
 - No store path, kernel path, initrd path, or any derivation value appears
   anywhere in the JSON envelope.
-- `spec.provider.settings` contains only the closed bounded fields — `vsockCid`,
-  `vcpus`, `memoryMb`, `machineType`, `consoleType` — from the signed Guest
+- `spec.provider.settings` contains only the closed bounded fields — `vcpus`,
+  `memoryMb`, `machineType`, `consoleType` — from the signed Guest
   schema extension. No `cmdlineExtra`, no `seccompOverride`, no free-form fields.
 - `Device/dev-vm-kvm` appears in `deviceAttachments` without `exclusive`; KVM
   is a shared device.
@@ -905,10 +903,10 @@ Guests:
 | --- | --- | --- |
 | 17 | `system-artifact-required` | `spec.systemArtifactId` must be set and non-null for this Provider |
 | 17 | `system-artifact-type-mismatch` | The artifact catalog entry must have `type = "nixos-system"` |
-| CH-1 | `vsock-cid-conflict` | `spec.provider.settings.vsockCid` must be unique across all `runtime-cloud-hypervisor` Guests in the Zone |
-| CH-2 | `vsock-cid-reserved` | `vsockCid` must be ≥ 3 (0 = hypervisor, 1 = loopback, 2 = host are reserved) |
+| CH-1 | `guest-control-endpoint-required` | Each running Guest must have an owned `Endpoint` with `producerRef: Guest/<name>`, `endpointClass: control`, and `transport: vsock` before guest-control health can pass |
+| CH-2 | `raw-endpoint-locator-denied` | Raw CIDs, ports, socket paths, and fd numbers are rejected from Guest spec/status and CLI output |
 | CH-3 | `memory-virtiofs-conflict` | `memoryShared: false` is rejected when any Volume attachment under this Guest uses `transport: virtiofs` |
-| CH-4 | `provider-settings-unknown-field` | Any `spec.provider.settings` field not in the signed Guest schema extension is rejected (rejects `cmdlineExtra`, `seccompOverride`, and any other unlisted field) |
+| CH-4 | `provider-settings-unknown-field` | Any `spec.provider.settings` field not in the signed Guest schema extension is rejected (rejects `cmdlineExtra`, `seccompOverride`, raw endpoint locators, and any other unlisted field) |
 | CH-5 | `controller-execution-ref-invalid` | `Provider.spec.config.controllerExecutionRef` must reference an existing `Host` resource in the Zone; missing or wrong type fails Provider installation |
 
 ---
@@ -964,10 +962,6 @@ spec:
     allowEgress: false
   deviceUsage: []                    # no device access; d2b-bus provides all resource authority
   mounts: []                         # no Provider state Volume; operational state is in status/core ledger (D087)
-  endpoints:
-    - name: health
-      transport: unix
-      purpose: controller-health     # ProviderDeployment liveness probe endpoint
   readiness:
     class: ready-condition
     initialDelay: "0s"
@@ -1037,10 +1031,6 @@ spec:
       access: exclusive                # TPM must be exclusive per Device contract
       purpose: tpm-socket
   mounts: []                           # virtiofs sockets supplied through LaunchTicket, not mounts
-  endpoints:
-    - name: ch-api
-      transport: unix
-      purpose: ch-api-socket           # internal to Host; no exported field
   readiness:
     class: ready-condition
     initialDelay: "0s"
@@ -1058,11 +1048,81 @@ spec:
 ```
 
 The controller does **not** store computed argv, kernel paths, initrd paths,
-TAP fd numbers, vsockCid, or socket paths in the Process spec or status. These
+TAP fd numbers, guest-control transport locators, or socket paths in the Process
+spec or status. These
 are implementation details resolved at `ProviderSupervisor` dispatch time from
 the signed template's artifact catalog entry and the current resource/dependency
 state. `Process.spec.artifactId` is not a field in the Process ResourceType;
 the executable is entirely owned by the template.
+
+The load-bearing stable endpoints are modeled as resources rather than inline
+Process fields:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: dev-vm-ch-api
+  zone: dev
+  ownerRef: Guest/dev-vm
+spec:
+  providerRef: Provider/runtime-cloud-hypervisor
+  producerRef: Process/dev-vm-vmm
+  endpointClass: control
+  transport: unix
+  purpose: ch-api-socket
+  serviceFingerprint: runtime-cloud-hypervisor.d2bus.org/ch-api/v1
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  lifecyclePolicy: recycle-with-producer
+---
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: dev-vm-guest-control
+  zone: dev
+  ownerRef: Guest/dev-vm
+spec:
+  providerRef: Provider/runtime-cloud-hypervisor
+  producerRef: Guest/dev-vm
+  endpointClass: control
+  transport: vsock
+  purpose: guest-control
+  serviceFingerprint: d2b.guest-control.d2bus.org/kk/v1
+  locality: cross-domain
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  lifecyclePolicy: recycle-with-producer
+```
+
+Consumers refer to `Endpoint/dev-vm-ch-api` and
+`Endpoint/dev-vm-guest-control`; Core/ProviderSupervisor resolves the private
+Unix or vsock locator only through EffectPort/LaunchTicket authorization.
+
+### Endpoint resources (D092)
+
+`Provider/runtime-cloud-hypervisor` declares conformance to the standard
+`Endpoint` base schema. Stable CH API, Guest-control, and vhost-user data
+surfaces are owned `Endpoint` resources with `ownerRef`, `producerRef`, closed
+`endpointClass`, closed `transport`, and no raw path, CID, port, fd, or
+credential in spec, status, audit, metrics, or CLI output. Consumers use
+`Endpoint/<name>` ResourceRefs; Core/ProviderSupervisor resolves private
+transports or fds only through authorized EffectPort/LaunchTicket flows, and an
+unauthorized request fails `endpoint-resolve-denied`. A producer restart bumps
+`endpointGeneration`, causing dependent consumers to receive the standard
+`dependency-changed` trigger.
+
+### Retained opaque handles
+
+Permitted opaque values are limited to controller-internal or high-churn data:
+`pidfd`/process generation observations, LaunchTicket fd indexes, per-session
+ComponentSession/OwnedTransport handles, operation IDs, and QMP/CH connection
+handles. They have no independent resource lifecycle, are not stable managed
+endpoint identities, and remain absent from public spec/status/CLI fields except
+as bounded non-authorizing diagnostics where already allowed.
 
 ---
 
@@ -1094,8 +1154,8 @@ other named streams or control/cancel traffic.
 ### 14.3 Guest bootstrap ComponentSession
 
 After the VMM Process is Ready, the controller opens an enrolled KK
-ComponentSession to the guest-control vsock endpoint (expected CID from
-`spec.provider.settings.vsockCid`). The session uses
+ComponentSession to `Endpoint/<guest>-guest-control`. The private vsock locator
+is resolved only through the authorized EffectPort/LaunchTicket path. The session uses
 `Noise_KK_25519_ChaChaPoly_SHA256` with the guest bootstrap credential
 (delivered through the `d2b-gctl` virtiofs share). The controller uses this
 session for:
@@ -1247,8 +1307,7 @@ The following are forbidden in any Guest spec, spec.provider.settings, or status
 - store paths, kernel paths, initrd paths;
 - socket paths (CH API socket, virtiofsd socket, swtpm socket);
 - TAP interface names or fd numbers;
-- vsock CID values in status (the CID is in spec; it must not be echoed in
-  status diagnostic fields);
+- guest-control transport locators in spec or status diagnostic fields;
 - raw broker operation names;
 - credential bytes or token material;
 - argv fragments or environment variable values.
@@ -1271,7 +1330,7 @@ The controller emits authoritative audit records (not OTEL) for:
 | `AdoptionAttempted` | durable | `zone`, `resource`, `outcome: adopted|failed|ambiguous` |
 
 No argv, paths, socket names, kernel cmdline, OEM strings, PID, pidfd, TAP
-name, vsockCid, or credential material appears in any audit field. Bounded
+name, guest-control locator, or credential material appears in any audit field. Bounded
 `reason_code` values use stable lower-kebab-case machine identifiers.
 
 ### 17.4 virtiofsd sandbox
@@ -1384,7 +1443,7 @@ status:
 | --- | --- | --- | --- |
 | `system-artifact-required` | Failed | — | `systemArtifactId` is null for a CH Guest |
 | `system-artifact-type-mismatch` | Failed | — | Referenced artifact is not `nixos-system` |
-| `vsock-cid-conflict` | Failed | PolicyValid=False | CID already in use in this Zone |
+| `guest-control-endpoint-conflict` | Failed | PolicyValid=False | Guest-control Endpoint identity conflicts with an existing resource in this Zone |
 | `vmm-process-exited` | Degraded | BootstrapReady=False, GuestReachable=False | Unexpected VMM exit |
 | `guest-control-health-failed` | Degraded | GuestReachable=False | Authenticated health check failed |
 | `guest-control-health-timeout` | Degraded | GuestReachable=False | Health check timed out |
@@ -1415,7 +1474,7 @@ emitter (no OTEL SDK; frames forwarded by `Provider/observability-otel`):
 
 Cardinality rules:
 - `zone` is allowed in metric labels (bounded by Zone count per host).
-- Guest name (`vm.name`), guest-specific IDs, and vsockCid are **not** metric
+- Guest name (`vm.name`), guest-specific IDs, and endpoint locators are **not** metric
   label values; they may appear only in OTEL resource attributes (advisory).
 - No path, socket name, CID, PID, or runtime detail appears in any metric label.
 
@@ -1508,7 +1567,7 @@ Migration from v2 (`d2b.vms.<vm>`) to v3 (`d2b.zones.<zone>.resources.<name>`):
 
 1. v2 runtime is stopped.
 2. Operator configures v3 Guest resource with matching `systemArtifactId`,
-   `vsockCid`, and `spec.provider.settings`.
+   Guest-control Endpoint resources, and `spec.provider.settings`.
 3. Persistent Volume resources for swtpm state and workload storage are
    retained; v3 resource cleanup contract prevents their deletion.
 4. `d2b 3.0 reset` activates v3; the controller creates the bootstrap graph
@@ -1522,8 +1581,8 @@ The `Provider/network-local` controller creates `Guest/<network-name>-net-vm`
 resources automatically for each Network. These Guests use
 `providerRef: Provider/runtime-cloud-hypervisor` and carry:
 - `spec.systemArtifactId`: set from `Network.spec.netVmSystemArtifactId`;
-- `spec.provider.settings.vsockCid`: assigned by the Network controller from the
-  Network's CIDR allocation;
+- Guest-control `Endpoint` resource: created by the Network controller without
+  exposing the private transport locator;
 - `spec.deviceAttachments`: includes the net-VM's `Device/kvm` and any declared
   network device refs; no implicit Host capabilities;
 - standard single VMM Process bootstrap.
@@ -1620,10 +1679,10 @@ bundle and are never swept by configuration generation cleanup.
 | Current source | `nixos-modules/options-realms-workloads.nix`; `nixos-modules/options-vms.nix`; `nixos-modules/processes-json.nix`; `nixos-modules/store.nix` |
 | Reuse action | ADAPT and REPLACE |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter); `nixos-modules/` option extension for `runtime-cloud-hypervisor` Guest schema |
-| Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; vsockCid uniqueness enforced at eval; `make test-drift` gate for schema/Nix drift |
+| Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; Guest-control `Endpoint` resource emitted without raw locator; `make test-drift` gate for schema/Nix drift |
 | Integration | Zone resource bundle emission; private artifact catalog; `xtask gen-resource-nix-options` for auto-generated Nix option types |
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
-| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; vsockCid-conflict eval error; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
+| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
 | Removal proof | `options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `nixos-modules/store.nix` removed after integration parity |
 
 ### ADR046-ch-005 (guest-control health and adoption)
@@ -1691,7 +1750,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     state.rs                     # controller status-first operational-state projection helpers (no state Volume)
   tests/
     vmm_argv_golden_test.rs      # golden argv vectors (headless, q35, gpu, video, macvtap)
-    guest_spec_validation_test.rs # validateSpec: vsockCid conflict, memoryShared, systemArtifactId,
+    guest_spec_validation_test.rs # validateSpec: Endpoint required, memoryShared, systemArtifactId,
                                  # controllerExecutionRef; rejects cmdlineExtra/seccompOverride
     bootstrap_graph_test.rs      # VMM Process spec construction, dependency ordering,
                                  # immediate-launch when all deps ready, drift repair

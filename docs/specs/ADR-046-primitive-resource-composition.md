@@ -52,11 +52,19 @@ Standard execution/shared:
 | Device | Inventoried/exclusive-or-shared device arbitration |
 | User | Named identity, UID/session observations, ACL/process subject |
 | Credential | Opaque rotating credential/lease lifecycle |
+| Endpoint | Stable managed service/device/transport/control/data attachment point (D092); no raw locator |
 
 Provider-specific semantic ResourceTypes may extend this set, always qualified
 `<provider-name>.d2bus.org.<Type>` (for example `display-wayland.d2bus.org.WaylandSession`).
 Standard types above are always unqualified; a Provider-specific type name is
 never bare/unqualified.
+
+Whether a given entity is a standard/qualified ResourceType or a permitted
+opaque handle is decided by the entity promotion test in
+`ADR-046-resource-object-model` § Entity promotion test (D092): a stable,
+cross-boundary, independently-managed identity is a ResourceType; a
+controller-internal or high-churn handle (pidfd, fd index, per-session named
+stream, `OwnedTransport`, `operationId`) stays an opaque ID.
 
 ## ResourceSpec shape
 
@@ -222,8 +230,8 @@ sandbox: { ... }
 budget: { ... }
 networkUsage: null
 deviceUsage: []
-endpoints: []
 telemetry: { ... }
+# no inline endpoints (D092): stable endpoints are owned Endpoint resources with producerRef
 ```
 
 The owning semantic Provider is metadata.ownerRef; its signed component/

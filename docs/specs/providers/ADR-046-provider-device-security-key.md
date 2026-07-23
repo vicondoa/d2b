@@ -304,10 +304,6 @@ spec:
       limit: 64
     memory:
       limit: "64Mi"
-  endpoints:
-    - name: ctrl-relay
-      transport: unix
-      purpose: device-security-key.relay-ctrl.v1
   restartPolicy:
     class: always
     backoffBase: "1s"
@@ -360,13 +356,6 @@ spec:
       limit: 64
     memory:
       limit: "32Mi"
-  endpoints:
-    - name: ctaphid-relay
-      transport: vsock
-      purpose: d2b.security-key.v3
-    - name: ctrl-relay
-      transport: unix
-      purpose: device-security-key.relay-ctrl.v1
   restartPolicy:
     class: on-failure
     backoffBase: "1s"
@@ -394,7 +383,7 @@ The relay Process:
   holds the corresponding OFD lease for the relay's process lifetime; it releases
   automatically when the relay exits for any reason (clean or crash).
 - Serves the `d2b.security-key.v3` ComponentSession over the
-  `Provider/transport-vsock` allocated endpoint (see §ComponentSession).
+  `Endpoint/<device-uid>-sk-ctaphid-relay` resource resolved through Provider/transport-vsock (see §ComponentSession).
 - Accepts at most one concurrent Guest frontend connection. A second concurrent
   connect attempt is held for up to `queueWaitTimeoutSecs` before receiving
   `ERR_CHANNEL_BUSY`.
@@ -408,8 +397,8 @@ The relay Process:
   expected Guest endpoint and passes only a canonical authenticated subject to the
   relay. The relay uses that canonical subject, not any raw transport address.
 - Connects to the Device controller's manifest-declared internal service
-  `device-security-key.relay-ctrl.v1` using the bound endpoint FD from its
-  LaunchTicket (`ctrl-relay` endpoint). Reports session lifecycle events and
+  `device-security-key.relay-ctrl.v1` using the bound internal channel FD from its
+  LaunchTicket. Reports session lifecycle events and
   receives `CancelSession` signals.
 - Has narrow ComponentSession service authority: responder of
   `d2b.security-key.v3` and client of `device-security-key.relay-ctrl.v1` only.
@@ -418,6 +407,62 @@ The relay Process:
 - On crash, Core releases the DeviceGrant and OFD lease; the Device controller
   observes `owned-resource-changed` and sets `DeviceHealthy=False`. The relay is
   restarted after back-off.
+
+The Host relay produces the stable CTAPHID relay service as an owned `Endpoint`
+resource:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: device-<uid-short>-sk-ctaphid-relay
+  zone: <zone>
+  ownerRef: Device/<device-name>
+spec:
+  providerRef: Provider/device-security-key
+  producerRef: Process/device-<uid-short>-sk-relay
+  endpointClass: device
+  transport: vsock
+  purpose: device-security-key.d2bus.org/ctaphid-relay
+  serviceFingerprint: device-security-key.d2bus.org/SecurityKeyCtapRelay.v3
+  locality: cross-domain
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: device-security-key.d2bus.org/frontend-only
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Endpoint resources (D092)
+
+`Provider/device-security-key` conforms to the standard `Endpoint` base schema.
+The stable CTAPHID relay/frontend service identity is an owned `Endpoint`
+resource with `producerRef`; the Guest frontend consumes it as `Endpoint/<name>`.
+Endpoint spec/status never carries raw vsock CIDs, ports, hidraw/UHID paths, fd
+numbers, CTAP/session bytes, PINs, CBOR payloads, signatures, or credentials.
+Resolution occurs only through an authorized EffectPort/LaunchTicket;
+unauthorized resolution returns `endpoint-resolve-denied`. Producer restart
+bumps `Endpoint.status.endpointGeneration`, causing frontend consumers to observe
+`dependency-changed` and reconnect through a fresh authorized ticket.
+
+## Retained opaque handles (D092 promotion test)
+
+- pidfds for relay/frontend supervision stay process-local identity handles.
+- LaunchTicket fd indexes for hidraw, UHID, and internal controller channels stay
+  opaque per-launch attachment slots.
+- CTAPHID CIDs, relay `sessionId` values, and per-connection ComponentSession
+  handles are high-churn ceremony/session state and are never promoted.
+- The manifest-declared relay-controller channel handle is controller-internal;
+  it is not independently consumed outside this Provider.
+- `OwnedTransport` and named CTAPHID streams are in-memory transport
+  capabilities behind Endpoint resolution, not Endpoint identities.
+- `operationId` values remain opaque audit/idempotency correlation handles.
 
 **Current implementation note (implemented-and-reachable):** In the baseline the
 relay is NOT a separate process — it is a daemon-internal loop in
@@ -495,10 +540,6 @@ spec:
       limit: 32
     memory:
       limit: "16Mi"
-  endpoints:
-    - name: ctaphid-client
-      transport: vsock
-      purpose: d2b.security-key.v3
   restartPolicy:
     class: on-failure
     backoffBase: "2s"
@@ -540,8 +581,7 @@ The frontend Process:
   UHID fd with the FIDO usage descriptor. The virtual device is visible to libfido2,
   browsers, and `pamu2fcfg` inside the Guest.
 - Connects to the host relay as initiator of the `d2b.security-key.v3`
-  ComponentSession over the `Provider/transport-vsock` allocated endpoint (the
-  endpoint ID is compiled into the Process spec from `endpoints[ctaphid-client]`).
+  ComponentSession over the `Provider/transport-vsock` resolved `Endpoint/<device-uid>-sk-ctaphid-relay` resource.
   Reconnects automatically on ComponentSession drop (tolerates relay restarts).
 - Reads UHID_OUTPUT events from the Guest kernel and sends them to the relay over
   the named CTAPHID stream. Reads relay responses and injects them via UHID_INPUT2.
@@ -565,15 +605,12 @@ The relay Process serves the `d2b.security-key.v3` ComponentSession over
 `Provider/transport-vsock`. This is the sole CTAPHID transport in v3; no parallel
 raw AF_VSOCK framing exists.
 
-**Transport allocation:** `Provider/transport-vsock` allocates an opaque vsock
-endpoint ID for each relay Process. The relay does not bind a raw vsock port. The
-endpoint ID is:
-- Compiled into the relay Process spec as the `endpoints[ctaphid-relay]` entry
-  (transport: vsock, purpose: d2b.security-key.v3).
-- Compiled into the frontend Process spec as the `endpoints[ctaphid-client]`
-  connect target.
-- Opaque to operators; never configurable as a port number. `vsockPort` does not
-  exist in v3.
+**Transport allocation:** `Provider/transport-vsock` resolves the owned
+`Endpoint/<device-uid>-sk-ctaphid-relay` resource into an opaque vsock attachment
+for the relay and frontend LaunchTickets. The relay does not bind a raw vsock
+port. The resolved transport handle is opaque to operators, never configurable as
+a port number, and never appears in Endpoint spec/status. `vsockPort` does not
+exist in v3.
 
 **Noise profile:** enrolled KK (`Noise_KK_25519_ChaChaPoly_SHA256`). Both relay
 and frontend static keys are enrolled at Process provisioning time before the first
@@ -605,8 +642,8 @@ vsock client from `d2b-session-unix/src/vsock.rs` (see W-R03).
 The relay connects to the Device controller's typed internal ComponentSession
 service `device-security-key.relay-ctrl.v1`. This service is declared in the
 Provider's package descriptor (manifest); there is no ambient filesystem socket
-path. The bound endpoint FD is injected into the relay's LaunchTicket as the
-`ctrl-relay` endpoint entry — the relay never resolves a path to find the
+path. The bound internal channel FD is injected into the relay's LaunchTicket as a
+controller-internal attachment — the relay never resolves a path to find the
 controller.
 
 - **Service name:** `device-security-key.relay-ctrl.v1` (internal; not
@@ -823,7 +860,7 @@ The relay Process holds narrow ComponentSession service authority: responder of
 `d2b.security-key.v3` and client of the manifest-declared internal service
 `device-security-key.relay-ctrl.v1` only. It does not hold a Zone resource API
 client, a broker connection, or write access to the Zone resource store. The
-internal service endpoint FD is injected via LaunchTicket; no ambient path is
+internal service channel FD is injected via LaunchTicket; no ambient path is
 used.
 
 ### I-9: No guest udev rules required
@@ -1347,13 +1384,13 @@ class.
 | --- | --- |
 | W-N01 | New crate `packages/d2b-provider-device-security-key/` with `src/`, `tests/`, `integration/`, `README.md` (workspace policy requires all four) |
 | W-N02 | Device controller: `controller.rs` implementing standard reconcile interface (`spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed`) |
-| W-N03 | Relay Process entry point: `relay.rs` — async ComponentSession accept loop (`d2b.security-key.v3` responder over `Provider/transport-vsock` allocated endpoint), CID translation, hidraw fd received from LaunchTicket DeviceGrant (not broker), CTAPHID proxy over named CTAPHID stream; manifest-declared internal service `device-security-key.relay-ctrl.v1` connected via LaunchTicket endpoint FD for controller messaging |
+| W-N03 | Relay Process entry point: `relay.rs` — async ComponentSession accept loop (`d2b.security-key.v3` responder over the owned `Endpoint/<device-uid>-sk-ctaphid-relay` resource), CID translation, hidraw fd received from LaunchTicket DeviceGrant (not broker), CTAPHID proxy over named CTAPHID stream; manifest-declared internal service `device-security-key.relay-ctrl.v1` connected via LaunchTicket internal channel FD for controller messaging |
 | W-N04 | Session state machine: `session.rs` — `SessionStateMachine` (Idle/Active/Completed/TimedOut; no AwaitingLease), session ring, session ID allocation, ring eviction; DeviceGrant held for relay lifetime; `CancelSession(sessionId)` from controller terminates Active ceremony |
 | W-N05 | CID translator: `cid.rs` — per-session u32→u64 host-CID allocation, bimap, eviction on session end |
 | W-N06 | hidraw probe: `probe.rs` — calls `SecurityKeyEffectPort::observe_inventory(&device_id, &policy_id)` with opaque types injected by Core; interprets `InventoryObservation`; never reads `/sys/class/hidraw/` directly; bundle device table population at activation time (Provider activation resolves label → `device_token` via Core; stored in private bundle) |
-| W-N07 | ComponentSession descriptor validation: `descriptor.rs` — manifest-declared relay↔controller service `device-security-key.relay-ctrl.v1` Noise NN handshake; socket FD injected via LaunchTicket endpoint (no ambient path); relay↔frontend `d2b.security-key.v3` Noise KK enrolled-key registration and session authority enforcement; relay uses canonical authenticated subject from ComponentSession, never raw vsock CID |
+| W-N07 | ComponentSession descriptor validation: `descriptor.rs` — manifest-declared relay↔controller service `device-security-key.relay-ctrl.v1` Noise NN handshake; socket FD injected via LaunchTicket internal channel (no ambient path); relay↔frontend `d2b.security-key.v3` Noise KK enrolled-key registration and session authority enforcement; relay uses canonical authenticated subject from ComponentSession, never raw vsock CID |
 | W-N08 | Minijail profiles for relay and controller only; frontend uses `Provider/system-systemd` hardening directives compiled from `SandboxSpec` (no minijail profile for frontend). Add relay and controller entries to `nixos-modules/minijail-profiles.nix`; `capabilityClasses: []`; `seccompClass: sk-relay` and `seccompClass: sk-controller` |
-| W-N09 | Process resource templates in Provider descriptor: controller template (`Host/host-system`, `system`, `controller`, `environmentClass: provider-defined`, `endpoints[ctrl-relay]`), relay template (`Host/host-system`, `system`, `service`, `environmentClass: provider-defined`, `endpoints[ctaphid-relay, ctrl-relay]`), and frontend template (`Guest/<vm>`, `user`, `service`, `environmentClass: provider-defined`, `endpoints[ctaphid-client]`, `userRef` required) |
+| W-N09 | Process resource templates in Provider descriptor: controller template (`Host/host-system`, `system`, `controller`, `environmentClass: provider-defined`), relay template (`Host/host-system`, `system`, `service`, `environmentClass: provider-defined`), frontend template (`Guest/<vm>`, `user`, `service`, `environmentClass: provider-defined`, `userRef` required), and the owned CTAPHID relay Endpoint resource |
 | W-N10 | Provider descriptor JSON (signed): identity, config schema, exported ResourceType (Device/hidraw), controller/relay/frontend component descriptors, `d2b.security-key.v3` service declaration, D087 status-first state declaration with an empty ProviderStateSet, permission claims |
 | W-N11 | v3 `SecurityKeyOpenDevice` broker op update: add `zone` field; implement bundle device table `device_token` lookup as sole open path; remove iterative sysfs scan from broker; add post-open revalidation steps (fstat, HIDIOCGRAWINFO, HIDIOCGRDESC). This is an internal Core operation called by LaunchTicket; the Provider controller does not call it. |
 | W-N20 | Status-first Provider state contract: the signed Provider descriptor declares no Provider state Volume for controller, relay, or frontend; ProviderStateSet is empty. Device resources and the Core Operation ledger are the operational authority. Controller/relay/frontend Process templates have no `/state` mount and no dedicated state-layout principals. Nix pre-provisions only principals required for genuine Process placement and DeviceGrant access, not state Volume ownership. |
@@ -1362,7 +1399,7 @@ class.
 | W-N14 | Audit record emission: bounded path-free `device-grant` records from Core at DeviceGrant resolution time; `device-session` lifecycle events from Device controller; neither block carries device path, guest name, session content, or CTAP bytes |
 | W-N15 | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring |
 | W-N16 | `README.md` for the crate: Provider identity, root config schema, Device spec, process model, RBAC, security invariants, state/telemetry, build/test/integration commands, standalone-repository consumption |
-| W-N17 | `Provider/transport-vsock` integration: allocate opaque vsock endpoint ID for each relay Process at creation time; compile the endpoint ID into the relay Process `endpoints[ctaphid-relay]` spec and into the frontend Process `endpoints[ctaphid-client]` connect target; enroll Noise KK static keys for relay/frontend pair before first connection |
+| W-N17 | `Provider/transport-vsock` integration: resolve the owned CTAPHID relay Endpoint into opaque LaunchTicket transport attachments for the relay and frontend; enroll Noise KK static keys for relay/frontend pair before first connection |
 | W-N18 | `SecurityKeyEffectPort` trait and associated opaque types (`DeviceId`, `ObservationPolicyId`) defined in `d2b-contracts` (neutral contract crate); both types have custom `Debug` impls that redact content; `effect_port.rs` in the Provider crate re-exports from `d2b-contracts`; Core adapter implementation in `d2b-provider` or `d2b-provider-toolkit` crate; inject into Device controller at startup with concrete `DeviceId` and `ObservationPolicyId` per Device; relay does NOT use the port |
 | W-N19 | Virtual frontend Device lifecycle: controller creates `Device/<device-name>-frontend` (`deviceClass: virtual`, `busClass: uhid`, `ownerRef: Device/<device-name>`, `settings.bindGuest`) on claim; updates `bindGuest` on claim transfer; emits event-only `Deleted` on Device deletion; Core pre-opens `/dev/uhid` inside the Guest at frontend launch time using the virtual Device's DeviceGrant |
 
@@ -1392,7 +1429,7 @@ class.
 | `cancel_propagation.rs` | Operator cancel → controller sends `CancelSession(sessionId)` via manifest-declared internal service → relay sends CTAPHID_CANCEL to token → `SessionCompleted`(reason=operator-cancel); DeviceGrant NOT released by CancelSession (persists until relay exit); disconnect mid-ceremony → same CancelSession sequence; relay crash → Core releases DeviceGrant automatically |
 | `session_timeout.rs` | CEREMONY_TIMEOUT elapsed → Active → TimedOut → Idle; audit `device-session-timeout`; relay restartable after timeout |
 | `cid_isolation.rs` | Two concurrent Guest connections to different relay instances do not share CID namespace; CID allocated per-session; CID translation round-trip for CTAPHID_INIT response; relay uses canonical subject from ComponentSession, not raw vsock CID |
-| `descriptor_validation.rs` | Manifest-declared relay-ctrl service: unregistered service name rejected; LaunchTicket endpoint FD not at ambient path; wrong descriptor digest rejected; wrong SO_PEERCRED uid rejected; oversized record discarded. Noise KK relay ComponentSession: unenrolled static key rejected; wrong service name rejected. `DeviceId`/`ObservationPolicyId` Debug output redacted in test log capture. |
+| `descriptor_validation.rs` | Manifest-declared relay-ctrl service: unregistered service name rejected; LaunchTicket internal channel FD not at ambient path; wrong descriptor digest rejected; wrong SO_PEERCRED uid rejected; oversized record discarded. Noise KK relay ComponentSession: unenrolled static key rejected; wrong service name rejected. `DeviceId`/`ObservationPolicyId` Debug output redacted in test log capture. |
 | `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller/relay/frontend Process templates have no `/state` mounts; controller never calls Volume create/delete; bounded operational observations are written to Device status and Operation rows; CTAP bytes, relay stream data, fd handles, and session keys are absent from status/log/audit/metrics and remain transient in process memory |
 
 ### Integration (in `integration/`)

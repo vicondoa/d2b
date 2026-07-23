@@ -173,6 +173,60 @@ worker components.
 There are no service, worker, or separate component binaries in this Provider.
 The controller is the only binary entry point.
 
+## 4.2 Endpoint resources (D092)
+
+`Provider/system-minijail` conforms to the standard `Endpoint` base schema for
+its fixed bootstrap controller service. The stable ComponentSession service used
+for process launch/control is an owned `Endpoint` resource with `producerRef`;
+ProviderSupervisor consumes it as `Endpoint/<name>`. Because the minijail
+controller is a bootstrap fixed process rather than a `Process` resource, the
+producer is the qualified fixed-controller resource below. Endpoint spec/status
+never carries cgroup paths, profile paths, pidfds, fd numbers, socket paths,
+Linux namespace details, or credentials. Resolution occurs only through an
+authorized EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, causing ProviderSupervisor to observe
+`dependency-changed` and reconnect through a fresh authorized ticket.
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: system-minijail-process-control
+  zone: dev
+  ownerRef: Provider/system-minijail
+spec:
+  providerRef: Provider/system-minijail
+  producerRef: system-minijail.d2bus.org/FixedController/minijail-controller
+  endpointClass: control
+  transport: unix
+  purpose: system-minijail.d2bus.org/process-control
+  serviceFingerprint: system-minijail.d2bus.org/ProcessControl.v3
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: component-session
+  consumerPolicy: provider-supervisor-only
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## 4.3 Retained opaque handles (D092 promotion test)
+
+- pidfds for Process/EphemeralProcess supervision are fresh process-local identity
+  handles and are never persisted or resolved as resources.
+- LaunchTicket fd indexes, cgroup directory fds, namespace/bootstrap fds, and
+  inherited listener fds are per-launch attachment slots.
+- Minijail profile digests, sandbox plan digests, cancellation tokens, and
+  `operationId` values remain opaque verification/idempotency handles.
+- `OwnedTransport`, ComponentSession IDs, and bootstrap IKpsk2/enrolled KK session
+  handles are in-memory session capabilities behind Endpoint resolution.
+
 ---
 
 ## 5. Root config schema

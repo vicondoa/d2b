@@ -376,7 +376,6 @@ spec:
     fds: { limit: 256 }
     pids: { limit: 256 }
   networkUsage: null
-  endpoints: []
   readiness:
     initialDelay: "0s"
     timeout: "30s"
@@ -431,10 +430,6 @@ spec:
     networkRef: <resolved from spec.config.networkRef>
     ports: []
     allowEgress: true   # ACA management API via injected AcaControl; no ambient endpoint
-  endpoints:
-    - name: bus
-      transport: unix
-      purpose: d2b.aca.v3.deployment
   readiness:
     initialDelay: "0s"
     timeout: "30s"
@@ -452,6 +447,50 @@ spec:
   drainTimeout: "30s"
   mounts: []                # no Provider state Volume; operational state in status/core ledger (D087)
 ```
+
+The deployment service's stable service surface is represented by an owned
+Endpoint resource, not an inline Process field:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: aca-deployment-service
+  zone: <zone>
+  ownerRef: Provider/runtime-azure-container-apps
+spec:
+  providerRef: Provider/runtime-azure-container-apps
+  producerRef: Process/aca-deployment-service
+  endpointClass: service
+  transport: unix
+  purpose: d2b.aca.v3.deployment
+  serviceFingerprint: runtime-azure-container-apps.d2bus.org/deployment/v1
+  locality: guest-local
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-azure-container-apps]
+  lifecyclePolicy: recycle-with-producer
+```
+
+### Endpoint resources (D092)
+
+`Provider/runtime-azure-container-apps` declares conformance to the standard
+`Endpoint` base schema. Stable controller/deployment service endpoints are
+owned `Endpoint` resources with `ownerRef` and `producerRef`; consumers use
+`Endpoint/<name>` ResourceRefs. No raw Unix path, relay URL, fd, credential, or
+cloud endpoint appears in resource spec/status or CLI output. Resolution occurs
+only through authorized EffectPort/LaunchTicket flows, and unauthorized resolve
+fails `endpoint-resolve-denied`. A producer restart bumps `endpointGeneration`
+and delivers the normal `dependency-changed` trigger. Per-session ACA relay and
+transport handles are internal and are not Endpoint resources.
+
+### Retained opaque handles
+
+Permitted opaque values are `AcaCredentialLease`, `CredentialLease` metadata
+handles, `OperationBinding`, provider operation IDs, bounded sandbox adoption
+digests, `CachedResponse` keys, and per-session relay/transport handles. They
+are controller-internal, high-churn, non-authorizing, or have no independent
+lifecycle, so D092 does not promote them to resources.
 
 ### 7.3 Provider state (status-first; no state Volume)
 
@@ -1283,7 +1322,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-relay/src/lib.rs`: `AzureRelayTransportProvider`; `packages/d2b-provider-aca/src/lib.rs`: `AcaRelayTransportConfig` |
 | Reuse action | REPLACE (both); ADAPT config fields to ZoneLink transport settings |
 | Destination | ZoneLink resource `spec.transportSettings` (§15.4); `Provider/transport-azure-relay` dossier (separate) |
-| Detailed design | `AcaRelayTransportConfig` fields mapped to `transportSettings.relayNamespace`, `.relayHybridConnection`, `.relayCredentialRef`. KK enrollment replaces ad-hoc vsock CID. |
+| Detailed design | `AcaRelayTransportConfig` fields mapped to `transportSettings.relayNamespace`, `.relayHybridConnection`, `.relayCredentialRef`. KK enrollment replaces ZoneLink transport. |
 | Integration | ZoneLink controller resolves transport Provider; ACA controller establishes enrolled KK ComponentSession over relay transport after `GuestProvision` |
 | Data migration | No relay session compatibility; re-enroll on first `RuntimeAdopt` |
 | Validation | ZoneLink enrollment tests; relay unavailability tests; KK re-enrollment after sandbox restart |

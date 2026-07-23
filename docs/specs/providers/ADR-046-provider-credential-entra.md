@@ -332,10 +332,6 @@ spec:
     networkRef: null
     ports: []
     allowEgress: false    # controller makes no outbound calls; no ambient network claim
-  endpoints:
-    - name: bus-registration
-      transport: unix
-      purpose: controller-registration
   readiness:
     class: provider-defined
 ```
@@ -391,10 +387,6 @@ spec:
     networkRef: null
     ports: []
     allowEgress: false  # no direct MSAL network claim; Entra calls via injected client/effect port
-  endpoints:
-    - name: credential-service
-      transport: unix
-      purpose: d2b.credential.v3
   readiness:
     class: provider-defined
 ```
@@ -444,13 +436,63 @@ spec:
     networkRef: null
     ports: []
     allowEgress: false  # no direct MSAL network claim; Entra calls via injected client/effect port
-  endpoints:
-    - name: credential-service
-      transport: unix
-      purpose: d2b.credential.v3
   readiness:
     class: provider-defined
 ```
+
+Each `entra-agent` produces its stable credential service identity as a separate
+owned `Endpoint` resource:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: "<zone-id>-entra-agent-<credential-name>-credential-service"
+  zone: "<zone-name>"
+  ownerRef: "Credential/<credential-name>"
+spec:
+  providerRef: Provider/credential-entra
+  producerRef: "Process/<zone-id>-entra-agent-<credential-name>"
+  endpointClass: service
+  transport: unix
+  purpose: credential-entra.d2bus.org/credential-service
+  serviceFingerprint: credential.d2bus.org/CredentialService.v3
+  locality: host-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## Endpoint resources (D092)
+
+`Provider/credential-entra` conforms to the standard `Endpoint` base schema. The
+stable `d2b.credential.v3`-class ComponentSession service identity for each
+agent is an owned `Endpoint` resource with `producerRef`; consumers use
+`Endpoint/<name>`. Endpoint spec/status never carries authority URLs, endpoint
+locators, fd numbers, tenant secrets, client secrets, token bytes, signatures,
+PSKs, or credential material. Resolution occurs only through an authorized
+EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, causing consumers to observe
+`dependency-changed` and reacquire through a fresh authorized ticket.
+
+## Retained opaque handles (D092 promotion test)
+
+- pidfds for controller/agent Processes are process supervision handles.
+- LaunchTicket fd indexes for the injected `EntraCredentialClient` effect port
+  remain per-launch attachment slots.
+- `EntraLeaseRef`, source-version handles, `operationId`, and idempotency keys are
+  bounded non-secret handles that are revalidated before use, not endpoints.
+- `OwnedTransport`, ComponentSession IDs, and the sensitive Noise_KK token/signing
+  delivery session handle are high-churn in-memory capabilities.
 
 #### Binary: `d2b-provider-credential-entra-controller`
 
@@ -1389,8 +1431,8 @@ sections in order:
 | --- | --- |
 | `test_controller_creates_agent_process` | Controller `reconcile` creates an `entra-agent` Process via `ProviderSupervisor::LaunchTicket` with correct `metadata.ownerRef`, placement, and sealed config fields (effect-port FD index included) |
 | `test_agent_deleted_on_credential_delete` | Controller `finalize` sends revocation signal to agent; controller calls `UpdateFinalizers` to clear `credential.d2bus.org/provider-revoke`; core performs event-only Deleted + row removal; audit appends post-commit |
-| `test_controller_process_template_schema` | Controller Process template fields match canonical schema: `type: Process`, `namespaceClasses=[mount,pid,ipc,uts,network]`, `capabilityClasses=[]`, `seccompClass=strict`, `startRoot=false`, `noNewPrivileges=true`, `environmentClass=minimal`, `readOnlyRoot=true`, `networkUsage.allowEgress=false`, `mounts=[]`, `endpoints=[{name:bus-registration,transport:unix,purpose:controller-registration}]`, `readiness.class=provider-defined` |
-| `test_user_agent_process_template_schema` | User-agent Process template: `type: Process`, `providerRef=Provider/system-systemd`, `domain=user`, `networkUsage.allowEgress=false`, `mounts=[]`, `endpoints=[{name:credential-service,transport:unix,purpose:d2b.credential.v3}]`, `budget.memory.limit="128Mi"`, `readiness.class=provider-defined`; no `binary`, `allowedSyscalls`, `maxRssBytes`, endpoint `kind`/`service` fields |
+| `test_controller_process_template_schema` | Controller Process template fields match canonical schema: `type: Process`, `namespaceClasses=[mount,pid,ipc,uts,network]`, `capabilityClasses=[]`, `seccompClass=strict`, `startRoot=false`, `noNewPrivileges=true`, `environmentClass=minimal`, `readOnlyRoot=true`, `networkUsage.allowEgress=false`, `mounts=[]`, `readiness.class=provider-defined` |
+| `test_user_agent_process_template_schema` | User-agent Process template: `type: Process`, `providerRef=Provider/system-systemd`, `domain=user`, `networkUsage.allowEgress=false`, `mounts=[]`, owned credential-service `Endpoint` resource, `budget.memory.limit="128Mi"`, `readiness.class=provider-defined`; no `binary`, `allowedSyscalls`, `maxRssBytes`, inline endpoint `kind`/`service` fields |
 | `test_guest_agent_system_process_template_schema` | Guest-agent system-domain Process template: `type: Process`, `providerRef=Provider/system-minijail`, `domain=system`, `mounts=[]`; all other fields identical to user-agent template |
 | `test_entra_client_trait_surface` | Verify `EntraCredentialClient` trait is object-safe and all methods have correct async signatures |
 | `test_opaque_azure_ref_parse_tenant_id` | `OpaqueAzureRef::parse` accepts valid GUIDs; rejects secret-shaped values, `://`, `/`, `+`, `=`, whitespace, `{}` |

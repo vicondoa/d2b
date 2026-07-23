@@ -272,6 +272,7 @@ in any of them and remain `ADR-only`.
 | Representative local/cloud/interaction Provider end-to-end composition | `ADR-only` | Yes — SPIKE-15 |
 | Three-layer spec + status shape: base-schema parity across implementations, minimal-base acceptance, capability-declared rejection, base-only projection, extension versioning/unknown-field/shadow | `ADR-only` | Yes — SPIKE-16 |
 | Expedited reconcile commit-proof gating/idempotency/priority-lane and currency/disruptive-upgrade dependency planning | `ADR-only` | Yes — SPIKE-17 |
+| Endpoint resource promotion, no-locator resolution, producer generation, consumer dependency trigger, promotion-test lint | `ADR-only` | Yes — SPIKE-18 |
 | Current v3 storage/DAG/pidfd/spawn_runner/router files exist and pass their own tests | `implemented-and-reachable`/`production-reachable` for current role (E4) | No — already evidenced |
 
 ## Mandatory disposable spike catalog
@@ -557,6 +558,22 @@ performed by this documentation-only spec.
 | Failure interpretation | An effect before proof, a rolled-back commit, a duplicated effect, an in-place disruptive change, or a planner that disrupts dependents before draining is a severity-blocking finding against D090/D091 and must be fixed structurally, never suppressed. |
 | Affected decisions/work items | D005, D030, D084, D090, D091; resource API/store/reconcile/core-controller work items and every Provider dossier's currency/upgrade work item. |
 | Cleanup | Deleted once the real resource-store/reconcile/core-controller crates and the provider conformance kit reach equal commit-proof-gating, idempotency, priority-lane, currency, and dependency-planner coverage. |
+| Status | Specified — not yet executed. |
+
+### SPIKE-18 — Endpoint resource promotion, no-locator resolution, producer generation, consumer trigger
+
+| Field | Value |
+| --- | --- |
+| Hypothesis | (D092) A stable endpoint can be modeled as an `Endpoint` resource with `ownerRef` (lifecycle) and `producerRef` (Process/Device/Guest/Host) carrying only closed class/transport/locality/purpose + bounded fingerprints and NO raw locator; a consumer references `Endpoint/<name>` and resolves to a private transport/FD only through an EffectPort/LaunchTicket path under authorization; a producer restart bumps `endpointGeneration`/`status.update` and fires the consumer's dependency trigger; and the promotion test correctly keeps high-churn handles (pidfd, fd index, named stream, `OwnedTransport`, `operationId`) as non-resource opaque IDs. |
+| Minimal disposable artifact | `proofs/endpoint-resource-spike/` — an in-process fake resource store with a `producer_index`, a fake TPM Device producing an `Endpoint`, a fake consumer Process referencing it, and a fake EffectPort that resolves an Endpoint to an opaque private handle only for an authorized consumer; a deterministic clock. |
+| Inputs | (a) Device creates an owned `Endpoint` (producerRef=Device, no locator in spec/status); (b) an authorized consumer resolves it via the EffectPort and receives a private handle; (c) an unauthorized consumer resolve; (d) producer restart → `endpointGeneration` bump; (e) child-first deletion when the producer/owner is deleted; (f) a set of high-churn handles fed to the promotion-test lint. |
+| Command/harness | `cargo test --manifest-path proofs/endpoint-resource-spike/Cargo.toml -- --test-threads=1 endpoint_resource`. |
+| Metrics | (1) Endpoint spec/status contain no path/address/CID/port/fd/credential (assert closed-enum/bounded fields only); (2) authorized resolve returns a handle only through the EffectPort; (3) unauthorized resolve → `endpoint-resolve-denied`, no locator returned; (4) producer restart bumps `endpointGeneration` and fires exactly one consumer `dependency-changed` trigger; (5) deleting the producer/owner deletes the Endpoint child-first; (6) the promotion-test lint classifies pidfd/fd-index/named-stream/`OwnedTransport`/`operationId` as permitted opaque (non-resource) and any stable cross-boundary endpoint as requiring promotion. |
+| Pass/fail threshold | All metrics binary pass; metrics (1) and (3) are hard zero-tolerance gates (no locator in the resource surface; no unauthorized resolution). |
+| Expected resource budget | ≤2 minutes wall time; ≤32 MiB RSS (in-memory store/EffectPort/lint). |
+| Failure interpretation | A raw locator in an Endpoint's spec/status, an unauthorized resolution, or a high-churn handle wrongly promoted (or a stable cross-boundary endpoint left as an opaque ID) is a severity-blocking finding against D092 and must be fixed structurally, never suppressed. |
+| Affected decisions/work items | D010, D022, D081, D084, D088, D089, D092; resource object/API/store/reconcile/core-controller work items and every Provider dossier's endpoint-migration work item. |
+| Cleanup | Deleted once the real resource-contract/store/reconcile crates and the provider conformance kit reach equal Endpoint no-locator, resolution-authorization, producer-generation, consumer-trigger, and promotion-test-lint coverage. |
 | Status | Specified — not yet executed. |
 
 ## Implementation validation — how a spike is retired

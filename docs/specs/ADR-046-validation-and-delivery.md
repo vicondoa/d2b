@@ -616,6 +616,22 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   --updates`, `get`, `upgrade` plan-by-default vs `--recursive --apply`) with
   stable `--json`; `spec.updatePolicy` manual-disruptive default; `spec.provider`
   cannot bypass disruption policy.
+- Endpoint resource tests (D092): endpoint ownership/lifecycle (owned `Endpoint`
+  child, `producerRef` set, child-first deletion with the producer/owner); no
+  raw locator in Endpoint spec/status/CLI (only closed
+  class/transport/locality/purpose + bounded fingerprints); ref resolution (a
+  consumer `Endpoint/<name>` ref gains a dependency edge and resolves to a
+  private transport/FD only via EffectPort/LaunchTicket); provider base-schema
+  conformance for the Endpoint ResourceType; endpoint update/recycle (recycle
+  with producer); producer restart bumps `endpointGeneration`/`status.update`;
+  consumer dependency trigger fires on that bump; unauthorized resolve →
+  `endpoint-resolve-denied` with no locator; CLI update visibility (`get
+  Endpoint/<name>` shows readiness/currency, no locator); high-churn-handle
+  non-resource lint asserts pidfd/fd-index/named-stream/`OwnedTransport`/
+  `operationId` are NOT promoted to resources and stay internal; the
+  `ProcessSpec`-has-no-inline-`endpoints` lint; standard ResourceType count is 17
+  (Endpoint present in the catalog); every retained public `*Id`/`Handle` has a
+  documented rationale row.
 - Quota/EmergencyPolicy tests: hierarchical Host/Guest allocation against
   Zone capacity, overcommit blocking, digest/Provider/Host/Guest/Zone/global
   emergency disable and route/session/grant revocation, incident-held

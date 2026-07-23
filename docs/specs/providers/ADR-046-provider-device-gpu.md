@@ -121,7 +121,6 @@ spec:
       limit: 32
   networkUsage: null
   deviceUsage: []
-  endpoints: []
   mounts: []
   readiness:
     class: provider-defined
@@ -383,9 +382,9 @@ spec:
 ```
 
 The Process controller verifies the Device is `Ready` and claimed by the owning
-Guest before launching the Process. The GPU worker socket path is provided to
-the CH runner Process via the signed provider component descriptor; it is not
-expressed as a raw path in the resource spec.
+Guest before launching the Process. The GPU sidecar surface is an owned
+`Endpoint` resource consumed as `Endpoint/<name>` by the CH runner; no socket
+locator is expressed as a raw path in any resource spec or status.
 
 ## GPU worker Process: full GPU
 
@@ -428,10 +427,6 @@ spec:
     - deviceRef: Device/corp-vm-gpu
       access: exclusive
       purpose: gpu-virtio
-  endpoints:
-    - name: gpu-socket
-      transport: unix
-      purpose: gpu-sidecar
   readiness:
     class: provider-defined
     initialDelay: "2s"
@@ -445,6 +440,29 @@ spec:
     backoffMultiplier: 2
     maxRestarts: 10
     resetAfter: "1h"
+```
+
+The worker produces the stable GPU sidecar Endpoint separately:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: corp-vm-gpu-sidecar
+  zone: dev
+  ownerRef: Device/corp-vm-gpu
+spec:
+  providerRef: Provider/device-gpu
+  producerRef: Process/device-<uid-short>-gpu
+  endpointClass: device
+  transport: unix
+  purpose: gpu-sidecar
+  serviceFingerprint: device-gpu.d2bus.org/gpu-sidecar/v1
+  locality: cross-domain
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  lifecyclePolicy: recycle-with-producer
 ```
 
 `uid-short` = first 12 hex characters of the owner Device resource UID.
@@ -538,9 +556,11 @@ compositor authority** and performs no host socket resolution:
   routes the opaque display endpoint FD directly into the GPU worker LaunchTicket
   at execution time. The device-gpu controller and Provider never hold or request
   compositor socket handles.
-- Device status exposes a `crossDomainEndpointId` as a closed-set opaque
-  identifier; no socket path, Wayland display name, or UID-scoped path appears
-  in status, audit, or telemetry.
+- Device status exposes typed EndpointRefs such as
+  `crossDomainEndpointRef: Endpoint/<display-endpoint>` and
+  `gpuSidecarEndpointRef: Endpoint/<gpu-sidecar>`; no socket path, Wayland
+  display name, UID-scoped path, or opaque endpoint ID appears in status, audit,
+  or telemetry.
 - The GPU worker uses the endpoint FD to expose the cross-domain Wayland channel
   to the Guest via the virtio-gpu context. The GPU worker produces virtio-gpu
   context/output consumed by the Guest Runtime; the host-side display endpoint
@@ -549,12 +569,32 @@ compositor authority** and performs no host socket resolution:
 The **video worker Process** does **not** hold this endpoint. See § Video
 worker: denied host sockets.
 
+### Endpoint resources (D092)
+
+`Provider/device-gpu` declares conformance to the standard `Endpoint` base
+schema. Stable GPU sidecar, video sidecar, and cross-domain display identities
+are owned `Endpoint` resources with `producerRef` to the producing
+`Process`/`Device`, closed `endpointClass`/`transport`, and no raw locator in
+spec/status/CLI. Consumers use `Endpoint/<name>` ResourceRefs.
+Core/ProviderSupervisor resolves Unix sockets or fd attachments only through
+authorized EffectPort/LaunchTicket flows; unauthorized resolve fails
+`endpoint-resolve-denied`. A producer restart bumps `endpointGeneration`, which
+triggers CH/video dependencies through `dependency-changed`.
+
+### Retained opaque handles
+
+Retained opaque values are pidfds, LaunchTicket fd indexes, render-node fd
+leases, transient DRM inventory handles, `OwnedTransport`, operation IDs, and
+per-session compositor connection handles. They are high-churn, internal to the
+controller/effect port, or have no independent lifecycle, so D092 does not
+promote them to resources.
+
 ### Cloud Hypervisor connection
 
 Cloud Hypervisor connects to the GPU sidecar via the `--gpu socket=...` flag,
 appended by the CH runner Process via the signed provider component descriptor.
-The socket locator is delivered through the Process endpoint manifest; it is
-runtime-derived from the Device resource UID and is not a spec field, status
+The private socket locator is resolved from `Endpoint/<gpu-sidecar>` only through
+the authorized EffectPort/LaunchTicket path and is not a spec field, status
 value, audit record, or telemetry attribute.
 
 ## GPU worker Process: render-node-only
@@ -696,10 +736,6 @@ spec:
     - deviceRef: Device/corp-vm-gpu
       access: exclusive
       purpose: video-decode
-  endpoints:
-    - name: video-socket
-      transport: unix
-      purpose: video-sidecar
   readiness:
     class: provider-defined
     initialDelay: "2s"
@@ -713,6 +749,29 @@ spec:
     backoffMultiplier: 2
     maxRestarts: 10
     resetAfter: "1h"
+```
+
+The video worker produces the stable video sidecar Endpoint separately:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: corp-vm-video-sidecar
+  zone: dev
+  ownerRef: Device/corp-vm-gpu
+spec:
+  providerRef: Provider/device-gpu
+  producerRef: Process/device-<uid-short>-video
+  endpointClass: data
+  transport: unix
+  purpose: video-sidecar
+  serviceFingerprint: device-gpu.d2bus.org/video-sidecar/v1
+  locality: cross-domain
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  lifecyclePolicy: recycle-with-producer
 ```
 
 The video and GPU workers carry distinct allocator-assigned principals, enforced
@@ -767,9 +826,10 @@ Source: `packages/d2b-core/src/bundle_resolver.rs`
 
 Cloud Hypervisor connects to the video decoder via the `--vhost-user-media
 socket=...` flag, appended by the CH runner Process via the signed component
-descriptor. The socket locator is delivered through the Process endpoint
-manifest; it is runtime-derived and is not a spec field, status value, audit
-record, or telemetry attribute.
+descriptor. The private socket locator is resolved from
+`Endpoint/<video-sidecar>` only through the authorized EffectPort/LaunchTicket
+path and is not a spec field, status value, audit record, or telemetry
+attribute.
 
 ### Broker Device allowlist (video worker)
 
@@ -1691,7 +1751,7 @@ disposition contract test passes.
 | --- | --- |
 | Current anchor | **GPU/video process roles**: `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` (`implemented-and-reachable`). **GPU argv**: `packages/d2b-host/src/gpu_argv.rs` `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig` (`implemented-and-reachable`). **Video argv + wire constants**: `packages/d2b-host/src/video_argv.rs` `VideoArgvInput`, `VideoBackend`, `wire_contract_snapshot()`, all `VHOST_USER_MEDIA_*` constants (`implemented-and-reachable`). **GPU device token set**: `packages/d2b-core/src/bundle_resolver.rs` lines 1882–1894, ProcessRole::Gpu/GpuRenderNode arm (`implemented-and-reachable`). **Minijail profiles**: `nixos-modules/minijail-profiles.nix` gpu, video, gpu-render-node profiles with device binds, seccomp refs, user NS config (`implemented-and-reachable`). **Broker ops**: `packages/d2b-contracts/src/broker_wire.rs` `RunnerRole::Gpu`, `RunnerRole::Video` (`implemented-and-reachable`). **Nix host graphics**: `nixos-modules/components/graphics.nix` (crosvm wrapper, virglVideo patch, CH rev guard, crossDomainTrusted enforcement) (`implemented-and-reachable`). **Nix guest video**: `nixos-modules/components/video/guest.nix` (`virtio_media` module, CH `--vhost-user-media` arg) (`generated-or-eval-contract`). **Contract tests**: `packages/d2b-contract-tests/tests/minijail_gpu.rs`, `minijail_swtpm_video.rs`, `video_binary_contract.rs` (`implemented-and-reachable`). **Provider crate**: `packages/d2b-provider-device-gpu/` (`ADR-only`). |
 | Evidence class | GPU/video process role enum and argv generators: `implemented-and-reachable`. GPU device token set and minijail profiles: `implemented-and-reachable`. Broker RunnerRole::Gpu/Video: `implemented-and-reachable`. CH/crosvm version guard: `implemented-and-reachable`. Video wire-contract constants: `implemented-and-reachable`. Device ResourceType schema: `ADR-only`. Provider crate and reconcile loop: `ADR-only`. |
-| Behavior retained | GPU device allowlist token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; distinct allocator-assigned video vs GPU worker principal (LaunchTicket invariant; private broker state); render-node fd pre-opened by the **privileged broker** and inherited via private fd-inheritance protocol; user-namespace zero-host-caps (ADR 0021); no Wayland/audio sockets for video role; `crossDomainTrusted` projected from Device setting into LaunchTicket at resolution time; argv builder omits CrossDomain from runtime args when false; NVIDIA opt-in gating for video; CH/crosvm rev compatibility guard; `videoSidecar` + `videoNvidiaDecode` mutual independence; `virglVideo` + `videoSidecar` mutual exclusion. |
+| Behavior retained | GPU device allowlist token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; distinct allocator-assigned video vs GPU worker principal (LaunchTicket invariant; private broker state); render-node fd pre-opened by the **privileged broker** and inherited via private fd-inheritance protocol; user-namespace zero-host-caps (ADR 0021); no Wayland/audio sockets for video role; EndpointRef-based cross-domain trust projected from Device setting into LaunchTicket at resolution time; argv builder omits CrossDomain from runtime args when false; NVIDIA opt-in gating for video; CH/crosvm rev compatibility guard; `videoSidecar` + `videoNvidiaDecode` mutual independence; `virglVideo` + `videoSidecar` mutual exclusion. |
 | Required delta | `d2b-provider-device-gpu` crate, async reconcile controller, Device ResourceType schema for GPU settings, Provider resource registration, process-name templates from Device UID, wire-contract check at startup, shared render-node arbitration enforcement, generation-based lifecycle via Zone resource plane; D087 status-first state assertion in the component descriptor — no Provider state Volume, empty ProviderStateSet, no controller `/state` mount, bounded operational state in status and Operation rows (ADR046-provider-device-gpu-08). |
 | Reuse path | Re-export `gpu_argv.rs` and `video_argv.rs` from `d2b-host` unmodified. Adapt device token set constant from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` for `deviceUsage` population. Adapt minijail profile field names to `Process` resource spec fields. uid/gid mapping is resolved privately by core from the signed worker template — the device-gpu controller does not write hostUid/hostGid into any resource spec field. |
 | Replacement/deletion | `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` in `processes.rs` retained until Provider integration parity. `d2b.vms.<vm>.graphics.*` Nix options deprecated (with warning) until consumer migration window closes. Nix `components/graphics.nix` host-side worker-spawn logic removed after `worker_gpu.rs` is live; CH arg injection and crosvm patches stay in Guest runtime Nix module. `StorageRoot`/`StoragePathSpec` entries for GPU/video roles in `d2b-core/src/storage.rs` removed after status-first Device/Process lifecycle integration passes. |

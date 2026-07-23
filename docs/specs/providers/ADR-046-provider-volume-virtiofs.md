@@ -57,8 +57,8 @@ to `Provider/volume-local`.
 | Provider resource name | `Provider/volume-virtiofs` |
 | `artifactId` key | `volume-virtiofs-provider` |
 | Package type | `provider` |
-| ResourceTypes declared | `virtiofs.d2bus.org.Export` (full lifecycle owner) |
-| ResourceTypes consumed (read/status-update) | `Volume` (read-only; status aggregated from Export), `Process` (create/delete worker) |
+| ResourceTypes declared | `virtiofs.d2bus.org.Export` (full attachment lifecycle owner) |
+| ResourceTypes consumed/managed | `Volume` (read-only; status aggregated from Export), `Process` (create/delete worker), `Endpoint` (create/delete exported endpoint child) |
 | Attachment transports owned | `virtiofs` |
 | Dependencies | `d2b-contracts` (v3 Export/Process/Volume types), `d2b-provider-toolkit` (ResourceClient, reconciler, fake seams), `d2b-session`, `d2b-bus`, `d2b-audit`, `d2b-telemetry` |
 | Prohibited imports | `d2bd`, `d2b-priv-broker` internals, `d2b-provider-volume-local`, any other Provider's implementation |
@@ -281,8 +281,9 @@ spec:
 status:
   phase: Ready                # Pending|Ready|Degraded|Failed|Unknown
   resource:
-    exportReady: true         # export socket present and virtiofsd Process Ready
+    exportReady: true         # export Endpoint resolvable and virtiofsd Process Ready
     guestMountReady: true     # guest-control probe returned MountReady
+    endpointRef: Endpoint/vol-work-state-virtiofsd-work-vm
   provider:
     providerRef: Provider/volume-virtiofs
     schemaId: volume-virtiofs.d2bus.org/Volume/status
@@ -314,6 +315,61 @@ status:
 | `access` | enum | No | `read-only` | `read-only` or `read-write`; `shared-write` is not supported in v3.0 |
 | `mountPath` | absolute path | Yes | — | Guest-side mount path; no overlap with other mounts on same Guest |
 | `provider.settings.*` | see §4.3 | No | see §4.3 | Validated against Provider's signed Export spec settings schema |
+
+The Export references its visible exported endpoint through
+`status.resource.endpointRef` after the Endpoint child exists. Export remains
+the attachment lifecycle owner; consumers that need the stable endpoint use the
+`Endpoint/<name>` ref, while lifecycle, deletion, and guest-mount readiness stay
+on the Export.
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: vol-work-state-virtiofsd-work-vm
+  zone: dev
+  ownerRef: virtiofs.d2bus.org.Export/vol-work-state-x-work-vm
+spec:
+  providerRef: Provider/volume-virtiofs
+  producerRef: Process/vol-work-state-virtiofsd-work-vm
+  endpointClass: data
+  transport: unix
+  purpose: volume-virtiofs.d2bus.org/export
+  serviceFingerprint: volume-virtiofs.d2bus.org/export.v1
+  locality: cross-domain
+  visibility: zone-private
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [guest-runtime.d2bus.org/virtiofs]
+  lifecyclePolicy: owner-ref-child
+status:
+  phase: Ready
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: Available
+  leaseAvailability: Available
+  conditions: []
+```
+
+### Endpoint resources (D092)
+
+The exported virtiofs binding is a standard `Endpoint` child when it has visible
+stable lifecycle and independent consumers. `Endpoint.spec` and
+`Endpoint.status` never contain the virtiofsd socket path, host path, guest
+mount path, CID, port, FD number, gid, or credential; authorized consumers
+resolve `Endpoint/<name>` only through the EffectPort/LaunchTicket path, and
+unauthorized callers receive `endpoint-resolve-denied`. Restarting the
+virtiofsd producer Process bumps `endpointGeneration`, causing consumers to see
+`dependency-changed`. The `virtiofs.d2bus.org.Export` resource still owns
+attachment lifecycle, finalizers, guest-mount readiness, and deletion ordering.
+
+### Retained opaque handles (D092)
+
+The private virtiofsd socket path, `VolumeMountToken`, per-session named stream,
+`OwnedTransport` byte-stream handle, transport connection handle, pidfd, FD
+index, and `operationId` remain controller-internal or high-churn opaque handles
+under the promotion test. They are not `Endpoint` resources.
 
 ### 4.3 `spec.provider.settings`
 
@@ -372,18 +428,21 @@ On spec-generation-changed for an Export:
   2. If store-view Export: check marker prerequisite (§9 step 4)
   3. Resolve threadPoolSize from Guest.spec.vcpus if null
   4. Ensure User/vol-<vol>-vfd exists (create if absent; ownerRef: Volume)
-  5. Compute desired virtiofsd Process spec
-  6. Diff against existing Process owned by this Export
-  7. Emit Create (or UpdateSpec) for the virtiofsd Process
-  8. Update Export.status: phase=Pending, WorkerReady=False, ExportReady=False
+  5. Compute desired virtiofsd Process spec and Endpoint child spec
+  6. Diff against existing Process and Endpoint owned by this Export
+  7. Emit Create (or UpdateSpec) for the virtiofsd Process and exported Endpoint
+  8. Update Export.status: phase=Pending, WorkerReady=False, ExportReady=False,
+     endpointRef=Endpoint/<derived-name>
 
-On owned-resource-changed (Process owned by Export):
+On owned-resource-changed (Process or Endpoint owned by Export):
   1. If Process.status.phase == Ready → poll export socket existence (§readiness)
-  2. If socket present → set Export.status.exportReady=true, WorkerReady=True
+  2. If socket present → set Endpoint.status.readiness=Ready and
+     Export.status.exportReady=true, WorkerReady=True
   3. If socket present → send guest-control MountReady? probe
   4. If probe returns MountReady → set Export.status.guestMountReady=true
   5. If probe returns MountAbsent or timeout → set guestMountReady=false; phase=Unknown
-  6. If Process.status.phase == Failed → set Export.status.phase=Failed
+  6. If Process.status.phase == Failed → set Export.status.phase=Failed and
+     Endpoint.status.readiness=NotReady
 
 On deletionRequestedAt set on Export:
   → Two-phase Export teardown (§6.2)

@@ -276,7 +276,6 @@ d2b.zones.<zone>.resources."system-systemd-controller-<target>" = {
       pids   = { limit = 256; };
     };
     networkUsage = null;
-    endpoints    = [];
     readiness    = {
       class            = "ready-condition";
       initialDelay     = "0s";
@@ -352,7 +351,6 @@ Canonical rendered JSON (schema mirror):
       "pids": {"limit": 256}
     },
     "networkUsage": null,
-    "endpoints": [],
     "readiness": {
       "class": "ready-condition",
       "initialDelay": "0s",
@@ -377,9 +375,65 @@ Canonical rendered JSON (schema mirror):
 
 `networkUsage: null` is correct: the controller communicates via Unix socketpair
 (ComponentSession to ProviderSupervisor and to d2b-bus) and via the injected
-effect port (DBus is a Unix socket internally). No TCP/UDP endpoints are
-declared. `processClass: controller` is mandatory; `worker` and `service` are
-rejected by ProviderDeployment for this resource.
+effect port (DBus is a Unix socket internally). Its stable control service
+identity is an owned `Endpoint` resource, not an inline Process field.
+`processClass: controller` is mandatory; `worker` and `service` are rejected by
+ProviderDeployment for this resource.
+
+The controller Process produces its stable process-control service identity as a
+separate owned `Endpoint` resource:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: system-systemd-process-control-<target>
+  zone: <zone>
+  ownerRef: Provider/system-systemd
+spec:
+  providerRef: Provider/system-systemd
+  producerRef: Process/system-systemd-controller-<target>
+  endpointClass: control
+  transport: unix
+  purpose: system-systemd.d2bus.org/process-control
+  serviceFingerprint: system-systemd.d2bus.org/ProcessControl.v3
+  locality: host-local
+  visibility: provider-internal
+  attachmentPolicy: component-session
+  consumerPolicy: provider-supervisor-only
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+## 5.3 Endpoint resources (D092)
+
+`Provider/system-systemd` conforms to the standard `Endpoint` base schema. The
+stable ComponentSession service used for process launch/control is an owned
+`Endpoint` resource with `producerRef`; ProviderSupervisor consumes it as
+`Endpoint/<name>`. Endpoint spec/status never carries DBus paths, unit names,
+cgroup paths, PIDs, pidfds, fd numbers, socket paths, or credentials. Resolution
+occurs only through an authorized EffectPort/LaunchTicket; unauthorized
+resolution returns `endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, causing ProviderSupervisor to observe
+`dependency-changed` and reconnect through a fresh authorized ticket.
+
+## 5.4 Retained opaque handles (D092 promotion test)
+
+- pidfds remain ephemeral controller-local supervision/identity handles.
+- LaunchTicket fd indexes, systemd manager handles, and inherited socketpairs are
+  per-launch attachment slots, not stable endpoint identities.
+- InvocationID/MainPID/unit identity tuples and cgroup observations are effect-port
+  verification data and never public Endpoint status.
+- `operationId`, cancellation tokens, and LaunchTicket identity tokens remain
+  opaque per-operation correlation/authorization handles.
+- `OwnedTransport` and ComponentSession IDs are in-memory capabilities behind
+  Endpoint resolution.
 
 ---
 

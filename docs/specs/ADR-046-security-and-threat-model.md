@@ -1070,6 +1070,18 @@ Volumes (`preserveState`); `Replace` of a resource-row identity is used only
 when explicitly required and planned with ownership/state transfer, and full
 destructive factory reset remains a separate authorized path.
 
+**Endpoint resource (D092).** A stable endpoint is the `Endpoint` ResourceType,
+never a raw locator in spec/status/CLI: the base carries only closed
+class/transport/locality/purpose values and bounded fingerprints, and status
+carries no path/address/CID/port/fd/credential. Core/ProviderSupervisor resolves
+an `Endpoint` to a live transport/FD only through the EffectPort/LaunchTicket
+path under authorization; an unauthorized resolve is denied with a typed error
+and returns no locator. Promoting endpoints to resources brings independent
+RBAC, audit, ownership, and dependency edges to what were opaque IDs; the frozen
+permitted-opaque set (pidfd, fd index, per-session named stream/`OwnedTransport`
+handle, `operationId`, digests) stays internal and non-locator by the
+`ADR-046-resource-object-model` promotion test.
+
 Two invariants close the specific attacks Volume state is most exposed to:
 
 - **TPM Volume never re-provisioned.** After the swtpm provisioning marker
@@ -1536,7 +1548,7 @@ quiesce/atomicity rules as any other scope.
 
 ## Per-ResourceType threat matrix
 
-The sixteen standard ResourceTypes (D035) each face a distinct primary
+The seventeen standard ResourceTypes (D035) each face a distinct primary
 threat and are covered by controls already defined above. This table is the
 single index a reviewer uses to confirm every ResourceType has at least one
 documented threat/control pair; the "Detail" column points to the exact
@@ -1560,6 +1572,7 @@ section with the full control description.
 | `Device` | Blanket device-path grant / cross-consumer device sharing (e.g. security-key + USBIP on one physical device) | No blanket grant; broker-derived node only; explicit mutual-exclusion enforcement (eval-time + runtime) | §13 |
 | `User` | Numeric UID/GID leaking into authorization decisions or public surface | `User/<name>` typed refs only; `mappingClass: process-principal-root` never exposes numeric UID/GID publicly | §15 |
 | `Credential` | Secret bytes reaching resource store/audit/telemetry, or a non-enrolled consumer reading a token | Zero-secret invariant; Noise KK-only sensitive delivery; exact `consumerRef` match | §9/§19 |
+| `Endpoint` | A stable endpoint leaking a raw locator (path/address/CID/port/fd/credential) into spec/status/CLI, or an unauthorized consumer resolving it to a live transport/FD | No raw locator in spec/status (closed transport/locality classes only); Core/ProviderSupervisor resolves via EffectPort/LaunchTicket under authorization; unauthorized resolve denied with a typed error (D092) | §D092 |
 
 ## Per-Provider-family threat matrix
 
@@ -2026,7 +2039,7 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None |
 | Reuse action | adapt (pattern from `tests/unit/gates/drift-check.sh`) |
 | Destination | `tests/unit/gates/security-matrix-coverage.sh` |
-| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 16 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section |
+| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 17 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section |
 | Integration | `make test-drift` |
 | Data migration | None |
 | Validation | Hermetic shell-script gate; a negative test adds a scratch Provider dossier missing a Security section and asserts the gate fails |

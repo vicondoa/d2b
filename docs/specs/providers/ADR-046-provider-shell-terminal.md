@@ -556,10 +556,6 @@ spec:
     memory: { limit: "128Mi" }
     pids:  { limit: 512 }
     fds:   { limit: 2048 }
-  endpoints:
-    - name: shell-service
-      transport: unix
-      purpose: shell-terminal.v3
   restartPolicy:
     class: on-failure
     backoffBase: "1s"
@@ -604,10 +600,6 @@ spec:
     memory: { limit: "64Mi" }
     pids:   { limit: 32 }
     fds:    { limit: 256 }
-  endpoints:
-    - name: supervisor-session
-      transport: unix
-      purpose: shell-session-supervisor.v1
   restartPolicy:
     class: never                  # crash = session terminal; no auto-restart
   readiness:
@@ -644,9 +636,6 @@ d2b.zones.dev.resources.shell-terminal-controller = {
       pids.limit = 512;
       fds.limit = 2048;
     };
-    endpoints = [
-      { name = "shell-service"; transport = "unix"; purpose = "shell-terminal.v3"; }
-    ];
     restartPolicy = {
       class = "on-failure";
       backoffBase = "1s";
@@ -691,9 +680,6 @@ d2b.zones.dev.resources.shell-session-supervisor-example = {
       pids.limit = 32;
       fds.limit = 256;
     };
-    endpoints = [
-      { name = "supervisor-session"; transport = "unix"; purpose = "shell-session-supervisor.v1"; }
-    ];
     restartPolicy.class = "never";
     readiness = {
       initialDelay = "0s";
@@ -706,6 +692,71 @@ d2b.zones.dev.resources.shell-session-supervisor-example = {
   };
 };
 ```
+
+```nix
+d2b.zones.dev.resources.shell-terminal-service-endpoint = {
+  type = "Endpoint";
+  metadata.ownerRef = "Provider/shell-terminal";
+  spec = {
+    providerRef = "Provider/shell-terminal";
+    producerRef = "Process/shell-terminal--controller";
+    endpointClass = "service";
+    transport = "unix";
+    purpose = "shell-terminal.d2bus.org/controller-service";
+    serviceFingerprint = "shell-terminal.d2bus.org/shell-terminal.v3";
+    locality = "host-local";
+    visibility = "authorized-consumers";
+    attachmentPolicy = "component-session";
+    consumerPolicy = "operator-authorized";
+    lifecyclePolicy = "recycle-with-producer";
+  };
+};
+```
+
+```nix
+d2b.zones.dev.resources.shell-session-supervisor-endpoint = {
+  type = "Endpoint";
+  metadata.ownerRef = "shell-terminal.d2bus.org.ShellSession/example";
+  spec = {
+    providerRef = "Provider/shell-terminal";
+    producerRef = "Process/shell-terminal--supervisor--<session-uid-short>";
+    endpointClass = "service";
+    transport = "unix";
+    purpose = "shell-terminal.d2bus.org/session-supervisor";
+    serviceFingerprint = "shell-terminal.d2bus.org/shell-session-supervisor.v1";
+    locality = "guest-local";
+    visibility = "authorized-consumers";
+    attachmentPolicy = "component-session";
+    consumerPolicy = "session-owner-authorized";
+    lifecyclePolicy = "recycle-with-producer";
+  };
+};
+```
+
+## Endpoint resources (D092)
+
+`Provider/shell-terminal` declares standard `Endpoint` base-schema conformance.
+Stable controller and shell-supervisor service identities are owned `Endpoint`
+resources with `producerRef`; they are not inline `Process.spec` or Nix Process
+fields. Consumers use `Endpoint/<name>` references. Endpoint spec/status/CLI/
+audit/telemetry never include raw socket paths, PTY bytes, terminal output,
+argv, environment, fds, or credentials. Resolution occurs only through an
+authorized EffectPort/LaunchTicket; unauthorized resolution returns
+`endpoint-resolve-denied`. Producer restart bumps
+`Endpoint.status.endpointGeneration`, which triggers `dependency-changed` for
+consumers.
+
+## Retained opaque handles
+
+- pidfds: Process supervision handles and not stable service identities.
+- Per-connection/session handles: ShellSession handles, supervisor handles, and
+  attach IDs are high-churn and scoped to one session generation.
+- Named streams: terminal byte streams carry payload and attachment state behind
+  authorization; they are not Endpoint identities.
+- `OwnedTransport`: authenticated ComponentSession transport ownership remains
+  an in-memory capability.
+- fd indexes: PTY, stream, and pre-opened service descriptors are
+  LaunchTicket-local slots and stay opaque under D092.
 
 ### YAML `Process` annotations field table
 

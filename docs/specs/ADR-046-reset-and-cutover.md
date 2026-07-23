@@ -1094,9 +1094,12 @@ only the resource's realization and owned ephemeral Processes/endpoints, and its
 dependency-aware planner drains dependents first. `Replace` of a resource-row
 identity is used only when explicitly required and is planned with ownership and
 state transfer so durable/state Volumes and TPM identity move to the replacement
-rather than being wiped. A full factory reset (below) is the separate,
-explicitly-destructive lever; upgrade/recycle never silently deletes durable
-state, and reset never masquerades as an upgrade.
+rather than being wiped. Owned `Endpoint` resources (D092) recycle with their
+producer (bumping `endpointGeneration` so consumers re-resolve) and are deleted
+child-first with the producer/owner; they carry no raw locator, so recycling an
+endpoint never leaks or persists a path/address/fd. A full factory reset (below)
+is the separate, explicitly-destructive lever; upgrade/recycle never silently
+deletes durable state, and reset never masquerades as an upgrade.
 
 ### Full Zone reset
 
