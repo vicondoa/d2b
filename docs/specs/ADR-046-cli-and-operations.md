@@ -261,11 +261,9 @@ exact shape (all fields always present; null where empty):
     "deletionRequestedAt": null,
     "createdAt": "2026-07-22T00:00:00Z",
     "updatedAt": "2026-07-22T10:30:00Z",
-    "managedBy": "nix",
+    "managedBy": "configuration",
     "configurationGeneration": 7,
-    "labels": {
-      "d2b.io/nix-path": "d2b.zones.main.resources.work-vm"
-    }
+    "labels": {}
   },
   "spec": {
     "providerRef": "Provider/cloud-hv",
@@ -289,17 +287,16 @@ exact shape (all fields always present; null where empty):
 
 | Field | Value | Meaning |
 | --- | --- | --- |
-| `managedBy` | `"nix"` | Set by Zone runtime on bundle apply; absent on dynamic resources |
-| `configurationGeneration` | `7` (integer) | Bundle generation that last created/updated this resource; absent on dynamic resources |
-| `labels["d2b.io/nix-path"]` | `"d2b.zones.main.resources.work-vm"` | Presentation/tracing only — not authoritative for cleanup decisions |
+| `managedBy` | `"configuration"` | Core-set closed enum; `"controller"` and `"api"` are the other values |
+| `configurationGeneration` | `7` (integer) | Bundle generation that last confirmed this configuration-managed resource; absent on controller/API-managed resources |
 
-**Cleanup authority:** The Zone runtime identifies resources eligible for
-deletion from a new bundle by `managedBy == "nix"` AND absence from the new
-bundle. `managedBy` absent or `"controller"` (dynamic resources) are **never**
-deleted by bundle application, regardless of whether their type appears in the
-bundle. This invariant is a correctness requirement.
+**Cleanup authority:** Core identifies resources eligible for deletion from a
+new bundle by `managedBy == "configuration"` AND absence from the new canonical
+configured set. `managedBy == "controller"` and `managedBy == "api"` resources
+are **never** deleted by bundle application. This invariant is a correctness
+requirement.
 
-**Owner controller responsibility:** When a Nix-owned parent resource is
+**Owner controller responsibility:** When a configuration-managed parent resource is
 deleted, its owning controller enqueues deletion of declared children (child
 Processes, EphemeralProcess sessions, Volume attachments). It does not delete
 unrelated resources.
@@ -342,12 +339,13 @@ Full activation-provider command surface is in
 d2b activation apply [--zone <zone>] [--dry-run] [--json | --human]
 ```
 
-Sends the built bundle (`/etc/d2b/zone-resources.json`) to the Zone runtime.
+Sends the built bundle (`/etc/d2b/zones/<zone>/resource-bundle.json`) to the
+fixed core-controller configuration service.
 Exits 0 when the apply phase completes (creates/updates present resources).
 Does not wait for deletion of absent Nix resources. Output includes applied
 resource count and pending-cleanup count.
 
-**Absent-resource deletion:** Resources with `managedBy == "nix"` absent from
+**Absent-resource deletion:** Resources with `managedBy == "configuration"` absent from
 the new bundle receive asynchronous Delete. The Zone enters
 `Degraded/pending-cleanup` until all complete.
 
@@ -372,19 +370,12 @@ Zone/main  Ready     (cleanup complete)
 d2b status <ResourceType>/<name> [--watch]
 ```
 
-**Force-remove stuck finalizer (explicit operator escape hatch):**
-
-```
-d2b delete <ResourceType>/<name> --force-remove-finalizers
-```
-
-Never triggered automatically.
-
 **Prior generation retention:** count-based; default 3; range 1–16. The
-retention count is configured via the Zone resource; the exact field name is
-established by ADR-046-nix-configuration. Generations beyond the count become
-eligible for pruning after cleanup completes. Generations within the count are
-retained for rollback regardless of elapsed time; there is no TTL.
+retention count is configured by the Zone-level Nix/compiler setting
+`d2b.zones.<zone>.retainedGenerations`, outside the empty `Zone.spec`.
+Generations beyond the count become eligible for pruning after cleanup
+completes. Generations within the count are retained for rollback regardless of
+elapsed time; there is no TTL.
 
 ```
 d2b activation gc [--zone <zone>] [--dry-run] [--json | --human]
@@ -409,14 +400,14 @@ Re-applies a retained prior generation bundle as a new (higher)
 
 | Layer | Test | What it proves |
 | --- | --- | --- |
-| Runtime (integration) | Apply bundle → absent `managedBy=nix` resource receives async Delete | Cleanup dispatch uses `managedBy` |
-| Runtime (integration) | Dynamic resource (`managedBy` absent) absent from bundle → NOT deleted | `managedBy` cleanup invariant |
+| Runtime (integration) | Apply bundle → absent `managedBy=configuration` resource receives async Delete | Cleanup dispatch uses `managedBy` |
+| Runtime (integration) | `managedBy=controller` and `managedBy=api` resources absent from bundle → NOT deleted | `managedBy` cleanup invariant |
 | Runtime (integration) | Zone status = `Degraded/pending-cleanup` during outstanding deletions | Status accuracy |
 | Runtime (integration) | Zone status = `Ready` after all cleanup completes | Status accuracy |
 | Runtime (integration) | Generations within retention count retained (no TTL) | Count-based retention |
 | Runtime (integration) | `d2b activation gc` prunes beyond retention count | GC correctness |
 | Runtime (integration) | `d2b activation rollback` re-applies prior bundle as new bundleGeneration | Rollback increments counter |
-| Runtime (integration) | Forced delete of stuck finalizer completes | Force-delete path |
+| Runtime (integration) | Stuck finalizer leaves resource Degraded and requires controller repair or full Zone reset | No force-finalizer path |
 | Runtime (integration) | Old `bundleGeneration` replay rejected | Generation monotonicity |
 
 ## Standard resource verbs
@@ -2226,9 +2217,9 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Current source | Nix emitters: `nixos-modules/options-realms-workloads.nix` (current `d2b.envs.<e>.vms.<v>.*`), `nixos-modules/options-realms.nix` (`d2b.realms.*`), `nixos-modules/unsafe-local-workloads-json.nix` (unsafe-local source), `nixos-modules/bundle-artifacts.nix`, `nixos-modules/manifest.nix`, `nixos-modules/assertions.nix`; JSON output: `/etc/d2b/processes.json` (old bundle), `/etc/d2b/realm-entrypoints.json` (static realm index); Zone runtime apply path: `packages/d2bd/src/` (activation apply handler — pre-ADR 0046 path through `cmd_host_prepare`/broker; no live resource bundle apply); cleanup: no current resource-deletion-on-bundle-apply path at baseline |
 | Reuse source | None (new implementation; no main `a1cc0b2d` reuse — this is the Nix/Zone side, not the CLI client side) |
 | Reuse action | replace |
-| Destination | Nix: `nixos-modules/options-zones.nix` (unified `d2b.zones.<zone>.resources` attrset; per-type `spec` sub-options generated from ResourceTypeSchema/Provider schema), `nixos-modules/bundle-emit.nix` (canonical JSON emit + SHA256 pin), `nixos-modules/assertions.nix` (updated); Zone runtime: `packages/d2bd/src/bundle_apply.rs` (new), `packages/d2bd/src/cleanup.rs` (new); Contracts: `packages/d2b-contracts/src/zone_bundle.rs` (new) |
-| Detailed design | **Nix shape:** `d2b.zones.<zone>.resources` is `attrsOf (submodule { type; optional metadata { ownerRef; labels }; spec })`. `spec` sub-options per `type` generated from ResourceTypeSchema (and signed Provider schema for type=Provider); field names identical to schema. `metadata.name`/`metadata.zone`/`apiVersion` derived; `status`/`uid`/`revision`/`generation`/`finalizers`/`deletionRequestedAt`/`createdAt`/`updatedAt`/`managedBy`/`configurationGeneration` are module-rejected unknown fields. Vendor-qualified types admitted when schema installed. Eval-time assertions: ref resolution, Host `spec.defaultDomain`/`spec.allowedDomains` locked to "user"/["user"], secret policy, conflict/bounds (max 1024). **Nix emit:** `bundle-emit.nix` emits `/etc/d2b/zone-resources.json` + SHA256 pin: canonical sort (type asc, name asc), `bundleGeneration` per derivation hash, `resourceTypeSchemaDigests` bound to installed schemas; build validation renders each entry to canonical JSON and verifies round-trip against ResourceTypeSchema (mismatch = hard build error). **Zone runtime apply:** `bundle_apply.rs` verifies integrity pin and schema digests, rejects old `bundleGeneration`, applies each resource (create/update/no-op), computes absent-set by `managedBy == "nix"` AND absence from new bundle, dispatches async Delete per absent resource, sets `pending-cleanup` Zone condition, returns immediately. Never deletes `managedBy` absent or "controller" resources. **Cleanup tracking:** `cleanup.rs` watches dispatched deletion completion, clears condition when empty. **Prior generation retention:** count-based; default 3; range 1–16; configured via the Zone resource (field name established by ADR-046-nix-configuration); no TTL. `d2b activation gc` prunes beyond count. Rollback re-applies retained bundle as new higher `bundleGeneration`. **Force delete:** `d2b delete --force-remove-finalizers` operator escape hatch. **Audit:** `resource-delete-dispatched` and `resource-delete-completed`/`resource-delete-failed` per absent resource. |
-| Integration | Nix build → `/etc/d2b/zone-resources.json` + pin → `d2b activation switch` → Zone runtime `bundle_apply` → resource API Create/Update/Delete → owner controllers → finalizer cascade → `cleanup` watcher → Zone status update |
+| Destination | Nix: `nixos-modules/options-zones.nix` (unified `d2b.zones.<zone>.resources` attrset; per-type `spec` sub-options generated from ResourceTypeSchema/Provider schema), `nixos-modules/bundle-emit.nix` (canonical JSON emit + SHA256 pin), `nixos-modules/assertions.nix` (updated); core controller: `packages/d2b-core-controller/src/configuration.rs`, `packages/d2b-core-controller/src/cleanup.rs`; Contracts: `packages/d2b-contracts/src/zone_bundle.rs` (new) |
+| Detailed design | **Nix shape:** `d2b.zones.<zone>.resources` is `attrsOf (submodule { type; optional metadata { ownerRef; labels; annotations }; spec })`. `spec` sub-options per `type` are generated from ResourceTypeSchema and signed Provider schemas; field names remain identical. `metadata.name`/`metadata.zone`/`apiVersion` are derived; status and all core metadata are rejected in input. Vendor-qualified types are admitted only when their schema is installed. **Nix emit:** `bundle-emit.nix` emits `/etc/d2b/zones/<zone>/resource-bundle.json` plus its integrity pin with canonical resource ordering and schema digests. **Core-controller apply:** `configuration.rs` verifies bundle/catalog integrity, applies Create/Update/no-op intents with bounded async concurrency, refreshes `configurationGeneration` for unchanged configuration-managed resources without waking their controller, handles controller/API name collisions per-item without seizing them, and asynchronously deletes only persisted `managedBy=configuration` resources absent from the new configured set. `cleanup.rs` consumes `Deleted` revision watches and maintains `PendingCleanup`; it never force-removes finalizers. **Prior generation retention:** `d2b.zones.<zone>.retainedGenerations`, default 3 and range 1–16, is a compiler setting outside `Zone.spec`; no TTL. Rollback reapplies a retained bundle as a new higher generation. |
+| Integration | Nix build → per-Zone `resource-bundle.json` + global private artifact catalog → `d2b activation switch` → `d2b-core-controller` configuration service → resource API Create/Update/Delete → owner controllers → finalizer cascade → cleanup watcher → Zone status update |
 | Data migration | Full reset from current manifest/processes/realm-entrypoints JSON format; prior Nix-generated artifacts (`/etc/d2b/processes.json`, `/etc/d2b/realm-entrypoints.json`) deleted after Zone resource bundle activates |
-| Validation | Runtime integration: all CLI-visible cleanup/status/rollback/gc/force-delete/audit tests (§CLI-visible tests for activation and cleanup); Nix unit and build tests owned by ADR-046-nix-configuration spec |
+| Validation | Runtime integration: all CLI-visible cleanup/status/rollback/gc/audit tests (§CLI-visible tests for activation and cleanup), including no force-finalizer path; Nix unit and build tests owned by ADR-046-nix-configuration spec |
 | Removal proof | Old `nixos-modules/manifest.nix`, `nixos-modules/bundle-artifacts.nix` emitters removed only after `bundle-emit.nix` produces equivalent-or-superseding output and all downstream consumers of the old bundle format are migrated |

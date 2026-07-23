@@ -222,7 +222,7 @@ Authoring rules:
 
 3. **Non-blocking activation** — New generation activation does not block on cleanup. The Zone
    reports `phase: Ready` (all pending cleanup complete) or `phase: Degraded` (cleanup in
-   progress) and emits condition `{type: GenerationClean, status: False, reason: PendingCleanup,
+   progress) and emits condition `{type: PendingCleanup, status: True, reason: PendingCleanup,
    message: "<N> resources awaiting deletion"}` until all absent resources complete deletion and
    their rows and index entries are removed atomically. Once the final resource is removed the
    condition clears and the Zone transitions to `phase: Ready`. `d2b op inspect` surfaces the
@@ -233,9 +233,10 @@ Authoring rules:
    if active finalizers or controller-managed children remain). The owning controller is
    responsible for reconciling children to deletion in response to `deletionRequestedAt` being
    set. The Zone runtime does not force-delete children; it signals the owner controller only.
-   Once all children and finalizers clear, the resource row and its index entry are removed
-   atomically. `ResourceDeleted` is the final audit event; there is no separately-observable
-   `phase: Deleted` state between finalizer clearance and row removal.
+   Once all children and finalizers clear, one store transaction writes the
+   event-only `Deleted` revision and removes the resource row and index atomically.
+   `ResourceDeleted` audit is appended afterward from that committed revision with
+   dedup; there is no persisted `phase: Deleted` row.
 
 5. **Prior generation retention** — The Zone runtime retains prior generation bundles in the
    Zone state store up to the per-Zone configured count (`d2b.zones.<zone>.retainedGenerations`,
@@ -263,13 +264,13 @@ Every spec work item must include test coverage for:
 
 | Test Kind | Required Assertion |
 |-----------|-------------------|
-| Nix eval | Valid config evaluates without error; invalid `kind`/`providerRef`/bounds produce the exact expected error message with source location |
+| Nix eval | Valid config evaluates without error; invalid `type`/`providerRef`/bounds produce the exact expected error message with source location |
 | Build — schema | Rendered JSON passes ResourceTypeSchema validation; provider-specific `spec.*` fields pass signed Provider schema; inline secret bytes fail build |
 | Build — bundle | Two identical configs produce identical generation IDs; field-order variation in Nix config does not change generation ID; any field change changes generation ID |
-| Cleanup — basic | Remove resource from Nix config, rebuild, activate: `deletionRequestedAt` is set on the resource, `ResourceDeletionRequested` audit event emitted, resource eventually reaches `ResourceDeleted` audit event with row and index entry removed atomically |
+| Cleanup — basic | Remove resource from Nix config, rebuild, activate: `deletionRequestedAt` is set; final store transaction writes the `Deleted` revision and removes row/index atomically; `ResourceDeleted` audit append follows the committed revision with dedup |
 | Cleanup — no false delete | Controller-managed dynamic child is NOT deleted when its configuration-managed parent is updated but not removed |
 | Cleanup — owner-child safety | Configuration-managed parent with controller-managed children: parent has `deletionRequestedAt` set and stays `phase: Pending` or `phase: Degraded` until owner controller deletes all children; row removed atomically only after children clear |
-| Cleanup — non-blocking | New generation activates and routes requests while prior-generation cleanup is in progress; `GenerationClean: False` condition visible in `d2b op inspect` |
+| Cleanup — non-blocking | New generation activates and routes requests while prior-generation cleanup is in progress; `PendingCleanup: True` condition visible in `d2b op inspect` |
 | Cleanup — prior retention | Prior bundle files present on disk up to `retainedGenerations` count; oldest pruned after cleanup complete once count exceeded |
 | Rollback | Emergency rollback re-activates any retained prior generation; surviving resources re-reconcile without reprovisioning |
 | Audit hygiene | All `ResourceDeletionRequested` and `ResourceDeleted` events present in audit segment; `ResourceDeleted` is the final event for each resource; message fields contain no paths, identifiers, or argv |
@@ -780,14 +781,14 @@ add additional layer for their ResourceType-specific cleanup semantics.
 | `tests/unit/nix/cases/<kind>-cleanup.nix` | nix-unit eval | Removing a resource from the Nix config produces a new bundle that does not contain that resource; the persisted prior record carries core-set `metadata.managedBy: configuration` (set by core, not by Nix authoring); generation ID of the new bundle changes |
 | `tests/unit/nix/cases/<kind>-schema-validation.nix` | nix-unit eval | Invalid `providerRef`, out-of-bounds value, or inline secret byte produces exact expected eval error |
 | `packages/d2b-contracts/tests/` | Rust unit | Generation ID is deterministic and order-independent; signed artifact covers `providerRef + provider-specific spec fields + generation` |
-| `packages/d2bd/tests/` or `tests/host-integration/<kind>-cleanup.nix` | integration | Resource removed from Nix config → `deletionRequestedAt` set → `ResourceDeletionRequested` audit event → `ResourceDeleted` audit event + row removed from index atomically; `GenerationClean: False` condition present in Zone status during cleanup |
+| `packages/d2b-core-controller/tests/` or `tests/host-integration/<type>-cleanup.nix` | integration | Resource removed from Nix config → `deletionRequestedAt` set → atomic `Deleted` revision + row/index removal → deduplicated `ResourceDeleted` audit append; `PendingCleanup: True` condition present in Zone status during cleanup |
 | `tests/host-integration/<kind>-cleanup.nix` | integration | Controller-managed dynamic child NOT deleted when configuration-managed parent is updated but not removed |
 | `tests/host-integration/<kind>-cleanup.nix` | integration | Configuration-managed parent with controller-managed children: `deletionRequestedAt` is set on parent; parent stays `phase: Pending`/`Degraded` until owner controller deletes all children; row removed atomically only after children clear |
-| `tests/host-integration/<kind>-cleanup.nix` | integration | New generation activates and routes requests while prior cleanup in progress; `GenerationClean: False` visible in `d2b op inspect` |
+| `tests/host-integration/<type>-cleanup.nix` | integration | New generation activates and routes requests while prior cleanup is in progress; `PendingCleanup: True` is visible in `d2b op inspect` |
 | `tests/host-integration/<kind>-cleanup.nix` | integration | Prior generation bundles present on disk up to `retainedGenerations` count; oldest pruned after cleanup complete |
 | `tests/host-integration/<kind>-cleanup.nix` | integration | Emergency rollback re-activates prior generation; surviving resources re-reconcile without reprovisioning |
 | `tests/unit/nix/cases/artifact-catalog.nix` | nix-unit eval | Duplicate `d2b.artifacts` ID fails eval with exact error; undeclared `type` fails eval; `artifactId` referencing missing catalog entry fails build; `systemArtifactId` with wrong-type catalog entry fails build; derivation placed directly in `spec.*` fails type check; catalog renders deterministic digest for a fixed derivation; rendered ResourceSpec JSON contains only the bounded ID string, not any store path |
-| `packages/d2b-contracts/tests/` or `packages/d2bd/tests/` | Rust unit | Artifact catalog type lookup is fail-closed for missing/wrong-type entries; `artifact-catalog.json` contains a `storePath` field per entry (present and validated by core privately); that `storePath` value is absent from all public ResourceSpec fields, status, audit events, logs, metric labels, and span attributes |
+| `packages/d2b-contracts/tests/` or `packages/d2b-core-controller/tests/` | Rust unit | Artifact catalog type lookup is fail-closed for missing/wrong-type entries; `artifact-catalog.json` contains a `storePath` field per entry (present and validated by core privately); that `storePath` value is absent from all public ResourceSpec fields, status, audit events, logs, metric labels, and span attributes |
 | `tests/host-integration/artifact-catalog-hygiene.nix` | integration | At runtime, store paths from the artifact catalog are absent from all public ResourceSpec fields, status, audit events, log lines, metric labels, and span attributes |
 
 ---
