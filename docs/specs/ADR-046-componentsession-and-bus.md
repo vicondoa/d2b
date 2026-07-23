@@ -262,6 +262,29 @@ It:
 ResourceClient always uses d2b-bus, even beside the Zone runtime. There is no
 direct-store shortcut.
 
+## Sensitive credential delivery
+
+Credential resources/status/store/revision/audit/OTEL remain free of token
+bytes. A Credential Provider may deliver a raw token only through a dedicated
+end-to-end sensitive ComponentSession:
+
+- initiator/responder are fully enrolled Provider/component identities;
+- Noise profile is KK; NN and IKpsk2 are forbidden;
+- consumerRef may name Provider/<name>; its signed component descriptor and
+  Role/RoleBinding resolve the exact receiving component/Process;
+- the offer/prologue binds Credential ref/UID/generation, Credential Provider
+  and consumer Provider/component generations, audience/operation class,
+  route, schema, limits, expiry/deadline, and authorization revisions;
+- d2b-bus/Zone/relay intermediaries authorize route establishment but forward
+  opaque protected records and cannot terminate/decrypt the inner session;
+- token payload has a strict small bound, zeroizing buffers, redacted Debug,
+  replay-safe sequence, no logging/audit/metrics, and immediate close/zeroize;
+- ambiguous delivery never becomes success and is not automatically replayed
+  outside the credential method's explicit idempotency contract.
+
+This is the only initial cross-process secret-byte channel. It grants no generic
+raw HTTP, signing, endpoint, or credential forwarding authority.
+
 ## Lifecycle
 
 Retain/adapt main's:

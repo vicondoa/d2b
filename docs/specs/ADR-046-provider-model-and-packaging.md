@@ -25,7 +25,9 @@ Provider resource in the same Zone.
 
 Provider spec contains:
 
-- exact package/executable/manifest/config/schema/service digests;
+- plain `artifactId` selecting a named Nix artifact-catalog entry;
+- exact package/executable/manifest/config/schema/service digests resolved from
+  that private artifact entry;
 - publisher/signature/trust/conformance/provenance/SBOM identity;
 - support channel and compatibility range;
 - root configuration validated against signed JSON Schema;
@@ -67,6 +69,28 @@ One Provider crate:
   implementation internals;
 - has one Nix package/conformance output;
 - has one `ADR-046-provider-<provider-name>.md` dossier.
+
+Every Provider crate contains:
+
+```text
+d2b-provider-<base>-<implementation>/
+  src/
+  tests/
+  integration/
+  README.md
+```
+
+- `src/`: implementation, component binaries, internal modules, and colocated
+  unit tests;
+- `tests/`: hermetic Cargo integration, ResourceType/controller conformance,
+  fault, redaction, schema, and fake-port tests;
+- `integration/`: heavier container/Host/Guest/cross-process/provider-system
+  fixtures and scenarios invoked by existing repository test orchestration;
+- `README.md`: Provider identity/config, ResourceTypes, controllers/services/
+  workers/binaries, placement, dependencies/RBAC, security/state/telemetry,
+  build/test/integration commands, and standalone-repository consumption.
+
+Workspace policy rejects a Provider crate missing any of these paths.
 
 This boundary must allow moving the crate to its own GitHub repository without
 splitting semantics or copying daemon internals.
@@ -165,9 +189,11 @@ component graph defines deterministic projections:
 - ResourceRef/dependency bindings;
 - component schema digest.
 
-Components cannot read sibling config. Secrets are Credential refs, not config
-values. Root/component digests bind Provider resource, Process resources,
-ComponentSessions, state, status, and audit.
+Components cannot read sibling config. Secrets are Credential refs, not config values. A signed Provider component may
+be selected as a raw-token consumer only through the Credential spec/RBAC and
+the KK end-to-end sensitive ComponentSession contract. Root/component digests
+bind Provider resource, Process resources, ComponentSessions, state, status,
+and audit.
 
 ## Provider dependencies
 
@@ -190,7 +216,17 @@ declared degraded behavior only.
 
 ## Package catalog
 
-Nix compiles an offline sorted exact-digest catalog:
+Nix authoring first declares derivations separately:
+
+```nix
+d2b.artifacts.provider-wayland = {
+  package = inputs.wayland-provider.packages.${system}.default;
+  type = "provider";
+};
+```
+
+The Provider ResourceSpec then uses `artifactId = "provider-wayland"`. Nix
+compiles an offline sorted exact-digest catalog:
 
 - Provider/package/publisher/version;
 - package/executable/manifest/component/descriptor/config digests;
@@ -204,6 +240,10 @@ Nix compiles an offline sorted exact-digest catalog:
 
 Selection is exact digest. No runtime marketplace, download, PATH scan,
 directory discovery, latest, or version-range solving.
+
+Artifact is not a ResourceType; `artifactId` is a plain bounded ID, not a
+ResourceRef. The private catalog may retain a Nix store path for activation,
+but resource spec/status/audit never expose it.
 
 ## Trust
 
@@ -379,8 +419,8 @@ special orchestrator Provider.
 | Dependency/owner | Provider contract; package/Nix integrator |
 | Current source | `packages/Cargo.toml`; `flake.nix`; `nixos-modules/host-daemon.nix`; current source package derivations |
 | Reuse action | adapt |
-| Destination | one `packages/d2b-provider-<base>-<implementation>/` per Provider; generic Nix Provider package/catalog emitter |
-| Detailed design | Split current combined/composition crates; exact outputs/manifests/conformance |
+| Destination | one `packages/d2b-provider-<base>-<implementation>/` per Provider with mandatory src/, tests/, integration/, README.md; generic Nix Provider package/catalog emitter |
+| Detailed design | Split current combined/composition crates; exact outputs/manifests/conformance/layout/documentation |
 | Integration | Provider package installed/registered per Zone |
 | Data migration | No package compatibility path |
 | Validation | Workspace naming/dependency/output/dossier/catalog parity policy |

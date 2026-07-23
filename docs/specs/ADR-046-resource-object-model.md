@@ -60,6 +60,19 @@ fields uses `spec: {}`.
 | `createdAt` | Core-set RFC 3339 UTC timestamp |
 | `updatedAt` | Core-set RFC 3339 UTC timestamp on every mutation |
 
+Internal non-user-writable management metadata also records:
+
+- `managedBy = configuration|controller|api`;
+- optional `configurationGeneration` for Nix-owned roots;
+- controller/Provider generation for dynamic children.
+
+These fields are authority inputs set by the configuration/resource service,
+not labels/annotations or caller-selected spec values.
+
+`api` is assigned to resources created directly by an authorized API client;
+they persist until explicit API deletion and are never swept by configuration
+generation cleanup.
+
 Labels/annotations are optional bounded presentation metadata. They never
 select authorization, provider/controller ownership, path, process identity,
 or implicit relationships. A ResourceType may declare a closed set of indexed
@@ -180,6 +193,21 @@ status-only event would otherwise be suppressed.
 
 No retained resource tombstone exists.
 
+### Removed Nix configuration
+
+After a newly validated Zone configuration generation activates, core diffs its
+canonical configured resource set against the prior active set. Every prior
+`managedBy=configuration` resource omitted from the new set receives normal
+asynchronous Delete:
+
+- activation succeeds without waiting for cleanup;
+- generation status becomes Degraded/pending-cleanup while removals remain;
+- owner children/finalizers complete through normal reconciliation;
+- controller-created resources are never swept merely because absent from Nix;
+- prior generation remains retained until cleanup/rollback policy permits
+  pruning;
+- failures are visible/audited and never reported as deleted.
+
 ## Minimal standard ResourceType catalog
 
 Core control:
@@ -189,6 +217,8 @@ Core control:
 - Provider;
 - Role;
 - RoleBinding.
+- Quota;
+- EmergencyPolicy.
 
 Standard execution/shared:
 

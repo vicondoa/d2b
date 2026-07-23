@@ -54,8 +54,11 @@ Algorithm:
 3. stage inactive resources in bounded transactions;
 4. atomically activate one configuration revision;
 5. trigger affected resources/providers/controllers;
-6. retain prior generation for bounded rollback/drain;
-7. prune only after ownership/finalizer checks.
+6. request asynchronous Delete for prior configuration-owned resources omitted
+   from the new canonical set;
+7. report Degraded/pending-cleanup without blocking activation;
+8. retain prior generation for bounded rollback/drain;
+9. prune only after ownership/finalizer checks.
 
 It does not overwrite controller-created children merely because root config
 changes.

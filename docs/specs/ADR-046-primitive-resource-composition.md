@@ -35,7 +35,9 @@ Core control:
 | ZoneLink | Parent/child delegation, transport, cursor/health |
 | Provider | Installed package/config/controllers/schemas/services/status |
 | Role | Bounded native RBAC rules |
-| RoleBinding | Subjects to Role with narrowing/expiry |
+| RoleBinding | Subjects to Role with narrowing; no time-based expiry |
+| Quota | Zone-wide/shared aggregate ceilings and observed usage |
+| EmergencyPolicy | Disable scopes/actions and emergency status |
 
 Standard execution/shared:
 
@@ -61,7 +63,8 @@ Inline:
 
 - Host/Guest Provider-specific type/settings;
 - defaultDomain/allowedDomains/defaultUserRef;
-- hierarchical CPU/memory/pids/fds/I/O/storage/network budgets;
+- optional `quotaRef` plus inline requested CPU/memory/pids/fds/I/O/storage/
+  network amounts;
 - network attachments;
 - device attachments;
 - Volume attachment defaults;
@@ -165,7 +168,6 @@ executionRef: Host/host-system
 domain: system # optional; defaults from Host/Guest ExecutionPolicy
 userRef: null  # required/inherited for user
 processClass: controller # controller | service | worker
-packageRef: Provider/example # exact package artifact comes from owning Provider
 template: controller-main
 configRef: Volume/example-config
 mounts:
@@ -181,7 +183,10 @@ endpoints: []
 telemetry: { ... }
 ```
 
-No free-form executable, raw host path, numeric UID/GID, raw seccomp program,
+The owning semantic Provider is metadata.ownerRef; its signed component/
+process template supplies the executable package/digest. `template` is a plain
+bounded ID, not a ResourceRef. No free-form executable, raw host path, numeric
+UID/GID, raw seccomp program,
 ambient capability list, caller-selected broker op, credential bytes, or
 arbitrary socket address is accepted. Package/template/provider schemas resolve
 those implementation details.

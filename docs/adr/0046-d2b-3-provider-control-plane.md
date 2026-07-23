@@ -29,6 +29,15 @@ dependencies, Nix modules, services, controllers, Providers, state stores, or
 reset behavior. Future implementation requires a separate request after the
 set is Accepted.
 
+Every normative ResourceType/Provider spec defines its Nix authoring form,
+canonical rendered ResourceSpec, and NixOS eval/build schema/reference
+validation. Nix mirrors the ResourceSpec `spec` shape directly; only name,
+Zone, and apiVersion are derived/defaulted, and status is controller-owned. Nix
+emits an integrity-pinned per-Zone resource generation.
+Removing a configured resource activates the new generation immediately and
+requests asynchronous owner/finalizer-safe deletion, with visible Degraded
+cleanup status; dynamic controller-owned resources are not broadly swept.
+
 ## Context
 
 The v3 baseline has useful foundations:
@@ -67,6 +76,9 @@ state, and audit unit. Every Zone owns:
 - one authoritative `Zone/<zone-name>` self resource;
 - one fixed core-controller process;
 - Zone-local Provider, Host, Guest, controller, policy, and ordinary resources.
+
+Zone.spec is empty. Zone-wide ceilings and emergency controls are separate
+Quota and EmergencyPolicy resources with their own controllers/status.
 
 Every resource belongs to one Zone. A parent represents a child with a local
 `ZoneLink/<name>` resource and accesses the child's resources through the child
@@ -254,6 +266,12 @@ Authenticated peers map to canonical Zone-local resource subjects. The same
 native Role/RoleBinding engine authorizes session connect, service invoke,
 stream open, and resource verbs. A handshake cannot self-assert roles;
 authorization leases bind policy revisions and revoke when RBAC changes.
+
+Credential Providers may deliver raw token bytes only over a dedicated
+end-to-end Noise_KK ComponentSession to a fully enrolled authorized consumer
+Provider/component. Bus/Zone/relay intermediaries authorize and forward opaque
+protected records without decrypting them. Tokens never enter resource
+spec/status/store/revision/audit/telemetry, NN, or bootstrap sessions.
 
 ### Primitive ResourceSpecs
 

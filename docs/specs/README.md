@@ -82,6 +82,43 @@ Every design section ends with a current-code fit table:
 | Feasibility proof | Existing proof or pre-acceptance spike |
 | Future owner | Exact work item/crate/component |
 
+Every ResourceType/Provider spec also contains a **Nix authoring and
+configuration cleanup** section:
+
+- user-facing direct schema mirror:
+  `d2b.zones.<zone>.resources.<name> = { type = "..."; spec = { ... }; };`;
+- exact canonical rendered ResourceSpec JSON;
+- generated/committed ResourceTypeSchema and Provider settings schema;
+- Nix eval/build validation of fields, bounds, ResourceRefs, Provider presence,
+  Host/Guest/domain policy, ownership, conflicts, and schema fingerprints;
+- canonical sorted integrity-pinned per-Zone resource bundle/generation;
+- activation/publication path;
+- removed configured-resource cleanup, status, audit, and tests.
+
+Nix does not define a second resource vocabulary. `spec` field names, nesting,
+types, defaults, bounds, and Provider extensions match the canonical
+ResourceTypeSchema directly. metadata.name, metadata.zone, and apiVersion are
+derived/defaulted. Users may author only metadata.ownerRef and bounded
+presentation labels/annotations; status, UID, generation, revision, timestamps,
+finalizers, managedBy, and configurationGeneration are core/controller-managed.
+managedBy is `configuration`, `controller`, or `api`; API-managed resources
+persist until explicitly deleted.
+
+Nix derivations are the one value class that cannot appear in JSON
+ResourceSpecs. They live in a separate named `d2b.artifacts.<id>` catalog.
+ResourceSpecs use plain `artifactId`/`systemArtifactId` fields. Nix builds and
+hashes each derivation and emits a private integrity-pinned ID-to-digest/closure
+catalog; store paths never enter public spec/status/audit.
+
+After a new generation activates, a previously Nix-owned resource absent from
+the new configured set enters normal asynchronous finalizer-safe deletion. The
+generation reports Degraded/pending-cleanup until deletion completes. Activation
+does not block. Controller-created resources are not deleted merely because
+they are absent from Nix; their owner controller governs them.
+
+Every Provider dossier requires its crate's `src/`, `tests/`, `integration/`,
+and `README.md` layout and assigns exact work items/files to each path.
+
 ## Resource terminology
 
 A **resource** belongs to exactly one Zone.
