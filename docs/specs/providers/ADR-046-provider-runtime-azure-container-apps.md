@@ -1191,7 +1191,12 @@ d2b.zones.my-zone.resources = {
 };
 ```
 
-The `aca-gateway` Guest's NixOS system closure must include the two ACA Provider component binaries (`d2b-aca-controller`, `d2b-aca-deployment-service`) and their runtime dependencies. Component principals (`ComponentPrincipal/aca-controller`, `ComponentPrincipal/aca-deployment-service`) are assigned by `Provider/system-minijail` at Process start time — they are not OS accounts and require no `users.users.*` NixOS declarations. The `gatewayExecutionRef = "Guest/aca-gateway"` in the Provider config ties all controller Processes to this specific Guest resource.
+The `aca-gateway` Guest's NixOS system closure must include the two ACA Provider
+component binaries (`d2b-aca-controller`, `d2b-aca-deployment-service`), their
+runtime dependencies, and the bounded system principals referenced by the
+components' `User/<name>` resources. Nix preprovisions those accounts; system-core
+only verifies them. The `gatewayExecutionRef = "Guest/aca-gateway"` in the Provider
+config ties all controller Processes to this specific Guest resource.
 
 ### 15.7 Eval-time validation
 

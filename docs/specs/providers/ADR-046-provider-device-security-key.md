@@ -1546,7 +1546,7 @@ class.
 | Existing test | Action |
 | --- | --- |
 | `packages/d2b-contract-tests/tests/usb_sk_contract.rs` | Move to `packages/d2b-provider-device-security-key/tests/` as part of W-R06; update v3 type imports; retain all existing assertions |
-| `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` | Move to `packages/d2b-provider-device-security-key/tests/` as part of W-R07; update for v3 Process resource minijail profile; retain zero-capabilities and seccompPolicyRef assertions |
+| `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` | Move to `packages/d2b-provider-device-security-key/tests/` as part of W-R07; update for the v3 Process resource sandbox; retain zero-`capabilityClasses` and `seccompClass` assertions |
 | `packages/d2b-priv-broker/tests/security_key_broker.rs` | Retain in broker crate; update for v3 bundle table lookup path; add zone-field round-trip test |
 
 ## Nix option migration
