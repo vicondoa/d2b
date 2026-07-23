@@ -273,7 +273,7 @@ calls for the Zone are handled by that single process.
 ### Process resource template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-vsock-service
@@ -572,7 +572,7 @@ transport observations returned to core are promoted to `ZoneLink.status.resourc
 any bounded, non-secret vsock-only observation that core persists for this
 Provider uses `ZoneLink.status.provider` with `providerRef:
 Provider/transport-vsock`, qualified `schemaId:
-transport-vsock.d2b.io/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
+transport-vsock.d2bus.org/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted `details` schema registered and signed in the Provider manifest. Core
 writes all present layers atomically and never copies shared
@@ -724,7 +724,7 @@ d2b.zones.k0.resources.link-to-k1 = {
     childZoneRef          = "Zone/k1";
     providerRef  = "Provider/transport-vsock";
     provider = {
-      schemaId      = "transport-vsock.d2b.io/ZoneLink/spec";
+      schemaId      = "transport-vsock.d2bus.org/ZoneLink/spec";
       schemaVersion = "1.0";
       settings = {
         guestRef              = "Guest/k1-vm";

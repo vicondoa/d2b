@@ -85,7 +85,7 @@ Zone-store, or another Provider's implementation internals.
 `Provider/runtime-cloud-hypervisor` is installed as a Zone-local resource:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: runtime-cloud-hypervisor
@@ -177,7 +177,7 @@ rejected.
 
 **D089 spec extension contract:** this Provider's implementation-only desired
 configuration is carried in `spec.provider.settings` under
-`runtime-cloud-hypervisor.d2b.io/Guest/spec`; the schema is registered/signed in
+`runtime-cloud-hypervisor.d2bus.org/Guest/spec`; the schema is registered/signed in
 the manifest, deny-unknown, bounded, versioned, and validated against
 `spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
 shared semantics are promoted to the Guest base and never placed in
@@ -191,7 +191,7 @@ plus provider-neutral `unsupported-capability`. `spec.provider` aligns with
 
 ```yaml
 provider:
-  schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+  schemaId: runtime-cloud-hypervisor.d2bus.org/Guest/spec
   schemaVersion: 1.0.0
   settings:
     vcpus: 2                  # int [1, 1024]; overrides Provider root default
@@ -235,7 +235,7 @@ spec:
   providerRef: Provider/runtime-cloud-hypervisor
   systemArtifactId: dev-vm-system   # required for this Provider; NOT in spec.provider.settings
   provider:
-    schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+    schemaId: runtime-cloud-hypervisor.d2bus.org/Guest/spec
     schemaVersion: 1.0.0
     settings:
       vcpus: 4
@@ -694,7 +694,7 @@ ownerChildTriggers:
 reconcileConcurrency: 8
 maxPendingResources: 256
 finalizersOwned:
-  - runtime.runtime-cloud-hypervisor.d2b.io/guest
+  - runtime.runtime-cloud-hypervisor.d2bus.org/guest
 observeIntervalSeconds: 30
 resyncPolicy: dependency-change-only
 deadlines:
@@ -736,7 +736,7 @@ as a JSON Schema artifact signed with the Provider package:
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "runtime-cloud-hypervisor.d2b.io/Guest/spec",
+  "$id": "runtime-cloud-hypervisor.d2bus.org/Guest/spec",
   "type": "object",
   "additionalProperties": false,
   "required": ["vsockCid"],
@@ -824,7 +824,7 @@ d2b.zones.dev.resources.dev-vm = {
       { deviceRef = "Device/dev-vm-tpm"; exclusive = true; }
     ];
     provider = {
-      schemaId = "runtime-cloud-hypervisor.d2b.io/Guest/spec";
+      schemaId = "runtime-cloud-hypervisor.d2bus.org/Guest/spec";
       schemaVersion = "1.0.0";
       settings = {
         vcpus       = 4;
@@ -845,7 +845,7 @@ bundle; `metadata.managedBy` set at activation time, not in bundle):
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Guest",
   "metadata": {
     "name": "dev-vm",
@@ -868,7 +868,7 @@ bundle; `metadata.managedBy` set at activation time, not in bundle):
     ],
     "providerRef": "Provider/runtime-cloud-hypervisor",
     "provider": {
-      "schemaId": "runtime-cloud-hypervisor.d2b.io/Guest/spec",
+      "schemaId": "runtime-cloud-hypervisor.d2bus.org/Guest/spec",
       "schemaVersion": "1.0.0",
       "settings": {
         "consoleType": "virtio",
@@ -935,7 +935,7 @@ observe or modify it. It is written once at Provider installation and updated
 only when the Provider is upgraded or its `controllerExecutionRef` changes.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: runtime-ch-controller
@@ -1002,7 +1002,7 @@ with resource-derived fields at reconcile time. The following is the canonical
 ResourceSpec written to the Zone store (no argv, paths, or socket names):
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: dev-vm-vmm
@@ -1152,7 +1152,7 @@ The `SpawnRunner{role: CloudHypervisor}` broker op (current:
 
 ### 15.3 Guest finalizer
 
-Finalizer ID: `runtime.runtime-cloud-hypervisor.d2b.io/guest`
+Finalizer ID: `runtime.runtime-cloud-hypervisor.d2bus.org/guest`
 
 Algorithm on `deletion-requested`:
 
@@ -1163,7 +1163,7 @@ Algorithm on `deletion-requested`:
 3. Wait for the owned VMM Process to be deleted (owner-child cascade with its
    own finalizer).
 4. Verify VMM process exit through the local pidfd.
-5. Clear the `runtime.runtime-cloud-hypervisor.d2b.io/guest` finalizer.
+5. Clear the `runtime.runtime-cloud-hypervisor.d2bus.org/guest` finalizer.
 6. Return `finalized`.
 
 If any child finalizer is blocked beyond `finalize` deadline (300 s), the
@@ -1302,7 +1302,7 @@ same shape as sibling Guest runtime providers. Cloud Hypervisor-specific VMM
 lifecycle/adoption observations, including `providerPhase` and the bounded
 non-authorizing guest identity digest, live only in `status.provider.details`
 with `providerRef: Provider/runtime-cloud-hypervisor`, qualified `schemaId`
-(`runtime-cloud-hypervisor.d2b.io/Guest/status`), `schemaVersion`, and
+(`runtime-cloud-hypervisor.d2bus.org/Guest/status`), `schemaVersion`, and
 `observedProviderGeneration`. Controller status writes include all present
 layers atomically in one status mutation; shared fields are never duplicated
 into `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
@@ -1342,7 +1342,7 @@ status:
     activeProcessCount: 1
   provider:
     providerRef: Provider/runtime-cloud-hypervisor
-    schemaId: runtime-cloud-hypervisor.d2b.io/Guest/status
+    schemaId: runtime-cloud-hypervisor.d2bus.org/Guest/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:

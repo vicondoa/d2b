@@ -61,7 +61,7 @@ shape (`spec.artifactId`, `spec.config`) because a Provider has no non-circular
 ### Envelope example
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Device
 metadata:
   name: corp-vm-tpm
@@ -70,7 +70,7 @@ metadata:
   generation: 1
   revision: <opaque>
   ownerRef: Guest/corp-vm
-  finalizers: [device-tpm.d2b.io/state-preserved]
+  finalizers: [device-tpm.d2bus.org/state-preserved]
   deletionRequestedAt: null
   createdAt: 2026-07-22T00:00:00Z
   updatedAt: 2026-07-22T00:00:00Z
@@ -82,7 +82,7 @@ spec:
   inventory:
     selector: {}             # emulated devices carry no physical selector
   provider:
-    schemaId: device-tpm.d2b.io/spec
+    schemaId: device-tpm.d2bus.org/spec
     schemaVersion: "1.0"
     settings: {}             # Provider-specific settings
 status:
@@ -310,10 +310,10 @@ external effect.
 
 | Provider | Finalizer ID |
 | --- | --- |
-| `device-tpm` | `device-tpm.d2b.io/state-preserved` |
-| `device-usbip` | `device-usbip.d2b.io/attachment-released` |
-| `device-security-key` | `device-security-key.d2b.io/lease-released` |
-| `device-gpu` | `device-gpu.d2b.io/worker-stopped` |
+| `device-tpm` | `device-tpm.d2bus.org/state-preserved` |
+| `device-usbip` | `device-usbip.d2bus.org/attachment-released` |
+| `device-security-key` | `device-security-key.d2bus.org/lease-released` |
+| `device-gpu` | `device-gpu.d2bus.org/worker-stopped` |
 
 Deletion sequence:
 1. `deletionRequestedAt` is set.
@@ -327,7 +327,7 @@ Deletion sequence:
 
 Persistent TPM state (swtpm NVRAM, EK seed) is never deleted by the Device
 finalizer. The Volume resource that owns TPM state has an independent lifecycle
-and its own `volume-local.d2b.io/tpm-state` finalizer.
+and its own `volume-local.d2bus.org/tpm-state` finalizer.
 
 ## Hotplug
 
@@ -1254,7 +1254,7 @@ d2b.zones.<zone>.resources.<name> = {
 | --- | --- |
 | `metadata.name` | Resource attribute key `<name>` |
 | `metadata.zone` | Zone attribute key `<zone>` |
-| `apiVersion` | Constant `"resources.d2b.io/v3"` |
+| `apiVersion` | Constant `"resources.d2bus.org/v3"` |
 | `metadata.uid` | Assigned by Core on first creation |
 | `metadata.generation` | Incremented by Core on each spec change |
 | `metadata.revision` | Opaque; set by Core |
@@ -1382,7 +1382,7 @@ not emitted by the Nix build and are filled by the runtime after first apply.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "corp-vm-tpm",
@@ -1407,7 +1407,7 @@ not emitted by the Nix build and are filled by the runtime after first apply.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "corp-vm-usb",
@@ -1437,7 +1437,7 @@ not emitted by the Nix build and are filled by the runtime after first apply.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "corp-vm-security-key",
@@ -1471,7 +1471,7 @@ not emitted by the Nix build and are filled by the runtime after first apply.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "corp-vm-gpu",
@@ -1509,7 +1509,7 @@ not emitted by the Nix build and are filled by the runtime after first apply.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "dev-vm-render",
@@ -1560,10 +1560,10 @@ The Nix build produces a Zone resource generation bundle at
   "generatedAt": "2026-07-22T00:00:00Z",
   "contentDigest": "sha256:<hex>",
   "resources": [
-    { "apiVersion": "resources.d2b.io/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-gpu" },          "spec": { ... } },
-    { "apiVersion": "resources.d2b.io/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-security-key" }, "spec": { ... } },
-    { "apiVersion": "resources.d2b.io/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-tpm" },          "spec": { ... } },
-    { "apiVersion": "resources.d2b.io/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-usb" },          "spec": { ... } }
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-gpu" },          "spec": { ... } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-security-key" }, "spec": { ... } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-tpm" },          "spec": { ... } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-usb" },          "spec": { ... } }
   ]
 }
 ```

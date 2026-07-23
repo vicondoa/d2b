@@ -302,7 +302,7 @@ operator UI.
 ### Spec schema
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Host
 metadata:
   name: host-system            # required; ^[a-z][a-z0-9-]*$; max 63
@@ -317,7 +317,7 @@ spec:
   deviceAttachments: []               # 0..64 DeviceAttachmentList entries
   volumeAttachmentDefaults: []        # 0..64 VolumeAttachmentDefaultList entries
   provider:
-    schemaId: system-core.d2b.io/host-spec
+    schemaId: system-core.d2bus.org/host-spec
     schemaVersion: "1.0"
     settings: {}                      # system-core Host extension schema; bounded
 ```
@@ -502,7 +502,7 @@ The four accepted runtime Providers (D043):
 ### Spec schema
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Guest
 metadata:
   name: dev-vm
@@ -518,7 +518,7 @@ spec:
   deviceAttachments: []
   volumeAttachmentDefaults: []
   provider:
-    schemaId: runtime-cloud-hypervisor.d2b.io/guest-spec
+    schemaId: runtime-cloud-hypervisor.d2bus.org/guest-spec
     schemaVersion: "1.0"
     settings: {}        # selected runtime Provider's Guest schema extension
 ```
@@ -705,7 +705,7 @@ Process has exactly one executionRef (Host or Guest) and one process domain
 ### Spec schema
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: wayland-proxy
@@ -1058,7 +1058,7 @@ fields. It does not reference or create a Process child.
 ### Spec schema (delta from ExecutionSpec)
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: EphemeralProcess
 metadata:
   name: swtpm-pre-start-flush-abc123
@@ -1260,7 +1260,7 @@ A User is not specific to one Host; multiple Hosts may refer to the same User.
 ### Spec schema
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: User
 metadata:
   name: alice             # required; ^[a-z][a-z0-9-]*$; max 63; Zone-local resource name; used in userRef as User/alice
@@ -1552,7 +1552,7 @@ d2b.zones.<zone>.resources.<name> = {
 };
 ```
 
-All five ResourceTypes share a single flat `resources` attrset under each Zone. `metadata.name` is derived from the `resources.<name>` attrset key (satisfies `^[a-z][a-z0-9-]*$`, max 63 chars). `metadata.zone` is derived from the enclosing `d2b.zones.<zone>` key. `apiVersion` defaults to `"resources.d2b.io/v3"`. Because `resources` is a flat attrset, no two entries may share the same `<name>` key regardless of `type`.
+All five ResourceTypes share a single flat `resources` attrset under each Zone. `metadata.name` is derived from the `resources.<name>` attrset key (satisfies `^[a-z][a-z0-9-]*$`, max 63 chars). `metadata.zone` is derived from the enclosing `d2b.zones.<zone>` key. `apiVersion` defaults to `"resources.d2bus.org/v3"`. Because `resources` is a flat attrset, no two entries may share the same `<name>` key regardless of `type`.
 
 **Author-settable metadata fields** (`metadata` submodule; all optional):
 
@@ -1568,7 +1568,7 @@ All five ResourceTypes share a single flat `resources` attrset under each Zone. 
 | --- | --- | --- |
 | `metadata.name` | Nix compiler | Derived from `resources.<name>` attrset key |
 | `metadata.zone` | Nix compiler | Derived from enclosing `d2b.zones.<zone>` key |
-| `apiVersion` | Nix compiler | Always `"resources.d2b.io/v3"` |
+| `apiVersion` | Nix compiler | Always `"resources.d2bus.org/v3"` |
 | `metadata.managedBy` | Activation controller / core | Valid values: `"configuration"` (set by activation controller for all Nix-declared resources), `"controller"` (set by core for controller-created resources), `"api"` (set by core for API-created resources). Immutable after first Create; NOT author-settable |
 | `metadata.configurationGeneration` | Activation controller | NixOS generation number recorded at activation; refreshed on each generation change even for unchanged specs; NOT author-settable |
 | `metadata.uid` | Resource store | Stable opaque identity assigned at Create |
@@ -1679,7 +1679,7 @@ Every Nix-declared resource compiles to a `ResourceEnvelope` JSON object. `spec`
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "annotations": {},
     "labels": {},
@@ -1714,7 +1714,7 @@ d2b.zones.dev.resources.host-system = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "annotations": {}, "labels": {}, "name": "host-system",
     "ownerRef": null, "zone": "dev"
@@ -1748,7 +1748,7 @@ d2b.zones.dev.resources.host-unsafe-local = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": { "annotations": {}, "labels": {}, "name": "host-unsafe-local", "ownerRef": null, "zone": "dev" },
   "spec": {
     "allowedDomains": ["user"], "budget": null, "defaultDomain": "user",
@@ -1788,7 +1788,7 @@ Resource bundle JSON (`systemArtifactId` is a top-level spec field; no store pat
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": { "annotations": {}, "labels": {}, "name": "dev-vm", "ownerRef": null, "zone": "dev" },
   "spec": {
     "allowedDomains": ["system", "user"],
@@ -1834,7 +1834,7 @@ d2b.zones.dev.resources.wayland-proxy = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": { "annotations": {}, "labels": {}, "name": "wayland-proxy", "ownerRef": "Provider/display-wayland", "zone": "dev" },
   "spec": {
     "budget": { "cpu": { "limit": "500m", "request": null }, "memory": { "limit": "128Mi", "request": null } },
@@ -1873,7 +1873,7 @@ d2b.zones.dev.resources."swtpm-flush-dev-vm" = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": { "annotations": {}, "labels": {}, "name": "swtpm-flush-dev-vm", "ownerRef": "Provider/device-tpm", "zone": "dev" },
   "spec": {
     "domain": "system", "executionRef": "Host/host-system", "failedTtl": "24h",
@@ -1904,7 +1904,7 @@ d2b.zones.dev.resources.alice-admin = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": { "annotations": {}, "labels": {}, "name": "alice", "ownerRef": null, "zone": "dev" },
   "spec": { "displayName": "Alice", "groups": ["audio", "d2b", "video", "wheel"], "osUsername": "alice" },
   "type": "User"

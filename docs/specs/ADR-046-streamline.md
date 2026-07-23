@@ -216,7 +216,7 @@ pattern was frozen once and propagated.
 
 ### F7 — Qualified ResourceType grammar drift
 
-D080 froze the single qualification grammar `<provider-name>.d2b.io.<Type>`
+D080 froze the single qualification grammar `<provider-name>.d2bus.org.<Type>`
 for Provider-specific ResourceTypes. Before that freeze, dossiers used
 inconsistent forms; `git log --all --oneline -S"qualified" -- docs/specs`
 shows the grammar question surfacing independently in
@@ -458,7 +458,7 @@ Rust, not NixOS module evaluation.
 
 | Test | Asserts |
 | --- | --- |
-| `policy_spec_vocabulary` | No `docs/specs/**` file uses a Provider-specific ResourceType name outside the D080 `<provider-name>.d2b.io.<Type>` grammar; no file authors a numeric `hostUid`/`hostGid` field on a public spec (F2/F7 regression guard) |
+| `policy_spec_vocabulary` | No `docs/specs/**` file uses a Provider-specific ResourceType name outside the D080 `<provider-name>.d2bus.org.<Type>` grammar; no file authors a numeric `hostUid`/`hostGid` field on a public spec (F2/F7 regression guard) |
 | `policy_spec_ownership` | No dossier other than `volume-local` writes Volume layout/spec/ownership fields (D083); no transport dossier reads/writes/finalizes `ZoneLink` (D081) (F4/F5 regression guard) |
 | `policy_spec_effectport_boundary` | No Provider dossier's detailed-design section names a direct broker/syscall/filesystem/systemd-socket call; every privileged effect is expressed as an injected typed `EffectPort` call (D077) (F6 regression guard) |
 | `policy_spec_source_policy` | No Volume `source.settings` example anywhere under `docs/specs/**` contains a raw absolute host path; every `local-path`/`block-image` source example uses `sourcePolicyId` (D082) (F9 regression guard) |

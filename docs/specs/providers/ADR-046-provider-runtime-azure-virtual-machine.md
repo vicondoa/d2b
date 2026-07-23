@@ -193,7 +193,7 @@ fields are rejected.
 
 **D089 spec extension contract:** this Provider's implementation-only desired
 configuration is carried in `spec.provider.settings` under
-`runtime-azure-virtual-machine.d2b.io/Guest/spec`; the schema is
+`runtime-azure-virtual-machine.d2bus.org/Guest/spec`; the schema is
 registered/signed in the manifest, deny-unknown, bounded, versioned, and
 validated against `spec.providerRef` at Nix build and API admission. Base fields
 stay at `spec.*`; shared semantics are promoted to the Guest base and never
@@ -211,7 +211,7 @@ no Nix system artifact). Enforced at eval time.
 
 ```yaml
 provider:
-  schemaId: runtime-azure-virtual-machine.d2b.io/Guest/spec
+  schemaId: runtime-azure-virtual-machine.d2bus.org/Guest/spec
   schemaVersion: 1.0.0
   settings:
     # Azure placement
@@ -398,7 +398,7 @@ declared `stateNamespace` and execution target in the component descriptor.
 
 ```yaml
 # Example name: runtime-azure-virtual-machine--azure-vm-controller--recovery-state--gw
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: runtime-azure-virtual-machine--azure-vm-controller--recovery-state--gw
@@ -410,7 +410,7 @@ spec:
   persistenceClass: persistent
   sensitivityClass: private       # single-process; volume-domain-mismatch on any other mount
   stateSchema:
-    schemaId: io.d2b.runtime-azure-virtual-machine/controller/recovery-state
+    schemaId: runtime-azure-virtual-machine.d2bus.org/controller/recovery-state
     schemaVersion: "1.0"
     schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
@@ -534,7 +534,7 @@ the injected async effect port traits over local FD channels.
 ### azure-vm-controller Process
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: azure-vm-controller-process
@@ -605,7 +605,7 @@ spec:
 ### azure-vm-bootstrap-svc Process
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: azure-vm-bootstrap-svc-process
@@ -1000,7 +1000,7 @@ This Provider declares no relay credential reference in `spec.config`.
 Azure VM-specific ARM/session phase and opaque non-authorizing operation or
 enrollment digests live only in `status.provider.details` with `providerRef:
 Provider/runtime-azure-virtual-machine`, qualified `schemaId`
-(`runtime-azure-virtual-machine.d2b.io/Guest/status`), `schemaVersion`, and
+(`runtime-azure-virtual-machine.d2bus.org/Guest/status`), `schemaVersion`, and
 `observedProviderGeneration`. Guest runtime readiness, capabilities, observed
 lifecycle phase, bootstrap readiness, and active process count are promoted to
 `status.resource` and remain identical to sibling Guest runtime providers.
@@ -1025,7 +1025,7 @@ status:
     activeProcessCount: 0
   provider:
     providerRef: Provider/runtime-azure-virtual-machine
-    schemaId: runtime-azure-virtual-machine.d2b.io/Guest/status
+    schemaId: runtime-azure-virtual-machine.d2bus.org/Guest/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
@@ -1184,7 +1184,7 @@ d2b.zones.dev.resources.corp-vm = {
     defaultUserRef   = null;
     budget           = {};       # no d2b-side budget for remote VM Guests
     provider = {
-      schemaId = "runtime-azure-virtual-machine.d2b.io/Guest/spec";
+      schemaId = "runtime-azure-virtual-machine.d2bus.org/Guest/spec";
       schemaVersion = "1.0.0";
       settings = {
         subscriptionId  = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

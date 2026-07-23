@@ -89,7 +89,7 @@ create or own this Process; core creates and manages it, aggregates its status
 into the Provider status, and deletes it when the Provider is deleted.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-gpu-controller
@@ -151,7 +151,7 @@ Normative D089 spec layering: Device base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `deviceClass`,
 `inventory.selector`, attachments, and arbitration. This Provider's
 desired-only extension is the canonical `spec.provider = { schemaId:
-"device-gpu.d2b.io/Device/spec", schemaVersion, settings }` envelope; it is
+"device-gpu.d2bus.org/Device/spec", schemaVersion, settings }` envelope; it is
 manifest-registered/signed, strict deny-unknown, bounded, versioned and
 digested,
 validated against `spec.providerRef` at Nix build and API admission,
@@ -166,7 +166,7 @@ status only. A reference to the former Device `spec.settings` denotes
 credential material is allowed in `spec.provider.settings`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Device
 metadata:
   name: corp-vm-gpu
@@ -175,7 +175,7 @@ metadata:
   generation: 1
   revision: <opaque>
   ownerRef: Guest/corp-vm
-  finalizers: [device-gpu.d2b.io/worker-stopped]
+  finalizers: [device-gpu.d2bus.org/worker-stopped]
   deletionRequestedAt: null
   createdAt: 2026-07-22T00:00:00Z
   updatedAt: 2026-07-22T00:00:00Z
@@ -190,7 +190,7 @@ spec:
       label: host-gpu
       pciSlot: null
   provider:
-    schemaId: "device-gpu.d2b.io/Device/spec"
+    schemaId: "device-gpu.d2bus.org/Device/spec"
     schemaVersion: "1.0.0"
     settings:
       renderNodeOnly: false
@@ -392,7 +392,7 @@ expressed as a raw path in the resource spec.
 ### Process resource shape
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-<uid-short>-gpu
@@ -562,7 +562,7 @@ value, audit record, or telemetry attribute.
 ### Process resource shape
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-<uid-short>-render-node
@@ -661,7 +661,7 @@ unprivileged readers.
 ### Process resource shape
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-<uid-short>-video
@@ -947,7 +947,7 @@ Per D088, ResourceType-common Device observation lives in
 identical across Device implementations. GPU-specific observations (DRM/render
 node mode and availability, worker refs/readiness, video sidecar and
 wire-contract observations, bounded diagnostics) live only in `status.provider`
-with `providerRef`, qualified `schemaId` `device-gpu.d2b.io/Device/status`,
+with `providerRef`, qualified `schemaId` `device-gpu.d2bus.org/Device/status`,
 `schemaVersion`, `observedProviderGeneration`, and strict bounded redacted
 `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
@@ -991,7 +991,7 @@ status:
     lastProbedAt: null
   provider:
     providerRef: Provider/device-gpu
-    schemaId: "device-gpu.d2b.io/Device/status"
+    schemaId: "device-gpu.d2bus.org/Device/status"
     schemaVersion: "1.0.0"
     observedProviderGeneration: 1
     details:
@@ -1121,7 +1121,7 @@ A dedicated watch task reads while per-resource tasks reconcile in parallel.
 | Trigger | Handler |
 | --- | --- |
 | `spec-generation-changed` | Re-evaluate settings; update argv/broker-token set; if `renderNodeOnly` or `videoSidecar` changed, stop/restart affected Processes; update arbitration mode. |
-| `deletion-requested` | Issue Delete on owned video Process (if running); issue Delete on GPU/render-node Process; wait for both to commit `phase=Deleted`; release OS resources; clear finalizer `device-gpu.d2b.io/worker-stopped`. |
+| `deletion-requested` | Issue Delete on owned video Process (if running); issue Delete on GPU/render-node Process; wait for both to commit `phase=Deleted`; release OS resources; clear finalizer `device-gpu.d2bus.org/worker-stopped`. |
 | `dependency-changed` | If owning Guest stops or degrades, release active claims; set phase `Degraded`. If GPU Process transitions to `Ready` and `videoSidecar=true`, create video Process. If GPU Process fails, stop video Process, update `VideoWorkerReady=False`. |
 | `scheduled-observe` | Probe DRM sysfs presence; update `DevicePresent` condition; apply three-strike failure semantics. |
 | `owned-resource-changed` | GPU Process phase changed: update `GpuWorkerReady`; trigger video dependency check. Video Process phase changed: update `VideoWorkerReady`; set `DeviceHealthy` accordingly. |
@@ -1133,13 +1133,13 @@ commit-to-controller-handler ≤5 ms p95; launch-attempt ≤20 ms p95.
 The device-gpu controller creates the Process resource; the system-minijail
 Process controller manages the launch.
 
-### Deletion sequence (finalizer `device-gpu.d2b.io/worker-stopped`)
+### Deletion sequence (finalizer `device-gpu.d2bus.org/worker-stopped`)
 
 1. `deletionRequestedAt` set on Device resource.
 2. Controller receives `deletion-requested` trigger.
 3. Controller issues Delete requests on owned video Process (if present) and
    GPU/render-node Process; waits for their finalizers to clear.
-4. Controller clears finalizer `device-gpu.d2b.io/worker-stopped`.
+4. Controller clears finalizer `device-gpu.d2bus.org/worker-stopped`.
 5. Core commits one revision event with `phase=Deleted` for the Device, removes
    the resource row and all indexes atomically in one redb transaction, then
    emits the audit record after the commit. No `phase=Deleted` row persists in
@@ -1212,7 +1212,7 @@ d2b.zones.<zone>.resources."<vm>-gpu" = {
       label    = "host-gpu";
     };
     provider = {
-      schemaId = "device-gpu.d2b.io/Device/spec";
+      schemaId = "device-gpu.d2bus.org/Device/spec";
       schemaVersion = "1.0.0";
       settings = {
         videoSidecar      = true;
@@ -1238,7 +1238,7 @@ d2b.zones.<zone>.resources."<vm>-render" = {
       label    = "host-gpu";
     };
     provider = {
-      schemaId = "device-gpu.d2b.io/Device/spec";
+      schemaId = "device-gpu.d2bus.org/Device/spec";
       schemaVersion = "1.0.0";
       settings = {
         renderNodeOnly = true;
@@ -1274,7 +1274,7 @@ Added to `nixos-modules/assertions.nix`:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "corp-vm-gpu",
@@ -1312,7 +1312,7 @@ Added to `nixos-modules/assertions.nix`:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Device",
   "metadata": {
     "name": "dev-vm-render",

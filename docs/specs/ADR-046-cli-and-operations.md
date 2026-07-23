@@ -203,7 +203,7 @@ d2b.zones.<zone-name>.resources.<resource-name> = {
 
 **Derived on emit:** `metadata.name` from `<resource-name>` attr key;
 `metadata.zone` from `<zone-name>` attr key; `apiVersion` defaults to
-`"resources.d2b.io/v3"`.
+`"resources.d2bus.org/v3"`.
 
 **Omitted in authoring (runtime-filled):** `status`, `uid`, `revision`,
 `generation`, `finalizers`, `deletionRequestedAt`, `createdAt`, `updatedAt`,
@@ -248,7 +248,7 @@ exact shape (all fields always present; null where empty):
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Guest",
   "metadata": {
     "name": "work-vm",
@@ -269,7 +269,7 @@ exact shape (all fields always present; null where empty):
     "providerRef": "Provider/cloud-hv",
     "executionPolicy": { "cores": 4, "memoryMiB": 8192 },
     "networkRefs": ["Network/default"],
-    "provider": { "schemaId": "runtime-cloud-hypervisor.d2b.io/Guest/spec", "schemaVersion": "1.0", "settings": {} }
+    "provider": { "schemaId": "runtime-cloud-hypervisor.d2bus.org/Guest/spec", "schemaVersion": "1.0", "settings": {} }
   },
   "status": {
     "observedGeneration": 3,

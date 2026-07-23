@@ -18,11 +18,11 @@
 ## 1. Purpose
 
 This dossier exhaustively specifies `Provider/volume-virtiofs` — the d2b v3 controller that
-declares and reconciles `virtiofs.d2b.io.Export` resources and owns every virtiofsd worker
+declares and reconciles `virtiofs.d2bus.org.Export` resources and owns every virtiofsd worker
 Process. It is the authoritative reference for:
 
 - the crate/package/provider identity and required crate layout;
-- the `virtiofs.d2b.io.Export` ResourceType owned by this Provider;
+- the `virtiofs.d2bus.org.Export` ResourceType owned by this Provider;
 - the controller component descriptor and watch plan;
 - the virtiofsd worker Process template (owned by Export);
 - the ADR 0021 broker-pre-established user-namespace invariant, enforced in full;
@@ -36,7 +36,7 @@ Process. It is the authoritative reference for:
 - status/errors/audit/telemetry/performance budgets;
 - exact implementation work items, test file layout, and removal proofs.
 
-`Provider/volume-virtiofs` reconciles `virtiofs.d2b.io.Export` resources only. It does not
+`Provider/volume-virtiofs` reconciles `virtiofs.d2bus.org.Export` resources only. It does not
 reconcile Volume resources directly. `Provider/volume-local` controls Volume resources
 (one controller per resource type). volume-local translates each
 `Volume.spec.attachments[transport=virtiofs]` entry into one owned Export resource;
@@ -57,14 +57,14 @@ to `Provider/volume-local`.
 | Provider resource name | `Provider/volume-virtiofs` |
 | `artifactId` key | `volume-virtiofs-provider` |
 | Package type | `provider` |
-| ResourceTypes declared | `virtiofs.d2b.io.Export` (full lifecycle owner) |
+| ResourceTypes declared | `virtiofs.d2bus.org.Export` (full lifecycle owner) |
 | ResourceTypes consumed (read/status-update) | `Volume` (read-only; status aggregated from Export), `Process` (create/delete worker) |
 | Attachment transports owned | `virtiofs` |
 | Dependencies | `d2b-contracts` (v3 Export/Process/Volume types), `d2b-provider-toolkit` (ResourceClient, reconciler, fake seams), `d2b-session`, `d2b-bus`, `d2b-audit`, `d2b-telemetry` |
 | Prohibited imports | `d2bd`, `d2b-priv-broker` internals, `d2b-provider-volume-local`, any other Provider's implementation |
 
 **D089 desired-spec shape.** `Provider/volume-virtiofs` owns the
-`virtiofs.d2b.io.Export` ResourceType base spec; base fields include
+`virtiofs.d2bus.org.Export` ResourceType base spec; base fields include
 `spec.providerRef`, `volumeRef`, `executionRef`, `view`, `access`, and
 `mountPath`. Virtiofs-only desired tunables are carried only in the canonical
 `spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
@@ -133,7 +133,7 @@ The authored Provider spec contains only `artifactId` and `config`. All other fi
 or runtime-observed; they are not authored and setting them is an eval assertion error.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: volume-virtiofs
@@ -153,7 +153,7 @@ Provider's signed spec settings schema at Nix eval time.
 
 Manifest-derived fields (loaded by the Zone runtime from the Provider's signed package
 manifest, never authored in Nix):
-- `spec.exports`: declares `virtiofs.d2b.io.Export` with its schema fingerprint;
+- `spec.exports`: declares `virtiofs.d2bus.org.Export` with its schema fingerprint;
 - `spec.components`: describes the volume-virtiofs-controller component and the
   virtiofsd-worker template;
 - `spec.dependencies`: lists required system Provider capabilities;
@@ -229,11 +229,11 @@ identity-only Volume, and the controller Process mounts no state Volume.
 
 ---
 
-## 4. Export ResourceType (`virtiofs.d2b.io.Export`)
+## 4. Export ResourceType (`virtiofs.d2bus.org.Export`)
 
 ### 4.1 What an Export is
 
-A `virtiofs.d2b.io.Export` resource is the control-plane artifact that binds one virtiofs
+A `virtiofs.d2bus.org.Export` resource is the control-plane artifact that binds one virtiofs
 attachment declaration to one running virtiofsd Process. There is one Export per
 `Volume.spec.attachments[transport=virtiofs]` entry.
 
@@ -252,8 +252,8 @@ it only consumes the public `exportReady` and `guestMountReady` booleans and the
 ### 4.2 Export ResourceSpec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: virtiofs.d2b.io.Export
+apiVersion: resources.d2bus.org/v3
+type: virtiofs.d2bus.org.Export
 metadata:
   name: vol-work-state-x-work-vm
   zone: dev
@@ -269,7 +269,7 @@ spec:
   access: read-write          # read-only | read-write
   mountPath: /state
   provider:
-    schemaId: volume-virtiofs.d2b.io/Export/spec
+    schemaId: volume-virtiofs.d2bus.org/Export/spec
     schemaVersion: "1.0"
     settings:
       posixAcl: false
@@ -285,7 +285,7 @@ status:
     guestMountReady: true     # guest-control probe returned MountReady
   provider:
     providerRef: Provider/volume-virtiofs
-    schemaId: volume-virtiofs.d2b.io/Volume/status
+    schemaId: volume-virtiofs.d2bus.org/Volume/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
@@ -332,7 +332,7 @@ status:
 
 `Provider/volume-local` is the sole controller for Volume resources. When volume-local
 reconciles a Volume and observes `attachments[*].transport == "virtiofs"` entries, it
-translates each such entry into one `virtiofs.d2b.io.Export` resource:
+translates each such entry into one `virtiofs.d2bus.org.Export` resource:
 
 ```text
 volume-local controller sees Volume spec with attachments[i].transport == "virtiofs"
@@ -363,7 +363,7 @@ only by volume-local (aggregated from Export statuses).
 
 ### 6.1 Export reconcile loop
 
-volume-virtiofs-controller watches `virtiofs.d2b.io.Export` resources:
+volume-virtiofs-controller watches `virtiofs.d2bus.org.Export` resources:
 
 ```text
 On spec-generation-changed for an Export:
@@ -435,17 +435,17 @@ Exports.
 ### 7.1 Process resource shape
 
 Each Export owns exactly one virtiofsd Process resource. The resource is named
-`vol-<volume-name>-virtiofsd-<guest-name>` and carries `ownerRef: virtiofs.d2b.io.Export/<export-name>`.
+`vol-<volume-name>-virtiofsd-<guest-name>` and carries `ownerRef: virtiofs.d2bus.org.Export/<export-name>`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: vol-work-state-virtiofsd-work-vm
   zone: dev
   uid: <store-generated>
   generation: 1
-  ownerRef: virtiofs.d2b.io.Export/vol-work-state-x-work-vm
+  ownerRef: virtiofs.d2bus.org.Export/vol-work-state-x-work-vm
   finalizers: [system-minijail/process]
 spec:
   providerRef: Provider/system-minijail
@@ -733,7 +733,7 @@ controller. Required Role rules:
 ```yaml
 # volume-virtiofs controller
 rules:
-  - resourceTypes: [virtiofs.d2b.io.Export]
+  - resourceTypes: [virtiofs.d2bus.org.Export]
     verbs: [get, list, watch, update-status, update-finalizers]
     zones: [<zone>]
   - resourceTypes: [Volume]
@@ -770,18 +770,18 @@ mounts: []                   # controller mounts no Provider state Volume
 resourceTypes:
   # Volume is intentionally absent: volume-virtiofs-controller does not own or create Volumes.
   # Provider/volume-local is the sole Volume reconciler. Volume appears only in watchSelectors (read-only, below).
-  - type: virtiofs.d2b.io.Export
+  - type: virtiofs.d2bus.org.Export
     verbs: [create, update-spec, update-status, update-finalizers, delete, watch]
   - type: Process
     verbs: [create, update-spec, delete, watch]
   - type: User
     verbs: [create, watch]
 watchSelectors:
-  - resourceType: virtiofs.d2b.io.Export
+  - resourceType: virtiofs.d2bus.org.Export
     filter: ""                         # all Exports in zone
   - resourceType: Process
-    filter: ownerRef starts-with "virtiofs.d2b.io.Export/"
-    ownerType: virtiofs.d2b.io.Export
+    filter: ownerRef starts-with "virtiofs.d2bus.org.Export/"
+    ownerType: virtiofs.d2bus.org.Export
   - resourceType: User
     filter: name starts-with "vol-" and name ends-with "-vfd"
   - resourceType: Volume
@@ -790,7 +790,7 @@ watchSelectors:
     filter: ""                         # read-only watch for vcpu-count resolution
 ownerChildTriggers:
   - trigger: owned-resource-changed
-    ownerType: virtiofs.d2b.io.Export
+    ownerType: virtiofs.d2bus.org.Export
     childTypes: [Process, User]
 dependencySelectors:
   - resourceType: Guest
@@ -833,7 +833,7 @@ or credential material.
 
 ## 13. Status conditions
 
-Export-level status conditions (on `virtiofs.d2b.io.Export`):
+Export-level status conditions (on `virtiofs.d2bus.org.Export`):
 
 | Condition type | Normal value | Abnormal state |
 | --- | --- | --- |
@@ -848,7 +848,7 @@ consumers is `Volume.status.resource.attachmentStatuses`, identical to sibling
 Volume implementations and written by `volume-local` from aggregated Export
 status. Virtiofs worker/export detail stays in `status.provider.details`
 with `providerRef: Provider/volume-virtiofs`, qualified `schemaId`
-(`volume-virtiofs.d2b.io/Volume/status`), `schemaVersion`, and
+(`volume-virtiofs.d2bus.org/Volume/status`), `schemaVersion`, and
 `observedProviderGeneration`. Any status writer writes all present layers
 atomically in one mutation; shared fields are never duplicated into
 `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
@@ -875,7 +875,7 @@ All volume-virtiofs audit records use the Zone-local audit stream
   "subject_digest": "sha256:<hex>",
   "zone": "dev",
   "verb": "create-virtiofsd-process",
-  "resourceRef": "virtiofs.d2b.io.Export/vol-work-state-x-work-vm",
+  "resourceRef": "virtiofs.d2bus.org.Export/vol-work-state-x-work-vm",
   "volumeRefDigest": "sha256:<hex-of-Volume/work-state>",
   "executionRefDigest": "sha256:<hex-of-Guest/work-vm>",
   "workerTemplate": "virtiofsd-worker",
@@ -893,7 +893,7 @@ All volume-virtiofs audit records use the Zone-local audit stream
   "subject_digest": "sha256:<hex>",
   "zone": "dev",
   "verb": "delete-virtiofsd-process",
-  "resourceRef": "virtiofs.d2b.io.Export/vol-work-state-x-work-vm",
+  "resourceRef": "virtiofs.d2bus.org.Export/vol-work-state-x-work-vm",
   "virtiofsdProcessRefDigest": "sha256:<hex>",
   "reason": "export-deleted",
   "correlationId": "<opaque>",
@@ -1038,15 +1038,15 @@ d2b.zones."dev".resources."work-state" = {
 ```
 
 volume-local translates the `transport = "virtiofs"` attachment into one
-`virtiofs.d2b.io.Export` resource automatically. No separate Export resource declaration
+`virtiofs.d2bus.org.Export` resource automatically. No separate Export resource declaration
 is required in Nix.
 
 ### 16.4 Canonical Export ResourceSpec JSON (attachment defaults materialized)
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
-  "type": "virtiofs.d2b.io.Export",
+  "apiVersion": "resources.d2bus.org/v3",
+  "type": "virtiofs.d2bus.org.Export",
   "metadata": {
     "name": "vol-work-state-x-work-vm",
     "zone": "dev",
@@ -1061,7 +1061,7 @@ is required in Nix.
     "access": "read-write",
     "mountPath": "/state",
     "provider": {
-      "schemaId": "volume-virtiofs.d2b.io/Export/spec",
+      "schemaId": "volume-virtiofs.d2bus.org/Export/spec",
       "schemaVersion": "1.0",
       "settings": {
         "cache": "auto",
@@ -1283,7 +1283,7 @@ it does not import session implementation internals directly.
 | Current source | No analog; new ResourceType |
 | Reuse action | new |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/export.rs`; `packages/d2b-contracts/src/v3/virtiofs_export.rs` |
-| Detailed design | Declare `virtiofs.d2b.io.Export` ResourceType in `d2b-contracts`. Base fields: `providerRef`, `volumeRef`, `executionRef`, `view`, `access`, `mountPath`; virtiofs tunables live under `spec.provider.settings` (as in §4.2). Status fields: top-level `phase`/`conditions`, `status.resource.exportReady`, `status.resource.guestMountReady`, and `status.provider.details.workerProcessRef`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema and provider status extension schema are signed and included in the Provider package. |
+| Detailed design | Declare `virtiofs.d2bus.org.Export` ResourceType in `d2b-contracts`. Base fields: `providerRef`, `volumeRef`, `executionRef`, `view`, `access`, `mountPath`; virtiofs tunables live under `spec.provider.settings` (as in §4.2). Status fields: top-level `phase`/`conditions`, `status.resource.exportReady`, `status.resource.guestMountReady`, and `status.provider.details.workerProcessRef`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema and provider status extension schema are signed and included in the Provider package. |
 | Integration | `d2b-contracts` exports the Export DTO; volume-virtiofs controller and volume-local both import it for ResourceClient typed operations |
 | Data migration | None; new type |
 | Validation | `tests/schema_conformance.rs`: `export_schema_canonical_json_stable`, `export_spec_denied_unknown_fields`, `export_status_exportready_is_boolean_not_path`, `export_owner_must_be_volume` |
@@ -1311,7 +1311,7 @@ it does not import session implementation internals directly.
 | Current source | `packages/d2bd/src/supervisor/dag.rs` (ProcessRole::Virtiofsd dag node); `nixos-modules/processes-json.nix` (virtiofsdRunner block; attachment-to-Process mapping) |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs`; `packages/d2b-provider-volume-virtiofs/src/export.rs` |
-| Detailed design | Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2b.io.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure User/vol-<vol>-vfd; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2). |
+| Detailed design | Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2bus.org.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure User/vol-<vol>-vfd; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2). |
 | Integration | volume-virtiofs controller registered by core ProviderDeployment; receives owned-resource-changed trigger from Export; emits Process resources consumed by system-minijail |
 | Data migration | Current `ProcessRole::Virtiofsd` dag nodes replaced by Export → Process resource lifecycle |
 | Validation | `tests/export_lifecycle.rs`: `export_create_spawns_virtiofsd_process`, `export_ready_when_socket_present`, `export_delete_terminates_virtiofsd`, `export_delete_waits_for_guest_mount_absent`, `export_delete_with_guest_unreachable_holds_finalizer_degraded`, `export_proof_of_ns_death_clears_finalizer`; `tests/multi_attachment.rs`: `two_guests_get_separate_exports_and_processes`, `process_failure_does_not_affect_sibling_export`; `tests/schema_conformance.rs`: `provider_state_set_volume_created_on_install`, `provider_state_set_volume_owner_ref_is_provider`, `provider_state_set_volume_layout_principal_is_user_not_component_principal`, `provider_state_set_no_cross_component_volume_sharing` |
@@ -1353,7 +1353,7 @@ it does not import session implementation internals directly.
 | Current source | `nixos-modules/processes-json.nix` (virtiofsdRunner block); `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles); `nixos-modules/options-vms.nix` (`d2b.vms.<vm>.shares.*`) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/resources-volume.nix` (store-view and user Volume attachment emission); `nixos-modules/options-volumes.nix` (optional user-facing volume/attachment options) |
-| Detailed design | Extend the Nix resource compiler to: (1) auto-emit a store-view Volume (with `ro-store` and `meta` Views, virtiofs ro-store attachment) per Guest that has a VM runtime Provider; (2) emit virtiofs attachment entries for explicitly configured user Volumes; (3) emit `User/vol-<vol>-vfd` resources for each Volume with virtiofs attachments; (4) emit `Provider/volume-virtiofs` as a Provider resource when any virtiofs attachment is configured. volume-local creates Export resources at runtime (not in Nix bundle); no `virtiofs.d2b.io.Export` resources appear in the Nix-emitted bundle. All eval validation steps (§16.5) apply. |
+| Detailed design | Extend the Nix resource compiler to: (1) auto-emit a store-view Volume (with `ro-store` and `meta` Views, virtiofs ro-store attachment) per Guest that has a VM runtime Provider; (2) emit virtiofs attachment entries for explicitly configured user Volumes; (3) emit `User/vol-<vol>-vfd` resources for each Volume with virtiofs attachments; (4) emit `Provider/volume-virtiofs` as a Provider resource when any virtiofs attachment is configured. volume-local creates Export resources at runtime (not in Nix bundle); no `virtiofs.d2bus.org.Export` resources appear in the Nix-emitted bundle. All eval validation steps (§16.5) apply. |
 | Integration | `nixos-modules/default.nix` wires resources-volume.nix; nix-unit tests verify canonical output |
 | Data migration | `d2b.vms.<vm>.shares` virtiofs entries → Volume attachments; `d2b.vms.<vm>` store-view auto-emission replaces `nixos-modules/store.nix` virtiofsd portion |
 | Validation | nix-unit: `store_view_volume_auto_emitted_per_guest`, `volume_virtiofs_attachment_canonical_json`, `virtiofs_provider_emitted_when_attachment_configured`, `vfd_user_emitted_per_volume`, `second_read_write_attachment_rejected_at_eval`, `transport_virtiofs_requires_provider_installed`; drift-check gate for `nixos-modules/processes-json.nix` virtiofsdRunner removal |

@@ -139,7 +139,7 @@ The `spec.provider.settings` object inside a `Guest.spec` when `spec.providerRef
 
 **D089 spec extension contract:** this Provider's implementation-only desired
 configuration is carried in `spec.provider.settings` under
-`runtime-azure-container-apps.d2b.io/Guest/spec`; the schema is
+`runtime-azure-container-apps.d2bus.org/Guest/spec`; the schema is
 registered/signed in the manifest, deny-unknown, bounded, versioned, and
 validated against `spec.providerRef` at Nix build and API admission. Base fields
 stay at `spec.*`; shared semantics are promoted to the Guest base and never
@@ -154,7 +154,7 @@ capability matrix plus provider-neutral `unsupported-capability`.
 spec:
   providerRef: Provider/runtime-azure-container-apps
   provider:
-    schemaId: runtime-azure-container-apps.d2b.io/Guest/spec
+    schemaId: runtime-azure-container-apps.d2bus.org/Guest/spec
     schemaVersion: 1.0.0
     settings:
       # Disk image source — exactly one of configuredDiskId or configuredImageId
@@ -350,7 +350,7 @@ The framework `ProviderDeployment` creates both component Processes as static re
 ### 7.1 Controller Process template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: aca-controller
@@ -402,7 +402,7 @@ The controller makes no direct network calls. All Azure API calls are dispatched
 The deployment service is the sole bearer of ACA effect port authority. It serves the `d2b.aca.v3.deployment` ComponentSession schema — including `GuestHealth` — and makes all outbound Azure API calls through the injected `AcaControl` port. It holds no controller authority and cannot write `Guest` resource status. Health probing (previously a separate worker) is an ordinary service method here; no separate health component or shared Volume is needed.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: aca-deployment-service
@@ -698,7 +698,7 @@ The `Provider/runtime-azure-container-apps` controller Process requires the foll
 
 ```yaml
 # Role — controller resource authority
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Role
 metadata:
   name: aca-controller-role
@@ -718,7 +718,7 @@ spec:
 
 ```yaml
 # RoleBinding — binds Role to controller component Process subject inside the gateway Guest
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: RoleBinding
 metadata:
   name: aca-controller-binding
@@ -753,7 +753,7 @@ A `Provider/runtime-azure-container-apps`-backed Guest uses a `ZoneLink` resourc
 - its `relayCredentialRef` must resolve to a Credential resource whose `scope.executionRef` matches `config.gatewayExecutionRef`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: ZoneLink
 metadata:
   name: aca-relay-link
@@ -804,7 +804,7 @@ observed lifecycle phase, bootstrap readiness, and active process count in the
 same shape as sibling Guest runtime providers. ACA-specific ARM/session phase
 and opaque non-authorizing sandbox binding digests live only in
 `status.provider.details` with `providerRef: Provider/runtime-azure-container-apps`,
-qualified `schemaId` (`runtime-azure-container-apps.d2b.io/Guest/status`),
+qualified `schemaId` (`runtime-azure-container-apps.d2bus.org/Guest/status`),
 `schemaVersion`, and `observedProviderGeneration`. Controller status writes
 include all present layers atomically in one status mutation; shared fields are
 never duplicated into `status.provider`, and the strict, ≤32 KiB, redacted
@@ -1049,7 +1049,7 @@ d2b.zones.my-zone.resources = {
       allowedDomains = [ "system" ];
       systemArtifactId = null;  # null for cloud Guests
       provider = {
-        schemaId = "runtime-azure-container-apps.d2b.io/Guest/spec";
+        schemaId = "runtime-azure-container-apps.d2bus.org/Guest/spec";
         schemaVersion = "1.0.0";
         settings = {
           configuredDiskId = "img-xxxxxxxxxxxxxxxxxxxxxxxx";

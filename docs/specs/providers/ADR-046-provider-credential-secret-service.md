@@ -131,7 +131,7 @@ Normative D089 spec layering: Credential base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `audience`, `scope`,
 `allowedOperations`, `rotation`, and `revocation`. This Provider's desired-only
 extension is the canonical `spec.provider = { schemaId:
-"credential-secret-service.d2b.io/Credential/spec", schemaVersion, settings }`
+"credential-secret-service.d2bus.org/Credential/spec", schemaVersion, settings }`
 envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
 and digested, validated against `spec.providerRef` at Nix build and API
 admission, implementation-only, and may not shadow base fields. Shared fields
@@ -193,7 +193,7 @@ d2b.zones.dev.resources.local-keyring = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Credential",
   "metadata": {
     "name": "local-keyring",
@@ -254,7 +254,7 @@ ownerChildTriggers:  [owned-resource-changed]
 reconcileConcurrency: 8
 maxPendingResources: 256
 finalizers:
-  - credential.d2b.io/provider-revoke
+  - credential.d2bus.org/provider-revoke
 observeInterval:     30s
 ```
 
@@ -308,7 +308,7 @@ Called every `observeInterval` (30 s) to detect out-of-band lease changes. Steps
 
 #### `finalize(resource, context)`
 
-Called when `deletionRequestedAt` is set and `credential.d2b.io/provider-revoke`
+Called when `deletionRequestedAt` is set and `credential.d2bus.org/provider-revoke`
 finalizer is present. Canonical sequence: revoke/drain → delete scoped Process
 (if applicable) → clear `provider-revoke` → (core) event-only `Deleted` revision
 + row/index removal → (audit subsystem) closure audit with dedup.
@@ -337,7 +337,7 @@ finalizer is present. Canonical sequence: revoke/drain → delete scoped Process
    triple (if one was created). This is a regular resource delete via the
    controller's write authority; the Process controller completes it through its
    own lifecycle before the Credential row is removed.
-6. Clear the `credential.d2b.io/provider-revoke` finalizer. After this, core
+6. Clear the `credential.d2bus.org/provider-revoke` finalizer. After this, core
    writes the event-only `Deleted` revision and removes the Credential row and
    indexes atomically.
 
@@ -530,7 +530,7 @@ spawned. `spec` has no generic `attachments` array. Endpoints, when present,
 use the `{name, transport, purpose}` shape only.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   # Generated name; pattern: credential-ss-<credential-uid-prefix>; no secret component.
@@ -742,8 +742,8 @@ further restricts the effective limit per Provider instance.
 
 | Finalizer ID | Owner | Meaning |
 | --- | --- | --- |
-| `credential.d2b.io/provider-revoke` | Credential controller | Revoke all active leases before deletion; honors `revocation.onOwnerDelete` policy |
-| `credential.d2b.io/consumer-drain` | `consumerRef` controller | Drain in-flight operations before Provider releases lease handle |
+| `credential.d2bus.org/provider-revoke` | Credential controller | Revoke all active leases before deletion; honors `revocation.onOwnerDelete` policy |
+| `credential.d2bus.org/consumer-drain` | `consumerRef` controller | Drain in-flight operations before Provider releases lease handle |
 
 Execution order: `consumer-drain` completes before `provider-revoke`. A missing
 `consumerRef` removes `consumer-drain` automatically. A terminal `leaseState`
@@ -862,7 +862,7 @@ Per D088, ResourceType-common Credential observation lives in `status.resource`:
 the non-secret lease metadata base that is identical across Credential
 implementations. Secret Service-specific lease observations live only in
 `status.provider` with `providerRef`, qualified `schemaId`
-`credential-secret-service.d2b.io/Credential/status`, `schemaVersion`,
+`credential-secret-service.d2bus.org/Credential/status`, `schemaVersion`,
 `observedProviderGeneration`, and strict bounded redacted `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
 atomically in one status mutation; shared
@@ -1337,7 +1337,7 @@ defaults, constraints, and the worked Nix example from §3 above.
 
 `Credential` lifecycle phases; status conditions owned (`CredentialReady`,
 `RotationDue`, `ProviderUnavailable`, `LeaseRevoked`); finalizers owned
-(`credential.d2b.io/provider-revoke`).
+(`credential.d2bus.org/provider-revoke`).
 
 ### Section 4: Controllers, services, workers, and binaries
 

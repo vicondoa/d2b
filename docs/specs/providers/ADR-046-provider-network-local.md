@@ -58,7 +58,7 @@ Sections reference `ADR-046-resources-network` (hereafter **NET**),
 
 **D089 spec extension contract:** `Provider/network-local` carries any
 implementation-only Network desired configuration only in `spec.provider.settings`
-under `network-local.d2b.io/Network/spec`; that schema is registered/signed in
+under `network-local.d2bus.org/Network/spec`; that schema is registered/signed in
 the manifest, deny-unknown, bounded, versioned, and validated against
 `spec.providerRef` at Nix build and API admission. Base Network fields stay at
 `spec.*`; shared semantics are promoted to the Network base and never placed in
@@ -134,7 +134,7 @@ The `Provider/network-local` resource is declared in Nix:
 
 ```yaml
 # Generated from d2b.zones.<zone>.providers.network-local (Nix option)
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: network-local
@@ -162,7 +162,7 @@ The framework creates the following Process resource when `Provider/network-loca
 is installed:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: network-local-ctrl
@@ -445,7 +445,7 @@ private to the core dependency resolver.
 ### 6.1 Full spec schema
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Network
 metadata:
   name: work-net                       # ^[a-z][a-z0-9-]*$; max 63; Zone-local
@@ -534,7 +534,7 @@ and attachment readiness in the same provider-neutral shape read by all generic
 Network consumers. Local bridge/firewall/config observations, including bounded
 firewall and config-volume digests, live only in `status.provider.details` with
 `providerRef: Provider/network-local`, qualified `schemaId`
-(`network-local.d2b.io/Network/status`), `schemaVersion`, and
+(`network-local.d2bus.org/Network/status`), `schemaVersion`, and
 `observedProviderGeneration`. Controller status writes include all present layers
 atomically in one status mutation; shared fields are never duplicated into
 `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
@@ -554,7 +554,7 @@ status:
     fabricReady: true                         # bridges created and Ready
   provider:
     providerRef: Provider/network-local
-    schemaId: network-local.d2b.io/Network/status
+    schemaId: network-local.d2bus.org/Network/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
@@ -627,7 +627,7 @@ IfNames **never** appear in:
 The Network controller creates and owns exactly one net-VM Guest per Network.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Guest
 metadata:
   name: net-work-net                    # or spec.netVmNameOverride
@@ -647,7 +647,7 @@ spec:
   # and are supplied to the runtime via LaunchTicket.
   # No attachment identity, handle, IfName, IP, or MAC appears here.
   provider:
-    schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+    schemaId: runtime-cloud-hypervisor.d2bus.org/Guest/spec
     schemaVersion: 1.0.0
     settings:
       vsockCid: 1024                  # assigned from the Network's CIDR allocation
@@ -655,7 +655,7 @@ spec:
   # parameters (operator-specified, not kernel-observed) for the macvtap under
   # spec.provider.settings:
   # provider:
-  #   schemaId: runtime-cloud-hypervisor.d2b.io/Guest/spec
+  #   schemaId: runtime-cloud-hypervisor.d2bus.org/Guest/spec
   #   schemaVersion: 1.0.0
   #   settings:
   #     vsockCid: 1024
@@ -688,7 +688,7 @@ Volume resource objects (with `ownerRef: Network/<name>`) but does not implement
 reconcile the Volume ResourceType.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: net-work-net-config             # net-<networkName>-config
@@ -826,7 +826,7 @@ controller does **not** create this User resource dynamically; it waits for it t
 be Ready as a reconcile precondition.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: User
 metadata:
   name: net-local-controller            # ^[a-z][a-z0-9-]*$
@@ -867,7 +867,7 @@ nftables rules and ip routes inside the net VM on startup and on `Reload()` call
 It does **not** supervise or spawn dnsmasq; dnsmasq is a separate Process (§11.2).
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: net-work-net-agent
@@ -987,7 +987,7 @@ Volume mount at startup.  Workers have **no** bus authority, no dependency/resou
 API, and no child-spawning.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: net-work-net-dnsmasq
@@ -1075,7 +1075,7 @@ dnsmasq invariants (preserved from `nixos-modules/net.nix` lines 302–441):
 Created only when `spec.mdns.enable = true`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: net-work-net-mdns-reflector
@@ -1135,7 +1135,7 @@ spec:
 Created only when `spec.mdns.enable = true` and `spec.mdns.dnsmasqLocal = true`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: net-work-net-mdns-dnsbridge
@@ -1457,7 +1457,7 @@ resources without waiting for any single handler.
 ### 16.3 Finalizer (delete sequence, strictly child-first)
 
 ```text
-network.d2b.io/fabric-cleanup finalizer
+network.d2bus.org/fabric-cleanup finalizer
 
 1. Set NetworkDraining condition
 

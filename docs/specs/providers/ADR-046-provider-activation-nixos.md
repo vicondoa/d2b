@@ -8,7 +8,7 @@
 | Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owners | `packages/d2b-provider-activation-nixos/`, `d2b activation` CLI namespace, `activation-nixos.d2b.io.NixosGeneration` ResourceType |
+| Owners | `packages/d2b-provider-activation-nixos/`, `d2b activation` CLI namespace, `activation-nixos.d2bus.org.NixosGeneration` ResourceType |
 | Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-nix-configuration`, `ADR-046-core-controllers`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-componentsession-and-bus`, `ADR-046-resources-zone-control`, `ADR-046-resources-host-guest-process-user`, `ADR-046-provider-state`, `ADR-046-telemetry-audit-and-support`, `ADR-046-cli-and-operations` |
 | Supersedes | Current `d2b switch`/`boot`/`test`/`rollback`/`build`/`generations`/`gc`/`migrate` top-level verbs in `packages/d2b/src/lib.rs` and hardlink-farm activation in `packages/d2b-host/src/hardlink_farm.rs` |
 
@@ -19,14 +19,14 @@
 `Provider/activation-nixos` owns the NixOS system generation plan/apply/status/
 adopt/rollback lifecycle for every Guest or Host whose Nix configuration
 declares it. It reconciles exactly one vendor-qualified ResourceType,
-`activation-nixos.d2b.io.NixosGeneration`, and owns the `d2b activation` CLI
+`activation-nixos.d2bus.org.NixosGeneration`, and owns the `d2b activation` CLI
 namespace.
 
 ### 1.1 What activation-nixos owns
 
 | Surface | Owned behavior |
 | --- | --- |
-| `activation-nixos.d2b.io.NixosGeneration` | Plan, apply, status, adopt, and rollback of a NixOS system activation on a Host or Guest |
+| `activation-nixos.d2bus.org.NixosGeneration` | Plan, apply, status, adopt, and rollback of a NixOS system activation on a Host or Guest |
 | `d2b activation` CLI projection | `build`, `switch`, `boot`, `test`, `rollback`, `adopt`, `generations`, `gc`, `migrate` subcommands |
 | Per-generation activation-runner | One `EphemeralProcess` per reconcile cycle; runs the integrity-bound activation operation on the target execution context |
 | Generation sequence and retention | Tracks active/superseded generation ordering per target; prunes surplus `NixosGeneration` resources to stay within `retainedGenerations` |
@@ -88,7 +88,7 @@ Absence of any of these paths fails `make test-policy` via
 ### 3.1 Canonical spec shape
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: activation-nixos
@@ -112,7 +112,7 @@ package.
 | Field | Type | Default | Bound | Description |
 | --- | --- | --- | --- | --- |
 | `controllerExecutionRef` | ResourceRef | required | `Host/<name>` | Execution target for the controller Process. Must resolve to an existing Host in the same Zone. |
-| `retainedGenerations` | integer | 3 | [1, 16] | Maximum number of `activation-nixos.d2b.io.NixosGeneration` resources retained per target execution context, spanning all terminal phases. Surplus records (oldest `Succeeded` or `Failed`) are deleted when this bound is exceeded. No TTL fields. |
+| `retainedGenerations` | integer | 3 | [1, 16] | Maximum number of `activation-nixos.d2bus.org.NixosGeneration` resources retained per target execution context, spanning all terminal phases. Surplus records (oldest `Succeeded` or `Failed`) are deleted when this bound is exceeded. No TTL fields. |
 
 ### 3.3 Fields that are NOT in spec.config
 
@@ -126,7 +126,7 @@ package.
 
 ---
 
-## 4. ResourceType: activation-nixos.d2b.io.NixosGeneration
+## 4. ResourceType: activation-nixos.d2bus.org.NixosGeneration
 
 ### 4.1 Type identity and qualification
 
@@ -136,10 +136,10 @@ standard ResourceType catalog"). The activation-nixos Provider declares one
 vendor-qualified ResourceType:
 
 ```
-activation-nixos.d2b.io.NixosGeneration
+activation-nixos.d2bus.org.NixosGeneration
 ```
 
-The vendor qualifier (`activation-nixos.d2b.io`) distinguishes it from any
+The vendor qualifier (`activation-nixos.d2bus.org`) distinguishes it from any
 unqualified standard kind. All resource metadata, spec, and status fields
 follow the universal resource envelope contract (`ADR-046-resource-object-model`).
 
@@ -150,8 +150,8 @@ declares, creates, mounts, nor manages Volumes for controller state.
 ### 4.2 Spec schema
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: activation-nixos.d2b.io.NixosGeneration
+apiVersion: resources.d2bus.org/v3
+type: activation-nixos.d2bus.org.NixosGeneration
 metadata:
   name: dev-vm--gen-7                        # bounded name; unique per Zone
   zone: dev
@@ -163,7 +163,7 @@ spec:
   executionRef: Guest/dev-vm                 # required; Host/<name> or Guest/<name>; immutable
   systemArtifactId: dev-vm-system            # required; bounded ID from d2b.artifacts catalog; immutable
   activationMode: switch                     # required; switch|boot|test|adopt; immutable
-  priorGenerationRef: null                   # optional; activation-nixos.d2b.io.NixosGeneration/<name>; points to the generation being superseded or rolled back from; immutable
+  priorGenerationRef: null                   # optional; activation-nixos.d2bus.org.NixosGeneration/<name>; points to the generation being superseded or rolled back from; immutable
 ```
 
 #### 4.2.1 spec fields
@@ -174,7 +174,7 @@ spec:
 | `executionRef` | ResourceRef | yes | `Host/<name>\|Guest/<name>` | Target execution context for the NixOS system. Immutable. |
 | `systemArtifactId` | bounded string | yes | `^[a-z][a-z0-9-]{0,127}$` | Global artifact catalog ID from `d2b.artifacts`. The controller resolves the internal store path from the private `artifact-catalog.json` at activation time. No store path appears in any spec or status field. Immutable. |
 | `activationMode` | enum | yes | `switch\|boot\|test\|adopt` | `switch`: activate immediately and switch running services. `boot`: set as next-boot default without switching running services. `test`: activate temporarily; reverts on next boot. `adopt`: record an existing active generation without dispatching a new activation. Immutable. |
-| `priorGenerationRef` | ResourceRef? | no | `activation-nixos.d2b.io.NixosGeneration/<name>` | The generation being superseded or rolled back from. Informational; the controller validates that the referenced resource exists and is in a terminal phase. Immutable. |
+| `priorGenerationRef` | ResourceRef? | no | `activation-nixos.d2bus.org.NixosGeneration/<name>` | The generation being superseded or rolled back from. Informational; the controller validates that the referenced resource exists and is in a terminal phase. Immutable. |
 
 ### 4.3 Status schema
 
@@ -194,7 +194,7 @@ status:
 Per D088, `NixosGeneration` status uses the universal `ResourceStatus` base at
 top-level `status.*`; activation-specific typed fields are the
 ResourceType-common `status.resource` object for
-`activation-nixos.d2b.io.NixosGeneration`. Optional `status.provider` carries
+`activation-nixos.d2bus.org.NixosGeneration`. Optional `status.provider` carries
 only implementation-only observation (`providerRef`, qualified immutable
 `schemaId`, semver `schemaVersion`, numeric `observedProviderGeneration`,
 strict unknown-field-denied redacted `details` ≤32 KiB registered/signed in the
@@ -223,7 +223,7 @@ Operators use it to distinguish intermediate states within a phase.
 ### 4.4 Phase transitions
 
 The common framework `phase` follows `ADR-046-resource-object-model`. For
-`activation-nixos.d2b.io.NixosGeneration`, the expected transitions are:
+`activation-nixos.d2bus.org.NixosGeneration`, the expected transitions are:
 
 | From | To | Trigger |
 | --- | --- | --- |
@@ -245,7 +245,7 @@ entries. No tombstone row is retained (`ADR-046-resource-object-model`
 ### 4.5 Finalizer protocol
 
 The activation-nixos controller holds a finalizer on every
-`activation-nixos.d2b.io.NixosGeneration` resource it owns. When
+`activation-nixos.d2bus.org.NixosGeneration` resource it owns. When
 `deletionRequestedAt` is set, the controller executes this ordered sequence
 before releasing the finalizer:
 
@@ -268,7 +268,7 @@ before releasing the finalizer:
    ownership release is the only mechanism.
 
 4. **Clear activation finalizer.** Remove the controller's finalizer from the
-   `activation-nixos.d2b.io.NixosGeneration` resource.
+   `activation-nixos.d2bus.org.NixosGeneration` resource.
 
 5. **Core commits event-only Deleted/removal.** The Zone runtime atomically
    emits `phase=Deleted` in the revision log and removes the resource row.
@@ -283,7 +283,7 @@ The controller maintains at most `spec.config.retainedGenerations` resources per
 `executionRef` target across all non-`Deleted` phases. When a new generation
 reaches `Ready` or `Succeeded`:
 
-1. Count all existing `activation-nixos.d2b.io.NixosGeneration` resources for the
+1. Count all existing `activation-nixos.d2bus.org.NixosGeneration` resources for the
    same `executionRef` that are in `Ready`, `Succeeded`, `Failed`, or
    `Degraded` phase.
 2. If the count exceeds `retainedGenerations`, identify the oldest surplus
@@ -305,7 +305,7 @@ The Provider package descriptor declares two components:
 
 | Component ID | Kind | processClass | Role |
 | --- | --- | --- | --- |
-| `controller` | `Process` (long-lived) | `controller` | Owns the `activation-nixos.d2b.io.NixosGeneration` reconcile loop via d2b-bus |
+| `controller` | `Process` (long-lived) | `controller` | Owns the `activation-nixos.d2bus.org.NixosGeneration` reconcile loop via d2b-bus |
 | `activation-runner` | `EphemeralProcess` template | `worker` | One-shot per generation; dispatches the integrity-bound activation operation on the target execution context |
 
 ### 5.2 Controller Process
@@ -318,7 +318,7 @@ the controller.
 Canonical `Process` resource shape (as created by ProviderDeployment):
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: activation-nixos--controller
@@ -425,17 +425,17 @@ apply.
 
 ### 5.4 Activation-runner EphemeralProcess
 
-For each `activation-nixos.d2b.io.NixosGeneration` that requires reconciliation, the
+For each `activation-nixos.d2bus.org.NixosGeneration` that requires reconciliation, the
 controller creates one owned `EphemeralProcess` resource. This is the canonical
 shape the controller emits:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: EphemeralProcess
 metadata:
   name: activation-nixos--runner--dev-vm--gen-7--<run-id>
   zone: dev
-  ownerRef: activation-nixos.d2b.io.NixosGeneration/dev-vm--gen-7
+  ownerRef: activation-nixos.d2bus.org.NixosGeneration/dev-vm--gen-7
 spec:
   providerRef: Provider/system-minijail
   executionRef: <NixosGeneration.spec.executionRef>   # same Host or Guest as the generation; runner executes locally on that target
@@ -541,7 +541,7 @@ in {
 Rendered resource:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: activation-nixos
@@ -562,7 +562,7 @@ appear in the Provider spec.
 
 ### 6.2 NixosGeneration resource authoring
 
-`activation-nixos.d2b.io.NixosGeneration` resources are authored by the Nix module
+`activation-nixos.d2bus.org.NixosGeneration` resources are authored by the Nix module
 for each Guest or Host that enables activation-nixos. They reference artifact
 IDs from the global `d2b.artifacts` catalog:
 
@@ -572,7 +572,7 @@ let
   # d2b.artifacts.${vmName}-system is declared by the Zone's VM Nix config
   genName = "${vmName}--gen-${toString configGen}";
 in {
-  d2b.zones.${zone}.resources."activation-nixos.d2b.io.NixosGeneration".${genName} = {
+  d2b.zones.${zone}.resources."activation-nixos.d2bus.org.NixosGeneration".${genName} = {
     spec = {
       providerRef = "Provider/activation-nixos";
       executionRef = "Guest/${vmName}";
@@ -587,8 +587,8 @@ in {
 Rendered:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: activation-nixos.d2b.io.NixosGeneration
+apiVersion: resources.d2bus.org/v3
+type: activation-nixos.d2bus.org.NixosGeneration
 metadata:
   name: dev-vm--gen-7
   zone: dev
@@ -635,7 +635,7 @@ duplicated in any `NixosGeneration` spec, nor in any other resource field.
 Nix build / CLI create
       │
       ▼
-activation-nixos.d2b.io.NixosGeneration
+activation-nixos.d2bus.org.NixosGeneration
   phase: Pending
   activationDetail: planning
       │
@@ -655,7 +655,7 @@ activation-nixos.d2b.io.NixosGeneration
 
 ### 7.2 Controller reconcile loop
 
-The controller watches all `activation-nixos.d2b.io.NixosGeneration` resources in
+The controller watches all `activation-nixos.d2bus.org.NixosGeneration` resources in
 the Zone whose `spec.providerRef` resolves to `Provider/activation-nixos`. For
 each resource:
 
@@ -702,7 +702,7 @@ explicit Provider descriptor justification is:
 
 ### 7.4 Rollback
 
-A rollback is a new `activation-nixos.d2b.io.NixosGeneration` resource created by
+A rollback is a new `activation-nixos.d2bus.org.NixosGeneration` resource created by
 the CLI or controller with:
 
 - `spec.activationMode: switch`
@@ -757,7 +757,7 @@ It is the projection of `ADR-046-cli-and-operations` work item `ADR046-cli-007`.
 | `d2b activation test --target T` | Create `NixosGeneration(test)` for target T | admin |
 | `d2b activation rollback --target T [--to G]` | Create `NixosGeneration(switch)` with `priorGenerationRef` pointing to G (or current active) | admin |
 | `d2b activation adopt --target T` | Create `NixosGeneration(adopt)` for target T | admin |
-| `d2b activation generations --target T` | List `activation-nixos.d2b.io.NixosGeneration` resources for target T | read |
+| `d2b activation generations --target T` | List `activation-nixos.d2bus.org.NixosGeneration` resources for target T | read |
 | `d2b activation gc --target T` | Release ownership references for surplus generations (triggers retention pruning immediately) | admin |
 | `d2b activation migrate --target T --destination H` | Request execution target relocation (future; not in v1 scope) | admin |
 
@@ -787,7 +787,7 @@ Top-level `d2b switch`, `d2b boot`, `d2b test`, `d2b rollback`, `d2b build`,
 
 | Session purpose | Who | Operation |
 | --- | --- | --- |
-| Zone resource API | Controller | Create, update, and watch `activation-nixos.d2b.io.NixosGeneration` and `EphemeralProcess` resources |
+| Zone resource API | Controller | Create, update, and watch `activation-nixos.d2bus.org.NixosGeneration` and `EphemeralProcess` resources |
 | Zone resource API | Activation runner (target-local) | Report structured activation outcome; update generation status |
 
 The runner executes locally on the target and uses the Zone resource API to
@@ -817,7 +817,7 @@ ComponentSession.
 
 | ResourceType | Create | Read | Update | Delete |
 | --- | --- | --- | --- | --- |
-| `activation-nixos.d2b.io.NixosGeneration` | configuration (bundle) / admin (CLI) | read | admin | admin (retention via controller) |
+| `activation-nixos.d2bus.org.NixosGeneration` | configuration (bundle) / admin (CLI) | read | admin | admin (retention via controller) |
 | `Volume` | — | — | — | — |
 
 The activation-nixos controller has **no** `Volume` resource rights. Volume
@@ -863,7 +863,7 @@ the signed Provider package. It permits only the syscalls required to:
 Internal store paths (`systemStorePath`) are resolved from `artifact-catalog.json`
 into the runner's process memory at activation time. They do not appear in:
 
-- Any `activation-nixos.d2b.io.NixosGeneration` spec or status field
+- Any `activation-nixos.d2bus.org.NixosGeneration` spec or status field
 - Any EphemeralProcess spec, status, or output field
 - Any CLI output
 - Any audit record or OTEL span attribute
@@ -875,7 +875,7 @@ into the runner's process memory at activation time. They do not appear in:
 
 ### 11.1 Conditions
 
-Standard conditions on `activation-nixos.d2b.io.NixosGeneration`:
+Standard conditions on `activation-nixos.d2bus.org.NixosGeneration`:
 
 | Condition type | Meaning |
 | --- | --- |
@@ -1005,9 +1005,9 @@ Required adaptations (work item `ADR046-activation-001`):
 - Emit bounded outcome code; no resource metadata writes.
 - Preserve no-bash-fallback invariant.
 
-### ADR046-activation-002: Implement activation-nixos.d2b.io.NixosGeneration ResourceType schema
+### ADR046-activation-002: Implement activation-nixos.d2bus.org.NixosGeneration ResourceType schema
 
-**Scope:** `docs/reference/schemas/v3/activation-nixos.d2b.io.NixosGeneration.json`,
+**Scope:** `docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json`,
 `packages/d2b-contracts/src/activation_nixos.rs`
 
 Define JSON schema and Rust DTOs. Enforce:
@@ -1019,7 +1019,7 @@ Define JSON schema and Rust DTOs. Enforce:
 
 **Scope:** `packages/d2b-provider-activation-nixos/src/controller/`
 
-Reconcile loop for `activation-nixos.d2b.io.NixosGeneration`. Key invariants:
+Reconcile loop for `activation-nixos.d2bus.org.NixosGeneration`. Key invariants:
 
 - No direct store-path operations; no `nix-collect-garbage` invocation.
 - EphemeralProcess dispatch creates runner with startRoot=true and the exact
@@ -1056,7 +1056,7 @@ only after this lands (work item ADR046-activation-007).
 
 **Scope:** `nixos-modules/providers/activation-nixos.nix`
 
-Emit Provider spec (§ 6.1) and `activation-nixos.d2b.io.NixosGeneration` resources
+Emit Provider spec (§ 6.1) and `activation-nixos.d2bus.org.NixosGeneration` resources
 (§ 6.2) per declared target. `retainedGenerations` flows only through
 `spec.config.retainedGenerations`. No store path in any emitted resource.
 Does not declare a dedicated state-layout `User/<name>` principal: the Provider
@@ -1088,7 +1088,7 @@ Gated on ADR046-activation-005 passing integration tests.
 | `generation::test_deleted_event_only` | Deletion emits event-only `phase=Deleted`; no tombstone |
 | `runner::test_no_raw_argv` | Runner binary creates no raw command string; invokes helper via JSON protocol |
 | `runner::test_storepath_not_in_output` | Runner output contains no store path in any field |
-| `runner::test_nix_bundle_no_generation` | Compiled bundle contains no `activation-nixos.d2b.io.NixosGeneration` resources with `systemStorePath` |
+| `runner::test_nix_bundle_no_generation` | Compiled bundle contains no `activation-nixos.d2bus.org.NixosGeneration` resources with `systemStorePath` |
 | `state::test_provider_state_set_empty` | Provider declares no Provider state Volume; ProviderStateSet query returns empty for `Provider/activation-nixos` |
 | `state::test_no_state_layout_principal` | No dedicated state-layout `User/<name>` or ComponentPrincipal reference is emitted for controller state |
 | `state::test_status_first_operational_state` | Bounded non-secret controller operational observations are stored in revisioned status/core Operation ledger and re-verified after restart |

@@ -91,7 +91,7 @@ runtime because they are available before the first Host resource exists.
 > only).
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: system-core
@@ -182,7 +182,7 @@ This section records the system-core–specific controller behavior.
 #### 4.1.1 Spec schema (normative summary)
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Host
 metadata:
   name: host-system        # ^[a-z][a-z0-9-]*$; max 63
@@ -198,7 +198,7 @@ spec:
   volumeAttachmentDefaults: []        # 0..64 VolumeAttachmentDefaultList entries
   isolationPosture: null              # promoted base field; null | "none"; see §9
   provider:
-    schemaId: system-core.d2b.io/Host/spec
+    schemaId: system-core.d2bus.org/Host/spec
     schemaVersion: 1.0.0
     settings:                         # system-core Host implementation schema
       kernelVersionMin: null          # min kernel semver string; null = no requirement
@@ -211,7 +211,7 @@ on a Host resource is rejected at admission with:
 
 **D089 spec extension contract:** this Provider's implementation-only desired
 configuration is carried in `spec.provider.settings` under
-`system-core.d2b.io/Host/spec`; the schema is registered/signed in the manifest,
+`system-core.d2bus.org/Host/spec`; the schema is registered/signed in the manifest,
 deny-unknown, bounded, versioned, and validated against `spec.providerRef` at Nix
 build and API admission. Base fields stay at `spec.*`; shared semantics are
 promoted to the Host/User base and never placed in `spec.provider`. This
@@ -249,7 +249,7 @@ Per D088, the universal `ResourceStatus` fields remain at top-level
 only in `status.resource` and is identical across Host implementations. Any
 future bounded, non-secret system-core-only Host observation must use
 `status.provider` with `providerRef: Provider/system-core`, a qualified
-`schemaId` such as `system-core.d2b.io/Host/status`, `schemaVersion` (semver MAJOR.MINOR),
+`schemaId` such as `system-core.d2bus.org/Host/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted `details` object registered and signed in the Provider manifest. A
 Host status write updates all present layers atomically in one mutation; shared
@@ -352,7 +352,7 @@ Complete normative contract: [`ADR-046-resources-host-guest-process-user`](../AD
 #### 4.2.1 Spec schema (normative summary)
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: User
 metadata:
   name: alice          # ^[a-z][a-z0-9-]*$; max 63; Zone-local identity
@@ -391,7 +391,7 @@ status:
 Per D088, User ResourceType-common observation written by system-core lives only
 in `status.resource`. Any future bounded, non-secret system-core-only User
 observation uses `status.provider` with `providerRef: Provider/system-core`, a
-qualified `schemaId` such as `system-core.d2b.io/User/status`, `schemaVersion` (semver MAJOR.MINOR),
+qualified `schemaId` such as `system-core.d2bus.org/User/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted `details` object registered and signed in the Provider manifest. The
 controller writes the universal base, `status.resource`, and any
@@ -709,7 +709,7 @@ d2b.zones.dev.resources.host-system = {
     budget         = {};
     isolationPosture = null;
     provider = {
-      schemaId = "system-core.d2b.io/Host/spec";
+      schemaId = "system-core.d2bus.org/Host/spec";
       schemaVersion = "1.0.0";
       settings.capabilities = ["kvm" "pidfd" "cgroup-v2" "virtiofs"];
     };
@@ -721,7 +721,7 @@ Rendered canonical JSON:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Host",
   "metadata": {
     "name": "host-system",
@@ -738,7 +738,7 @@ Rendered canonical JSON:
     "volumeAttachmentDefaults": [],
     "isolationPosture": null,
     "provider": {
-      "schemaId": "system-core.d2b.io/Host/spec",
+      "schemaId": "system-core.d2bus.org/Host/spec",
       "schemaVersion": "1.0.0",
       "settings": {
         "kernelVersionMin": null,
@@ -761,7 +761,7 @@ d2b.zones.dev.resources.host-user-shell = {
     defaultUserRef  = "User/alice";
     isolationPosture = "none";     # required; cannot be null for user-only
     provider = {
-      schemaId = "system-core.d2b.io/Host/spec";
+      schemaId = "system-core.d2bus.org/Host/spec";
       schemaVersion = "1.0.0";
       settings = {};
     };
@@ -797,7 +797,7 @@ Rendered canonical JSON:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "User",
   "metadata": {
     "name": "alice",

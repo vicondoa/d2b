@@ -19,8 +19,8 @@ This dossier defines the complete pre-ADR-0045 baseline design for
 
 It is authoritative for:
 
-- `shell-terminal.d2b.io.ShellPool`
-- `shell-terminal.d2b.io.ShellSession`
+- `shell-terminal.d2bus.org.ShellPool`
+- `shell-terminal.d2bus.org.ShellSession`
 - controller and session-supervisor `Process` composition
 - controller and supervisor ComponentSession contracts
 - user-domain placement rules for Host and Guest targets
@@ -68,7 +68,7 @@ The provider owns exactly two binaries:
 - `d2b-shell-session-supervisor`
 
 The controller is a system-domain controller and public shell service. The supervisor is a
-dynamic user-domain `service` Process created exactly once per `shell-terminal.d2b.io.ShellSession`.
+dynamic user-domain `service` Process created exactly once per `shell-terminal.d2bus.org.ShellSession`.
 It terminates a private typed ComponentSession endpoint (`shell-session-supervisor.v1`)
 and the named terminal stream; it has no `ResourceClient`, no dependency or CLI portal,
 and no involvement in resource-API operations. Host and Guest pools use the same
@@ -87,7 +87,7 @@ The canonical crate layout follows D012 and D059.
 | Binary | Role | Placement | Principal class |
 | --- | --- | --- | --- |
 | `d2b-shell-terminal-controller` | controller and public lifecycle service | system-domain `Process` owned by `Provider/shell-terminal` | provider principal |
-| `d2b-shell-session-supervisor` | per-session PTY owner and internal shell service | user-domain dynamic `service` `Process` owned by `shell-terminal.d2b.io.ShellSession/<name>` | exact `User/<name>` from the pool |
+| `d2b-shell-session-supervisor` | per-session PTY owner and internal shell service | user-domain dynamic `service` `Process` owned by `shell-terminal.d2bus.org.ShellSession/<name>` | exact `User/<name>` from the pool |
 
 No other binary is normative for this provider. In particular:
 
@@ -111,15 +111,15 @@ reported as status payload bytes. The `ProviderStateSet` is therefore empty.
 
 | ResourceType | Owner | Purpose | Creates provider worker? | Cardinality |
 | --- | --- | --- | --- | --- |
-| `shell-terminal.d2b.io.ShellPool` | `Provider/shell-terminal` | capacity and policy for one execution target plus one user identity | No | one or more per Zone |
-| `shell-terminal.d2b.io.ShellSession` | `Provider/shell-terminal` | one persistent login-shell session plus exactly one supervisor `Process` | Yes, exactly one supervisor | zero or more per pool |
+| `shell-terminal.d2bus.org.ShellPool` | `Provider/shell-terminal` | capacity and policy for one execution target plus one user identity | No | one or more per Zone |
+| `shell-terminal.d2bus.org.ShellSession` | `Provider/shell-terminal` | one persistent login-shell session plus exactly one supervisor `Process` | Yes, exactly one supervisor | zero or more per pool |
 
 | Reference form | Example |
 | --- | --- |
-| pool `ResourceRef` | `shell-terminal.d2b.io.ShellPool/dev-alice` |
-| session `ResourceRef` | `shell-terminal.d2b.io.ShellSession/dev-alice-main` |
-| supervisor owner reference | `shell-terminal.d2b.io.ShellSession/dev-alice-main` |
-| Nix type string | `"shell-terminal.d2b.io.ShellPool"` or `"shell-terminal.d2b.io.ShellSession"` |
+| pool `ResourceRef` | `shell-terminal.d2bus.org.ShellPool/dev-alice` |
+| session `ResourceRef` | `shell-terminal.d2bus.org.ShellSession/dev-alice-main` |
+| supervisor owner reference | `shell-terminal.d2bus.org.ShellSession/dev-alice-main` |
+| Nix type string | `"shell-terminal.d2bus.org.ShellPool"` or `"shell-terminal.d2bus.org.ShellSession"` |
 
 `status.phase` on both ResourceTypes uses only the common phase catalog:
 
@@ -158,7 +158,7 @@ capability only through its signed capability matrix plus typed
 provider-neutral `unsupported-capability`. `spec.provider` aligns with
 `status.provider`.
 
-## `shell-terminal.d2b.io.ShellPool` ResourceType
+## `shell-terminal.d2bus.org.ShellPool` ResourceType
 
 ### Purpose
 
@@ -180,8 +180,8 @@ A pool is responsible for:
 ### Canonical object shape
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: shell-terminal.d2b.io.ShellPool
+apiVersion: resources.d2bus.org/v3
+type: shell-terminal.d2bus.org.ShellPool
 metadata:
   name: guest-alice-shell
   zone: dev
@@ -208,8 +208,8 @@ status:
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `apiVersion` | `string` | Yes | `resources.d2b.io/v3` | Exact | Resource API version. |
-| `type` | `string` | Yes | `shell-terminal.d2b.io.ShellPool` | Exact | Vendor-qualified ResourceType identifier. |
+| `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
+| `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellPool` | Exact | Vendor-qualified ResourceType identifier. |
 | `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, max 63 | Pool resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | No | `Provider/shell-terminal` | Provider or higher-level owner | Default owner is the provider. |
@@ -222,7 +222,7 @@ status:
 | `spec.outputRingCapacity` | `u64` bytes | No | `262144` | `4096..1048576` | Default ring capacity inherited by new sessions unless the session requests an equal or smaller value. |
 
 `spec.executionRef`, `spec.userRef`, and `spec.loginShellRef` are immutable once a pool
-has any child `shell-terminal.d2b.io.ShellSession`. Mutation after session creation is rejected
+has any child `shell-terminal.d2bus.org.ShellSession`. Mutation after session creation is rejected
 with `PoolSpecFrozenByChildSessions`.
 
 ### Status schema
@@ -264,7 +264,7 @@ with `PoolSpecFrozenByChildSessions`.
 | `Ready` | The pool target, user, login shell, and status writer are valid; capacity counters are current. | Any validation or reconcile step is incomplete or failed. |
 | `ExecutionTargetVerified` | The referenced Host or Guest exists and supports user-domain placement. | The target is absent, unresolved, or missing user-domain support. |
 | `UserVerified` | The referenced `User/<name>` exists and is accepted by the target. | User lookup fails or the target rejects the user. |
-| `CapacityAvailable` | At least one more `shell-terminal.d2b.io.ShellSession` may be created. | `activeSessions >= maxSessions`. |
+| `CapacityAvailable` | At least one more `shell-terminal.d2bus.org.ShellSession` may be created. | `activeSessions >= maxSessions`. |
 | `AttachCapacityAvailable` | At least one more live attach stream may be opened. | `attachedSessions >= maxAttached`. |
 | `IsolationPostureWarning` | The pool targets a Host with `isolationPosture=none`; this is a warning, not an admission bypass. | The target is a Guest or a Host with an isolated posture. |
 | `Deleting` | Metadata deletion timestamp is present and the finalizer has started. | The resource is not deleting. |
@@ -282,7 +282,7 @@ with `PoolSpecFrozenByChildSessions`.
      `spec.defaultUserRef` on the `Guest/<name>` resource.
 6. Observe that the optional ProviderStateSet is empty for `shell-terminal`; there
    are no Provider state Volume prerequisites to gate pool readiness.
-7. Enumerate child `shell-terminal.d2b.io.ShellSession` resources by owner or `spec.poolRef`.
+7. Enumerate child `shell-terminal.d2bus.org.ShellSession` resources by owner or `spec.poolRef`.
 8. Count `activeSessions` and `attachedSessions`.
 9. Compute remaining capacity.
 10. Publish `status.isolationPosture` from the execution target.
@@ -313,7 +313,7 @@ with `PoolSpecFrozenByChildSessions`.
 ### Finalizer steps
 
 1. Mark the pool `Deleting` condition true.
-2. List child `shell-terminal.d2b.io.ShellSession` resources.
+2. List child `shell-terminal.d2bus.org.ShellSession` resources.
 3. If any child session is not in `Deleted`, block pool finalization with
    `PoolDeleteBlockedBySessions`.
 4. Do not synthesize kill commands or management workers.
@@ -321,7 +321,7 @@ with `PoolSpecFrozenByChildSessions`.
 6. Remove the provider finalizer.
 7. Allow the store to tombstone the pool and set `status.phase=Deleted`.
 
-## `shell-terminal.d2b.io.ShellSession` ResourceType
+## `shell-terminal.d2bus.org.ShellSession` ResourceType
 
 ### Purpose
 
@@ -334,15 +334,15 @@ ComponentSession endpoint. The controller owns lifecycle orchestration only.
 ### Canonical object shape
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: shell-terminal.d2b.io.ShellSession
+apiVersion: resources.d2bus.org/v3
+type: shell-terminal.d2bus.org.ShellSession
 metadata:
   name: guest-alice-shell-main
   zone: dev
-  ownerRef: shell-terminal.d2b.io.ShellPool/guest-alice-shell
+  ownerRef: shell-terminal.d2bus.org.ShellPool/guest-alice-shell
 spec:
   providerRef: Provider/shell-terminal
-  poolRef: shell-terminal.d2b.io.ShellPool/guest-alice-shell
+  poolRef: shell-terminal.d2bus.org.ShellPool/guest-alice-shell
   executionRef: Guest/work
   userRef: User/alice
   loginShellRef: artifact://shells/bash-login
@@ -364,13 +364,13 @@ status:
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `apiVersion` | `string` | Yes | `resources.d2b.io/v3` | Exact | Resource API version. |
-| `type` | `string` | Yes | `shell-terminal.d2b.io.ShellSession` | Exact | Vendor-qualified ResourceType identifier. |
+| `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
+| `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellSession` | Exact | Vendor-qualified ResourceType identifier. |
 | `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, max 63 | Stable session resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
-| `metadata.ownerRef` | `ResourceRef` | Yes | `shell-terminal.d2b.io.ShellPool/<name>` | pool reference | Owning pool. |
+| `metadata.ownerRef` | `ResourceRef` | Yes | `shell-terminal.d2bus.org.ShellPool/<name>` | pool reference | Owning pool. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
-| `spec.poolRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellPool/<name>` | Pool from which capacity and placement are derived. |
+| `spec.poolRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellPool/<name>` | Pool from which capacity and placement are derived. |
 | `spec.executionRef` | `ResourceRef` | Yes on stored object | inherited from pool | `Host/<name>` or `Guest/<name>` | Controller copies the pool target into the session at creation time. |
 | `spec.userRef` | `ResourceRef` | Yes on stored object | inherited from pool | `User/<name>` | Controller copies the pool user into the session at creation time. |
 | `spec.loginShellRef` | `string` | Yes on stored object | inherited from pool | artifact catalog reference | Controller copies the pool login shell into the session at creation time. |
@@ -500,12 +500,12 @@ in process memory and named streams only.
 This provider uses two canonical `Process` templates only: one controller and one
 per-session supervisor. The controller template is emitted by the core ProviderDeployment
 handler. The supervisor template is emitted by the shell-terminal controller when it
-creates a `shell-terminal.d2b.io.ShellSession`.
+creates a `shell-terminal.d2bus.org.ShellSession`.
 
 ### Controller `Process` template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: shell-terminal--controller
@@ -552,17 +552,17 @@ spec:
 ### Session supervisor `Process` template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: shell-terminal--supervisor--<session-uid-short>
   zone: <zone>
-  ownerRef: shell-terminal.d2b.io.ShellSession/<session-name>
+  ownerRef: shell-terminal.d2bus.org.ShellSession/<session-name>
 spec:
   providerRef: Provider/system-systemd
   executionRef: Guest/<guest>   # or Host/<host> for Host pools
   domain: user
-  userRef: User/<pool-user>     # from shell-terminal.d2b.io.ShellPool spec.userRef
+  userRef: User/<pool-user>     # from shell-terminal.d2bus.org.ShellPool spec.userRef
   processClass: service            # terminates a private ComponentSession endpoint; no ResourceClient/CLI portal
   template: shell-session-supervisor
   sandbox:
@@ -688,11 +688,11 @@ optional `metadata.annotations`, only the closed keys below are permitted.
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `metadata.annotations.d2b.io/provider-role` | `string` | No | None | `shell-terminal-controller|shell-session-supervisor` | Human-stable template role marker. |
-| `metadata.annotations.d2b.io/provider-service` | `string` | No | None | `shell-terminal.v3|shell-session-supervisor.v1` | Declared primary service purpose. |
-| `metadata.annotations.d2b.io/routing-class` | `string` | No | None | `controller|session-supervisor` | Routing ownership class. |
-| `metadata.annotations.d2b.io/redaction-class` | `string` | No | None | `shell-terminal` | Indicates the shell-terminal redaction profile. |
-| `metadata.annotations.d2b.io/isolation-warning` | `string` | No | None | `host-none` | Optional warning tag for Host pools with `isolationPosture=none`. |
+| `metadata.annotations.d2bus.org/provider-role` | `string` | No | None | `shell-terminal-controller|shell-session-supervisor` | Human-stable template role marker. |
+| `metadata.annotations.d2bus.org/provider-service` | `string` | No | None | `shell-terminal.v3|shell-session-supervisor.v1` | Declared primary service purpose. |
+| `metadata.annotations.d2bus.org/routing-class` | `string` | No | None | `controller|session-supervisor` | Routing ownership class. |
+| `metadata.annotations.d2bus.org/redaction-class` | `string` | No | None | `shell-terminal` | Indicates the shell-terminal redaction profile. |
+| `metadata.annotations.d2bus.org/isolation-warning` | `string` | No | None | `host-none` | Optional warning tag for Host pools with `isolationPosture=none`. |
 
 ## ProviderStateSet
 
@@ -742,21 +742,21 @@ The provider defines two ComponentSession services.
 | Service | Hosted by | Target resource | Purpose | Noise profile |
 | --- | --- | --- | --- | --- |
 | `shell-terminal.v3` | `Process/shell-terminal--controller` | `Provider/shell-terminal` | public lifecycle service for pools and sessions | KK or stronger per platform policy |
-| `shell-session-supervisor.v1` | `Process/shell-terminal--supervisor--<session-uid-short>` | `shell-terminal.d2b.io.ShellSession/<name>` | private per-session service for attach, detach, detach-all, kill, and status | KK |
+| `shell-session-supervisor.v1` | `Process/shell-terminal--supervisor--<session-uid-short>` | `shell-terminal.d2bus.org.ShellSession/<name>` | private per-session service for attach, detach, detach-all, kill, and status | KK |
 
 ### Public controller service: `shell-terminal.v3`
 
 | Method | Target | Description | Required role |
 | --- | --- | --- | --- |
-| `OpenSession` | `shell-terminal.d2b.io.ShellPool/<name>` | Create a new `shell-terminal.d2b.io.ShellSession`, create its supervisor, and return the route data needed to attach. | `Role/shell-admin` or Zone-admin superset |
-| `ListSessions` | `shell-terminal.d2b.io.ShellPool/<name>` | List child session summaries for one pool. | `Role/shell-admin` or Zone-admin superset |
-| `PoolStatus` | `shell-terminal.d2b.io.ShellPool/<name>` | Return aggregate pool counts, phase, and warning state. | `Role/shell-admin` or Zone-admin superset |
+| `OpenSession` | `shell-terminal.d2bus.org.ShellPool/<name>` | Create a new `shell-terminal.d2bus.org.ShellSession`, create its supervisor, and return the route data needed to attach. | `Role/shell-admin` or Zone-admin superset |
+| `ListSessions` | `shell-terminal.d2bus.org.ShellPool/<name>` | List child session summaries for one pool. | `Role/shell-admin` or Zone-admin superset |
+| `PoolStatus` | `shell-terminal.d2bus.org.ShellPool/<name>` | Return aggregate pool counts, phase, and warning state. | `Role/shell-admin` or Zone-admin superset |
 
 #### `OpenSession` request
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `poolRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellPool/<name>` | Target pool. |
+| `poolRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellPool/<name>` | Target pool. |
 | `sessionName` | `string` | No | controller-generated | kebab-case, max 32 bytes | Optional operator-friendly name copied into `spec.sessionName`. |
 | `outputRingCapacity` | `u64` bytes | No | pool default | `4096..1048576` and `<= pool limit` | Optional session-specific ring size. |
 | `attachImmediately` | `bool` | No | `true` | Fixed | Whether the caller plans to open the supervisor stream right away. |
@@ -767,7 +767,7 @@ The provider defines two ComponentSession services.
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellSession/<name>` | Created session resource. |
+| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellSession/<name>` | Created session resource. |
 | `supervisorRef` | `ResourceRef` | Yes | None | `Process/<name>` | Created supervisor process resource. |
 | `supervisorGeneration` | `u64` | Yes | None | Monotonic | Generation that must accompany `Attach`, `Detach`, `DetachAll`, and `Kill`. |
 | `service` | `string` | Yes | `shell-session-supervisor.v1` | Exact | Per-session service name. |
@@ -778,7 +778,7 @@ The provider defines two ComponentSession services.
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellSession/<name>` | Child session resource reference. |
+| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellSession/<name>` | Child session resource reference. |
 | `phase` | `enum` | Yes | None | Common phase | Current session phase. |
 | `detailKind` | `enum` | Yes | None | closed session detail set | Current typed detail kind. |
 | `supervisorGeneration` | `u64` | Yes | None | Monotonic | Current attach generation. |
@@ -790,7 +790,7 @@ The provider defines two ComponentSession services.
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `poolRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellPool/<name>` | Pool reference. |
+| `poolRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellPool/<name>` | Pool reference. |
 | `phase` | `enum` | Yes | None | Common phase | Pool phase. |
 | `detailKind` | `enum` | Yes | None | closed pool detail set | Pool detail kind. |
 | `activeSessions` | `u32` | Yes | None | `0..64` | Current child-session count. |
@@ -817,17 +817,17 @@ The provider defines two ComponentSession services.
 
 | Method or stream | Target | Description | Required role |
 | --- | --- | --- | --- |
-| `Attach` | `shell-terminal.d2b.io.ShellSession/<name>` | Open a bidirectional terminal stream against the exact supervisor generation. | `Role/shell-admin` or Zone-admin superset |
-| `Detach` | `shell-terminal.d2b.io.ShellSession/<name>` | Detach the caller's current stream without killing the shell. | `Role/shell-admin` or Zone-admin superset |
-| `DetachAll` | `shell-terminal.d2b.io.ShellSession/<name>` | Detach all current streams from the exact session without killing the shell. | `Role/shell-admin` or Zone-admin superset |
-| `Kill` | `shell-terminal.d2b.io.ShellSession/<name>` | Terminate the exact session scope owned by the supervisor. | `Role/shell-admin` or Zone-admin superset |
-| `SupervisorStatus` | `shell-terminal.d2b.io.ShellSession/<name>` | Return redacted session status from the exact supervisor generation. | `Role/shell-admin` or Zone-admin superset |
+| `Attach` | `shell-terminal.d2bus.org.ShellSession/<name>` | Open a bidirectional terminal stream against the exact supervisor generation. | `Role/shell-admin` or Zone-admin superset |
+| `Detach` | `shell-terminal.d2bus.org.ShellSession/<name>` | Detach the caller's current stream without killing the shell. | `Role/shell-admin` or Zone-admin superset |
+| `DetachAll` | `shell-terminal.d2bus.org.ShellSession/<name>` | Detach all current streams from the exact session without killing the shell. | `Role/shell-admin` or Zone-admin superset |
+| `Kill` | `shell-terminal.d2bus.org.ShellSession/<name>` | Terminate the exact session scope owned by the supervisor. | `Role/shell-admin` or Zone-admin superset |
+| `SupervisorStatus` | `shell-terminal.d2bus.org.ShellSession/<name>` | Return redacted session status from the exact supervisor generation. | `Role/shell-admin` or Zone-admin superset |
 
 #### `Attach` request
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellSession/<name>` | Target session reference. |
+| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellSession/<name>` | Target session reference. |
 | `expectedSupervisorGeneration` | `u64` | Yes | None | current generation | Fail closed if stale. |
 | `tailBytes` | `u64` bytes | No | `65536` | `0..outputRingCapacity` | Ring tail to replay before live output. |
 | `terminalRows` | `u16` | No | current PTY value | `1..4096` | Optional resize hint on attach. |
@@ -845,7 +845,7 @@ The provider defines two ComponentSession services.
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellSession/<name>` | Target session. |
+| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellSession/<name>` | Target session. |
 | `expectedSupervisorGeneration` | `u64` | Yes | None | current generation | Mandatory stale-handle protection field. |
 | `reason` | `enum` | No | `operator-request` | `operator-request|stream-close|maintenance` | Redacted reason code for detach or kill. |
 | `graceTimeoutMs` | `u32` | No | `5000` | `0..60000` | Kill grace period. Ignored by `Detach` and `SupervisorStatus`. |
@@ -854,7 +854,7 @@ The provider defines two ComponentSession services.
 
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
-| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2b.io.ShellSession/<name>` | Target session. |
+| `sessionRef` | `ResourceRef` | Yes | None | `shell-terminal.d2bus.org.ShellSession/<name>` | Target session. |
 | `supervisorGeneration` | `u64` | Yes | None | Monotonic | Current generation. |
 | `phase` | `enum` | Yes | None | Common phase | Current session phase. |
 | `detailKind` | `enum` | Yes | None | closed detail set | Current session detail kind. |
@@ -888,7 +888,7 @@ Flow:
    `supervisorRef`, K0 route Zone, and `supervisorGeneration`.
 3. The client opens a direct ComponentSession to `shell-session-supervisor.v1`.
 4. The d2b-bus resolves the route by K0 Zone,
-   `shell-terminal.d2b.io.ShellSession/<name>`, service `shell-session-supervisor.v1`, named
+   `shell-terminal.d2bus.org.ShellSession/<name>`, service `shell-session-supervisor.v1`, named
    stream `terminal`, schema fingerprint, and `supervisorGeneration`.
 5. The supervisor replays the requested tail from its in-memory ring, then switches to
    live PTY I/O.
@@ -916,7 +916,7 @@ uses 64 KiB initial credit with bounded grant increments.
 | Routing dimension | Value |
 | --- | --- |
 | Zone | K0 Zone where the supervisor `Process` runs. |
-| Target resource | `shell-terminal.d2b.io.ShellSession/<name>` |
+| Target resource | `shell-terminal.d2bus.org.ShellSession/<name>` |
 | Service | `shell-session-supervisor.v1` |
 | Method or stream | `Attach`, `Detach`, `DetachAll`, `Kill`, `SupervisorStatus`, or `terminal` |
 | Schema fingerprint | Versioned fingerprint of the service or stream schema. |
@@ -967,7 +967,7 @@ bytes, and never replays terminal data.
 Each session supervisor has one canonical identity tuple:
 
 - Zone UID of the K0 Zone where the supervisor runs
-- `shell-terminal.d2b.io.ShellSession` UID
+- `shell-terminal.d2bus.org.ShellSession` UID
 - Process supervisor generation, defined as the stored `status.supervisorGeneration`
   plus the currently verified `Process` generation and InvocationID binding
 
@@ -998,7 +998,7 @@ verification.
 ### Restart adoption algorithm
 
 1. List all `Process/shell-terminal--supervisor--*` resources in the Zone store.
-2. For each candidate, require `ownerRef` to point at a `shell-terminal.d2b.io.ShellSession/<name>`.
+2. For each candidate, require `ownerRef` to point at a `shell-terminal.d2bus.org.ShellSession/<name>`.
 3. Resolve the owning session resource.
 4. Verify the process name derived from the session UID short form.
 5. Query provider and runtime identity evidence for the candidate process.
@@ -1129,19 +1129,19 @@ relay-authenticated exception for user-domain targets.
 
 | Verb | Target | Required role | Relay-authenticated identity allowed? |
 | --- | --- | --- | --- |
-| `OpenSession` | `shell-terminal.d2b.io.ShellPool/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools; policy may permit only local admin for Guest pools as well. |
-| `ListSessions` | `shell-terminal.d2b.io.ShellPool/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
-| `PoolStatus` | `shell-terminal.d2b.io.ShellPool/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
-| `Attach` | `shell-terminal.d2b.io.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
-| `Detach` | `shell-terminal.d2b.io.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
-| `DetachAll` | `shell-terminal.d2b.io.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
-| `Kill` | `shell-terminal.d2b.io.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
-| `SupervisorStatus` | `shell-terminal.d2b.io.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `OpenSession` | `shell-terminal.d2bus.org.ShellPool/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools; policy may permit only local admin for Guest pools as well. |
+| `ListSessions` | `shell-terminal.d2bus.org.ShellPool/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `PoolStatus` | `shell-terminal.d2bus.org.ShellPool/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `Attach` | `shell-terminal.d2bus.org.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `Detach` | `shell-terminal.d2bus.org.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `DetachAll` | `shell-terminal.d2bus.org.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `Kill` | `shell-terminal.d2bus.org.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
+| `SupervisorStatus` | `shell-terminal.d2bus.org.ShellSession/<name>` | `Role/shell-admin` or Zone-admin superset | No for Host user-domain pools. |
 
 ### Admission rules
 
 1. Only controller principals and authorized Nix emitters may create or mutate stored
-   `shell-terminal.d2b.io.ShellSession` objects directly.
+   `shell-terminal.d2bus.org.ShellSession` objects directly.
 2. External operators use only `OpenSession`, `ListSessions`, `PoolStatus`, `Attach`,
    `Detach`, `DetachAll`, `Kill`, and `SupervisorStatus`.
 3. A relay-authenticated subject is never sufficient for user-domain Host shell access.
@@ -1151,7 +1151,7 @@ relay-authenticated exception for user-domain targets.
 
 ## Security invariants
 
-SR-1: `shell-terminal.d2b.io.ShellPool` is capacity-only. It never creates a pool-wide supervisor,
+SR-1: `shell-terminal.d2bus.org.ShellPool` is capacity-only. It never creates a pool-wide supervisor,
 never owns PTY state, and never owns attach streams.
 
 SR-2: Every managed shell session owns exactly one user-domain supervisor `Process`
@@ -1190,7 +1190,7 @@ Nix declarations use qualified type names exactly as stored.
 
 ```nix
 d2b.zones.dev.resources.guest-alice-shell = {
-  type = "shell-terminal.d2b.io.ShellPool";
+  type = "shell-terminal.d2bus.org.ShellPool";
   spec = {
     providerRef = "Provider/shell-terminal";
     executionRef = "Guest/work";
@@ -1205,10 +1205,10 @@ d2b.zones.dev.resources.guest-alice-shell = {
 
 ```nix
 d2b.zones.dev.resources.guest-alice-shell-main = {
-  type = "shell-terminal.d2b.io.ShellSession";
+  type = "shell-terminal.d2bus.org.ShellSession";
   spec = {
     providerRef = "Provider/shell-terminal";
-    poolRef = "shell-terminal.d2b.io.ShellPool/guest-alice-shell";
+    poolRef = "shell-terminal.d2bus.org.ShellPool/guest-alice-shell";
     executionRef = "Guest/work";
     userRef = "User/alice";
     loginShellRef = "artifact://shells/bash-login";
@@ -1232,7 +1232,7 @@ d2b.zones.dev.resources.work = {
 The Nix compiler must reject:
 
 - non-vendor-qualified pool or session type strings
-- session declarations whose `poolRef` does not name `shell-terminal.d2b.io.ShellPool/<name>`
+- session declarations whose `poolRef` does not name `shell-terminal.d2bus.org.ShellPool/<name>`
 - Guest targets lacking `allowedDomains = [ ... "user" ... ]`
 - session `outputRingCapacity` values larger than the parent pool's configured bound
 
@@ -1315,7 +1315,7 @@ handles into the controller.
 
 | ID | Area | Description | src path | tests path | integration path |
 | --- | --- | --- | --- | --- | --- |
-| `ADR046-sterm-001` | Resource schemas | Implement `shell-terminal.d2b.io.ShellPool` and `shell-terminal.d2b.io.ShellSession` schemas with qualified names, common phases, and typed detail fields. | `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` | `packages/d2b-provider-shell-terminal/integration/resource-shape/` |
+| `ADR046-sterm-001` | Resource schemas | Implement `shell-terminal.d2bus.org.ShellPool` and `shell-terminal.d2bus.org.ShellSession` schemas with qualified names, common phases, and typed detail fields. | `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` | `packages/d2b-provider-shell-terminal/integration/resource-shape/` |
 | `ADR046-sterm-002` | Controller binary | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; assert ProviderStateSet is empty; publish bounded non-secret operational state to resource status and the core Operation ledger; no controller Provider state Volume or `/state` mount exists. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` | `packages/d2b-provider-shell-terminal/integration/controller-restart/` |
 | `ADR046-sterm-003` | Supervisor binary | Implement `d2b-shell-session-supervisor` as the sole PTY owner for Host and Guest pools. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-session-supervisor.rs` | `packages/d2b-provider-shell-terminal/tests/supervisor_runtime.rs` | `packages/d2b-provider-shell-terminal/integration/supervisor-host-guest/` |
 | `ADR046-sterm-004` | Process templates | Teach the Nix compiler and controller to emit the canonical controller and user-domain supervisor `Process` templates. | `packages/d2b-provider-shell-terminal/src/process_templates.rs` | `packages/d2b-provider-shell-terminal/tests/process_templates.rs` | `packages/d2b-provider-shell-terminal/integration/process-placement/` |
@@ -1339,7 +1339,7 @@ assumptions.
 | ring buffer mechanics | Reuse | `packages/d2b-guestd/src/shell.rs` | Reuse bounded ring ideas only; move ownership into the per-session supervisor and keep bytes out of the controller. |
 | scope adoption pattern | Reuse | `packages/d2b-unsafe-local-helper/src/runtime.rs` `ScopeRuntime` and `PersistedScope` | Reuse verification and adoption shape only; do not reuse protocol, helper identities, or state storage assumptions. |
 | service starting point | Reuse | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` `packages/d2b-contracts/src/generated_v2_services/shell.rs` and `shell_ttrpc.rs` | Reuse service-shape ideas only; exclude ADR 0045 session, realm, and constellation assumptions. |
-| Guest persistent-shell runtime | Remove | `packages/d2b-guestd/src/shell.rs` `ShellRuntimeConfig` and related managed runtime flow | Superseded by `shell-terminal.d2b.io.ShellSession` plus per-session supervisors. |
+| Guest persistent-shell runtime | Remove | `packages/d2b-guestd/src/shell.rs` `ShellRuntimeConfig` and related managed runtime flow | Superseded by `shell-terminal.d2bus.org.ShellSession` plus per-session supervisors. |
 | unsafe-local helper supervisor | Remove | `packages/d2b-unsafe-local-helper/src/services/shell/` | Superseded by `d2b-shell-session-supervisor` and `Provider/system-systemd` user-domain placement. |
 | public wire shell protocol | Remove | `packages/d2b-contracts/src/public_wire.rs` `ShellOp` and `ShellOpResponse` | Superseded by ComponentSession services and named terminal streams. |
 | pool-wide supervisor model | Remove | prior ADR 0046 draft text and templates | No pool-wide worker remains. |
@@ -1364,8 +1364,8 @@ or documentation:
 ## Appendix A: canonical example resources
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: shell-terminal.d2b.io.ShellPool
+apiVersion: resources.d2bus.org/v3
+type: shell-terminal.d2bus.org.ShellPool
 metadata:
   name: host-alice-shell
   zone: personal
@@ -1399,15 +1399,15 @@ status:
 ```
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: shell-terminal.d2b.io.ShellSession
+apiVersion: resources.d2bus.org/v3
+type: shell-terminal.d2bus.org.ShellSession
 metadata:
   name: host-alice-shell-main
   zone: personal
-  ownerRef: shell-terminal.d2b.io.ShellPool/host-alice-shell
+  ownerRef: shell-terminal.d2bus.org.ShellPool/host-alice-shell
 spec:
   providerRef: Provider/shell-terminal
-  poolRef: shell-terminal.d2b.io.ShellPool/host-alice-shell
+  poolRef: shell-terminal.d2bus.org.ShellPool/host-alice-shell
   executionRef: Host/workstation
   userRef: User/alice
   loginShellRef: artifact://shells/bash-login
@@ -1440,7 +1440,7 @@ status:
 | Step | Actor | Action |
 | --- | --- | --- |
 | 1 | CLI | Call `OpenSession` on `shell-terminal.v3` with a pool reference. |
-| 2 | Controller | Validate pool capacity, resolve inherited execution and user fields, create `shell-terminal.d2b.io.ShellSession`. |
+| 2 | Controller | Validate pool capacity, resolve inherited execution and user fields, create `shell-terminal.d2bus.org.ShellSession`. |
 | 3 | Controller | Create `Process/shell-terminal--supervisor--<session-uid-short>` in the user domain. |
 | 4 | Supervisor | Spawn the manifest-fixed login shell, allocate the PTY, initialize the ring, and signal readiness. |
 | 5 | Controller | Verify InvocationID and Process generation, increment `status.supervisorGeneration`, and register bus routes. |
@@ -1464,7 +1464,7 @@ status:
 
 ## Appendix D: normative checklist
 
-1. All stored type strings are qualified: `shell-terminal.d2b.io.ShellPool` or `shell-terminal.d2b.io.ShellSession`.
+1. All stored type strings are qualified: `shell-terminal.d2bus.org.ShellPool` or `shell-terminal.d2bus.org.ShellSession`.
 2. Every session supervisor is user-domain and names an exact `User/<name>`.
 3. Exactly one supervisor `Process` exists per session.
 4. No pool creates a supervisor `Process`.

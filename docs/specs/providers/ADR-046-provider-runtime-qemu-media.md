@@ -87,7 +87,7 @@ the four top-level paths above.
 ## 2 Provider ResourceSpec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: runtime-qemu-media
@@ -150,14 +150,14 @@ OTEL telemetry.
 A `Guest` resource managed by `runtime-qemu-media` has the following shape:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Guest
 metadata:
   name: corp-iso-boot
   zone: corp
   ownerRef: null
   finalizers:
-    - runtime-qemu-media.d2b.io/guest-cleanup
+    - runtime-qemu-media.d2bus.org/guest-cleanup
 spec:
   providerRef: Provider/runtime-qemu-media
   systemArtifactId: null                    # no NixOS guest system; media-boot only
@@ -172,7 +172,7 @@ spec:
       exclusive: false
   volumeDefaults: {}
   provider:                                  # see §5
-    schemaId: runtime-qemu-media.d2b.io/Guest/spec
+    schemaId: runtime-qemu-media.d2bus.org/Guest/spec
     schemaVersion: 1.0.0
     settings:
       bootMediaRef: Volume/corp-iso-boot-media
@@ -196,7 +196,7 @@ status:
     runtimeReady: false
   provider:
     providerRef: Provider/runtime-qemu-media
-    schemaId: runtime-qemu-media.d2b.io/Guest/status
+    schemaId: runtime-qemu-media.d2bus.org/Guest/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
@@ -225,7 +225,7 @@ no raw paths, executable paths, argv fragments, or credential bytes appear here.
 
 **D089 spec extension contract:** this Provider's implementation-only desired
 configuration is carried in `spec.provider.settings` under
-`runtime-qemu-media.d2b.io/Guest/spec`; the schema is registered/signed in the
+`runtime-qemu-media.d2bus.org/Guest/spec`; the schema is registered/signed in the
 manifest, deny-unknown, bounded, versioned, and validated against
 `spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
 shared semantics are promoted to the Guest base and never placed in
@@ -282,14 +282,14 @@ ephemeral, lives in the per-Guest cgroup domain, and holds the QEMU Unix
 socket endpoints (QMP, serial) and any small runtime scratch state.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: <guest-uid-short>-runtime
   zone: corp
   ownerRef: Guest/corp-iso-boot     # controller sets ownerRef to the owning Guest
   finalizers:
-    - runtime-qemu-media.d2b.io/runtime-volume
+    - runtime-qemu-media.d2bus.org/runtime-volume
 spec:
   providerRef: Provider/volume-local
   source:
@@ -367,7 +367,7 @@ from the Guest. This decouples media lifecycle from Guest lifecycle.
 Example for a raw or qcow2 disk image:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: corp-iso-boot-media
@@ -492,7 +492,7 @@ implicit Host capability. The operator must declare `Device/host-kvm` in the
 Zone and the Guest must list `Device/host-kvm` in `spec.deviceAttachments`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Device
 metadata:
   name: host-kvm
@@ -535,7 +535,7 @@ non-fatal informational condition.
 
 `Provider/runtime-qemu-media` does not own any display proxy Process or
 Wayland socket. When `spec.provider.settings.displayWindow = true`, the controller
-creates a `display-wayland.d2b.io.WaylandSession` resource in the same Zone,
+creates a `display-wayland.d2bus.org.WaylandSession` resource in the same Zone,
 using the exact ResourceSpec defined by `Provider/display-wayland`'s dossier
 (including its required `guestRef`, `hostRef`, `userRef`, `policy`, `identity`,
 and `device` fields as applicable). The `runtime-qemu-media` controller is the
@@ -543,8 +543,8 @@ resource owner (`ownerRef: Guest/<name>`) and is responsible for creating,
 updating, and deleting it; it does not invent additional spec fields.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: display-wayland.d2b.io.WaylandSession
+apiVersion: resources.d2bus.org/v3
+type: display-wayland.d2bus.org.WaylandSession
 metadata:
   name: <guest-uid-short>-display
   zone: corp
@@ -557,7 +557,7 @@ spec:
   guestRef: Guest/corp-iso-boot
 ```
 
-The controller watches `display-wayland.d2b.io.WaylandSession/<guest-uid-short>-display`
+The controller watches `display-wayland.d2bus.org.WaylandSession/<guest-uid-short>-display`
 for `phase: Ready`. When `display-wayland` sets the session `Ready`, it
 writes a typed endpoint attachment to the session's status. The
 `runtime-qemu-media` controller reads this opaque attachment (whose exact
@@ -567,7 +567,7 @@ includes the corresponding display fd in the runner LaunchTicket.
 The `display-wayland` Provider owns all proxy Process instances internally.
 `runtime-qemu-media` only:
 
-1. creates/updates/deletes the `display-wayland.d2b.io.WaylandSession`
+1. creates/updates/deletes the `display-wayland.d2bus.org.WaylandSession`
    resource as an owner, and
 2. consumes the opaque endpoint attachment from that session's `Ready` status.
 
@@ -593,7 +593,7 @@ no separate preflight worker is required.
 The controller creates one instance of this resource per Guest:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: <guest-uid-short>-qemu-runner    # deterministic; uid-short = first 12 hex chars of Guest UID
@@ -737,7 +737,7 @@ core as part of `ProviderDeployment`. It is not created by the controller
 itself. Its canonical ResourceSpec is:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: runtime-qemu-media-controller
@@ -819,7 +819,7 @@ The controller watches:
 | `Volume` | Guest ownerRef | runtime Volume, media Volumes |
 | `Network` | Zone-wide | Network readiness for tap delivery |
 | `Device` | Zone-wide | Device/host-kvm availability |
-| `display-wayland.d2b.io.WaylandSession` | Guest ownerRef | Display compositor readiness |
+| `display-wayland.d2bus.org.WaylandSession` | Guest ownerRef | Display compositor readiness |
 | `Process` | Guest ownerRef | Runner process lifecycle |
 
 No asynchronous pre-launch EphemeralProcess probes any of these resources.
@@ -855,19 +855,19 @@ returns immediately and is re-triggered when the dependency watch event fires.
 ### 11.4 Finalize logic
 
 ```
-OBSERVE: Guest.finalizers contains runtime-qemu-media.d2b.io/guest-cleanup
+OBSERVE: Guest.finalizers contains runtime-qemu-media.d2bus.org/guest-cleanup
   set runner Process.desiredLifecycle = stopped (or delete Process resource)
   wait for Process.phase = Succeeded | Failed (via Process watch event)
   IF displayWindow: delete WaylandSession resource; wait for Deleted
   set runtime Volume.desiredLifecycle = deleted (via Volume finalizer drain)
   wait for Volume.phase = Deleted (via Volume watch event)
-  remove runtime-qemu-media.d2b.io/guest-cleanup from Guest.finalizers
+  remove runtime-qemu-media.d2bus.org/guest-cleanup from Guest.finalizers
   → core removes Guest row; emits ResourceDeleted audit event
 ```
 
 The finalizer never forcefully unlinks socket paths or sends signals to
 processes outside the provider-owned resource graph. The runner's runtime
-Volume finalizer (`runtime-qemu-media.d2b.io/runtime-volume`) ensures the
+Volume finalizer (`runtime-qemu-media.d2bus.org/runtime-volume`) ensures the
 tmpfs is unmounted only after the runner Process pidfd signals exit.
 
 ---
@@ -896,7 +896,7 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
 
 6. **Display handle (if displayWindow):** Controller reads the opaque
    endpoint attachment from
-   `display-wayland.d2b.io.WaylandSession/<guest-uid-short>-display`
+   `display-wayland.d2bus.org.WaylandSession/<guest-uid-short>-display`
    status (field names owned by the `display-wayland` dossier). Includes
    the corresponding display fd in the LaunchTicket for QEMU's display
    backend.
@@ -1016,7 +1016,7 @@ service contracts (d2b-bus), not via broker wire ops.
 | `volume-create-runtime` | Volume | get, list, watch, create, update, delete | Create/delete runtime tmpfs Volume |
 | `network-watch` | Network | get, list, watch | Watch Network readiness |
 | `device-kvm-watch` | Device | get, list, watch | Watch Device/host-kvm status |
-| `waylandsession-manage` | display-wayland.d2b.io.WaylandSession | get, list, watch, create, update, delete | Create/delete WaylandSession for display |
+| `waylandsession-manage` | display-wayland.d2bus.org.WaylandSession | get, list, watch, create, update, delete | Create/delete WaylandSession for display |
 | `user-watch` | User | get, list, watch | Resolve Guest userRef |
 
 ### 15.2 Operator RoleBindings required
@@ -1037,7 +1037,7 @@ rules:
     verbs: [get, list, watch]
   - resources: [Device]
     verbs: [get, list, watch]
-  - resources: [display-wayland.d2b.io.WaylandSession]
+  - resources: [display-wayland.d2bus.org.WaylandSession]
     verbs: [get, list, watch, create, update, delete]
 ```
 
@@ -1078,7 +1078,7 @@ observed lifecycle phase, bootstrap readiness, and active process count in the
 same shape as sibling Guest runtime providers. QEMU media-specific QMP/runner
 lifecycle detail, including `providerPhase`, lives only in
 `status.provider.details` with `providerRef: Provider/runtime-qemu-media`,
-qualified `schemaId` (`runtime-qemu-media.d2b.io/Guest/status`), `schemaVersion`,
+qualified `schemaId` (`runtime-qemu-media.d2bus.org/Guest/status`), `schemaVersion`,
 and `observedProviderGeneration`. Controller status writes include all present
 layers atomically in one status mutation; shared fields are never duplicated
 into `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
@@ -1318,7 +1318,7 @@ d2b.zones.corp.resources.corp-iso-boot = {
       exclusive = false;
     }];
     provider = {
-      schemaId = "runtime-qemu-media.d2b.io/Guest/spec";
+      schemaId = "runtime-qemu-media.d2bus.org/Guest/spec";
       schemaVersion = "1.0.0";
       settings = {
         bootMediaRef  = "Volume/corp-iso-boot-media";
@@ -1352,7 +1352,7 @@ d2b.zones.corp.resources.corp-media-station = {
       exclusive = false;
     }];
     provider = {
-      schemaId = "runtime-qemu-media.d2b.io/Guest/spec";
+      schemaId = "runtime-qemu-media.d2bus.org/Guest/spec";
       schemaVersion = "1.0.0";
       settings = {
         bootMediaRef  = "Volume/corp-win-installer";
@@ -1608,7 +1608,7 @@ attachment for the owning Guest. No path inspection.
 **Priority:** P1
 
 **Description:** When `spec.provider.settings.displayWindow = true`, controller
-creates/updates/deletes a `display-wayland.d2b.io.WaylandSession` resource
+creates/updates/deletes a `display-wayland.d2bus.org.WaylandSession` resource
 (§9) using the exact ResourceSpec defined by the `display-wayland` dossier.
 Watches for `Ready` and reads the opaque endpoint attachment from status
 (field names defined by `display-wayland` dossier).
@@ -1617,7 +1617,7 @@ Watches for `Ready` and reads the opaque endpoint attachment from status
 
 **Tests:**
 - `tests/wayland_session_create.rs` — emitted resource type is
-  `display-wayland.d2b.io.WaylandSession`; no invented spec fields; no
+  `display-wayland.d2bus.org.WaylandSession`; no invented spec fields; no
   `managedBy` in metadata
 - `tests/wayland_session_attachment_read.rs` — opaque endpoint attachment
   parsed from status without inventing field names
@@ -1845,7 +1845,7 @@ hotplug attach/detach, restart recovery.
 | `media_volume_watch.rs` | Dependency gating for boot/removable Volume refs |
 | `media_attachment_validation.rs` | Missing virtio-blk attachment → condition error |
 | `kvm_device_watch.rs` | Device/host-kvm phase machine; Degraded/Failed propagation |
-| `wayland_session_create.rs` | `display-wayland.d2b.io.WaylandSession` resource type; no invented spec fields; no managedBy |
+| `wayland_session_create.rs` | `display-wayland.d2bus.org.WaylandSession` resource type; no invented spec fields; no managedBy |
 | `wayland_session_attachment_read.rs` | Opaque endpoint attachment consumed from display-wayland status |
 | `wayland_session_missing_provider.rs` | displayWindow=true + null displayProviderRef → Failed |
 | `process_spec_golden.rs` | Full canonical Process spec against §10.1 YAML |

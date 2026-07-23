@@ -17,7 +17,7 @@
 Every resource has:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Host
 metadata:
   name: host-system
@@ -114,7 +114,7 @@ spec:
   # ...exact typed base fields frozen by the ResourceType schema...
   # Layer 3 — optional canonical selected-Provider extension envelope
   provider:
-    schemaId: <provider-name>.d2b.io/<ResourceType>/spec
+    schemaId: <provider-name>.d2bus.org/<ResourceType>/spec
     schemaVersion: "1.0"
     settings:
       # strict, bounded, versioned, deny-unknown implementation-only desired settings
@@ -213,7 +213,7 @@ status:
   # Layer 3 — optional Provider-specific extension
   provider:
     providerRef: Provider/<name>
-    schemaId: <provider-name>.d2b.io/<ResourceType>/status
+    schemaId: <provider-name>.d2bus.org/<ResourceType>/status
     schemaVersion: "1.0"
     observedProviderGeneration: 7
     details:
@@ -282,7 +282,7 @@ is not shared across implementations:
 | Field | Rules |
 | --- | --- |
 | `providerRef` | `Provider/<name>` of the writing Provider |
-| `schemaId` | Qualified, immutable status-extension schema ID (per the D080 grammar, e.g. `<provider-name>.d2b.io/<ResourceType>/status`) |
+| `schemaId` | Qualified, immutable status-extension schema ID (per the D080 grammar, e.g. `<provider-name>.d2bus.org/<ResourceType>/status`) |
 | `schemaVersion` | Semver `MAJOR.MINOR` of the extension schema |
 | `observedProviderGeneration` | Numeric `Provider/<name>` resource generation this observation reflects |
 | `details` | Strict typed object: unknown-field-denied, size/cardinality bounded, redacted/non-secret |

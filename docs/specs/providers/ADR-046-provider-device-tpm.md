@@ -99,7 +99,7 @@ integration/
 ### 3.1 Canonical Provider spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: device-tpm
@@ -150,7 +150,7 @@ signed controller component descriptor and `config.controllerExecutionRef`.
 ### 4.1 Canonical controller Process spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-tpm-controller
@@ -357,7 +357,7 @@ Normative D089 spec layering: Device base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `deviceClass`,
 `inventory.selector`, attachments, and arbitration. This Provider's
 desired-only extension is the canonical `spec.provider = { schemaId:
-"device-tpm.d2b.io/Device/spec", schemaVersion, settings }` envelope; it
+"device-tpm.d2bus.org/Device/spec", schemaVersion, settings }` envelope; it
 is manifest-registered/signed, strict deny-unknown, bounded, versioned and
 digested,
 validated against `spec.providerRef` at Nix build and API admission,
@@ -372,7 +372,7 @@ status only. A reference to the former Device `spec.settings` denotes
 credential material is allowed in `spec.provider.settings`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Device
 metadata:
   name: corp-vm-tpm
@@ -386,7 +386,7 @@ spec:
   inventory:
     selector: {}
   provider:
-    schemaId: "device-tpm.d2b.io/Device/spec"
+    schemaId: "device-tpm.d2bus.org/Device/spec"
     schemaVersion: "1.0.0"
     settings:
       logLevel: 20
@@ -415,7 +415,7 @@ It is separate from the ProviderStateSet (§4.2).
 ### 7.1 Canonical Volume spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: device-<uid-short>-tpm-state    # uid-short = first 12 hex chars of Device UID
@@ -521,7 +521,7 @@ Volume reaches `Ready` phase.
 ### 8.1 Canonical Process spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-<uid-short>-swtpm
@@ -655,7 +655,7 @@ is rejected at admission.
 ### 9.1 Canonical EphemeralProcess spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: EphemeralProcess
 metadata:
   name: device-<uid-short>-flush
@@ -758,7 +758,7 @@ Per D088, ResourceType-common Device observation lives in
 `status.resource`: the provider-neutral claim/arbitration/presence base that is
 identical across Device implementations. TPM-specific observation lives only in
 `status.provider` with `providerRef`, qualified `schemaId`
-`device-tpm.d2b.io/Device/status`, `schemaVersion`,
+`device-tpm.d2bus.org/Device/status`, `schemaVersion`,
 `observedProviderGeneration`, and strict bounded redacted `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
 atomically in one status mutation; shared
@@ -798,7 +798,7 @@ status:
     provisionedAt: "2026-07-22T00:00:05Z"
   provider:
     providerRef: Provider/device-tpm
-    schemaId: "device-tpm.d2b.io/Device/status"
+    schemaId: "device-tpm.d2bus.org/Device/status"
     schemaVersion: "1.0.0"
     observedProviderGeneration: 1
     details:
@@ -1122,7 +1122,7 @@ d2b.zones.dev.resources."corp-vm-tpm" = {
     maxConcurrentClaims = 1;
     inventory.selector = {};
     provider = {
-      schemaId = "device-tpm.d2b.io/Device/spec";
+      schemaId = "device-tpm.d2bus.org/Device/spec";
       schemaVersion = "1.0.0";
       settings = {
         logLevel = 20;

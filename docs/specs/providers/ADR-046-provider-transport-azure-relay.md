@@ -211,7 +211,7 @@ against it before emitting the resource bundle.
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://d2b.io/schemas/v3/providers/transport-azure-relay.transport-settings.json",
+  "$id": "https://d2bus.org/schemas/v3/providers/transport-azure-relay.transport-settings.json",
   "title": "AzureRelayTransportSettings",
   "type": "object",
   "additionalProperties": false,
@@ -324,7 +324,7 @@ d2b.zones.k1.resources.k2-guest = {
     childZoneName        = "k2";
     providerRef = "Provider/transport-azure-relay";
     provider = {
-      schemaId      = "transport-azure-relay.d2b.io/ZoneLink/spec";
+      schemaId      = "transport-azure-relay.d2bus.org/ZoneLink/spec";
       schemaVersion = "1.0";
       settings = {
         relayNamespaceId        = "relns-d2b-prod";  # non-secret namespace label
@@ -545,7 +545,7 @@ The listener service does **not**:
 Canonical Process resource (listener):
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-azure-relay-listener
@@ -634,7 +634,7 @@ The sender service does **not**:
 Canonical Process resource (sender):
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-azure-relay-sender
@@ -925,7 +925,7 @@ Per D088, core writes the ZoneLink universal `ResourceStatus` base at top-level
 `status.*` and cross-provider ZoneLink/transport observation under
 `status.resource`. Azure-specific bounded, non-secret observation belongs in
 `status.provider` with `providerRef: Provider/transport-azure-relay`, qualified
-`schemaId: transport-azure-relay.d2b.io/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
+`schemaId: transport-azure-relay.d2bus.org/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted `details` object registered and signed in the Provider manifest. Core
 writes all present layers atomically in one status mutation; shared fields are
@@ -954,7 +954,7 @@ status:
       reconnectAttempt: 0
   provider:
     providerRef: Provider/transport-azure-relay
-    schemaId: transport-azure-relay.d2b.io/ZoneLink/status
+    schemaId: transport-azure-relay.d2bus.org/ZoneLink/status
     schemaVersion: "1.0"
     observedProviderGeneration: 3
     details:

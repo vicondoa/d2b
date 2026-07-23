@@ -96,7 +96,7 @@ ProviderStateSet(zone, provider-name) =
 
 **Core ProviderDeployment ownership.** Core ProviderDeployment creates only the declared state Volumes in the ProviderStateSet from the signed state declarations in the Provider manifest, before launching the owning component's Process. The Provider controller does not invoke Volume creation APIs; operators and Nix never author component state Volumes.
 
-**Export children excluded.** `virtiofs.d2b.io.Export` children have `ownerRef: Volume/<source>` (not `ownerRef: Provider/<name>`) and are excluded from the ProviderStateSet. Only source Volumes are included.
+**Export children excluded.** `virtiofs.d2bus.org.Export` children have `ownerRef: Volume/<source>` (not `ownerRef: Provider/<name>`) and are excluded from the ProviderStateSet. Only source Volumes are included.
 
 **Only declared components included.** ProviderStateSet includes only the Volumes of components that declared one under the [storage-need test](#storage-need-test). A component that keeps its bounded non-secret operational state in `status`/the core Operation ledger contributes no Volume. There is never an empty identity-only Volume.
 
@@ -110,7 +110,7 @@ A semantic Provider component declares a state namespace in its component descri
 stateNamespaces:
   - id: main-state
     kind: state                   # always "state" for component state Volumes
-    schemaId: io.d2b.example-provider/controller/main-state
+    schemaId: example-provider.d2bus.org/controller/main-state
     schemaVersion: "1.0"
     schemaDigest: sha256:<hex>
     persistenceClass: persistent    # required; ephemeral/cache/config rejected
@@ -155,7 +155,7 @@ Fields:
 Core ProviderDeployment creates one Volume per **declared** component state namespace per execution target from the signed state declarations in the Provider manifest, before launching the owning component's Process. Components that declare no state namespace get no Volume. The Provider controller does not invoke Volume creation APIs. Operators and Nix never author component state Volumes. Each declared Volume:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: example-provider--controller--main-state--host-system
@@ -167,7 +167,7 @@ spec:
   persistenceClass: persistent               # required; ephemeral/cache/config rejected
   sensitivityClass: private
   stateSchema:
-    schemaId: io.d2b.example-provider/controller/main-state
+    schemaId: example-provider.d2bus.org/controller/main-state
     schemaVersion: "1.0"
     schemaDigest: sha256:<hex>
     migrationPolicy: pre-launch-required
@@ -275,7 +275,7 @@ spec:
 
 #### host-backed-guest
 
-The source Volume lives on the Host; volume-local creates a `virtiofs.d2b.io.Export` child resource per attachment to provide Guest access:
+The source Volume lives on the Host; volume-local creates a `virtiofs.d2bus.org.Export` child resource per attachment to provide Guest access:
 
 ```yaml
 spec:
@@ -290,11 +290,11 @@ spec:
   hostCustodyPermitted: true        # required; absent or false → placement-host-custody-violation
 ```
 
-- volume-local creates one `virtiofs.d2b.io.Export` child (ownerRef: Volume/<source>, providerRef: volume-virtiofs) per `attachments[]` entry. volume-virtiofs owns only the virtiofsd worker Process and Export lifecycle; it does not own or replicate source bytes.
+- volume-local creates one `virtiofs.d2bus.org.Export` child (ownerRef: Volume/<source>, providerRef: volume-virtiofs) per `attachments[]` entry. volume-virtiofs owns only the virtiofsd worker Process and Export lifecycle; it does not own or replicate source bytes.
 - Permitted only when the signed descriptor explicitly carries `hostCustodyPermitted: true`.
 - All lifecycle operations (migration, sealing, snapshots, relocation, incident hold, destruction) apply to the source Volume.
 
-**ProviderStateSet.** In both modes the source Volume has `ownerRef: Provider/<provider>` and is included in the ProviderStateSet. `virtiofs.d2b.io.Export` children have `ownerRef: Volume/<source>` and are excluded. For `guest-local` there are no Export children.
+**ProviderStateSet.** In both modes the source Volume has `ownerRef: Provider/<provider>` and is included in the ProviderStateSet. `virtiofs.d2bus.org.Export` children have `ownerRef: Volume/<source>` and are excluded. For `guest-local` there are no Export children.
 
 All lifecycle decisions in this spec — migration, sealing, snapshots, relocation, incident hold, and destruction — apply to the source Volume in both modes. For `host-backed-guest` relocation, Export children follow the source Volume per `ADR-046-primitive-resource-composition`.
 
@@ -307,7 +307,7 @@ The volume-local Provider never hands out a dirfd, file descriptor, or raw path 
 3. A `private` Volume is mounted by exactly one Process at a time; the provider rejects concurrent mounts outside the same component instance.
 4. An `internal` Volume is mountable only by Processes controlled by the same Provider, determined through the registered controller Provider/owner chain.
 5. `shared-read` allows cross-Provider read-only view mounts but prohibits any write access to the shared path.
-6. The volume-local Provider never passes a host filesystem fd to a process in a different domain. For `host-backed-guest` state, volume-local creates a `virtiofs.d2b.io.Export` child (providerRef: volume-virtiofs) that exposes the declared view over virtiofs; the underlying dirfd is never passed across domains directly. For `guest-local` state, the Host volume-local controller holds no dirfd, path, byte content, or identity marker for the Volume; all filesystem operations are performed by the volume-local controller inside the Guest.
+6. The volume-local Provider never passes a host filesystem fd to a process in a different domain. For `host-backed-guest` state, volume-local creates a `virtiofs.d2bus.org.Export` child (providerRef: volume-virtiofs) that exposes the declared view over virtiofs; the underlying dirfd is never passed across domains directly. For `guest-local` state, the Host volume-local controller holds no dirfd, path, byte content, or identity marker for the Volume; all filesystem operations are performed by the volume-local controller inside the Guest.
 
 Any violation fails the Process launch with a typed `volume-domain-mismatch` error.
 
@@ -578,7 +578,7 @@ State relocation moves a Volume's backing store from one Host or execution targe
 4. On successful copy: controller mounts the destination Volume in place of the source; removes the source finalizer; deletes the source Volume.
 5. On failed copy: source Volume and its finalizer remain; operator resolves.
 
-Cross-Host relocation is a prerequisite for Guest migration (moving the source Volume that backs a Guest's virtiofs attachment from one host to another). The `virtiofs.d2b.io.Export` child resources (owned by volume-virtiofs) are reconciled by volume-virtiofs to point to the new source after the copy completes; the exact protocol is governed by `ADR-046-primitive-resource-composition` Volume attachment spec.
+Cross-Host relocation is a prerequisite for Guest migration (moving the source Volume that backs a Guest's virtiofs attachment from one host to another). The `virtiofs.d2bus.org.Export` child resources (owned by volume-virtiofs) are reconciled by volume-virtiofs to point to the new source after the copy completes; the exact protocol is governed by `ADR-046-primitive-resource-composition` Volume attachment spec.
 
 ## Incident hold
 
@@ -715,7 +715,7 @@ d2b.zones.<zone>.resources.<name> = {
 The NixOS module derives:
 - `metadata.name` from the attr key (`<name>`)
 - `metadata.zone` from the enclosing Zone attr key (`<zone>`)
-- `metadata.apiVersion` as `"resources.d2b.io/v3"` (defaulted; not written by the user)
+- `metadata.apiVersion` as `"resources.d2bus.org/v3"` (defaulted; not written by the user)
 
 Core fills `metadata.uid`, `metadata.generation`, `metadata.resourceVersion`, `metadata.creationTimestamp`, `metadata.managementFields`, and all `status.*` fields at runtime. None of these appear in the Nix source or the emitted bundle.
 
@@ -780,7 +780,7 @@ The rendered resource JSON for the example above:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Provider",
   "metadata": {
     "name": "example-provider",
@@ -1047,7 +1047,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Reuse action | copy-unchanged (path.rs) / adapt (atomic.rs, lock.rs) / adapt (swtpm_dir.rs marker algorithm) |
 | Destination | `packages/d2b-provider-volume-local/` (new crate, full scaffold required): `src/{atomic.rs, path.rs, lock.rs, marker.rs, effect_port.rs}`; `tests/volume_local.rs` (marker missing/replaced/mismatch, domain-isolation rejection, quota enforcement); `integration/volume_local.rs` (real Host filesystem provision, broker-maintained marker check, domain-isolation rejection cross-process); `README.md` |
 | Crate layout | Creates full `d2b-provider-volume-local/` scaffold. `src/` owns filesystem primitives and effect port; `tests/` owns hermetic fault-injection and conformance tests (no live daemon); `integration/` owns real-Host provision, marker verification, and cross-process domain-isolation scenarios; `README.md` documents volume-local Provider identity, `spec.config.*`, Volume ResourceType ownership, broker placement requirements, OFD-lock security model, state and telemetry surfaces, and build/test/integration commands |
-| Detailed design | Anchored Volume root provision, identity marker write/check, quota soft-check on write, domain-isolation validation, fd-relative layout creation/repair/cleanup, broker-maintained marker root protocol; layout `ownerRef`/`groupRef` must reference a Nix-preprovisioned User principal or bounded system pool — Volume admission rejects runtime-created principals; `VolumeEffectPort` returns opaque IDs and named view dirfds only — no raw host path returned by any EffectPort operation; volume-local must support `source.executionRef: Guest/<name>` for `guest-local` placement (controller running inside the Guest): when executing in a Guest domain, volume-local may not create, read, or hold dirfds/paths for Volumes sourced in another domain; `host-backed-guest` placement creates a `virtiofs.d2b.io.Export` child per attachment entry and validates `hostCustodyPermitted: true` in the signed descriptor |
+| Detailed design | Anchored Volume root provision, identity marker write/check, quota soft-check on write, domain-isolation validation, fd-relative layout creation/repair/cleanup, broker-maintained marker root protocol; layout `ownerRef`/`groupRef` must reference a Nix-preprovisioned User principal or bounded system pool — Volume admission rejects runtime-created principals; `VolumeEffectPort` returns opaque IDs and named view dirfds only — no raw host path returned by any EffectPort operation; volume-local must support `source.executionRef: Guest/<name>` for `guest-local` placement (controller running inside the Guest): when executing in a Guest domain, volume-local may not create, read, or hold dirfds/paths for Volumes sourced in another domain; `host-backed-guest` placement creates a `virtiofs.d2bus.org.Export` child per attachment entry and validates `hostCustodyPermitted: true` in the signed descriptor |
 | Integration | `d2b-priv-broker` calls `volume_local::marker::provision_marker` at broker-maintained Volume creation; `d2b-provider-volume-local` controller calls `marker::verify_marker` on every daemon restart via reconcile startup relist |
 | Data migration | New marker written for each Volume at v3 first-boot; TPM marker path adapted from current swtpm-markers root |
 | Validation | Marker missing/replaced/mismatch tests; domain-isolation rejection tests; quota enforcement tests; crash at every provision step |

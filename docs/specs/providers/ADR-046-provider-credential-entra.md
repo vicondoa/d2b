@@ -143,7 +143,7 @@ Normative D089 spec layering: Credential base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `audience`, `scope`,
 `allowedOperations`, `rotation`, and `revocation`. This Provider's desired-only
 extension is the canonical `spec.provider = { schemaId:
-"credential-entra.d2b.io/Credential/spec", schemaVersion, settings }`
+"credential-entra.d2bus.org/Credential/spec", schemaVersion, settings }`
 envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
 and digested, validated against `spec.providerRef` at Nix build and API
 admission, implementation-only, and may not shadow base fields. Shared fields
@@ -182,7 +182,7 @@ sessions.
 
 | Finalizer ID | Owned by | Trigger |
 | --- | --- | --- |
-| `credential.d2b.io/provider-revoke` | `entra-controller` | `metadata.deletionRequestedAt != null` |
+| `credential.d2bus.org/provider-revoke` | `entra-controller` | `metadata.deletionRequestedAt != null` |
 
 The `consumer-drain` finalizer is registered by the `consumerRef` Provider's
 controller (e.g. `Provider/display-wayland`), not by `credential-entra`.
@@ -249,7 +249,7 @@ dependencySelectors:
 ownerChildTriggers:     [owned-resource-changed]
 reconcileConcurrency:   8
 maxPendingResources:    256
-finalizers:             [credential.d2b.io/provider-revoke]
+finalizers:             [credential.d2bus.org/provider-revoke]
 observeInterval:        30s
 ```
 
@@ -270,7 +270,7 @@ the Provider resource becomes Ready, placing it on the Host resolved from
 ```yaml
 # Process resource template for entra-controller.
 # Instantiated once per Zone by Provider/credential-entra on Provider Ready.
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: "<zone-id>-credential-entra-ctrl"   # derived from Zone ID at Provider install
@@ -327,7 +327,7 @@ directly.
 ```yaml
 # User-agent Process resource template.
 # Controller instantiates one per Credential with scope.domainFilter=user.
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: "<zone-id>-entra-agent-<credential-name>"   # controller-assigned; derived from Credential name
@@ -380,7 +380,7 @@ network invariants are identical to the user-agent template.
 ```yaml
 # Guest-agent system-domain Process resource template.
 # Controller instantiates one per Credential with scope.domainFilter=system under a Guest.
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: "<zone-id>-entra-agent-<credential-name>"
@@ -899,7 +899,7 @@ Per D088, ResourceType-common Credential observation lives in `status.resource`:
 the non-secret lease metadata base that is identical across Credential
 implementations. Entra-specific lease/enrollment observations live only in
 `status.provider` with `providerRef`, qualified `schemaId`
-`credential-entra.d2b.io/Credential/status`, `schemaVersion`,
+`credential-entra.d2bus.org/Credential/status`, `schemaVersion`,
 `observedProviderGeneration`, and strict bounded redacted `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
 atomically in one status mutation; shared
@@ -1151,7 +1151,7 @@ Process resource CRUD and inter-process status reporting.
      write bounded audit record.
    - `drain-leases`: do not signal revocation; allow natural expiry; delete
      agent Process immediately (owner cascade handles it if not already gone).
-2. **Controller removes `credential.d2b.io/provider-revoke` finalizer** by
+2. **Controller removes `credential.d2bus.org/provider-revoke` finalizer** by
    calling `UpdateFinalizers`. When this is the last finalizer on the resource,
    core proceeds with deletion.
 3. **Core (automatic after zero finalizers)**: performs one atomic store
@@ -1343,7 +1343,7 @@ sections in order:
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeEntraClient`, `credential_canary`/`endpoint_canary`, interaction-required, colocated-consumer, generation-mismatch tests) |
 | Reuse action | copy and adapt |
 | Destination | `packages/d2b-provider-credential-entra/src/{lib.rs, controller.rs, service.rs, controller_main.rs, agent_main.rs, audit.rs, telemetry.rs}`; `packages/d2b-provider-credential-entra/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs}`; `packages/d2b-provider-credential-entra/integration/{container-service.sh, guest-placement.nix, cleanup-rollback.sh}`; `packages/d2b-provider-credential-entra/README.md` |
-| Detailed design | (1) Copy `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` from main `a1cc0b2d` without modification to trait signatures. (2) Replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (`user-agent \| guest-agent`); reject `host-system` at construction with `credential-placement-mismatch`. (3) Validate `tenantId` config field at startup using `OpaqueAzureRef::parse` from v3 `d2b-realm-provider/src/credential.rs`; note that the current v3 source field is `AzureControlPlaneRef.tenant_id`; the target config field name is `tenantId`, which is an opaque inline identifier, not a `<ResourceType>/<name>` ResourceRef, and must not end in `Ref`. (4) Validate `authorityClass` config field is one of `{public, us-government, china}` or a registered effect-port alias; reject any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; effect-port aliases are validated as opaque identifiers matching `^[a-z][a-z0-9-]*$`. (5) Validate `controllerExecutionRef` is present and resolves a `Host/<name>` in the same Zone with `system` in `allowedDomains`; this field is **required** — there is no default Zone primary Host fallback; return a hard validation error if absent. (6) Retain `EntraCredentialClient` trait unchanged; adapt `EntraCredentialProvider` to v3 `d2b.credential.v3` service interface in `service.rs`. (7) Map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not `credential-operation-denied`). (8) Enforce `EntraCredentialOwner::ExactConsumer`: `consumerRef` required in spec; reject any caller not matching `consumerRef` at d2b-bus before service dispatch. (9) Implement `entra-controller` in `controller.rs` and `controller_main.rs` per §12: receive ProviderSupervisor descriptor registration; watch Credential resources; on Create/Update create `entra-agent` Process via LaunchTicket with canonical Process template (template=entra-agent-main, correct providerRef per domainFilter, executionRef/domain/userRef from Credential scope, ownerRef=Credential/<name>, networkUsage.allowEgress=false, sealed config projection including tenantId, authorityClass, consumerRef, maxLeases, interactionPolicy, audience, idempotency_key, and effect-port FD index; no authorityUrl, no endpoint URL, no hostname); on agent Process failure set `ProviderUnavailable=True` and requeue; on Deletion: signal agent to revoke (per revocation policy), await agent confirmation, then call `UpdateFinalizers` to remove `credential.d2b.io/provider-revoke`; core automatically writes event-only Deleted revision and removes the row/indexes when no finalizers remain; audit subsystem appends deletion record post-commit with dedup/exactly-once recovery. (10) Implement `entra-agent` in `service.rs` and `agent_main.rs` per §12 agent startup: read sealed config from ProviderSupervisor inherited FD including effect-port FD index and authorityClass; open effect-port FD; construct `EntraCredentialClient` implementation over it using authorityClass to select authority endpoint/TLS internally (no ambient HTTPS socket opened; no hostname validation performed by the agent); `OpaqueAzureRef::parse(tenantId)`; call `issue_lease`; open `d2b.credential.v3` listener; write Process status Ready; serve credential methods for `consumerRef` only; establish Noise KK delivery channel for token/signature output. (11) Implement `audit.rs` and `telemetry.rs` per §10; apply `contains_sensitive_shape` guard in agent before all outbound string fields. (12) Apply D087 status-first state: declare no Provider state Volume, keep ProviderStateSet empty, put bounded non-secret lease/enrollment observation in `Credential.status` and Operation ledger, and keep token/signature bytes transient over Noise_KK only. |
+| Detailed design | (1) Copy `EntraCredentialClient` trait, `EntraLeaseRequest/Ref/Grant/Inspection/Renewal/Revocation`, `EntraCredentialProvider`, `EntraCredentialOwner::ExactConsumer`, `EntraClientState`, `EntraClientError` from main `a1cc0b2d` without modification to trait signatures. (2) Replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (`user-agent \| guest-agent`); reject `host-system` at construction with `credential-placement-mismatch`. (3) Validate `tenantId` config field at startup using `OpaqueAzureRef::parse` from v3 `d2b-realm-provider/src/credential.rs`; note that the current v3 source field is `AzureControlPlaneRef.tenant_id`; the target config field name is `tenantId`, which is an opaque inline identifier, not a `<ResourceType>/<name>` ResourceRef, and must not end in `Ref`. (4) Validate `authorityClass` config field is one of `{public, us-government, china}` or a registered effect-port alias; reject any string containing `://`, `.`, port separators, path components, query-string characters, or hostname-shaped bytes; effect-port aliases are validated as opaque identifiers matching `^[a-z][a-z0-9-]*$`. (5) Validate `controllerExecutionRef` is present and resolves a `Host/<name>` in the same Zone with `system` in `allowedDomains`; this field is **required** — there is no default Zone primary Host fallback; return a hard validation error if absent. (6) Retain `EntraCredentialClient` trait unchanged; adapt `EntraCredentialProvider` to v3 `d2b.credential.v3` service interface in `service.rs`. (7) Map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not `credential-operation-denied`). (8) Enforce `EntraCredentialOwner::ExactConsumer`: `consumerRef` required in spec; reject any caller not matching `consumerRef` at d2b-bus before service dispatch. (9) Implement `entra-controller` in `controller.rs` and `controller_main.rs` per §12: receive ProviderSupervisor descriptor registration; watch Credential resources; on Create/Update create `entra-agent` Process via LaunchTicket with canonical Process template (template=entra-agent-main, correct providerRef per domainFilter, executionRef/domain/userRef from Credential scope, ownerRef=Credential/<name>, networkUsage.allowEgress=false, sealed config projection including tenantId, authorityClass, consumerRef, maxLeases, interactionPolicy, audience, idempotency_key, and effect-port FD index; no authorityUrl, no endpoint URL, no hostname); on agent Process failure set `ProviderUnavailable=True` and requeue; on Deletion: signal agent to revoke (per revocation policy), await agent confirmation, then call `UpdateFinalizers` to remove `credential.d2bus.org/provider-revoke`; core automatically writes event-only Deleted revision and removes the row/indexes when no finalizers remain; audit subsystem appends deletion record post-commit with dedup/exactly-once recovery. (10) Implement `entra-agent` in `service.rs` and `agent_main.rs` per §12 agent startup: read sealed config from ProviderSupervisor inherited FD including effect-port FD index and authorityClass; open effect-port FD; construct `EntraCredentialClient` implementation over it using authorityClass to select authority endpoint/TLS internally (no ambient HTTPS socket opened; no hostname validation performed by the agent); `OpaqueAzureRef::parse(tenantId)`; call `issue_lease`; open `d2b.credential.v3` listener; write Process status Ready; serve credential methods for `consumerRef` only; establish Noise KK delivery channel for token/signature output. (11) Implement `audit.rs` and `telemetry.rs` per §10; apply `contains_sensitive_shape` guard in agent before all outbound string fields. (12) Apply D087 status-first state: declare no Provider state Volume, keep ProviderStateSet empty, put bounded non-secret lease/enrollment observation in `Credential.status` and Operation ledger, and keep token/signature bytes transient over Noise_KK only. |
 | Integration | User-domain or system-domain Process under Guest (or user-domain under Host); `entra-controller` component registered with d2b-bus; Credential controller reconciles `Credential` resources with `providerRef=Provider/credential-entra`; `Provider/system-minijail` or `Provider/system-systemd` launches the process via ProviderSupervisor LaunchTicket |
 | Data migration | Full v3 reset; no migration from old `CredentialProvider` trait |
 | Validation | See §18 |
@@ -1358,7 +1358,7 @@ sections in order:
 | Test | Purpose |
 | --- | --- |
 | `test_controller_creates_agent_process` | Controller `reconcile` creates an `entra-agent` Process via `ProviderSupervisor::LaunchTicket` with correct `metadata.ownerRef`, placement, and sealed config fields (effect-port FD index included) |
-| `test_agent_deleted_on_credential_delete` | Controller `finalize` sends revocation signal to agent; controller calls `UpdateFinalizers` to clear `credential.d2b.io/provider-revoke`; core performs event-only Deleted + row removal; audit appends post-commit |
+| `test_agent_deleted_on_credential_delete` | Controller `finalize` sends revocation signal to agent; controller calls `UpdateFinalizers` to clear `credential.d2bus.org/provider-revoke`; core performs event-only Deleted + row removal; audit appends post-commit |
 | `test_controller_process_template_schema` | Controller Process template fields match canonical schema: `type: Process`, `namespaceClasses=[mount,pid,ipc,uts,network]`, `capabilityClasses=[]`, `seccompClass=strict`, `startRoot=false`, `noNewPrivileges=true`, `environmentClass=minimal`, `readOnlyRoot=true`, `networkUsage.allowEgress=false`, `mounts=[]`, `endpoints=[{name:bus-registration,transport:unix,purpose:controller-registration}]`, `readiness.class=provider-defined` |
 | `test_user_agent_process_template_schema` | User-agent Process template: `type: Process`, `providerRef=Provider/system-systemd`, `domain=user`, `networkUsage.allowEgress=false`, `mounts=[]`, `endpoints=[{name:credential-service,transport:unix,purpose:d2b.credential.v3}]`, `budget.memory.limit="128Mi"`, `readiness.class=provider-defined`; no `binary`, `allowedSyscalls`, `maxRssBytes`, endpoint `kind`/`service` fields |
 | `test_guest_agent_system_process_template_schema` | Guest-agent system-domain Process template: `type: Process`, `providerRef=Provider/system-minijail`, `domain=system`, `mounts=[]`; all other fields identical to user-agent template |
@@ -1492,9 +1492,9 @@ Nix-generation removal triggers async Delete and `provider-revoke` finalizer:
 - Verifies: (1) activation for generation N+1 completes (returns Ready status on
   new resources) before `provider-revoke` finalizer finishes (non-blocking
   activation invariant); (2) `Credential/work-entra` reaches `phase=Terminating`
-  with `credential.d2b.io/provider-revoke` finalizer running; (3) `leaseState`
+  with `credential.d2bus.org/provider-revoke` finalizer running; (3) `leaseState`
   transitions to `Revoked` (under `revocation.onOwnerDelete=immediate`);
-  (4) controller calls `UpdateFinalizers` to clear `credential.d2b.io/provider-revoke`
+  (4) controller calls `UpdateFinalizers` to clear `credential.d2bus.org/provider-revoke`
   (last finalizer); core performs one atomic store transaction writing the
   event-only `Deleted` revision and removing the row/indexes — no `Deleted` row
   persists; after that transaction commits the audit subsystem appends

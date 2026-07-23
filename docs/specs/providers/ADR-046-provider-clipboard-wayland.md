@@ -191,7 +191,7 @@ d2b.zones.dev.resources.clipboard-wayland = {
 ### YAML canonical form
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: clipboard-wayland
@@ -276,7 +276,7 @@ Core ProviderDeployment creates this Process from the signed
 `clipboard-controller` component template.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: clipboard-controller
@@ -367,7 +367,7 @@ Core ProviderDeployment creates this Process from the signed
 `clipd-host` component template.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: clipd-host
@@ -464,7 +464,7 @@ spec:
 per paste request that requires interactive user confirmation.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: EphemeralProcess
 metadata:
   name: picker-3f7a9c12

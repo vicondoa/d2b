@@ -366,7 +366,7 @@ creation and ownership is `<provider>--<component>--<namespace>--<exec-short>`.
 ### Exact Volume ResourceSpec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: observability-otel--collector--sockets--host-system
@@ -512,7 +512,7 @@ appears in these specs; the sandbox is compiled semantically by system-minijail.
 ### otel-collector Process (static; created by core)
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: observability-otel--collector
@@ -576,7 +576,7 @@ One instance per active Guest. `<guest-uid-short>` is a stable opaque short ID
 derived from the Guest UID; it is not the human-readable Guest name.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: observability-otel--fwd-<guest-uid-short>
@@ -700,7 +700,7 @@ controller writes status only for collector/forwarder Process resources it owns:
 Process-common observation lives in `Process.status.resource`, while bounded
 non-secret OTEL-specific export, ingestion, or backpressure detail lives in
 `Process.status.provider` with `providerRef: Provider/observability-otel`,
-qualified schema IDs such as `observability-otel.d2b.io/Process/status`,
+qualified schema IDs such as `observability-otel.d2bus.org/Process/status`,
 `schemaVersion` (semver MAJOR.MINOR), `observedProviderGeneration`, and a strict
 unknown-field-denied, ≤32 KiB, redacted `details` object registered and signed
 in the Provider manifest. The controller writes all present layers atomically in
@@ -1092,7 +1092,7 @@ d2b.zones.work.resources.observability-otel = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "metadata": {
     "name": "observability-otel",
     "zone": "work"

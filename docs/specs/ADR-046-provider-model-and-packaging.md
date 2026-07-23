@@ -441,7 +441,7 @@ independently shared Azure Network is required.
 | `audio-pipewire` | Provider-specific audio/session types | PipeWire policy/session, Host/user components, vhost-user-sound Processes |
 | `clipboard-wayland` | Provider-specific clipboard types | Selection/bridge/transfer/presentation and Host/user/Guest Processes |
 | `notification-desktop` | Provider-specific notification types | Observe/project/action/ack/presentation Processes |
-| `shell-terminal` | `shell-terminal.d2b.io.ShellSession` | Persistent terminal session/supervisor, open/attach/detach/kill and named terminal streams |
+| `shell-terminal` | `shell-terminal.d2bus.org.ShellSession` | Persistent terminal session/supervisor, open/attach/detach/kill and named terminal streams |
 
 One-shot exec is EphemeralProcess, not an exec Provider.
 

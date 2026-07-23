@@ -169,7 +169,7 @@ freeform strings that could become control authority.
 Compiled Provider resource YAML:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: notification-desktop
@@ -282,7 +282,7 @@ cgroup path, a raw credential, or a host path via config.
 ### 5.2 controller Process template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: notification-desktop-controller
@@ -341,7 +341,7 @@ notification state; all delivery state is in-session at the host-sink.
 ### 5.3 host-sink Process template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: notification-desktop-host-sink
@@ -408,7 +408,7 @@ or ambient config.  See §15 for the full dependency protocol.
 ### 5.4 guest-source Process template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: notification-desktop-guest-source-<guest-name>

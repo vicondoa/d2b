@@ -119,7 +119,7 @@ Normative D089 spec layering: Device base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `deviceClass`,
 `inventory.selector`, attachments, and arbitration. This Provider's
 desired-only extension is the canonical `spec.provider = { schemaId:
-"device-usbip.d2b.io/Device/spec", schemaVersion, settings }` envelope; it
+"device-usbip.d2bus.org/Device/spec", schemaVersion, settings }` envelope; it
 is manifest-registered/signed, strict deny-unknown, bounded, versioned and
 digested,
 validated against `spec.providerRef` at Nix build and API admission,
@@ -134,7 +134,7 @@ status only. A reference to the former Device `spec.settings` denotes
 credential material is allowed in `spec.provider.settings`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Device
 metadata:
   name: corp-vm-usb
@@ -153,7 +153,7 @@ spec:
       productId:  "0407"
       serial:     null           # optional; null = match any serial for this vid/pid
   provider:
-    schemaId: "device-usbip.d2b.io/Device/spec"
+    schemaId: "device-usbip.d2bus.org/Device/spec"
     schemaVersion: "1.0.0"
     settings:
       networkRef: Network/work-net  # required; used as zone-scoping dependency
@@ -183,7 +183,7 @@ entry that references that Volume; the runtime rejects the Process launch if
 the Volume is not Ready.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-usbip--controller
@@ -256,7 +256,7 @@ acquisition) are **semantic EffectPort steps** executed through the injected
 Long-lived per-Device usbipd backend. Owned by the Device resource.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-b3a7f1d2c591-daemon
@@ -320,7 +320,7 @@ Long-lived TCP proxy that forwards guest connections from the Network uplink
 IP (TCP 3240) to the loopback usbipd backend. Owned by the Device resource.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: device-b3a7f1d2c591-proxy
@@ -654,7 +654,7 @@ Per D088, ResourceType-common Device observation lives in
 `status.resource`: the provider-neutral claim/arbitration/presence base that is
 identical across Device implementations. USBIP attach/detach observations live
 only in `status.provider` with `providerRef`, qualified `schemaId`
-`device-usbip.d2b.io/Device/status`, `schemaVersion`,
+`device-usbip.d2bus.org/Device/status`, `schemaVersion`,
 `observedProviderGeneration`, and strict bounded redacted `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
 atomically in one status mutation; shared
@@ -678,7 +678,7 @@ status:
     lastProbedAt: "2024-01-15T10:23:44Z"
   provider:
     providerRef: Provider/device-usbip
-    schemaId: "device-usbip.d2b.io/Device/status"
+    schemaId: "device-usbip.d2bus.org/Device/status"
     schemaVersion: "1.0.0"
     observedProviderGeneration: 1
     details:
@@ -827,7 +827,7 @@ rules.
 
 ## Finalizer lifecycle
 
-The controller adds its finalizer `device-usbip.d2b.io/finalizer` to the
+The controller adds its finalizer `device-usbip.d2bus.org/finalizer` to the
 Device resource after the first successful step in the bring-up sequence.
 It does NOT add the finalizer before any host mutation has occurred.
 
@@ -1068,7 +1068,7 @@ d2b.zones.work.resources.corp-vm-usb = {
       productId = "0407";
     };
     provider = {
-      schemaId = "device-usbip.d2b.io/Device/spec";
+      schemaId = "device-usbip.d2bus.org/Device/spec";
       schemaVersion = "1.0.0";
       settings = {
         networkRef = "Network/work-net";

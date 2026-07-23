@@ -310,7 +310,7 @@ Canonical rendered JSON (schema mirror):
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Process",
   "metadata": {
     "name": "system-systemd-controller-<target>",
@@ -688,8 +688,8 @@ at top-level `status.*`, and ResourceType-common process observation written by
 system-systemd lives in `status.resource`. Any bounded, non-secret
 systemd-specific observation lives in `status.provider` with
 `providerRef: Provider/system-systemd`, a qualified `schemaId` such as
-`system-systemd.d2b.io/Process/status` or
-`system-systemd.d2b.io/EphemeralProcess/status`, `schemaVersion` (semver MAJOR.MINOR),
+`system-systemd.d2bus.org/Process/status` or
+`system-systemd.d2bus.org/EphemeralProcess/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted `details` object registered and signed in the Provider manifest. Each
 controller write updates all present layers atomically in one status mutation;
@@ -993,7 +993,7 @@ Canonical rendered JSON (schema mirror):
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Provider",
   "metadata": {
     "name": "system-systemd",
@@ -1053,7 +1053,7 @@ Canonical rendered JSON:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Process",
   "metadata": {
     "name": "wayland-proxy",

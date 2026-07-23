@@ -187,7 +187,7 @@ Operators cannot suppress or override it:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Host",
   "status": {
     "phase": "Ready",

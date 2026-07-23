@@ -110,7 +110,7 @@ self-description shape (`spec.artifactId`, `spec.config`) because a Provider has
 no non-circular `spec.providerRef`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: work-state
@@ -1239,7 +1239,7 @@ above renders as:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Volume",
   "metadata": {
     "name": "work-state",
@@ -1348,7 +1348,7 @@ NixOS generation:
 
 ```json
 {
-  "schemaVersion": "resources.d2b.io/zone-bundle/v1",
+  "schemaVersion": "resources.d2bus.org/zone-bundle/v1",
   "zone": "dev",
   "generationId": "<SHA-256 of sorted canonical resource JSON set>",
   "emittedAt": "2026-07-22T21:00:00Z",

@@ -1703,7 +1703,7 @@ marker base, quota base, and sealing/schema base are promoted to the
 ResourceType-common `status.resource` shape shared by all Volume implementations.
 Local filesystem-specific marker/quota/snapshot/migration observations live only
 in `status.provider.details` with `providerRef: Provider/volume-local`,
-qualified `schemaId` (`volume-local.d2b.io/Volume/status`), `schemaVersion`, and
+qualified `schemaId` (`volume-local.d2bus.org/Volume/status`), `schemaVersion`, and
 `observedProviderGeneration`. The controller writes all present layers atomically
 in one status mutation; shared fields are never duplicated into
 `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
@@ -1737,7 +1737,7 @@ status:
     quotaUsage: { usedBytes: 0, inodeCount: 0 }
   provider:
     providerRef: Provider/volume-local
-    schemaId: volume-local.d2b.io/Volume/status
+    schemaId: volume-local.d2bus.org/Volume/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:

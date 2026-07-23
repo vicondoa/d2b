@@ -584,7 +584,7 @@ authority from prior hops beyond what its own enrolled RoleBinding grants.
 ### Spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: ZoneLink
 metadata:
   name: k1-dev
@@ -760,7 +760,7 @@ bundle and set only by the configuration service/core — never by the emitter.
 | --- | --- |
 | `metadata.name` | `<name>` attribute key in `resources.<name>` |
 | `metadata.zone` | `<zone>` attribute key in `zones.<zone>` |
-| `apiVersion` | Fixed: `"resources.d2b.io/v3"` |
+| `apiVersion` | Fixed: `"resources.d2bus.org/v3"` |
 | `metadata.managedBy` | Absent from bundle; set only by configuration service/core when activating the bundle |
 | `metadata.configurationGeneration` | Absent from bundle; set only by configuration service/core on Create/UpdateSpec |
 | `metadata.uid`, `metadata.generation`, `metadata.revision`, timestamps | Assigned by the Zone runtime on first Create; absent from the bundle |
@@ -1048,7 +1048,7 @@ determinism before the integrity digest is computed.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Zone",
   "metadata": {
     "name": "k0",
@@ -1069,7 +1069,7 @@ bundle JSON and must not be authored.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "ZoneLink",
   "metadata": {
     "name": "k1-dev",

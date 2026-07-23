@@ -38,8 +38,8 @@ implementation-specific surface.
 
 **D089 spec extension contract:** this Provider's implementation-only desired
 configuration is carried in `spec.provider.settings` under
-`system-minijail.d2b.io/Process/spec` or
-`system-minijail.d2b.io/EphemeralProcess/spec`; each schema is registered/signed
+`system-minijail.d2bus.org/Process/spec` or
+`system-minijail.d2bus.org/EphemeralProcess/spec`; each schema is registered/signed
 in the manifest, deny-unknown, bounded, versioned, and validated against
 `spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
 shared semantics are promoted to the Process/EphemeralProcess base and never
@@ -57,8 +57,8 @@ capability matrix plus provider-neutral `unsupported-capability`.
 | --- | --- |
 | `providerRef` | `Provider/system-minijail` |
 | Crate | `packages/d2b-provider-system-minijail/` |
-| Package identity | `io.d2b.system-minijail` |
-| Publisher | `io.d2b` (first-party) |
+| Package identity | `system-minijail.d2bus.org` |
+| Publisher | `d2bus.org` (first-party) |
 | Implemented ResourceTypes | `Process`, `EphemeralProcess` |
 | Supported Host/Guest Provider capabilities | `pidfd`, `cgroup-v2`, `user-namespace`, `minijail-seccomp` |
 | Supported domains | `system` on any Host or Guest; `user` domain only if the Provider descriptor's conformance extension declares `user-domain-supported: true` for that Host/Guest placement |
@@ -884,8 +884,8 @@ implementation. Per D088, ResourceType-common Process/EphemeralProcess
 observation written by system-minijail lives in `status.resource`, while
 bounded non-secret minijail-only observation lives in `status.provider.details`
 with `providerRef: Provider/system-minijail`, qualified schema IDs
-`system-minijail.d2b.io/Process/status` or
-`system-minijail.d2b.io/EphemeralProcess/status`, `schemaVersion` (semver MAJOR.MINOR),
+`system-minijail.d2bus.org/Process/status` or
+`system-minijail.d2bus.org/EphemeralProcess/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted schema registered and signed in the Provider manifest. The controller
 writes all present layers atomically in one status mutation, and shared fields
@@ -1119,7 +1119,7 @@ Rendered canonical JSON (excerpt):
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Process",
   "metadata": {
     "name": "virtiofsd-work",

@@ -73,15 +73,15 @@ following Provider-specific ResourceTypes:
 
 | ResourceType | Short name | Responsibility |
 | --- | --- | --- |
-| `display-wayland.d2b.io.WaylandSession` | `WaylandSession` | One active Wayland cross-domain display session between a Guest and the host compositor, including endpoint references, filter policy, identity metadata, and lifecycle |
-| `display-wayland.d2b.io.WaylandPolicy` | `WaylandPolicy` | Zone-scoped Wayland global filter policy template: classified global allowlist/denylist, version caps, dmabuf filters, identity rail settings |
+| `display-wayland.d2bus.org.WaylandSession` | `WaylandSession` | One active Wayland cross-domain display session between a Guest and the host compositor, including endpoint references, filter policy, identity metadata, and lifecycle |
+| `display-wayland.d2bus.org.WaylandPolicy` | `WaylandPolicy` | Zone-scoped Wayland global filter policy template: classified global allowlist/denylist, version caps, dmabuf filters, identity rail settings |
 
 Both ResourceTypes are scoped to the owning Zone and follow the standard
 resource envelope contract from `ADR-046-resource-object-model`.
 
 **D089 spec extension contract:** any implementation-only desired configuration
 for these ResourceTypes is carried in `spec.provider.settings` under the
-registered `display-wayland.d2b.io/<ResourceType>/spec` schema; that schema is
+registered `display-wayland.d2bus.org/<ResourceType>/spec` schema; that schema is
 signed in the manifest, deny-unknown, bounded, versioned, and validated against
 `spec.providerRef` at Nix build and API admission. Base fields stay at `spec.*`;
 shared semantics are promoted to the WaylandSession/WaylandPolicy base and never
@@ -109,10 +109,10 @@ implicit controller bootstrap.
 ### 4.2 `display-controller`
 
 A Zone-singleton system-domain controller. Manages both
-`display-wayland.d2b.io.WaylandSession` and `display-wayland.d2b.io.WaylandPolicy`
+`display-wayland.d2bus.org.WaylandSession` and `display-wayland.d2bus.org.WaylandPolicy`
 resources within its Zone.
 
-On `display-wayland.d2b.io.WaylandPolicy` create/update:
+On `display-wayland.d2bus.org.WaylandPolicy` create/update:
 1. Validates the policy schema. **Unknown interface names fail closed**: any
    `allowGlobals` or `denyGlobals` entry not in the compiled global catalog is
    rejected at admission with an actionable error. The `WaylandPolicy` resource
@@ -120,7 +120,7 @@ On `display-wayland.d2b.io.WaylandPolicy` create/update:
 2. Compiles an ordered canonical policy digest into controller-local in-memory
    state. No durable Volume is required.
 
-On `display-wayland.d2b.io.WaylandSession` create/update:
+On `display-wayland.d2bus.org.WaylandSession` create/update:
 1. Verifies the referenced `WaylandPolicy` (fully qualified ResourceRef) is Ready.
 2. Requests a cross-domain GPU endpoint attachment grant from `Provider/device-gpu`
    via typed ComponentSession service. Receives an opaque grant handle.
@@ -205,20 +205,20 @@ declared.
 
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: display-wayland.d2b.io.WaylandSession
+apiVersion: resources.d2bus.org/v3
+type: display-wayland.d2bus.org.WaylandSession
 metadata:
   name: corp-vm-display
   zone: dev
   uid: <store-generated>
   generation: 1
   ownerRef: Guest/corp-vm
-  finalizers: [display-wayland.d2b.io/proxy-stopped]
+  finalizers: [display-wayland.d2bus.org/proxy-stopped]
 spec:
   guestRef: Guest/corp-vm
   hostRef: Host/host-system
   userRef: User/alice              # user whose compositor session the proxy connects to
-  policyRef: display-wayland.d2b.io.WaylandPolicy/default
+  policyRef: display-wayland.d2bus.org.WaylandPolicy/default
   # UI identity metadata — compositor-agnostic
   identity:
     label: "corp-vm"              # max 64 chars; validated against Guest name
@@ -251,7 +251,7 @@ status: {}
 | `guestRef` | ResourceRef | yes | — | `Guest/<name>` | Target Guest |
 | `hostRef` | ResourceRef | yes | — | `Host/<name>` | Host running the proxy Process |
 | `userRef` | ResourceRef | yes | — | `User/<name>` | User whose compositor session the proxy connects to; used by `display-user-portal` to acquire the compositor fd |
-| `policyRef` | ResourceRef | yes | — | `display-wayland.d2b.io.WaylandPolicy/<name>` | Resolved policy template; fully qualified ResourceRef |
+| `policyRef` | ResourceRef | yes | — | `display-wayland.d2bus.org.WaylandPolicy/<name>` | Resolved policy template; fully qualified ResourceRef |
 | `identity.label` | string | yes | — | 1..64 chars; `^[a-z][a-z0-9-]*$` | Authenticated display label; matches Guest name by default |
 | `identity.activeColor` | string | yes | — | `^#[0-9a-fA-F]{6}$` | Active/focused identity color |
 | `identity.inactiveColor` | string | no | `activeColor` | `^#[0-9a-fA-F]{6}$` | Inactive/unfocused identity color |
@@ -337,7 +337,7 @@ declared in the signed ProviderDeployment manifest. It is the sole d2b-bus actor
 for this Provider; it has no worker sibling processes that share its authority.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: display-wayland-controller
@@ -397,7 +397,7 @@ has no d2b-bus authority. It receives pre-opened compositor connections from the
 fixed user session supervisor and re-exports bounded per-session attachment grants.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: display-wayland-user-portal
@@ -455,12 +455,12 @@ The Host proxy is a long-lived `Process` resource owned by the `WaylandSession`
 resource (via `metadata.ownerRef`).
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: corp-vm-display-proxy
   zone: dev
-  ownerRef: display-wayland.d2b.io.WaylandSession/corp-vm-display
+  ownerRef: display-wayland.d2bus.org.WaylandSession/corp-vm-display
 spec:
   providerRef: Provider/system-minijail
   executionRef: Host/host-system
@@ -573,12 +573,12 @@ The guest frontend is a long-lived `Process` resource running in the `system`
 domain under the Guest.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: corp-vm-display-guest
   zone: dev
-  ownerRef: display-wayland.d2b.io.WaylandSession/corp-vm-display
+  ownerRef: display-wayland.d2bus.org.WaylandSession/corp-vm-display
 spec:
   providerRef: Provider/system-systemd
   executionRef: Guest/corp-vm
@@ -659,12 +659,12 @@ and config arrive in the LaunchTicket.
 ### 7.1 Host proxy runtime Volume
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Volume
 metadata:
   name: corp-vm-display-proxy-runtime
   zone: dev
-  ownerRef: display-wayland.d2b.io.WaylandSession/corp-vm-display
+  ownerRef: display-wayland.d2bus.org.WaylandSession/corp-vm-display
 spec:
   providerRef: Provider/volume-local
   source:
@@ -751,8 +751,8 @@ fits the status-first model, so no durable Provider state Volume is declared.
 
 
 ```yaml
-apiVersion: resources.d2b.io/v3
-type: display-wayland.d2b.io.WaylandPolicy
+apiVersion: resources.d2bus.org/v3
+type: display-wayland.d2bus.org.WaylandPolicy
 metadata:
   name: default
   zone: dev
@@ -1000,10 +1000,10 @@ included in any status/audit/metrics surface.
 
 ```yaml
 resourceVerbs:
-  - resourceType: display-wayland.d2b.io.WaylandSession
+  - resourceType: display-wayland.d2bus.org.WaylandSession
     verbs: [get, list, watch, create, update-spec, update-status,
             update-finalizers, delete]
-  - resourceType: display-wayland.d2b.io.WaylandPolicy
+  - resourceType: display-wayland.d2bus.org.WaylandPolicy
     verbs: [get, list, watch, create, update-spec, update-status]
   - resourceType: Process
     verbs: [get, list, watch, create, update-spec, update-status,
@@ -1058,7 +1058,7 @@ LaunchTicket's sealed fd table. It **never appears** in:
 ### 12.3 Finalizer
 
 ```text
-finalizer: display-wayland.d2b.io/proxy-stopped
+finalizer: display-wayland.d2bus.org/proxy-stopped
 ```
 
 The finalizer is installed on `WaylandSession` before any Process is created.
@@ -1230,18 +1230,18 @@ Guest's advisory metadata, not by the proxy binary.
 `display-controller` (sole controller for this Provider):
 ```yaml
 watches:
-  - resourceType: display-wayland.d2b.io.WaylandSession
+  - resourceType: display-wayland.d2bus.org.WaylandSession
     labelSelector: {}
-  - resourceType: display-wayland.d2b.io.WaylandPolicy
+  - resourceType: display-wayland.d2bus.org.WaylandPolicy
     labelSelector: {}
   - resourceType: Process
-    labelSelector: {ownerKind: display-wayland.d2b.io.WaylandSession}
+    labelSelector: {ownerKind: display-wayland.d2bus.org.WaylandSession}
   - resourceType: Volume
-    labelSelector: {ownerKind: display-wayland.d2b.io.WaylandSession}
+    labelSelector: {ownerKind: display-wayland.d2bus.org.WaylandSession}
   - resourceType: Device
     labelSelector: {purpose: wayland-cross-domain-endpoint}
 ownerTriggers:
-  - parentType: display-wayland.d2b.io.WaylandSession
+  - parentType: display-wayland.d2bus.org.WaylandSession
     childTypes: [Process, Volume]
 ```
 
@@ -1298,7 +1298,7 @@ d2b.zones.dev.resources.display-wayland = {
 
 # WaylandPolicy (Zone-scoped defaults)
 d2b.zones.dev.resources.default-wayland-policy = {
-  type = "display-wayland.d2b.io.WaylandPolicy";
+  type = "display-wayland.d2bus.org.WaylandPolicy";
   spec = {
     denyGlobals    = [];
     allowGlobals   = [];
@@ -1318,11 +1318,11 @@ d2b.zones.dev.resources.default-wayland-policy = {
 
 # WaylandSession for a VM Guest
 d2b.zones.dev.resources.corp-vm-display = {
-  type = "display-wayland.d2b.io.WaylandSession";
+  type = "display-wayland.d2bus.org.WaylandSession";
   spec = {
     guestRef  = "Guest/corp-vm";
     hostRef   = "Host/host-system";
-    policyRef = "display-wayland.d2b.io.WaylandPolicy/default-wayland-policy";
+    policyRef = "display-wayland.d2bus.org.WaylandPolicy/default-wayland-policy";
     identity = {
       label         = "corp-vm";
       activeColor   = "#7fc8ff";
@@ -1363,8 +1363,8 @@ Rendered canonical JSON for the `WaylandSession` resource:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
-  "type": "display-wayland.d2b.io.WaylandSession",
+  "apiVersion": "resources.d2bus.org/v3",
+  "type": "display-wayland.d2bus.org.WaylandSession",
   "metadata": {
     "name": "corp-vm-display",
     "zone": "dev"
@@ -1372,7 +1372,7 @@ Rendered canonical JSON for the `WaylandSession` resource:
   "spec": {
     "guestRef": "Guest/corp-vm",
     "hostRef": "Host/host-system",
-    "policyRef": "display-wayland.d2b.io.WaylandPolicy/default-wayland-policy",
+    "policyRef": "display-wayland.d2bus.org.WaylandPolicy/default-wayland-policy",
     "identity": {
       "label": "corp-vm",
       "activeColor": "#7fc8ff",
@@ -1439,7 +1439,7 @@ At eval time the Nix module enforces:
 - `type` must be a known ResourceType in the Zone's locked schema;
 - `spec.guestRef` is a valid `Guest/<name>` declared in the Zone;
 - `spec.hostRef` is a valid `Host/<name>` declared in the Zone;
-- `spec.policyRef` is a valid `display-wayland.d2b.io.WaylandPolicy/<name>` declared in the Zone;
+- `spec.policyRef` is a valid `display-wayland.d2bus.org.WaylandPolicy/<name>` declared in the Zone;
 - `spec.identity.activeColor` matches `^#[0-9a-fA-F]{6}$`;
 - `spec.crossDomainTrusted = true` (false is a Nix eval error);
 - `spec.filter.allowGlobals` does not contain clipboard-boundary globals

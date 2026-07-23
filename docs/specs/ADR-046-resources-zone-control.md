@@ -87,7 +87,7 @@ metadata and other installed resources (Provider, Role, RoleBinding, Quota,
 EmergencyPolicy). The Zone resource is a pure identity anchor.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Zone
 metadata:
   name: dev
@@ -248,7 +248,7 @@ update ZoneLink spec or status.
 ### 3.3 Spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: ZoneLink
 metadata:
   name: guest-link
@@ -962,7 +962,7 @@ status.
 The complete Role spec is the `rules` array:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Role
 metadata:
   name: process-controller
@@ -1180,7 +1180,7 @@ RoleBinding spec or status.
 ### 6.3 Spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: RoleBinding
 metadata:
   name: process-controller-binding
@@ -1408,7 +1408,7 @@ owns Quota reconciliation. No other controller may update Quota spec or status.
 ### 7.3 Spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Quota
 metadata:
   name: default-quota
@@ -1588,7 +1588,7 @@ flag set to `true` in any enabled policy applies Zone-wide. The effective
 ### 8.3 Spec
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: EmergencyPolicy
 metadata:
   name: zone-lockdown

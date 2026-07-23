@@ -100,7 +100,7 @@ Provider resource dossiers below retain the D075 Provider self-description shape
 `spec.providerRef`.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Credential
 metadata:
   name: work-entra
@@ -135,7 +135,7 @@ spec:
     onOwnerDelete: immediate          # immediate | drain-leases
     onProviderGeneration: immediate   # immediate | drain-leases
   provider:
-    schemaId: credential-entra.d2b.io/spec
+    schemaId: credential-entra.d2bus.org/spec
     schemaVersion: "1.0"
     settings: {}                      # non-secret Provider-specific desired settings
 status:
@@ -359,8 +359,8 @@ become a child of its credential Provider.
 
 | Finalizer ID | Owner | Meaning |
 | --- | --- | --- |
-| `credential.d2b.io/provider-revoke` | Credential controller | Revoke all active leases before deletion proceeds; honors `revocation.onOwnerDelete` policy |
-| `credential.d2b.io/consumer-drain` | consumerRef controller | Drain in-flight operations before Provider releases the lease handle |
+| `credential.d2bus.org/provider-revoke` | Credential controller | Revoke all active leases before deletion proceeds; honors `revocation.onOwnerDelete` policy |
+| `credential.d2bus.org/consumer-drain` | consumerRef controller | Drain in-flight operations before Provider releases the lease handle |
 
 Finalizer execution order: `consumer-drain` completes before
 `provider-revoke`. A missing consumerRef removes the `consumer-drain` finalizer
@@ -695,7 +695,7 @@ dependencySelectors:
 ownerChildTriggers: [owned-resource-changed]
 reconcileConcurrency: 8
 maxPendingResources: 256
-finalizers: [credential.d2b.io/provider-revoke]
+finalizers: [credential.d2bus.org/provider-revoke]
 observeInterval: 30s       # check expiry/rotation due; no external drift
 ```
 
@@ -897,7 +897,7 @@ The authoring shape is the same for every ResourceType:
   re-nesting.
 - `metadata.name` is derived from the attr key (`work-entra`).
 - `metadata.zone` is derived from the Zone attr key (`dev`).
-- `apiVersion` defaults to `resources.d2b.io/v3` and is not authored.
+- `apiVersion` defaults to `resources.d2bus.org/v3` and is not authored.
 - `status` is omitted from Nix entirely; it is controller-managed and read-only.
 - `metadata.uid`, `generation`, `revision`, `managedBy`, `configurationGeneration`,
   `createdAt`, `updatedAt` are filled by core; they are never authored in Nix.
@@ -1048,7 +1048,7 @@ the `spec` object in the output. The output for the `work-entra` example above:
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Credential",
   "metadata": {
     "name": "work-entra",
@@ -1085,7 +1085,7 @@ the `spec` object in the output. The output for the `work-entra` example above:
 Rules for this output:
 
 - `metadata.name` is the attr key (`work-entra`); `metadata.zone` is the Zone
-  attr key (`dev`); `apiVersion` is the fixed default `resources.d2b.io/v3` and
+  attr key (`dev`); `apiVersion` is the fixed default `resources.d2bus.org/v3` and
   is a top-level field, not nested inside `metadata`.
   None of these are authored in Nix.
 - `metadata` in the Nix-rendered output contains only: `name` (derived), `zone`
@@ -1910,7 +1910,7 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Current source | `nixos-modules/assertions.nix` (secret-shape assertions, `implemented-and-reachable`). Note: `nixos-modules/options-realms.nix` line 318 contains `d2b.realms.<realm>.relay.credentialRef` — this uses the current v3 **Realm** terminology (current symbol for Zone) and is a relay credential **state-directory path** reference for gateway relay provisioning, not a Zone Credential resource declaration. It is not a source for this work item. No current v3 source exists for Zone Credential resource Nix declarations (ADR-only). |
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-resources.nix` (generic schema-derived resource options; not type-specific), `nixos-modules/activation-nixos-cleanup.nix` |
-| Detailed design | **(1) Schema-derived options and eval-time validation**: implement `d2b.zones.<zone>.resources.<name> = { type = "..."; spec = { ... }; }` as a generic attrset option; an optional `metadata` sub-attr may contain `ownerRef` and/or presentation `labels`/`annotations`. Nix option types, defaults, and inline docs for `spec` fields are generated from the committed `ResourceTypeSchema` JSON (`docs/reference/schemas/v3/credential.json`) and the signed Provider schema — no bespoke options module is maintained separately. `metadata.name` derives from the attr key; `metadata.zone` from the Zone attr key; `apiVersion` defaults to `resources.d2b.io/v3`; `status`/`uid`/`generation`/`revision`/timestamps/`managedBy`/`configurationGeneration` are not authored. Core assigns `metadata.managedBy = "configuration"` and `metadata.configurationGeneration = <N>` to all configuration-managed resources at create/update time; these are never authored in Nix. Eval-time assertions (applied to all entries with `type = "Credential"`): `spec.providerRef` resolves a Provider in the same Zone whose `credentialDomains` includes `spec.scope.domainFilter` and whose `spec.artifactId` (a sibling of `spec.config` on the Provider resource, not inside `spec.config`) resolves an artifact catalog entry of `type = "provider"`; `spec.audience` charset (`^[A-Za-z0-9._:/@-]+$`, max 256); `spec.rotation.proactiveWindowMs < maxLeaseLifetimeMs / 2`; `spec.consumerRef`/`scope.executionRef`/`scope.userRef` resolve declared Zone resources; duplicate `(providerRef, executionRef, userRef, audience)` tuple rejected; `contains_sensitive_shape` on all string fields; Provider-specific placement constraints; `allowedOperations` ⊆ `providerRef.supportedOperations`. **(2) Canonical JSON and bundle emission**: render `spec` attr directly to `spec` object in canonical JSON (no field renames/re-nesting); `metadata` in output contains only derived `name`/`zone` and optionally Nix-authored `ownerRef`/`labels`/`annotations`; `apiVersion` is top-level, not inside `metadata`; `finalizers` is omitted from the Nix-rendered input (core manages finalizers, never accepts them from the bundle); no management labels are emitted by Nix; sort bundle by `(type, name)`; write to `/etc/d2b/zones/<zone>/resource-bundle.json` with digest. **(2b) Artifact catalog emission**: derivation-valued inputs (`d2b.artifacts.<id>`) are compiled separately into an integrity-pinned artifact catalog (`/etc/d2b/zones/<zone>/artifact-catalog.json`) with its own digest header; each entry records `id`, `type`, `sha256`, and bounded closure metadata; store paths are private catalog implementation data absent from the resource bundle, status, audit, and logs; `activation-nixos` verifies both digests before any create/update; missing or wrong-type `artifactId` references fail the NixOS build. **(3) Build-time schema validation**: validate rendered JSON against `docs/reference/schemas/v3/credential.json` and Provider-specific schema; enforce `secretRef` fields use `Credential/<name>` refs; enforce no store paths in any resource bundle or status output; drift gate (`make test-drift`) regenerates schemas with `cargo xtask gen-schemas` and asserts `git diff --exit-code`; Nix options module drift checked in the same gate. **(4) Generation transition and cleanup contract**: activation-nixos controller verifies SHA-256 digest of both resource bundle and artifact catalog, creates/updates desired-set resources, activates without blocking on cleanup, issues async Delete for absent configuration-managed resources (those with `metadata.managedBy = "configuration"`), sets Degraded/Cleanup=True on removed resources; retains up to `retainedConfigurationMax` (default 3, range 1..16) prior bundles; oldest prune when count exceeded; no time-based rollback window. **(5) Configuration-managed vs controller/API isolation**: `managedBy` and `ownerRef` are orthogonal; configuration-managed and API-created resources may each carry an optional same-Zone `ownerRef` and participate in owner cascade. Cleanup checks `metadata.managedBy = "configuration"` before issuing Delete; resources with `metadata.managedBy = "controller"` or `metadata.managedBy = "api"` are never deleted by this path; API-created resources persist until explicit Delete and are never generation-swept. |
+| Detailed design | **(1) Schema-derived options and eval-time validation**: implement `d2b.zones.<zone>.resources.<name> = { type = "..."; spec = { ... }; }` as a generic attrset option; an optional `metadata` sub-attr may contain `ownerRef` and/or presentation `labels`/`annotations`. Nix option types, defaults, and inline docs for `spec` fields are generated from the committed `ResourceTypeSchema` JSON (`docs/reference/schemas/v3/credential.json`) and the signed Provider schema — no bespoke options module is maintained separately. `metadata.name` derives from the attr key; `metadata.zone` from the Zone attr key; `apiVersion` defaults to `resources.d2bus.org/v3`; `status`/`uid`/`generation`/`revision`/timestamps/`managedBy`/`configurationGeneration` are not authored. Core assigns `metadata.managedBy = "configuration"` and `metadata.configurationGeneration = <N>` to all configuration-managed resources at create/update time; these are never authored in Nix. Eval-time assertions (applied to all entries with `type = "Credential"`): `spec.providerRef` resolves a Provider in the same Zone whose `credentialDomains` includes `spec.scope.domainFilter` and whose `spec.artifactId` (a sibling of `spec.config` on the Provider resource, not inside `spec.config`) resolves an artifact catalog entry of `type = "provider"`; `spec.audience` charset (`^[A-Za-z0-9._:/@-]+$`, max 256); `spec.rotation.proactiveWindowMs < maxLeaseLifetimeMs / 2`; `spec.consumerRef`/`scope.executionRef`/`scope.userRef` resolve declared Zone resources; duplicate `(providerRef, executionRef, userRef, audience)` tuple rejected; `contains_sensitive_shape` on all string fields; Provider-specific placement constraints; `allowedOperations` ⊆ `providerRef.supportedOperations`. **(2) Canonical JSON and bundle emission**: render `spec` attr directly to `spec` object in canonical JSON (no field renames/re-nesting); `metadata` in output contains only derived `name`/`zone` and optionally Nix-authored `ownerRef`/`labels`/`annotations`; `apiVersion` is top-level, not inside `metadata`; `finalizers` is omitted from the Nix-rendered input (core manages finalizers, never accepts them from the bundle); no management labels are emitted by Nix; sort bundle by `(type, name)`; write to `/etc/d2b/zones/<zone>/resource-bundle.json` with digest. **(2b) Artifact catalog emission**: derivation-valued inputs (`d2b.artifacts.<id>`) are compiled separately into an integrity-pinned artifact catalog (`/etc/d2b/zones/<zone>/artifact-catalog.json`) with its own digest header; each entry records `id`, `type`, `sha256`, and bounded closure metadata; store paths are private catalog implementation data absent from the resource bundle, status, audit, and logs; `activation-nixos` verifies both digests before any create/update; missing or wrong-type `artifactId` references fail the NixOS build. **(3) Build-time schema validation**: validate rendered JSON against `docs/reference/schemas/v3/credential.json` and Provider-specific schema; enforce `secretRef` fields use `Credential/<name>` refs; enforce no store paths in any resource bundle or status output; drift gate (`make test-drift`) regenerates schemas with `cargo xtask gen-schemas` and asserts `git diff --exit-code`; Nix options module drift checked in the same gate. **(4) Generation transition and cleanup contract**: activation-nixos controller verifies SHA-256 digest of both resource bundle and artifact catalog, creates/updates desired-set resources, activates without blocking on cleanup, issues async Delete for absent configuration-managed resources (those with `metadata.managedBy = "configuration"`), sets Degraded/Cleanup=True on removed resources; retains up to `retainedConfigurationMax` (default 3, range 1..16) prior bundles; oldest prune when count exceeded; no time-based rollback window. **(5) Configuration-managed vs controller/API isolation**: `managedBy` and `ownerRef` are orthogonal; configuration-managed and API-created resources may each carry an optional same-Zone `ownerRef` and participate in owner cascade. Cleanup checks `metadata.managedBy = "configuration"` before issuing Delete; resources with `metadata.managedBy = "controller"` or `metadata.managedBy = "api"` are never deleted by this path; API-created resources persist until explicit Delete and are never generation-swept. |
 | Integration | `activation-nixos` Provider creates/updates Credential resources from emitted envelopes; Credential controller `provider-revoke` finalizer handles cleanup Deletes; owner controller reconciles children of deleted configuration-managed Credentials |
 | Data migration | None; v3 reset |
 | Validation | **(eval/build)**: nix-unit golden JSON envelope for each example (spec shape, no management labels in Nix output, sort, digest); assertion-failure tests for secret-shaped audience, mismatched providerRef/domainFilter, proactiveWindow > half maxLifetime, duplicate binding tuple, unresolved refs; artifact catalog: assertion-failure for missing `artifactId`, wrong-type `artifactId`, duplicate catalog ID; bundle + artifact catalog digest round-trip; artifact catalog store-path absence from resource bundle and status; Provider-specific schema cross-check; `make test-drift` schema drift gate. **(runtime integration in `tests/host-integration/`)**: `credential-cleanup-basic` (removed resource reaches Deleted); `credential-cleanup-nonblocking` (activation Ready before cleanup finalizer finishes); `credential-cleanup-pending-status` (Cleanup=True on removed resource, PendingCleanup=True on Provider); `credential-cleanup-stalled` (Degraded stall detection and recovery); `credential-cleanup-controller-children-preserved` (ownerRef children cleaned by Credential controller); `credential-cleanup-no-dynamic-deletion` (controller-created Credential with `managedBy = "controller"` not deleted); `credential-retained-generation-count` (up to retainedConfigurationMax bundles retained; rollback re-creates from retained bundle; oldest pruned when count exceeded); `credential-bundle-digest-mismatch` (tampered bundle aborts activation). |

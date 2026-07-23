@@ -86,7 +86,7 @@ Normative D089 spec layering: Device base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `deviceClass`,
 `inventory.selector`, attachments, and arbitration. This Provider's
 desired-only extension is the canonical `spec.provider = { schemaId:
-"device-security-key.d2b.io/Device/spec", schemaVersion, settings }`
+"device-security-key.d2bus.org/Device/spec", schemaVersion, settings }`
 envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
 and digested, validated against `spec.providerRef` at Nix build and API
 admission, implementation-only, and may not shadow base fields. Shared fields
@@ -447,7 +447,7 @@ spec:
     selector:
       busClass: uhid
   provider:
-    schemaId: "device-security-key.d2b.io/Device/spec"
+    schemaId: "device-security-key.d2bus.org/Device/spec"
     schemaVersion: "1.0.0"
     settings:
       bindGuest: Guest/<vm>           # exact Guest that holds the claim
@@ -966,7 +966,7 @@ Per D088, ResourceType-common Device observation lives in `status.resource`: the
 provider-neutral claim/arbitration/presence base that is identical across Device
 implementations. Security-key relay/session observations live only in
 `status.provider` with `providerRef`, qualified `schemaId`
-`device-security-key.d2b.io/Device/status`, `schemaVersion`,
+`device-security-key.d2bus.org/Device/status`, `schemaVersion`,
 `observedProviderGeneration`, and strict bounded redacted `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
 atomically in one status mutation; shared
@@ -1004,7 +1004,7 @@ status:
     lastProbedAt: "2026-07-22T00:05:00Z"
   provider:
     providerRef: Provider/device-security-key
-    schemaId: "device-security-key.d2b.io/Device/status"
+    schemaId: "device-security-key.d2bus.org/Device/status"
     schemaVersion: "1.0.0"
     observedProviderGeneration: 1
     details:
@@ -1043,7 +1043,7 @@ reconcile interface from `ADR-046-resource-reconciliation`. Trigger handlers:
 2. Validate `busClass=hidraw`, `arbitration=exclusive`, `maxConcurrentClaims=1`.
 3. Check mutual-exclusion invariant against `device-usbip` Devices in the Zone.
    If violated: set `ClaimConflict` condition, phase `Failed`. Stop.
-4. If first-time: install finalizer `device-security-key.d2b.io/lease-released`.
+4. If first-time: install finalizer `device-security-key.d2bus.org/lease-released`.
 5. Ensure relay Process resource exists with correct spec, including
    `deviceUsage: [{deviceRef: Device/<device-name>, access: exclusive, purpose: hidraw-fido}]`
    referencing the exact Device and exclusive access. If not: create it.
@@ -1068,7 +1068,7 @@ reconcile interface from `ADR-046-resource-reconciliation`. Trigger handlers:
 4. Emit event-only `Deleted` revision for the virtual frontend Device resource
    (`Device/<device-name>-frontend`); Core removes atomically; audit appended
    after commit.
-5. Clear finalizer `device-security-key.d2b.io/lease-released`.
+5. Clear finalizer `device-security-key.d2bus.org/lease-released`.
 6. Core removes the physical Device resource after finalizer clears.
 
 ### `dependency-changed` / `execution-status-changed`
@@ -1266,7 +1266,7 @@ d2b.zones.dev.resources."corp-vm-sk" = {
 | --- | --- |
 | `metadata.name` | Resource attribute key |
 | `metadata.zone` | Zone attribute key |
-| `apiVersion` | Constant `"resources.d2b.io/v3"` |
+| `apiVersion` | Constant `"resources.d2bus.org/v3"` |
 | `metadata.uid`, `generation`, `revision` | Core-assigned on creation |
 | `metadata.finalizers` | Written by Provider controller |
 | `status` | Entirely read-only |

@@ -79,7 +79,7 @@ semantics are promoted to the Network base spec and never live in
 For the same Provider, the `spec.provider` and `status.provider` schemas align.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Network
 metadata:
   name: work-net
@@ -1185,7 +1185,7 @@ internal observed state. No bridge or tap is deleted during adoption.
 
 ### Delete
 
-The finalizer `network.d2b.io/fabric-cleanup` is owned by the network-local
+The finalizer `network.d2bus.org/fabric-cleanup` is owned by the network-local
 controller. On deletion (strictly child-first order):
 
 1. Controller receives `deletion-requested` trigger.
@@ -1604,7 +1604,7 @@ d2b.zones.<zone>.resources.<name> = { type = "Network"; spec = { <exact Resource
 
 The **attribute key is the resource name**; `metadata.name` is derived from it.
 `metadata.zone` is derived from the Zone attribute key. `apiVersion` defaults to
-`"resources.d2b.io/v3"`. The `type` field is **required** (not inferred).
+`"resources.d2bus.org/v3"`. The `type` field is **required** (not inferred).
 
 `status` is absent from the Nix form; it is read-only. All core management
 metadata — `uid`, `generation`, `revision`, `managedBy`,
@@ -1731,7 +1731,7 @@ derived from this shape.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Network",
   "metadata": {
     "name": "work-net",
@@ -1854,7 +1854,7 @@ store path and a different `contentHash`.
   "generatedAt": "1970-01-01T00:00:00Z",
   "resources": [
     {
-      "apiVersion": "resources.d2b.io/v3",
+      "apiVersion": "resources.d2bus.org/v3",
       "type": "Network",
       "metadata": {
         "name": "work-net",
@@ -2043,7 +2043,7 @@ cleanup test suite (ADR046-network-008).
 When `Network/work-net` is present in generation N but absent from generation N+1:
 
 1. Core sets `metadata.deletionRequestedAt = <activationTime>` on
-   `Network/work-net`. The finalizer `network.d2b.io/fabric-cleanup` is already
+   `Network/work-net`. The finalizer `network.d2bus.org/fabric-cleanup` is already
    set from initial create.
 2. The `NetworkDraining` condition is set by the network-local controller with
    `reason: configuration-generation-removed`.

@@ -54,7 +54,7 @@ Standard execution/shared:
 | Credential | Opaque rotating credential/lease lifecycle |
 
 Provider-specific semantic ResourceTypes may extend this set, always qualified
-`<provider-name>.d2b.io.<Type>` (for example `display-wayland.d2b.io.WaylandSession`).
+`<provider-name>.d2bus.org.<Type>` (for example `display-wayland.d2bus.org.WaylandSession`).
 Standard types above are always unqualified; a Provider-specific type name is
 never bare/unqualified.
 
@@ -158,7 +158,7 @@ Not ResourceTypes:
 Physical/local execution is an explicit Host:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Host
 metadata:
   name: host-system

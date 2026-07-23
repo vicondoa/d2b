@@ -566,7 +566,7 @@ exists for this Provider) creates the following `Process` resource when
 ProviderDeployment reconciler):
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-unix-service
@@ -964,7 +964,7 @@ does not write Provider status directly. If this Provider ever writes bounded,
 non-secret implementation-specific observation on a resource it owns, that
 detail must live in `status.provider` with `providerRef:
 Provider/transport-unix`, a qualified `schemaId` such as
-`transport-unix.d2b.io/<ResourceType>/status`, `schemaVersion` (semver MAJOR.MINOR),
+`transport-unix.d2bus.org/<ResourceType>/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
 redacted `details` object registered and signed in the Provider manifest; the
 writer updates all present layers atomically and never duplicates shared fields
@@ -1164,7 +1164,7 @@ d2b.zones.k0.resources.k1-link = {
     childZoneName             = "k1";
     providerRef               = "Provider/transport-unix";
     provider = {
-      schemaId      = "transport-unix.d2b.io/ZoneLink/spec";
+      schemaId      = "transport-unix.d2bus.org/ZoneLink/spec";
       schemaVersion = "1.0";
       settings      = {};   # allocator/core-issued FD; attachments forbidden on ZoneLink
     };
@@ -1184,7 +1184,7 @@ d2b.zones.k0.resources.k3-link = {
     childZoneName             = "k3";
     providerRef               = "Provider/transport-unix";
     provider = {
-      schemaId      = "transport-unix.d2b.io/ZoneLink/spec";
+      schemaId      = "transport-unix.d2bus.org/ZoneLink/spec";
       schemaVersion = "1.0";
       settings      = { socketKind = "stream"; };
     };
@@ -1201,14 +1201,14 @@ d2b.zones.k0.resources.k3-link = {
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "ZoneLink",
   "metadata": { "name": "k1-link", "zone": "k0" },
   "spec": {
     "childZoneName": "k1",
     "providerRef": "Provider/transport-unix",
     "provider": {
-      "schemaId": "transport-unix.d2b.io/ZoneLink/spec",
+      "schemaId": "transport-unix.d2bus.org/ZoneLink/spec",
       "schemaVersion": "1.0",
       "settings": {
         "socketKind": "seqpacket"

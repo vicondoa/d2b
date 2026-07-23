@@ -51,7 +51,7 @@ Normative D089 spec layering: Credential base fields are ResourceType base
 `spec.*` fields, including `spec.providerRef`, `audience`, `scope`,
 `allowedOperations`, `rotation`, and `revocation`. This Provider's desired-only
 extension is the canonical `spec.provider = { schemaId:
-"credential-managed-identity.d2b.io/Credential/spec", schemaVersion, settings }`
+"credential-managed-identity.d2bus.org/Credential/spec", schemaVersion, settings }`
 envelope; it is manifest-registered/signed, strict deny-unknown, bounded, versioned
 and digested, validated against `spec.providerRef` at Nix build and API
 admission, implementation-only, and may not shadow base fields. Shared fields
@@ -131,7 +131,7 @@ resource spec, status, audit, or logs.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type": "Provider",
   "metadata": {
     "name": "credential-managed-identity",
@@ -239,7 +239,7 @@ Per D088, ResourceType-common Credential observation lives in `status.resource`:
 the non-secret lease metadata base that is identical across Credential
 implementations. Managed-identity-specific lease observations live only in
 `status.provider` with `providerRef`, qualified `schemaId`
-`credential-managed-identity.d2b.io/Credential/status`, `schemaVersion`,
+`credential-managed-identity.d2bus.org/Credential/status`, `schemaVersion`,
 `observedProviderGeneration`, and strict bounded redacted `details`
 (≤32 KiB, unknown-field-denied). The controller writes all present layers
 atomically in one status mutation; shared
@@ -696,7 +696,7 @@ dependencySelectors:
 ownerChildTriggers: [owned-resource-changed, agent-process-health-changed]
 reconcileConcurrency: 8
 maxPendingResources: 256
-finalizers: [credential.d2b.io/provider-revoke]
+finalizers: [credential.d2bus.org/provider-revoke]
 observeInterval: 30s
 ```
 
@@ -741,7 +741,7 @@ configuration — they are managed exclusively by the controller.
 ### Controller Process template
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: managed-identity-controller
@@ -806,7 +806,7 @@ when the Credential is deleted the controller removes the agent Process before
 releasing the `provider-revoke` finalizer.
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: mi-agent-<credential-name>         # controller-derived, non-configurable
@@ -1218,7 +1218,7 @@ All error messages:
 | IMDS unavailability onset | Zone, `Credential/<name>`, consecutive-failure count, outcome code `credential-provider-unavailable` |
 | Agent spawn | Zone, `Credential/<name>`, agent Process name, `executionRef`, outcome code |
 | Agent Process failure | Zone, `Credential/<name>`, agent Process name, failure reason (closed code), failure count |
-| **Deleted-phase closure** | Zone, `Credential/<name>`, `phase=Deleted`, `finalizer=credential.d2b.io/provider-revoke`, `cleanupLatencyMs`, final `rotationGeneration`, outcome `resource-deleted` |
+| **Deleted-phase closure** | Zone, `Credential/<name>`, `phase=Deleted`, `finalizer=credential.d2bus.org/provider-revoke`, `cleanupLatencyMs`, final `rotationGeneration`, outcome `resource-deleted` |
 
 The **Deleted-phase closure** audit record is written by the **audit subsystem**,
 not by the controller. The controller's only deletion-time action is to clear
@@ -1524,7 +1524,7 @@ dependencySelectors:
 ownerChildTriggers: [owned-resource-changed, agent-process-health-changed]
 reconcileConcurrency: 8
 maxPendingResources: 256
-finalizers: [credential.d2b.io/provider-revoke]
+finalizers: [credential.d2bus.org/provider-revoke]
 observeInterval: 30s
 ```
 
@@ -1990,7 +1990,7 @@ these sections in order:
    authoring shape.
 3. **ResourceTypes managed** — `Credential` only: lifecycle phases, status
    conditions owned (`CredentialReady`, `RotationDue`, `ProviderUnavailable`,
-   `LeaseRevoked`), finalizers owned (`credential.d2b.io/provider-revoke`).
+   `LeaseRevoked`), finalizers owned (`credential.d2bus.org/provider-revoke`).
    `Volume` is **not** listed here; this Provider declares no Provider state
    Volume under D087 because no managed-identity payload passes the
    storage-need test.

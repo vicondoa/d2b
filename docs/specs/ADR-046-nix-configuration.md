@@ -298,7 +298,7 @@ Every declared Zone compiles to exactly one `Zone/<name>` self-resource with
 an empty spec:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Zone
 metadata:
   name: dev
@@ -361,7 +361,7 @@ spec is a structured eval error. The operator must select a declared Provider
 Compiled ZoneLink bundle entry:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: ZoneLink
 metadata:
   name: link-dev
@@ -558,7 +558,7 @@ d2b.zones.dev.resources.system-core = {
 Compiles to a `Provider` resource in that Zone's generated bundle:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Provider
 metadata:
   name: system-core
@@ -687,7 +687,7 @@ d2b.zones.dev.resources.host-system = {
 Compiles to:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: Host
 metadata:
   name: host-system
@@ -790,7 +790,7 @@ d2b.zones.dev.resources.dev-vm = {
     # Canonical selected-Provider extension envelope (D089): validated against the
     # Provider named by providerRef. No raw host paths; named closure-entry IDs only.
     provider = {
-      schemaId      = "runtime-cloud-hypervisor.d2b.io/Guest/spec";
+      schemaId      = "runtime-cloud-hypervisor.d2bus.org/Guest/spec";
       schemaVersion = "1.0";
       settings = {
         vsockCid      = 42;
@@ -1128,7 +1128,7 @@ d2b.zones.dev.resources.alice = {
 Compiles to:
 
 ```yaml
-apiVersion: resources.d2b.io/v3
+apiVersion: resources.d2bus.org/v3
 type: User
 metadata:
   name: alice
@@ -1351,7 +1351,7 @@ d2b.zones.<zone>.resources.<name> = {
 
 `metadata.name` is derived from the attribute key (`<name>`).
 `metadata.zone` is derived from the enclosing zone attribute key (`<zone>`).
-`apiVersion` is defaulted to `"resources.d2b.io/v3"` — never specified in Nix.
+`apiVersion` is defaulted to `"resources.d2bus.org/v3"` — never specified in Nix.
 `status` is omitted from all emitted artifacts and is read-only; the Zone
 runtime fills `uid`, `generation`, `revision`, `timestamps`, and management
 metadata at first activation and on subsequent reconciles. All three status
@@ -1391,7 +1391,7 @@ inside any resource spec field.
 
 ```json
 {
-  "apiVersion": "resources.d2b.io/v3",
+  "apiVersion": "resources.d2bus.org/v3",
   "type":       "<ResourceType>",
   "metadata": {
     "name":       "<name>",
