@@ -164,6 +164,22 @@ Two callers using the same expected resource revision cannot both succeed. The
 first valid durable commit wins; the other gets `resource-conflict` with the
 current revision and may re-read/retry.
 
+### Expedited commit proof (D090)
+
+For an expedited (`waitForReconcile`) `Create`/`UpdateSpec`/`Delete`, the writer
+reserves the target revision under one mutation ticket (`operationId`) while the
+owning controller runs preflight/plan in parallel. The controller performs no
+external effect, finalizer release, or status mutation until the writer emits,
+only after step 12 (durable commit), a typed
+`CommittedRevisionProof { resourceUid, generation, revision, operationId }`. If
+the transaction fails or is rejected at any step, the writer emits `Abort` for
+that `operationId` and no effect occurs. A durable commit is authoritative and
+is never rolled back because the subsequent expedited reconcile pass fails or
+times out. The commit still emits the ordinary ChangeBatch/hint (step 13); the
+expedited request additionally enters the priority reconcile lane. Status
+written by the expedited pass is a normal later asynchronous status mutation
+with its own revision, never part of the spec/create commit.
+
 ## Revision model
 
 Zone revision:

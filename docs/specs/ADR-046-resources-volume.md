@@ -87,6 +87,26 @@ rather than observed.
 
 Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
 
+**D091 update policy.** The universal base spec carries `spec.updatePolicy` for
+every Volume: disruptive changes default to manual, while automatic
+non-disruptive upgrades are permitted by policy. A `spec.provider` extension MAY
+add provider-specific knobs, but MUST NOT bypass or weaken base
+`spec.updatePolicy`.
+
+**D090 expedited reconcile.** Authorized Volume `Create`, `UpdateSpec`, and
+`Delete` calls MAY set `waitForReconcile`. Under one mutation ticket,
+`operationId`, and deadline, Core admission and the reserved-revision redb commit
+run in parallel with controller preflight/plan, but the controller MUST NOT
+perform external effects, finalizer release, or status mutation until Core
+supplies `CommittedRevisionProof {resourceUid, generation, revision,
+operationId}`; DB failure aborts with no effect. The API returns the committed
+object plus one-pass projected layered status, `disposition`
+(`Converged|Progressing|Blocked|UpgradeRequired|Failed`), `statusPersistence`
+(`pending|committed`), and the last persisted status revision. The durable
+commit is never rolled back on reconcile timeout or failure; effect idempotency
+keys derive from `(UID,generation,revision,operationId)`, and the expedited pass
+uses a bounded priority lane in the same per-resource single-flight.
+
 Every Volume Provider `ResourceApiBinding` MUST implement the exact Volume base
 spec schema version and fingerprint, accept the canonical minimal valid base
 Spec, and pass base lifecycle/status/error/finalizer conformance. A Provider MAY
@@ -725,6 +745,21 @@ and 4 KiB strings; violations use `status-oversize`,
 `status-provider-schema-invalid`, or `status-provider-overlap`.
 
 Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
+
+**D091 update currency.** Every Volume includes universal `status.update` with
+`state` (`Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`),
+`reasons`
+(`CoreGenerationChanged|ProviderGenerationChanged|ArtifactChanged|ImageOrSystemGenerationChanged|SpecChanged|DependencyChanged|SecurityPolicyChanged`),
+bounded non-secret observed/target generation and digest IDs, `disruption`
+(`None|Reload|Restart|Recycle|Replace`), `preserveState`, optional
+`operationId`, `lastAssessedAt`, and bounded/truncated `owned:{count,refs}` and
+`dependencies:{count,refs}`. Volume-specific currency refinements live in
+`status.resource` and never in `status.provider`; controllers set
+`status.update` via `assess_update` on core/provider/artifact/spec/dependency/
+security-policy triggers and MUST report `UpgradeRequired` for disruptive
+changes rather than applying them in place. Durable/state Volumes report
+`preserveState: true` across upgrades; disruption `Replace` is allowed only with
+explicit state transfer.
 
 `Volume` has multiple implementations (`volume-local` and `volume-virtiofs`).
 Attachment base status, layout phase/conditions, marker/invariant observations,

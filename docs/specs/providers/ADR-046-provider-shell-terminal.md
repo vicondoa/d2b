@@ -406,6 +406,33 @@ No terminal, clipboard, or notification bytes, secrets, paths, PIDs, unit names,
 or authority-conferring handles appear in any status layer; terminal bytes stay
 in process memory and named streams only.
 
+D091 currency and upgrade: the shell-terminal controller implements
+`assess_update`, `plan_upgrade`, and `execute_upgrade` for its qualified
+ResourceTypes and semantic shell sessions. A `ProviderGenerationChanged`,
+`ArtifactChanged`, `DependencyChanged`, or `SpecChanged` reason populates
+universal `status.update` with
+`UpdateAvailable` or `UpgradeRequired`; disruptive changes MUST return
+`UpgradeRequired` rather than being applied in place, while non-disruptive
+changes reconcile normally. These currency fields are universal/ResourceType
+base fields, never `status.provider`. Upgrades recycle only the shell realization (owned
+`Process` resources, endpoints, supervisors, and sessions) with `disruption`
+set to `Reload`, `Restart`, or `Recycle`; durable config is preserved, dependent
+sessions and attachments are drained and restarted by the dependency-aware
+planner, and owned ephemeral session state remains process memory. No terminal
+bytes, session bytes, clipboard bytes, notification content, secrets, paths, or
+handles may appear in `status.update`.
+
+D090 expedited reconcile: Create, UpdateSpec, and Delete requests that set
+`waitForReconcile` perform no external effect, finalizer mutation, or status
+mutation until Core supplies a typed `CommittedRevisionProof`
+`{resourceUid,generation,revision,operationId}`. Abort produces no effect; a
+durable commit is never rolled back on later reconcile timeout. The response is
+the committed object plus one-pass projected layered status, a disposition
+(`Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`), and
+`statusPersistence` (`pending` or `committed`); effect idempotency keys derive
+from `(UID,generation,revision,operationId)` in the same per-resource
+single-flight priority lane.
+
 ### `status.detail.kind` enum
 
 | Value | Meaning |

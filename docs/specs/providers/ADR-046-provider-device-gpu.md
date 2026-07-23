@@ -955,6 +955,33 @@ atomically in one status mutation; shared fields are never duplicated
 into `status.provider`, and the extension schema is registered and signed in the
 Provider manifest.
 
+### Currency and expedited reconcile (D091/D090)
+
+D091 currency is universal status, not GPU provider detail. The controller
+implements `assess_update`, `plan_upgrade`, and `execute_upgrade`, populates
+universal `status.update`, and keeps shared currency fields out of
+`status.provider`; GPU-specific observations may appear only under
+`status.provider.details`. Driver/provider generation, artifact, spec, or
+security-policy changes that require interrupting active claimants MUST set
+`status.update.state = Blocked` while dependent `Process`/`Guest` resources are
+running, then `UpgradeRequired` when an upgrade operation is planned, with
+`reasons = [ProviderGenerationChanged]`, `[ArtifactChanged]`, `[SpecChanged]`,
+or `[SecurityPolicyChanged]`, `disruption = Recycle`, and
+`preserveState = true`. Non-disruptive changes reconcile normally. The
+dependency-aware planner drains dependent Processes/Guests, recycles the GPU
+realization, and restarts dependents; no surprise disruption is permitted and
+device identity is preserved.
+
+D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
+external effect, finalizer change, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
+one-pass response returns the committed object, projected layered status,
+disposition `Converged|Progressing|Blocked|UpgradeRequired|Failed`, and
+`statusPersistence = pending|committed`; the durable commit is never rolled back
+after a reconcile timeout. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)`, and the expedited pass uses the bounded
+priority lane inside the same per-resource single-flight.
+
 ```yaml
 status:
   observedGeneration: 1

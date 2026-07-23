@@ -264,6 +264,35 @@ All handlers are async. They return a typed `ReconcileResult` carrying the
 next disposition: `Ok(Ready)`, `Degrade(reason, requeue_at)`, `Fail(outcome)`,
 `Finalizing`, or `Blocked(reason, requeue_at)`.
 
+#### Currency and upgrade (D091)
+
+The controller implements `assess_update`, `plan_upgrade`, and
+`execute_upgrade`. A Provider generation or signed artifact generation/digest
+change updates universal `status.update` with `state: UpdateAvailable` or
+`state: UpgradeRequired`, `reasons` including `ProviderGenerationChanged` or
+`ArtifactChanged`, observed/target generation or digest IDs,
+`disruption: Reload` or `disruption: Restart` for the credential component
+realization, `preserveState: true`, bounded `owned`/`dependencies`, and
+`lastAssessedAt`. Disruptive changes MUST return `UpgradeRequired` rather than
+applying in place; non-disruptive changes reconcile normally. Credential
+rotation is not an upgrade and remains the §6.5 flow. `status.update` MUST NOT
+contain secret bytes, tokens, or lease material; only bounded non-secret
+generation/digest IDs and lease metadata already permitted by the Credential
+base may appear. Token delivery remains solely over `Noise_KK`.
+
+#### Expedited reconcile on mutation (D090)
+
+For `Create`, `UpdateSpec`, and `Delete` with `waitForReconcile`, the controller
+MUST perform no Secret Service effect, finalizer change, or status mutation
+until core supplies `CommittedRevisionProof {resourceUid,generation,revision,operationId}`.
+Abort before that proof has no effect. After durable commit, the commit is never
+rolled back if the reconcile pass times out. The response returns the committed
+object, post-pass projected layered status, disposition
+(`Converged|Progressing|Blocked|UpgradeRequired|Failed`), and
+`statusPersistence: pending|committed`. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)` and use the same per-resource
+single-flight priority lane.
+
 #### `reconcile(resource, context)`
 
 Called when a Credential resource assigned to this Provider has been created,

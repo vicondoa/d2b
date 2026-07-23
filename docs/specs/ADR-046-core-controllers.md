@@ -128,6 +128,29 @@ Owns:
 It implements the <=5 ms commit-to-handler path with the store post-commit
 dispatcher and d2b-bus.
 
+### Currency and upgrade aggregation (D091)
+
+Owns:
+
+- invoking `assess_update` triggers on core/Provider-generation,
+  artifact/image/NixOS-generation, immutable-spec, dependency, and
+  security-policy change;
+- aggregating self/owned/dependency `status.update` currency into the bounded
+  `status.update.owned`/`status.update.dependencies` counts and truncated refs
+  for `Get`/`List` (including `List --updates`);
+- topological dependency/owner planning for `plan_upgrade`/`execute_upgrade`
+  (drain → recycle → restart affected owned/dependent resources) via the reverse
+  dependency indexes;
+- persisting each upgrade operation/idempotency/progress in the core Operation
+  ledger (status carries only the latest bounded plan/result), and resuming an
+  in-flight upgrade after crash/restart.
+
+The expedited (`waitForReconcile`) mutation path (D090) uses the same
+post-commit dispatcher: core emits the typed `CommittedRevisionProof` only after
+durable commit and routes the expedited request into the owning controller's
+bounded priority lane, then aggregates the returned disposition/projection for
+the API response without waiting for the asynchronous status write.
+
 ### Ownership/finalizer
 
 Owns generic owner graph integrity and deletion ordering, not Provider-specific

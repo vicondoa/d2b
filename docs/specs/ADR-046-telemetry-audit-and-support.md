@@ -993,6 +993,44 @@ the v3 `AuthenticatedSubjectContext` (ADR-046-componentsession-and-bus); this
 replaces the current `PrincipalId` in `AuditEnvelope`. No resource name, spec
 bytes, or status bytes appear in this record.
 
+#### ResourceUpgrade (D091) and expedited reconcile (D090)
+
+An `assess_update`/`plan_upgrade`/`execute_upgrade` operation emits a
+`resource-upgrade` record; an authorized expedited (`waitForReconcile`) mutation
+is recorded via the existing `resource-mutation` record extended with an
+`expedited: true` flag and its `operation_id`. Neither carries spec/status bytes,
+secrets, or raw artifact paths — only bounded closed-enum currency/disruption
+values and opaque generation/digest IDs:
+
+```json
+{
+  "record_class": "resource-upgrade",
+  "resource_upgrade_fields": {
+    "verb":                 "assess|plan|execute",
+    "resource_type":        "<closed catalog type>",
+    "resource_uid":         "<opaque uid>",
+    "update_state":         "Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown",
+    "disruption":           "None|Reload|Restart|Recycle|Replace",
+    "preserve_state":       true,
+    "reasons":              ["<closed-enum currency reason>"],
+    "observed_generation":  11,
+    "target_generation":    12,
+    "affected_owned_count": 3,
+    "operation_id":         "<opaque>",
+    "outcome":              "ok|blocked|conflict|denied|error",
+    "error_code":           "<stable code or null>"
+  }
+}
+```
+
+The core Operation ledger owns upgrade idempotency/progress; this record is the
+authoritative security history of the upgrade decision/execution, not a second
+ledger. OTEL metrics for currency/upgrade and expedited reconcile use only
+bounded closed-enum labels (`update_state`, `disruption`, `disposition`,
+`outcome`) plus the existing `zone`/`provider`/`component` resource attributes —
+never resource names, generation digests as labels, or per-operation IDs as
+labels (cardinality rules below).
+
 #### RBACChange
 
 ```json

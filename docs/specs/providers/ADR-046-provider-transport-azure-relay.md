@@ -788,6 +788,35 @@ transport service has no authority or visibility over them:
 | Route state and Watch cursors | Core manages; relay has no view |
 | ZoneLink resource status and finalizer | Core writes; relay returns observations only |
 
+### Currency and upgrade (D091)
+
+The core ZoneLink controller, not the relay transport service, implements
+`assess_update`, `plan_upgrade`, and `execute_upgrade`. A Provider generation or
+signed artifact generation/digest change updates universal `status.update` with
+`state: UpdateAvailable` or `state: UpgradeRequired`, `reasons` including
+`ProviderGenerationChanged` or `ArtifactChanged`, observed/target generation or
+digest IDs, `disruption: Reload` or `disruption: Restart`, `preserveState:
+true`, bounded `owned`/`dependencies`, and `lastAssessedAt`. Disruptive changes
+MUST return `UpgradeRequired` rather than applying in place; non-disruptive
+changes reconcile normally. Upgrade recycles the relay service realization;
+open byte-stream handles are re-established by core reconnect. ZoneLink session
+state remains owned by the core ZoneLink controller. `status.update` MUST NOT
+contain secrets.
+
+### Expedited reconcile on mutation (D090)
+
+For `Create`, `UpdateSpec`, and `Delete` with `waitForReconcile`, core MUST
+perform no `OpenTransport`/`CloseTransport`, finalizer change, or status
+mutation until it supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. Abort
+before that proof has no effect. After durable commit, the commit is never
+rolled back if the reconcile pass times out. The response returns the committed
+object, post-pass projected layered status, disposition
+(`Converged|Progressing|Blocked|UpgradeRequired|Failed`), and
+`statusPersistence: pending|committed`. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)` and use the same per-resource
+single-flight priority lane.
+
 ### Named opaque byte-stream properties
 
 The `TransportHandle` refers to a named byte stream exposed by the relay

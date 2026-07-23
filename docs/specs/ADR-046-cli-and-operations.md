@@ -443,6 +443,7 @@ List resources of one type.
 d2b list <ResourceType> [--zone <zone>]
   [--phase <phase>]
   [--label-selector <k>=<v>]
+  [--updates]
   [--page-token <token>]
   [--limit <n>]
   [--json | --human]
@@ -452,7 +453,12 @@ Returns a bounded page of matching resources. Pagination uses `--page-token`
 from the previous response.
 
 **Output format:** JSON array envelope with `items`, `nextPageToken`
-(absent if last page), `snapshotRevision`; human table with status column.
+(absent if last page), `snapshotRevision`; human table with status column. Every
+`get`/`list` output includes the resource's `status.update` currency (state,
+disruption, and bounded owned/dependency update aggregates) so operators always
+see self/owned/dependency update state (D091). `--updates` filters/sorts to
+resources whose `status.update.state` is not `Current` and expands the
+owned/dependency update breakdown; the `--json` shape is stable.
 
 **Exit codes:**
 - 0: list returned (may be empty)
@@ -493,8 +499,19 @@ Create a resource from a JSON spec file or stdin.
 ```
 d2b create <ResourceType> [--zone <zone>]
   [--spec-file <path> | --spec-stdin]
+  [--wait-for-reconcile [--reconcile-deadline <duration>]]
   [--json | --human]
 ```
+
+With `--wait-for-reconcile` (expedited mode, D090; authorized UX mutation only),
+the command returns after the durable commit plus one expedited reconcile pass
+and reports the committed resource, the post-pass projected layered status,
+`disposition` (`Converged|Progressing|Blocked|UpgradeRequired|Failed`),
+`statusPersistence` (`pending|committed`), and `lastPersistedStatusRevision`. A
+durable commit is never undone if the pass times out; a timeout returns a
+committed-but-reconcile-pending outcome. When the change is disruptive the
+disposition is `UpgradeRequired` and the response carries the upgrade projection
+(D091).
 
 **Exit codes:**
 - 0: created
@@ -510,8 +527,13 @@ Full spec replacement.
 d2b update-spec <ResourceType>/<name> [--zone <zone>]
   [--revision <expected-revision>]
   [--spec-file <path> | --spec-stdin]
+  [--wait-for-reconcile [--reconcile-deadline <duration>]]
   [--json | --human]
 ```
+
+`--wait-for-reconcile` behaves as for `create` (D090): committed resource +
+one expedited reconcile pass disposition + `statusPersistence`. A disruptive
+change returns `UpgradeRequired` rather than applying in place (D091).
 
 **Exit codes:**
 - 0: updated
@@ -525,11 +547,14 @@ Request deletion.
 ```
 d2b delete <ResourceType>/<name> [--zone <zone>]
   [--revision <expected-revision>]
+  [--wait-for-reconcile [--reconcile-deadline <duration>]]
   [--json | --human]
 ```
 
 Triggers deletion (sets `deletionRequestedAt`). Does not wait for finalizers to
-complete unless `--wait` is given.
+complete unless `--wait` is given. With `--wait-for-reconcile` (expedited, D090)
+the response is an event-only Deleted projection / not-found outcome after the
+commit plus one expedited pass.
 
 **Exit codes:**
 - 0: deletion accepted
@@ -558,6 +583,54 @@ Deleted or deadline.
 **Exit codes (with `--watch`):**
 - 0: phase reached Ready or Succeeded
 - 1: phase reached Failed, Deleted, or zone unavailable
+- 2: usage error
+- 3: cancelled or deadline exceeded
+
+### `d2b upgrade <ResourceType>/<name>`
+
+Assess and apply a disruptive/currency upgrade (D091). Plans by default; applies
+only with explicit `--apply`.
+
+```
+d2b upgrade <ResourceType>/<name> [--zone <zone>]
+  [--recursive]
+  [--apply]
+  [--reconcile-deadline <duration>]
+  [--json | --human]
+```
+
+Without `--apply`, prints the bounded upgrade plan (disruption class,
+`preserveState`, and the topological owned/dependency drain→recycle→restart set)
+and makes no change. `--recursive` includes owned/dependent resources in the
+plan. `--recursive --apply` executes the planned upgrade, preserving Resource
+UID/spec identity and durable/state/secret Volumes and TPM identity where
+possible (`preserveState`), recycling only realization and owned ephemeral
+Processes/endpoints. The `--json` plan/result shape is stable.
+
+**Exit codes:**
+- 0: plan produced (no `--apply`) or upgrade applied
+- 1: blocked, conflict, not found, or zone unavailable
+- 2: usage error
+- 3: cancelled or deadline exceeded
+
+### `d2b reconcile <ResourceType>/<name>`
+
+Admin action that requests one expedited reconcile pass (D090) on an existing
+resource via the shared priority lane, without changing spec.
+
+```
+d2b reconcile <ResourceType>/<name> [--zone <zone>]
+  [--reconcile-deadline <duration>]
+  [--json | --human]
+```
+
+Returns the resource, the post-pass projected layered status, `disposition`,
+`statusPersistence`, and `lastPersistedStatusRevision`. Requires admin/core
+authorization; a non-authorized caller is rejected with `expedited-not-authorized`.
+
+**Exit codes:**
+- 0: expedited pass reached a disposition
+- 1: committed-but-reconcile-pending (timeout), blocked, not found, or zone unavailable
 - 2: usage error
 - 3: cancelled or deadline exceeded
 

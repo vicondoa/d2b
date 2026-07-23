@@ -283,6 +283,34 @@ top-level `status.*` base, while the Wayland typed fields are
 implementation has bounded redacted details that are not shared by all
 display-wayland implementations.
 
+D091 currency and upgrade: the display-wayland controller implements
+`assess_update`, `plan_upgrade`, and `execute_upgrade` for its qualified
+ResourceTypes and semantic Wayland sessions. A `ProviderGenerationChanged`,
+`ArtifactChanged`, `DependencyChanged`, or `SpecChanged` reason populates
+universal `status.update` with
+`UpdateAvailable` or `UpgradeRequired`; disruptive changes MUST return
+`UpgradeRequired` rather than being applied in place, while non-disruptive
+changes reconcile normally. These currency fields are universal/ResourceType
+base fields, never `status.provider`. Upgrades recycle only the display
+realization (owned `Process` resources, endpoints, semantic sessions, and
+session attachments) with `disruption` set to `Reload`, `Restart`, or
+`Recycle`; durable config is preserved, dependent sessions are drained and
+restarted by the dependency-aware planner, and owned ephemeral session state
+remains process memory. No surface content bytes, clipboard bytes, terminal
+bytes, notification content bytes, session bytes, secrets, paths, or handles
+may appear in `status.update`.
+
+D090 expedited reconcile: Create, UpdateSpec, and Delete requests that set
+`waitForReconcile` perform no external effect, finalizer mutation, or status
+mutation until Core supplies a typed `CommittedRevisionProof`
+`{resourceUid,generation,revision,operationId}`. Abort produces no effect; a
+durable commit is never rolled back on later reconcile timeout. The response is
+the committed object plus one-pass projected layered status, a disposition
+(`Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`), and
+`statusPersistence` (`pending` or `committed`); effect idempotency keys derive
+from `(UID,generation,revision,operationId)` in the same per-resource
+single-flight priority lane.
+
 ```yaml
 status:
   phase: Pending | Ready | Degraded | Failed | Unknown

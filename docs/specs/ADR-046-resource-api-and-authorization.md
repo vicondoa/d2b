@@ -37,10 +37,56 @@ the Zone runtime.
 | `CommitBatch` | Atomic bounded set of the above in one Zone transaction |
 | `ResolveRef` | Validate canonical ref/type/UID and return bounded identity metadata |
 | `InspectSchema` | Read bound ResourceType schema/export/Provider identity |
+| `Upgrade` | Authorized `assess_update`/`plan_upgrade`/`execute_upgrade` on a ResourceRef; plan-by-default, apply with explicit intent; optional `--recursive` owned/dependency planning (D091) |
+
+`Create`, `UpdateSpec`, and `Delete` accept an authorized expedited option
+`waitForReconcile` with a bounded deadline (D090; see § Expedited reconcile).
 
 There is no arbitrary path/header/query/table API, JSON patch, server-side
 apply, direct redb access, exec/port-forward, secret byte read, or generic
 Provider command.
+
+## Expedited reconcile (D090)
+
+`Create`/`UpdateSpec`/`Delete` may set `waitForReconcile` with a bounded
+deadline. Under one **mutation ticket** carrying an `operationId` and the
+deadline, Core admission plus the reserved-revision redb transaction run in
+parallel with the owning controller's preflight/plan:
+
+1. The controller MAY validate and plan before commit but performs **no**
+   external effect, finalizer release, or status mutation until Core supplies a
+   typed `CommittedRevisionProof { resourceUid, generation, revision, operationId }`.
+2. A DB failure sends `Abort`; no effect occurs. The API returns success only if
+   the initial resource mutation durably committed. A durable commit is never
+   rolled back because reconcile later fails or times out.
+3. Commit enqueues the ordinary reconcile hint; the expedited request enters a
+   bounded priority lane into the SAME per-resource single-flight reconciler
+   (`ADR-046-resource-reconciliation`). Any normally queued reconcile stays
+   queued and runs after the expedited pass. All effect IDs/idempotency keys
+   derive from `(UID, generation, revision, operationId)`; a normal re-entry
+   observes converged/progressing state and no-ops/rejoins, never duplicating.
+
+The API waits in parallel for durable commit plus **one expedited reconcile
+pass** and returns:
+
+```yaml
+resource: <committed resource object>          # base spec + committed metadata
+status:   <post-pass projected layered status> # universal + resource + optional provider
+disposition: Converged | Progressing | Blocked | UpgradeRequired | Failed
+statusPersistence: pending | committed
+lastPersistedStatusRevision: <revision>
+reconcileProjection: <bounded>
+```
+
+Status persistence is asynchronous; the response need not wait for the status
+write, so no uncommitted status is represented as durable. `Delete` returns an
+event-only Deleted projection / not-found outcome. Expedited completion means
+one pass reached a `Converged|Progressing|Blocked|UpgradeRequired|Failed`
+disposition, not long-running external Ready. A timeout/cancel after commit
+returns a typed committed-but-reconcile-pending response while the ordinary
+queue continues. Priority quotas/fairness prevent starvation/DoS. Only
+authorized UX mutations and core may request expedited mode; the admin
+`resource reconcile` CLI action reuses the same lane.
 
 ## Request context
 
@@ -337,6 +383,10 @@ Stable classes include:
 - spec-provider-schema-invalid;
 - spec-provider-shadow;
 - unsupported-capability;
+- expedited-not-authorized;
+- expedited-quota-exceeded;
+- expedited-reconcile-pending;
+- upgrade-required;
 - authorization-denied;
 - revision-expired;
 - backpressure;

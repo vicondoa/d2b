@@ -142,6 +142,68 @@ controller retry under policy. Core never merges stale Provider output.
 There is no fixed polling interval, debounce window, or sleep between ready
 resources.
 
+## Expedited reconcile pass (D090)
+
+An expedited (`waitForReconcile`) mutation enters a **bounded priority lane**
+into the SAME per-resource single-flight reconciler; it does not create a second
+executor and never bypasses per-resource serialization:
+
+1. The controller may preflight/plan in parallel with Core admission/commit but
+   starts no external effect, finalizer release, or status mutation until it
+   receives the typed `CommittedRevisionProof { resourceUid, generation,
+   revision, operationId }` from Core; an `Abort` for that `operationId` means
+   no effect.
+2. On proof, the expedited request is dispatched ahead of normally-queued work
+   for that resource; any already-queued ordinary reconcile stays queued and
+   runs after the expedited pass completes.
+3. All effect IDs/idempotency keys derive from `(UID, generation, revision,
+   operationId)`. The later ordinary re-entry observes the converged/progressing
+   state and no-ops or rejoins the in-flight operation — it never duplicates an
+   effect.
+4. The pass returns a bounded `ReconcileProjection` and one **disposition**:
+   `Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`
+   (these map onto the ordinary result dispositions; expedited completion is one
+   pass reaching a disposition, not long-running external Ready).
+5. Status persistence is asynchronous: the controller returns the projected
+   layered status candidate; the actual `UpdateStatus` write is a normal later
+   mutation. A timeout/cancel after commit yields a committed-but-reconcile-
+   pending outcome and the ordinary queue continues.
+
+Priority quotas and fairness bound the expedited lane so it cannot starve
+ordinary reconciles or be used for DoS. Only authorized UX mutations/core (and
+the admin `resource reconcile` action) use this lane.
+
+## Currency and disruptive upgrade (D091)
+
+Every controller additionally implements `assess_update`, `plan_upgrade`, and
+`execute_upgrade` alongside ordinary reconcile, serialized through the same
+per-resource single-flight so a reconcile and an upgrade never run concurrently
+for one resource:
+
+- **assess_update** runs on core/Provider-generation, artifact/image/NixOS-
+  generation, immutable-spec, dependency, or security-policy change and writes
+  the bounded `status.update` currency object (state/reasons/observed+target
+  IDs/disruption/preserveState/owned+dependency aggregates). A controller MUST
+  report `UpgradeRequired` for a disruptive change rather than apply it in
+  place; non-disruptive changes reconcile normally.
+- **plan_upgrade** produces a bounded plan (disruption class, preserveState,
+  affected owned/dependent set); **execute_upgrade** applies it. The core
+  Operation ledger persists the upgrade operation/idempotency/progress and
+  resumes after crash/restart; `status.update` carries only the latest bounded
+  plan/result, never a second ledger.
+- Upgrade **preserves** the Resource UID and spec identity where possible and
+  recycles only the realization and owned ephemeral Processes/endpoints; durable
+  and state/secret Volumes and TPM identity are preserved (`preserveState:
+  true`). `Replace` of the resource-row identity is used only when explicitly
+  required and planned with ownership/state transfer; full factory reset is a
+  separate destructive path (`ADR-046-reset-and-cutover`).
+- A **dependency-aware planner** topologically drains, recycles, and restarts
+  affected owned/dependent resources. Example: a GPU Device marks itself
+  `UpgradeRequired`/`Blocked` while applications depend on it; the planner
+  drains dependent Processes/Guests, recycles the GPU realization, then restarts
+  the dependents — no surprise disruption. Core invokes dependency/owner
+  triggers and aggregates self/owned/dependency currency for list/get.
+
 ## Trigger reasons
 
 Closed common reasons:
@@ -155,8 +217,13 @@ Closed common reasons:
 - controller-generation-changed;
 - Provider-generation-changed;
 - policy-changed;
+- security-policy-changed;
+- artifact-or-image-changed;
 - execution-status-changed;
 - scheduled-observe;
+- assess-update-due;
+- upgrade-requested;
+- expedited-mutation;
 - retry-due;
 - manual-reconcile;
 - startup-relist.
@@ -335,10 +402,10 @@ core Operation ledger, and independent external observation.
 | Current source | `packages/d2b-realm-router/src/lib.rs`, `mux_session.rs`, `session_lifecycle.rs`; `packages/d2bd/src/supervisor/dag.rs` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-controller-toolkit/src/lib.rs`, `runner.rs`, `queue.rs`, `context.rs`, `result.rs` |
-| Detailed design | Async ResourceReconciler, watch receiver, coalescing, per-resource serialization, parallel tasks, retry/checkpoint/finalize |
+| Detailed design | Async ResourceReconciler, watch receiver, coalescing, per-resource serialization, parallel tasks, retry/checkpoint/finalize; expedited priority lane and `CommittedRevisionProof`-gated effects (D090); `assess_update`/`plan_upgrade`/`execute_upgrade` methods serialized in the same single-flight (D091) |
 | Integration | Provider controller binaries wrap handlers with toolkit |
 | Data migration | None |
-| Validation | Golden state-machine vectors, deterministic clocks, conflict/restart/queue tests |
+| Validation | Golden state-machine vectors, deterministic clocks, conflict/restart/queue tests; D090: commit-fails/Abort → no effect, controller finishes-before-commit gated on proof, effects-gate, status-write-delayed (`statusPersistence: pending`), normal-queued no-op/rejoin, concurrent mutation, delete event-only projection, expedited timeout committed-but-pending, restart re-entry no duplicate; D091: current/non-disruptive/each-trigger assess, UpgradeRequired-not-in-place, dependency propagation/topological drain-recycle-restart, GPU blocking, state/TPM preservation, crash/re-entry resume, single-flight reconcile-vs-upgrade serialization |
 | Removal proof | Current per-role orchestration removed only after ResourceType successors |
 
 ### ADR046-reconcile-002

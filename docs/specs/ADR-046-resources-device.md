@@ -39,6 +39,12 @@ rather than observed.
 
 Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
 
+**D091 update policy.** The universal base spec carries `spec.updatePolicy` for
+every Device: disruptive changes default to manual, while automatic
+non-disruptive upgrades are permitted by policy. A `spec.provider` extension MAY
+add provider-specific knobs, but MUST NOT bypass or weaken base
+`spec.updatePolicy`.
+
 Every Device Provider `ResourceApiBinding` MUST implement the exact Device base
 spec schema version and fingerprint, accept the canonical minimal valid base
 Spec, and pass base lifecycle/status/error/finalizer conformance. A Provider MAY
@@ -233,6 +239,24 @@ and 4 KiB strings; violations use `status-oversize`,
 `status-provider-schema-invalid`, or `status-provider-overlap`.
 
 Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
+
+**D091 update currency.** Every Device includes universal `status.update` with
+`state` (`Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`),
+`reasons`
+(`CoreGenerationChanged|ProviderGenerationChanged|ArtifactChanged|ImageOrSystemGenerationChanged|SpecChanged|DependencyChanged|SecurityPolicyChanged`),
+bounded non-secret observed/target generation and digest IDs, `disruption`
+(`None|Reload|Restart|Recycle|Replace`), `preserveState`, optional
+`operationId`, `lastAssessedAt`, and bounded/truncated `owned:{count,refs}` and
+`dependencies:{count,refs}`. Device claim/arbitration/presence base currency is
+reported through `status.update`; any Device-specific refinement lives in
+`status.resource` and never in `status.provider`. Device controllers set this
+via `assess_update` on core/provider/artifact/image-or-system/spec/dependency/
+security-policy triggers and MUST report `UpgradeRequired` for disruptive
+changes rather than applying them in place. A Device upgrade such as a GPU
+realization change MUST use `UpgradeRequired` or `Blocked` while dependents
+exist; the planner drains dependents, recycles the Device realization, and
+restarts dependents. TPM/device identity and durable device state use
+`preserveState: true` wherever possible.
 
 The existing `status.device` sub-object is carried within `status.resource` as
 `status.resource.device` by the mapping convention. `Device` has multiple
@@ -475,6 +499,20 @@ These invariants are preserved exactly in the device-tpm Provider.
 
 Each Device Provider controller implements the standard async reconcile loop
 from `ADR-046-resource-reconciliation`:
+
+**D090 expedited reconcile.** Authorized Device `Create`, `UpdateSpec`, and
+`Delete` calls MAY set `waitForReconcile`. Under one mutation ticket,
+`operationId`, and deadline, Core admission and the reserved-revision redb commit
+run in parallel with controller preflight/plan, but the controller MUST NOT
+perform external effects, finalizer release, or status mutation until Core
+supplies `CommittedRevisionProof {resourceUid, generation, revision,
+operationId}`; DB failure aborts with no effect. The API returns the committed
+object plus one-pass projected layered status, `disposition`
+(`Converged|Progressing|Blocked|UpgradeRequired|Failed`), `statusPersistence`
+(`pending|committed`), and the last persisted status revision. The durable
+commit is never rolled back on reconcile timeout or failure; effect idempotency
+keys derive from `(UID,generation,revision,operationId)`, and the expedited pass
+uses a bounded priority lane in the same per-resource single-flight.
 
 1. **spec-generation-changed:** create/update inventory selector, provision
    emulated device (swtpm, UHID virtual HID), apply udev rules.

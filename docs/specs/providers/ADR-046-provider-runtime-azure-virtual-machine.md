@@ -1038,6 +1038,34 @@ No ARM resource ID path, ARM resource URI, cloud subscription/tenant IDs,
 poll URLs, PSK material, Noise key material, or raw operation handles appear in
 status.
 
+### Currency and expedited reconcile (D091/D090)
+
+D091 currency is universal status, not Azure VM provider detail. The controller
+implements `assess_update`, `plan_upgrade`, and `execute_upgrade`, populates
+universal `status.update`, and keeps shared currency fields out of
+`status.provider`; Azure-specific observations may appear only under
+`status.provider.details`. Provider generation, VM image generation, or
+security-policy changes set `status.update.state = UpdateAvailable` for
+non-disruptive currency and `UpgradeRequired` for disruptive currency, with
+`reasons = [ProviderGenerationChanged]`, `[ImageOrSystemGenerationChanged]`, or
+`[SecurityPolicyChanged]`, `disruption = Recycle|Replace`, and
+`preserveState = true` rather than applying disruption in place. Non-disruptive
+changes reconcile normally. `execute_upgrade` recycles the Azure VM realization
+while preserving the Guest UID/spec identity, sealed recovery Volume, enrolled
+identity, and data Volumes; `Replace` is allowed only with explicit
+ownership/state transfer. ARM operation/idempotency remains in the core
+Operation ledger, and no secret enters `status.update`.
+
+D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
+external effect, finalizer change, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
+one-pass response returns the committed object, projected layered status,
+disposition `Converged|Progressing|Blocked|UpgradeRequired|Failed`, and
+`statusPersistence = pending|committed`; the durable commit is never rolled back
+after a reconcile timeout. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)`, and the expedited pass uses the bounded
+priority lane inside the same per-resource single-flight.
+
 ### Stable error codes
 
 Closed set; never contain ARM error bodies, token text, internal paths,

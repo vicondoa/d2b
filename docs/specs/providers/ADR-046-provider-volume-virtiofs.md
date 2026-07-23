@@ -393,6 +393,34 @@ The controller never receives raw host paths, FDs, or broker authority. The Volu
 is provided to the virtiofsd Process at launch time by core, resolved from the signed Export
 spec and LaunchTicket — the virtiofs controller never handles FDs directly.
 
+**Currency and upgrade (D091).** The controller implements `assess_update`,
+`plan_upgrade`, and `execute_upgrade` for Export attachments and populates only
+the universal `status.update`, never `status.provider`, with
+`state: Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`,
+`reasons` from `CoreGenerationChanged`, `ProviderGenerationChanged`,
+`ArtifactChanged`, `ImageOrSystemGenerationChanged`, `SpecChanged`,
+`DependencyChanged`, or `SecurityPolicyChanged`, observed/target
+generation/digest IDs, `disruption: None|Reload|Restart|Recycle|Replace`,
+`preserveState`, optional `operationId`, `lastAssessedAt`, and
+`owned`/`dependencies` refs. It honors base `spec.updatePolicy` (manual
+disruptive default; auto non-disruptive), while the Core Operation ledger owns
+upgrade operation, idempotency, and progress. Disruptive attachment/Export
+changes return `UpgradeRequired` rather than applying in place; the planner
+recycles the virtiofsd Process with `disruption: Recycle`, preserves the
+underlying source Volume data, and drains/restarts dependent Guest attachments.
+Non-disruptive changes reconcile normally.
+
+**Expedited reconcile (D090).** For `Create`, `UpdateSpec`, or `Delete` with
+`waitForReconcile`, the controller performs no external effect, finalizer
+mutation, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. `Abort`
+means no effect; a durable commit is never rolled back after a later reconcile
+timeout. The response contains the committed object, one-pass projected layered
+status, `disposition: Converged|Progressing|Blocked|UpgradeRequired|Failed`,
+and `statusPersistence: pending|committed`; effect idempotency keys derive from
+`(UID,generation,revision,operationId)` in the same per-resource single-flight
+using a bounded priority lane.
+
 ### 6.2 Two-phase Export teardown
 
 ```text

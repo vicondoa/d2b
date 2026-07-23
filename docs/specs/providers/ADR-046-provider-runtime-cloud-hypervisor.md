@@ -1308,6 +1308,33 @@ layers atomically in one status mutation; shared fields are never duplicated
 into `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
 registered and signed in the Provider manifest.
 
+#### Currency and expedited reconcile (D091/D090)
+
+D091 currency is universal status, not Cloud Hypervisor provider detail. The
+controller implements `assess_update`, `plan_upgrade`, and `execute_upgrade`,
+populates universal `status.update`, and keeps shared currency fields out of
+`status.provider`; backend-specific observations may appear only under
+`status.provider.details`. A new `systemArtifactId`/NixOS system-image
+generation, provider package generation, or disruptive runtime spec change MUST
+set `status.update.state = UpgradeRequired`, with `reasons =
+[ImageOrSystemGenerationChanged]`, `[ProviderGenerationChanged]`, or
+`[SpecChanged]`, `disruption = Recycle|Restart`, and `preserveState = true`
+rather than applying in place. Non-disruptive spec changes reconcile normally.
+`execute_upgrade` recycles the VMM/runner `Process` and endpoints while
+preserving the Guest UID/spec identity, durable/data Volumes, and TPM identity
+supplied by `Provider/device-tpm`; the dependency-aware planner restarts the
+Guest after the recycle.
+
+D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
+external effect, finalizer change, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
+one-pass response returns the committed object, projected layered status,
+disposition `Converged|Progressing|Blocked|UpgradeRequired|Failed`, and
+`statusPersistence = pending|committed`; the durable commit is never rolled back
+after a reconcile timeout. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)`, and the expedited pass uses the bounded
+priority lane inside the same per-resource single-flight.
+
 ```yaml
 status:
   observedGeneration: 1

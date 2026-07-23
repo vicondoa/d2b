@@ -201,6 +201,29 @@ strict unknown-field-denied redacted `details` ≤32 KiB registered/signed in th
 Provider manifest); shared fields are never duplicated there. The controller
 writes all present layers atomically in one status mutation.
 
+D091 currency and upgrade: the activation-nixos controller implements
+`assess_update`, `plan_upgrade`, and `execute_upgrade` for
+`activation-nixos.d2bus.org.NixosGeneration`. A new NixOS/system generation is
+the prototypical `ImageOrSystemGenerationChanged` and `ArtifactChanged` trigger:
+the `NixosGeneration` resource populates universal `status.update` with
+`UpdateAvailable` or `UpgradeRequired`, and disruptive changes MUST return
+`UpgradeRequired` rather than being applied in place, while non-disruptive
+changes reconcile normally. These currency fields are universal/ResourceType
+base fields, never `status.provider`. Operators apply the planned change
+through `d2b upgrade` or activation apply; durable state is preserved across
+activation, and `Replace` is used only with ownership/state transfer.
+
+D090 expedited reconcile: Create, UpdateSpec, and Delete requests that set
+`waitForReconcile` perform no external effect, finalizer mutation, or status
+mutation until Core supplies a typed `CommittedRevisionProof`
+`{resourceUid,generation,revision,operationId}`. Abort produces no effect; a
+durable commit is never rolled back on later reconcile timeout. The response is
+the committed object plus one-pass projected layered status, a disposition
+(`Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`), and
+`statusPersistence` (`pending` or `committed`); effect idempotency keys derive
+from `(UID,generation,revision,operationId)` in the same per-resource
+single-flight priority lane.
+
 #### 4.3.1 activationDetail enum
 
 `activationDetail` is a typed, bounded resource detail field. It

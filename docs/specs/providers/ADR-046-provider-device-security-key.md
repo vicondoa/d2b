@@ -973,6 +973,24 @@ atomically in one status mutation; shared
 fields are never duplicated into `status.provider`, and the extension schema is
 registered and signed in the Provider manifest.
 
+**Currency and upgrade (D091).** The controller implements `assess_update`,
+`plan_upgrade`, and `execute_upgrade` for security-key relay/frontend
+realization and populates only the universal `status.update`, never
+`status.provider`, with
+`state: Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`,
+`reasons` from `CoreGenerationChanged`, `ProviderGenerationChanged`,
+`ArtifactChanged`, `ImageOrSystemGenerationChanged`, `SpecChanged`,
+`DependencyChanged`, or `SecurityPolicyChanged`, observed/target
+generation/digest IDs, `disruption: None|Reload|Restart|Recycle|Replace`,
+`preserveState`, optional `operationId`, `lastAssessedAt`, and
+`owned`/`dependencies` refs. It honors base `spec.updatePolicy` (manual
+disruptive default; auto non-disruptive), while the Core Operation ledger owns
+upgrade operation, idempotency, and progress. Disruptive relay/frontend changes
+return `UpgradeRequired` rather than applying in place; the planner recycles the
+relay/frontend realization, accepts that transient session state is in memory,
+and keeps secrets out of `status.update`. Non-disruptive changes reconcile
+normally.
+
 ```yaml
 status:
   phase: Ready | Pending | Degraded | Failed | Unknown
@@ -1036,6 +1054,17 @@ Device resource is deleted.
 
 The Device controller for `device-security-key` implements the standard async
 reconcile interface from `ADR-046-resource-reconciliation`. Trigger handlers:
+
+For `Create`, `UpdateSpec`, or `Delete` with `waitForReconcile` (D090), the
+controller performs no external effect, finalizer mutation, or status mutation
+until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. `Abort`
+means no effect; a durable commit is never rolled back after a later reconcile
+timeout. The response contains the committed object, one-pass projected layered
+status, `disposition: Converged|Progressing|Blocked|UpgradeRequired|Failed`,
+and `statusPersistence: pending|committed`; effect idempotency keys derive from
+`(UID,generation,revision,operationId)` in the same per-resource single-flight
+using a bounded priority lane.
 
 ### `spec-generation-changed`
 

@@ -165,6 +165,13 @@ envelope.
 `providerRef`-plus-`spec.provider` shape, because a `Provider` cannot carry a
 non-circular `spec.providerRef` to itself.
 
+**Update policy (D091).** The base spec carries a provider-neutral
+`spec.updatePolicy` (universal or ResourceType base): disruptive upgrades default
+to `manual` (the controller reports `UpgradeRequired` and waits for an explicit
+`resource upgrade ... --apply`), while automatic application of non-disruptive
+changes MAY be permitted. A `spec.provider` extension MAY add implementation
+knobs but MUST NOT bypass or weaken the base disruption policy.
+
 ## Status
 
 Status is observed state and is a separately authorized subresource. It is the
@@ -206,6 +213,17 @@ status:
   startedAt: 2026-07-23T00:00:00Z
   completedAt: null
   outcome: null
+  update:                              # universal currency object (D091)
+    state: Current
+    reasons: []
+    observedGeneration: 4
+    targetGeneration: 4
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: 2026-07-23T00:00:01Z
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
   # Layer 2 — ResourceType-common, provider-neutral (required across all implementations)
   resource:
     # exact typed fields frozen by the ResourceType schema
@@ -234,6 +252,34 @@ The universal base is present on every resource at `status` top level:
 | `startedAt` | Optional RFC 3339 UTC; resource/effect start |
 | `completedAt` | Optional RFC 3339 UTC; terminal completion |
 | `outcome` | Optional latest bounded outcome |
+| `update` | Universal provider-neutral currency object (D091); present on every resource |
+
+### Universal currency object `status.update` (D091)
+
+Every resource carries a bounded, provider-neutral `status.update` object in the
+universal base. Because it is universal (or, for a ResourceType-specific
+refinement, `status.resource`), its shared fields are never duplicated in a
+`status.provider` extension (D088):
+
+| Field | Rules |
+| --- | --- |
+| `state` | `Current`, `UpdateAvailable`, `UpgradeRequired`, `Upgrading`, `Blocked`, or `Unknown` |
+| `reasons` | Bounded list from the closed enum `CoreGenerationChanged`, `ProviderGenerationChanged`, `ArtifactChanged`, `ImageOrSystemGenerationChanged`, `SpecChanged`, `DependencyChanged`, `SecurityPolicyChanged` |
+| `observedGeneration` / `targetGeneration` | Numeric; and/or bounded non-secret observed/target digest IDs |
+| `disruption` | `None`, `Reload`, `Restart`, `Recycle`, or `Replace` |
+| `preserveState` | Bool: whether the planned upgrade preserves durable/state/secret Volumes and identity |
+| `operationId` | Optional in-flight upgrade Operation id (core Operation ledger) |
+| `lastAssessedAt` | RFC 3339 UTC of the last `assess_update` |
+| `owned` | `{ count, refs }` bounded/truncated aggregate currency of owned resources |
+| `dependencies` | `{ count, refs }` bounded/truncated aggregate currency of dependencies |
+
+A controller assesses currency via `assess_update` on core/Provider-generation,
+artifact/image/NixOS-generation, immutable-spec, dependency, or
+security-policy change (D091). It MUST report `UpgradeRequired` rather than apply
+a disruptive in-place change; non-disruptive changes reconcile normally. Core
+aggregates self/owned/dependency currency for list/get. The latest bounded
+upgrade plan/result lives here; the core Operation ledger owns
+operation/idempotency/progress (never a second ledger in status).
 
 Condition:
 
@@ -477,7 +523,7 @@ The following are not standalone ResourceTypes:
 | Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields |
 | Integration | Store/API/SDK/Nix/codegen consume one contract |
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
-| Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests |
+| Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests; `status.update` currency object round-trip (state/reasons/disruption/preserveState/owned+dependency refs bounded); `spec.updatePolicy` base round-trip |
 | Removal proof | Old DTOs removed per owning ResourceType wave only after rendered/runtime consumers move |
 
 ### ADR046-object-002

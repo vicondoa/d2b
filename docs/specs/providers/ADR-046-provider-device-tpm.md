@@ -765,7 +765,32 @@ atomically in one status mutation; shared
 fields are never duplicated into `status.provider`, and the extension schema is
 registered and signed in the Provider manifest.
 
-### 10.1 Common phase model
+### 10.1 Currency and expedited reconcile (D091/D090)
+
+D091 currency is universal status, not TPM provider detail. The controller
+implements `assess_update`, `plan_upgrade`, and `execute_upgrade`, populates
+universal `status.update`, and keeps shared currency fields out of
+`status.provider`; TPM-specific observations may appear only under
+`status.provider.details`. Provider generation, spec, artifact, or
+security-policy changes that are disruptive MUST set `status.update.state =
+UpgradeRequired`, with `reasons = [ProviderGenerationChanged]`, `[SpecChanged]`,
+`[ArtifactChanged]`, or `[SecurityPolicyChanged]`, `disruption = Recycle`, and
+`preserveState = true` rather than applying disruption in place. Non-disruptive
+changes reconcile normally. `execute_upgrade` preserves TPM identity and the
+per-Device TPM data Volume; disruption is at most `Recycle`, and the controller
+MUST never wipe or re-provision TPM state as part of an upgrade.
+
+D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
+external effect, finalizer change, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
+one-pass response returns the committed object, projected layered status,
+disposition `Converged|Progressing|Blocked|UpgradeRequired|Failed`, and
+`statusPersistence = pending|committed`; the durable commit is never rolled back
+after a reconcile timeout. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)`, and the expedited pass uses the bounded
+priority lane inside the same per-resource single-flight.
+
+### 10.2 Common phase model
 
 `Provider/device-tpm` uses the standard Device phase model without
 Device-specific phases.
@@ -778,7 +803,7 @@ Device-specific phases.
 | `Failed` | Volume marker fail-closed, flush Failed, or swtpm maxRestarts exceeded |
 | `Deleted` | Terminal event only; core emits and removes the row |
 
-### 10.2 Canonical Device status
+### 10.3 Canonical Device status
 
 ```yaml
 status:
@@ -812,7 +837,7 @@ status:
         lastFlushAt: "2026-07-22T00:00:09Z"
 ```
 
-### 10.3 Typed TPM provider details fields
+### 10.4 Typed TPM provider details fields
 
 The fields below are TPM-specific and therefore live under
 `status.provider.details.tpm`; the Device claim/arbitration/presence base stays
@@ -832,7 +857,7 @@ promoted to `status.resource`.
 ResourceRef pointing to a typed resource. All `*Ref` fields in Device status
 and spec are canonical `ResourceType/<name>` strings in the same Zone.
 
-### 10.4 Guest runtime endpoint handoff
+### 10.5 Guest runtime endpoint handoff
 
 When the Guest runtime Provider needs the TPM socket for Cloud Hypervisor:
 

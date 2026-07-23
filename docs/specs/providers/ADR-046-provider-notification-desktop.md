@@ -823,6 +823,33 @@ authority (D087). No notification bytes, clipboard or terminal bytes, secrets,
 paths, PIDs, unit names, or authority-conferring handles are ever persisted or
 placed in any status layer.
 
+D091 currency and upgrade: the notification-desktop controller implements
+`assess_update`, `plan_upgrade`, and `execute_upgrade` for its qualified
+ResourceTypes and semantic notification sessions. A `ProviderGenerationChanged`,
+`ArtifactChanged`, `DependencyChanged`, or `SpecChanged` reason populates
+universal `status.update` with
+`UpdateAvailable` or `UpgradeRequired`; disruptive changes MUST return
+`UpgradeRequired` rather than being applied in place, while non-disruptive
+changes reconcile normally. These currency fields are universal/ResourceType
+base fields, never `status.provider`. Upgrades recycle only the notification realization
+(owned `Process` resources, endpoints, and sessions) with `disruption` set to
+`Reload`, `Restart`, or `Recycle`; durable config is preserved, dependent
+sessions and attachments are drained and restarted by the dependency-aware
+planner, and owned ephemeral session state remains process memory. No
+notification content bytes, clipboard bytes, terminal bytes, session bytes,
+secrets, paths, or handles may appear in `status.update`.
+
+D090 expedited reconcile: Create, UpdateSpec, and Delete requests that set
+`waitForReconcile` perform no external effect, finalizer mutation, or status
+mutation until Core supplies a typed `CommittedRevisionProof`
+`{resourceUid,generation,revision,operationId}`. Abort produces no effect; a
+durable commit is never rolled back on later reconcile timeout. The response is
+the committed object plus one-pass projected layered status, a disposition
+(`Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`), and
+`statusPersistence` (`pending` or `committed`); effect idempotency keys derive
+from `(UID,generation,revision,operationId)` in the same per-resource
+single-flight priority lane.
+
 ---
 
 ## 12. Lifecycle, status, and error handling

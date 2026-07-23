@@ -79,6 +79,24 @@ implementations of a ResourceType are promoted to the ResourceType base
 § Status). The `spec.provider` and `status.provider` schemas align for the same
 Provider.
 
+**Currency, upgrade, and expedited reconcile (D090/D091).** Every controller
+component implements, alongside ordinary reconcile, the toolkit methods
+`assess_update`, `plan_upgrade`, and `execute_upgrade`, and populates the
+universal `status.update` currency object. A controller MUST report
+`UpgradeRequired` for a disruptive change rather than apply it in place;
+non-disruptive changes reconcile normally. Upgrades preserve the Resource
+UID/spec identity and durable/state/secret Volumes and TPM identity where
+possible, recycling only realization and owned ephemeral Processes/endpoints;
+`Replace` of the resource-row identity is used only when explicitly required and
+planned with ownership/state transfer. The signed capability matrix and base
+conformance suite (D089) additionally cover currency states, disruption classes,
+and the expedited (`waitForReconcile`) path — a controller performs no external
+effect, finalizer release, or status mutation on an expedited mutation until it
+receives Core's `CommittedRevisionProof`, and it returns a bounded
+disposition/projection for the one expedited pass. Upgrade disruption policy is
+a provider-neutral base field; a `spec.provider` extension may add
+implementation knobs but cannot bypass it.
+
 Provider status contains:
 
 - common resource status;

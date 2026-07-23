@@ -839,6 +839,33 @@ Initial → AwaitingDependency → Ready → Degraded (transient) → Ready
 - `Failed`: Process exhausted maxRestarts; EphemeralProcess cleanup handler
   detects unrecoverable picker failures.
 
+D091 currency and upgrade: the clipboard-wayland controller implements
+`assess_update`, `plan_upgrade`, and `execute_upgrade` for its qualified
+ResourceTypes and semantic clipboard sessions. A `ProviderGenerationChanged`,
+`ArtifactChanged`, `DependencyChanged`, or `SpecChanged` reason populates
+universal `status.update` with
+`UpdateAvailable` or `UpgradeRequired`; disruptive changes MUST return
+`UpgradeRequired` rather than being applied in place, while non-disruptive
+changes reconcile normally. These currency fields are universal/ResourceType
+base fields, never `status.provider`. Upgrades recycle only the clipboard realization
+(owned `Process` resources, endpoints, and sessions) with `disruption` set to
+`Reload`, `Restart`, or `Recycle`; durable config is preserved, dependent
+sessions and attachments are drained and restarted by the dependency-aware
+planner, and owned ephemeral session state remains process memory. No clipboard
+content bytes, terminal bytes, notification content bytes, session bytes,
+secrets, paths, or handles may appear in `status.update`.
+
+D090 expedited reconcile: Create, UpdateSpec, and Delete requests that set
+`waitForReconcile` perform no external effect, finalizer mutation, or status
+mutation until Core supplies a typed `CommittedRevisionProof`
+`{resourceUid,generation,revision,operationId}`. Abort produces no effect; a
+durable commit is never rolled back on later reconcile timeout. The response is
+the committed object plus one-pass projected layered status, a disposition
+(`Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`), and
+`statusPersistence` (`pending` or `committed`); effect idempotency keys derive
+from `(UID,generation,revision,operationId)` in the same per-resource
+single-flight priority lane.
+
 ### clipd-host startup sequence
 
 1. Open inherited-socketpair ComponentSession to `clipboard-controller`

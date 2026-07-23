@@ -590,6 +590,32 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   either base fingerprint is rejected. Generic CLI/controller base-only tests:
   author and reconcile succeed on base spec + base status with `spec.provider`/
   `status.provider` absent or from a newer Provider version.
+- Expedited reconcile tests (D090): commit-fails/`Abort` → no external effect;
+  controller finishes preflight before commit but gates all effects on
+  `CommittedRevisionProof`; effects-gate (no finalizer release / status write
+  pre-proof); status-write-delayed → response carries `statusPersistence:
+  pending` and last persisted status revision; normally-queued reconcile
+  no-ops/rejoins after the expedited pass (idempotency key from
+  UID/generation/revision/operationId; no duplicate effect); concurrent
+  mutation conflict handling; delete returns event-only Deleted projection /
+  not-found; expedited timeout → committed-but-reconcile-pending with the queue
+  continuing; restart mid-expedited → no duplicate effect; `expedited-not-
+  authorized`/`expedited-quota-exceeded` enforcement and priority-lane fairness.
+- Currency and disruptive-upgrade tests (D091): `status.update` reports
+  `Current` when converged; a non-disruptive change reconciles without
+  `UpgradeRequired`; each trigger (`CoreGenerationChanged`,
+  `ProviderGenerationChanged`, `ArtifactChanged`, `ImageOrSystemGenerationChanged`,
+  `SpecChanged`, `DependencyChanged`, `SecurityPolicyChanged`) drives the correct
+  state/reason; dependency propagation aggregates owned/dependency currency for
+  list/get; GPU dependency blocking → `Blocked`/`UpgradeRequired`, planner drains
+  dependent Processes/Guests, recycles the GPU realization, restarts dependents;
+  state-preservation (durable/state Volumes) and TPM-identity preservation across
+  upgrade/recycle; `Replace` only with ownership/state transfer; crash/re-entry
+  resumes from the core Operation ledger without duplicating; per-resource
+  single-flight serializes reconcile-vs-upgrade; CLI projections (`list
+  --updates`, `get`, `upgrade` plan-by-default vs `--recursive --apply`) with
+  stable `--json`; `spec.updatePolicy` manual-disruptive default; `spec.provider`
+  cannot bypass disruption policy.
 - Quota/EmergencyPolicy tests: hierarchical Host/Guest allocation against
   Zone capacity, overcommit blocking, digest/Provider/Host/Guest/Zone/global
   emergency disable and route/session/grant revocation, incident-held

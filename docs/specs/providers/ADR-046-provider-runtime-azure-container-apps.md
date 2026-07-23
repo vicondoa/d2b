@@ -810,6 +810,33 @@ include all present layers atomically in one status mutation; shared fields are
 never duplicated into `status.provider`, and the strict, ≤32 KiB, redacted
 extension schema is registered and signed in the Provider manifest.
 
+#### Currency and expedited reconcile (D091/D090)
+
+D091 currency is universal status, not ACA provider detail. The controller
+implements `assess_update`, `plan_upgrade`, and `execute_upgrade`, populates
+universal `status.update`, and keeps shared currency fields out of
+`status.provider`; ACA-specific observations may appear only under
+`status.provider.details`. Provider generation, sandbox image/artifact digest, or
+security-policy changes set `status.update.state = UpdateAvailable` for
+non-disruptive currency and `UpgradeRequired` for disruptive currency, with
+`reasons = [ProviderGenerationChanged]`, `[ArtifactChanged]`, or
+`[SecurityPolicyChanged]`, `disruption = Recycle`, and `preserveState = true`.
+Non-disruptive changes reconcile normally. `execute_upgrade` recycles only the
+ACA sandbox realization while preserving the Guest UID/spec identity, enrolled
+identity, and any paired Azure-VM sealed recovery Volume; ARM
+operation/idempotency remains in the core Operation ledger, and no secret enters
+`status.update`.
+
+D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
+external effect, finalizer change, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
+one-pass response returns the committed object, projected layered status,
+disposition `Converged|Progressing|Blocked|UpgradeRequired|Failed`, and
+`statusPersistence = pending|committed`; the durable commit is never rolled back
+after a reconcile timeout. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)`, and the expedited pass uses the bounded
+priority lane inside the same per-resource single-flight.
+
 | Field | Allowed content | Forbidden content |
 | --- | --- | --- |
 | `status.provider.details.providerPhase` | One of: `provisioning`, `ready`, `running`, `idle`, `stopping`, `stopped`, `failed`, `deleted`, `unknown` | Azure resource ID, ACA sandbox URL, container name, management ARM path |

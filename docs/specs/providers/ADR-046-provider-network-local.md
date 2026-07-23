@@ -1400,6 +1400,35 @@ the first `await` on an effect call.  Each resource's reconcile/observe/finalize
 handler runs independently; the watch receiver continues dispatching other ready
 resources without waiting for any single handler.
 
+**Currency and upgrade (D091).** The controller implements `assess_update`,
+`plan_upgrade`, and `execute_upgrade` for Network fabric realization and writes
+only the universal `status.update`, never `status.provider`, with
+`state: Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`,
+`reasons` from `CoreGenerationChanged`, `ProviderGenerationChanged`,
+`ArtifactChanged`, `ImageOrSystemGenerationChanged`, `SpecChanged`,
+`DependencyChanged`, or `SecurityPolicyChanged`, observed/target
+generation/digest IDs, `disruption: None|Reload|Restart|Recycle|Replace`,
+`preserveState`, optional `operationId`, `lastAssessedAt`, and
+`owned`/`dependencies` refs. It honors base `spec.updatePolicy` (manual
+disruptive default; auto non-disruptive), while the Core Operation ledger owns
+upgrade operation, idempotency, and progress. A fabric/provider-generation
+change returns `UpgradeRequired` with `disruption: Recycle` or
+`disruption: Restart` instead of being applied in place; the dependency-aware
+planner drains dependent attachments/Guests, recycles the fabric realization,
+restarts dependents, and preserves Network identity. Non-disruptive changes
+reconcile normally.
+
+**Expedited reconcile (D090).** For `Create`, `UpdateSpec`, or `Delete` with
+`waitForReconcile`, the controller performs no external effect, finalizer
+mutation, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. `Abort`
+means no effect; a durable commit is never rolled back after a later reconcile
+timeout. The response contains the committed object, one-pass projected layered
+status, `disposition: Converged|Progressing|Blocked|UpgradeRequired|Failed`,
+and `statusPersistence: pending|committed`; effect idempotency keys derive from
+`(UID,generation,revision,operationId)` in the same per-resource single-flight
+using a bounded priority lane.
+
 ### 16.2 Reconcile (Network resource)
 
 ```text

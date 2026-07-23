@@ -816,6 +816,18 @@ validated against the package manifest. Raw Nix store path strings (e.g.,
 `/nix/store/<hash>-foo`) are rejected at eval time and must never appear in
 emitted resource spec JSON.
 
+**Update policy and currency triggers (D091).** The base spec carries a
+provider-neutral `spec.updatePolicy` (disruptive upgrades default to `manual`;
+automatic application of non-disruptive changes MAY be permitted); a
+`spec.provider` extension may add implementation knobs but cannot bypass it.
+Selecting a new artifact/image ID, a new `systemArtifactId` NixOS generation, or
+a new Provider package generation in Nix is a currency trigger: activation
+records the observed/target generation/digest IDs, and the owning controller's
+`assess_update` reports `status.update.state = UpgradeRequired` (with the
+matching closed-enum reason) rather than applying a disruptive change in place.
+The operator applies it with `d2b upgrade <ref> --apply` (optionally
+`--recursive`).
+
 ### Package closures into Guests
 
 Current source: `nixos-modules/closures-json.nix` — `pkgs.closureInfo` per VM,

@@ -1047,6 +1047,29 @@ the provider-neutral `unsupported-capability` result rather than degrading a bas
 field. Generic tooling authors only the base spec, so no operator or generic
 controller depends on a Provider's opaque `settings`.
 
+**Expedited reconcile (D090).** Only authorized UX mutations and core (and the
+admin `resource reconcile` action) may set `waitForReconcile`; an unauthorized
+request is rejected with `expedited-not-authorized`. The expedited priority lane
+is quota-bounded and fair so it cannot starve ordinary reconciles or serve as a
+DoS amplifier. A controller performs no external effect, finalizer release, or
+status mutation until Core's typed `CommittedRevisionProof` arrives, so a
+never-committed mutation causes no effect; and a durable commit is authoritative
+regardless of whether the expedited pass later fails, so the API cannot be
+tricked into reporting an uncommitted mutation as durable or an uncommitted
+status as persisted (`statusPersistence: pending`).
+
+**Currency and disruptive upgrade (D091).** The `status.update` currency object
+carries only bounded, non-secret observed/target generation/digest IDs and
+bounded/truncated owned/dependency refs — never secret material, raw artifact
+paths, or unbounded collections. Disruptive changes require an explicit,
+authorized `resource upgrade ... --apply`; a controller must report
+`UpgradeRequired` rather than silently disrupt a running workload, and the
+dependency-aware planner drains dependents before recycling so there is no
+surprise disruption. Upgrades preserve TPM identity and durable/state/secret
+Volumes (`preserveState`); `Replace` of a resource-row identity is used only
+when explicitly required and planned with ownership/state transfer, and full
+destructive factory reset remains a separate authorized path.
+
 Two invariants close the specific attacks Volume state is most exposed to:
 
 - **TPM Volume never re-provisioned.** After the swtpm provisioning marker

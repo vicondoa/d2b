@@ -1084,6 +1084,20 @@ post-cutover recovery levers this spec defines as the "full Zone reset,"
 (system-minijail, volume-local, and other dossiers) already reference by name
 without defining their mechanism.
 
+### Not a reset: disruptive upgrade/recycle (D091)
+
+An in-place disruptive **upgrade/recycle** (`d2b upgrade <ref> [--recursive]
+--apply`, D091) is distinct from and never a substitute for these destructive
+resets. An upgrade preserves the Resource UID and spec identity and preserves
+durable/state/secret Volumes and TPM identity (`preserveState: true`), recycling
+only the resource's realization and owned ephemeral Processes/endpoints, and its
+dependency-aware planner drains dependents first. `Replace` of a resource-row
+identity is used only when explicitly required and is planned with ownership and
+state transfer so durable/state Volumes and TPM identity move to the replacement
+rather than being wiped. A full factory reset (below) is the separate,
+explicitly-destructive lever; upgrade/recycle never silently deletes durable
+state, and reset never masquerades as an upgrade.
+
 ### Full Zone reset
 
 `d2b host reset --scope zone --target Zone/<name> [--dry-run | --apply]

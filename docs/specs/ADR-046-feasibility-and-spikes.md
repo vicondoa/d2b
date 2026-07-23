@@ -271,6 +271,7 @@ in any of them and remain `ADR-only`.
 | Clean v3 reset/cutover (no v2 alias dispatch, fresh Zone bootstrap) | `ADR-only` | Yes — SPIKE-14 |
 | Representative local/cloud/interaction Provider end-to-end composition | `ADR-only` | Yes — SPIKE-15 |
 | Three-layer spec + status shape: base-schema parity across implementations, minimal-base acceptance, capability-declared rejection, base-only projection, extension versioning/unknown-field/shadow | `ADR-only` | Yes — SPIKE-16 |
+| Expedited reconcile commit-proof gating/idempotency/priority-lane and currency/disruptive-upgrade dependency planning | `ADR-only` | Yes — SPIKE-17 |
 | Current v3 storage/DAG/pidfd/spawn_runner/router files exist and pass their own tests | `implemented-and-reachable`/`production-reachable` for current role (E4) | No — already evidenced |
 
 ## Mandatory disposable spike catalog
@@ -540,6 +541,22 @@ performed by this documentation-only spec.
 | Failure interpretation | A base-only consumer that fails on an unknown/newer extension, two implementations that diverge on the base spec or `status.resource`, or a base capability honored/degraded outside the capability matrix, is a severity-blocking finding against D088/D089: the shared field is either mis-placed in an extension (must be promoted to base) or the base contract is not truly provider-neutral. Fixed structurally, never suppressed. |
 | Affected decisions/work items | D027, D028, D037, D075, D088, D089; resource object/API/store/reconcile work items and every Provider dossier's spec/status-schema work item. |
 | Cleanup | Deleted once the real resource-contract crate (`packages/d2b-contracts`) and the provider conformance kit reach equal base-schema-parity, minimal-base-acceptance, capability-matrix, base-only-projection, and extension-version test coverage. |
+| Status | Specified — not yet executed. |
+
+### SPIKE-17 — expedited reconcile commit-proof gating and currency/disruptive-upgrade planning
+
+| Field | Value |
+| --- | --- |
+| Hypothesis | (D090) An expedited (`waitForReconcile`) mutation can run controller preflight/plan in parallel with a reserved-revision commit while gating every external effect/finalizer/status write on a typed `CommittedRevisionProof`, enter a bounded priority lane in the same per-resource single-flight, and return committed-object + one-pass disposition + `statusPersistence` without waiting for the async status write; an `Abort` yields no effect; a durable commit is never rolled back on later reconcile timeout; and a normal re-entry no-ops via the `(UID,generation,revision,operationId)` idempotency key. (D091) A controller can assess currency into `status.update`, report `UpgradeRequired` for a disruptive change instead of applying it, and a dependency-aware planner can topologically drain→recycle→restart dependents (GPU example) while preserving UID/state/TPM. |
+| Minimal disposable artifact | `proofs/expedited-upgrade-spike/` — an in-process fake resource store (reserved-revision + commit-proof/`Abort` emitter, not real redb) and a fake single-flight reconciler with a bounded priority lane; a fake GPU Device with dependent Processes for the drain/recycle/restart planner; a deterministic clock. |
+| Inputs | (a) expedited create where commit succeeds then one pass reaches a disposition; (b) expedited create where commit `Abort`s (assert zero effects); (c) controller finishes preflight before proof (assert no effect until proof); (d) delayed status write (assert `statusPersistence: pending`); (e) a normally-queued reconcile after an expedited pass (assert no-op/rejoin, no duplicate); (f) expedited timeout after commit (assert committed-but-pending, queue continues); (g) restart mid-expedited (assert no duplicate effect); (h) each currency trigger → correct `state`/`reasons`; (i) disruptive change → `UpgradeRequired` not applied in place; (j) GPU with dependents → `Blocked`, planner drains/recycles/restarts, UID/state/TPM preserved. |
+| Command/harness | `cargo test --manifest-path proofs/expedited-upgrade-spike/Cargo.toml -- --test-threads=1 expedited_and_upgrade`. |
+| Metrics | (1) no effect/finalizer/status mutation occurs before `CommittedRevisionProof`; `Abort` → zero effects; (2) durable commit persists regardless of a later pass timeout; (3) idempotency key dedups the normal re-entry (exactly-once effect); (4) response returns committed object + one-pass disposition + `statusPersistence` without blocking on the status write; (5) priority lane is bounded/fair (ordinary reconciles not starved); (6) currency states/reasons/disruption computed correctly per trigger; (7) disruptive change never applied in place (always `UpgradeRequired`); (8) planner order is drain→recycle→restart and preserves UID/state/TPM. |
+| Pass/fail threshold | All metrics binary pass; metrics (1)-(3) and (7)-(8) are hard zero-tolerance gates (no ungated effect, no lost commit, no duplicate, no surprise disruption, no silent state/TPM loss). |
+| Expected resource budget | ≤3 minutes wall time; ≤48 MiB RSS (in-memory store/reconciler/planner). |
+| Failure interpretation | An effect before proof, a rolled-back commit, a duplicated effect, an in-place disruptive change, or a planner that disrupts dependents before draining is a severity-blocking finding against D090/D091 and must be fixed structurally, never suppressed. |
+| Affected decisions/work items | D005, D030, D084, D090, D091; resource API/store/reconcile/core-controller work items and every Provider dossier's currency/upgrade work item. |
+| Cleanup | Deleted once the real resource-store/reconcile/core-controller crates and the provider conformance kit reach equal commit-proof-gating, idempotency, priority-lane, currency, and dependency-planner coverage. |
 | Status | Specified — not yet executed. |
 
 ## Implementation validation — how a spike is retired

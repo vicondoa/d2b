@@ -1711,6 +1711,33 @@ registered and signed in the Provider manifest. The controller watch loop remain
 responsive to new Volume spec changes while per-resource effect calls run
 concurrently.
 
+### Currency and expedited reconcile (D091/D090)
+
+D091 currency is universal status, not volume-local provider detail. The
+controller implements `assess_update`, `plan_upgrade`, and `execute_upgrade`,
+populates universal `status.update`, and keeps shared currency fields out of
+`status.provider`; filesystem-specific observations may appear only under
+`status.provider.details`. Provider/controller generation, schema, spec, or
+security-policy changes that require disruption MUST set `status.update.state =
+UpgradeRequired`, with `reasons = [ProviderGenerationChanged]`, `[SpecChanged]`,
+`[ArtifactChanged]`, or `[SecurityPolicyChanged]`, `disruption = Recycle|Replace`,
+and `preserveState = true` rather than applying disruption in place.
+Non-disruptive changes reconcile normally. Durable and state Volumes are
+preserved across any upgrade; volume-local's own controller upgrade recycles
+only the controller `Process`, and `Replace` of a Volume row is allowed only
+with explicit ownership/state transfer. No raw host path or secret enters
+`status.update`.
+
+D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
+external effect, finalizer change, or status mutation until Core supplies
+`CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
+one-pass response returns the committed object, projected layered status,
+disposition `Converged|Progressing|Blocked|UpgradeRequired|Failed`, and
+`statusPersistence = pending|committed`; the durable commit is never rolled back
+after a reconcile timeout. Effect idempotency keys derive from
+`(UID,generation,revision,operationId)`, and the expedited pass uses the bounded
+priority lane inside the same per-resource single-flight.
+
 ### Core Volume status
 
 ```yaml
