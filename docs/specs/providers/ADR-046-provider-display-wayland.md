@@ -87,56 +87,118 @@ resource envelope contract from `ADR-046-resource-object-model`.
 
 | ID | Type | Binary | Domain | Placement | Cardinality |
 | --- | --- | --- | --- | --- | --- |
-| `host-proxy-controller` | controller | `d2b-display-wayland-host-proxy` | system | one per Host, on `Host/<name>` | 1 per Zone Host |
-| `guest-frontend-controller` | controller | `d2b-display-wayland-guest-frontend` | system | one per Guest, on `Guest/<name>` where `providerSettings.displayWayland.enable = true` | 1 per enabled Guest |
-| `policy-controller` | controller | `d2b-display-wayland-policy` | system | one per Zone, on the Zone self resource | 1 per Zone |
+| `display-controller` | controller | `d2b-display-wayland-controller` | system | Zone singleton | 1 per Zone |
+| `display-user-portal` | service | `d2b-display-wayland-user-portal` | user | one per active user login session | 1 per user with active sessions |
 
-The `policy-controller` watches `WaylandPolicy` resources and updates the
-filter policy digest served to `host-proxy-controller` instances. It does not
-own any Process.
+Both components are declared as static entries in the signed ProviderDeployment
+manifest; the framework instantiates them at Provider enrollment. There is no
+implicit controller bootstrap.
 
-### 4.2 `host-proxy-controller`
+### 4.2 `display-controller`
 
-Watches `WaylandSession` resources owned by each Host. For every Ready
-`WaylandSession`:
+A Zone-singleton system-domain controller. Manages both
+`display-wayland.d2b.io.WaylandSession` and `display-wayland.d2b.io.WaylandPolicy`
+resources within its Zone.
 
-1. Verifies that the referenced Guest `Device` (GPU cross-domain endpoint) is
-   Ready and that the `device-gpu` Provider has exposed the cross-domain
-   socket endpoint to the Zone.
-2. Reads the `WaylandPolicy` compiled digest for this session.
-3. Creates and manages a `Process` resource for the Host proxy worker (see
-   §6.1).
-4. Writes `WaylandSession.status` with endpoint revision, proxy process ref,
-   and readiness.
-
-On Guest stop or `WaylandSession` deletion the controller finalizes the proxy
-Process. The proxy socket is an implementation detail of the Process Volume
-mount; it is never exposed in status or audit.
-
-### 4.3 `guest-frontend-controller`
-
-Watches Guest resources where `spec.providerSettings.displayWayland.enable =
-true`. For each such Guest:
-
-1. Creates and manages a `Process` resource for the in-guest Wayland frontend
-   worker (see §6.2). The process runs in the `system` domain under the Guest.
-2. Creates the `WaylandSession` resource that `host-proxy-controller` will
-   pick up.
-3. Writes `WaylandSession.status.guestFrontendRef`.
-
-### 4.4 `policy-controller`
-
-Watches `WaylandPolicy` resources in the Zone. On create/update:
-
-1. Validates the policy schema.
+On `display-wayland.d2b.io.WaylandPolicy` create/update:
+1. Validates the policy schema. **Unknown interface names fail closed**: any
+   `allowGlobals` or `denyGlobals` entry not in the compiled global catalog is
+   rejected at admission with an actionable error. The `WaylandPolicy` resource
+   is not admitted.
 2. Compiles an ordered canonical policy digest into controller-local in-memory
-   state.
-3. Signals `host-proxy-controller` instances through the owner-trigger mechanism.
+   state. No durable Volume is required.
 
-`WaylandPolicy` resources that reference unknown interface names are accepted
-with a `UnknownInterface` condition. Policy violations produce `PolicyWarning`
-audit records, not hard admission failures, because the list of advertised
-interfaces is host-compositor-dependent.
+On `display-wayland.d2b.io.WaylandSession` create/update:
+1. Verifies the referenced `WaylandPolicy` (fully qualified ResourceRef) is Ready.
+2. Requests a cross-domain GPU endpoint attachment grant from `Provider/device-gpu`
+   via typed ComponentSession service. Receives an opaque grant handle.
+   `ProviderSupervisor` routes the fd directly from the device-gpu provider to the
+   target worker at launch; the controller never holds the fd.
+3. Requests a per-session compositor connection attachment grant from
+   `display-user-portal` for the session's `userRef` via KK-profile
+   ComponentSession. Receives an opaque grant handle. `ProviderSupervisor` routes
+   the fd directly from the portal to the target worker at launch; the controller
+   never holds the compositor fd or any compositor socket path.
+4. Assembles a `ProviderSupervisor` LaunchTicket carrying the opaque attachment
+   grant handles (compositor, GPU endpoint) and the sealed config descriptor.
+   `ProviderSupervisor` resolves each grant handle and installs the corresponding
+   fd at the declared in-jail fd number before the Process's first instruction.
+   The proxy receives no d2b-bus socket and never contacts d2b-bus.
+5. Issues a separate LaunchTicket for the guest frontend Process for each
+   enabled Guest, with the sealed cross-domain config.
+6. Writes `WaylandSession.status` with endpoint revision and readiness.
+
+### 4.3 `display-user-portal`
+
+A separately sandboxed user-domain service component. One instance per active
+user login session. Declared as a static entry in the signed ProviderDeployment
+manifest; instantiated by the user's session manager when the Provider is
+enrolled and the user logs in.
+
+The portal:
+1. Receives a pre-opened compositor connection attachment from the fixed user
+   session supervisor via KK-profile ComponentSession attachment (SCM_RIGHTS).
+   The portal **never reads `WAYLAND_DISPLAY`**, any compositor socket path, or
+   any ambient environment path. The fixed user session supervisor is the only
+   entity that holds the compositor socket path.
+2. Validates that the delivering peer is the same-user supervisor via
+   `SO_PEERCRED`; rejects any delivery from a different uid.
+3. Authenticates to `display-controller` via KK-profile ComponentSession (local
+   Unix transport; peer identity from `SO_PEERCRED`).
+4. On request from `display-controller` for a specific `WaylandSession` and
+   `userRef`: validates same-user, then issues a bounded per-session compositor
+   connection attachment grant to `ProviderSupervisor`. `ProviderSupervisor`
+   routes the fd directly to the target worker without the controller or portal
+   holding a reference.
+5. Never exposes the compositor socket path in any resource status, spec, log,
+   audit, or metric surface. Never grants more connections than there are active
+   sessions for the authenticated user.
+
+Neither the portal nor any other `display-wayland` component reads or holds the
+compositor socket path after the portal's initial supervisor-delivered attachment
+is accepted.
+
+### 4.4 Provider state Volumes (ProviderStateSet)
+
+Per `ADR-046-provider-state`, the framework creates one private `Volume` resource
+per static component at Provider enrollment:
+
+| Component | Volume name | Payload schema |
+| --- | --- | --- |
+| `display-controller` | `display-wayland-controller-state` | empty (all runtime state rebuilt from Zone store) |
+| `display-user-portal` | `display-wayland-user-portal-state` | empty (compositor connection grants are transient) |
+
+These are ordinary `Volume` resources with `ownerRef: Provider/display-wayland`
+and the `providerState` extension from `ADR-046-provider-state`. The
+**ProviderStateSet** is a logical query-time grouping of all
+`Volume{ownerRef: Provider/display-wayland}` resources in the Zone; it is **not
+a ResourceType** and not a separate resource. Each component's Volume is private:
+no component can access another component's Volume. Each component receives only
+its own local view dirfd (via `ProviderSupervisor` before first instruction); it
+never holds a path to the Volume. Layout principals are Nix-preprovisioned
+`User/<name>` accounts (§16.6); no `ComponentPrincipal` ResourceRefs are used.
+There is no cross-component shared Volume.
+
+These Volumes are **durable** (`kind: state`, `persistenceClass: persistent`):
+they survive component and Provider restart and participate in upgrade, destroy,
+and reset lifecycle phases. Although the payload schema is empty for both
+components, the framework writes a `provider-state-identity` marker at
+enrollment and verifies it on each mount. A missing or corrupt marker is a
+fail-closed error, not a silent re-create.
+
+**Ownership rule.** Core `ProviderDeployment` creates the component state
+Volumes before starting component Processes and deletes them after Processes
+reach terminal state. The `display-controller` does **not** create, own, or
+watch component state Volumes and does not add Volume to its exported
+ResourceTypes. `Provider/volume-local` is the sole Volume reconciler for all
+Volumes in this Provider (component state and session-owned runtime alike):
+it materializes mounts from declared specs; controllers submit Volume resource
+objects but do not perform mounts. Each component consumes only its own required
+view dirfd, delivered by `ProviderSupervisor` before the component's first
+instruction.
+
+The Provider spec carries only `artifactId` and `config`; core aggregates
+Provider status from child resource conditions.
 
 ---
 
@@ -155,7 +217,8 @@ metadata:
 spec:
   guestRef: Guest/corp-vm
   hostRef: Host/host-system
-  policyRef: WaylandPolicy/default
+  userRef: User/alice              # user whose compositor session the proxy connects to
+  policyRef: display-wayland.d2b.io.WaylandPolicy/default
   # UI identity metadata — compositor-agnostic
   identity:
     label: "corp-vm"              # max 64 chars; validated against Guest name
@@ -173,7 +236,6 @@ spec:
   virglVideo: false               # opt-in experimental virglrenderer video path
   filter:
     debugLogging: false
-    byteLogging: false
     denyGlobals: []
     allowGlobals: []
     maxVersions: {}
@@ -188,7 +250,8 @@ status: {}
 | --- | --- | --- | --- | --- | --- |
 | `guestRef` | ResourceRef | yes | — | `Guest/<name>` | Target Guest |
 | `hostRef` | ResourceRef | yes | — | `Host/<name>` | Host running the proxy Process |
-| `policyRef` | ResourceRef | yes | — | `WaylandPolicy/<name>` | Resolved policy template |
+| `userRef` | ResourceRef | yes | — | `User/<name>` | User whose compositor session the proxy connects to; used by `display-user-portal` to acquire the compositor fd |
+| `policyRef` | ResourceRef | yes | — | `display-wayland.d2b.io.WaylandPolicy/<name>` | Resolved policy template; fully qualified ResourceRef |
 | `identity.label` | string | yes | — | 1..64 chars; `^[a-z][a-z0-9-]*$` | Authenticated display label; matches Guest name by default |
 | `identity.activeColor` | string | yes | — | `^#[0-9a-fA-F]{6}$` | Active/focused identity color |
 | `identity.inactiveColor` | string | no | `activeColor` | `^#[0-9a-fA-F]{6}$` | Inactive/unfocused identity color |
@@ -200,8 +263,7 @@ status: {}
 | `identity.label.position` | enum | no | `top-left` | `top-left \| top-center` | Label position |
 | `crossDomainTrusted` | bool | yes | — | must be `true` | Explicit opt-in for cross-domain Wayland forwarding; `false` is rejected at spec admission |
 | `virglVideo` | bool | no | `false` | — | Opt-in experimental virglrenderer video path; gated by `device-gpu` descriptor |
-| `filter.debugLogging` | bool | no | `false` | — | Verbose Wayland protocol tracing; payload metadata may appear in logs; not for production |
-| `filter.byteLogging` | bool | no | `false` | — | Raw transport hexdump logging; not for production |
+| `filter.debugLogging` | bool | no | `false` | — | Verbose Wayland protocol trace logging; structurally redacted output only (message shape and global names; no payload bytes, argument values, or surface content); not for production |
 | `filter.denyGlobals` | `[string]` | no | `[]` | max 128 items; each max 63 chars | Additional globals to deny beyond policy defaults |
 | `filter.allowGlobals` | `[string]` | no | `[]` | max 128 items; each max 63 chars | Globals to allow; clipboard-boundary globals are ignored and produce audit advisory |
 | `filter.maxVersions` | `map<string,u32>` | no | `{}` | max 128 entries | Per-interface version caps |
@@ -252,6 +314,7 @@ socket name, user identity, window title, or raw argv appears in status.
 | `GuestFrontendReady` | Guest frontend Process is running and connected |
 | `PolicyApplied` | Compiled filter policy digest is current |
 | `GpuEndpointAvailable` | `device-gpu` Provider advertises cross-domain capability and endpoint ID |
+| `UserPortalReady` | `display-user-portal` for `userRef` is available and has delivered a compositor fd |
 | `ClipboardBridgeReady` | Internal clipboard bridge to `clipboard-wayland` Provider is established; optional |
 | `CrossDomainTrusted` | `spec.crossDomainTrusted = true` and GPU sidecar advertises cross-domain context type |
 
@@ -259,7 +322,126 @@ socket name, user identity, window title, or raw argv appears in status.
 
 ## 6. Process templates
 
-### 6.1 Host proxy Process (`wayland-proxy-worker`)
+### 6.1 `display-controller` static Process
+
+The `display-controller` is a Zone-singleton system-domain controller Process
+declared in the signed ProviderDeployment manifest. It is the sole d2b-bus actor
+for this Provider; it has no worker sibling processes that share its authority.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Process
+metadata:
+  name: display-wayland-controller
+  zone: dev
+  ownerRef: Provider/display-wayland
+spec:
+  providerRef: Provider/system-minijail
+  executionRef: Host/host-system
+  domain: system
+  processClass: controller
+  template: display-wayland-controller
+  sandbox:
+    namespaceClasses: [mount, pid]
+    capabilityClasses: []
+    seccompClass: w1-display-wayland-controller
+    noNewPrivileges: true
+    startRoot: false
+    environmentClass: minimal
+    readOnlyRoot: true
+    umask: "0022"
+    oomScoreAdj: -100
+  budget:
+    memory:
+      request: "16Mi"
+      limit: "64Mi"
+    pids:
+      limit: 32
+    fds:
+      limit: 128
+  networkUsage: null
+  deviceUsage: []
+  readiness:
+    initialDelay: "0s"
+    timeout: "30s"
+    failureThreshold: 3
+    successThreshold: 1
+    class: provider-defined
+  restartPolicy:
+    class: on-failure
+    backoffBase: "1s"
+    backoffMax: "60s"
+    backoffMultiplier: 2.0
+    maxRestarts: null
+    resetAfter: "300s"
+  telemetry:
+    metricsEnabled: true
+    tracingEnabled: true
+    logLevel: info
+    sensitiveLabels: false
+```
+
+### 6.2 `display-user-portal` static Process
+
+The `display-user-portal` is a user-domain service Process declared in the signed
+ProviderDeployment manifest. It is sandboxed separately from the controller and
+has no d2b-bus authority. It receives pre-opened compositor connections from the
+fixed user session supervisor and re-exports bounded per-session attachment grants.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Process
+metadata:
+  name: display-wayland-user-portal
+  zone: dev
+  ownerRef: Provider/display-wayland
+spec:
+  providerRef: Provider/system-systemd-user
+  executionRef: Host/host-system
+  domain: user
+  processClass: service
+  template: display-wayland-user-portal
+  sandbox:
+    namespaceClasses: []
+    capabilityClasses: []
+    seccompClass: w1-display-wayland-portal
+    noNewPrivileges: true
+    startRoot: false
+    environmentClass: minimal
+    readOnlyRoot: true
+    umask: "0022"
+    oomScoreAdj: 0
+  budget:
+    memory:
+      request: "8Mi"
+      limit: "32Mi"
+    pids:
+      limit: 16
+    fds:
+      limit: 64
+  networkUsage: null
+  deviceUsage: []
+  readiness:
+    initialDelay: "0s"
+    timeout: "30s"
+    failureThreshold: 3
+    successThreshold: 1
+    class: provider-defined
+  restartPolicy:
+    class: on-failure
+    backoffBase: "1s"
+    backoffMax: "60s"
+    backoffMultiplier: 2.0
+    maxRestarts: null
+    resetAfter: "300s"
+  telemetry:
+    metricsEnabled: true
+    tracingEnabled: true
+    logLevel: info
+    sensitiveLabels: false
+```
+
+### 6.3 Host proxy worker Process (`wayland-proxy-worker`)
 
 The Host proxy is a long-lived `Process` resource owned by the `WaylandSession`
 resource (via `metadata.ownerRef`).
@@ -278,41 +460,56 @@ spec:
   processClass: worker
   template: wayland-proxy-worker
   sandbox:
-    namespaceClasses: [mount, pid]
-    capabilityClasses: []
-    seccompClass: w1-wayland-proxy
-    noNewPrivileges: true
-    startRoot: false
-    environmentClass: minimal
-    readOnlyRoot: true
-    umask: "0022"
-    oomScoreAdj: 0
+   namespaceClasses: [mount, pid]
+   capabilityClasses: []
+   seccompClass: w1-wayland-proxy
+   noNewPrivileges: true
+   startRoot: false
+   environmentClass: minimal
+   readOnlyRoot: true
+   umask: "0022"
+   oomScoreAdj: 0
   budget:
-    memory:
-      request: "32Mi"
-      limit: "128Mi"
-    pids:
-      limit: 64
-    fds:
-      limit: 256
+   memory:
+     request: "32Mi"
+     limit: "128Mi"
+   pids:
+     limit: 64
+   fds:
+     limit: 256
   mounts:
-    - volumeRef: Volume/corp-vm-display-proxy-runtime
-      view: proxy-runtime
-      mountPath: /run/d2b-wlproxy
-      access: read-write
-  devices:
-    - deviceRef: Device/corp-vm-gpu
-      access: shared
-      purpose: wayland-cross-domain-endpoint
+   - volumeRef: Volume/corp-vm-display-proxy-runtime
+     view: proxy-runtime
+     mountPath: /run/d2b-wlproxy
+     access: read-write
+     required: true
+  deviceUsage:
+   - deviceRef: Device/corp-vm-gpu
+     access: shared
+     purpose: wayland-cross-domain-endpoint
   endpoints:
-    - name: wayland-listen
-      transport: unix
-      purpose: wayland-cross-domain-listen
+   - name: wayland-listen
+     transport: unix
+     purpose: wayland-cross-domain-listen
+  networkUsage: null
+  readiness:
+   initialDelay: "0s"
+   timeout: "30s"
+   failureThreshold: 3
+   successThreshold: 1
+   class: provider-defined
+  restartPolicy:
+   class: on-failure
+   backoffBase: "1s"
+   backoffMax: "60s"
+   backoffMultiplier: 2.0
+   maxRestarts: null
+   resetAfter: "300s"
   telemetry:
-    metricsEnabled: true
-    tracingEnabled: true
-    logLevel: info
-    sensitiveLabels: false
+   metricsEnabled: true
+   tracingEnabled: true
+   logLevel: info
+   sensitiveLabels: false
 ```
 
 **Process identity and naming:**
@@ -324,62 +521,45 @@ names, user identities, or window content.
 
 **Binary:** `d2b-display-wayland-host-proxy`
 
-**Principal:** `d2b-<guest-name>-wlproxy` — a dedicated per-Guest system user.
+**Principal:** opaque hash-derived OS account (`d2b-wlp-<hex12>` for
+bundle-declared sessions; `d2b-wlp-p<N>` for pool-allocated sessions; see §16.5).
 No capabilities. No PipeWire/Pulse socket access.
 
 **Sandbox:**
 - Mount namespace: the per-session Volume (§7.1) provides the only writable
-  surface at `/run/d2b-wlproxy`. The upstream compositor connection is
-  established outside the jail by a same-UID authenticated user-session/display
-  component that opens the connection and passes a pre-connected fd to the host
-  proxy via ComponentSession attachment (§10). The host compositor socket path
-  is never read from spec, status, or any ambient environment variable; no
-  bind-mount of a compositor socket path occurs.
-- The cross-domain GPU endpoint fd is received through the typed `device-gpu`
-  ComponentSession service/descriptor handoff (§9). It is never a path or
-  status field.
-- `seccompClass: w1-wayland-proxy` — references the Provider-signed seccomp
-  catalog entry, not a raw BPF program.
-- `startRoot: false` — the process never holds root inside or outside the
-  namespace.
-- `userNamespace` is not required for this process class (the proxy holds no
-  host capabilities requiring namespace fakery).
+  surface at `/run/d2b-wlproxy`.
+- All required fds (upstream compositor fd, cross-domain GPU endpoint fd) and
+  sealed config are installed by `ProviderSupervisor` at declared in-jail fd
+  numbers before the process's first instruction. `ProviderSupervisor` resolves
+  each attachment grant handle directly from the source (portal, device-gpu) to
+  this worker; the controller never holds the fds. The proxy never contacts
+  d2b-bus and holds no d2b-bus socket.
+- No compositor socket path, GPU device node path, or cross-provider socket path
+  ever enters the proxy binary's address space.
+- `seccompClass: w1-wayland-proxy` — Provider-signed seccomp catalog entry.
+- `startRoot: false` — never holds root inside or outside the namespace.
 
 **Startup sequence (fail-closed):**
-1. Resolve filter policy from the compiled `WaylandPolicy` digest. Exit
-   non-zero on policy parse errors.
-2. Receive the pre-connected upstream compositor fd delivered via
-   ComponentSession attachment from the authenticated user-session/display
-   component. Exit non-zero if no valid fd is received or if the connection
-   is already broken. The per-session listen socket is **never** created
-   before a live upstream fd is in hand.
+1. Read sealed config and compiled `WaylandPolicy` digest from the in-jail config
+  fd installed by `ProviderSupervisor`. Exit non-zero on parse errors.
+2. Verify the upstream compositor fd (installed at the declared in-jail fd
+  number) is a live connected socket. Exit non-zero if invalid or already
+  broken. The per-session listen socket is **never** created before a live
+  upstream fd is confirmed.
 3. Create the per-session listen socket inside the Volume mount.
-4. Emit a `ProxyReadinessEvent` (bounded, path-free) over the internal
-   readiness fd established by the supervisor.
+4. Emit a `ProxyReadinessEvent` (bounded, path-free) over the readiness fd
+  installed by `ProviderSupervisor`.
 5. Enter the dispatch loop.
 
-The per-session listen socket path (the crosvm-facing side of the cross-domain
-channel) is a private Volume implementation detail residing only in the Volume
-mount and the LaunchTicket's sealed fd table. It is not public status, not
-logged in its bound form, and not available to external callers. The
-`device-gpu` Provider configures the VMM (crosvm) to connect to the proxy
-using this path via its own process template and private bundle; the path
-never surfaces in the resource API. The upstream compositor connection, by
-contrast, is a pre-opened fd delivered via ComponentSession attachment with
-no path exposed anywhere.
+**No d2b-bus authority:** the proxy binary has no d2b-bus socket after launch.
+It receives all required state and fds from the LaunchTicket. It never opens
+a second compositor connection, an SSH path, or any out-of-band IPC fallback.
+If the upstream compositor fd is invalid the proxy exits non-zero. The
+`display-controller` detects the failed Process and sets
+`WaylandSession.status.phase = Failed`. There is no retry to a different fd or
+a fallback display path.
 
-**ComponentSession transport:** the proxy binary communicates with the Zone
-bus only through the `d2b-bus` ComponentSession over a local Unix transport
-(inherited socketpair). It uses the NN profile (local purpose class, trusted
-endpoint policy). The proxy never opens a second direct compositor connection,
-an SSH path, or any out-of-band IPC fallback.
-
-**No direct compositor fallback:** if the host compositor socket is
-unavailable the proxy exits non-zero. The controller detects the failed Process
-and sets `WaylandSession.status.phase = Failed`. There is no retry to a
-different socket or a fallback display path.
-
-### 6.2 Guest frontend Process (`wayland-frontend-worker`)
+### 6.4 Guest frontend worker Process (`wayland-frontend-worker`)
 
 The guest frontend is a long-lived `Process` resource running in the `system`
 domain under the Guest.
@@ -419,6 +599,21 @@ spec:
     - name: wayland-cross-domain
       transport: vsock
       purpose: wayland-cross-domain-guest
+  networkUsage: null
+  deviceUsage: []
+  readiness:
+    initialDelay: "0s"
+    timeout: "30s"
+    failureThreshold: 3
+    successThreshold: 1
+    class: provider-defined
+  restartPolicy:
+    class: on-failure
+    backoffBase: "1s"
+    backoffMax: "60s"
+    backoffMultiplier: 2.0
+    maxRestarts: null
+    resetAfter: "300s"
   telemetry:
     metricsEnabled: true
     tracingEnabled: true
@@ -427,7 +622,7 @@ spec:
 ```
 
 **Binary:** `wl-cross-domain-proxy` (from `pkgs/wl-cross-domain-proxy`; see
-§14 for the v3 migration path).
+§17 for the v3 migration path).
 
 **Purpose:** drives the guest-side virtio-gpu Wayland cross-domain transport.
 The binary connects to the in-guest virtio-gpu cross-domain context and
@@ -441,11 +636,13 @@ cross-domain context established by `Provider/device-gpu` and
 `Provider/runtime-cloud-hypervisor`.
 
 **Lifecycle gate:** this Process is not created until `crossDomainTrusted =
-true` is confirmed in the `WaylandSession` spec. The `guest-frontend-controller`
+true` is confirmed in the `WaylandSession` spec. The `display-controller`
 checks this field at reconcile time and sets a `CrossDomainTrusted` condition
-on the `WaylandSession` before creating the Process. A missing GPU cross-domain
-context (because the VMM did not advertise the context type) causes the Process
-to enter `Failed` phase; the controller sets `WaylandSession` to `Degraded`.
+on the `WaylandSession` before issuing the guest frontend LaunchTicket. A
+missing GPU cross-domain context causes the Process to enter `Failed` phase;
+the controller sets `WaylandSession` to `Degraded`. The guest frontend worker,
+like the host proxy, has no d2b-bus authority after launch; all required fds
+and config arrive in the LaunchTicket.
 
 ---
 
@@ -465,13 +662,14 @@ spec:
   source:
     executionRef: Host/host-system
     settings:
-      kind: tmpfs        # backend mount type; distinct from Volume.kind lifecycle
+      kind: tmpfs                                          # backend mount type; distinct from Volume.kind lifecycle
+      sourcePolicyId: display-wayland.wlproxy-runtime.v1  # bound in Provider.spec.config.runtimeVolumePolicyId
   kind: ephemeral        # lifecycle: removed on Host restart / session deletion
   layout:
     - path: ""
       type: directory
-      ownerRef: User/d2b-corp-vm-wlproxy
-      groupRef: User/d2b-corp-vm-wlproxy
+      ownerRef: User/d2b-wlp-<hex12>    # opaque hash-derived principal; see §16.5
+      groupRef: User/d2b-wlp-<hex12>
       mode: "0700"
       sensitivity: private
       createPolicy: create-if-absent
@@ -485,6 +683,7 @@ spec:
     proxy-runtime:
       path: ""
       rights: [read, write, create, delete, traverse]
+  attachments: []        # no process-scoped attachment grants; fd routing is via ProviderSupervisor grant handles
   quota:
     maxBytes: 4194304    # 4 MiB hard limit; sockets carry no payload bytes
     maxInodes: 64        # listen socket, clipboard bridge socket, lock files
@@ -496,22 +695,141 @@ ephemeral` is the lifecycle classification: the volume is boot-scoped and
 removed on Host restart or session deletion, which triggers `WaylandSession`
 reconciliation. The tmpfs quota is enforced by the kernel mount options; the
 charge is derived automatically from `source.executionRef` (`Host/host-system`)
-without a separate `chargeTo` field.
+without a separate `chargeTo` field. `source.settings.sourcePolicyId` binds the
+volume to the Provider-declared source policy; if not globally fixed, it is
+configurable via `Provider.spec.config.runtimeVolumePolicyId`.
+
+The `display-controller` creates this Volume resource as a child of the
+`WaylandSession` (via `ownerRef`) when reconciling the session. `Provider/volume-local`
+is the sole Volume reconciler: it materializes the tmpfs mount from the declared
+spec; the controller submits the Volume resource object but does not perform the
+mount itself. Session-owned Volumes are deleted by owner-cascade when the
+`WaylandSession` is deleted.
 
 The actual listen socket path inside the mount is a private implementation
-detail derived from the Process template; it is never placed in the Volume spec,
-resource status, logs, or audit. The `device-gpu` Provider receives the path
-as a sealed bundle artifact, not through the resource API.
+detail of the proxy binary; it is never placed in the Volume spec, resource
+status, logs, or audit. No cross-provider path sharing occurs.
 
-### 7.2 Policy controller state
+### 7.2 `display-controller` state Volume
 
-The `policy-controller` holds compiled `WaylandPolicy` state in
-controller-local in-memory state only. No durable Volume is required: the
-policy is deterministically rebuilt from the `WaylandPolicy` ResourceSpec on
-every controller restart. The `WaylandPolicy` ResourceSpec is itself durable
-in the Zone store, making the compiled digest trivially recoverable.
-There is no independent recovery need that would justify a separate persistent
-Volume for this component.
+Framework-created at Provider enrollment per `ADR-046-provider-state`. The
+payload schema is empty — `display-controller` rebuilds all runtime state
+(policy digest, pool lease table) from the Zone store on restart — but the
+Volume itself is **durable**: `kind: state`, `persistenceClass: persistent`.
+It survives component and Provider restart and participates in upgrade, destroy,
+and reset lifecycle phases. `migrationPolicy: none` because `stateSchema: {}`
+requires no migration worker. The `identityMarker: provider-state-identity`
+field instructs the framework to write a bounded marker at enrollment and verify
+it before delivering the view dirfd; a missing or corrupt marker is a
+fail-closed error.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Volume
+metadata:
+  name: display-wayland-controller-state
+  zone: dev
+  ownerRef: Provider/display-wayland
+  labels:
+    d2b.io/provider-state-component: display-controller
+spec:
+  providerRef: Provider/volume-local
+  source:
+    executionRef: Host/host-system
+    settings:
+      sourcePolicyId: display-wayland.component-state.v1
+  kind: state
+  persistenceClass: persistent
+  migrationPolicy: none
+  stateSchema: {}
+  identityMarker: provider-state-identity
+  layout:
+    - path: ""
+      type: directory
+      ownerRef: User/d2b-dwl-ctrl
+      groupRef: User/d2b-dwl-ctrl
+      mode: "0700"
+      sensitivity: private
+      createPolicy: create-if-absent
+      repairPolicy: exact-owner
+      cleanupPolicy: owner-controlled
+      noFollow: true
+      accessAcl: []
+      defaultAcl: []
+      invariants: [no-symlink]
+  views:
+    controller-state:
+      path: ""
+      rights: [read, write, create, delete, traverse]
+  attachments: []
+  quota:
+    quotaBytes: 65536
+    enforcement: hard
+```
+
+The `display-controller` receives the `controller-state` view dirfd from
+`ProviderSupervisor` before its first instruction. It never holds a path to
+this Volume and has no access to the portal state Volume.
+
+### 7.3 `display-user-portal` state Volume
+
+Framework-created at Provider enrollment per `ADR-046-provider-state`. Portal
+compositor connection grants are transient; the payload schema is empty. The
+Volume itself is **durable**: `kind: state`, `persistenceClass: persistent`.
+It survives component and Provider restart and participates in upgrade, destroy,
+and reset lifecycle phases. `migrationPolicy: none` because `stateSchema: {}`
+requires no migration worker. The `identityMarker: provider-state-identity`
+field instructs the framework to write a bounded marker at enrollment and verify
+it before delivering the view dirfd; a missing or corrupt marker is a
+fail-closed error.
+
+```yaml
+apiVersion: resources.d2b.io/v3
+type: Volume
+metadata:
+  name: display-wayland-user-portal-state
+  zone: dev
+  ownerRef: Provider/display-wayland
+  labels:
+    d2b.io/provider-state-component: display-user-portal
+spec:
+  providerRef: Provider/volume-local
+  source:
+    executionRef: Host/host-system
+    settings:
+      sourcePolicyId: display-wayland.component-state.v1
+  kind: state
+  persistenceClass: persistent
+  migrationPolicy: none
+  stateSchema: {}
+  identityMarker: provider-state-identity
+  layout:
+    - path: ""
+      type: directory
+      ownerRef: User/d2b-dwl-portal
+      groupRef: User/d2b-dwl-portal
+      mode: "0700"
+      sensitivity: private
+      createPolicy: create-if-absent
+      repairPolicy: exact-owner
+      cleanupPolicy: owner-controlled
+      noFollow: true
+      accessAcl: []
+      defaultAcl: []
+      invariants: [no-symlink]
+  views:
+    portal-state:
+      path: ""
+      rights: [read, write, create, delete, traverse]
+  attachments: []
+  quota:
+    quotaBytes: 65536
+    enforcement: hard
+```
+
+The `display-user-portal` receives the `portal-state` view dirfd from
+`ProviderSupervisor` before its first instruction. It never holds a path to
+this Volume and has no access to the controller state Volume.
 
 ---
 
@@ -581,9 +899,11 @@ highest priority):
 4. **Session overrides** — `WaylandSession.spec.filter.*` per-session
    overrides with highest priority.
 
-Unknown globals (not in any layer) are denied by default unless the operator
-explicitly adds them to `allowGlobals` (which produces a `W-ALLOW-UNCLASSIFIED`
-audit advisory).
+Unknown globals (not in any layer) are denied by default. **Unknown interface
+names in `allowGlobals` or `denyGlobals` fail closed at spec admission**: any
+entry not present in the Provider's compiled global catalog causes the
+`WaylandPolicy` resource to be rejected with an actionable error. Only
+interface names registered in the Provider's compiled catalog are accepted.
 
 ### 8.3 Clipboard boundary
 
@@ -639,41 +959,60 @@ Provider.
 
 ## 10. ComponentSession transport and no direct compositor fallback
 
-All intra-Zone communication from this Provider's processes uses `d2b-bus`
-ComponentSession over local Unix transports (inherited socketpair or Unix
-seqpacket). The Noise profile is `Noise_NN_25519_ChaChaPoly_SHA256` (local
-purpose class; peer evidence from `SO_PEERCRED` + process identity).
+`display-controller` is the sole d2b-bus actor for this Provider. It
+communicates over KK-profile (`Noise_KK_25519_ChaChaPoly_SHA256`) or NN-profile
+ComponentSession over local Unix transports as appropriate. Worker processes
+(host proxy, guest frontend) have **no d2b-bus authority after launch**; all
+required fds and sealed config arrive via the `ProviderSupervisor` LaunchTicket.
 
-The Host proxy process communicates:
-- with the Zone runtime for status updates and lifecycle over d2b-bus;
-- with the same-UID authenticated user-session/display component to receive
-  the pre-opened upstream compositor fd as a ComponentSession attachment
-  (NN-profile, local purpose class) before proxy startup;
-- with `Provider/clipboard-wayland` over the internal clipboard bridge socket
-  (a separate bounded per-session Unix socket, managed by the Volume mount,
-  not the host compositor socket).
+**`display-controller` bus communication:**
+- With `display-user-portal` over KK-profile ComponentSession (local Unix
+  seqpacket; peer identity from `SO_PEERCRED` + process identity): the portal
+  issues an opaque per-session compositor connection attachment grant handle.
+  `ProviderSupervisor` resolves the handle and routes the fd directly from
+  the portal to the target worker. The controller receives only the opaque grant
+  handle and a status confirmation; it never holds the compositor fd.
+- With `Provider/device-gpu` controller over KK-profile ComponentSession: the
+  device-gpu provider issues an opaque cross-domain GPU endpoint attachment grant
+  handle. `ProviderSupervisor` resolves the handle and routes the fd directly
+  from device-gpu to the target worker. The controller receives only the opaque
+  grant handle and a status confirmation; it never holds the GPU endpoint fd.
+- With `Provider/clipboard-wayland` over NN-profile ComponentSession for
+  per-session clipboard bridge establishment (opaque endpoint handle routing;
+  no socket paths exchanged).
+- With Zone runtime for resource status updates and lifecycle.
 
-The clipboard bridge socket path is an implementation detail of the Volume
-mount. It is not exposed in status, logs, or audit.
+**LaunchTicket composition:** `display-controller` assembles a
+`ProviderSupervisor` LaunchTicket carrying:
+- the opaque compositor connection attachment grant handle (from portal);
+- the opaque GPU endpoint attachment grant handle (from device-gpu);
+- the sealed config descriptor (policy digest, identity, filter settings).
 
-The proxy **does not** implement any fallback communication path to the host
-compositor. If the upstream compositor fd received via ComponentSession
-attachment is invalid or the connection breaks:
+`ProviderSupervisor` resolves each grant handle and installs the corresponding
+fd at the declared in-jail fd number before the worker's first instruction.
+No fd transits through the controller process. No socket path is embedded in
+the LaunchTicket, spec, status, audit, or any log line.
+
+**Cross-provider fd routing:** `ProviderSupervisor` routes attachment grants
+directly from the issuing endpoint (portal, device-gpu) to the exact target
+worker Process. The crosvm-facing proxy listen socket path, if the existing wire
+protocol requires a filesystem path, resides only in the Volume mount (§7.1);
+it is never shared with `device-gpu`, the VMM, or any other Provider through the
+bundle, resource API, or LaunchTicket.
+
+**No compositor fallback:** if the compositor fd installed by the LaunchTicket
+is invalid or the connection breaks:
 - The proxy emits a bounded `ProxyReadinessEvent` with
-  `failure: upstream-unavailable` over the supervisor readiness fd.
+  `failure: upstream-unavailable` over the readiness fd.
 - The proxy exits non-zero.
-- The Process controller detects the exit and sets the Process phase to
-  `Failed`.
-- `host-proxy-controller` sets `WaylandSession.status.conditions.ProxyReady =
-  False` and `WaylandSession.status.phase = Failed`.
-- No second compositor fd or path is tried.
-- No direct `WAYLAND_DISPLAY` environment variable is read or honored.
-- No SSH or out-of-band channel is opened.
+- `display-controller` detects the failed Process, sets
+  `WaylandSession.status.conditions.ProxyReady = False` and
+  `WaylandSession.status.phase = Failed`.
+- No second compositor fd, path, environment variable, or out-of-band channel
+  is tried.
 
-This fail-closed behavior is a hard requirement: the proxy jailed principal
-(`d2b-<guest-name>-wlproxy`) holds no capabilities and no authority to open
-compositor connections independently. The only upstream compositor connection
-it holds is the pre-opened fd delivered via ComponentSession attachment.
+The proxy jailed principal (opaque hash-derived OS account; see §16.5) holds no
+capabilities and no authority to open compositor connections independently.
 
 ---
 
@@ -772,34 +1111,33 @@ or any `update-spec` verb on Host or Guest.
 
 ### 12.2 Broker operations
 
-The Host proxy process runs under the `Provider/system-minijail` Process
-Provider and requires exactly one privileged broker operation:
+The host proxy and guest frontend processes run under `Provider/system-minijail`
+and `Provider/system-systemd` respectively. Both require exactly one privileged
+broker operation: **`ProviderSupervisor.LaunchTicket`**.
 
-- **`SpawnRunner { role: WaylandProxy }`** (current baseline) →
-  **`ProviderSupervisor.LaunchTicket`** (v3 target): the broker receives the
-  compiled sandbox plan, the pre-opened upstream compositor fd (received via
-  ComponentSession attachment from the authenticated user-session/display
-  component), and the cross-domain GPU endpoint fd (received via typed
-  `device-gpu` ComponentSession handoff). The broker establishes the mount
-  namespace, installs both fds at their declared in-jail fd numbers from the
-  LaunchTicket, and hands back a verified pidfd. No compositor socket path is
-  passed in the LaunchTicket; only the pre-opened fd descriptor.
+`display-controller` prepares the LaunchTicket with:
+- the opaque compositor connection attachment grant handle (issued by
+  `display-user-portal`; never held by the controller);
+- the opaque GPU endpoint attachment grant handle (issued by `device-gpu`
+  ComponentSession; never held by the controller);
+- the sealed config descriptor (policy digest, identity, filter settings).
 
-The upstream compositor fd is established before the LaunchTicket is issued.
-It is never associated with a socket path in the LaunchTicket, spec, status,
-audit, or logs. Any private listen socket path for the crosvm-facing side of
-the cross-domain protocol (if required by the existing wire protocol) resides
-only in the Volume mount and the LaunchTicket's sealed fd table. It **never
-appears** in:
+The broker (`ProviderSupervisor`) resolves each grant handle directly from the
+issuing endpoint to the worker: it establishes the mount namespace, installs
+each fd at its declared in-jail number, and hands back a verified pidfd. No fd
+transits through the controller process. No compositor socket path enters the
+LaunchTicket, spec, status, audit, or any log line.
+
+Any crosvm-facing listen socket path (if required by the existing virtio-gpu
+cross-domain wire protocol) resides only in the Volume mount and the
+LaunchTicket's sealed fd table. It **never appears** in:
 - the resource spec;
 - the resource status;
 - any audit record;
 - any log line produced by the proxy;
-- any OTEL span attribute or metric label.
-
-The proxy binary receives the upstream compositor connection as a pre-opened
-fd at a fixed in-jail fd number declared in the LaunchTicket. It receives no
-socket path argument for the upstream connection.
+- any OTEL span attribute or metric label;
+- any cross-provider bundle or sealed bundle artifact shared with `device-gpu`
+  or the VMM.
 
 ### 12.3 Finalizer
 
@@ -809,19 +1147,27 @@ finalizer: display-wayland.d2b.io/proxy-stopped
 
 The finalizer is installed on `WaylandSession` before any Process is created.
 Finalizer handling:
-1. Send a graceful stop signal to the proxy Process.
-2. Wait for the Process to reach `Succeeded` or `Failed` phase (max 10 s).
-3. Delete the proxy Process resource (final `Deleted`-phase revision committed,
-   then row and index entries removed atomically).
-4. Delete the Volume resource (same atomic deletion sequence).
-5. Remove the finalizer from `WaylandSession`.
-6. The Zone runtime commits the final `Deleted`-phase revision for
+1. Send a graceful stop signal to the proxy Process via the Process resource.
+2. Wait for the proxy Process to reach `Succeeded` or `Failed` phase and for
+   the Process Provider to confirm deletion (verified terminal state). Maximum
+   grace period: 30 s.
+3. If the Process reaches verified terminal phase and is confirmed deleted,
+   delete the Volume resource (final `Deleted`-phase revision + atomic row/
+   index removal).
+4. Remove the finalizer from `WaylandSession`.
+5. The Zone runtime commits the final `Deleted`-phase revision for
    `WaylandSession`, atomically removes its row and index entries, and commits
    the `display-wayland/session-finalized` audit record after the atomic removal.
 
-If the Process does not stop within the deadline the controller removes the
-Process resource unconditionally (the Process Provider enforces SIGKILL) and
-proceeds to Volume deletion.
+**Ambiguous termination:** if the proxy Process does not reach a verified
+terminal phase, or Process deletion is not confirmed by the Process Provider
+within the grace period, the finalizer **retains ownership** of `WaylandSession`.
+The `display-controller` sets `WaylandSession.status.phase = Degraded` with a
+`FinalizerAmbiguous` condition and suspends further progress. The finalizer is
+never removed while Process state is uncertain. The Process resource is never
+deleted unconditionally. Operator intervention is required to resolve the
+ambiguous state; after the Process is confirmed gone the finalizer sequence
+resumes from step 3.
 
 ---
 
@@ -830,16 +1176,20 @@ proceeds to Volume deletion.
 ### 13.1 WaylandSession phase transitions
 
 ```
-Pending → (GpuEndpointAvailable=True, PolicyApplied=True, CrossDomainTrusted=True)
-        → (Process created) → (Process Ready) → Ready
+Pending → (GpuEndpointAvailable=True, UserPortalReady=True,
+           PolicyApplied=True, CrossDomainTrusted=True)
+        → (LaunchTicket issued) → (Process Ready) → Ready
 
 Ready → (GPU Device removed or crossDomainTrusted revoked) → Degraded
+Ready → (user portal unavailable) → Degraded
 Degraded → (condition resolved) → Ready
 
 Ready/Degraded → (spec.crossDomainTrusted=false detected at admission) → rejected at UpdateSpec
 
 Ready → (proxy Process Failed repeatedly) → Failed
 Failed → (manual re-create or spec change) → Pending
+
+Terminating → (finalizer ambiguous: Process not confirmed terminal) → Degraded+FinalizerAmbiguous
 ```
 
 ### 13.2 Stable error codes
@@ -849,16 +1199,18 @@ Stable error codes reported in `status.conditions[*].reason`:
 | Code | Meaning |
 | --- | --- |
 | `gpu-endpoint-unavailable` | `Provider/device-gpu` Device is not Ready or does not expose a cross-domain endpoint |
-| `cross-domain-not-trusted` | `WaylandSession.spec.crossDomainTrusted` is false; admitted to store but rejected by controller |
+| `user-portal-unavailable` | `display-user-portal` for `userRef` is not running or did not deliver a compositor fd |
+| `cross-domain-not-trusted` | `WaylandSession.spec.crossDomainTrusted` is false; rejected at admission |
 | `proxy-process-failed` | Host proxy Process exited with non-zero status |
 | `guest-frontend-failed` | Guest frontend Process exited or never started |
 | `policy-digest-missing` | `WaylandPolicy` referenced by `policyRef` is not Ready |
 | `virgl-video-unsupported` | `virglVideo: true` but GPU Device does not advertise video decode |
 | `upstream-unavailable` | Upstream compositor fd was invalid or connection already broken at proxy startup |
 | `allow-clipboard-boundary-ignored` | One or more `allowGlobals` entries are clipboard-boundary globals; ignored with advisory |
-| `unknown-interface-allowed` | One or more `allowGlobals` entries are unclassified globals |
+| `unknown-interface-rejected` | `WaylandPolicy` references an interface name not in the compiled catalog; rejected at admission |
 | `proxy-readiness-timeout` | Proxy did not emit a readiness event within the readiness deadline |
 | `no-principal-available` | All pre-provisioned dynamic session pool principals are occupied; no OS user created |
+| `finalizer-ambiguous` | Proxy Process did not reach verified terminal state within grace period; finalizer retained; operator intervention required |
 
 ### 13.3 Readiness deadline
 
@@ -942,7 +1294,7 @@ Provider processes emit the following OTEL resource attributes (advisory,
 re-stamped at ingress per ADR-046-telemetry-audit-and-support):
 
 ```text
-service.name = d2b-display-wayland-{host-proxy|guest-frontend|policy}
+service.name = d2b-display-wayland-{controller|user-portal|host-proxy|guest-frontend}
 service.version = <CARGO_PKG_VERSION>
 d2b.zone = <zone-name>
 d2b.provider = display-wayland
@@ -959,10 +1311,12 @@ Guest's advisory metadata, not by the proxy binary.
 
 ### 15.1 Controller watch plans
 
-`host-proxy-controller`:
+`display-controller` (sole controller for this Provider):
 ```yaml
 watches:
   - resourceType: display-wayland.d2b.io.WaylandSession
+    labelSelector: {}
+  - resourceType: display-wayland.d2b.io.WaylandPolicy
     labelSelector: {}
   - resourceType: Process
     labelSelector: {ownerKind: display-wayland.d2b.io.WaylandSession}
@@ -975,26 +1329,12 @@ ownerTriggers:
     childTypes: [Process, Volume]
 ```
 
-`guest-frontend-controller`:
-```yaml
-watches:
-  - resourceType: Guest
-    labelSelector: {}
-  - resourceType: display-wayland.d2b.io.WaylandSession
-    labelSelector: {}
-  - resourceType: Process
-    labelSelector: {ownerKind: display-wayland.d2b.io.WaylandSession}
-ownerTriggers:
-  - parentType: display-wayland.d2b.io.WaylandSession
-    childTypes: [Process]
-```
-
-`policy-controller`:
-```yaml
-watches:
-  - resourceType: display-wayland.d2b.io.WaylandPolicy
-    labelSelector: {}
-```
+The controller watches `WaylandSession`, `WaylandPolicy`, session-owned `Process`
+and `Volume` resources, and `Device` resources advertising
+`wayland-cross-domain-endpoint`. The session-owned `Volume` watch covers the
+runtime tmpfs Volume (§7.1) whose reconciliation status gates proxy launch.
+Component state Volumes (`ownerRef: Provider/display-wayland`) are **not**
+watched by the controller: they are managed exclusively by `ProviderDeployment`.
 
 ### 15.2 Reconcile concurrency
 
@@ -1025,12 +1365,18 @@ d2b.artifacts.display-wayland-provider = {
 };
 
 # Provider resource
+# Note: the framework creates one private provider-state Volume per static
+# component at enrollment (ADR-046-provider-state). ProviderStateSet is a
+# logical query-time grouping of Volume{ownerRef: Provider/...} resources;
+# it is not a ResourceType. Both state Volumes have empty payload schemas.
+# All authority is in WaylandSession and WaylandPolicy resource objects.
 d2b.zones.dev.resources.display-wayland = {
   type = "Provider";
   spec = {
     artifactId = "display-wayland-provider";
     config = {
-      principalPoolSize = 4;  # pre-provisioned pool accounts for dynamic sessions; 1..32
+      principalPoolSize = 4;       # pre-provisioned pool accounts for dynamic sessions; 1..32
+      runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";  # source policy for tmpfs Volumes
     };
   };
 };
@@ -1061,7 +1407,7 @@ d2b.zones.dev.resources.corp-vm-display = {
   spec = {
     guestRef  = "Guest/corp-vm";
     hostRef   = "Host/host-system";
-    policyRef = "WaylandPolicy/default-wayland-policy";
+    policyRef = "display-wayland.d2b.io.WaylandPolicy/default-wayland-policy";
     identity = {
       label         = "corp-vm";
       activeColor   = "#7fc8ff";
@@ -1081,7 +1427,6 @@ d2b.zones.dev.resources.corp-vm-display = {
     virglVideo = false;
     filter = {
       debugLogging = false;
-      byteLogging  = false;
       denyGlobals  = [];
       allowGlobals = [];
       maxVersions  = {};
@@ -1096,7 +1441,8 @@ d2b.zones.dev.resources.corp-vm-display = {
 
 | Field | Type | Default | Bounds | Description |
 | --- | --- | --- | --- | --- |
-| `principalPoolSize` | u32 | `4` | 1..32 | Number of pre-provisioned `d2b-wlproxy-pool-<N>` OS accounts available for dynamic (API-created) `WaylandSession` principals. Validated against the signed Provider config schema at bundle admission. |
+| `principalPoolSize` | u32 | `4` | 1..32 | Number of pre-provisioned `d2b-wlp-p<N>` OS accounts available for dynamic (API-created) `WaylandSession` principals. Validated against the signed Provider config schema at bundle admission. |
+| `runtimeVolumePolicyId` | string | `"display-wayland.wlproxy-runtime.v1"` | non-empty | Source policy ID bound to the `sourcePolicyId` field of every proxy runtime tmpfs Volume. Must match a policy registered in the Provider's signed artifact. |
 
 Rendered canonical JSON for the `WaylandSession` resource:
 
@@ -1111,7 +1457,7 @@ Rendered canonical JSON for the `WaylandSession` resource:
   "spec": {
     "guestRef": "Guest/corp-vm",
     "hostRef": "Host/host-system",
-    "policyRef": "WaylandPolicy/default-wayland-policy",
+    "policyRef": "display-wayland.d2b.io.WaylandPolicy/default-wayland-policy",
     "identity": {
       "label": "corp-vm",
       "activeColor": "#7fc8ff",
@@ -1124,7 +1470,6 @@ Rendered canonical JSON for the `WaylandSession` resource:
     "virglVideo": false,
     "filter": {
       "debugLogging": false,
-      "byteLogging": false,
       "denyGlobals": [],
       "allowGlobals": [],
       "maxVersions": {},
@@ -1192,40 +1537,60 @@ At eval time the Nix module enforces:
 
 ### 16.5 Principal provisioning
 
-Each `WaylandSession` process runs under a dedicated per-Guest system principal
-(`d2b-<guest-name>-wlproxy`). These OS accounts are provisioned by the NixOS
-module, not created on demand at runtime.
+Each `WaylandSession` worker process runs under a dedicated opaque hash-derived
+OS account. Account names do not expose the guest name, zone name, or any
+human-readable session identifier. All accounts are provisioned by the NixOS
+module at `nixos-rebuild switch` time; none are created at runtime.
+
+#### Name derivation
+
+**Bundle-declared sessions:** the account name is derived as:
+
+```
+d2b-wlp-<H12>
+```
+
+where `H12 = builtins.substring 0 12 (builtins.hashString "sha256" "d2b-wlp:${zone}:${sessionName}")`.
+
+Example for zone `dev`, session `corp-vm-display`:
+`d2b-wlp-` + first 12 hex chars of `sha256("d2b-wlp:dev:corp-vm-display")`.
+
+**Dynamic pool accounts:** `d2b-wlp-p${toString N}` for N in 0..(`principalPoolSize` − 1).
+
+No raw UID or GID integer is set or required. The OS allocates UIDs in the
+system range automatically. The `display-controller` and the broker resolve the
+account by name through NSS at spawn time; neither creates OS accounts.
 
 #### Bundle-declared sessions (Nix-configured)
 
 For every `WaylandSession` declared under `d2b.zones.<zone>.resources.*` in
-the NixOS configuration, the Zone bundle emitter declares the corresponding
-`d2b-<guest-name>-wlproxy` user and group in the NixOS system configuration
-with `isSystemUser = true` and no explicit UID or GID:
+the NixOS configuration, the Zone bundle emitter derives the opaque account name
+and declares it with `isSystemUser = true`:
 
 ```nix
-# Auto-generated by the Zone bundle emitter (do not write by hand):
-users.users."d2b-corp-vm-wlproxy" = {
+# Name derivation helper (internal to emitter; do not write by hand):
+principalFor = zone: sessionName:
+  let h = builtins.hashString "sha256" "d2b-wlp:${zone}:${sessionName}";
+  in "d2b-wlp-${builtins.substring 0 12 h}";
+
+# Auto-generated for zone "dev", session "corp-vm-display":
+users.users."d2b-wlp-<hex12>" = {
   isSystemUser = true;
-  group        = "d2b-corp-vm-wlproxy";
-  description  = "d2b display-wayland proxy principal for corp-vm";
+  group        = "d2b-wlp-<hex12>";
+  description  = "d2b display-wayland proxy principal";
 };
-users.groups."d2b-corp-vm-wlproxy" = {};
+users.groups."d2b-wlp-<hex12>" = {};
 ```
 
-The account is created at `nixos-rebuild switch` time, before any runtime
-activity. Account names are derived solely from the authenticated Guest
-resource name and are bounded to `^d2b-[a-z][a-z0-9-]*-wlproxy$` (max 63
-chars). The `host-proxy-controller` and the broker verify account existence
-via NSS at spawn time; neither creates OS accounts.
+The account name is bounded to `^d2b-wlp-[0-9a-f]{12}$` (20 chars). The
+emitter ensures uniqueness; a collision (extremely unlikely given SHA-256) is a
+Nix eval error with an actionable message.
 
 #### Dynamic API sessions (runtime-created)
 
 For `WaylandSession` resources created at runtime via the Zone API (not
 declared in the Nix bundle), the controller draws principals from a bounded
-pool of pre-provisioned accounts. Pool accounts are named
-`d2b-wlproxy-pool-<N>` (zero-padded index, N < `principalPoolSize`) and are
-provisioned by the same Nix emitter. The pool size is set in
+pool of pre-provisioned accounts. The pool size is set in
 `Provider.spec.config` (§16.1):
 
 ```nix
@@ -1233,23 +1598,20 @@ d2b.zones.dev.resources.display-wayland.spec.config.principalPoolSize = 4;
 # default: 4; bounds: 1..32; validated against signed Provider config schema
 ```
 
-The Zone bundle emitter translates this into NixOS `users.users.*` declarations
-with `isSystemUser = true` and no explicit UID or GID; the OS allocates UIDs
-in the system range automatically:
+The Zone bundle emitter translates this into NixOS `users.users.*` declarations:
 
 ```nix
 # Auto-generated by the Zone bundle emitter (do not write by hand):
-users.users."d2b-wlproxy-pool-0" = {
+users.users."d2b-wlp-p0" = {
   isSystemUser = true;
-  group        = "d2b-wlproxy-pool-0";
+  group        = "d2b-wlp-p0";
   description  = "d2b display-wayland dynamic session pool slot 0";
 };
-users.groups."d2b-wlproxy-pool-0" = {};
+users.groups."d2b-wlp-p0" = {};
 # ... repeated for each N in 0..(principalPoolSize - 1)
 ```
 
-No raw UID or GID integer is set or required in the Nix declaration. The
-broker resolves the principal by name through NSS at spawn time.
+No raw UID or GID integer is set or required in any Nix declaration.
 
 The controller maintains a lease table mapping pool slots to active dynamic
 sessions. If all pool slots are occupied when a new dynamic session is
@@ -1269,6 +1631,35 @@ The total number of concurrent display sessions on a given Host is bounded by:
 Nix eval enforces that the sum of declared `WaylandSession` resources per Host
 does not exceed the provisioned principal count. Exceeding this limit is a Nix
 eval error with an actionable message.
+
+### 16.6 Component state Volume principals
+
+The two framework-created provider-state Volumes use fixed Nix-provisioned OS
+accounts as layout principals. These are Zone-singleton static components, so
+account names are fixed (not hash-derived). The Zone bundle emitter declares
+them alongside the wlproxy principal accounts:
+
+```nix
+# Auto-generated by the Zone bundle emitter (do not write by hand):
+users.users."d2b-dwl-ctrl" = {
+  isSystemUser = true;
+  group        = "d2b-dwl-ctrl";
+  description  = "d2b display-wayland controller state principal";
+};
+users.groups."d2b-dwl-ctrl" = {};
+
+users.users."d2b-dwl-portal" = {
+  isSystemUser = true;
+  group        = "d2b-dwl-portal";
+  description  = "d2b display-wayland user portal state principal";
+};
+users.groups."d2b-dwl-portal" = {};
+```
+
+Account names follow `^d2b-dwl-[a-z][a-z0-9-]*$`. No raw UID or GID integer
+is set; the OS allocates UIDs in the system range automatically. The broker
+resolves each account by name via NSS at Volume provisioning time. No
+`ComponentPrincipal` ResourceRefs are used.
 
 ---
 
@@ -1345,11 +1736,11 @@ produces the guest binary (see §19 removal table).
 | Current source | `packages/d2b-wayland-proxy/`, `packages/d2b-host/src/wayland_proxy_argv.rs`, `packages/d2b-host-providers/src/lib.rs`, `packages/d2b-realm-provider/src/{conformance,mock}.rs` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-display-wayland/src/` |
-| Detailed design | Create Provider crate layout (`src/`, `tests/`, `integration/`, `README.md`); extract `FilterPolicy`, `PolicyInput`, `DecorationManager`, `BridgeConfig`, `ProxyReadinessEvent`, `ProxyIdentity`, `ClipboardGlobalDisposition` from `d2b-wayland-proxy`; implement `host-proxy-controller` and `policy-controller` using toolkit `ResourceClient`/`Reconciler`; implement pool-slot acquisition logic that fails closed with `NoPrincipalAvailable` when all pre-provisioned dynamic session principals are occupied; implement `wl-cross-domain-proxy` guest frontend binary at `src/bin/wl-cross-domain-proxy.rs` within the Provider package; implement provider-neutral `display_fails_closed_when_unsupported` conformance |
-| Integration | Zone Provider resource/catalog → `WaylandSession` controller → Process resources → supervisor ticket |
+| Detailed design | Create Provider crate layout (`src/`, `tests/`, `integration/`, `README.md`); extract `FilterPolicy`, `PolicyInput`, `DecorationManager`, `BridgeConfig`, `ProxyReadinessEvent`, `ProxyIdentity`, `ClipboardGlobalDisposition` from `d2b-wayland-proxy`; implement single `display-controller` using toolkit `ResourceClient`/`Reconciler` to manage both `WaylandSession` and `WaylandPolicy` resources; implement `display-user-portal` as a separately sandboxed user-domain service that receives pre-opened compositor connections from the fixed user session supervisor (never reads `WAYLAND_DISPLAY`), validates same-user via `SO_PEERCRED`, and issues bounded per-session compositor connection attachment grants to `ProviderSupervisor`; implement LaunchTicket composition with opaque attachment grant handles (compositor, GPU endpoint) so no fd transits through the controller; implement pool-slot acquisition using opaque hash-derived account names (`d2b-wlp-<hex12>` for bundle sessions, `d2b-wlp-p<N>` for pool) that fails closed with `NoPrincipalAvailable` when all pool slots are occupied; implement `wl-cross-domain-proxy` guest frontend binary at `src/bin/wl-cross-domain-proxy.rs` within the Provider package; implement provider-neutral `display_fails_closed_when_unsupported` conformance; verify that framework-created provider-state Volumes (§7.2/§7.3) are present at enrollment and that each component receives only its local view dirfd |
+| Integration | Zone Provider resource/catalog → `WaylandSession` controller (in `display-controller`) → Process resources → supervisor ticket; framework enrollment creates `display-wayland-controller-state` and `display-wayland-user-portal-state` Volumes |
 | Data migration | Full reset; no v2 session compatibility |
-| Validation | conformance vectors, fake-bus tests, filter policy golden tests (migrate from `packages/d2b-wayland-proxy/`), redaction/audit contract tests, no-fallback test |
-| Removal proof | `packages/d2b-host-providers/src/lib.rs` `LocalCrossDomainWaylandProvider` removed only after `host-proxy-controller` passes conformance; `packages/d2b-host/src/wayland_proxy_argv.rs` removed only after Process template sealing verified |
+| Validation | conformance vectors, fake-bus tests, filter policy golden tests (migrate from `packages/d2b-wayland-proxy/`), redaction/audit contract tests, no-fallback test, `controller_unknown_interface_fails_closed`, `controller_finalizer_ambiguous_retained`, `user_portal_unavailable_blocks_pending`, `provider_state_volumes_created_at_enrollment` |
+| Removal proof | `packages/d2b-host-providers/src/lib.rs` `LocalCrossDomainWaylandProvider` removed only after `display-controller` passes conformance; `packages/d2b-host/src/wayland_proxy_argv.rs` removed only after Process template sealing verified |
 
 ### ADR046-display-002
 
@@ -1359,7 +1750,7 @@ produces the guest binary (see §19 removal table).
 | Current source | `nixos-modules/components/graphics.nix` `graphics.waylandProxy.*`; `nixos-modules/ui-colors.nix` VM border color resolution; `nixos-modules/options-vms.nix` `graphics.*` options |
 | Reuse action | adapt |
 | Destination | Zone bundle emitter for `WaylandSession` / `WaylandPolicy` ResourceSpecs under `d2b.zones.<zone>.resources.*`; `WaylandSession` color resolution in Nix bundle emitter |
-| Detailed design | Emit `WaylandSession` and `WaylandPolicy` ResourceSpecs from Nix; derive colors from `d2b-niri-border` palette (§16.2); enforce `crossDomainTrusted = true` at eval time; emit v3 `display-wayland-provider` artifact catalog entry with `spec.config.principalPoolSize` (default 4, bounds 1..32); provision `d2b-<guest>-wlproxy` system user/group (`isSystemUser = true`, no raw UID/GID) for every bundle-declared `WaylandSession`; provision `d2b-wlproxy-pool-<N>` accounts (same convention) up to `spec.config.principalPoolSize` per Host; validate signed Provider config schema against `principalPoolSize`; enforce eval-time bound that bundle session count + pool size does not exceed provisioned principal count; nix-unit tests for color derivation, spec shape, JSON round-trip, and principal provisioning |
+| Detailed design | Emit `WaylandSession` and `WaylandPolicy` ResourceSpecs from Nix; derive colors from `d2b-niri-border` palette (§16.2); enforce `crossDomainTrusted = true` at eval time; emit v3 `display-wayland-provider` artifact catalog entry with `spec.config.principalPoolSize` (default 4, bounds 1..32) and `spec.config.runtimeVolumePolicyId`; provision opaque hash-derived OS accounts (`d2b-wlp-<hex12>` for bundle-declared sessions, `d2b-wlp-p<N>` for pool; `isSystemUser = true`, no raw UID/GID) for all sessions and pool slots; validate that account names are unique and do not expose guest/session identity; validate signed Provider config schema; enforce eval-time bound that bundle session count + pool size does not exceed provisioned principal count; configure `display-controller` and `display-user-portal` in the signed ProviderDeployment manifest; nix-unit tests for color derivation, opaque principal name derivation, spec shape, JSON round-trip, and principal provisioning uniqueness |
 | Integration | Zone NixOS module system → bundle emitter → `/etc/d2b/zones/<zone>/bundle/generation-N.json` |
 | Data migration | Legacy `graphics.waylandProxy.*` Nix options accepted with deprecation warning during migration window; removed after parity |
 | Validation | nix-unit spec-shape tests, eval-time guard tests (crossDomainTrusted=false rejected), color derivation golden tests, principal provisioning count bound test |
@@ -1404,7 +1795,7 @@ blocking defect.
 | --- | --- | --- |
 | `ProcessRole::WaylandProxy` | `packages/d2b-core/src/processes.rs` | `ADR046-display-001` passes conformance and Process template verified |
 | `generate_wayland_proxy_argv` / `WaylandProxyArgvInput` | `packages/d2b-host/src/wayland_proxy_argv.rs` | Process template sealing verified; no other callers remain |
-| `LocalCrossDomainWaylandProvider` | `packages/d2b-host-providers/src/lib.rs` | `host-proxy-controller` passes conformance |
+| `LocalCrossDomainWaylandProvider` | `packages/d2b-host-providers/src/lib.rs` | `display-controller` passes conformance |
 | `packages/d2b-wayland-proxy/` crate | whole directory | `ADR046-display-001` complete; all behavior migrated to Provider crate; all tests passing in new location |
 | `nixos-modules/components/graphics.nix` `graphics.waylandProxy.*` options | `nixos-modules/components/graphics.nix` | `ADR046-display-002` Zone bundle emitter parity verified |
 | `nixos-modules/ui-colors.nix` VM border color resolution | `nixos-modules/ui-colors.nix` | `ADR046-display-002` color derivation in Zone bundle emitter verified by nix-unit pass |
@@ -1436,18 +1827,24 @@ blocking defect.
 | `metric_labels_closed` | All metric label values are members of the closed pre-declared label sets |
 | `readiness_event_bounded` | `ProxyReadinessEvent` serialization contains no socket paths |
 | `principal_pool_exhausted_fails_closed` | All pool slots occupied → new dynamic session transitions to `Failed` with `NoPrincipalAvailable`; no OS user creation attempted |
+| `opaque_principal_name_derived` | `principalFor(zone, sessionName)` produces `d2b-wlp-<hex12>` with correct SHA-256 derivation; two sessions with different names produce different accounts; pool slots produce `d2b-wlp-p<N>` |
 
 ### 20.2 Hermetic integration tests (`packages/d2b-provider-display-wayland/tests/`)
 
 | Test | Coverage |
 | --- | --- |
-| `controller_session_create_to_ready` | Fake-bus: `WaylandSession` created → `host-proxy-controller` creates Process and Volume → fake Process transitions to Ready → session status transitions to Ready |
+| `controller_session_create_to_ready` | Fake-bus: `WaylandSession` created → `display-controller` creates Process and Volume → fake Process transitions to Ready → session status transitions to Ready |
 | `controller_gpu_endpoint_unavailable` | Fake-bus: GPU Device not Ready → session stays Pending → `GpuEndpointAvailable=False` condition |
+| `controller_user_portal_unavailable` | Fake-bus: `display-user-portal` not running or grant handle issuance fails → session stays Pending → `UserPortalReady=False` condition; `user-portal-unavailable` error code |
 | `controller_proxy_failed_backoff` | Fake-bus: proxy Process exits → retry policy applied → after 5 failures within window session transitions to Failed |
-| `controller_finalize` | Fake-bus: `WaylandSession` deletionRequestedAt set → finalizer runs → Process deleted → Volume deleted → finalizer removed |
-| `controller_policy_update_triggers_reconcile` | Policy controller compiles `WaylandPolicy` → owner trigger dispatched to `host-proxy-controller` → session reconciled with new policy digest |
+| `controller_finalize` | Fake-bus: `WaylandSession` deletionRequestedAt set → finalizer runs → graceful stop sent → Process reaches verified terminal phase → Volume deleted by owner-cascade → finalizer removed |
+| `controller_finalizer_ambiguous_retained` | Fake-bus: graceful stop sent but Process does not reach terminal phase within grace period → `FinalizerAmbiguous` condition set → `Degraded` phase → finalizer retained; no unconditional deletion |
+| `controller_policy_update_triggers_reconcile` | `display-controller` reconciles `WaylandPolicy` → owner trigger dispatched to `WaylandSession` reconciliation → session reconciled with new policy digest |
+| `controller_unknown_interface_fails_closed` | `WaylandPolicy` spec contains an interface name not in the compiled catalog → spec admission rejected with actionable error; `unknown-interface-rejected` condition; no warn-and-continue |
 | `controller_clipboard_bridge_disabled_without_clipboard_provider` | `clipboard-wayland` Provider absent → `ClipboardBridgeReady=False` condition; session proceeds without clipboard bridge |
 | `controller_no_principal_available` | Fake-bus: all pool slots occupied → new dynamic `WaylandSession` reconcile → `NoPrincipalAvailable` condition set → session `Failed`; no spawn attempted |
+| `provider_state_volumes_created_at_enrollment` | Fake-bus: Provider enrolled → framework creates both `display-wayland-controller-state` and `display-wayland-user-portal-state` Volumes with `kind: state`, `persistenceClass: persistent`, minimal nonzero quota, and `provider-state-identity` layout entry; each component receives only its own view dirfd and has no visibility to the other Volume |
+| `provider_state_volume_identity_marker_missing` | Fake-bus: `provider-state-identity` file absent from controller state Volume at mount time → framework reports fail-closed error, `ProviderStateIdentityMissing` condition set, `display-controller` not started; same for portal Volume |
 
 ### 20.3 Container/cross-process integration (`packages/d2b-provider-display-wayland/integration/`)
 
@@ -1482,14 +1879,15 @@ packages/d2b-provider-display-wayland/README.md
 
 - Provider identity / `providerRef` / `artifactId`;
 - ResourceTypes implemented: `WaylandSession`, `WaylandPolicy`;
-- Controllers: `host-proxy-controller`, `guest-frontend-controller`,
-  `policy-controller`;
-- Services: none (all communication via d2b-bus ComponentSession);
+- Controllers: `display-controller` (Zone-singleton, manages `WaylandSession` and `WaylandPolicy`);
+- Services: `display-user-portal` (user-domain, delivers compositor fd to display-controller via ComponentSession attachment);
 - Worker Processes: `wayland-proxy-worker`, `wayland-frontend-worker`;
-- Binaries: `d2b-display-wayland-host-proxy`, `d2b-display-wayland-guest-frontend`,
-  `d2b-display-wayland-policy`;
-- Component placement: one `host-proxy-controller` per Zone Host; one
-  `guest-frontend-controller` per enabled Guest; one `policy-controller` per Zone;
+- Binaries: `d2b-display-wayland-controller`, `d2b-display-wayland-user-portal`,
+  `d2b-display-wayland-host-proxy`, `d2b-display-wayland-guest-frontend`;
+- Component placement: one `display-controller` per Zone (system-domain singleton
+  declared in signed ProviderDeployment manifest); one `display-user-portal` per
+  active user login session (user-domain, separately sandboxed; declared in
+  signed ProviderDeployment manifest);
 - Dependencies: `Provider/device-gpu` (optional, required for Ready sessions);
   `Provider/clipboard-wayland` (optional, clipboard bridge);
   `Provider/runtime-cloud-hypervisor` (mandatory for VMM cross-domain context);
@@ -1497,11 +1895,19 @@ packages/d2b-provider-display-wayland/README.md
 - Security posture: no direct compositor fallback, no capabilities, mandatory
   seccomp, mount namespace, per-session Volume, no socket paths in
   status/logs/audit;
-- Principal provisioning: `d2b-<guest>-wlproxy` accounts provisioned by Nix
-  at `nixos-rebuild switch` for bundle-declared sessions; dynamic sessions use
-  the pre-provisioned `d2b-wlproxy-pool-<N>` account pool; no OS user creation
-  at runtime; pool exhaustion fails closed with `NoPrincipalAvailable` (§16.5);
-- State / Volume use: ephemeral tmpfs proxy runtime Volume per session (§7.1); no durable Volume for policy state (policy is deterministically rebuilt from WaylandPolicy spec on controller restart);
+- Principal provisioning: opaque hash-derived OS accounts (`d2b-wlp-<hex12>` for
+  bundle-declared sessions, `d2b-wlp-p<N>` for dynamic pool; `isSystemUser=true`,
+  no raw UID/GID) provisioned by Nix at `nixos-rebuild switch`; account names do
+  not expose guest/zone identity; dynamic sessions use the pre-provisioned pool;
+  no OS account creation at runtime; pool exhaustion fails closed with
+  `NoPrincipalAvailable` (§16.5);
+- State / Volume use: ephemeral tmpfs proxy runtime Volume per session (§7.1);
+  durable `kind: state` / `persistenceClass: persistent` component state Volumes
+  (§7.2/§7.3), each holding an enrollment identity marker, surviving Provider
+  restart and participating in upgrade, destroy, and reset — framework fails
+  closed on missing or corrupt identity marker; no persistent Volume for policy
+  state (deterministically rebuilt from `WaylandPolicy` spec on controller
+  restart);
 - Telemetry: closed metric labels, no socket paths, no user identities, no
   window titles in any observability surface;
 - Build: `cargo build -p d2b-provider-display-wayland`;
