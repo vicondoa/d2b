@@ -1468,6 +1468,23 @@ The four required fixture subdirectories and their coverage obligations:
 | `finalizer_drain/` | Simulates Guest restart during Export deletion. Asserts: volume-virtiofs Export finalizer is not cleared while Guest is unreachable and no pidfd proof is available; finalizer is cleared after Guest comes back and confirms `MountAbsent`; finalizer is cleared immediately when pidfd proof of mount-namespace death is present. Requirements: podman; guest-control stub container. |
 | `store_view_readonly/` | Mounts a real store-view Volume (tmpfs-backed for CI) via virtiofsd. Asserts: `--shared-dir` resolves to `live/` not `/nix/store`; marker prerequisite gates launch; read-only flag set; no host-store paths accessible. Requirements: virtiofsd binary in PATH; `/dev/fuse` accessible; fake hardlink-farm marker fixture. |
 
+### Fast hermetic execution and test placement (D094)
+
+Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
+unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
+and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+sleep, and `cargo test -p d2b-provider-volume-virtiofs --lib --tests` completes in ≤2 s warm-cache
+execution time (compilation excluded). They use a deterministic fake clock/RNG
+and the toolkit fakes/FakeEffectPort only — no process spawn, container,
+network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
+hardware, or live cloud, and no filesystem tree beyond tiny temp fixtures. Any
+scenario needing those lives only in `integration/`, which keeps a lane
+timeout/budget, parallel isolation, and fake external services by default; such
+a need is re-placed into `integration/`, never given a sleep, larger timeout,
+or `#[ignore]`. Bounded crypto/property tests are the only classified
+exception, each named with a capped case count and a declared higher per-test
+budget.
+
 ---
 
 ## 21. Removal proofs
@@ -1484,3 +1501,12 @@ The four required fixture subdirectories and their coverage obligations:
 No current path is removed until its resource/controller/Provider successor is integrated,
 tested, and confirmed by parity gates. Removal is recorded in the CHANGELOG under the
 relevant release section with `managedBy: configuration` confirmation.
+
+Per D094, each replaced current-code test is retired with an explicit
+keep/adapt/move/delete disposition and a removal gate: the minimum reusable
+semantic assertions migrate into this crate's hermetic `tests/`, and the old
+duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
+entries are deleted once successor coverage and the removal proof pass —
+updating `tests/layer1-jobs.json`, the closed gate manifests, the
+flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
+Old and new suites never run in parallel indefinitely.

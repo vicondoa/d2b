@@ -1419,12 +1419,38 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | v2 `d2b.notify.v2.NotifyService` generated stubs | v3 `d2b.notification.v3` service established and all callers migrated |
 | State dir `/run/d2b/notify` tmpfiles rule | Retired; all notification state is in-memory per-session with no Volume replacement |
 
+Per D094, each replaced current-code test is retired with an explicit
+keep/adapt/move/delete disposition and a removal gate: the minimum reusable
+semantic assertions migrate into this crate's hermetic `tests/`, and the old
+duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
+entries are deleted once successor coverage and the removal proof pass —
+updating `tests/layer1-jobs.json`, the closed gate manifests, the
+flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
+Old and new suites never run in parallel indefinitely.
+
 ---
 
 ## 18. Tests and integration requirements
 
 Workspace policy requires every Provider crate to contain non-empty `tests/`
 and `integration/` directories.
+
+### Fast hermetic execution and test placement (D094)
+
+Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
+unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
+and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+sleep, and `cargo test -p d2b-provider-notification-desktop --lib --tests`
+completes in ≤2 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
+KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
+temp fixtures. Any scenario needing those lives only in `integration/`, which
+keeps a lane timeout/budget, parallel isolation, and fake external services by
+default; such a need is re-placed into `integration/`, never given a sleep,
+larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
+classified exception, each named with a capped case count and a declared higher
+per-test budget.
 
 ### 18.1 Required `tests/` coverage
 

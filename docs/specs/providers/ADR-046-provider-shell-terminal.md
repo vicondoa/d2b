@@ -1389,6 +1389,23 @@ The only legitimate restart-sensitive shell state is the supervisor-owned PTY, r
 attach state; those are adopted by verifying the supervisor, not by copying bytes or
 handles into the controller.
 
+### Fast hermetic execution and test placement (D094)
+
+Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
+unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
+and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+sleep, and `cargo test -p d2b-provider-shell-terminal --lib --tests` completes
+in ≤2 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
+KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
+temp fixtures. Any scenario needing those lives only in `integration/`, which
+keeps a lane timeout/budget, parallel isolation, and fake external services by
+default; such a need is re-placed into `integration/`, never given a sleep,
+larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
+classified exception, each named with a capped case count and a declared higher
+per-test budget.
+
 ## Implementation work items
 
 | ID | Area | Description | src path | tests path | integration path |
@@ -1438,6 +1455,15 @@ or documentation:
 - `supervisorPhase` as a top-level pool phase
 - SSH or direct-host fallback
 - controller-owned PTY or terminal bytes
+
+Per D094, each replaced current-code test is retired with an explicit
+keep/adapt/move/delete disposition and a removal gate: the minimum reusable
+semantic assertions migrate into this crate's hermetic `tests/`, and the old
+duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
+entries are deleted once successor coverage and the removal proof pass —
+updating `tests/layer1-jobs.json`, the closed gate manifests, the
+flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
+Old and new suites never run in parallel indefinitely.
 
 ## Appendix A: canonical example resources
 

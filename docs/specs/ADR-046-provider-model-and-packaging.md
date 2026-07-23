@@ -414,7 +414,15 @@ Every Provider dossier specifies:
 - pidfd/wait/reap where Process Provider;
 - telemetry/audit/doctor/support;
 - failure/upgrade/migration;
-- exact v3 source→future destination work items and tests.
+- exact v3 source→future destination work items and tests, each naming the
+  old test selector/file with a keep/adapt/move/delete disposition and removal
+  gate (D094);
+- test placement and execution budgets (D094): `src/` units and `tests/` are
+  fast, in-process, deterministic, parallel-safe hermetic tests within the
+  `ADR-046-validation-and-delivery` §10.16 budgets (individual normal test p95
+  ≤50 ms, no wall-clock sleep; per-crate `--lib --tests` ≤2 s), and every real
+  process/socket/container/Nix/guest/hardware/live scenario lives only in
+  `integration/`.
 
 ## Frozen initial Provider catalog
 

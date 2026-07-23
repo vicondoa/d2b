@@ -625,6 +625,31 @@ three-stage lifecycle:
 No spike in this catalog is retired by this spec; retirement is always
 performed by the owning production work item, per anti-claim rule 5.
 
+## Hermetic test-runtime budget baseline (D094)
+
+The D094 execution budgets in `ADR-046-validation-and-delivery` §10.16 are
+measurable and are recorded, not asserted by feel:
+
+- **Reference runner.** The pinned CI/reference runner class (fixed vCPU/RAM
+  shape) is recorded with the ledger; the same class is used for the
+  historical regression comparison so a budget change reflects test cost, not
+  hardware drift.
+- **Repetitions and statistic.** Each measured test/crate/shard is executed a
+  fixed, recorded repetition count with a warm cache; the reported figure is
+  the p95 of execution-only time (build excluded).
+- **Fail/regression policy.** A run fails when any budget in §10.16 is
+  exceeded or when a test/crate/shard regresses beyond the recorded historical
+  threshold versus the previous committed ledger. A classified crypto/property
+  exception is compared only against its own declared per-test budget and
+  capped case count.
+- **Cold compile tracked separately.** Cold compilation time is recorded on a
+  separate line and optimized through shared cache and dependency discipline;
+  it is never mixed into the execution budgets, and correctness never depends
+  on any cache.
+
+This baseline is established by `ADR046-feasibility-011` and consumed by the
+test-runtime ledger/timing gate (`ADR046-delivery-007`/`ADR046-streamline-022`).
+
 ## Current-code fit
 
 | Item | Treatment |
@@ -806,3 +831,19 @@ decisions/work items" row.
 | Data migration | None |
 | Validation | SPIKE-15 metrics (1)-(4) across all three compositions |
 | Removal proof | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce all three compositions against real, non-fake Zone/store/bus/broker code |
+
+### ADR046-feasibility-011
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-feasibility-011` |
+| Dependency/owner | `ADR046-delivery-007`; delivery/test-tooling integrator |
+| Current source | this codebase's ad hoc `tests/tools/` timing logs (`d2b-static-timing.$$/`), which are not a candidate-bound, reference-runner-recorded ledger |
+| Reuse source | existing `libtest --format=json` timing output and `xtask` (no new test framework) |
+| Reuse action | `adapt` |
+| Destination | `proofs/test-runtime-budget-spike/`; the committed baseline ledger consumed by `ADR046-delivery-007` |
+| Detailed design | Establishes the D094 measurement baseline: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a regression |
+| Integration | Output ledger shape is consumed by the runtime ledger/timing gate; establishes the historical threshold seed |
+| Data migration | None |
+| Validation | The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets |
+| Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces the baseline against the real crate set |

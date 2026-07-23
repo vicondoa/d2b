@@ -300,7 +300,17 @@ crate may reach into `src/` modules that are not part of the crate's declared pu
 
 ### `tests/`
 
-Owns **hermetic Cargo integration tests** (files under `tests/*.rs` invoked by `cargo test`):
+Owns **hermetic Cargo integration tests** (files under `tests/*.rs` invoked by `cargo test`).
+Per D094 these are fast, in-process, deterministic, and parallel-safe: an individual normal
+test has p95 ≤50 ms with no wall-clock sleep, and the crate's whole
+`cargo test -p d2b-provider-<base>-<implementation> --lib --tests` execution (units + `tests/`)
+completes in ≤2 s warm-cache execution time (compilation excluded). They use a deterministic
+fake clock/RNG and the toolkit fakes only; no process spawn, container, network, DBus, systemd,
+broker daemon, Nix eval/build, KVM, hardware, or live cloud, and no filesystem tree beyond tiny
+temp fixtures. A test needing any of those is a placement violation and MUST move to
+`integration/` — never gain a sleep, larger timeout, or `#[ignore]`. Bounded crypto/property
+tests are the only classified exception and declare a capped case count and a higher per-test
+budget by name.
 
 - ResourceType controller conformance tests — assert every declared ResourceType is reconciled
   correctly from `spec` to `status` phase transitions.
@@ -316,7 +326,10 @@ Owns **hermetic Cargo integration tests** (files under `tests/*.rs` invoked by `
 ### `integration/`
 
 Owns **heavier test scenarios** invoked by the existing test orchestration
-(`make test-integration` / `make test-host-integration`), not by bare `cargo test`:
+(`make test-integration` / `make test-host-integration`), not by bare `cargo test`.
+Per D094 these may be slower but still carry a lane timeout/budget, run with parallel
+isolation, and use fake external services by default; live/hardware runs remain a separate
+manual tier.
 
 - Container-level scenarios: Provider controller running against a real Zone runtime in a
   container; resource lifecycle under real broker calls.
@@ -790,6 +803,35 @@ add additional layer for their ResourceType-specific cleanup semantics.
 | `tests/unit/nix/cases/artifact-catalog.nix` | nix-unit eval | Duplicate `d2b.artifacts` ID fails eval with exact error; undeclared `type` fails eval; `artifactId` referencing missing catalog entry fails build; `systemArtifactId` with wrong-type catalog entry fails build; derivation placed directly in `spec.*` fails type check; catalog renders deterministic digest for a fixed derivation; rendered ResourceSpec JSON contains only the bounded ID string, not any store path |
 | `packages/d2b-contracts/tests/` or `packages/d2b-core-controller/tests/` | Rust unit | Artifact catalog type lookup is fail-closed for missing/wrong-type entries; `artifact-catalog.json` contains a `storePath` field per entry (present and validated by core privately); that `storePath` value is absent from all public ResourceSpec fields, status, audit events, logs, metric labels, and span attributes |
 | `tests/host-integration/artifact-catalog-hygiene.nix` | integration | At runtime, store paths from the artifact catalog are absent from all public ResourceSpec fields, status, audit events, log lines, metric labels, and span attributes |
+
+---
+
+## §8.4 Fast-execution placement and legacy retirement (D094)
+
+Every disposition in §8.1 and every removal target in §8.2 is bound to the
+D094 execution model:
+
+- Each migration/replacement row names the **exact old test selector/file** it
+  covers and its keep/adapt/move/delete disposition. `RETAIN`/`ADAPT` targets
+  that are hermetic MUST meet the §10.16 budgets of
+  `ADR-046-validation-and-delivery` (individual normal test p95 ≤50 ms, no
+  wall-clock sleep; per-crate `--lib --tests` ≤2 s; Layer-1 hermetic shard
+  ≤60 s). An adapted test that can only pass by spawning a process, hitting the
+  network, or sleeping is re-placed into `integration/`, not slowed down in a
+  hermetic tier.
+- When ADR 0046 replaces a behavior, the minimum reusable semantic assertions
+  migrate into the new hermetic suite and the old duplicate tests, shell gates,
+  fixtures, static artifacts, CI jobs, and manifest entries are **deleted** once
+  successor coverage and the §8.2 removal proof pass. Old and new suites never
+  run indefinitely.
+- Each such deletion updates `tests/layer1-jobs.json`, the closed gate
+  manifests, the flake/matrix/Nix-unit pins, the generated ledgers, and the CI
+  workflow shards, and adds an absence assertion (the retired selector no longer
+  appears). This is enforced by the legacy-test retirement generator
+  (`ADR046-streamline-023`) and the test-runtime ledger/timing gate
+  (`ADR046-streamline-022`/`ADR046-delivery-007`). No new top-level
+  `tests/*.sh` gate is introduced; Rust unit/property and the existing
+  generated drift/policy gates are preferred.
 
 ---
 

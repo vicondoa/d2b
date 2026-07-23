@@ -464,6 +464,8 @@ Rust, not NixOS module evaluation.
 | `policy_spec_source_policy` | No Volume `source.settings` example anywhere under `docs/specs/**` contains a raw absolute host path; every `local-path`/`block-image` source example uses `sourcePolicyId` (D082) (F9 regression guard) |
 | `policy_spec_finalizer_phase` | Every ResourceType/Provider spec's status section uses only the common phase enum `Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown` (D037) and the fixed finalizer/deletion ordering (D084); no spec invents a parallel phase or deletion-ordering scheme |
 | `policy_no_leaked_decision_prefix` | No file under `docs/specs/**` contains a "decision-required" marker using any ID prefix other than the canonical `ADR-046-decision-register` `D0xx` numbering (F8 regression guard) |
+| `policy_test_placement` | Every `src/` `#[cfg(test)]` module and crate `tests/*.rs` file is hermetic (D094): no process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build, KVM, hardware, live cloud, or non-tiny filesystem tree, and no `#[ignore]`; such needs must move to `integration/` |
+| `policy_test_determinism` | No hermetic-tier test uses wall-clock sleep/retry (D094); a deterministic fake clock/RNG is used instead, except for explicitly allow-listed crypto/property tests with a declared per-test budget and capped case count |
 
 ### Type 6 — flake checks (`tests/unit/smoke/`)
 
@@ -789,5 +791,69 @@ v3 source to extract from.
 | Implementation shape | Parses every "Current-code fit" table's "Current anchor" cell for symbol/crate names, cross-references against the migration map's disposition rows, and flags any current-source citation absent from the map |
 | Integration | Standing Layer-1 policy lint once wired; also usable ad hoc when authoring a new dossier's evidence section |
 | Validation | New test seeding a fixture spec citing a current-source symbol absent from the migration map and confirming it is flagged |
+| Adoption timing | Immediately |
+| Removal/supersession | None |
+
+### ADR046-streamline-020 — Hermetic test placement lint
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-streamline-020` |
+| Tier | A |
+| Observed friction evidence | D094: without a lint, a slow scenario needing a real process/container/network silently lands in a `src/`/`tests/` hermetic tier and inflates the inner loop |
+| Desired behavior | A policy lint asserting every `src/` `#[cfg(test)]` module and crate `tests/*.rs` file is hermetic — no process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM hardware, live cloud, or filesystem tree beyond tiny temp fixtures; any such need must move to `integration/`, never gain a sleep, larger timeout, or `#[ignore]` |
+| Destination | `packages/d2b-contract-tests/tests/policy_test_placement.rs` |
+| Owner/dependencies | ADR046-streamline-001 |
+| Implementation shape | Scans hermetic-tier Rust sources for banned API surfaces (`std::process::Command`, socket/container/DBus/systemd helpers, `#[ignore]`) and for `integration/`-only markers appearing outside `integration/` |
+| Integration | `make test-policy` row; no new top-level `tests/*.sh` gate |
+| Validation | Fixture crate with an intentional process-spawning hermetic test is rejected naming the file/line; a correct crate passes |
+| Adoption timing | Immediately |
+| Removal/supersession | None |
+
+### ADR046-streamline-021 — Deterministic-clock/sleep lint
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-streamline-021` |
+| Tier | A |
+| Observed friction evidence | D094: wall-clock `sleep`/retry in a hermetic test both breaks the p95 ≤50 ms budget and makes the test flaky/non-parallel-safe |
+| Desired behavior | A lint rejecting wall-clock sleep/retry (`std::thread::sleep`, `tokio::time::sleep` without a paused test clock, real `Instant::now` polling loops) in `src/`/`tests/` hermetic tiers, requiring a deterministic fake clock/RNG instead |
+| Destination | `packages/d2b-contract-tests/tests/policy_test_determinism.rs` |
+| Owner/dependencies | ADR046-streamline-020 |
+| Implementation shape | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property exceptions are allow-listed by explicit name with a declared per-test budget |
+| Integration | `make test-policy` row |
+| Validation | Fixture hermetic test using `thread::sleep` is rejected; a classified crypto test on the allow-list passes |
+| Adoption timing | Immediately |
+| Removal/supersession | None |
+
+### ADR046-streamline-022 — Test-runtime ledger and timing gate
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-streamline-022` |
+| Tier | A |
+| Observed friction evidence | D094: no machine-readable record of execution-only test time exists, so budget regressions are invisible until the inner loop is already slow |
+| Desired behavior | A test-runtime ledger + timing gate (reusing existing `xtask`/`libtest --format=json` output, no new framework) measuring execution-only time after build against the §10.16 budgets, recording reference runner/repetitions/p95, reporting top slow tests, applying a historical regression threshold, and emitting a CI artifact |
+| Destination | `packages/xtask/src/test_runtime_ledger.rs` (shared with `ADR046-delivery-007`) |
+| Owner/dependencies | ADR046-delivery-007 |
+| Implementation shape | Parses per-test JSON timings, aggregates per test/crate/shard, compares against pinned budgets and the previous ledger, and fails on regression beyond the threshold |
+| Integration | Consumed by wave entry/exit (`ADR-046-validation-and-delivery` §4/§10.16); `make test-rust` and Layer-1 shards run concurrently |
+| Validation | Synthetic timing regression fails the gate; ledger output is deterministic and machine-readable |
+| Adoption timing | Immediately |
+| Removal/supersession | None |
+
+### ADR046-streamline-023 — Legacy-test retirement generator
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-streamline-023` |
+| Tier | A |
+| Observed friction evidence | D094: replaced behavior otherwise leaves old duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest entries running alongside their successors indefinitely |
+| Desired behavior | A generator that, from each current-code migration work item's old-selector→disposition table, produces the retirement checklist and removal gate: which old test selectors/files/`tests/layer1-jobs.json` rows/closed gate manifests/flake-matrix-Nix-unit pins/generated ledgers/CI shards are deleted once successor coverage and removal proof pass, and asserts a retired selector is absent afterward |
+| Destination | `packages/xtask/src/bin/legacy_test_retirement.rs` (`cargo run -p xtask -- legacy-test-retirement`) |
+| Owner/dependencies | ADR046-streamline-008, ADR046-streamline-022 |
+| Implementation shape | Reads the migration map's disposition rows, cross-references the live `tests/layer1-jobs.json`/gate manifests, and emits the delete set plus an absence assertion; never deletes automatically — it produces the gated checklist and the failing test that proves incomplete retirement |
+| Integration | `make test-policy`/`make test-drift` row; wired to every current-code migration work item's removal proof |
+| Validation | Fixture with a replaced behavior whose old selector still appears in `tests/layer1-jobs.json` fails; once removed, the absence assertion passes |
 | Adoption timing | Immediately |
 | Removal/supersession | None |

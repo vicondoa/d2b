@@ -181,11 +181,16 @@ advance.
    commit named in its dependency edges (§3.4), not against a stale `main`.
 4. The `cargo xtask heavy-gate` semaphore (§11) is available (not held past
    its 30-minute timeout by a stale prior-wave validation run).
+5. The fast hermetic suite (§10.16) passes within its execution budgets on the
+   wave's entry tree; it is the required default inner loop for every change
+   in the wave and must be green before any `integration/` lane is scheduled.
 
 **Exit criteria (all required):**
 
 1. Every spec's work items assigned to this wave show `Validation` evidence
-   satisfying §10's applicable matrix rows, imported per §12.2.
+   satisfying §10's applicable matrix rows, imported per §12.2, including the
+   §10.16 runtime-ledger artifact showing every hermetic budget met (or a
+   classified crypto/property exception) with no timing regression.
 2. The immutable candidate snapshot (§12.1) for this wave's integrated tree
    has all required CI, local, and host validator lanes reporting (pending is
    acceptable only while the PR is open, per §13; not at wave close).
@@ -759,6 +764,62 @@ This is what makes §3.3's 27-way parallel wave safe: no Provider crate's
 hermetic test suite requires another Provider crate to be compiled, merged,
 or even to exist yet.
 
+### 10.16 Hermetic execution budgets, placement, and the runtime ledger (D094)
+
+The fast hermetic suite (`src/` `#[cfg(test)]` units and crate `tests/*.rs`)
+is the default inner loop, required on every change; all slower coverage
+lives only in `integration/`. Budgets below are **execution-only**, measured
+after build with a warm cache (compilation excluded) against the recorded
+reference runner, and enforced by the runtime ledger + timing gate — not by a
+new test framework.
+
+| Budget | Threshold (warm cache, execution only) |
+| --- | --- |
+| Individual normal hermetic test | p95 ≤50 ms, no wall-clock sleep |
+| Per Provider crate `cargo test -p d2b-provider-<base>-<implementation> --lib --tests` | ≤2 s |
+| All 27 Provider hermetic suites, sharded | ≤30 s aggregate wall |
+| All 27 Provider hermetic suites, single host | ≤60 s |
+| Each Layer-1 hermetic shard (`make test-rust` split) | ≤60 s |
+| Classified bounded crypto/property exception | named per test; capped case count; declared higher per-test budget |
+
+**Placement rules (a violation must move, never gain a sleep/timeout/`#[ignore]`):**
+
+- `src/` units and `tests/` are in-process only — deterministic fake
+  clock/RNG; fake `ResourceClient`/EffectPort/broker/transport/credential/
+  systemd; in-memory or tiny-temp bounded redb fixtures; parallel-safe with
+  no global mutable or shared ports/paths; exact bounded property case counts.
+  No sleep/retry on wall clock, process spawn, containers, network, DBus,
+  systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM hardware, live
+  cloud, or filesystem trees beyond tiny temp fixtures.
+- `integration/` owns any real process, socket rendezvous, container, Nix
+  eval/build, guest VM/KVM/TCG, broker/systemd/DBus, real filesystem
+  quota/mount/namespace, hardware, or live cloud/Entrablau. It may be slower
+  but still has a lane timeout/budget, parallel isolation, and fake external
+  services by default; live/hardware remain a separate manual tier.
+
+**Runtime ledger + timing gate.** A machine-readable test-runtime ledger and
+a timing gate reuse the existing `xtask`/Make tooling (no new top-level
+`tests/*.sh` gate): they record the reference runner, repetition count, and
+per-test/crate/shard p95, enforce the budgets above, report the top slow
+tests, apply a historical regression threshold, and emit a CI artifact.
+`make test-rust` and the Layer-1 hermetic shards run concurrently; expensive
+integration lanes take the sole heavy-gate slot (§11). CI caches compile
+outputs, but correctness never depends on the cache, and cold compile time is
+tracked and optimized separately via shared cache and dependency discipline.
+
+**Legacy retirement.** When ADR 0046 replaces a behavior, the minimum
+reusable semantic assertions migrate into the new hermetic suite and the old
+duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and
+manifest entries are deleted once successor coverage and the §9 removal proof
+pass — old and new suites never run indefinitely. Every current-code
+migration/replacement work item names the exact old test selectors/files with
+a keep/adapt/move/delete disposition and a removal gate, and updates
+`tests/layer1-jobs.json`, closed gate manifests, flake/matrix/Nix-unit pins,
+generated ledgers, and CI workflow shards. Policy self-tests assert that an
+intentional slow/sleep/process/network test in a hermetic tier is rejected, a
+timing regression fails the gate, parallel isolation holds, and a retired
+legacy selector is absent.
+
 ## 11. Heavy-gate: sole use
 
 Every Layer-2/hardware/live/perf-heavy command anywhere in ADR 0046
@@ -1141,4 +1202,20 @@ binaries.
 | Integration | `make check` gains no new required step for ordinary contributors; this tooling is invoked only by the wave integrator per §4/§13 |
 | Data migration | None |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |
+| Removal proof | Not applicable |
+
+### ADR046-delivery-007
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-delivery-007` |
+| Dependency/owner | `ADR046-W0`; delivery-tooling integrator |
+| Current source | none in this repository; this codebase's existing `tests/tools/` timing logs (`d2b-static-timing.$$/`) are ad hoc, not a candidate-bound ledger |
+| Reuse source | existing `xtask`/`libtest --format=json` timing output; no new test framework |
+| Reuse action | adapt |
+| Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 shard targets |
+| Detailed design | Measures execution-only time (after build, warm cache) per test/crate/shard against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, applies a historical regression threshold, and emits a machine-readable CI artifact; the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
+| Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
+| Data migration | None |
+| Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; a synthetic timing regression fails the gate; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |
