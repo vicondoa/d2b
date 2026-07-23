@@ -145,7 +145,7 @@ and `IsolationPosture` enums. These drive current `WorkloadExecutionPosture`.
 | `LocalVm` | Locally supervised NixOS VM (Cloud Hypervisor) | `Guest` + `providerRef: Provider/runtime-cloud-hypervisor` |
 | `QemuMedia` | Locally supervised QEMU external-media runner | `Guest` + `providerRef: Provider/runtime-qemu-media` |
 | `ProviderManaged` | Runtime owned by a provider adapter | `Guest` + exact frozen `providerRef` selected in config (e.g., `Provider/runtime-azure-container-apps`, `Provider/runtime-azure-virtual-machine`) |
-| `UnsafeLocal` | Host-user process, no isolation boundary | User-only `Host` under `Provider/system-core` with `isolationPolicy: "none"` |
+| `UnsafeLocal` | Host-user process, no isolation boundary | User-only `Host` under `Provider/system-core` with `providerSettings.isolationPosture: "none"` |
 
 For current `WorkloadProviderKind::ProviderManaged` workloads, the `providerRef`
 in the compiled `Guest` resource is the exact frozen catalog entry selected by
@@ -550,7 +550,7 @@ d2b.zones.dev.resources.system-core = {
   type = "Provider";
   spec = {
     artifactId = "system-core";   # plain bounded ID; must exist in d2b.artifacts with type="provider"
-    rootConfig = {};              # validated against Provider's signed settings schema
+    config     = {};              # validated against Provider's signed settings schema; no raw host paths
   };
 };
 ```
@@ -565,19 +565,27 @@ metadata:
   zone: dev
   ownerRef: null
 spec:
-  artifactId:    system-core
-  packageDigest: sha256:aabbcc...
-  rootConfig:    {}
-status:
-  phase: Pending
+  artifactId: system-core
+  config:     {}
 ```
 
 `artifactId` is a plain bounded string (not a ResourceRef; `Artifact` is not a
 ResourceType). The build resolves `artifactId` against `d2b.artifacts` (type
 must be `"provider"`) and `d2b.providerCatalog` (trust validation); the catalog
-is frozen with no `ProviderCatalogEntry` ResourceType. `packageDigest` is
-populated by the compiler from the resolved artifact catalog entry and never
-specified directly in Nix.
+is frozen with no `ProviderCatalogEntry` ResourceType. `packageDigest` and other
+manifest-derived fields are private compiled catalog metadata and are not part of
+the Provider ResourceSpec. `status` is read-only runtime state and is never
+emitted in Nix-authored bundles.
+
+`config` values are validated at build time against the Provider's signed settings
+schema. `config` must not contain raw host paths, Nix store path strings, or any
+opaque filesystem references — all derivation outputs and volume source policies
+are expressed as artifact IDs or opaque source policy IDs, not literal paths.
+
+Core `ProviderDeployment` reads the signed manifest/catalog selected by
+`artifactId` and creates the Provider's static controller/service `Process`
+graph. Provider controllers never bootstrap their own controller/service
+Processes; they may only create authorized dynamic child resources at runtime.
 
 ### Provider crate layout
 
@@ -604,6 +612,52 @@ Every work item in any spec that introduces a new
 - include the layout policy gate (`make test-policy`) in its `Tests` field; and
 - include a `README.md` stub commit in its first commit before any other
   implementation lands.
+
+### Provider state Volumes
+
+A `ProviderStateSet` is a query-time logical grouping of the ordinary `Volume`
+resources owned by a `Provider`. It is not a `ResourceType` and is never stored
+as its own artifact or row.
+
+Core `ProviderDeployment` creates the static controller/service `Process`
+resources and, before launching each component `Process`, creates one private,
+framework-created state `Volume` for every declared `stateNamespaces` entry in
+that component's signed state declarations. This includes an empty-`stateSchema`
+state `Volume` for stateless components. Provider controllers never bootstrap
+their own controller/service Processes or their own per-component state Volumes.
+
+Each state Volume uses the canonical full `Volume` schema, extended for provider
+state with `stateSchema`, `persistenceClass`, `sensitivityClass`, `quotaBytes`,
+`quota.maxBytes`, `quota.maxInodes`, `identityMarker`, and sealing fields.
+Every state Volume has `kind = "state"` and `persistenceClass = "persistent"`.
+`source.settings.sourcePolicyId` is always set to the component's opaque private
+storage policy ID. `quotaBytes` must be strictly greater than zero; `quota.maxBytes`
+and `quota.maxInodes` must also be strictly greater than zero. Declaring
+`quotaBytes = 0` for a state namespace is rejected at build and admission time —
+the framework applies no silent base quota and the component's signed state
+declaration must carry an explicit positive value. For empty-`stateSchema`
+components the `migrationPolicy` is `none`. Layout principals use `User/<name>`
+refs drawn from bounded, Nix-preprovisioned pools, and Nix must provision the
+referenced `User` resources in advance.
+
+These Provider state Volumes are never operator-authored in Nix. Nix does not
+declare them, does not allocate their internal paths, and does not manage their
+runtime-only identities. Each component mounts only its own declared state view
+through its `mounts`; there is no separate non-Volume compartment concept.
+
+The one exception to "state Volumes are not Nix-authored" is a closed,
+per-execution-target bootstrap mechanism that is not exposed as any Nix option.
+Each execution target (Host, Guest, or user-domain local-storage owner) running
+its own `volume-local` controller instance may use this local bootstrap path to
+provision only the empty-`stateSchema` state Volume for that target's own
+`volume-local` controller instance and, only where `system-core` or
+`system-minijail` are fixed bootstrap components on that same target, their
+state Volumes too. This is not a third Process-bootstrap Provider, never crosses
+execution-target boundaries, and never touches any other component's state
+Volume. These bootstrap-created Volumes are real `Volume` resources from their
+first write, with ordinary resource rows, generations, and status; the target's
+`volume-local` instance adopts them under its normal reconcile loop after
+startup.
 
 
 
@@ -665,44 +719,49 @@ Provider or process type exists for unsafe-local execution.
 The no-isolation posture is preserved explicitly across all surfaces:
 
 - **Host status** — `Provider/system-core` sets a stable `NoIsolation` condition
-  on `Host` status. The condition is present whenever `spec.isolationPolicy` is
-  `"none"`; it is never absent or cleared by a later upgrade.
+  on `Host` status. The condition is present whenever
+  `spec.providerSettings.isolationPosture` is `"none"`; it is never absent or
+  cleared by a later upgrade.
 - **CLI/UI** — `d2b host inspect` and any status display always render the
   no-isolation warning when the Host carries the `NoIsolation` condition.
   The warning text is not suppressible by operator flag.
-- **Audit/telemetry** — every process start, session open, and lifecycle
-  event under this Host carries a closed `isolation: none` label in its audit
-  record and telemetry attributes.
+- **Audit** — every `ProcessEffect` audit event under this Host carries a
+  closed boolean field `no_isolation=true`. No isolation label appears in OTEL
+  telemetry attributes.
 
 ```nix
 d2b.zones.dev.resources.host-unsafe-local = {
   type = "Host";
   spec = {
-    providerRef     = "Provider/system-core";
-    defaultDomain   = "user";
-    allowedDomains  = ["user"];
-    defaultUserRef  = "User/alice";
-    isolationPolicy = "none";   # required common Host spec field for user-only
-                                # system-core Hosts; cannot be set to any other value
+    providerRef    = "Provider/system-core";
+    defaultDomain  = "user";
+    allowedDomains = ["user"];
+    defaultUserRef = "User/alice";
+    providerSettings = {
+      isolationPosture = "none";   # declared in Host schema; required for user-only
+                                   # system-core Hosts; cannot be set to any other value
+    };
   };
 };
 ```
 
 Eval assertions:
 
-- `isolationPolicy` set to any value other than `"none"` for a user-only
-  (`defaultDomain: user`, `allowedDomains: [user]`) `Provider/system-core` Host
-  is rejected at eval time.
+- `providerSettings.isolationPosture` set to any value other than `"none"` for a
+  user-only (`defaultDomain: user`, `allowedDomains: [user]`)
+  `Provider/system-core` Host is rejected at eval time.
 - A Process with `executionRef: Host/host-unsafe-local` and `domain: system`
   is rejected at eval time.
 - No `Guest` ref is emitted for an unsafe-local declaration.
 
-`isolationPolicy: "none"` is a common field of the `Host` spec (visible to all
-controllers and inspectable via the resource API). It is not a
-Provider-specific extension. `status.isolationPosture` reflects `none` when
-`spec.isolationPolicy` is `none`. The `NoIsolation` status condition and
-`isolation: none` audit/telemetry label are required whenever this posture is
-in effect.
+`providerSettings.isolationPosture: "none"` is declared in the `Host`
+ResourceTypeSchema under `providerSettings` (visible to all controllers and
+inspectable via the resource API). It is not a freeform field; the schema
+restricts it to the bounded enum. `status.isolationPosture` reflects `none`
+when `spec.providerSettings.isolationPosture` is `none`. The `NoIsolation`
+status condition and the `no_isolation=true` `ProcessEffect` audit field are
+required whenever this posture is in effect; OTEL telemetry never carries
+an isolation label.
 
 ## Guest resource
 
@@ -724,7 +783,7 @@ d2b.zones.dev.resources.dev-vm = {
     budget             = { cpu = { cores = 4; }; memory = { bytes = 4294967296; }; };
     networkAttachments = [{ networkRef = "Network/dev-lan"; }];
     deviceAttachments  = [{ deviceRef = "Device/dev-tpm"; }];
-    # providerSettings validated against Provider's signed JSON Schema.
+    # providerSettings (declared in Guest schema): validated against Provider's signed JSON Schema.
     # No raw host paths; named closure-entry IDs only.
     providerSettings   = {
       vsockCid      = 42;
@@ -734,12 +793,13 @@ d2b.zones.dev.resources.dev-vm = {
 };
 ```
 
-`providerSettings` is validated against the installed Provider's exported JSON
-Schema. Values that reference Nix derivation outputs (e.g., a closure, a
-kernel module path) are serialized as named closure-entry identifiers or
-content digests validated against the package manifest. Raw Nix store path
-strings (e.g., `/nix/store/<hash>-foo`) are rejected at eval time and must
-never appear in emitted resource spec JSON.
+Guest (and Host) `providerSettings` is declared in those ResourceType schemas and
+validated against the installed Provider's exported JSON Schema. Values that
+reference Nix derivation outputs (e.g., a closure, a kernel module path) are
+serialized as named closure-entry identifiers or content digests validated
+against the package manifest. Raw Nix store path strings (e.g.,
+`/nix/store/<hash>-foo`) are rejected at eval time and must never appear in
+emitted resource spec JSON.
 
 ### Package closures into Guests
 
@@ -802,13 +862,13 @@ Current source: `packages/d2b-core/src/processes.rs` — `ProcessesJson`,
 ```nix
 d2b.zones.dev.resources.wayland-proxy = {
   type = "Process";
-  metadata.ownerRef = "Provider/display-wayland";
   spec = {
     providerRef  = "Provider/system-systemd";   # replaces ProcessRole + minijail profile selection
     executionRef = "Host/host-system";          # replaces per-VM DAG node host/VM assignment
     domain       = "user";
     userRef      = "User/alice";
     processClass = "service";
+    packageRef   = "Provider/display-wayland";  # replaces binaryPath in ProcessNode
     template     = "wayland-proxy-host";        # replaces ProcessRole for template dispatch
     configRef    = "Volume/wayland-proxy-config";
     mounts = [
@@ -856,12 +916,12 @@ Current source: `ProcessRole::StoreVirtiofsPreflight`, `SwtpmPreStartFlush`,
 ```nix
 d2b.zones.dev.resources.store-sync-dev-vm = {
   type = "EphemeralProcess";
-  metadata.ownerRef = "Volume/dev-vm-store-farm";
   spec = {
     providerRef   = "Provider/system-minijail";
     executionRef  = "Host/host-system";
     domain        = "system";
     processClass  = "worker";
+    packageRef    = "Provider/volume-virtiofs";
     template      = "store-sync";
     configRef     = "Volume/store-sync-config";
     successfulTtl = "1h";    # default; explicit for clarity
@@ -894,7 +954,15 @@ d2b.zones.dev.resources.wayland-proxy-state = {
   type = "Volume";
   spec = {
     providerRef = "Provider/volume-local";
-    source      = { kind = "local-durable"; };
+    source = {
+      executionRef = "Host/host-system";
+      settings = {
+        kind           = "local-path";
+        sourcePolicyId = "wayland-proxy-state";  # opaque ID resolved through
+                                                 # volume-local's private
+                                                 # allowedHostPaths catalog
+      };
+    };
     layout = [
       { path          = "socket-dir";
         type          = "directory";
@@ -913,6 +981,12 @@ d2b.zones.dev.resources.wayland-proxy-state = {
   };
 };
 ```
+
+For `local-path` and `block-image` sources, `source.settings.sourcePolicyId`
+is an opaque bounded ID that references an entry in volume-local's private
+`config.allowedHostPaths` catalog. The raw host path is resolved only inside
+the private effect-adapter/broker path and never appears in the public `Volume`
+spec, status, or audit record.
 
 `layout[*].ownerRef` and `layout[*].groupRef` accept only `User/<name>`
 typed Zone refs. Numeric UID/GID strings (e.g., `"1000"`) are rejected at
@@ -1071,21 +1145,40 @@ Current source: `packages/d2b-realm-core/src/identity_config.rs`
 d2b.zones.dev.resources.work-entra = {
   type = "Credential";
   spec = {
-    providerRef     = "Provider/credential-entra";
-    # No secret bytes, token values, or key material in spec.
-    # identity_config fields that are directory metadata (not secrets) only.
-    providerSettings = {
-      tenantId       = "...";    # directory metadata only
-      applicationRef = "...";
+    providerRef       = "Provider/credential-entra";
+    scope             = {
+      executionRef  = "Guest/work-vm";   # optional Host or Guest placement restriction
+      domainFilter  = "user";            # optional: system | user
+      userRef       = "User/alice";      # required when domainFilter=user
     };
+    audience          = "azure-resource-manager";  # Provider-validated opaque audience token; no secrets
+    consumerRef       = "Provider/display-wayland"; # optional; restricts acquiring Provider
+    allowedOperations = [ "acquire-token" "refresh-token" "revoke-token" ];
+    rotation          = {
+      policy              = "proactive";
+      proactiveWindowMs   = 300000;
+      maxLeaseLifetimeMs  = 3600000;
+    };
+    expiry            = { hardDeadlineMs = 28800000; };
+    revocation        = {
+      onOwnerDelete         = "immediate";
+      onProviderGeneration  = "immediate";
+    };
+    # providerSettings validated against Provider's signed schema; no secret bytes.
+    providerSettings  = { tenantId = "..."; };  # optional; only when Provider schema declares it
   };
 };
 ```
 
-`providerSettings` is validated against the Provider's exported schema.
-The emitted `Credential` spec never contains key material, token bytes, or PEM.
-Current `identity_config.rs` values that carry credential bytes are forbidden
-from the emitted spec; they remain inside the Provider's external secret service.
+Credential spec fields mirror the `Credential` ResourceTypeSchema exactly:
+`providerRef`, `scope.{executionRef,domainFilter,userRef}`, `audience`,
+`consumerRef`, `allowedOperations`, `rotation`, `expiry`, `revocation`, and
+optional `providerSettings` (permitted when the Provider schema declares it;
+validated against signed Provider schema; no secret bytes). No invented fields
+(`credentialType`, `ownerRef`, `domain`). The emitted spec never contains key
+material, token bytes, or PEM. Current `identity_config.rs` values that carry
+credential bytes are forbidden from the emitted spec; they remain inside the
+Provider's external secret service.
 
 ## Role and RoleBinding
 
@@ -1140,7 +1233,7 @@ update. No `Group` ResourceType exists in the initial set; user group facts
 (e.g., supplementary groups) may narrow User admission within the runtime
 authz layer but are never RoleBinding subjects.
 
-## Controller placement templates
+## Controller placement
 
 Current source: `nixos-modules/options-realms.nix` — `d2b.realms.<r>.providers`
 attrset with `kind`, `placement`, `capabilityRefs`, `configRef`,
@@ -1150,36 +1243,45 @@ attrset with `kind`, `placement`, `capabilityRefs`, `configRef`,
 list; these collapse into `executionRef: Host/<h>` or `Guest/<g>` per the
 NodeKind table above.
 
+In v3, placement bindings are not a generic sibling field of the Provider
+ResourceSpec. The Provider ResourceSpec carries only `artifactId` and `config`.
+Placement bindings are expressed in one of two ways:
+
+1. **As validated `config` fields.** Where the Provider's signed deployment
+   template schema defines placement-related config keys (e.g., which Host or
+   Guest to use for each controller or worker process), the operator supplies
+   those values inside the `config` object. Their structure, names, and
+   validation rules are defined entirely by the Provider's schema — not the
+   framework. The Nix build validates `config` against the Provider's signed
+   settings schema.
+
+2. **As controller-created Process resources.** At runtime, the Provider
+   controller creates the required `Process` resources using the execution
+   targets declared in the Zone. Nix does not declare these Process resources
+   directly for Provider-internal processes; they are dynamic children managed
+   by the Provider controller.
+
+If an operator-supplied `config` key names a placement target (e.g., a Host or
+Guest) that no longer matches a declared resource, config validation rejects it
+at build time against the Provider's signed schema (which encodes which
+`executionRef`-typed fields exist). Removed or renamed config keys produce a
+structured build error; there is no warning-only path.
+
 ```nix
+# Provider with placement expressed as config fields per its signed schema:
 d2b.zones.dev.resources.display-wayland = {
   type = "Provider";
   spec = {
-    catalogEntryId      = "display-wayland";
-    componentPlacements = {
-      wayland-proxy-host = {
-        executionRef = "Host/host-system";
-        domain       = "user";
-        userRef      = "User/alice";
-      };
-      wayland-proxy-guest = {
-        executionRef = "Guest/dev-vm";
-        domain       = "system";
-      };
+    artifactId = "display-wayland";
+    config     = {
+      # Placement-typed config keys defined by display-wayland's signed schema.
+      # Names and types are determined by the Provider, not the framework.
+      hostExecutionRef  = "Host/host-system";
+      guestExecutionRef = "Guest/dev-vm";
     };
   };
 };
 ```
-
-`componentPlacements` narrows Provider template defaults. It may not add new
-templates. Eval asserts every key names an existing template in the Provider's
-catalog entry.
-
-If an operator-declared `componentPlacements` key names a template that no
-longer exists in the Provider's current catalog entry (removed or renamed in a
-Provider version upgrade), config generation fails with a structured error
-identifying the missing template name and the Provider catalog entry. There is
-no warning-only or silent-drop path; the operator must either remove the stale
-key or pin the prior Provider version.
 
 ## Ref validation
 
@@ -1313,7 +1415,10 @@ succeeds. The drift gate `make test-drift` enforces `xtask gen-schemas` +
 | `systemArtifactId` artifact has `type = "nixos-system"` | Build |
 | `source.systemArtifactId` artifact has `type = "nixos-system"` | Build |
 | Numeric/string bounds (e.g., vsockCid range) | Eval |
-| `providerSettings` matches Provider's signed `settingsSchemaDigest` | Build |
+| `config` matches Provider's signed settings schema (Provider ResourceSpec) | Build |
+| `config` must not contain raw host paths or store path strings | Build |
+| `providerSettings` matches Provider's signed settings schema (where schema declares it) | Build |
+| `providerSettings` must not contain raw host paths, store paths, or secret bytes | Build |
 | Store paths absent from all public ResourceSpecs, status, audit, and OTEL telemetry | Build/Runtime |
 
 A structured eval error identifies the exact NixOS option path and rejected
@@ -1321,19 +1426,26 @@ value for every rule violation.
 
 ### Provider-specific settings validation
 
-`providerSettings` in `Guest`, `Host`, `Process`, and `EphemeralProcess` specs
-is validated at build time against the exact signed JSON Schema embedded in the
-Provider's package closure. Validation is offline; no network access occurs
-during the build. The schema fingerprint is recorded in `provider-catalog.json`
-under `settingsSchemaDigest`; a `providerSettings` schema whose digest does not
-match the catalog entry is a build error.
+The `Provider` ResourceSpec uses a `config` field validated against the
+Provider's signed settings schema. Other semantic ResourceTypes (`Host`, `Guest`,
+`Credential`, and others) may use a `providerSettings` field only when their
+canonical ResourceTypeSchema declares it; if the schema does not declare
+`providerSettings`, the field is absent and must not appear in Nix input. All
+other spec fields are those declared in the ResourceTypeSchema exactly. Nix
+mirrors each ResourceSpec 1:1; no blanket rule applies across types.
+
+Validation is offline; no network access occurs during the build. The schema
+fingerprint is recorded in `provider-catalog.json` under `settingsSchemaDigest`
+(private compiled catalog metadata, not a ResourceSpec field); a schema mismatch
+is a build error.
 
 Rules:
 - Additional fields not declared in the Provider schema are rejected
   (`additionalProperties: false`).
-- Settings values referencing Nix derivation outputs are serialized as named
-  closure-entry identifiers validated against the package manifest; raw Nix
-  store path strings are rejected at eval time.
+- `config` and any `providerSettings` value must not contain raw host paths or
+  Nix store path strings; derivation outputs are expressed as artifact IDs or
+  opaque source policy IDs. No provider-specific field in `providerSettings` may
+  accept secret bytes.
 - Numeric, string, and boolean bounds declared in the Provider schema are
   enforced at build time; out-of-bounds values fail the derivation.
 
@@ -1341,15 +1453,13 @@ Rules:
 
 No secret value (credential bytes, token, PSK material, key PEM, password,
 certificate DER/PEM, bearer token, HMAC key) may appear in any Nix spec field,
-`providerSettings` value, or generated artifact. See "Prohibited fields
+any `providerSettings` value, or generated artifact. See "Prohibited fields
 summary" below for the complete list. Provider-required secrets are always
 declared as `Credential/<name>` refs. The `Credential` resource spec carries
-only:
-
-- the credential `type` (e.g., `tls-client-cert`, `mtls-keypair`, `psk`);
-- the owning `ownerRef`;
-- `providerRef` pointing at the Provider consuming it; and
-- `domain` (`system` or `user`).
+configuration-only fields (`providerRef`, `scope`, `audience`, `consumerRef`,
+`allowedOperations`, `rotation`, `expiry`, `revocation`, and optional
+`providerSettings` where the Provider schema declares it) — never credential
+bytes, tokens, or key material.
 
 Actual secret bytes are injected at runtime via the broker's `StoreCredential`
 op, which is never invoked from Nix. An eval assertion rejects any string field
@@ -1517,9 +1627,10 @@ When a new configuration generation activates:
      The cleanup controller cascades only to resources that also carry
      `managedBy=configuration`; controller-managed children of a deleted
      configuration-owned parent are handled by the parent's controller.
-6. When all finalizers are clear and reconciliation is complete, the resource
-   transitions to `status.phase: Deleted`. The runtime then removes the row
-   from the Zone store.
+6. When all finalizers are clear and reconciliation is complete, a single store
+   transaction appends the `Deleted` revision and removes the resource row and
+   its indexes. Subsequent `Get` returns not-found. The `ResourceDelete` audit
+   event is appended afterward with dedup/exactly-once recovery.
 
 #### Prior generation retention and pruning
 
@@ -1541,7 +1652,7 @@ Prior generation bundles are retained according to `retainedGenerations`
 | Field | Values |
 | --- | --- |
 | `Zone.status.phase` | `Ready` — all configuration-owned resources reconciled; `Degraded` — deletion pending or ZoneLink lagging; `Pending` — new generation staged and pointer swapped, reconciliation in progress |
-| `Resource.status.phase` | `Pending` — awaiting deletion completion; `Deleted` — deletion complete, row being removed |
+| `Resource.status.phase` | `Pending` — awaiting deletion completion; `Deleted` — a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery |
 | `Resource.status.conditions[PendingDeletion]` | Present when resource is enqueued for deletion; `reason: AbsentFromConfiguration` |
 | `Resource.status.conditions[DeletionBlocked]` | Present when a finalizer prevents deletion completion |
 | `Resource.status.conditions[ReconcileError]` | Present on reconciliation failure |
@@ -1567,9 +1678,9 @@ structured audit event:
 | Test | Tier | Description |
 | --- | --- | --- |
 | Two-generation bundle diff | nix-unit | Generation 1 declares resource R; generation 2 omits R. Verify R absent from generation 2 bundle `*.json`; generation 1 bundle retains R. |
-| Async cleanup activation | Integration | Activate generation 1 (R present, `managedBy=configuration`, phase Ready). Activate generation 2 (R absent). Verify R enters Pending/PendingDeletion; Zone phase Degraded. Complete cleanup. Verify an event-only Deleted revision and atomic row/index removal; Zone phase Ready. |
+| Async cleanup activation | Integration | Activate generation 1 (R present, `managedBy=configuration`, phase Ready). Activate generation 2 (R absent). Verify R enters Pending/PendingDeletion; Zone phase Degraded. Complete cleanup. Verify a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone phase Ready. |
 | Audit record | Integration | After async cleanup: verify structured `ResourceDelete` event with correct zone/type/name/generationIndex/configurationGeneration/reason fields. |
-| Finalizer-blocked deletion | Integration | R holds active finalizer. Activate generation 2 (R absent). Verify R enters DeletionBlocked condition. Remove finalizer. Verify deletion completes (phase Deleted, row removed) and Zone phase returns Ready. |
+| Finalizer-blocked deletion | Integration | R holds active finalizer. Activate generation 2 (R absent). Verify R enters DeletionBlocked condition. Remove finalizer. Verify deletion completes: a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone phase returns Ready. |
 | Controller-managed preservation | Integration | A resource carrying `managedBy=controller` exists. Activate generation 2. Verify the config-publication controller never touches that resource, regardless of ownerRef or bundle absence. |
 | API-managed preservation | Integration | A resource carrying `managedBy=api` exists. Activate generation 2. Verify the config-publication controller never enqueues it for deletion. |
 | Rollback after partial cleanup | Integration | Activate generation 2 (R absent, cleanup in progress). Before cleanup completes, roll back to generation 1. Verify R is re-adopted or re-created and returns to Ready. |
@@ -1758,8 +1869,8 @@ marked compile-only.
 | `SyncJson`, OFD lock rows | `d2b-core/src/sync.rs`, `nixos-modules/sync-json.nix` | Live | Internal `d2b-contracts` implementation mechanism; removed from Nix artifacts | ADR046-nix-007 |
 | `RealmControllersJson`, `RealmControllerMetadataSummary` | `d2b-core/src/realm_controller_config.rs`; read live by d2bd `realm_access_resolver` | Live | Zone self-resource + ZoneLink bootstrap; `realm-controllers.json` retained during migration | ADR046-nix-008 |
 | `RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary` | `d2b-core/src/realm_workloads_launcher.rs` | Live | Process resource annotations in `zones/<z>/processes.json` | ADR046-nix-009 |
-| `RealmIdentityConfigJson` | `d2b-realm-core/src/identity_config.rs`; loaded live by d2bd | Live | Credential resource providerSettings; `realm-identity.json` retained during migration | ADR046-nix-009 |
-| `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | `d2b-realm-core/src/workload.rs` | Live in launcher metadata | `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.providerRef` per table; `UnsafeLocal` → user-only `Host` with `noIsolationWarning: true` (never `Guest`; not a v3 Provider) | ADR046-nix-001 |
+| `RealmIdentityConfigJson` | `d2b-realm-core/src/identity_config.rs`; loaded live by d2bd | Live | Credential resource `scope`/`audience`/`allowedOperations`/`providerSettings` fields; `realm-identity.json` retained during migration | ADR046-nix-009 |
+| `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | `d2b-realm-core/src/workload.rs` | Live in launcher metadata | `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.providerRef` per table; `UnsafeLocal` → user-only `Host` with `providerSettings.isolationPosture: "none"` (never `Guest`; not a v3 Provider) | ADR046-nix-001 |
 | `Capability` enum, `CapabilitySet` | `d2b-realm-core/src/capability.rs` | Live in provider advertisement | Role verbs / Provider descriptor fields per Capability disposition table | ADR046-nix-001 |
 | `RuntimeProvider`, `WorkloadProvider`, `HostSubstrateProvider` traits | `d2b-realm-provider/src/provider.rs` | Live (ACA/local-vm implement these) | Provider component descriptors + `ADR-046-provider-<name>.md` dossiers | ADR046-provider-001 |
 | `OperationRouter`, `DurableExecTable`, `TargetResolver` | `d2b-realm-router/src/`; `d2bd/src/realm_stubs.rs` | COMPILE-ONLY at baseline (`dead_code`-allowed, not called) | `d2b-bus` routing; adapt `RealmSessionAuthority`/`CredentialCustody`/`RealmServiceLimits` from `main:packages/d2b-realm-router/src/service_v2.rs` | ADR046-bus-010 |
@@ -1809,13 +1920,13 @@ Never accepted in any Nix-authored resource spec or generated artifact:
 | Ref validation rejection | Malformed or missing ref fails eval with structured error |
 | Conflict detection | CIDR overlap, owner cycle, and duplicate type/name rejection at eval time |
 | ProcessRole parity | Every `ProcessRole` variant has a corresponding test case in the Process/EphemeralProcess resource schema |
-| Unsafe-local Host | User-only `Host` with `isolationPolicy: "none"` reconciled by `Provider/system-core`; child Processes use normal Process Providers; `NoIsolation` condition present in Host status; `isolation: none` label in audit record; CLI/UI warning non-suppressible; no `Guest` emitted |
-| ResourceTypeSchema validation | Every emitted `spec` validates against committed JSON Schema at build time; schema drift gate passes; unknown field in providerSettings fails build |
+| Unsafe-local Host | User-only `Host` with `providerSettings.isolationPosture: "none"` reconciled by `Provider/system-core`; child Processes use normal Process Providers; `NoIsolation` condition present in Host status; `no_isolation=true` in `ProcessEffect` audit events; OTEL never labels isolation; CLI/UI warning non-suppressible; no `Guest` emitted |
+| ResourceTypeSchema validation | Every emitted `spec` validates against committed JSON Schema at build time; schema drift gate passes; unknown field in `providerSettings` (where schema declares it) or Provider `config` fails build |
 | Credential ref enforcement | PEM header in spec field fails eval; `Credential/<name>` ref accepted; no secret bytes in any emitted artifact |
 | Bundle integrity | Byte-identical rebuild from identical inputs; `candidateId`/`contentId` match computed values; file digest mismatch fails activation |
-| Absent-resource async Delete | Generation 1 has resource R (`managedBy=configuration`); generation 2 omits R; R enters Pending/PendingDeletion; Zone Degraded; R reaches Deleted phase and row removed; Zone Ready; audit event emitted |
+| Absent-resource async Delete | Generation 1 has resource R (`managedBy=configuration`); generation 2 omits R; R enters Pending/PendingDeletion; Zone Degraded; a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone Ready |
 | Controller-managed preserved | Resource with `managedBy=controller` untouched by config-publication controller; never enqueued for deletion regardless of bundle absence |
-| Finalizer-safe deletion | Resource with active finalizer enters DeletionBlocked condition; stays Pending; deletion completes after finalizer removed; transitions to Deleted, row removed |
+| Finalizer-safe deletion | Resource with active finalizer enters DeletionBlocked condition; stays Pending; deletion completes after finalizer removed: a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery |
 | Provider crate layout gate | Stub `d2b-provider-test-missing-integration/` missing `integration/` fails `make test-policy`; complete stub with all four paths passes |
 | Artifact catalog resolution | Declare `d2b.artifacts.dev-vm-system = { package = …; type = "nixos-system"; }`; build succeeds; `artifact-catalog.json` contains matching entry with correct type/digests/storePath; `storePath` absent from all public ResourceSpecs, status, audit, OTEL; reference with wrong type fails build; absent artifact ID fails build |
 
@@ -2001,7 +2112,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Current source | `nixos-modules/realm-workloads-launcher-v2-json.nix` (`RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary`; live); `nixos-modules/realm-identity-config-json.nix` (`RealmIdentityConfigJson`; live, read by d2bd from `/etc/d2b/realm-identity.json`); `packages/d2b-core/src/realm_workloads_launcher.rs`; `packages/d2b-realm-core/src/identity_config.rs` |
 | Reuse action | adapt |
 | Destination | Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/processes.json`; `Provider/credential-entra` Credential resource; `realm-identity.json` RETAINED during migration |
-| Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource providerSettings (no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
+| Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `scope`, `audience`, `allowedOperations`, `providerSettings` where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
 | Validation | Launcher metadata shape regression; no-secret assertion vectors |
 | Tests | `tests/unit/nix/cases/zones-launcher-metadata.nix`; no-secret vectors |
 | Drift pin | `make nix-unit-pin` |
@@ -2014,9 +2125,9 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | ADR046-nix-001; unsafe-local migration |
 | Current source | `nixos-modules/unsafe-local-workloads-json.nix` (`WorkloadProviderKind::UnsafeLocal`/`IsolationPosture::UnsafeLocal`; current `unsafe-local-workloads.json` artifact); `nixos-modules/unsafe-local-helper.nix` (user-domain process/helper definitions); `packages/d2b-core/src/unsafe_local_workloads.rs` |
 | Reuse action | adapt |
-| Destination | User-only `Host` resource in `zones/<z>/hosts.json` (`isolationPolicy: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/processes.json` using normal Process Providers; shell session supervisor → `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
-| Detailed design | `isolationPolicy: "none"` is the common Host spec field (not providerSettings); enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; `isolation: none` label in audit/telemetry for all events under this Host; CLI/UI warning non-suppressible |
-| Validation | User-only Host rejection of system-domain Process refs; `isolationPolicy != "none"` assertion rejection for user-only system-core Hosts; `NoIsolation` condition present in status; `isolation: none` in audit record; no Guest emitted for unsafe-local declaration |
+| Destination | User-only `Host` resource in `zones/<z>/hosts.json` (`providerSettings.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/processes.json` using normal Process Providers; shell session supervisor → `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
+| Detailed design | `providerSettings.isolationPosture: "none"` is declared in the Host schema under `providerSettings`; enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; every `ProcessEffect` audit event under this Host carries `no_isolation=true`; OTEL telemetry never carries an isolation label; CLI/UI warning non-suppressible |
+| Validation | User-only Host rejection of system-domain Process refs; `providerSettings.isolationPosture != "none"` assertion rejection for user-only system-core Hosts; `NoIsolation` condition present in status; `no_isolation=true` in `ProcessEffect` audit event; OTEL attribute absent; no Guest emitted for unsafe-local declaration |
 | Tests | `tests/unit/nix/cases/zones-unsafe-local.nix`; `tests/host-integration/unsafe-local-helper.nix` extended |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `unsafe-local-workloads-json.nix` and unsafe-local-specific Nix code removed after user-only Host/Process resources pass all `tests/host-integration/unsafe-local-helper.nix` tests |
@@ -2136,10 +2247,10 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | ADR046-nix-005; ADR046-nix-001; `d2b-contracts` schema generation (ADR046-bus-005) |
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, mode/ownership); `nixos-modules/bundle.nix` (digest chain, SHA256SUMS); `packages/xtask/src/main.rs` (`gen-schemas`); no current per-ResourceType JSON Schema under `docs/reference/schemas/v3/` |
 | Reuse action | extend xtask schema generation; new Nix eval/build validation hooks |
-| Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `providerSettings` against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |
+| Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `providerSettings` where declared in schema, and Provider `config`, against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |
 | Detailed design | `cargo xtask gen-schemas` emits one JSON Schema per ResourceType under `docs/reference/schemas/v3/`; Nix derivation reads these schemas from `pkgs.d2b-resource-schemas` and validates every emitted `spec` JSON before producing the Zone bundle; Provider-settings validation reads `settingsSchemaDigest` from `provider-catalog.json` and resolves the schema from the Provider package closure; Credential ref enforcement: eval assertion rejects any `spec` string field matching `-----BEGIN`, `eyJ`, or a hex string ≥ 32 bytes in a secret-typed field; `managedBy` in any input spec rejected at eval (core-set runtime field, never in Nix input); bundle integrity: `candidateId`/`contentId` computed over canonical sorted output |
 | Integration | Validation hooks wired into `bundle-zones.nix` derivation; `d2b-activation-helper` re-verifies digest chain at staging |
-| Validation | Schema round-trip: emit spec, validate against schema, verify byte-identical re-emit; providerSettings rejection test (unknown field, out-of-bounds value, raw store path); Credential ref enforcement: PEM-in-spec rejected; secret-pattern-in-spec rejected; valid `Credential/<name>` ref accepted; `managedBy` in spec input rejected at eval |
+| Validation | Schema round-trip: emit spec, validate against schema, verify byte-identical re-emit; `providerSettings` rejection test (unknown field, out-of-bounds value, raw store path, secret bytes) where schema declares the field; Provider `config` rejection test (unknown field); Credential ref enforcement: PEM-in-spec rejected; secret-pattern-in-spec rejected; valid `Credential/<name>` ref accepted; `managedBy` in spec input rejected at eval |
 | Tests | `tests/unit/nix/cases/resource-schema-validation.nix`; `tests/unit/nix/cases/provider-settings-validation.nix`; `tests/unit/nix/cases/credential-ref-enforcement.nix`; `tests/unit/nix/cases/managed-by-rejection.nix`; `packages/d2b-contract-tests/tests/resource-schema-round-trip.rs` |
 | Drift pin | `make test-drift` after any `gen-schemas` run; `make nix-unit-pin` after adding cases |
 | Removal proof | Not removed; extended as new ResourceTypes are added |
@@ -2151,11 +2262,11 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | ADR046-nix-005; ADR046-nix-001; configuration-publication controller (ADR-046-core-controllers) |
 | Current source | No current equivalent; current `bundle.nix` replaces all artifacts atomically with no per-resource cleanup tracking |
 | Reuse action | new |
-| Destination | Configuration-publication handler in `packages/d2b-core-controller/src/configuration.rs`; cleanup tracking in `packages/d2b-core-controller/src/cleanup.rs`; `Zone` status conditions in `d2b-contracts/src/v3/zone_status.rs`; cleanup audit emitter in `d2b-state/src/audit_segments.rs` |
-| Detailed design | Core classifies persisted resources by the closed `managedBy` enum: only `configuration` participates in generation diff; `controller` and `api` are untouched. At activation it compares the new canonical configured set against stored `managedBy=configuration` resources. Independent intents are durably queued with bounded async concurrency. Removed resources receive `deletionRequestedAt` plus `PendingDeletion`; the Zone becomes Degraded immediately while cleanup remains. Finalizers are never force-cleared. The final store transaction writes the event-only `Deleted` revision and removes the row/indexes atomically; the authoritative audit record is appended afterward from that committed revision with dedup/exactly-once recovery. Generation pruning uses the count setting `retainedGenerations` and waits for cleanup. Rollback reapplies a retained bundle and re-adopts resources whose deletion has not completed. |
-| Integration | `d2b-activation-helper` supplies the integrity-pinned bundle/catalog; core sets `managedBy=configuration` and `configurationGeneration` while persisting activated resources. Cleanup authority never comes from ownerRef, labels, or bundle-authored management fields. |
-| Validation | Classification preserves controller/API resources; configuration-managed absence enqueues Delete; active finalizers remain Pending/Degraded without force removal; the atomic store transaction writes Deleted revision + row/index removal only; audit append follows with dedup; Zone transitions Pending→Degraded→Ready. |
-| Tests | `tests/unit/nix/cases/cleanup-two-generation.nix`; `tests/host-integration/cleanup-activation.nix`; `tests/host-integration/cleanup-finalizer.nix`; `tests/host-integration/cleanup-controller-managed.nix`; `tests/host-integration/cleanup-api-managed.nix`; `tests/host-integration/cleanup-rollback.nix`; `tests/host-integration/cleanup-retention-count.nix` |
+| Destination | Configuration-publication controller handler in `packages/d2bd/src/config_publication.rs`; `ConfigurationOwnedClassifier`; `AbsentResourceReaper`; `Zone` status conditions in `d2b-contracts/src/v3/zone_status.rs`; cleanup audit emitter in `d2b-state/src/audit_segments.rs` |
+| Detailed design | `ConfigurationOwnedClassifier`: classify resources by core-set `managedBy` field only — `managedBy=configuration` resources are owned by config publication; `managedBy=controller` and `managedBy=api` resources are never touched. At activation, diff new-generation bundle name+type set against all resources with `managedBy=configuration` in the Zone store; resources absent from the new bundle are enqueued for Delete. Never infer ownership from `ownerRef`, labels, or absence from emitted files. `AbsentResourceReaper`: processes the Absent queue asynchronously; does not block pointer swap (step 4); sets `status.phase=Pending` + `PendingDeletion` condition (`reason: AbsentFromConfiguration`); waits for all finalizers to clear; commits a single store transaction that appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; the `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery. Zone phase: `Pending` during pointer-swap-to-first-reconcile window; `Degraded` while any `managedBy=configuration` resource carries `PendingDeletion` or a ZoneLink lags; `Ready` when all reconciled. Generation pruning: prune when `generationIndex ≤ activeIndex - retainedGenerations` AND all enqueued resources from that generation have reached `Deleted`. Rollback: re-adopt `managedBy=configuration` resources in `Pending/PendingDeletion` back to the rollback target generation's owned set |
+| Integration | `d2b-activation-helper` sets `managedBy=configuration` + `configurationGeneration` on every resource it activates; controller reads these fields to determine owned set — never `ownerRef` or bundle membership alone |
+| Validation | Classification: `managedBy=controller` resource never enqueued (even if absent from bundle). `managedBy=api` resource never enqueued. `managedBy=configuration` resource absent from new bundle always enqueued. Finalizer safety: resource with active finalizer enters DeletionBlocked; not force-deleted; stays in `Pending`. Final deletion: a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery. Zone status: `Pending` during activation; `Degraded` while PendingDeletion outstanding; `Ready` when clean. Audit: `ResourceDelete` event includes `configurationGeneration` field. |
+| Tests | `tests/unit/nix/cases/cleanup-two-generation.nix` (bundle diff); `tests/host-integration/cleanup-activation.nix` (async cleanup, Pending→Deleted, single store transaction appends `Deleted` revision + removes row/indexes, subsequent `Get` not-found, `ResourceDelete` audit event appended afterward with dedup/exactly-once recovery, Zone Pending→Degraded→Ready); `tests/host-integration/cleanup-finalizer.nix` (DeletionBlocked, stays Pending, cleared on finalizer removal, single store transaction appends `Deleted` revision + removes row/indexes, subsequent `Get` not-found); `tests/host-integration/cleanup-controller-managed.nix` (managedBy=controller preserved); `tests/host-integration/cleanup-api-managed.nix` (managedBy=api preserved); `tests/host-integration/cleanup-rollback.nix` (rollback re-adoption); `tests/host-integration/cleanup-retention-window.nix` (generation pruning) |
 | Drift pin | `make nix-unit-pin`; `make test-drift` if status/audit schema changes |
 | Removal proof | Not removed; extended as new ResourceTypes are added |
 
