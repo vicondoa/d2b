@@ -644,12 +644,12 @@ impl SharedContractPolicy {
                         .protected_prefixes
                         .iter()
                         .any(|prefix| path_matches_prefix(path, prefix));
-                let exact_shared_root_implementation = self
-                    .implementation_path(path)
-                    .is_some_and(|implementation| {
-                        !implementation.at_prefix_root
-                            && matches!(implementation.owner, ImplementationOwner::Frozen)
-                    });
+                let exact_shared_root_implementation =
+                    self.implementation_path(path)
+                        .is_some_and(|implementation| {
+                            !implementation.at_prefix_root
+                                && matches!(implementation.owner, ImplementationOwner::Frozen)
+                        });
                 if !globally_protected && !exact_shared_root_implementation {
                     return Err(format!(
                         "{} exception {path} is not a protected or exact shared-root path",
@@ -3402,10 +3402,7 @@ mod tests {
         // Wrong parent: w8 may only chain from w7, not from w6 directly.
         assert!(!policy.parent_is_allowed(ownership, "adr0045-w6-user-services"));
         assert!(policy.parent_is_allowed(ownership, "adr0045-w8-integration"));
-        assert!(!policy.parent_is_allowed(
-            ownership,
-            "adr0045-w8-integration-secrets-lifecycle"
-        ));
+        assert!(!policy.parent_is_allowed(ownership, "adr0045-w8-integration-secrets-lifecycle"));
         // Wrong base: an unrelated, non-governed branch is not an authority root.
         assert!(!policy.parent_is_allowed(ownership, "some-unrelated-branch"));
         // W8 must start from the landed predecessor, not bypass W5-W7 by
@@ -3463,7 +3460,10 @@ mod tests {
         ] {
             let error = check_changed_paths_for_branch(&policy, "w8", branch, &paths)
                 .expect_err("W8 component workspace registration");
-            for path in paths.iter().filter(|path| path.as_str() != "packages/Cargo.lock") {
+            for path in paths
+                .iter()
+                .filter(|path| path.as_str() != "packages/Cargo.lock")
+            {
                 assert!(error.contains(path), "{error}");
             }
             assert!(!error.contains("packages/Cargo.lock"), "{error}");
