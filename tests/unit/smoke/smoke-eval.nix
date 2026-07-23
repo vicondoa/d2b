@@ -5,8 +5,10 @@
 # graph that are touched by every consumer:
 #
 #   - d2b.site.* defaults flow through.
-#   - At least one declared host-local realm materialises its network.
-#   - At least one runtime-bound workload reaches the guest evaluator.
+#   - At least one d2b.envs.<env> materialises (network.nix
+#     allMeta non-empty → route-preflight unit + assertion block).
+#   - At least one d2b.vms.<name> with an env reference round-trips
+#     through host.nix's microvm.vms translation.
 #   - All component toggles default off (graphics/audio/tpm/usbip),
 #     so the heavyweight component imports (graphics.nix, etc.) stay
 #     out of this smoke path. The test is fast.
@@ -84,31 +86,29 @@ let
           yubikey.enable = false;
         };
 
-        d2b.acceptDestructiveV2Cutover = true;
-        d2b.realms.work = {
-          path = "work";
-          placement = "host-local";
-          broker = {
-            enable = true;
-            hostMutation = true;
-          };
-          network = {
-            mode = "declared";
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-          providers.runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          workloads.corp-vm = {
-            providerRefs.runtime = "runtime";
-            config = {
-              networking.hostName = lib.mkDefault "corp-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
+        # One env — exercises network.nix materialisation, the
+        # route preflight unit, and the CIDR validation chain.
+        d2b.envs.work = {
+          lanSubnet    = "10.20.0.0/24";
+          uplinkSubnet = "192.0.2.0/30";
+        };
+
+        # One workload VM — exercises host.nix's microvm.vms
+        # translation, the framework-managed SSH key activation,
+        # and the cli.nix manifest builder.
+        d2b.vms.corp-vm = {
+          enable = true;
+          env = "work";
+          index = 10;
+          ssh.user = "alice";
+          # ssh.keyPath intentionally LEFT NULL so the C2 default
+          # (derived from cfg.site.keysDir) is exercised in the
+          # manifest builder.
+          config = {
+            networking.hostName = lib.mkDefault "corp-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
             };
           };
         };

@@ -21,12 +21,14 @@ pub struct AuditEvent {
 }
 
 pub fn bounded_mime(mime_type: &str) -> String {
-    if crate::policy::is_mime_allowed(mime_type) {
-        return crate::policy::normalize_mime(mime_type);
+    let normalized = crate::policy::normalize_mime(mime_type);
+    if crate::policy::is_mime_allowed(&normalized) {
+        return normalized;
     }
     let mut out = String::new();
     for ch in mime_type.chars() {
         if out.len() + ch.len_utf8() > MAX_AUDIT_MIME_BYTES {
+            out.push('…');
             break;
         }
         if ch.is_ascii_graphic() || ch == ' ' {
@@ -88,25 +90,10 @@ impl AuditQueue {
     }
 
     pub fn drain_all(&mut self) -> Vec<AuditEvent> {
-        self.drain_bounded(usize::MAX)
-    }
-
-    pub fn drain_bounded(&mut self, max_events: usize) -> Vec<AuditEvent> {
-        let mut events = Vec::with_capacity(
-            max_events.min(self.per_realm.values().map(VecDeque::len).sum::<usize>()),
-        );
+        let mut events = Vec::new();
         for queue in self.per_realm.values_mut() {
-            while events.len() < max_events {
-                let Some(event) = queue.pop_front() else {
-                    break;
-                };
-                events.push(event);
-            }
-            if events.len() == max_events {
-                break;
-            }
+            events.extend(queue.drain(..));
         }
-        self.per_realm.retain(|_, queue| !queue.is_empty());
         events
     }
 }
@@ -170,12 +157,7 @@ impl MetricsQueue {
     }
 
     pub fn drain_all(&mut self) -> Vec<MetricEvent> {
-        self.drain_bounded(usize::MAX)
-    }
-
-    pub fn drain_bounded(&mut self, max_events: usize) -> Vec<MetricEvent> {
-        let count = max_events.min(self.queue.len());
-        self.queue.drain(..count).collect()
+        self.queue.drain(..).collect()
     }
 }
 
@@ -260,23 +242,5 @@ mod tests {
         });
         assert_eq!(queue.take_dropped_count(), 1);
         assert_eq!(queue.take_dropped_count(), 0);
-    }
-
-    #[test]
-    fn bounded_drains_preserve_remaining_events() {
-        let mut audit = AuditQueue::new(AuditQueueConfig { per_realm_quota: 4 });
-        audit.enqueue_fail_closed(event("vm-a", "r1")).unwrap();
-        audit.enqueue_fail_closed(event("vm-a", "r2")).unwrap();
-        assert_eq!(audit.drain_bounded(1).len(), 1);
-        assert_eq!(audit.len_for_realm("vm-a"), 1);
-        assert_eq!(audit.drain_bounded(1).len(), 1);
-        assert_eq!(audit.len_for_realm("vm-a"), 0);
-
-        let mut metrics = MetricsQueue::new(2);
-        for name in [MetricName::PickerOpened, MetricName::PickerTimeout] {
-            metrics.enqueue_droppable(MetricEvent { name, reason: None });
-        }
-        assert_eq!(metrics.drain_bounded(1).len(), 1);
-        assert_eq!(metrics.len(), 1);
     }
 }

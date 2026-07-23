@@ -17,8 +17,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::SkNotifyState;
 
-pub const MAX_WAYBAR_JSON_BYTES: usize = 4 * 1024;
-
 /// JSON block emitted by the `d2b-sk-waybar-helper` binary to its Waybar
 /// `custom/` module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -100,36 +98,11 @@ pub fn waybar_block_from_state(state: &SkNotifyState) -> WaybarBlock {
 
 /// Emit a [`WaybarBlock`] to stdout as a JSON line (the format expected by
 /// Waybar `custom/` with `return-type = "json"`).
-pub fn waybar_json(block: &WaybarBlock) -> Result<String, WaybarProjectionError> {
-    let line = serde_json::to_string(block).map_err(WaybarProjectionError::Json)?;
-    if line.len() > MAX_WAYBAR_JSON_BYTES {
-        return Err(WaybarProjectionError::ProjectionTooLarge);
-    }
-    Ok(line)
-}
-
-pub fn print_waybar_block(block: &WaybarBlock) -> Result<(), WaybarProjectionError> {
-    let line = waybar_json(block)?;
+pub fn print_waybar_block(block: &WaybarBlock) -> serde_json::Result<()> {
+    let line = serde_json::to_string(block)?;
     println!("{line}");
     Ok(())
 }
-
-#[derive(Debug)]
-pub enum WaybarProjectionError {
-    Json(serde_json::Error),
-    ProjectionTooLarge,
-}
-
-impl std::fmt::Display for WaybarProjectionError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Json(_) => formatter.write_str("cannot encode Waybar projection"),
-            Self::ProjectionTooLarge => formatter.write_str("Waybar projection exceeds size limit"),
-        }
-    }
-}
-
-impl std::error::Error for WaybarProjectionError {}
 
 #[cfg(test)]
 mod tests {
@@ -232,22 +205,5 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["text"], "🔑");
         assert_eq!(parsed["class"], "d2b-sk-touch");
-    }
-
-    #[test]
-    fn generated_waybar_projection_is_bounded() {
-        let mut state = SkNotifyState::empty(T0);
-        for index in 0..crate::state::MAX_ACTIVE_CEREMONIES {
-            state = state.apply(
-                &SecurityKeyEvent::Started {
-                    session_id: format!("s{index}"),
-                    vm_name: "v".repeat(crate::state::MAX_PROJECTION_VM_NAME_CHARS),
-                    rp_id: None,
-                },
-                T0 + index as u64,
-            );
-        }
-        let encoded = waybar_json(&waybar_block_from_state(&state)).unwrap();
-        assert!(encoded.len() <= MAX_WAYBAR_JSON_BYTES);
     }
 }

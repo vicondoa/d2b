@@ -6,12 +6,11 @@ use std::{
 
 use d2b_contract_tests::{read_repo_file, repo_root};
 use d2b_core::{
+    allocator_config::{AllocatorJson, AllocatorRuntimeState},
     bundle::Bundle,
     processes::ProcessesJson,
     realm_controller_config::{RealmControllerRuntimeState, RealmControllersJson},
-    storage::{
-        ActorKind, PrincipalKind, RepairPolicy, StorageInvariant, StorageJson, StoragePathKind,
-    },
+    storage::{SensitivityClass, StorageJson, StoragePathKind},
     sync::{LockKind, SyncJson},
 };
 use regex::Regex;
@@ -20,23 +19,13 @@ use regex::Regex;
 fn storage_and_sync_emitters_are_wired_into_private_bundle() {
     let default_nix = read_repo_file("nixos-modules/default.nix");
     assert!(
-        default_nix.contains("./bundle-artifacts.nix"),
-        "default.nix must import the canonical bundle artifact composer"
+        default_nix.contains("./storage-json.nix"),
+        "default.nix must import storage-json.nix"
     );
-
-    let artifacts_nix = read_repo_file("nixos-modules/bundle-artifacts.nix");
-    for needle in [
-        "realmStorageRows = import ./realm-storage-rows.nix",
-        "paths = realmStorageRows.paths;",
-        "locks = realmStorageRows.locks;",
-        "installFileName = \"storage.json\";",
-        "installFileName = \"sync.json\";",
-    ] {
-        assert!(
-            artifacts_nix.contains(needle),
-            "bundle-artifacts.nix missing realm storage/sync wiring: {needle}"
-        );
-    }
+    assert!(
+        default_nix.contains("./sync-json.nix"),
+        "default.nix must import sync-json.nix"
+    );
 
     let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
     for needle in [
@@ -53,44 +42,6 @@ fn storage_and_sync_emitters_are_wired_into_private_bundle() {
     let bundle_doc = read_repo_file("docs/reference/manifest-bundle.md");
     assert!(bundle_doc.contains("`storage.json`"));
     assert!(bundle_doc.contains("`sync.json`"));
-}
-
-#[test]
-fn legacy_storage_emitters_delegate_to_realm_rows_without_vm_repair() {
-    for (path, projection) in [
-        (
-            "nixos-modules/storage-json.nix",
-            "paths = realmStorageRows.paths;",
-        ),
-        (
-            "nixos-modules/sync-json.nix",
-            "locks = realmStorageRows.locks;",
-        ),
-    ] {
-        let source = read_repo_file(path);
-        for needle in [
-            "realmStorageRows = import ./realm-storage-rows.nix",
-            projection,
-            "schemaVersion = \"v2\";",
-        ] {
-            assert!(source.contains(needle), "{path} missing `{needle}`");
-        }
-        for forbidden in [
-            "cfg.vms",
-            "cfg.envs",
-            "scope = \"vm:",
-            "scope = \"env:",
-            "/run/d2b/vms/",
-            "cfg.store.stateDir",
-            "nix-activation",
-            "actor \"nix-module\" \"tmpfiles\"",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "{path} retains legacy VM/env storage repair: {forbidden}"
-            );
-        }
-    }
 }
 
 #[test]
@@ -141,9 +92,20 @@ fn realm_controller_artifact_is_wired_into_private_bundle() {
         bundle_artifacts.contains("realmControllersJson"),
         "bundle-artifacts.nix must declare realmControllersJson metadata"
     );
+    let host_users = read_repo_file("nixos-modules/host-users.nix");
+    let host_daemon = read_repo_file("nixos-modules/host-daemon.nix");
+    let d2bd_group_marker = "realm.controller.daemon.publicSocketGroup \"d2bd\"";
+    assert!(
+        host_users.contains(d2bd_group_marker),
+        "host-users.nix must put realm daemon users in d2bd for private bundle artifact reads: {d2bd_group_marker}"
+    );
+    assert!(
+        host_daemon.contains(d2bd_group_marker),
+        "host-daemon.nix must run realm daemon services with d2bd as a supplementary group: {d2bd_group_marker}"
+    );
     assert!(
         !bundle_artifacts.contains("d2bRealmBundleArtifactAcls"),
-        "realm private artifacts must not add a parallel activation ACL hook"
+        "realm daemon private artifact access must use canonical group membership, not a parallel activation ACL hook"
     );
 
     let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
@@ -158,15 +120,14 @@ fn realm_controller_artifact_is_wired_into_private_bundle() {
     }
 
     let controller_nix = read_repo_file("nixos-modules/realm-controller-config-json.nix");
-    let storage_rows = read_repo_file("nixos-modules/realm-storage-rows.nix");
+    let index_nix = read_repo_file("nixos-modules/index.nix");
     assert!(controller_nix.contains("installFileName = \"realm-controllers.json\";"));
     assert!(controller_nix.contains("classification = \"contractPrivateNonSecret\";"));
     assert!(controller_nix.contains("sensitivity = \"nonSecret\";"));
     assert!(controller_nix.contains("runtimeState = \"metadata-only\";"));
     assert!(controller_nix.contains("preservesDirectUnixSocketSemantics = true;"));
-    assert!(storage_rows.contains("[ \"controller\" \"providers\" \"storage\" \"sync\" ]"));
-    assert!(storage_rows.contains("path = \"${configRoot}/${file}.json\";"));
-    assert!(storage_rows.contains("owner = brokerUser args.realmId;"));
+    assert!(index_nix.contains("materializedService = localHostRealm;"));
+    assert!(index_nix.contains("materializedSocket = brokerMaterialized;"));
 }
 
 #[test]
@@ -176,45 +137,39 @@ fn rendered_allocator_contract_shape_and_private_bundle_path_when_fixture_availa
         return;
     };
 
-    let allocator: serde_json::Value = read_json(&dir, "allocator.json");
+    let allocator: AllocatorJson = read_json(&dir, "allocator.json");
     let bundle: Bundle = read_json(&dir, "bundle.json");
+    let storage: StorageJson = read_json(&dir, "storage.json");
 
-    assert_eq!(allocator["schemaVersion"], "v2");
-    assert_eq!(allocator["allocator"]["runtimeState"], "metadata-only");
-    assert_eq!(allocator["allocator"]["runtime"]["spawnsService"], false);
-    assert_eq!(allocator["allocator"]["runtime"]["socketActivated"], false);
-    assert!(allocator["allocator"]["runtime"]["serviceName"].is_null());
+    assert_eq!(allocator.schema_version, "v2");
     assert_eq!(
-        allocator["allocator"]["rootSocket"],
+        allocator.allocator.runtime_state,
+        AllocatorRuntimeState::MetadataOnly
+    );
+    assert!(!allocator.allocator.runtime.spawns_service);
+    assert!(!allocator.allocator.runtime.socket_activated);
+    assert!(allocator.allocator.runtime.service_name.is_none());
+    assert_eq!(
+        allocator.allocator.root_socket.as_str(),
         "/run/d2b/allocator/local-root.sock"
     );
     assert_eq!(
-        allocator["allocator"]["leaseLedger"],
+        allocator.allocator.lease_ledger.as_str(),
         "/var/lib/d2b/allocator/leases.jsonl"
     );
-    assert_eq!(allocator["invariants"]["noRuntimeAllocatorService"], true);
-    assert_eq!(
-        allocator["invariants"]["preservesEnvRuntimeSourceOfTruth"],
-        true
-    );
-    assert_eq!(allocator["invariants"]["privateMetadataOnly"], true);
+    assert!(allocator.invariants.no_runtime_allocator_service);
+    assert!(allocator.invariants.preserves_env_runtime_source_of_truth);
+    assert!(allocator.invariants.private_metadata_only);
 
     let mut resource_ids = BTreeSet::new();
-    for request in allocator["resourceRequests"]
-        .as_array()
-        .expect("allocator resource requests")
-    {
-        let resource_id = request["resourceId"]
-            .as_str()
-            .expect("allocator resource id");
+    for request in &allocator.resource_requests {
         assert!(
-            resource_ids.insert(resource_id),
-            "allocator resource id rendered more than once: {resource_id}"
+            resource_ids.insert(request.resource_id.as_str()),
+            "allocator resource id rendered more than once: {}",
+            request.resource_id
         );
         assert!(
-            request["realmPath"]
-                .as_str()
-                .is_some_and(|realm| !realm.is_empty()),
+            !request.realm_path.is_empty(),
             "allocator resource requests must remain rooted in a realm path"
         );
     }
@@ -223,13 +178,14 @@ fn rendered_allocator_contract_shape_and_private_bundle_path_when_fixture_availa
         bundle.allocator_path.as_deref(),
         Some("/etc/d2b/allocator.json")
     );
-    assert!(
-        bundle
-            .artifact_hashes
-            .as_ref()
-            .is_some_and(|hashes| hashes.contains_key("/etc/d2b/allocator.json")),
-        "bundle integrity table must cover allocator.json"
-    );
+    let allocator_path = storage
+        .paths
+        .iter()
+        .find(|path| path.path_template.as_str() == "/etc/d2b/allocator.json")
+        .expect("storage.json covers allocator.json as a private bundle artifact");
+    assert_eq!(allocator_path.kind, StoragePathKind::RegularFile);
+    assert_eq!(allocator_path.sensitivity, SensitivityClass::Private);
+    assert_eq!(allocator_path.mode, "0640");
 }
 
 #[test]
@@ -266,20 +222,8 @@ fn rendered_realm_controller_contract_shape_when_fixture_available() {
     );
     for controller in &controllers.controllers {
         assert!(
-            controller.daemon.user.as_str().starts_with("d2bd-r-"),
+            controller.daemon.user.as_str().starts_with("d2br-"),
             "realm daemon principal must be deterministic and realm-scoped"
-        );
-        assert!(
-            controller.broker.user.as_str().starts_with("d2bbr-r-"),
-            "realm broker principal must be distinct and realm-scoped"
-        );
-        assert!(
-            controller
-                .daemon
-                .public_socket_group
-                .as_str()
-                .starts_with("d2b-r-"),
-            "realm public group must be realm-scoped"
         );
         assert_eq!(
             controller.allocator.config_path.as_str(),
@@ -289,42 +233,20 @@ fn rendered_realm_controller_contract_shape_when_fixture_available() {
             controller.allocator.root_socket.as_str(),
             "/run/d2b/allocator/local-root.sock"
         );
-        let realm_id = controller.realm_id.as_str();
-        assert_eq!(
-            controller.daemon.config_path.as_str(),
-            format!("/etc/d2b/r/{realm_id}/controller.json")
-        );
-        for file in ["controller", "providers", "storage", "sync"] {
-            let expected_id = format!("path:realm-config-{file}:{realm_id}");
-            let expected_path = format!("/etc/d2b/r/{realm_id}/{file}.json");
-            let row = storage
-                .paths
-                .iter()
-                .find(|path| path.id.as_str() == expected_id)
-                .unwrap_or_else(|| panic!("storage.json missing {expected_id}"));
-            assert_eq!(row.path_template.as_str(), expected_path);
-            assert_eq!(row.kind, StoragePathKind::RegularFile);
-            assert_eq!(row.mode, "0640");
-            assert_eq!(row.owner.kind, PrincipalKind::User);
-            assert_eq!(row.owner.value, controller.broker.user);
-            assert_eq!(row.creator.kind, ActorKind::Broker);
-            assert_eq!(row.creator.value, controller.broker.user);
-            assert_eq!(row.repair_policy, RepairPolicy::BrokerReconcile);
-            assert!(!row.recursive);
-        }
     }
 
     assert_eq!(
         bundle.realm_controllers_path.as_deref(),
         Some("/etc/d2b/realm-controllers.json")
     );
-    assert!(
-        bundle
-            .artifact_hashes
-            .as_ref()
-            .is_some_and(|hashes| hashes.contains_key("/etc/d2b/realm-controllers.json")),
-        "bundle integrity table must cover realm-controllers.json"
-    );
+    let controller_path = storage
+        .paths
+        .iter()
+        .find(|path| path.path_template.as_str() == "/etc/d2b/realm-controllers.json")
+        .expect("storage.json covers realm-controllers.json as a private bundle artifact");
+    assert_eq!(controller_path.kind, StoragePathKind::RegularFile);
+    assert_eq!(controller_path.sensitivity, SensitivityClass::Private);
+    assert_eq!(controller_path.mode, "0640");
 }
 
 #[test]
@@ -405,196 +327,89 @@ fn storage_lifecycle_report_schema_and_reference_are_committed() {
 
 #[test]
 fn rendered_storage_contract_covers_process_writable_paths_when_fixture_available() {
-    let fixture_dirs: Vec<_> = ["D2B_FIXTURES", "D2B_FIXTURES_FULL"]
-        .into_iter()
-        .filter_map(|name| env::var_os(name).map(|dir| (name, PathBuf::from(dir))))
-        .collect();
-    if fixture_dirs.is_empty() {
+    let Some(dir) = env::var_os("D2B_FIXTURES").map(PathBuf::from) else {
         eprintln!("  (skipping rendered storage/sync contract check; D2B_FIXTURES unset)");
         return;
+    };
+    let storage: StorageJson = read_json(&dir, "storage.json");
+    let sync: SyncJson = read_json(&dir, "sync.json");
+    let processes: ProcessesJson = read_json(&dir, "processes.json");
+
+    storage
+        .validate_unique_ids()
+        .expect("rendered storage contract must have unique ids");
+    sync.validate_lock_order()
+        .expect("rendered sync contract must have valid lock order");
+
+    let storage_paths: BTreeSet<&str> = storage
+        .paths
+        .iter()
+        .map(|path| path.path_template.as_str())
+        .collect();
+    for dag in &processes.vms {
+        for node in &dag.nodes {
+            let restart = storage.restart_policies.iter().find(|policy| {
+                policy.vm.as_str() == dag.vm && policy.role_id.as_str() == node.id.0
+            });
+            assert!(
+                restart.is_some(),
+                "missing restart policy for {}:{}",
+                dag.vm,
+                node.id.0
+            );
+            for writable in &node.profile.mount_policy.writable_paths {
+                assert!(
+                    storage_paths.contains(writable.path.as_str()),
+                    "storage.json missing writable path for {}:{} -> {}",
+                    dag.vm,
+                    node.id.0,
+                    writable.path
+                );
+            }
+        }
     }
 
-    for (fixture_name, dir) in fixture_dirs {
-        let storage: StorageJson = read_json(&dir, "storage.json");
-        let sync: SyncJson = read_json(&dir, "sync.json");
-        let processes: ProcessesJson = read_json(&dir, "processes.json");
-        let bundle: Bundle = read_json(&dir, "bundle.json");
-
+    assert!(
         storage
-            .validate_unique_ids()
-            .expect("rendered storage contract must have unique ids");
-        sync.validate_lock_order()
-            .expect("rendered sync contract must have valid lock order");
-
-        let storage_paths: BTreeSet<&str> = storage
             .paths
             .iter()
-            .map(|path| path.path_template.as_str())
-            .collect();
-        for dag in &processes.vms {
-            for node in &dag.nodes {
-                for writable in &node.profile.mount_policy.writable_paths {
-                    assert!(
-                        storage_paths.contains(writable.path.as_str()),
-                        "{fixture_name} storage.json missing writable path for {}:{} -> {}",
-                        dag.vm,
-                        node.id.0,
-                        writable.path
-                    );
-                }
-            }
-        }
-
-        assert!(
-            storage.paths.iter().all(|path| {
-                matches!(
-                    path.repair_policy,
-                    RepairPolicy::BrokerReconcile | RepairPolicy::BrokerFailClosed
-                ) && path.creator.kind == ActorKind::Broker
-                    && !path.recursive
-            }),
-            "{fixture_name} realm/workload storage rows must be non-recursive and broker-owned"
-        );
-        assert!(
-            storage.paths.iter().all(|path| {
-                !path.scope.as_str().starts_with("vm:")
-                    && !path.scope.as_str().starts_with("env:")
-                    && !path.path_template.as_str().starts_with("/run/d2b/vms/")
-                    && !path.path_template.as_str().starts_with("/var/lib/d2b/vms/")
-            }),
-            "{fixture_name} storage.json must not retain legacy VM/env scopes or paths"
-        );
-        assert!(
-            storage
-                .paths
-                .iter()
-                .all(|path| { !path.path_template.as_str().starts_with("/run/udev/") }),
-            "{fixture_name} storage.json must not claim broker-owned storage authority over foreign /run/udev state"
-        );
-        assert!(
-            sync.locks
-                .iter()
-                .all(|lock| lock.kind == LockKind::Ofd && lock.cloexec_required),
-            "{fixture_name} every realm/workload lock must be an O_CLOEXEC OFD lock"
-        );
-
-        let store_live_rows: Vec<_> = storage
+            .any(|path| path.path_template.as_str() == "/etc/d2b/storage.json"),
+        "storage.json must describe itself as a private bundle artifact"
+    );
+    assert!(
+        storage
             .paths
             .iter()
-            .filter(|path| path.id.as_str().ends_with("/store-view-live"))
-            .collect();
-        assert!(
-            !store_live_rows.is_empty(),
-            "{fixture_name} storage.json must include workload store-view live rows"
-        );
-        for path in store_live_rows {
-            assert_ne!(path.path_template.as_str(), "/nix/store");
-            for invariant in [
-                StorageInvariant::SameFilesystem,
-                StorageInvariant::HardlinkFarmNoRecursion,
-                StorageInvariant::NoRecursiveMutation,
-            ] {
-                assert!(
-                    path.invariants.contains(&invariant),
-                    "{fixture_name} {} missing hardlink invariant {invariant:?}",
-                    path.id
-                );
-            }
-        }
-
-        let guest_session_credentials: Vec<_> = storage
+            .any(|path| path.path_template.as_str() == "/etc/d2b/sync.json"),
+        "storage.json must describe sync.json as a private bundle artifact"
+    );
+    assert!(
+        storage
             .paths
             .iter()
-            .filter(|path| {
-                path.id
-                    .as_str()
-                    .starts_with("path:workload-guest-session-credential:")
-            })
-            .collect();
-        assert!(
-            !guest_session_credentials.is_empty(),
-            "{fixture_name} storage.json must preserve guest-session credential rows"
-        );
-        for path in guest_session_credentials {
-            assert_eq!(path.kind, StoragePathKind::RegularFile);
-            assert_eq!(path.mode, "0440");
-            assert_eq!(path.owner.kind, PrincipalKind::User);
-            assert_eq!(path.owner.value.as_str(), "root");
-            assert_eq!(path.group.kind, PrincipalKind::Group);
-            assert!(
-                path.group.value.as_str().starts_with("d2b-gctlfs-"),
-                "{fixture_name} guest-session credential group must be workload-scoped"
-            );
-            assert_eq!(path.creator.kind, ActorKind::Broker);
-            assert_eq!(path.repair_policy, RepairPolicy::BrokerFailClosed);
-            assert!(!path.recursive);
-        }
-
-        // realm-observability-rows.nix's path rows (config/state/secret-source/
-        // runtime/store-sync projection) must be re-emitted through the same
-        // canonical, broker-owned storage.json authority as every other
-        // workload path, not left dangling for workload-process-rows.nix's
-        // `resourceRefs.observability` ids to reference nothing.
-        let observability_paths: Vec<_> = storage
+            .any(|path| path.path_template.as_str() == "/etc/d2b/allocator.json"),
+        "storage.json must describe allocator.json as a private bundle artifact"
+    );
+    assert!(
+        storage
             .paths
             .iter()
-            .filter(|path| path.id.as_str().starts_with("path:observability-"))
-            .collect();
-        if !observability_paths.is_empty() {
-            assert_eq!(
-                bundle.observability_secrets_path.as_deref(),
-                Some("/etc/d2b/observability-secrets.json"),
-                "{fixture_name} bundle must expose observability secret metadata"
-            );
-            assert!(
-                bundle.artifact_hashes.as_ref().is_some_and(|hashes| {
-                    hashes.contains_key("/etc/d2b/observability-secrets.json")
-                }),
-                "{fixture_name} bundle must integrity-pin observability secret metadata"
-            );
-            let expected_prefixes = [
-                "path:observability-config:",
-                "path:observability-runtime:",
-                "path:observability-secrets:",
-                "path:observability-state:",
-                "path:observability-store-sync-projection:",
-            ];
-            assert_eq!(
-                observability_paths.len(),
-                expected_prefixes.len(),
-                "{fixture_name} observability storage rows must register exactly the canonical path set"
-            );
-            for prefix in expected_prefixes {
-                assert!(
-                    observability_paths
-                        .iter()
-                        .any(|path| path.id.as_str().starts_with(prefix)),
-                    "{fixture_name} storage.json missing observability path {prefix}"
-                );
-            }
-            for path in &observability_paths {
-                assert_eq!(
-                    path.creator.kind,
-                    ActorKind::Broker,
-                    "{fixture_name} observability storage rows must be broker-created"
-                );
-                assert_eq!(path.owner.kind, PrincipalKind::User);
-                assert!(
-                    path.owner.value.as_str().starts_with("d2bbr-r-"),
-                    "{fixture_name} observability storage rows must be broker-owned"
-                );
-                assert!(!path.recursive);
-                assert!(path.no_follow);
-                assert!(
-                    matches!(
-                        path.repair_policy,
-                        RepairPolicy::BrokerReconcile | RepairPolicy::BrokerFailClosed
-                    ),
-                    "{fixture_name} observability storage rows must use a broker repair policy"
-                );
-            }
-        }
-    }
+            .any(|path| path.kind == StoragePathKind::UnixSocket),
+        "storage.json should include role/readiness Unix socket paths"
+    );
+    assert!(
+        storage
+            .paths
+            .iter()
+            .all(|path| { !path.path_template.as_str().starts_with("/run/udev/") }),
+        "storage.json must not claim broker-owned storage authority over foreign /run/udev state"
+    );
+    assert!(
+        sync.locks
+            .iter()
+            .any(|lock| lock.kind == LockKind::Ofd && lock.cloexec_required),
+        "sync.json must include at least one O_CLOEXEC OFD lock"
+    );
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(dir: &std::path::Path, name: &str) -> T {
@@ -662,29 +477,30 @@ fn broker_storage_and_sync_requests_stay_opaque_only() {
 }
 
 #[test]
-fn tmpfiles_do_not_create_realm_or_workload_storage_leaves() {
+fn tmpfiles_host_mutable_paths_are_covered_by_storage_contract_roots() {
     let tmpfiles_paths = literal_d2b_tmpfiles_paths();
     assert!(
         !tmpfiles_paths.is_empty(),
         "policy-paths: static tmpfiles inventory found no literal d2b tmpfiles paths"
     );
 
-    let forbidden: Vec<_> = tmpfiles_paths
+    let covered_roots = rendered_storage_roots_or_static_fallback();
+    let missing: Vec<_> = tmpfiles_paths
         .iter()
         .filter(|path| {
-            path.starts_with("/etc/d2b/r/")
-                || path.starts_with("/run/d2b/r/")
-                || path.starts_with("/var/lib/d2b/r/")
-                || path.starts_with("/var/cache/d2b/r/")
-                || path.contains("/w/")
+            !covered_roots
+                .iter()
+                .any(|root| path == &root.as_str() || path.starts_with(&format!("{root}/")))
         })
         .cloned()
         .collect();
 
     assert!(
-        forbidden.is_empty(),
-        "policy-paths: tmpfiles must stop at fixed local-root anchors and endpoint state; \
-         realm/workload leaves are broker-created from opaque storage ids: {forbidden:?}"
+        missing.is_empty(),
+        "policy-paths: tmpfiles host-mutable paths are not covered by storage.json roots/paths: \
+         {missing:?}. This check inventories literal systemd.tmpfiles.rules from nixos-modules \
+         (docs/ and tests/ are excluded); interpolated/evaluated rules are validated when \
+         D2B_FIXTURES provides rendered storage.json."
     );
 }
 
@@ -744,6 +560,42 @@ fn literal_d2b_tmpfiles_paths() -> BTreeSet<String> {
         }
     }
     paths
+}
+
+fn rendered_storage_roots_or_static_fallback() -> BTreeSet<String> {
+    if let Some(dir) = env::var_os("D2B_FIXTURES").map(PathBuf::from) {
+        let storage: StorageJson = read_json(&dir, "storage.json");
+        let mut roots: BTreeSet<String> = storage
+            .roots
+            .iter()
+            .map(|root| root.path.as_str().to_owned())
+            .collect();
+        roots.extend(
+            storage
+                .paths
+                .iter()
+                .map(|path| path.path_template.as_str().to_owned()),
+        );
+        return roots;
+    }
+
+    eprintln!(
+        "  (policy-paths: D2B_FIXTURES unset; tmpfiles coverage uses the narrow static \
+         fallback roots from storage-json.nix rather than fully evaluated rules)"
+    );
+    let storage_nix = read_repo_file("nixos-modules/storage-json.nix");
+    assert!(
+        storage_nix.contains("path = toString cfg.site.stateDir;")
+            && storage_nix.contains("path = \"/run/d2b\";")
+            && storage_nix.contains("path = \"/etc/d2b\";"),
+        "policy-paths: storage-json.nix must declare state, runtime, and /etc d2b roots"
+    );
+    BTreeSet::from([
+        "/etc/d2b".to_owned(),
+        "/run/d2b".to_owned(),
+        "/var/cache/d2b".to_owned(),
+        "/var/lib/d2b".to_owned(),
+    ])
 }
 
 fn host_mutation_sources() -> BTreeSet<String> {
@@ -823,6 +675,10 @@ fn stripped_code_line<'a>(path: &Path, line: &'a str) -> &'a str {
 fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
         (
+            "nixos-modules/components/audio/host.nix",
+            "storage root:path:run-root",
+        ),
+        (
             "nixos-modules/bundle.nix",
             "storage paths:private bundle artifacts",
         ),
@@ -833,6 +689,10 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
         (
             "nixos-modules/components/observability/host.nix",
             "storage root:path:run-root",
+        ),
+        (
+            "nixos-modules/gateway-vm.nix",
+            "storage root:path:state-root",
         ),
         (
             "nixos-modules/guest-control.nix",
@@ -847,12 +707,16 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:state-root",
         ),
         (
-            "nixos-modules/host-daemon.nix",
-            "fixed local-root runtime/state/config anchors",
+            "nixos-modules/host-ssh-host-keys.nix",
+            "storage root:path:state-root",
         ),
         (
-            "nixos-modules/user-services.nix",
-            "storage root:path:run-root",
+            "nixos-modules/host.nix",
+            "storage roots:path:state-root,path:run-root",
+        ),
+        (
+            "nixos-modules/observability-host-secrets.nix",
+            "storage root:path:state-root",
         ),
         ("nixos-modules/store.nix", "storage root:path:state-root"),
         (

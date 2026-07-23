@@ -9,9 +9,6 @@
         test-lint test-rust test-proofs test-flake test-nix-unit \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
-        heavy-check heavy-test-integration heavy-test-host-integration \
-        heavy-test-hardware heavy-cargo-test heavy-flake-check \
-        wave-policy-check \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
 
@@ -20,7 +17,6 @@
 SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 	        --impure --raw --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
 NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
-CARGO_XTASK := cd packages && cargo xtask
 
 # ===========================================================================
 # Test-rearchitecture interface. The targets are the stable contract; the
@@ -41,7 +37,7 @@ CARGO_XTASK := cd packages && cargo xtask
 ##          drift after the parallel phase. Tune with D2B_CHECK_JOBS and
 ##          D2B_FLAKE_JOBS.
 check:
-	$(CARGO_XTASK) layer1 run-local
+	bash tests/tools/layer1-jobs run-local
 
 ## check-static — legacy/full-static monolithic gate retained for explicit use.
 check-static:
@@ -81,11 +77,10 @@ check-tier0:
 test: test-unit test-integration
 
 test-unit:
-	$(CARGO_XTASK) layer1 run-local --skip-preflight
+	bash tests/tools/layer1-jobs run-local --skip-preflight
 
 # ===========================================================================
-# Sub-targets. Test gates have corresponding tests/test-<name>.sh drivers;
-# manifest/check-discovery plumbing is owned by Rust xtask.
+# Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
 # ===========================================================================
 
 ## test-lint — preflight + nix-instantiate --parse + shellcheck (no eval, no cargo).
@@ -116,7 +111,7 @@ test-flake:
 ## stdout (CI dynamic-matrix plumbing for the sharded test-flake; see
 ## .github/workflows/pr-l1-static-fast.yml). Invoke as `make -s test-flake-list`.
 test-flake-list:
-	@$(CARGO_XTASK) layer1 checks list
+	@bash tests/test-flake-list.sh
 
 ## test-nix-unit — build all sharded nix-unit corpus checks (focused convenience
 ## target; already covered by test-flake, so NOT in test-unit to avoid double work).
@@ -136,38 +131,13 @@ test-policy:
 test-integration:
 	bash tests/test-integration.sh
 
-# Host-wide, two-slot OFD gate for the expensive final-validation commands.
-# Existing targets stay unchanged; concurrent development uses these wrappers
-# when entering a heavy local lane.
-heavy-check:
-	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. check
-
-heavy-test-integration:
-	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. test-integration
-
-heavy-test-host-integration:
-	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. test-host-integration
-
-heavy-test-hardware:
-	cd packages && cargo xtask heavy-gate -- $(MAKE) -C .. test-hardware
-
-heavy-cargo-test:
-	cd packages && cargo xtask heavy-gate -- cargo test --workspace
-
-heavy-flake-check:
-	cd packages && cargo xtask heavy-gate -- nix flake check ..
-
-wave-policy-check:
-	@test -n "$(CANDIDATE_ROOT)" || { echo "usage: make -C <trusted-parent-worktree> wave-policy-check CANDIDATE_ROOT=<wave-worktree>" >&2; exit 2; }
-	cd packages && cargo xtask wave-policy check --candidate-root "$(abspath $(CANDIDATE_ROOT))"
-
 ## layer1-workflow — regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
 layer1-workflow:
-	$(CARGO_XTASK) layer1 workflow write
+	bash tests/tools/layer1-jobs render-workflow --write
 
 ## layer1-workflow-check — fail if the generated Layer-1 PR workflow is stale.
 layer1-workflow-check:
-	$(CARGO_XTASK) layer1 workflow check
+	bash tests/tools/layer1-jobs check-workflow
 
 # ===========================================================================
 # Additional targets (helper utilities, legacy aliases, meta gates).

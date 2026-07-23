@@ -1,66 +1,63 @@
-{ lib, pkgs, flakeRoot, ... }:
+# nix-unit cases for the privileged broker service cgroup posture.
+#
+# The broker is socket-activated but owns privileged runner spawn and
+# cgroup-delegation operations. Its unit must stay in d2b.slice,
+# must be explicitly delegated, and must not use systemd service teardown
+# as the runner lifecycle mechanism.
+{ mkEval, lib, ... }:
 
 let
-  module =
-    (import (flakeRoot + "/nixos-modules/host-broker.nix") { inputs = { }; })
-      {
-        config.d2b = {
-          site = {
-            usePrebuiltHostTools = false;
-            stateDir = "/var/lib/d2b";
-            audit.retentionDays = 14;
-            bundle.currentManifest = "/etc/d2b/bundle.json";
-          };
-          _realmPrincipals.localRoot = {
-            controller = "d2bd";
-            broker = "root";
-            socketPrincipals.broker = {
-              owner = "root";
-              group = "d2bd";
-              mode = "0660";
-            };
-          };
-        };
-        inherit lib pkgs;
-      };
-  service = module.config.systemd.services.d2b-priv-broker;
-  cfg = service.serviceConfig;
-in
-{
-  "broker-service-posture/local-root-identity" = {
-    expr = {
-      user = cfg.User;
-      group = cfg.Group;
-      type = cfg.Type;
-      notifyAccess = cfg.NotifyAccess;
-    };
-    expected = {
-      user = "root";
-      group = "root";
-      type = "notify";
-      notifyAccess = "main";
-    };
+  minimal = { ... }: {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+    environment.etc."machine-id".text = "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    d2b.daemonExperimental.enable = true;
   };
 
-  "broker-service-posture/continuation" = {
-    expr = {
-      killMode = cfg.KillMode;
-      slice = cfg.Slice;
-      delegate = cfg.Delegate;
-      restart = cfg.Restart;
-    };
-    expected = {
-      killMode = "process";
-      slice = "d2b.slice";
-      delegate = true;
-      restart = "on-failure";
-    };
+  cfg = (mkEval [ minimal ]).config;
+  svcCfg = cfg.systemd.services.d2b-priv-broker.serviceConfig or { };
+  sliceCfg = cfg.systemd.slices.d2b.sliceConfig or { };
+  tmpfiles = cfg.systemd.tmpfiles.rules;
+in
+{
+  "broker-service-posture/service-slice" = {
+    expr = svcCfg.Slice or "";
+    expected = "d2b.slice";
+  };
+
+  "broker-service-posture/service-delegate" = {
+    expr = svcCfg.Delegate or false;
+    expected = true;
+  };
+
+  "broker-service-posture/service-kill-mode" = {
+    expr = svcCfg.KillMode or "";
+    expected = "process";
+  };
+
+  "broker-service-posture/slice-delegate-controllers" = {
+    expr = sliceCfg.Delegate or "";
+    expected = "cpu memory pids io cpuset";
   };
 
   "broker-service-posture/no-global-manager-environment-mutation" = {
-    expr =
-      !(lib.hasInfix "set-environment" cfg.ExecStartPre)
-      && cfg.EnvironmentFile == "-/run/d2b/broker/priv-broker.env";
-    expected = true;
+    expr = {
+      execStartPreAvoidsSetEnvironment =
+        !(lib.hasInfix "set-environment" (svcCfg.ExecStartPre or ""));
+      execStartAvoidsSetEnvironment =
+        !(lib.hasInfix "set-environment" (svcCfg.ExecStart or ""));
+      usesOptionalUnitLocalEnvironmentFile = svcCfg.EnvironmentFile or "";
+      environmentFileParentNotGroupWritable =
+        builtins.elem "d /run/d2b/broker 0750 root d2bd -" tmpfiles;
+    };
+    expected = {
+      execStartPreAvoidsSetEnvironment = true;
+      execStartAvoidsSetEnvironment = true;
+      usesOptionalUnitLocalEnvironmentFile = "-/run/d2b/broker/priv-broker.env";
+      environmentFileParentNotGroupWritable = true;
+    };
   };
 }

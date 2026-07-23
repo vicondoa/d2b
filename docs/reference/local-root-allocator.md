@@ -2,9 +2,10 @@
 
 **Diataxis category:** reference.
 
-This page documents the declarative inputs emitted for the local-root allocator
-and the `d2b-realm-core` typed lease contract. The emitted records do not bind
-listeners, allocate leases, spawn children, or supervise processes.
+This page documents the committed `d2b-realm-core` contract for
+arbitrating host resources that are shared by local realm controllers. It
+is a contract and schema foundation only: it does not provide a runtime
+allocator service, live host mutation, or realm-broker dispatch for these DTOs.
 
 ## Purpose
 
@@ -34,8 +35,6 @@ runtime allocator exists.
 | Reconciliation | Comparing persisted lease state with observed kernel/host state and producing explicit decisions. |
 | Quarantine | A fail-closed state that prevents automatic reuse until a later repair path resolves ambiguity. |
 | Reclaim | A terminal cleanup decision for resources that can be safely retired from the ledger. |
-| Ledger generation | An opaque compare-and-swap token binding a decision to the consistent durable snapshot from which it was computed. |
-| Atomic grant commit | One durable ledger transaction that reserves the lease id, inserts the lease, stores the idempotency result, and advances the ledger generation together. |
 
 ## Resource kinds
 
@@ -89,39 +88,6 @@ A request that cannot be expressed in this total order must be denied
 rather than partially applied. Future runtime code must not acquire a
 resource out of order and then rely on cleanup to recover correctness.
 
-## Generated child-realm inputs
-
-Every enabled host-local child realm contributes a deterministic set of rows:
-
-- one public and one broker `SOCK_SEQPACKET` listener request under
-  `/run/d2b/r/<realm-id>/`;
-- one bounded typed lease-request template containing cgroup, namespace,
-  host-file partition, and listener resources;
-- separate controller and broker launch records, each naming its principal,
-  listener, cgroup leaf, namespace inputs, and resource references;
-- controller and broker identity configurations with deterministic UID/GID
-  maps, including only the realm's internal cgroup group;
-- cgroup layout and ownership rows for the process-free realm/workload roots
-  and the controller, broker, and workload role leaves; and
-- dedicated user, mount, network, IPC, PID, and cgroup namespace rows for each
-  child process.
-
-The rows are sorted by canonical realm path. Resource acquisition is ordered by
-phase and ordinal, and process launch order is explicit. These records describe
-inputs to the runtime owned by the local-root controller and broker; booleans in
-the records state that binding, spawning, supervision, adoption, and lease
-execution have not occurred.
-
-The private `allocator.json.processLaunch` projection pairs the controller and
-broker for each child realm under one canonical controller-generation key.
-Every child row binds its numeric principal, listener, cgroup, namespace,
-resource, and lease references with SHA-256 digests and fail-closed spawn
-flags. References are opaque and bounded; the executable reference is the only
-path-bearing launch field, and no argv or environment is reconstructed from
-ambient host state. Host-mediated device lease requests from the normalized
-device index are included in `resourceRequests` and referenced only by the
-owning realm broker's bounded resource and lease authority.
-
 ## Immutable host-file boundary
 
 `host-file-partition` is a typed resource kind, not permission for a
@@ -155,50 +121,9 @@ The crate defines these reports and bounds them to keep audit and metric
 metadata small. It does not observe the live kernel, mutate
 nftables, create cgroups, or repair host files.
 
-## Allocator engine adapters
-
-`LocalRootAllocatorEngine<L, O, V>` is statically composed from three narrow
-adapters:
-
-- `AllocatorLedger::load` returns a fallible, generation-bound
-  `AllocatorLedgerSnapshot` containing the current leases and opaque,
-  engine-owned idempotency records;
-- `AllocatorLedger::commit_allocation` accepts one engine-created transaction.
-  For a grant, the adapter reserves the next lease id while holding its
-  exclusive lock, materializes the engine-owned lease and idempotency result,
-  and durably publishes the sequence, lease, idempotency record, and generation
-  change atomically. Denial idempotency is committed through the same method;
-- `ObservedAllocatorState` exposes an already-collected resource observation
-  snapshot;
-- `AllocatorLiveness` answers whether the exact realm/controller generation in
-  a `LeaseOwner` is live.
-
-All three traits require `Send + Sync`. The engine uses generic static dispatch;
-it has no trait-object, dynamic downcast, ambient-I/O, or fallback path. Host
-observation happens before the decision pass. Durable reads and commits remain
-explicitly fallible so an OFD-locked adapter can report lock, I/O, stale
-generation, or integrity failures. `AllocatorEngineError` is a closed,
-detail-free error enum; `allocate` and `reconcile` return `Result` and propagate
-these failures without producing an allocation response.
-
-The engine computes and validates a decision against one snapshot, then commits
-before returning `Granted`. A commit must expose either the complete old state
-or the complete new state after any failure; it must never expose a reserved id,
-lease, or idempotency record independently. A stale generation fails closed.
-The caller may retry with the same idempotency key: an uncommitted failure is
-recomputed from a fresh snapshot, while a durable commit whose acknowledgement
-was lost replays the exact stored result. The idempotency record is constructed,
-serialized, and compared by the engine, so a ledger adapter stores an opaque
-value rather than reimplementing request fingerprint validation.
-
-The in-memory `FakeAllocatorLedger`, `FakeObservedAllocatorState`, and
-`FakeAllocatorLiveness` adapters are available only to crate tests or consumers
-that explicitly enable the `test-support` feature. They are not default generic
-parameters and are absent from the normal production API.
-
-`/etc/d2b/realm-controllers.json` references the emitted resource ids for each
-child realm. Those references are inputs, not grants, and do not confer host
-mutation authority.
+`/etc/d2b/realm-controllers.json` may reference allocator resource ids for a
+realm, but those references remain metadata until a runtime allocator exists.
+They do not grant host mutation authority by themselves.
 
 Operator repair should be explicit and evidence-driven rather than
 automatic cleanup. A CLI or daemon repair path for states such as
@@ -234,13 +159,11 @@ interface names, command output, credentials, provider endpoints, and
 opaque resource values that would expand label cardinality or leak host
 state.
 
-## Runtime boundary
+## Current implementation status
 
-The committed foundation consists of Rust DTOs, validation helpers, a pure
-allocator decision engine with injectable state adapters, tests, generated
-schema coverage, and declarative Nix rows. The local-root runtime composes
-durable ledger, observed-state, and pidfd-backed liveness adapters; validates
-the generated rows; binds listeners; creates namespaces and cgroups; allocates
-and revokes leases; parent-spawns children; returns pidfds; and performs
-adoption and supervision. No child realm `.socket` or `.service` unit is
-generated, and the allocator is not a separate daemon.
+The committed foundation consists of Rust DTOs, validation helpers, tests,
+and generated schema coverage in `d2b-realm-core`. It does not install a
+local-root allocator daemon, expose a public or broker socket operation,
+or change the live behavior of existing `d2b.envs` networking, cgroup,
+nftables, host-file, or namespace management. Runtime allocation, live
+mutation, and migration from local host-resource paths are contract boundaries.

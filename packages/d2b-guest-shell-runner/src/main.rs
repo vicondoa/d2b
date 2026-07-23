@@ -1,11 +1,13 @@
+use std::path::Path;
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use d2b_guest_shell_runner::{
     cli::{Cli, Command},
     name::validate_shell_name,
-    socket::ExternalDataPlaneSocket,
+    output::ShellManagementOutput,
+    socket::validate_socket_path,
 };
 
 fn main() -> ExitCode {
@@ -22,90 +24,181 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Daemon(args) => {
-            let socket = ExternalDataPlaneSocket::new(args.socket)?;
-            if !args.home.is_absolute() {
-                anyhow::bail!("libshpool home path must be absolute");
-            }
-            run_libshpool_daemon(&socket, &args.home)?;
+            validate_socket_path(&args.socket)?;
+            run_libshpool_daemon(&args.socket, &args.home)?;
         }
         Command::Attach(args) => {
-            let socket = ExternalDataPlaneSocket::new(args.socket)?;
+            validate_socket_path(&args.socket)?;
             validate_shell_name(&args.name)?;
-            run_libshpool_attach(&socket, &args.name, args.force)?;
+            run_libshpool_attach(&args.socket, &args.name, args.force)?;
         }
         Command::List(args) => {
-            let socket = ExternalDataPlaneSocket::new(args.socket)?;
-            run_libshpool_list(&socket)?;
+            validate_socket_path(&args.socket)?;
+            run_libshpool_list(&args.socket, args.json)?;
         }
         Command::Detach(args) => {
-            let socket = ExternalDataPlaneSocket::new(args.socket)?;
+            validate_socket_path(&args.socket)?;
             validate_shell_name(&args.name)?;
-            run_libshpool_detach(&socket, &args.name)?;
+            let status = run_libshpool_session_command("detach", &args.socket, &args.name)?;
+            print_management("detach", args.name, args.json, status)?;
         }
         Command::Kill(args) => {
-            let socket = ExternalDataPlaneSocket::new(args.socket)?;
+            validate_socket_path(&args.socket)?;
             validate_shell_name(&args.name)?;
-            run_libshpool_kill(&socket, &args.name)?;
+            let status = run_libshpool_session_command("kill", &args.socket, &args.name)?;
+            print_management("kill", args.name, args.json, status)?;
         }
     }
     Ok(())
 }
 
 #[cfg(feature = "real-libshpool")]
-fn run_libshpool_daemon(socket: &ExternalDataPlaneSocket, home: &std::path::Path) -> Result<()> {
-    d2b_guest_shell_runner::libshpool_bridge::daemon(socket, home)
-}
-
-#[cfg(not(feature = "real-libshpool"))]
-fn run_libshpool_daemon(_socket: &ExternalDataPlaneSocket, _home: &std::path::Path) -> Result<()> {
-    backend_unavailable()
+fn parse_shpool_args(argv: Vec<String>) -> Result<libshpool::Args> {
+    libshpool::Args::try_parse_from(argv).context("parsing shpool arguments")
 }
 
 #[cfg(feature = "real-libshpool")]
-fn run_libshpool_attach(socket: &ExternalDataPlaneSocket, name: &str, force: bool) -> Result<()> {
-    d2b_guest_shell_runner::libshpool_bridge::attach(socket, name, force)
+fn run_shpool(argv: Vec<String>) -> Result<()> {
+    let args = parse_shpool_args(argv)?;
+    if args.version() {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    d2b_guest_shell_runner::libshpool_bridge::run(args)
+}
+
+#[cfg(feature = "real-libshpool")]
+fn socket_arg(socket: &Path) -> String {
+    socket.to_string_lossy().into_owned()
+}
+
+#[cfg(feature = "real-libshpool")]
+fn run_libshpool_daemon(socket: &Path, home: &Path) -> Result<()> {
+    let args = parse_shpool_args(vec![
+        "shpool".to_owned(),
+        "--socket".to_owned(),
+        socket_arg(socket),
+        "--no-daemonize".to_owned(),
+        "daemon".to_owned(),
+    ])?;
+    if args.version() {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    d2b_guest_shell_runner::libshpool_bridge::run_with_home(args, home)
 }
 
 #[cfg(not(feature = "real-libshpool"))]
-fn run_libshpool_attach(
-    _socket: &ExternalDataPlaneSocket,
+fn run_libshpool_daemon(_socket: &Path, _home: &Path) -> Result<()> {
+    anyhow::bail!("persistent shell daemon mode is not enabled in this helper build")
+}
+
+#[cfg(feature = "real-libshpool")]
+fn run_libshpool_attach(socket: &Path, name: &str, force: bool) -> Result<()> {
+    let mut argv = vec![
+        "shpool".to_owned(),
+        "--socket".to_owned(),
+        socket_arg(socket),
+        "--no-daemonize".to_owned(),
+        "attach".to_owned(),
+    ];
+    if force {
+        argv.push("--force".to_owned());
+    }
+    argv.push("--".to_owned());
+    argv.push(name.to_owned());
+    run_shpool(argv)
+}
+
+#[cfg(not(feature = "real-libshpool"))]
+fn run_libshpool_attach(_socket: &Path, _name: &str, _force: bool) -> Result<()> {
+    anyhow::bail!("persistent shell attach mode is not enabled in this helper build")
+}
+
+#[cfg(feature = "real-libshpool")]
+fn run_libshpool_list(socket: &Path, json: bool) -> Result<()> {
+    let mut argv = vec![
+        "shpool".to_owned(),
+        "--socket".to_owned(),
+        socket_arg(socket),
+        "--no-daemonize".to_owned(),
+        "list".to_owned(),
+    ];
+    if json {
+        argv.push("--json".to_owned());
+    }
+    run_shpool(argv)
+}
+
+#[cfg(not(feature = "real-libshpool"))]
+fn run_libshpool_list(_socket: &Path, json: bool) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&ShellManagementOutput::unsupported("list", String::new()))?
+        );
+    } else {
+        println!("shell session listing is not implemented in this helper build");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "real-libshpool")]
+fn run_libshpool_session_command(
+    command: &str,
+    socket: &Path,
+    name: &str,
+) -> Result<ManagementStatus> {
+    run_shpool(vec![
+        "shpool".to_owned(),
+        "--socket".to_owned(),
+        socket_arg(socket),
+        "--no-daemonize".to_owned(),
+        command.to_owned(),
+        "--".to_owned(),
+        name.to_owned(),
+    ])?;
+    Ok(ManagementStatus::Ok)
+}
+
+#[cfg(not(feature = "real-libshpool"))]
+fn run_libshpool_session_command(
+    _command: &str,
+    _socket: &Path,
     _name: &str,
-    _force: bool,
+) -> Result<ManagementStatus> {
+    Ok(ManagementStatus::Unsupported)
+}
+
+#[derive(Clone, Copy)]
+enum ManagementStatus {
+    Ok,
+    #[cfg(not(feature = "real-libshpool"))]
+    Unsupported,
+}
+
+fn print_management(
+    command: &'static str,
+    name: String,
+    json: bool,
+    status: ManagementStatus,
 ) -> Result<()> {
-    backend_unavailable()
-}
-
-#[cfg(feature = "real-libshpool")]
-fn run_libshpool_list(socket: &ExternalDataPlaneSocket) -> Result<()> {
-    d2b_guest_shell_runner::libshpool_bridge::list(socket)
-}
-
-#[cfg(not(feature = "real-libshpool"))]
-fn run_libshpool_list(_socket: &ExternalDataPlaneSocket) -> Result<()> {
-    backend_unavailable()
-}
-
-#[cfg(feature = "real-libshpool")]
-fn run_libshpool_detach(socket: &ExternalDataPlaneSocket, name: &str) -> Result<()> {
-    d2b_guest_shell_runner::libshpool_bridge::detach(socket, name)
-}
-
-#[cfg(not(feature = "real-libshpool"))]
-fn run_libshpool_detach(_socket: &ExternalDataPlaneSocket, _name: &str) -> Result<()> {
-    backend_unavailable()
-}
-
-#[cfg(feature = "real-libshpool")]
-fn run_libshpool_kill(socket: &ExternalDataPlaneSocket, name: &str) -> Result<()> {
-    d2b_guest_shell_runner::libshpool_bridge::kill(socket, name)
-}
-
-#[cfg(not(feature = "real-libshpool"))]
-fn run_libshpool_kill(_socket: &ExternalDataPlaneSocket, _name: &str) -> Result<()> {
-    backend_unavailable()
-}
-
-#[cfg(not(feature = "real-libshpool"))]
-fn backend_unavailable<T>() -> Result<T> {
-    anyhow::bail!("retained shell libshpool backend is unavailable")
+    let output = match status {
+        ManagementStatus::Ok => ShellManagementOutput::ok(command, name),
+        #[cfg(not(feature = "real-libshpool"))]
+        ManagementStatus::Unsupported => ShellManagementOutput::unsupported(command, name),
+    };
+    if json {
+        println!("{}", serde_json::to_string(&output)?);
+    } else {
+        match status {
+            ManagementStatus::Ok => println!("{} for '{}' completed", output.command, output.name),
+            #[cfg(not(feature = "real-libshpool"))]
+            ManagementStatus::Unsupported => println!(
+                "{} for '{}' is not implemented in this helper build",
+                output.command, output.name
+            ),
+        }
+    }
+    std::io::Write::flush(&mut std::io::stdout()).context("flushing stdout")
 }

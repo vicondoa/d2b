@@ -1,6 +1,6 @@
 # 0010. Wire protocol and typed errors
 
-- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
+- Status: Accepted
 - Date: 2026-05-26
 - Wave: W2
 - Plan slice: "Daemon API and state model (wire-frozen in W2 even though much is unimplemented)."

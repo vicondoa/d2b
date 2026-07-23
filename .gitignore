@@ -88,16 +88,15 @@ tests/smoke-run-log.txt
 .static-fast.lock
 packages/*/t/
 .copilot-*
-/.ttrpc-api-fit-spike.*/
 .*-eval.log
 
 # CI sccache local-disk backend (restored/saved by actions/cache in test-rust).
 .sccache/
 
-# Toolchain-scoped Cargo gate outputs. Developer Cargo commands continue to use
-# packages/target; tests/test-rust.sh uses these isolated dirs so artifacts from
-# another rustc version cannot poison the pinned gate.
-packages/.d2b-gate-targets/
+# Broker feature-pass target dirs (deterministic siblings of the broker target
+# dir, kept stable so sccache cache keys don't churn — see tests/test-rust.sh).
+packages/d2b-priv-broker/target-layer1/
+packages/d2b-priv-broker/target-fakebackends/
 
 # Panel-review output must never be committed — it belongs in the
 # session workspace, not the repo. (Removed a stray panel-w-fu-fu-rollup/

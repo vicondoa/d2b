@@ -1,9 +1,7 @@
 [package]
 name = "xtask"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 default-run = "xtask"
 license.workspace = true
@@ -14,17 +12,12 @@ workspace = true
 [dependencies]
 clap_complete = "4"
 clap_mangen = "0.2"
-command-fds.workspace = true
-d2b = { workspace = true }
-d2b-realm-core = { workspace = true }
-d2b-core = { workspace = true }
-d2b-contracts = { workspace = true, features = ["schema"] }
-protobuf-codegen.workspace = true
+d2b = { path = "../d2b", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+protobuf-codegen = "3.7.2"
 serde.workspace = true
-sha2.workspace = true
-ttrpc-codegen.workspace = true
+ttrpc-codegen = "0.6.0"
 schemars.workspace = true
 serde_json.workspace = true
-rustix = { workspace = true, features = ["event"] }
-nix = { workspace = true, features = ["fs"] }
-signal-hook.workspace = true

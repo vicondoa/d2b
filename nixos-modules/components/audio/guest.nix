@@ -1,7 +1,10 @@
-# Guest support for a realm workload's mediated virtio-snd device.
+# Audio support for d2b VMs (virtio-snd + vhost-user-sound +
+# PipeWire). Imported into the GUEST config by host.nix whenever a
+# VM sets `d2b.vms.<name>.audio.enable = true`.
 #
-# The realm controller owns the vhost-user process and Cloud Hypervisor
-# attachment. This module configures only the guest audio stack.
+# Host-side wiring (the daemon-supervised sidecar runner, the WirePlumber
+# rule, and per-VM state files) lives in the host audio component and is
+# imported at the host scope from the framework module aggregator.
 #
 # Architecture
 # ------------
@@ -9,21 +12,91 @@
 # `--generic-vhost-user` flag (see cloud-hypervisor/docs/generic-
 # vhost-user.md) to attach a vhost-user backend. The backend is
 # upstream `vhost-device-sound --backend pipewire`, which connects to
-# the mediated host PipeWire daemon and appears as a client named from
-# the canonical workload ID, giving the user a normal per-stream mute/
+# the user's PipeWire daemon and appears in plasma-pa as a client
+# named `d2b-<vm>` — giving the user a normal per-stream mute/
 # volume UX through the Plasma mixer.
 #
+# The vhost-user protocol is 1:1 frontend<->backend, so d2bd supervises one
+# broker-spawned runner per VM that currently has audio.
+#
+# Boot-time enable: this module wires `microvm.extraArgsScript` to a
+# tiny shell helper that reads /var/lib/d2b/<vm>/audio-state.json
+# at VM start. If both mic and speaker are "off", the helper emits
+# nothing — no virtio-snd device, the guest sees no soundcard. If at
+# least one direction is "on", the helper:
+#   1. Waits up to 5s for the vhost-user socket to appear under
+#      /run/d2b/vms/<vm>/.
+#   2. Echoes `--generic-vhost-user socket=...,virtio_id=25,
+#      queue_sizes=[64,64,64,64]` on stdout, which microvm.nix's
+#      runner template captures into `runtime_args` and appends to
+#      the cloud-hypervisor command line.
+#
+# Split mic/speaker enforcement happens at the WirePlumber layer:
+# audio-host.nix installs a rule that reads the same state file and
+# null-routes the disabled direction's streams from the client.
+# v1 keeps that mechanism simple; refinements are out of scope.
 { lib, pkgs, config, ... }:
 
+let
+  vmName = config.networking.hostName;
+  d2bLib = import ../../lib.nix { inherit lib pkgs; };
+
+  # The helper script invoked by microvm.nix's runner at VM start.
+  # Output: either nothing (no audio device) or a single line of
+  # additional cloud-hypervisor flags.
+  #
+  # Important: in the d2b framework, an `audio.enable = true` VM
+  # is asserted to also have `autostart = false` (see the assertion
+  # in audio-host.nix). That means the runner is always launched
+  # interactively via `d2b up` running as the host's Wayland
+  # user (`d2b.site.waylandUser`), never via microvm@<vm>.service.
+  audioArgsScript = pkgs.writeShellScript "d2b-audio-args-${vmName}" ''
+    set -eu
+    # shellcheck source=/dev/null
+    . ${d2bLib.d2bReadAudioState}
+    _a_result=$(d2b_read_audio_state "${vmName}")
+    mic=''${_a_result#mic=}; mic=''${mic% *}
+    spk=''${_a_result#* speaker=}
+    if [ "$mic" != "on" ] && [ "$spk" != "on" ]; then
+      # Both directions off (or state unreadable/invalid) — no device attached.
+      exit 0
+    fi
+
+    # The daemon-supervised audio runner puts the socket at this path.
+    sock="/run/d2b/vms/${vmName}/snd.sock"
+
+    # Wait briefly for the daemon-supervised listening socket to appear.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -S "$sock" ] && break
+      ${pkgs.coreutils}/bin/sleep 0.5
+    done
+    if [ ! -S "$sock" ]; then
+      echo "d2b-audio: sidecar socket $sock did not appear; skipping audio device" >&2
+      exit 0
+    fi
+
+    # Cloud-hypervisor generic-vhost-user spec. virtio_id=25 is the
+    # virtio device ID for "sound" per the virtio spec. queue_sizes
+    # must be a 4-element list matching vhost-device-sound's
+    # advertised queue count (ctrl + event + tx + rx). Available since
+    # cloud-hypervisor v52.0 (the spectrum-ch package pins to v52).
+    printf -- '--generic-vhost-user socket=%s,virtio_id=25,queue_sizes=[64,64,64,64]\n' "$sock"
+  '';
+in
+
 {
-  # The workload module supplies the guest users that may open virtio-snd.
+  # In-guest audio user list — populated from the host-side
+  # `d2b.vms.<name>.audio.users` (default `[ ssh.user ]`) via
+  # the propagation pattern in host.nix. Declared as an option in
+  # this module so the value resolves cleanly at guest-config eval.
   options.d2b.audio.users = lib.mkOption {
     type = lib.types.listOf lib.types.str;
     default = [ ];
     description = ''
       Guest-side usernames to add to the `audio` group so they can
       reach the virtio-snd device + PipeWire daemon without
-      logind-active session privileges.
+      logind-active session privileges. Populated by host.nix from
+      `d2b.vms.<name>.audio.users`.
     '';
   };
 
@@ -33,6 +106,10 @@
   # graphics.nix / tpm.nix (which also pin cloud-hypervisor) don't
   # conflict.
   microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
+
+  # Dynamic per-boot --generic-vhost-user injection. See header
+  # comment for the full lifecycle.
+  microvm.extraArgsScript = "${audioArgsScript}";
 
   # In-guest PipeWire + ALSA / Pulse compat stack. snd_virtio is
   # in-tree since 5.16; linuxPackages_latest on the host long
@@ -75,8 +152,11 @@
   # home-manager session), so the polkit path is not reliably
   # triggered. Group membership is the dependable mechanism.
   #
-  # We add `audio` to each listed user's extraGroups. The option is a
-  # list-merge type, so this composes with whatever the workload module
+  # The user list is declared host-side via
+  # `d2b.vms.<name>.audio.users` and propagated into
+  # `config.d2b.audio.users` here by host.nix. We add `audio` to
+  # each listed user's extraGroups; users.users.<u>.extraGroups is a
+  # list-merge type, so this composes with whatever the per-VM file
   # already declares for the user.
   users.users =
     lib.listToAttrs (map

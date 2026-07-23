@@ -1,11 +1,13 @@
 //! Transport-neutral CLI-to-`d2bd` daemon access (ADR 0032).
 //!
-//! The local command binding owns authenticated ComponentSession construction,
-//! daemon peer verification, and exact endpoint policy. Compatibility helpers
-//! for the pre-cutover semantic API remain separate and are never a fallback
-//! from the ComponentSession path.
+//! The local binding intentionally speaks the existing public daemon wire:
+//! AF_UNIX `SOCK_SEQPACKET`, one 4-byte little-endian length-prefixed JSON
+//! body per packet, `hello` negotiation, then the current type-tagged `list`
+//! request. The primary `vm_list` API returns a daemon-access-local shape that
+//! preserves the public-wire list response exactly; the v2 [`WorkloadSummary`]
+//! projection remains available only as an explicitly lossy compatibility
+//! helper.
 
-pub mod component_session;
 pub mod direct_tls;
 pub mod relay;
 
@@ -18,13 +20,12 @@ use std::{
 use async_trait::async_trait;
 use d2b_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, KnownFeatureFlag, MAX_FRAME_SIZE,
-    PUBLIC_SOCKET_PATH,
+    PUBLIC_SOCKET_PATH, SemverRange,
     public_wire::{
         ListEntry, ListRequest, ListResponse, PublicVmServices, RuntimeSummary, VmLifecycle,
         VmLifecycleState,
     },
 };
-use d2b_core::error::SemverRange;
 use d2b_realm_core::{
     Capability, CapabilitySet, ErrorKind, NodeId, PrincipalId, ProviderId,
     RealmAccessClientBindingKind, RealmAccessClientContract, RealmPath, WorkloadId, WorkloadState,
@@ -1209,8 +1210,10 @@ struct ListResponseFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle};
-    use d2b_core::error::Version;
+    use d2b_contracts::{
+        Version,
+        public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle},
+    };
     use nix::{
         sys::socket::{Backlog, MsgFlags, accept4, bind, listen, send},
         unistd::close,

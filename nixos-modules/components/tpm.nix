@@ -1,27 +1,29 @@
-# TPM support for a realm-owned local VM workload.
+# TPM support for d2b VMs. Imported by host.nix whenever a VM
+# sets `d2b.vms.<name>.tpm.enable = true`.
 #
-# The host evaluator passes canonical short realm, workload, and swtpm role IDs.
-# The socket therefore lives in the role directory declared by the endpoint
-# contract; workload names and hostnames never become path components.
-{ lib
-, pkgs
-, d2bRealmId
-, d2bWorkloadId
-, d2bRoleIds
-, ...
-}:
+# Wires cloud-hypervisor's `--tpm socket=...` to the per-VM
+# d2b-<name>-swtpm.service running on the host (see host.nix for
+# the per-VM systemd unit). State persists in
+# /var/lib/d2b/swtpm/<name>/ on the host across launches — wiping
+# it looks like device tampering to remote IdPs and forces
+# re-enrolment.
+{ lib, pkgs, config, ... }:
 
-let
-  tpmSocket =
-    "/run/d2b/r/${d2bRealmId}/w/${d2bWorkloadId}/roles/${d2bRoleIds.swtpm}/tpm.sock";
-in {
+{
   # cloud-hypervisor is the only hypervisor microvm.nix can talk to
   # swtpm with. mkDefault so graphics.nix (which also sets this)
   # doesn't conflict if both are enabled.
   microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
+  # cloud-hypervisor's --tpm path moved from /run/swtpm/<vm>/sock
+  # to /run/d2b/vms/<vm>/tpm.sock. The per-VM runtime dir already exists,
+  # is owned d2bd:d2b 0750 with default ACL granting every
+  # per-VM ephemeral UID rwx (see host-activation.nix
+  # d2bRoleUidAcls). Putting the TPM socket there lets cloud-hypervisor
+  # connect via the inherited named-user ACL — no separate /run/swtpm/ dir
+  # or per-VM ACL needed.
   microvm.cloud-hypervisor.extraArgs = [
-    "--tpm" "socket=${tpmSocket}"
+      "--tpm" "socket=/run/d2b/vms/${config.networking.hostName}/tpm.sock"
   ];
 
   security.tpm2.enable = true;

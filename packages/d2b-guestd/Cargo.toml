@@ -1,9 +1,7 @@
 [package]
 name = "d2b-guestd"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -11,22 +9,21 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
+async-trait = "0.1"
 futures = "0.3"
 hmac = "0.12"
-d2b-contracts = { workspace = true, features = ["guest", "v2-component-session", "v2-guest-configured-launches"] }
-d2b-exec-runner = { workspace = true }
-d2b-realm-core = { workspace = true }
-d2b-session = { workspace = true, default-features = false }
-protobuf.workspace = true
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-exec-runner = { path = "../d2b-exec-runner", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+protobuf = "3.7.2"
 rustix = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, default-features = false, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-vsock = "0.7.2"
-ttrpc = { workspace = true, default-features = false, features = ["async", "sync"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
 
 [dev-dependencies]
 # `test-util` enables tokio's mock clock (`start_paused` / `time::advance`) used
 # by the interactive-exec runtime-ceiling tests; dev-only so the shipped daemon
 # never carries the test clock.
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { version = "1", features = ["test-util"] }

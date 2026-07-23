@@ -5,11 +5,6 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 DEFAULT_PINNED_DIR="$ROOT/tests/golden/pinned"
 
-# shellcheck source=tests/lib.sh
-. "$ROOT/tests/lib.sh"
-
-workspace_target_dir=${D2B_WORKSPACE_GATE_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}
-
 if ! command -v cargo >/dev/null 2>&1; then
   for candidate in "$HOME"/.rustup/toolchains/1.94.1-*/bin; do
     if [ -x "$candidate/cargo" ]; then
@@ -69,23 +64,44 @@ collect_present() {
 # Main workspace (packages/Cargo.toml).
 collect_present < <(
   cd "$ROOT/packages"
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest list --locked --workspace --exclude d2b-contract-tests --message-format oneline
+  cargo nextest list --workspace --exclude d2b-contract-tests --message-format oneline
 )
 # Fixture contract tests are excluded from the default workspace test pass, but
 # test-rust.sh runs them with D2B_FIXTURES. Include their nextest
 # listing so retired shell gates can pin rendered-artifact contract successors.
 collect_present < <(
   cd "$ROOT/packages"
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest list --locked -p d2b-contract-tests --message-format oneline
+  cargo nextest list -p d2b-contract-tests --message-format oneline
 )
-# Broker package feature tests are part of the unified workspace. Retired canaries pinned
+# Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
+# cargo workspace, excluded from the main one. Retired canaries pinned
 # ops::device / ops::modprobe #[test]s that live there, so the fail-closed
 # pinned gate must enumerate it too — otherwise those retirements would be
 # silently unguarded against deletion.
+#
+# `cargo metadata --all-features` (run by `nextest list`) can add a
+# transitive lock entry the committed lock omits (e.g. `itoa` under rustix's
+# full feature set), which would dirty the working tree. Snapshot + restore
+# the broker lock so listing is non-mutating by construction.
+broker_lock="$ROOT/packages/d2b-priv-broker/Cargo.lock"
+broker_lock_backup=""
+restore_broker_lock() {
+  if [ -n "$broker_lock_backup" ] && [ -f "$broker_lock_backup" ]; then
+    cp "$broker_lock_backup" "$broker_lock"
+    rm -f "$broker_lock_backup"
+  fi
+}
+if [ -f "$broker_lock" ]; then
+  broker_lock_backup="$ROOT/tests/.assert-pinned-broker-lock.${BASHPID:-$$}"
+  if [ -e "$broker_lock_backup" ]; then
+    echo "assert-pinned-tests: scratch path already exists: $broker_lock_backup" >&2
+    exit 1
+  fi
+  cp "$broker_lock" "$broker_lock_backup"
+  trap restore_broker_lock EXIT
+fi
 collect_present < <(
-  cd "$ROOT/packages"
+  cd "$ROOT/packages/d2b-priv-broker"
   # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
   # test surface: the default real-wire tests, the layer1-bootstrap legacy
   # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the
@@ -93,11 +109,13 @@ collect_present < <(
   # (e.g. tests/pidfd_handoff_scm_rights.rs). test-rust.sh runs the
   # default, layer1-bootstrap, AND fake-backends broker test passes, so every
   # listed test is actually executed and can be guarded by the pinned gate.
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest list --locked -p d2b-priv-broker \
-      --features d2b-priv-broker/layer1-bootstrap,d2b-priv-broker/fake-backends \
-      --message-format oneline
+  cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline
 )
+if [ -n "$broker_lock_backup" ]; then
+  restore_broker_lock
+  broker_lock_backup=""
+  trap - EXIT
+fi
 
 declare -A seen
 total=0

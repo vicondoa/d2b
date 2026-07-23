@@ -37,20 +37,22 @@ d2b.site.clipboard = {
 };
 ```
 
-The daemon's control plane is `d2b.clipboard.v2` over an authenticated,
-host-local ComponentSession. Generated service requests provide deadlines,
-generation binding, idempotency, cancellation, and bounded opaque identifiers;
-the clipboard implementation does not define a second wire DTO. The command
-client and clipboard bridge have a closed per-method authority matrix.
+## Internal bridge sockets
 
-## Internal bridge endpoints
+The VM bridge path is a d2b-managed runtime contract:
 
-The VM bridge endpoint is a pre-authorized, host-local transport binding. The
-local transport provider resolves its opaque endpoint and lease identifiers;
-`d2b-clipd` does not derive or self-bind a pathname. ComponentSession authenticates
-the bridge role and binds each descriptor claim to the request, method, session
-generation, and attachment credits before the clipboard service sees it.
-Transfer FDs remain owned by the service lifecycle and never go to the picker.
+```text
+/run/d2b/clipd/<uid>/bridge/<vm>/clip.sock
+```
+
+The stable root and socket name are configurable through
+`d2b.site.clipboard.runtime.*`, but the parent directories and ACLs are
+provisioned dynamically by `d2bd` and the broker as VMs start, stop, and restart.
+Static tmpfiles may create only stable parents in future wiring; they are not
+sufficient for per-VM `d2b-<vm>-wlproxy` ACLs or lifecycle cleanup.
+
+The bridge is local-only, validates peer credentials, and may use `SCM_RIGHTS`
+between d2b components. Transfer FDs never go to the picker.
 The Wayland proxy keeps transfer FDs as owned descriptors while they are queued;
 short `sendmsg` results or `EAGAIN` keep the metadata frame and ancillary FD
 coupled until an atomic retry succeeds, and any truncated control-message
@@ -73,9 +75,7 @@ does not shell out to `niri msg`. Focused-window data is labeling context only:
 host attribution is recorded as best-effort `focused_window_guess`. Native
 clipboard events and explicit operator actions such as `d2b clipboard arm` use
 the maintained Niri event-stream cache so the daemon's Wayland event loop does
-not block on synchronous compositor IPC. Window, workspace, app-id, title, and
-output collections are capped before they enter daemon state, and control
-characters are removed from bounded presentation labels.
+not block on synchronous compositor IPC.
 
 Host cross-realm native paste requires a trusted no-patch Niri hook or future
 upstream-equivalent IPC event. Focus alone is not paste intent. When that hook is

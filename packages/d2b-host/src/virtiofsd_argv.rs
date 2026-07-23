@@ -226,32 +226,36 @@ pub fn exec_arg0(input: &VirtiofsdArgvInput) -> Result<String, VirtiofsdArgvErro
 mod tests {
     use super::*;
 
-    /// ADR 0021 realm-role fixture for the closure-only `ro-store` share.
+    /// W0b audit fixture: `ro-store` share for `corp-vm`. Audit shape:
+    /// `--socket-path=corp-vm-virtiofs-ro-store.sock`,
+    /// `--socket-group=kvm`, `--shared-dir=/nix/store`,
+    /// `--thread-pool-size=$(nproc)`, `--posix-acl`, `--xattr`,
+    /// `--cache=auto`, `--inode-file-handles=prefer`.
     fn audit_ro_store_input() -> VirtiofsdArgvInput {
         VirtiofsdArgvInput {
             virtiofsd_binary_path:
                 "/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-virtiofsd-1.13.0/bin/virtiofsd"
                     .to_owned(),
-            vm_name: "ucvmyzodoxhnswumcjsa".to_owned(),
+            vm_name: "corp-vm".to_owned(),
             share_tag: "ro-store".to_owned(),
-            socket_path: "/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/sqp27tqz36s4bzbwtpea/ro-store.sock".to_owned(),
-            socket_group: "d2b-role-sqp27tqz36s4bzbwtpea".to_owned(),
-            shared_dir: "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/store-view/live".to_owned(),
+            socket_path: "corp-vm-virtiofs-ro-store.sock".to_owned(),
+            socket_group: "kvm".to_owned(),
+            shared_dir: "/nix/store".to_owned(),
             thread_pool_size: 4,
-            posix_acl: false,
-            xattr: false,
+            posix_acl: true,
+            xattr: true,
             cache: VirtiofsdCacheMode::Auto,
-            inode_file_handles: VirtiofsdInodeFileHandles::Never,
+            inode_file_handles: VirtiofsdInodeFileHandles::Prefer,
             readonly: true,
-            extra_args: vec!["--sandbox=chroot".to_owned()],
+            extra_args: Vec::new(),
         }
     }
 
     fn audit_d2b_meta_input() -> VirtiofsdArgvInput {
         VirtiofsdArgvInput {
             share_tag: "d2b-meta".to_owned(),
-            socket_path: "/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/sqp27tqz36s4bzbwtpea/d2b-meta.sock".to_owned(),
-            shared_dir: "/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/store-view/meta".to_owned(),
+            socket_path: "corp-vm-virtiofs-d2b-meta.sock".to_owned(),
+            shared_dir: "/var/lib/d2b/vms/corp-vm/store-meta".to_owned(),
             readonly: false,
             ..audit_ro_store_input()
         }
@@ -263,20 +267,15 @@ mod tests {
         // Binary path first.
         assert!(argv[0].ends_with("/virtiofsd"));
         let joined = argv.join(" ");
-        assert!(joined.contains(
-            "--socket-path=/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/sqp27tqz36s4bzbwtpea/ro-store.sock"
-        ));
-        assert!(joined.contains("--socket-group=d2b-role-sqp27tqz36s4bzbwtpea"));
-        assert!(joined.contains(
-            "--shared-dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/store-view/live"
-        ));
+        assert!(joined.contains("--socket-path=corp-vm-virtiofs-ro-store.sock"));
+        assert!(joined.contains("--socket-group=kvm"));
+        assert!(joined.contains("--shared-dir=/nix/store"));
         assert!(joined.contains("--thread-pool-size=4"));
-        assert!(!joined.contains("--posix-acl"));
-        assert!(!joined.contains("--xattr"));
+        assert!(joined.contains("--posix-acl"));
+        assert!(joined.contains("--xattr"));
         assert!(joined.contains("--cache=auto"));
-        assert!(joined.contains("--inode-file-handles=never"));
+        assert!(joined.contains("--inode-file-handles=prefer"));
         assert!(joined.contains("--readonly"));
-        assert!(joined.contains("--sandbox=chroot"));
     }
 
     const VIRTIOFSD_ARGV_GOLDEN: &str =
@@ -306,16 +305,14 @@ mod tests {
     fn audit_d2b_meta_omits_readonly() {
         let argv = generate_virtiofsd_argv(&audit_d2b_meta_input()).unwrap();
         let joined = argv.join(" ");
-        assert!(joined.contains(
-            "--shared-dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/store-view/meta"
-        ));
+        assert!(joined.contains("--shared-dir=/var/lib/d2b/vms/corp-vm/store-meta"));
         assert!(!joined.contains("--readonly"));
     }
 
     #[test]
     fn exec_arg0_matches_audit_naming() {
         let arg0 = exec_arg0(&audit_ro_store_input()).unwrap();
-        assert_eq!(arg0, "microvm-virtiofsd@ucvmyzodoxhnswumcjsa-ro-store");
+        assert_eq!(arg0, "microvm-virtiofsd@corp-vm-ro-store");
     }
 
     #[test]

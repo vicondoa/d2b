@@ -1,61 +1,193 @@
-# QEMU media runtime
+# qemu-media runtime contract
 
-`qemu-media` is a host-local runtime-provider implementation for manually
-operated removable-media workloads.
+**Diataxis category:** reference.
 
-## Declaration
+`runtime.kind = "qemu-media"` declares a manually started local QEMU VM
+for external media workflows. It uses d2b's daemon/broker control
+plane, but not the per-VM NixOS evaluator, Cloud Hypervisor, store
+sync, guest-control, SSH, or in-guest observability paths.
 
-A workload selects an enabled realm provider:
+For the general VM runtime selection policy, including why qemu-media is
+not selected as a full VM runtime, see
+[runtime provider selection](./runtime-provider-selection.md).
+
+## Runtime shape
+
+| Surface | Contract |
+| --- | --- |
+| Provider | `local-qemu-media` with QEMU as the runner. |
+| Autostart | Manual-only. Start with `d2b vm start <vm> --apply`; daemon startup skips it. |
+| Process DAG | `host-reconcile` → `qemu-media`. The runner starts paused with a QMP socket under `/run/d2b/vms/<vm>/qmp.sock`. |
+| Boot media | After the runner is alive, `d2bd` asks the broker to run `QemuMediaBoot`; the broker opens the declared boot source, sends the fd to QEMU over QMP, attaches USB storage, waits for QMP success responses, then continues QEMU. |
+| Hotplug | `d2b usb attach` / `detach` route to `QemuMediaAttach` / `QemuMediaDetach`, not USBIP. |
+| Shutdown | `d2b vm stop <vm> --apply` sends broker-mediated QMP `system_powerdown`, waits for `query-status` to report a stopped guest or the VMM pidfd to exit, then uses QMP `quit` / forced pidfd cleanup only as needed. |
+| Unsupported capabilities | guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability. |
+
+## Options
+
+Set the runtime kind on the VM:
 
 ```nix
-d2b.realms.dark = {
-  parent = "local-root";
-  path = "dark.local-root";
-  placement = "host-local";
+d2b.vms.dark-live = {
+  enable = true;
+  runtime.kind = "qemu-media";
+  env = "dark";
+  index = 10;
+  autostart = false;
+  lifecycle.gracefulShutdown.timeoutSeconds = null;
+};
+```
 
-  providers.media = {
-    type = "runtime";
-    implementationId = "qemu-media";
-    configRef = "dark-live-media";
-    capabilities = [ "qmp-media-attach" ];
+`qemu-media` inherits `d2b.daemon.lifecycle.gracefulShutdown.enable`
+and the daemon default timeout. Set
+`d2b.vms.<vm>.lifecycle.gracefulShutdown.enable = false` only for
+guests that intentionally cannot react to ACPI powerdown, or set
+`timeoutSeconds = 1..600` to override the site default for one VM.
+
+### Resources
+
+`qemu-media` passes explicit RAM and vCPU sizing to QEMU. The defaults are
+4 GiB and 2 vCPUs, avoiding QEMU's small built-in memory default.
+
+```nix
+d2b.vms.dark-live.qemuMedia.resources = {
+  memoryMiB = 4096;
+  vcpu = 2;
+};
+```
+
+The runner presents boot media as a removable USB storage device on an
+EHCI controller, matching the USB-disk/removable shape recommended by
+Linux VM frontends for external live media.
+
+### Memory security
+
+`qemu-media` uses a QEMU memory backend by default so guest RAM is excluded
+from QEMU/host core dumps (`dump=off`) and Kernel Samepage Merging
+(`merge=off`). Operators can additionally fail closed if guest RAM cannot
+be locked into host memory:
+
+```nix
+d2b.vms.dark-live.qemuMedia.security = {
+  lockMemory = true;
+  excludeMemoryFromCoreDump = true;
+  disableMemoryMerge = true;
+};
+```
+
+`lockMemory = true` adds `-overcommit mem-lock=on`. The broker gives only
+that qemu-media runner a bounded memlock allowance derived from the trusted
+guest RAM setting: guest RAM plus the larger of 2 GiB or 25% headroom. This
+headroom is the child `RLIMIT_MEMLOCK` ceiling, not a promise that QEMU will
+lock the entire allowance. QEMU refuses to start if the host cannot keep guest
+RAM resident; the broker checks guest RAM plus 1 GiB of QEMU overhead against
+`MemAvailable` before spawn so clearly insufficient host memory fails before
+the QMP boot-media transaction begins.
+
+### Direct image file
+
+Direct image files are configured in Nix. They do not use enrollment.
+The path is operator-authored configuration, and the broker still
+validates ownership, mode, symlink safety, regular-file type,
+non-mounted/non-loop use, locks, and raw format before opening it.
+
+```nix
+d2b.vms.dark-live.qemuMedia.source = {
+  kind = "image-file";
+  path = "/var/lib/d2b/images/dark-live.raw";
+  format = "raw";
+  readOnly = true;
+};
+```
+
+### Physical USB
+
+Physical USB sources use opaque refs in Nix and are selected at runtime:
+
+```nix
+d2b.vms.dark-live.qemuMedia = {
+  source = {
+    kind = "physical-usb";
+    ref = "boot";
+    usbSelector.byIdName = "usb-Example_Dark_Live_0001-0:0";
+    format = "raw";
+    readOnly = true;
   };
 
-  workloads.dark-live = {
-    provider = "media";
-    autostart = false;
+  removableSlots.backup.source = {
+    kind = "physical-usb";
+    ref = "backup";
+    format = "raw";
+    readOnly = true;
   };
 };
 ```
 
-`configRef` is an opaque reference to private provider intent. Public
-workload metadata does not contain media paths, USB selectors, credentials,
-or QEMU argv.
+`usbSelector.byIdName` is the basename of a stable
+`/dev/disk/by-id/*` symlink for the physical USB block device. It is
+configured only as a selector; public status, CLI success output, and
+broker audit summaries must not echo it. Use a local shell such as
+`ls /dev/disk/by-id/` to choose the basename, and use `d2b usb probe`
+to verify the currently attached transient busid. Running qemu-media VMs
+can hotplug that busid selector through QMP:
 
-## Process contract
-
-The owning realm controller emits and supervises a `qemu-media-runner` role.
-It starts QEMU paused and uses the allocator-declared TAP and inherited
-console descriptors. The QMP listener is:
-
-```text
-/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/qmp.sock
+```bash
+d2b usb probe
+d2b usb attach dark-live 1-2.3 --apply
 ```
 
-The runner is placed directly in:
+The busid is a transient selector only. It is not stored in Nix-backed
+artifacts and is not echoed by successful attach/detach output.
 
-```text
-d2b.slice/r-<realm-id>/workloads/w-<workload-id>/<role-id>
-```
+## CLI behavior
 
-The workload and realm cgroup interiors remain process-free. There is no
-per-workload systemd service or socket unit.
+| Command | qemu-media behavior |
+| --- | --- |
+| `d2b vm start <vm> --dry-run` | Reports the 2-node qemu-media DAG. |
+| `d2b vm start <vm> --apply` | Spawns the QEMU runner, waits for QMP readiness, runs `QemuMediaBoot`, and continues QEMU after boot media is attached. |
+| `d2b vm stop <vm> --apply` | Sends QMP `system_powerdown`, waits up to the configured graceful shutdown timeout, polls `query-status`, and cleans up an empty QEMU process with QMP `quit` before falling back to pidfd/broker cleanup. |
+| `d2b vm stop <vm> --force --apply` | Skips the QMP guest-powerdown wait and immediately enters the standard SIGTERM/SIGKILL cleanup path. |
+| `d2b list` / `d2b vm list` | Marks qemu-media rows as `manual-only` and includes QMP readiness when available. JSON may include `runtimeKind`, `autostart`, `runtimeCapabilities`, `serviceCapabilities`, `unsupportedCapabilities`, and `qemuMedia`. |
+| `d2b status <vm>` | Shows qemu-media runner state, QMP readiness, source refs, source kind, format, read-only policy, and registry state. |
+| `d2b usb attach <vm> <busid> --apply` | Resolves the current USB identity against configured physical refs, preflights that the block device is unused, opens the fd in the broker, sends it to QEMU over QMP, and returns only after QMP accepts the fd/block/device commands. |
+| `d2b usb detach <vm> <busid> --apply` | Resolves the configured source, with a fail-closed same-device fallback for a uniquely attached same-vendor/product ref when the runtime selector moved, then removes or reconciles the QMP device/block/fd nodes idempotently. |
+| `d2b usb probe` | Shows qemu-media slots as `unbound`, `enrollable`, `enrolled`, `stale`, or `direct-config`; follow-up text points to config/probe or QMP hotplug, never to a public enrollment verb. |
 
-## Security posture
+Dry-run JSON for hotplug includes `busIdProvided: true`, but not the
+busid value. Successful broker audit records include VM/ref, slot,
+read-only policy, and QMP plan labels only; they omit busid, by-id names,
+serials, block paths, image paths, and registry paths.
 
-- The realm broker resolves private media intent and host resources.
-- The controller receives opaque resource references and pidfds, not host
-  device paths.
-- QEMU runs in the role's minijail profile with `/dev/kvm` and
-  `/dev/vhost-net` only.
-- Display access uses the workload's mediated Wayland role when declared.
-- `autostart = true` is not supported for removable-media workloads.
+## Security contract
+
+- Physical USB identity lives in the root-only qemu-media registry and
+  runtime udev rule file, not in the Nix store.
+- The qemu-media runner has an empty capability set, private PID/mount
+  namespaces, a read-only root, no broad media path bind mounts, no
+  `/dev/bus/usb`, and `/dev/kvm` as its focused device class.
+- Media fds stay broker-local until QMP fd passing. The daemon and CLI
+  name only VM/ref/busid selectors.
+- Direct image-file paths are trusted bundle configuration. Public CLI status
+  reports source kind/format/read-only policy without echoing those paths; the
+  broker fail-closes on unsafe paths and non-raw formats.
+- Running sensitive external media inside a VM is not equivalent to bare
+  metal. The host OS, compositor, and QEMU process can observe the session,
+  and host swap can retain guest memory. The default memory backend sets
+  `dump=off,merge=off` to avoid QEMU/process core dumps and KSM for guest
+  RAM; host kernel crash dumps require separate host-level policy. Use
+  `qemuMedia.security.lockMemory = true` when the host must fail closed
+  rather than risk swapping guest RAM.
+- Host window presentation for niri routes through the d2b Wayland
+  Wayland proxy and matches the proxy-rewritten app-id prefix
+  `d2b.<vm>.`; set `d2b.vms.<vm>.ui.border.activeColor` for a
+  fixed color. The legacy
+  `d2b.vms.<vm>.qemuMedia.window.niriBorderColor` option remains a
+  one-release compatibility input.
+
+## See also
+
+- [qemu-media how-to](../how-to/qemu-media.md)
+- [CLI contract](./cli-contract.md)
+- [Privileges](./privileges.md)
+- [niri VM borders](../how-to/niri-vm-borders.md)
+- [UI color contract](./ui-colors.md)

@@ -1,9 +1,8 @@
 # Broker request dispositions
 
-This table tracks the internal privileged-intent dispositions selected after
-strict `d2b.broker.v2` admission and bundle resolution. These names are not
-wire variants: the generated service methods and typed request/response
-messages are the only broker wire surface. Current broker behavior is described in
+This table tracks the broker request dispositions for the current
+`OperationAuthz.operation` enum plus the daemon-only `Hello`
+handshake. Current broker behavior is described in
 [`privileges.md`](./privileges.md). The table has exactly one
 `compile-time-only` broker row (`PrepareSwtpmDir`, a `SpawnRunner`
 side-effect audit operation that never reaches the wire dispatcher).
@@ -18,22 +17,23 @@ side-effect audit operation that never reaches the wire dispatcher).
 | BindUnixSocket | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; sidecar socket binding is not implemented. | reserved |
 | CreateOrReconcileUsersGroups | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; host account reconciliation is not implemented in the production dispatcher. | bootstrap-only |
 | CreatePersistentTap | promoted-live | Creates or reconciles the VM TAP device through the live TAP handler and records the resulting ifnames. | live in production broker |
-| CreateTapFd | promoted-live | Opens a TAP fd through the live TAP handler and returns it in an authenticated, typed ComponentSession attachment table. | live in production broker |
+| CreateTapFd | promoted-live | Opens a TAP fd through the live TAP handler and returns it over `SCM_RIGHTS`. | live in production broker |
 | DelegateCgroupV2 | promoted-live | Delegates the trusted cgroup v2 subtree and records the delegated scope. | live in production broker |
 | DeregisterRunnerPidfd | promoted-live | Removes the runner pidfd registry entry idempotently and returns whether an entry was present. | live in production broker |
 | DiskInit | promoted-live | Resolves trusted disk-init plans for the VM and creates, validates, or safely repairs disk images before runner spawn; ambiguous existing data fails closed. | live in production broker |
 | ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `d2bd`. | live read-only callable |
+| GuestControlSign | callable-read-only | Computes the per-VM guest-control auth tag over the bound transcript; returns only the transcript-bound MAC tag. | guest-control live callable |
 | Hello | callable-read-only | Daemon-only handshake; returns `HelloOk` with the broker capability list. | live read-only callable |
 | InjectSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret write paths are not implemented. | future work |
 | LaunchMinijailChild | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; privileged child launch is not implemented. | future work |
 | ModprobeIfAllowed | promoted-live | Resolves the trusted module policy, checks the host module posture, and runs the live modprobe handler when allowed. | live in production broker |
-| OpenCgroupDir | promoted-live | Opens the trusted cgroup directory and returns a typed directory attachment. | live in production broker |
-| OpenDevice | promoted-live | Opens a device allowed by the trusted device matrix and returns a typed device attachment. | live in production broker |
-| OpenFuse | promoted-live | Opens the allowed FUSE device path and returns a typed FUSE attachment. | live in production broker |
-| OpenHidrawSecurityKey | promoted-live | Resolves a configured FIDO security-key stable selector from the trusted bundle, opens the physical `hidraw` node, and returns a typed hidraw attachment. | live in production broker |
-| OpenKvm | promoted-live | Opens the allowed KVM device path and returns a typed KVM attachment. | live in production broker |
-| OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns a typed pidfd attachment. | live in production broker |
-| OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns a typed vhost attachment. | live in production broker |
+| OpenCgroupDir | promoted-live | Opens the trusted cgroup directory and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenDevice | promoted-live | Opens a device allowed by the trusted device matrix and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenFuse | promoted-live | Opens the allowed FUSE device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenHidrawSecurityKey | promoted-live | Resolves a configured FIDO security-key stable selector from the trusted bundle, opens the physical `hidraw` node, and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenKvm | promoted-live | Opens the allowed KVM device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OwnershipMatrixCheck | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; ownership-matrix preflight is not implemented. | future work |
 | PauseBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin pause controls are not implemented. | future work |
 | PollChildReaped | promoted-live | Drains the broker's child-reap notification buffer and returns the pending notifications. | live in production broker |
@@ -65,7 +65,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | SetSocketAcl | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; privileged socket ACL mutation is not implemented. | reserved |
 | SetupMountNamespace | promoted-live | Prepares the per-VM mount-namespace staging root and store-view bind target. | live in production broker |
 | SignalRunner | promoted-live | Looks up the runner's registered pidfd, sends the requested signal, and audits the live stop request. | live in production broker |
-| SpawnRunner | promoted-live | Handles CH/virtiofsd/swtpm child process launch and typed pidfd attachment handoff. | live in production broker |
+| SpawnRunner | promoted-live | Handles CH/virtiofsd/swtpm child process launch and `SCM_RIGHTS` pidfd handoff. | live in production broker |
 | SshHostKeyPreflight | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; SSH host-key preflight is not implemented. | future work |
 | StoreSync | promoted-live | Resolves the per-VM store-view intent, synchronizes the hardlink farm, and emits the terminal store-sync audit record. | live in production broker |
 | StoreVerify | promoted-live | Verifies the per-VM store hardlink farm and optionally repairs drift through the store-sync path. | live in production broker |
@@ -79,4 +79,4 @@ side-effect audit operation that never reaches the wire dispatcher).
 | ValidateLockSpec | promoted-live | Resolves the trusted sync contract row and validates lock policy without mutating host state. | live in production broker |
 | ValidateBundle | callable-read-only | Sole validation entry point; calls `d2b_core::manifest::validate_bundle` and logs only opaque metadata. | live read-only callable |
 | SecurityKeyApplyUdevRules | stubbed-unimplemented | Writes broker-generated udev rules granting the `d2b-security-key` group ownership of the configured FIDO vendorId/productId/serial-matched hidraw nodes. No blanket hidraw access; a targeted audit event is recorded. | future work |
-| SecurityKeyOpenDevice | stubbed-unimplemented | Resolves the stable device-label selector against the trusted bundle's security-key device table, checks sysfs presence and FIDO class, opens the exact hidraw node, and returns a typed hidraw attachment for the CTAP relay session. | future work |
+| SecurityKeyOpenDevice | stubbed-unimplemented | Resolves the stable device-label selector against the trusted bundle's security-key device table, checks sysfs presence and FIDO class, opens the exact hidraw node, and returns the fd via SCM_RIGHTS for the CTAP relay session. | future work |

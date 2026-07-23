@@ -75,9 +75,9 @@ contains one event listener and four virtiofsd programs:
 
 - `virtiofsd-ro-store`: `--socket-path=corp-vm-virtiofs-ro-store.sock`,
   `--socket-group=kvm`, `--shared-dir=/nix/store`.
-- `virtiofsd-d2b-meta`: `--shared-dir=/var/lib/d2b/r/<realm-id>/w/<workload-id>/store-view/meta`.
-- `virtiofsd-d2b-hkeys`: `--shared-dir=/var/lib/d2b/r/<realm-id>/w/<workload-id>/keys/host`.
-- `virtiofsd-d2b-ssh-host`: `--shared-dir=/var/lib/d2b/r/<realm-id>/w/<workload-id>/keys/sshd`.
+- `virtiofsd-d2b-meta`: `--shared-dir=/var/lib/d2b/vms/corp-vm/store-meta`.
+- `virtiofsd-d2b-hkeys`: `--shared-dir=/var/lib/d2b/vms/corp-vm/host-keys`.
+- `virtiofsd-d2b-ssh-host`: `--shared-dir=/var/lib/d2b/vms/corp-vm/sshd-host-keys`.
 
 Each virtiofsd wrapper conditionally adds `--rlimit-nofile 1048576` when
 running as uid 0, then passes `--thread-pool-size \`nproc\``,
@@ -113,7 +113,7 @@ The headless runner emits these flags today:
 | `--vsock` | `cid=10914385,socket=notify.vsock` | `microvm.vsock.cid`; host.nix gives non-observability VMs a fallback CID for CH notify. Observability VMs append their own `microvm.cloud-hypervisor.extraArgs` `--vsock socket=...`. |
 | `--fs` | four sockets/tags: `ro-store`, `d2b-meta`, `d2b-hkeys`, `d2b-ssh-host` | `microvm.shares`; d2b's store and host-key modules materialize these virtiofs shares. |
 | `--api-socket` | `corp-vm.sock` | CH runner default. The daemon keeps API sockets always enabled but daemon-only. |
-| `--net` | allocator-derived MAC and TAP id | The normalized realm network row for the canonical workload id. |
+| `--net` | `mac=02:76:53:AE:57:0A,tap=work-l10` | `microvm.interfaces`, derived from `d2b.vms.corp-vm.env = "work"` and `index = 10`. |
 | `${runtime_args:-}` | empty for headless minimal | Extension point used by audio/graphics shapes; empty in this audit. |
 
 Not present for the audited headless VM, but present when features enable
@@ -179,7 +179,7 @@ Inputs are:
 - `microvm.shares` for virtiofs sockets/tags and virtiofsd roles;
 - `microvm.vsock` and `microvm.cloud-hypervisor.extraArgs` for notify,
   observability, TPM, video/audio, and other backend-specific flags;
-- realm workload/provider options and allocator-derived resources, graphics,
+- `d2b.vms.<vm>.*` options for env/index-derived names, graphics,
   audio, video, TPM, USBIP, audit, observability, state roots, and
   lifecycle policy;
 - the manifest bundle (`bundle.json`, `host.json`, `processes.json`,

@@ -4,12 +4,17 @@
 //! lifecycle readiness and it does not expose exec.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION};
+use d2b_contracts::broker_wire::{
+    GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
+    GuestControlSignRequest, GuestControlSignResponse,
+};
+use d2b_contracts::guest_auth::{
+    AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, GUEST_CONTROL_AUTH_PORT,
+};
 use d2b_contracts::guest_proto as pb;
 use d2b_contracts::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
 use protobuf::{Message, MessageField};
@@ -117,6 +122,20 @@ pub trait GuestControlRpc {
         &self,
         request: pb::UsbipStatusRequest,
     ) -> Result<pb::UsbipStatusResponse, GuestControlHealthError>;
+    async fn activate_system_start(
+        &self,
+        request: pb::GuestActivationStartRequest,
+    ) -> Result<pb::GuestActivationStartResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
+    async fn activate_system_status(
+        &self,
+        request: pb::GuestActivationStatusRequest,
+    ) -> Result<pb::GuestActivationStatusResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
     async fn audio_status(
         &self,
         request: pb::AudioStatusRequest,
@@ -133,62 +152,11 @@ pub trait GuestControlRpc {
     }
 }
 
-pub trait LegacyGuestProofSigner {
+pub trait GuestControlSigner {
     fn sign(
         &self,
-        request: LegacyGuestProofRequest,
-    ) -> Result<LegacyGuestProof, GuestControlHealthError>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LegacyGuestProofRole {
-    Host,
-    Guest,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct LegacyGuestProofRequest {
-    pub vm_id: String,
-    pub role: LegacyGuestProofRole,
-    pub protocol_version: u32,
-    pub peer_cid: Option<u32>,
-    pub host_nonce: [u8; AUTH_NONCE_LEN],
-    pub guest_nonce: [u8; AUTH_NONCE_LEN],
-    pub guest_boot_id: String,
-    pub capabilities_hash: Option<String>,
-}
-
-impl fmt::Debug for LegacyGuestProofRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("LegacyGuestProofRequest(REDACTED)")
-    }
-}
-
-impl LegacyGuestProofRequest {
-    fn validate(&self) -> Result<(), GuestControlHealthError> {
-        if self.vm_id.is_empty()
-            || self.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION
-            || self.host_nonce == [0; AUTH_NONCE_LEN]
-            || self.guest_nonce == [0; AUTH_NONCE_LEN]
-            || self.guest_boot_id.is_empty()
-            || matches!(self.role, LegacyGuestProofRole::Host) && self.capabilities_hash.is_some()
-            || matches!(self.role, LegacyGuestProofRole::Guest)
-                && self.capabilities_hash.as_deref().is_none_or(str::is_empty)
-        {
-            return Err(GuestControlHealthError::Signer);
-        }
-        Ok(())
-    }
-}
-
-pub struct LegacyGuestProof {
-    pub tag: Vec<u8>,
-}
-
-impl fmt::Debug for LegacyGuestProof {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("LegacyGuestProof(REDACTED)")
-    }
+        request: GuestControlSignRequest,
+    ) -> Result<GuestControlSignResponse, GuestControlHealthError>;
 }
 
 pub fn connected_stream_to_ttrpc_socket(
@@ -332,6 +300,20 @@ impl GuestControlRpc for TtrpcGuestControlClient {
         self.unary("UsbipStatus", request).await
     }
 
+    async fn activate_system_start(
+        &self,
+        request: pb::GuestActivationStartRequest,
+    ) -> Result<pb::GuestActivationStartResponse, GuestControlHealthError> {
+        self.unary("ActivateSystemStart", request).await
+    }
+
+    async fn activate_system_status(
+        &self,
+        request: pb::GuestActivationStatusRequest,
+    ) -> Result<pb::GuestActivationStatusResponse, GuestControlHealthError> {
+        self.unary("ActivateSystemStatus", request).await
+    }
+
     async fn audio_status(
         &self,
         request: pb::AudioStatusRequest,
@@ -356,7 +338,7 @@ pub async fn probe_guest_control_health<C, S>(
 ) -> Result<GuestControlHealthEvidence, GuestControlHealthError>
 where
     C: GuestControlRpc + Sync,
-    S: LegacyGuestProofSigner + Sync,
+    S: GuestControlSigner + Sync,
 {
     let mut hello_req = pb::HelloRequest::new();
     hello_req.metadata = MessageField::some(request_metadata(vm_id));
@@ -375,17 +357,17 @@ where
         .as_slice()
         .try_into()
         .map_err(|_| GuestControlHealthError::Protocol)?;
-    let host_proof = sign_request(
-        vm_id,
-        LegacyGuestProofRole::Host,
-        peer_cid,
-        &host_nonce,
-        &guest_nonce,
-        &hello.guest_boot_id,
-        None,
-    );
-    host_proof.validate()?;
-    let host_tag = signer.sign(host_proof)?.tag;
+    let host_tag = signer
+        .sign(sign_request(
+            vm_id,
+            GuestControlProofRole::HostProof,
+            peer_cid,
+            &host_nonce,
+            &guest_nonce,
+            &hello.guest_boot_id,
+            None,
+        ))?
+        .tag;
     if host_tag.len() != AUTH_TAG_LEN {
         return Err(GuestControlHealthError::Signer);
     }
@@ -409,17 +391,17 @@ where
         .capabilities_hash
         .clone()
         .ok_or(GuestControlHealthError::Protocol)?;
-    let guest_proof = sign_request(
-        vm_id,
-        LegacyGuestProofRole::Guest,
-        peer_cid,
-        &host_nonce,
-        &guest_nonce,
-        &hello.guest_boot_id,
-        Some(capabilities_hash.clone()),
-    );
-    guest_proof.validate()?;
-    let expected_guest_tag = signer.sign(guest_proof)?.tag;
+    let expected_guest_tag = signer
+        .sign(sign_request(
+            vm_id,
+            GuestControlProofRole::GuestProof,
+            peer_cid,
+            &host_nonce,
+            &guest_nonce,
+            &hello.guest_boot_id,
+            Some(capabilities_hash.clone()),
+        ))?
+        .tag;
     if guest_tag.len() != AUTH_TAG_LEN || expected_guest_tag.len() != AUTH_TAG_LEN {
         return Err(GuestControlHealthError::AuthFailed);
     }
@@ -520,6 +502,36 @@ pub enum GuestUsbipImportError {
     Protocol,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestSystemActivationMode {
+    Switch,
+    Test,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestSystemActivationStart {
+    pub activation_id: String,
+    pub switch_script_path: String,
+    pub mode: GuestSystemActivationMode,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestSystemActivationStatus {
+    pub state: pb::GuestActivationState,
+    pub exit_code: Option<i32>,
+    pub signal: Option<u32>,
+    pub status_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestSystemActivationError {
+    Probe(GuestControlHealthError),
+    CapabilityUnavailable,
+    GuestRejected(pb::GuestControlErrorKind),
+    Protocol,
+}
+
 /// Typed outcome of an authenticated guest-side audio enforcement call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuestAudioSetError {
@@ -559,7 +571,7 @@ pub async fn audio_status_authenticated<C, S>(
 ) -> Result<GuestAudioStatus, GuestAudioSetError>
 where
     C: GuestControlRpc + Sync,
-    S: LegacyGuestProofSigner + Sync,
+    S: GuestControlSigner + Sync,
 {
     let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
         .await
@@ -630,7 +642,7 @@ pub async fn audio_set_authenticated<C, S>(
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError>
 where
     C: GuestControlRpc + Sync,
-    S: LegacyGuestProofSigner + Sync,
+    S: GuestControlSigner + Sync,
 {
     let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
         .await
@@ -705,7 +717,7 @@ pub async fn read_guest_config_authenticated<C, S>(
 ) -> Result<Vec<u8>, GuestFileReadError>
 where
     C: GuestControlRpc + Sync,
-    S: LegacyGuestProofSigner + Sync,
+    S: GuestControlSigner + Sync,
 {
     let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
         .await
@@ -750,7 +762,7 @@ pub async fn usbip_import_authenticated<C, S>(
 ) -> Result<GuestUsbipImportResult, GuestUsbipImportError>
 where
     C: GuestControlRpc + Sync,
-    S: LegacyGuestProofSigner + Sync,
+    S: GuestControlSigner + Sync,
 {
     let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
         .await
@@ -801,7 +813,7 @@ pub async fn usbip_status_authenticated<C, S>(
 ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError>
 where
     C: GuestControlRpc + Sync,
-    S: LegacyGuestProofSigner + Sync,
+    S: GuestControlSigner + Sync,
 {
     let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
         .await
@@ -846,6 +858,116 @@ where
         });
     }
     Ok(GuestUsbipStatusResult { imports })
+}
+
+pub async fn activate_system_start_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+    start: &GuestSystemActivationStart,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    let advertises_activation = evidence.health.capabilities.iter().any(|capability| {
+        matches!(
+            capability.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION)
+        )
+    });
+    if !advertises_activation {
+        return Err(GuestSystemActivationError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::GuestActivationStartRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.activation_id = start.activation_id.clone();
+    request.switch_script_path = start.switch_script_path.clone();
+    request.timeout_ms = start.timeout_ms;
+    request.mode = protobuf::EnumOrUnknown::new(match start.mode {
+        GuestSystemActivationMode::Switch => pb::GuestActivationMode::GUEST_ACTIVATION_MODE_SWITCH,
+        GuestSystemActivationMode::Test => pb::GuestActivationMode::GUEST_ACTIVATION_MODE_TEST,
+    });
+    let response = client
+        .activate_system_start(request)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    if response.activation_id != start.activation_id {
+        return Err(GuestSystemActivationError::Protocol);
+    }
+    if let Some(error) = response.error.as_ref() {
+        return Err(GuestSystemActivationError::GuestRejected(
+            error.kind.enum_value_or_default(),
+        ));
+    }
+    let state = response
+        .state
+        .enum_value()
+        .map_err(|_| GuestSystemActivationError::Protocol)?;
+    Ok(GuestSystemActivationStatus {
+        state,
+        exit_code: None,
+        signal: None,
+        status_code: None,
+    })
+}
+
+pub async fn activate_system_status_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+    activation_id: &str,
+) -> Result<GuestSystemActivationStatus, GuestSystemActivationError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    let advertises_activation = evidence.health.capabilities.iter().any(|capability| {
+        matches!(
+            capability.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION)
+        )
+    });
+    if !advertises_activation {
+        return Err(GuestSystemActivationError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::GuestActivationStatusRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.activation_id = activation_id.to_owned();
+    let response = client
+        .activate_system_status(request)
+        .await
+        .map_err(GuestSystemActivationError::Probe)?;
+    if response.activation_id != activation_id {
+        return Err(GuestSystemActivationError::Protocol);
+    }
+    if let Some(error) = response.error.as_ref() {
+        return Err(GuestSystemActivationError::GuestRejected(
+            error.kind.enum_value_or_default(),
+        ));
+    }
+    let state = response
+        .state
+        .enum_value()
+        .map_err(|_| GuestSystemActivationError::Protocol)?;
+    Ok(GuestSystemActivationStatus {
+        state,
+        exit_code: response.exit_code,
+        signal: response.signal,
+        status_code: response.status_code,
+    })
 }
 
 /// Exhaustive host-side mapping of a guest `ReadGuestFile` error kind to a typed
@@ -980,22 +1102,26 @@ fn request_metadata(vm_id: &str) -> pb::RequestMetadata {
 
 fn sign_request(
     vm_id: &str,
-    role: LegacyGuestProofRole,
+    role: GuestControlProofRole,
     peer_cid: Option<u32>,
     host_nonce: &[u8; AUTH_NONCE_LEN],
     guest_nonce: &[u8; AUTH_NONCE_LEN],
     guest_boot_id: &str,
     capabilities_hash: Option<String>,
-) -> LegacyGuestProofRequest {
-    LegacyGuestProofRequest {
-        vm_id: vm_id.to_owned(),
+) -> GuestControlSignRequest {
+    GuestControlSignRequest {
+        vm_id: d2b_contracts::types::VmId::new(vm_id),
         role,
         protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+        direction: GuestControlDirection::HostToGuest,
+        purpose: GuestControlAuthPurpose::GuestControlAuthV1,
+        guest_control_port: GUEST_CONTROL_AUTH_PORT,
         peer_cid,
-        host_nonce: *host_nonce,
-        guest_nonce: *guest_nonce,
-        guest_boot_id: guest_boot_id.to_owned(),
+        host_nonce: host_nonce.to_vec(),
+        guest_nonce: guest_nonce.to_vec(),
+        guest_boot_id: GuestBootIdWire::new(guest_boot_id),
         capabilities_hash,
+        tracing_span_id: None,
     }
 }
 
@@ -1005,17 +1131,19 @@ mod tests {
 
     struct FakeSigner;
 
-    impl LegacyGuestProofSigner for FakeSigner {
+    impl GuestControlSigner for FakeSigner {
         fn sign(
             &self,
-            request: LegacyGuestProofRequest,
-        ) -> Result<LegacyGuestProof, GuestControlHealthError> {
-            request.validate()?;
+            request: GuestControlSignRequest,
+        ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
+            request
+                .validate_shape()
+                .map_err(|_| GuestControlHealthError::Signer)?;
             let fill = match request.role {
-                LegacyGuestProofRole::Host => 0x55,
-                LegacyGuestProofRole::Guest => 0x77,
+                GuestControlProofRole::HostProof => 0x55,
+                GuestControlProofRole::GuestProof => 0x77,
             };
-            Ok(LegacyGuestProof {
+            Ok(GuestControlSignResponse {
                 tag: vec![fill; AUTH_TAG_LEN],
             })
         }

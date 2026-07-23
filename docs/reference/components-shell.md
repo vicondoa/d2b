@@ -49,14 +49,6 @@ When enabled for a workload user, the guest module:
 The shpool daemon remains in the delegated system service cgroup; the PAM service
 uses `startSession = false`, `setEnvironment = true`, and `setLoginUid = true`.
 
-The authenticated control boundary is `d2b.guest.v2.GuestService/OpenShell`
-over ComponentSession with endpoint purpose `guest-control` and responder role
-`guest-agent`. The static `d2b-guest-shell-runner` remains a guest-local
-libshpool data-plane adapter. Its Unix socket path and process status are not a
-service request, response, authentication mechanism, or compatibility fallback.
-The helper emits no d2b-owned JSON control protocol; typed outcomes and stream
-identifiers use the frozen guest service messages.
-
 ## Manifest metadata
 
 Supported providers emit a per-VM manifest block:

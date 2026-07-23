@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_MANAGER_ENVIRONMENT_ENTRIES: usize = 4096;
 pub const MAX_MANAGER_ENVIRONMENT_BYTES: usize = 256 * 1024;
-pub const PERSISTENT_SHELL_TERM: &str = "xterm-256color";
-pub const PERSISTENT_SHELL_COLORTERM: &str = "truecolor";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvironmentError {
@@ -37,16 +35,6 @@ impl fmt::Debug for ManagerEnvironment {
 }
 
 impl ManagerEnvironment {
-    pub fn parse_for_authenticated_uid(
-        raw: Vec<String>,
-        authenticated_uid: u32,
-    ) -> Result<Self, EnvironmentError> {
-        if authenticated_uid == 0 || authenticated_uid != nix::unistd::getuid().as_raw() {
-            return Err(EnvironmentError::RuntimeDirectoryInvalid);
-        }
-        Self::parse(raw)
-    }
-
     pub fn parse(raw: Vec<String>) -> Result<Self, EnvironmentError> {
         if raw.len() > MAX_MANAGER_ENVIRONMENT_ENTRIES {
             return Err(EnvironmentError::TooManyEntries);
@@ -94,16 +82,6 @@ impl ManagerEnvironment {
             entries.insert("WAYLAND_DISPLAY".to_owned(), display.to_owned());
         }
         Ok(entries)
-    }
-
-    pub fn persistent_shell_entries(&self) -> BTreeMap<String, String> {
-        let mut entries = self.entries.clone();
-        entries.insert("TERM".to_owned(), PERSISTENT_SHELL_TERM.to_owned());
-        entries.insert(
-            "COLORTERM".to_owned(),
-            PERSISTENT_SHELL_COLORTERM.to_owned(),
-        );
-        entries
     }
 
     pub fn path(&self) -> Result<&str, EnvironmentError> {
@@ -263,36 +241,6 @@ mod tests {
     }
 
     #[test]
-    fn persistent_shell_environment_overrides_non_terminal_manager_values_only() {
-        let environment = ManagerEnvironment::parse(vec![
-            "PATH=/run/current-system/sw/bin".to_owned(),
-            "PRIVATE_VALUE=preserved".to_owned(),
-            "TERM=dumb".to_owned(),
-            "COLORTERM=manager-value".to_owned(),
-        ])
-        .unwrap();
-
-        let child = environment.persistent_shell_entries();
-        assert_eq!(
-            child.get("TERM").map(String::as_str),
-            Some(PERSISTENT_SHELL_TERM)
-        );
-        assert_eq!(
-            child.get("COLORTERM").map(String::as_str),
-            Some(PERSISTENT_SHELL_COLORTERM)
-        );
-        assert_eq!(
-            child.get("PRIVATE_VALUE").map(String::as_str),
-            Some("preserved")
-        );
-        assert_eq!(
-            child.get("PATH").map(String::as_str),
-            Some("/run/current-system/sw/bin")
-        );
-        assert_eq!(child.len(), 4);
-    }
-
-    #[test]
     fn wayland_display_accepts_socket_basename_and_rejects_invalid_values() {
         let with_display = |display: Option<&str>| ManagerEnvironment {
             entries: display
@@ -326,24 +274,6 @@ mod tests {
         assert_eq!(
             ManagerEnvironment::parse(vec!["1BAD=value".to_owned()]),
             Err(EnvironmentError::InvalidEntry)
-        );
-    }
-
-    #[test]
-    fn authenticated_environment_rejects_cross_uid_projection() {
-        let uid = nix::unistd::getuid().as_raw();
-        if uid != 0 {
-            assert!(
-                ManagerEnvironment::parse_for_authenticated_uid(vec!["PATH=/bin".to_owned()], uid)
-                    .is_ok()
-            );
-        }
-        assert_eq!(
-            ManagerEnvironment::parse_for_authenticated_uid(
-                vec!["PATH=/bin".to_owned()],
-                uid.saturating_add(1)
-            ),
-            Err(EnvironmentError::RuntimeDirectoryInvalid)
         );
     }
 }

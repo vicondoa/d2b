@@ -21,8 +21,8 @@
 
 let
   # Centralised so renaming the Wayland session user is a single
-  # edit. Everything below (`users.users.${user}` and `d2b.site.*`)
-  # reads this binding.
+  # edit. Everything below (`users.users.${user}`, `d2b.site.*`,
+  # `d2b.vms.corp-vm.ssh.user`) reads this binding.
   user = "TODO-set-user";
 in
 {
@@ -94,7 +94,6 @@ in
     # also opts into `usbip.yubikey`. Set `false` to skip them.
     yubikey.enable = false;
   };
-  d2b.acceptDestructiveV2Cutover = true;
 
   # TODO 5: your host's primary LAN CIDR(s).
   # Look it up with `ip route` — a typical home LAN is
@@ -105,40 +104,52 @@ in
   d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
   # ────────────────────────────────────────────────────────────────
-  # d2b — one host-local realm
+  # d2b — one isolated env
   # ────────────────────────────────────────────────────────────────
-  d2b.realms.work = {
-    path = "work";
-    placement = "host-local";
-    broker = {
-      enable = true;
-      hostMutation = true;
-    };
-    network = {
-      # TODO 6: workload LAN CIDR. Must be a /24 ending in `.0`.
-      mode = "declared";
-      lanSubnet = "10.20.0.0/24";
+  # An env materialises two bridges (host↔net-VM uplink + workload
+  # LAN), an auto-declared headless net VM that NATs + firewalls,
+  # dnsmasq DHCP/DNS, and a per-env usbipd proxy. Workload VMs join
+  # the env via `d2b.vms.<name>.env = "<env>"`.
+  d2b.envs.work = {
+    # TODO 6: workload LAN CIDR. Must be a /24 ending in `.0` and
+    # must NOT overlap `d2b.hostLanCidrs` (or any other env).
+    # Workload VMs get IPs at `<prefix>.<index>` (see VM below).
+    lanSubnet = "10.20.0.0/24";
 
-      # TODO 7: host↔realm network-workload uplink.
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    providers.runtime = {
-      type = "runtime";
-      implementationId = "cloud-hypervisor";
-    };
-    workloads.corp-vm = {
-      providerRefs.runtime = "runtime";
-      config = { ... }: {
-        networking.hostName = "corp-vm";
+    # TODO 7: host↔net-VM uplink. Point-to-point /30 ending in `.0`.
+    # RFC 5737 ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
+    # are reserved for docs and never routed on the public internet,
+    # which makes them obvious as d2b-uplink addresses.
+    uplinkSubnet = "192.0.2.0/30";
+  };
 
-        users.users.${user} = {
-          isNormalUser = true;
-          uid = 1000;
-          extraGroups = [ "wheel" ];
-        };
+  # ────────────────────────────────────────────────────────────────
+  # d2b — one workload VM in the env
+  # ────────────────────────────────────────────────────────────────
+  # Repeat this block per workload. The VM's IP is derived from
+  # `(env, index)` — here `10.20.0.10`. The framework auto-generates
+  # an Ed25519 SSH host key under `/var/lib/d2b/keys/` and
+  # injects the matching pubkey into the guest's `authorized_keys`.
+  d2b.vms.corp-vm = {
+    enable = true;
+    env = "work";
+    index = 10;
+    ssh.user = user;
 
-        system.stateVersion = "25.11";
+    # Per-VM NixOS configuration.
+    config = { ... }: {
+      networking.hostName = "corp-vm";
+
+      users.users.${user} = {
+        isNormalUser = true;
+        uid = 1000;
+        extraGroups = [ "wheel" ];
       };
+
+      # NixOS state version inside the guest. Bump in lockstep with
+      # the channel you pin (or just leave at the value d2b was
+      # cut against).
+      system.stateVersion = "25.11";
     };
   };
 
@@ -162,7 +173,7 @@ in
     }
     {
       assertion = !(lib.elem "TODO-set-user" config.d2b.site.launcherUsers);
-      message = "Edit configuration.nix — rename the `user` let-binding at the top of the file (TODO 3); it propagates to users.users.<user> and d2b.site.{waylandUser,launcherUsers}.";
+      message = "Edit configuration.nix — rename the `user` let-binding at the top of the file (TODO 3); it propagates to users.users.<user>, d2b.site.{waylandUser,launcherUsers}, and d2b.vms.corp-vm.ssh.user.";
     }
     {
       assertion = config.d2b.site.userAuthorizedKeys != [ ];

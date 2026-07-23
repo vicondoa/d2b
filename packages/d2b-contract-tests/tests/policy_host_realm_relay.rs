@@ -105,6 +105,7 @@ fn host_daemon_broker_and_activation_do_not_store_realm_credentials() {
         "packages/d2bd/src/realm_stubs.rs",
         "packages/d2bd/src/lib.rs",
         "nixos-modules/assertions.nix",
+        "nixos-modules/gateway-vm.nix",
         "nixos-modules/options-gateway.nix",
     ]);
     let forbidden = [
@@ -115,6 +116,8 @@ fn host_daemon_broker_and_activation_do_not_store_realm_credentials() {
         ["Relay", "Credential"].concat(),
         ["Gateway", "Credential"].concat(),
         ["Provider", "Credential"].concat(),
+        ["realm", "_audit"].concat(),
+        ["realm", "Audit"].concat(),
         ["remote", "_node", "_registry"].concat(),
         ["Remote", "Node", "Registry"].concat(),
     ];
@@ -187,10 +190,10 @@ fn host_relay_credentials_are_explicitly_refused_not_materialized() {
 
     let host_daemon = read("nixos-modules/host-daemon.nix");
     assert!(
-        !host_daemon.contains("D2B_RELAY_")
-            && !host_daemon.contains("relayCredential")
-            && !host_daemon.contains("providerCredential"),
-        "host daemon module must not materialize realm relay/provider credentials"
+        host_daemon.contains(r#"forbiddenHostEnvPrefixes = [ "D2B_RELAY_" ]"#)
+            && host_daemon
+                .contains(r#"omitted = [ "payload" "headers" "token" "endpoint" "credential" ]"#),
+        "host daemon module must emit only a deny/redaction policy for host relay credentials"
     );
 }
 

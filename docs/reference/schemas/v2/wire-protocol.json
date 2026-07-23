@@ -1255,6 +1255,24 @@
             "kind": {
               "type": "string",
               "enum": [
+                "GuestControlSign"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GuestControlSignRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "InjectSecretById"
               ]
             },
@@ -2536,6 +2554,24 @@
             },
             "payload": {
               "$ref": "#/definitions/HelloResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GuestControlSign"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GuestControlSignResponse"
             }
           }
         },
@@ -5760,6 +5796,133 @@
         "proxy-unavailable"
       ]
     },
+    "GuestBootIdWire": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestControlAuthPurpose": {
+      "type": "string",
+      "enum": [
+        "guest-control-auth-v1"
+      ]
+    },
+    "GuestControlDirection": {
+      "type": "string",
+      "enum": [
+        "host-to-guest"
+      ]
+    },
+    "GuestControlProofRole": {
+      "type": "string",
+      "enum": [
+        "host-proof",
+        "guest-proof"
+      ]
+    },
+    "GuestControlSignRequest": {
+      "type": "object",
+      "required": [
+        "direction",
+        "guestBootId",
+        "guestControlPort",
+        "guestNonce",
+        "hostNonce",
+        "protocolVersion",
+        "purpose",
+        "role",
+        "vmId"
+      ],
+      "properties": {
+        "capabilitiesHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "$ref": "#/definitions/GuestControlDirection"
+        },
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootIdWire"
+        },
+        "guestControlPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "guestNonce": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "hostNonce": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "peerCid": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "purpose": {
+          "$ref": "#/definitions/GuestControlAuthPurpose"
+        },
+        "role": {
+          "$ref": "#/definitions/GuestControlProofRole"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestControlSignResponse": {
+      "type": "object",
+      "required": [
+        "tag"
+      ],
+      "properties": {
+        "tag": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        }
+      },
+      "additionalProperties": false
+    },
     "Hello": {
       "type": "object",
       "required": [
@@ -6634,118 +6797,6 @@
       },
       "additionalProperties": false
     },
-    "ObservabilityExportFormat": {
-      "type": "string",
-      "enum": [
-        "json-lines",
-        "otlp-protobuf"
-      ]
-    },
-    "ObservabilityExportInspectRequest": {
-      "type": "object",
-      "required": [
-        "maxBytes",
-        "operationId"
-      ],
-      "properties": {
-        "maxBytes": {
-          "type": "integer",
-          "format": "uint32",
-          "maximum": 524288.0,
-          "minimum": 1.0
-        },
-        "offset": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint32",
-          "maximum": 1048576.0,
-          "minimum": 0.0
-        },
-        "operationId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ObservabilityExportInspectResponse": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "operationId",
-            "state"
-          ],
-          "properties": {
-            "operationId": {
-              "type": "string"
-            },
-            "state": {
-              "type": "string",
-              "enum": [
-                "missing"
-              ]
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "bytesBase64",
-            "complete",
-            "digest",
-            "encodedBytes",
-            "format",
-            "offset",
-            "operationId",
-            "returnedBytes",
-            "state"
-          ],
-          "properties": {
-            "bytesBase64": {
-              "type": "string"
-            },
-            "complete": {
-              "type": "boolean"
-            },
-            "digest": {
-              "type": "string"
-            },
-            "encodedBytes": {
-              "type": "integer",
-              "format": "uint32",
-              "maximum": 1048576.0,
-              "minimum": 0.0
-            },
-            "format": {
-              "$ref": "#/definitions/ObservabilityExportFormat"
-            },
-            "offset": {
-              "type": "integer",
-              "format": "uint32",
-              "maximum": 1048576.0,
-              "minimum": 0.0
-            },
-            "operationId": {
-              "type": "string"
-            },
-            "returnedBytes": {
-              "type": "integer",
-              "format": "uint32",
-              "maximum": 524288.0,
-              "minimum": 0.0
-            },
-            "state": {
-              "type": "string",
-              "enum": [
-                "available"
-              ]
-            }
-          },
-          "additionalProperties": false
-        }
-      ]
-    },
     "OpenCgroupDirRequest": {
       "type": "object",
       "required": [
@@ -7202,24 +7253,6 @@
             },
             "payload": {
               "$ref": "#/definitions/AuditRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "observability export inspect"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ObservabilityExportInspectRequest"
             }
           }
         },
@@ -7903,24 +7936,6 @@
             },
             "payload": {
               "$ref": "#/definitions/AuditResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "observability export inspect"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ObservabilityExportInspectResponse"
             }
           }
         },
@@ -12524,7 +12539,7 @@
           ]
         },
         "providerId": {
-          "description": "Opaque, per-realm derived provider identifier (e.g. `wrk-corp-vm-cloud-hypervisor`); never a fixed literal.",
+          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
           "anyOf": [
             {
               "$ref": "#/definitions/ContractId"
@@ -12550,7 +12565,7 @@
           }
         },
         "runtimeKind": {
-          "description": "Opaque runtime implementation identifier (e.g. `systemd-user` for unsafe-local workloads, `cloud-hypervisor`/`qemu-media` for local-VM-backed workloads).",
+          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
           "anyOf": [
             {
               "$ref": "#/definitions/ContractId"

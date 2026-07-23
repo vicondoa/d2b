@@ -62,16 +62,16 @@ fn with_observability_configuration_sets_operator_toggles() {
             "d2b.observability.enable = true",
         ),
         (
-            r"d2b\.realms\.work[[:space:]]*=",
-            "work realm d2b.realms.work",
+            r"d2b\.envs\.work[[:space:]]*=",
+            "workload env d2b.envs.work",
         ),
         (
-            r"workloads\.work-app[[:space:]]*=",
-            "realm workload workloads.work-app",
+            r"d2b\.vms\.work-app[[:space:]]*=",
+            "workload VM d2b.vms.work-app",
         ),
         (
-            r"components/observability/guest\.nix",
-            "guest observability component import on work-app",
+            r"observability\.enable[[:space:]]*=[[:space:]]*true",
+            "per-VM observability.enable = true on work-app",
         ),
     ] {
         assert!(
@@ -79,9 +79,4 @@ fn with_observability_configuration_sets_operator_toggles() {
             "examples-with-observability-eval: configuration.nix missing {label}"
         );
     }
-
-    assert!(
-        !any_line_matches(&config, r"d2b\.(envs|vms)\."),
-        "examples-with-observability-eval: configuration.nix must not use removed env/VM declarations"
-    );
 }

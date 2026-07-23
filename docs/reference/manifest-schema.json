@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/vicondoa/d2b/blob/main/docs/reference/manifest-schema.json",
   "title": "d2b JSON manifest",
-  "description": "Realm-workload compatibility manifest emitted by the d2b NixOS framework at /run/current-system/sw/share/d2b/vms.json. The contract consumed by the Rust CLI and daemon. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
+  "description": "Per-VM metadata manifest emitted by the d2b NixOS framework at /run/current-system/sw/share/d2b/vms.json. The contract consumed by the Rust CLI and daemon. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
   "type": "object",
   "required": ["_manifest", "_observability"],
   "properties": {
     "_manifest": {
       "type": "object",
-      "description": "Reserved schema-metadata key. The leading underscore disqualifies it as a canonical workload ID, so it cannot collide with a workload entry.",
+      "description": "Reserved schema-metadata key. The leading underscore disqualifies it as a VM name (vmNameOk regex requires a leading lowercase letter), so it cannot collide with any valid consumer config.",
       "required": ["manifestVersion"],
       "additionalProperties": false,
       "properties": {
@@ -43,7 +43,7 @@
         "vmName": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$",
-          "description": "Compatibility name reserved for the observability stack (default: sys-obs)."
+          "description": "VM name reserved for the observability stack (default: sys-obs)."
         },
         "obsVsockCid": {
           "type": "integer",
@@ -80,7 +80,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "True iff the normalized workload has an observability role."
+          "description": "True iff d2b.vms.<name>.observability.enable is set."
         },
         "vsockCid": {
           "type": ["integer", "null"],
@@ -106,7 +106,7 @@
       "properties": {
         "allowEastWest": {
           "type": "boolean",
-          "description": "Raw allowEastWest setting for this workload's owning realm network."
+          "description": "Raw d2b.envs.<env>.allowEastWest setting for this VM's env."
         },
         "effectiveEastWest": {
           "type": "boolean",
@@ -249,7 +249,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "True iff the normalized workload enables persistent shell support on a compatible provider."
+          "description": "True iff d2b.vms.<name>.guest.shell.enable is set on a provider that supports persistent guest shells."
         },
         "defaultName": {
           "type": "string",
@@ -367,7 +367,7 @@
         "name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$",
-          "description": "Canonical workload ID. Matches the enclosing top-level key."
+          "description": "VM name. Matches the enclosing top-level key. Pattern enforced by nixos-modules/assertions.nix's vmNameOk."
         },
         "runtime": {
           "$ref": "#/$defs/runtimeMetadata"
@@ -377,23 +377,23 @@
         },
         "graphics": {
           "type": "boolean",
-          "description": "True iff the normalized workload has a GPU role. The CLI uses this to pick the launch path."
+          "description": "True iff d2b.vms.<name>.graphics.enable is set. The CLI uses this to pick the launch path."
         },
         "tpm": {
           "type": "boolean",
-          "description": "True iff the normalized workload has an swtpm role."
+          "description": "True iff d2b.vms.<name>.tpm.enable is set."
         },
         "usbipYubikey": {
           "type": "boolean",
-          "description": "True iff the normalized workload has a USBIP role. `d2b usb attach|detach|probe` refuses to run when false."
+          "description": "True iff d2b.vms.<name>.usbip.yubikey is set. `d2b usb attach|detach|probe` refuses to run when false. The legacy `d2b usb <vm>` bash orchestrator was retired per ADR 0015."
         },
         "audio": {
           "type": "boolean",
-          "description": "True iff the normalized workload has an audio role. Capability bit; live grant state lives in audioStateFile."
+          "description": "True iff d2b.vms.<name>.audio.enable is set. Capability bit; live grant state lives in audioStateFile."
         },
         "securityKey": {
           "type": "boolean",
-          "description": "True iff the normalized workload has a security-key frontend role. Public-safe capability bit emitted into vms.json."
+          "description": "True iff d2b.vms.<name>.usb.securityKey.enable is set. When true, the guest has a virtual FIDO2/CTAPHID HID device via the d2b security-key proxy. Public-safe capability bit emitted into vms.json."
         },
         "tap": {
           "type": "string",
@@ -474,7 +474,7 @@
         },
         "sshUser": {
           "type": ["string", "null"],
-          "description": "Compatibility SSH username when the runtime publishes one; otherwise null."
+          "description": "Username for d2b-driven SSH. Mirrors d2b.vms.<name>.ssh.user. Null for headless net VMs."
         }
       }
     }

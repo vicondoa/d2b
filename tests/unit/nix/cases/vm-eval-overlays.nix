@@ -23,45 +23,28 @@ let
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    d2b.acceptDestructiveV2Cutover = true;
-    d2b.realms.work = {
-      path = "work";
-      placement = "host-local";
-      broker = {
-        enable = true;
-        hostMutation = true;
-      };
-      network = {
-        mode = "declared";
-        lanSubnet = "10.20.0.0/24";
-        uplinkSubnet = "192.0.2.0/30";
-      };
-      providers.runtime = {
-        type = "runtime";
-        implementationId = "cloud-hypervisor";
-      };
-      workloads.demo = {
-        providerRefs.runtime = "runtime";
-        config = { lib, pkgs, ... }: {
-          networking.hostName = lib.mkDefault "demo";
-          users.users.alice = { isNormalUser = true; uid = 1000; };
-          environment.etc."overlay-probe".text = pkgs.overlayProbeText;
-        };
+    d2b.envs.work = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
+    d2b.vms.demo = {
+      enable = true;
+      env = "work";
+      index = 10;
+      ssh.user = "alice";
+      config = { lib, pkgs, ... }: {
+        networking.hostName = lib.mkDefault "demo";
+        users.users.alice = { isNormalUser = true; uid = 1000; };
+        environment.etc."overlay-probe".text = pkgs.overlayProbeText;
       };
     };
   };
 
   cfg = (mkEval [ fixture ]).config;
-  workload = builtins.head
-    (builtins.filter
-      (row: row.workloadName == "demo")
-      cfg.d2b._index.workloads.enabledList);
 in
 {
   "vm-eval-overlays/guest-inherits-host-overlays" = {
-    expr =
-      cfg.d2b._computedWorkloads.${workload.workloadId}
-        .config.environment.etc."overlay-probe".text;
+    expr = cfg.d2b._computed.demo.config.environment.etc."overlay-probe".text;
     expected = "guest-overlay-visible";
   };
 }

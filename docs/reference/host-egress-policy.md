@@ -2,13 +2,14 @@
 
 **Diataxis category:** reference.
 
-D2b hosts are a credential-free local control surface for provider-backed
-workloads. Realm Relay and provider credentials belong in the exact
-credential-owning provider agent.
+D2b hosts are a credential-free local control surface for realm-backed
+workloads. Realm relay/provider credentials and relay sessions belong in
+gateway guests.
 
 The host publishes a static, redacted policy artifact at
 `/etc/d2b/host-realm-relay-egress-policy.json`.
-The compatibility artifact records bounded diagnostic policy:
+It lists the gateway interface classifications that may carry realm relay
+traffic and records bounded diagnostic policy:
 
 - diagnostics are redacted;
 - diagnostics are rate-limited;
@@ -23,4 +24,4 @@ preparation, and must fail before use if it cannot be rendered or applied.
 Host runtime checks must verify that `d2bd`, the broker, and host CLI
 processes do not expose realm relay credentials in `/proc/<pid>/environ`,
 `/proc/<pid>/cmdline`, or inherited file descriptors. Socket inspection
-must confirm the host does not open provider-owned Relay/WebSocket sessions.
+must confirm the host does not open realm Relay/WebSocket sessions.

@@ -7,18 +7,13 @@ Schema: [`bundle.json`](./bundle.json)
 find the current `host.json`, `processes.json`, `privileges.json`,
 `closures/*.json`, `storage.json`, `sync.json`, `allocator.json`,
 `realm-controllers.json`, `realm-identity.json`,
-`realm-workloads-launcher-v2.json`, `unsafe-local-workloads.json`,
-`provider-registry-v2.json`, `observability-secrets.json`, and
+`realm-workloads-launcher-v2.json`, `unsafe-local-workloads.json`, and
 `minijail-profile.json` artifacts.
 
 ## Top-level fields
 
 - `schemaVersion` — schema directory/version for every referenced artifact.
-- `bundleVersion` — additive bundle contract rev (`13` in the current tree).
-- `bundleHash` — SHA-256 self-hash computed with `bundleHash` absent and
-  `artifactHashes` nullified.
-- `artifactHashes` — per-artifact SHA-256 hashes keyed by the referenced
-  private artifact paths.
+- `bundleVersion` — additive bundle contract rev (`11` in the current tree).
 - `publicManifestPath` — path to the public `vms.json` manifest.
 - `hostPath` — path to the private `host.json` artifact.
 - `processesPath` — path to the private `processes.json` artifact.
@@ -32,15 +27,9 @@ find the current `host.json`, `processes.json`, `privileges.json`,
   served through the authorized public daemon API.
 - `unsafeLocalWorkloadsPath` — optional path to the private configured
   unsafe-local workload artifact.
-- `providerRegistryV2Path` — path to the private canonical provider
-  descriptors and opaque intent bindings.
-- `observabilitySecretsPath` — optional path to private, non-secret
-  observability credential-generation metadata.
 - `privilegesPath` — path to the private `privileges.json` artifact.
 - `closures` — per-VM closure artifact paths.
 - `minijailProfiles` — shipped minijail profile metadata paths.
-- `managedKeys` — managed SSH key directory, known-hosts path, and per-VM key
-  overrides used by the key inventory surface.
 - `generation` — source/build provenance for drift auditing.
 
 ## Contract notes

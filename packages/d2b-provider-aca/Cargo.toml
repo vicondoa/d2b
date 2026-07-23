@@ -1,9 +1,7 @@
 [package]
 name = "d2b-provider-aca"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -18,17 +16,17 @@ workspace = true
 # production code does not fall back to ambient developer credentials. Data-plane
 # REST calls go to the ADC endpoint.
 [dependencies]
-d2b-realm-core = { workspace = true }
-d2b-realm-provider = { workspace = true }
-async-trait.workspace = true
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 azure_core = "1.0.0"
 azure_identity = "1.0.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

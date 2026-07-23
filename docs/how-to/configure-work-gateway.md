@@ -1,13 +1,11 @@
-# Migrate a work gateway declaration
+# Configure a work realm gateway
 
 **Diataxis category:** how-to.
 
-The former `d2b.gateways.<name>` configuration and its nested Relay and ACA
-sandbox fields are removed. They no longer declare a gateway guest. A
-non-empty declaration fails evaluation with a migration error.
+Use a dedicated gateway guest for each work or provider realm. Do not share a
+gateway guest, d2b env, or L2 bridge with personal realms.
 
-Keep the existing env as the active network substrate and move non-secret
-realm intent to `d2b.realms`:
+## Declare the realm and gateway
 
 ```nix
 d2b.envs.work = {
@@ -15,29 +13,45 @@ d2b.envs.work = {
   uplinkSubnet = "192.0.2.0/30";
 };
 
-d2b.realms.work = {
-  placement = "provider-agent";
-  placementProvider = "aca";
+d2b.gateways.work = {
+  realm = "work";
   env = "work";
-  network.envs = [ "work" ];
-
-  providers.aca = {
-    kind = "aca";
-    placement = "provider-agent";
-    capabilityRefs = [ "runtime" ];
-    configRef = "work-aca";
-  };
+  index = 20;
+  relay.namespace = "relns-example.servicebus.windows.net";
+  relay.entity = "hc-d2b-work";
 };
 ```
 
-`providers.aca` and `configRef` are non-secret planning metadata. They do not
-launch an ACA provider agent, enroll Azure credentials, or open Relay
-connections in the current Nix implementation. Do not put provider
-coordinates, credentials, tokens, or enrollment payloads in Nix.
+Then start the gateway like any other VM:
 
-There is currently no supported replacement for starting or entering an
-auto-declared gateway VM. Do not hand-write gateway artifacts or invoke legacy
-gateway enrollment helpers. Follow
-[the v1.2 to v2 migration guide](./migrate-d2b-v1-2-to-v2.md), then consult
-[provider-managed sandboxes](../reference/provider-managed-sandboxes.md) for
-the implemented provider contract and its availability boundary.
+```bash
+d2b vm start sys-work-gateway --apply
+```
+
+## Inspect the policy
+
+```bash
+d2b realm list
+d2b realm inspect work
+```
+
+The output reports whether a realm is host-resident or gateway-backed, the
+gateway VM when present, its local lifecycle state, and the default-deny
+cross-realm posture.
+
+## Enroll credentials inside the gateway
+
+Realm relay/provider credentials are enrolled from inside the gateway guest.
+The host declaration contains only non-secret coordinates and never parses or
+stores credential material.
+
+```bash
+d2b realm enter work
+sudo -u d2bd D2B_GATEWAY_STATE_DIR=<gateway-state-dir> \
+  d2b-gateway-enroll enroll \
+  <gateway-state-dir>/credential.sealed.json \
+  <gateway-state-dir>/seal.key < enrollment.json
+```
+
+Use placeholder or test credentials only in examples and fixtures. Do not
+commit live provider ids, tokens, keys, host paths, or user identifiers.

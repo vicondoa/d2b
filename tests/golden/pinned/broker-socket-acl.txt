@@ -1,5 +1,5 @@
 # broker-socket-acl — d2b-priv-broker integration test successor.
-# Runs under the default workspace pass exercised by
-# tests/tools/rust-workspace-checks.sh and enumerated by
+# Runs under the broker workspace `cargo test --features layer1-bootstrap`
+# pass already exercised by tests/tools/rust-workspace-checks.sh and enumerated by
 # tests/tools/assert-pinned-tests.sh. One bare libtest path per line.
-broker_endpoint_requires_host_local_directional_identity
+socket_acl_rejects_non_d2bd_peers_and_accepts_daemon

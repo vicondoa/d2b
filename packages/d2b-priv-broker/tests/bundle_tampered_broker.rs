@@ -10,6 +10,7 @@
 //! `try_load_resolver` → `BundleSlot::Tampered` → `BrokerError::BundleTampered`
 //! → `into_response()` pipeline as the live `serve` loop.
 
+#[cfg(not(feature = "layer1-bootstrap"))]
 mod broker_tampered {
     use d2b_contracts::broker_wire::BrokerResponse;
     use d2b_core::bundle_resolver::BundleVerifyPolicy;

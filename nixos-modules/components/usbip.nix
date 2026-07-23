@@ -1,4 +1,5 @@
-# USBIP security-key passthrough for realm-owned local VM workloads.
+# USBIP YubiKey passthrough for d2b VMs. Imported by host.nix
+# whenever a VM sets `d2b.vms.<name>.usbip.yubikey = true`.
 #
 # This file holds only the GUEST-side wiring:
 #   - vhci_hcd kernel module so `usbip attach` can materialise the
@@ -6,9 +7,11 @@
 #   - usbip CLI tools so guestd can perform authenticated guest-side import
 #     cleanup/attach over guest-control.
 #
-# Host access remains behind the host-mediated device provider and a
-# local-root allocator lease. The guest receives only the mediated USBIP
-# connection; physical bus IDs never become runtime path components.
+# The HOST-side bits (broker-spawned per-env usbipd/proxy runners,
+# usbip-host kernel module, udev rules granting kvm-group access to
+# Yubico hidraw + raw USB nodes) live outside this guest component
+# because they're shared across VMs and depend on the host bridge
+# being up.
 #
 # The hot-plug ceremony is daemon-owned: d2bd drives broker host
 # bind/unbind and asks guestd to reconcile guest-side USBIP imports over

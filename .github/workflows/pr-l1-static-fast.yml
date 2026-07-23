@@ -4,6 +4,7 @@
 name: pr-l1-static-fast
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
 
@@ -16,10 +17,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: "Tier 0 first-pass gate"
-        run: make -- check-tier0
+      - name: Tier 0 first-pass gate
+        run: make check-tier0
       - name: ADR index coverage guard
         run: bash tests/unit/meta/adr-index-coverage.sh
       - name: CI coverage structural guard
@@ -33,19 +32,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
-      - name: "Lint gate (preflight + parse + shellcheck)"
-        run: make -- test-lint
+      - name: Lint gate (preflight + parse + shellcheck)
+        run: make test-lint
 
   test-changelog:
     if: github.event_name == 'pull_request'
@@ -55,9 +48,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-      - name: "Changelog policy gate"
+      - name: Changelog policy gate
         run: bash scripts/changelog-check.sh
 
   test-rust:
@@ -66,28 +58,27 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # sccache remains enabled in CI and uses its local-disk backend. The
-      # existing cache action persists that directory without exposing cache
-      # credentials to build scripts, proc-macros, or tests.
-      D2B_CI_SCCACHE: "1"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      # Incremental compilation artifacts are non-deterministic and bloat the
-      # target cache without benefiting independent PR runs.
+      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
+      # caching) instead, which caches ALL compiled artifacts including
+      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
+      # compilations are "non-cacheable" by sccache due to crate-type).
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
+      # are non-deterministic and bloat the cache without benefit for CI
+      # (each PR run starts from a different commit).
       CARGO_INCREMENTAL: "0"
+      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
+      # rust-cache's post-step `cargo metadata` doesn't fail looking for
+      # an sccache binary that isn't installed.
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -117,12 +108,14 @@ jobs:
         with:
           workspaces: |
             packages -> target
+            packages/d2b-priv-broker -> target
           cache-directories: |
-            .sccache
+            packages/d2b-priv-broker/target-layer1
+            packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
-      - name: "Rust workspace gate"
+      - name: Rust workspace gate
         # Skip the fixture nix-build (~35 min) - the same fixtures are
         # already evaluated by the flake-eval-x86 (fixture-smoke) and
         # (fixture-smoke-full) shards. The contract tests that depend on
@@ -130,7 +123,7 @@ jobs:
         # the Rust compilation + unit/integration tests.
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
-        run: make -- test-rust
+        run: make test-rust
 
   test-proofs:
     needs: [tier0]
@@ -138,19 +131,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
-      - name: "Proof crates gate"
-        run: make -- test-proofs
+      - name: Proof crates gate
+        run: make test-proofs
 
   flake-eval-discover:
     needs: [tier0]
@@ -160,21 +147,15 @@ jobs:
       checks: ${{ steps.list.outputs.checks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
       - id: list
-        name: "Enumerate flake checks (x86_64-linux)"
+        name: Enumerate flake checks (x86_64-linux)
         run: |
-          checks=$(make -s -- test-flake-list)
+          checks=$(make -s test-flake-list)
           echo "discovered checks: $checks"
           echo "checks=$checks" >> "$GITHUB_OUTPUT"
 
@@ -190,8 +171,6 @@ jobs:
         check: ${{ fromJSON(needs.flake-eval-discover.outputs.checks) }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Add swap (insurance for the heaviest single check)
         run: |
           # A single check instantiates in its own process and fits a 16 GB
@@ -209,20 +188,16 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
-      - name: "Flake check shard (x86_64-linux)"
+      - name: Flake check shard (x86_64-linux)
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
         # `D2B_FLAKE_CHECK='${{ matrix.check }}' ...` would be a shell-injection
         # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
         env:
           D2B_FLAKE_CHECK: ${{ matrix.check }}
-        run: make -- test-flake
+        run: make test-flake
 
   flake-eval-x86-outputs:
     needs: [tier0]
@@ -230,21 +205,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
-      - name: "Flake non-checks outputs (x86_64-linux)"
+      - name: Flake non-checks outputs (x86_64-linux)
         env:
           D2B_FLAKE_OUTPUTS: "1"
-        run: make -- test-flake
+        run: make test-flake
 
   test-flake-x86:
     needs: [flake-eval-discover, flake-eval-x86, flake-eval-x86-outputs]
@@ -252,7 +221,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: "Require all x86 flake jobs to pass"
+      - name: Require all x86 flake jobs to pass
         run: |
           discover='${{ needs.flake-eval-discover.result }}'
           shards='${{ needs.flake-eval-x86.result }}'
@@ -271,18 +240,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
-      - name: "aarch64 smoke eval"
+      - name: aarch64 smoke eval
         run: |
           nix-instantiate --eval --strict \
             -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath' \
@@ -294,19 +257,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
-      - name: "Drift gate"
-        run: make -- test-drift
+      - name: Drift gate
+        run: make test-drift
 
   test-policy:
     needs: [tier0]
@@ -314,19 +271,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Install pinned sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
-        with:
-          version: "v0.10.0"
-      - name: "Policy meta-gates"
-        run: make -- test-policy
+      - name: Policy meta-gates
+        run: make test-policy
 
   check:
     needs: [tier0, test-lint, test-changelog, test-rust, test-proofs, test-flake-x86, test-flake-aarch64, test-drift, test-policy]

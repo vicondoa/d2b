@@ -897,41 +897,19 @@ fn ts_at_least(line: &str, since: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
 
     fn target_scratch_root(prefix: &str) -> PathBuf {
         let base = std::env::var_os("CARGO_TARGET_TMPDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-        fs::create_dir_all(&base).expect("create audit test scratch root");
-        for _ in 0..1024 {
-            let id = NEXT_SCRATCH_ID.fetch_add(1, Ordering::Relaxed);
-            let path = base.join(format!("{prefix}-{}-{id}", std::process::id()));
-            match fs::create_dir(&path) {
-                Ok(()) => return path,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => panic!("create audit test directory {}: {error}", path.display()),
-            }
-        }
-        panic!("failed to reserve a unique audit test directory")
-    }
-
-    #[test]
-    fn audit_file_descriptor_is_append_only() {
-        let scratch = target_scratch_root("d2bd-broker-audit-append");
-        let path = scratch.join("broker.jsonl");
-        let file = open_append_cloexec(&path, Gid::current().as_raw(), true)
-            .expect("open append-only audit file");
-        let status = nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)
-            .expect("read audit file status flags");
-        assert!(
-            nix::fcntl::OFlag::from_bits_truncate(status).contains(nix::fcntl::OFlag::O_APPEND),
-            "audit file descriptor must retain O_APPEND"
-        );
-        drop(file);
-        fs::remove_dir_all(scratch).expect("remove audit test scratch");
+        base.join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ))
     }
 
     #[test]

@@ -188,24 +188,7 @@ pub struct FilterPolicy {
     pub warnings: Vec<PolicyWarning>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum PolicyBuildError {
-    #[error("Wayland control policy requires ComponentSession identity")]
-    UnauthenticatedIdentity,
-}
-
 impl FilterPolicy {
-    pub fn build_for_component_session(input: PolicyInput) -> Result<Self, PolicyBuildError> {
-        let identity = input
-            .identity
-            .as_ref()
-            .ok_or(PolicyBuildError::UnauthenticatedIdentity)?;
-        identity
-            .require_component_session()
-            .map_err(|_| PolicyBuildError::UnauthenticatedIdentity)?;
-        Ok(Self::build(input))
-    }
-
     /// Build a policy from operator input layered on top of secure defaults.
     pub fn build(input: PolicyInput) -> Self {
         let identity = input.identity.unwrap_or_else(|| {
@@ -595,18 +578,6 @@ mod tests {
             vm_name: vm.to_owned(),
             ..Default::default()
         })
-    }
-
-    #[test]
-    fn control_policy_has_no_legacy_identity_fallback() {
-        assert_eq!(
-            FilterPolicy::build_for_component_session(PolicyInput {
-                vm_name: "work".to_owned(),
-                ..Default::default()
-            })
-            .unwrap_err(),
-            PolicyBuildError::UnauthenticatedIdentity
-        );
     }
 
     #[test]

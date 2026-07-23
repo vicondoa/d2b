@@ -371,10 +371,7 @@ fn macvtap_device_path(ifindex: u32) -> PathBuf {
     PathBuf::from(format!("/dev/tap{ifindex}"))
 }
 
-fn validate_existing_macvtap(
-    ip: &Path,
-    intent: &ResolvedMacvtapIntent,
-) -> Result<(), super::OpError> {
+fn validate_existing_macvtap(ip: &Path, intent: &ResolvedMacvtapIntent) -> Result<(), super::OpError> {
     let output = Command::new(ip)
         .args(["-d", "-j", "link", "show", "dev", intent.ifname.as_str()])
         .env_remove("NOTIFY_SOCKET")
@@ -407,7 +404,8 @@ fn validate_existing_macvtap_json(
     let link = links
         .iter()
         .find(|link| {
-            link.get("ifname").and_then(serde_json::Value::as_str) == Some(intent.ifname.as_str())
+            link.get("ifname").and_then(serde_json::Value::as_str)
+                == Some(intent.ifname.as_str())
         })
         .or_else(|| links.first())
         .ok_or_else(|| super::OpError::InvalidInput {
@@ -925,8 +923,6 @@ mod tests {
             realm_identity_path: None,
             realm_workloads_launcher_v2_path: None,
             unsafe_local_workloads_path: None,
-            provider_registry_v2_path: None,
-            observability_secrets_path: None,
             closures: Vec::new(),
             minijail_profiles: Vec::new(),
             managed_keys: Default::default(),

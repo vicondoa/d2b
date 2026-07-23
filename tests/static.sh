@@ -1219,10 +1219,9 @@ d2b_time_begin "W2 cargo prebuild"
 if [ -d "$ROOT/packages" ]; then
   d2b_activate_rust_toolchain_path || true
   _W2_WORKSPACE_TARGET=$(d2b_cargo_target_dir workspace)
-  CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --locked \
-    --manifest-path "$ROOT/packages/Cargo.toml" --quiet \
-    -p d2b -p d2bd -p xtask -p d2b-priv-broker --bins \
-    --features d2b-priv-broker/layer1-bootstrap
+  _W2_BROKER_TARGET=$(d2b_cargo_target_dir broker)
+  CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --manifest-path "$ROOT/packages/Cargo.toml" --quiet -p d2b -p d2bd -p xtask --bins
+  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/packages/d2b-priv-broker/Cargo.toml" --quiet -p d2b-priv-broker --features layer1-bootstrap
 fi
 d2b_time_end "W2 cargo prebuild"
 d2b_time_begin "W2 CLI smoke prewarm"

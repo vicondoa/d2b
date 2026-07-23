@@ -36,18 +36,6 @@ fn assert_file_has_line(rel: &str, pattern: &str, ctx: &str) {
     );
 }
 
-fn assert_any_file_has_line(files: &[&str], pattern: &str, ctx: &str) {
-    let matched = files
-        .iter()
-        .filter(|rel| repo_path_exists(rel))
-        .any(|rel| any_line_matches(&read_repo_file(rel), pattern));
-    assert!(
-        matched,
-        "{ctx}: required pattern /{pattern}/ not found in {}",
-        files.join(", ")
-    );
-}
-
 /// `rg PATTERN FILES...` (fail-on-match) — assert NO line of any of the
 /// repo-relative `files` matches `pattern`.
 fn assert_files_have_no_line(files: &[&str], pattern: &str, ctx: &str) {
@@ -283,17 +271,16 @@ fn tap_dag_contract_doc_matches_implementation() {
         "tap-dag-contract-doc-eval: doc must reference ChNetHandoffMode"
     );
 
-    // ==> local-root public group naming. Realm principal normalization owns
-    // the canonical `d2b` group and host-daemon consumes that principal.
+    // ==> launcher group naming (daemon-only canonical). The doc claims the
+    // broker public socket sits behind the daemon-only `d2b` group
+    // declared by host-daemon.nix; sanity check that's still true.
     assert!(
         doc.contains("d2b"),
         "tap-dag-contract-doc-eval: doc must reference daemon-only d2b group"
     );
     assert!(
-        read_repo_file("nixos-modules/realm-users.nix").contains(r#"publicGroup = "d2b";"#)
-            && read_repo_file("nixos-modules/host-daemon.nix")
-                .contains("SocketGroup = publicSocketPrincipal.group;"),
-        "tap-dag-contract-doc-eval: local-root d2b group is not wired through realm principals"
+        read_repo_file("nixos-modules/host-daemon.nix").contains("users.groups.d2b"),
+        "tap-dag-contract-doc-eval: host-daemon.nix no longer declares d2b group"
     );
 }
 
@@ -322,7 +309,6 @@ fn guest_exec_runtime_static() {
     let exec_src = format!("{GUESTD_SRC}/exec.rs");
     let exec_linux_src = format!("{GUESTD_SRC}/exec_linux.rs");
     let service_src = format!("{GUESTD_SRC}/service.rs");
-    let production_guest_src = format!("{GUESTD_SRC}/production_guest.rs");
 
     // The runtime must exist (this guard is meaningless otherwise).
     for required in [&exec_src, &exec_linux_src] {
@@ -445,8 +431,8 @@ fn guest_exec_runtime_static() {
 
     // Capabilities are advertised conditionally (usability-aware), not
     // always-on.
-    assert_any_file_has_line(
-        &[&service_src, &production_guest_src],
+    assert_file_has_line(
+        &service_src,
         r"EXEC_DETACHED|EXEC_LOGS",
         "guest-exec-runtime-static: detached/logs capabilities must be wired conditionally",
     );
@@ -519,10 +505,10 @@ fn guest_exec_runtime_static() {
 
     // The TTY merged-output contract surfaces a typed stderr-unavailable error;
     // the wire mapping must be wired in the service layer.
-    assert_any_file_has_line(
-        &[&service_src, &exec_src],
+    assert_file_has_line(
+        &service_src,
         r"TtyStderrUnavailable",
-        "guest-exec-runtime-static: TTY stderr-unavailable wire mapping missing",
+        "guest-exec-runtime-static: TTY stderr-unavailable wire mapping missing from service.rs",
     );
 }
 

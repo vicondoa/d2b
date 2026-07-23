@@ -1,26 +1,56 @@
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
-use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
 use tempfile::{Builder, TempDir};
+
+pub const HELLO_FRAME: &str =
+    r#"{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":[]}"#;
 
 pub fn d2bd_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_d2bd"))
 }
 
-pub fn current_username() -> String {
-    uzers::get_current_username()
-        .expect("current uid has a username")
-        .to_string_lossy()
-        .into_owned()
+#[derive(Debug, Clone)]
+pub struct TestPeer {
+    pub uid: u32,
+    pub gid: u32,
+    pub username: &'static str,
+    pub groups: &'static str,
+}
+
+impl TestPeer {
+    pub fn launcher() -> Self {
+        Self {
+            uid: 60003,
+            gid: 60003,
+            username: "launcher-user",
+            groups: "wheel",
+        }
+    }
+
+    pub fn admin() -> Self {
+        Self {
+            uid: 60004,
+            gid: 60004,
+            username: "admin-user",
+            groups: "wheel",
+        }
+    }
+
+    pub fn deny(uid: u32, username: &'static str, groups: &'static str) -> Self {
+        Self {
+            uid,
+            gid: uid,
+            username,
+            groups,
+        }
+    }
 }
 
 pub struct DaemonFixture {
@@ -108,121 +138,7 @@ pub fn primary_group_name() -> String {
 }
 
 pub fn write_daemon_config(fixture: &DaemonFixture, launcher_users: &[&str], admin_users: &[&str]) {
-    let artifacts = write_empty_provider_registry_artifacts(fixture.root());
-    write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, Some(artifacts));
-}
-
-fn write_empty_provider_registry_artifacts(root: &Path) -> serde_json::Value {
-    let artifacts_dir = root.join("artifacts");
-    let public_manifest_path = artifacts_dir.join("vms.json");
-    let bundle_path = artifacts_dir.join("bundle.json");
-    let host_path = artifacts_dir.join("host.json");
-    let processes_path = artifacts_dir.join("processes.json");
-    let provider_registry_path = artifacts_dir.join("provider-registry-v2.json");
-    let closures_dir = artifacts_dir.join("closures");
-    fs::create_dir_all(&closures_dir).expect("create default artifact fixture");
-
-    fs::write(
-        &public_manifest_path,
-        serde_json::to_vec(&serde_json::json!({
-            "_manifest": { "manifestVersion": 6 },
-            "_observability": {
-                "enabled": false,
-                "signozUrl": "http://127.0.0.1:8080",
-                "signozOtlpGrpcPort": 4317,
-                "signozOtlpHttpPort": 4318,
-                "obsVsockCid": 1000,
-                "obsVsockHostSocket": "/run/d2b/obs.sock",
-                "vmName": "sys-obs"
-            }
-        }))
-        .expect("serialize default manifest"),
-    )
-    .expect("write default manifest");
-    fs::copy(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/deny-unknown/host-valid.json"),
-        &host_path,
-    )
-    .expect("copy default host fixture");
-    fs::write(
-        &processes_path,
-        serde_json::to_vec(&serde_json::json!({ "schemaVersion": "v2", "vms": [] }))
-            .expect("serialize default processes"),
-    )
-    .expect("write default processes");
-    fs::write(
-        &provider_registry_path,
-        serde_json::to_vec(&serde_json::json!({
-            "schemaVersion": "v2",
-            "registryGeneration": 1,
-            "configurationFingerprint": "0".repeat(64),
-            "publishedAtUnixMs": 0,
-            "providers": []
-        }))
-        .expect("serialize explicit empty provider registry"),
-    )
-    .expect("write explicit empty provider registry");
-    let mut artifact_hashes = BTreeMap::new();
-    for (key, path) in [
-        ("host.json", &host_path),
-        ("processes.json", &processes_path),
-        ("provider-registry-v2.json", &provider_registry_path),
-    ] {
-        artifact_hashes.insert(
-            key.to_owned(),
-            format!(
-                "sha256:{:x}",
-                Sha256::digest(fs::read(path).expect("read default artifact for hashing"))
-            ),
-        );
-    }
-    let mut bundle = serde_json::json!({
-        "bundleVersion": 13,
-        "schemaVersion": "v2",
-        "publicManifestPath": "vms.json",
-        "hostPath": "host.json",
-        "processesPath": "processes.json",
-        "privilegesPath": "privileges.json",
-        "providerRegistryV2Path": "provider-registry-v2.json",
-        "closures": [],
-        "minijailProfiles": [],
-        "managedKeys": {},
-        "generation": {
-            "generator": "d2bd-integration-test",
-            "sourceRevision": null,
-            "generatedAt": null
-        },
-        "artifactHashes": artifact_hashes
-    });
-    let mut unhashed = bundle.clone();
-    unhashed["artifactHashes"] = serde_json::Value::Null;
-    bundle["bundleHash"] = serde_json::Value::String(format!(
-        "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&unhashed).expect("serialize unhashed bundle"))
-    ));
-    fs::write(
-        &bundle_path,
-        serde_json::to_vec(&bundle).expect("serialize default bundle"),
-    )
-    .expect("write default bundle");
-    for path in [
-        &public_manifest_path,
-        &bundle_path,
-        &host_path,
-        &processes_path,
-        &provider_registry_path,
-    ] {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o640))
-            .expect("chmod default artifact");
-    }
-    serde_json::json!({
-        "publicManifestPath": path_string(&public_manifest_path),
-        "bundlePath": path_string(&bundle_path),
-        "hostPath": path_string(&host_path),
-        "processesPath": path_string(&processes_path),
-        "closuresDir": path_string(&closures_dir)
-    })
+    write_daemon_config_with_artifacts(fixture, launcher_users, admin_users, None);
 }
 
 pub fn write_daemon_config_with_artifacts(
@@ -319,21 +235,9 @@ impl Drop for SpawnedProcess {
 
 pub fn spawn_d2bd_serve(
     fixture: &DaemonFixture,
+    peer: &TestPeer,
     once: bool,
     state_restore_report: Option<&Path>,
-) -> SpawnedProcess {
-    spawn_d2bd_serve_inner(fixture, once, state_restore_report, true)
-}
-
-pub fn spawn_d2bd_serve_expect_startup_failure(fixture: &DaemonFixture) -> SpawnedProcess {
-    spawn_d2bd_serve_inner(fixture, true, None, false)
-}
-
-fn spawn_d2bd_serve_inner(
-    fixture: &DaemonFixture,
-    once: bool,
-    state_restore_report: Option<&Path>,
-    wait_until_ready: bool,
 ) -> SpawnedProcess {
     fixture.reset_runtime_endpoints();
     let mut command = Command::new(d2bd_bin());
@@ -355,67 +259,20 @@ fn spawn_d2bd_serve_inner(
     command
         .arg("--allow-unprivileged-runtime-dir")
         .arg("--no-drop-privileges")
+        .env("D2BD_TEST_PEER_UID", peer.uid.to_string())
+        .env("D2BD_TEST_PEER_GID", peer.gid.to_string())
+        .env("D2BD_TEST_PEER_USERNAME", peer.username)
+        .env("D2BD_TEST_PEER_GROUPS", peer.groups)
         .env("D2B_SKIP_KERNEL_MODULE_CHECK", "1")
         .env("RUST_LOG", "off")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let readiness = wait_until_ready.then(|| {
-        let notify_path = fixture.run_dir.join("notify.sock");
-        remove_file_if_present(&notify_path);
-        let listener = UnixDatagram::bind(&notify_path).expect("bind test notify socket");
-        listener
-            .set_nonblocking(true)
-            .expect("set test notify socket nonblocking");
-        command.env("NOTIFY_SOCKET", &notify_path);
-        (listener, notify_path)
-    });
     if let Some(report) = state_restore_report {
         command.arg("--test-state-restore-report").arg(report);
     }
-    let mut child = command.spawn().expect("spawn d2bd serve");
-    if let Some((notify_listener, notify_path)) = readiness {
-        wait_for_daemon_ready(
-            &mut child,
-            &notify_listener,
-            &notify_path,
-            Duration::from_secs(45),
-        );
-    }
+    let child = command.spawn().expect("spawn d2bd serve");
+    wait_for_socket(&fixture.socket_path, Duration::from_secs(15));
     SpawnedProcess::from_child(child)
-}
-
-fn wait_for_daemon_ready(
-    child: &mut Child,
-    listener: &UnixDatagram,
-    notify_path: &Path,
-    timeout: Duration,
-) {
-    let deadline = Instant::now() + timeout;
-    let mut buffer = [0_u8; 512];
-    while Instant::now() < deadline {
-        match listener.recv(&mut buffer) {
-            Ok(len)
-                if buffer[..len]
-                    .split(|byte| *byte == b'\n')
-                    .any(|line| line == b"READY=1") =>
-            {
-                return;
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => panic!("receive daemon readiness notification: {error}"),
-        }
-        if let Some(status) = child.try_wait().expect("inspect d2bd serve status") {
-            panic!("d2bd serve exited before readiness with {status:?}");
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-    panic!(
-        "timed out waiting for daemon readiness notification: {}",
-        notify_path.display()
-    );
 }
 
 pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> SpawnedProcess {
@@ -436,53 +293,14 @@ pub fn spawn_lock_only(config: &Path, state_lock: &Path, hold_seconds: u64) -> S
     SpawnedProcess::from_child(child)
 }
 
-pub fn complete_component_session_handshake(socket_path: &Path) {
-    use std::time::Instant;
-
-    use d2b_contracts::v2_component_session::{EndpointPolicyIdentity, Locality};
-    use d2b_session::{HandshakeCredentials, SessionEngine};
-    use d2b_session_unix::SeqpacketSocket;
-    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
-    use std::os::fd::AsRawFd;
-
-    let fd = socket(
-        AddressFamily::Unix,
-        SockType::SeqPacket,
-        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
-        None,
-    )
-    .expect("create ComponentSession probe");
-    let address = UnixAddr::new(socket_path).expect("public socket address");
-    connect(fd.as_raw_fd(), &address).expect("connect ComponentSession probe");
-    let uid = nix::unistd::Uid::current().as_raw();
-    let gid = nix::unistd::Gid::current().as_raw();
-    let policy = d2bd::daemon_service::daemon_endpoint_policy(
-        7,
-        d2bd::daemon_service::daemon_channel_binding(uid, gid),
-    )
-    .expect("daemon endpoint policy");
-    let identity = EndpointPolicyIdentity::from(&policy);
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("ComponentSession runtime")
-        .block_on(async move {
-            let socket = SeqpacketSocket::from_owned(fd).expect("client seqpacket");
-            let transport = d2bd::daemon_service::DaemonSeqpacketTransport::new(
-                socket,
-                Locality::HostLocal,
-                policy.limits,
-            )
-            .expect("daemon client transport");
-            SessionEngine::establish_initiator_with_generation_discovery(
-                transport,
-                identity,
-                HandshakeCredentials::Nn,
-                Instant::now(),
-            )
-            .await
-            .expect("authenticated daemon ComponentSession");
-        });
+pub fn test_client(socket: &Path, frames: &[&str]) -> (i32, String) {
+    let mut command = Command::new(d2bd_bin());
+    command.arg("test-client").arg("--socket").arg(socket);
+    for frame in frames {
+        command.arg("--frame-json").arg(frame);
+    }
+    let output = command.output().expect("spawn d2bd test-client");
+    (status_code(&output.status), combined_output(&output))
 }
 
 pub fn run_lock_only(config: &Path, state_lock: &Path, _locks_dir: &Path) -> (i32, String) {

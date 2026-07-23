@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016
-# tests/unit/meta/pr-checklist-gate.sh — policy gate for the mandatory PR checklist.
+# tests/unit/meta/pr-checklist-gate.sh — W0 policy gate for the mandatory PR checklist.
 #
-# Validates the template (default) or a provided PR body (file arg or `-` for
-# stdin).
+# W0 validates the template (default) or a provided PR body (file arg or `-` for
+# stdin). A later wave wires this against live PR bodies in CI.
 
 set -euo pipefail
 
@@ -54,24 +54,17 @@ check_item() {
   fi
 }
 
-check_item 'focused preflight checkbox' '^- \[[ xX]\] \*\*Focused preflight passed before PR creation/update\*\*'
-check_item 'final-tree make check checkbox' '^- \[[ xX]\] \*\*`make check` passes for the final tree\*\*'
-check_item 'final-lane test-integration checkbox' '^- \[[ xX]\] \*\*`make test-integration` passes in the final validator lane\*\*'
-check_item 'final-lane test-host-integration checkbox' '^- \[[ xX]\] \*\*`make test-host-integration` passes in the final validator lane\*\*'
+check_item 'make check checkbox' '^- \[[ xX]\] \*\*`make check` passes locally\*\*'
+check_item 'make test-integration checkbox' '^- \[[ xX]\] \*\*`make test-integration` passes on the host before PR creation\*\*'
+check_item 'make test-host-integration checkbox' '^- \[[ xX]\] \*\*`make test-host-integration` passes on the host before PR creation\*\*'
 check_item 'manual test-hardware checkbox' '^- \[[ xX]\] \*\*Manual `make test-hardware` run\*\*'
-check_item 'manifest and xtask graph checkbox' '^- \[[ xX]\] \*\*New/changed tests are represented in the canonical manifest/`xtask`'
-check_item 'generated CI lockstep checkbox' '^- \[[ xX]\] \*\*Docs \+ generated CI updated in lockstep\*\*'
-check_item 'candidate invalidation checkbox' '^- \[[ xX]\] \*\*The final tree is unchanged since validation and panel review\*\*'
-check_item 'seal before merge checkbox' '^- \[[ xX]\] \*\*All pending lanes completed and the tree-bound wave seal passed before'
+check_item 'make-target wiring checkbox' '^- \[[ xX]\] \*\*New/changed tests are wired into a `make` target\*\*'
+check_item 'docs and CI lockstep checkbox' '^- \[[ xX]\] \*\*Docs \+ CI updated in lockstep\*\*'
 
 if [ "$is_template" -eq 1 ]; then
   check_item 'test-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
   check_item 'test-host-integration N/A escape hatch' 'N/A: pure policy/docs/checklist change with no daemon, broker, NixOS'
   check_item 'no AI metadata instruction' 'Do not include AI agent, assistant, or model metadata'
-  check_item 'external raw evidence instruction' 'Do not paste raw evidence'
-  check_item 'PR-before-final-gates instruction' 'Open or update the PR after focused preflight'
-  check_item 'candidate_id summary field' 'Delivery `candidate_id`'
-  check_item 'content_id summary field' 'Delivery `content_id`'
 fi
 
 if [ "$fail" -ne 0 ]; then

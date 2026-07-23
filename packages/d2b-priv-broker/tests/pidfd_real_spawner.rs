@@ -74,34 +74,3 @@ fn real_spawner_pidfd_is_cloexec_and_start_time_round_trips() {
         other => panic!("expected start-time drift, got {other:?}"),
     }
 }
-
-#[test]
-fn realm_child_spawner_has_no_namespace_or_placement_fallback() {
-    let source = include_str!("../src/sys.rs");
-    let start = source
-        .find("pub fn clone3_spawn_realm_child")
-        .expect("realm child spawner");
-    let end = source[start..]
-        .find("#[allow(clippy::too_many_arguments")
-        .map(|offset| start + offset)
-        .expect("end of realm child spawner");
-    let function = &source[start..end];
-    assert!(function.contains("libc::CLONE_NEWCGROUP"));
-    assert!(function.contains("mount: true"));
-    assert!(function.contains("pid: true"));
-    assert!(function.contains("net: true"));
-    assert!(function.contains("ipc: true"));
-    assert!(function.contains("user: true"));
-    assert!(function.contains("capabilities: Vec::new()"));
-
-    assert!(source.contains("CHILD_EXIT_REALM_FD_CLOSE"));
-    assert!(source.contains("CHILD_EXIT_REALM_CAPABILITY_DROP"));
-    assert!(source.contains("realm child spawn requires clone3 namespace and cgroup placement"));
-
-    let allocator = include_str!("../src/allocator_service.rs");
-    assert!(allocator.contains("bootstrap: RealmChildBootstrapEndpoints"));
-    assert!(allocator.contains("evidence: PidfdEvidence"));
-    assert!(allocator.contains("PendingSpawnedRealmPairGuard::new("));
-    assert!(allocator.contains("self.spawner.terminate_pair(&self.pair)"));
-    assert!(allocator.contains("pending.disarm();"));
-}

@@ -53,65 +53,26 @@ fn read_tracked_text_file(rel: &str) -> Option<String> {
 
 fn pr_template_violations(template: &str) -> Vec<String> {
     let mut violations = Vec::new();
-    let provenance_field = Regex::new(
-        r"(?mi)^-\s+\*\*(AI|agent|assistant|tool|model|provider|run([ _-]?id)?)\b[^*]*\*\*",
-    )
-    .expect("valid PR provenance-field regex");
-    if provenance_field.is_match(template) {
-        violations.push("PR template must not request tool/model/run provenance fields".to_owned());
+    if !template.contains("Do not include AI agent, assistant, or model metadata") {
+        violations.push("PR template must ban AI/agent/model metadata".to_owned());
     }
-    for (required, message) in [
-        (
-            "Do not include AI agent, assistant, or model metadata",
-            "PR template must ban AI/agent/model metadata",
-        ),
-        (
-            "Do not paste raw evidence",
-            "PR template must keep evidence payloads external",
-        ),
-        (
-            "Open or update the PR after focused preflight",
-            "PR template must open the PR before final delivery lanes",
-        ),
-        (
-            "panel lanes may be pending while the PR is open",
-            "PR template must permit concurrent final lanes on an open PR",
-        ),
-        (
-            "`make test-integration` passes in the final validator lane",
-            "PR template must keep test-integration in the final validator lane",
-        ),
-        (
-            "`make test-host-integration` passes in the final validator lane",
-            "PR template must keep test-host-integration in the final validator lane",
-        ),
-        (
-            "Delivery `candidate_id`",
-            "PR template must summarize the delivery candidate_id",
-        ),
-        (
-            "Delivery `content_id`",
-            "PR template must summarize the delivery content_id",
-        ),
-        (
-            "tree-bound wave seal passed before",
-            "PR template must require a tree-bound seal before merge",
-        ),
-    ] {
-        if !template.contains(required) {
-            violations.push(message.to_owned());
-        }
+    if !template.contains("`make test-integration` passes on the host before PR creation") {
+        violations.push("PR template must keep the test-integration checklist item".to_owned());
+    }
+    if !template.contains("`make test-host-integration` passes on the host before PR creation") {
+        violations
+            .push("PR template must keep the test-host-integration checklist item".to_owned());
     }
     if template.matches(PURE_POLICY_NA).count() < 2 {
         violations.push(
-            "PR template must provide N/A escape hatches for both final host gates".to_owned(),
+            "PR template must provide N/A escape hatches for both host/manual gates".to_owned(),
         );
     }
     violations
 }
 
 #[test]
-fn pr_template_carries_external_parallel_delivery_contract() {
+fn pr_template_carries_metadata_ban_and_host_gate_escape_hatches() {
     let template = read_repo_file(PR_TEMPLATE);
     let violations = pr_template_violations(&template);
     assert!(
@@ -121,32 +82,12 @@ fn pr_template_carries_external_parallel_delivery_contract() {
     );
 }
 
-fn valid_pr_template_fixture() -> String {
-    format!(
-        "Do not include AI agent, assistant, or model metadata\n\
-         Do not paste raw evidence\n\
-         Open or update the PR after focused preflight\n\
-         Final CI, validator, and panel lanes may be pending while the PR is open\n\
-         Delivery `candidate_id`\n\
-         Delivery `content_id`\n\
-         - [ ] **`make test-integration` passes in the final validator lane**\n\
-         - [ ] **`make test-host-integration` passes in the final validator lane**\n\
-         tree-bound wave seal passed before\n\
-         {PURE_POLICY_NA}\n\
-         {PURE_POLICY_NA}\n"
-    )
-}
-
 #[test]
 fn pr_template_ratchet_negative_fixtures_fail_closed() {
-    let valid = valid_pr_template_fixture();
-    assert!(
-        pr_template_violations(&valid).is_empty(),
-        "complete parallel-delivery fixture must pass"
+    let missing_metadata_ban = format!(
+        "- [ ] **`make test-integration` passes on the host before PR creation**\n  {PURE_POLICY_NA}\n\
+         - [ ] **`make test-host-integration` passes on the host before PR creation**\n  {PURE_POLICY_NA}\n"
     );
-
-    let missing_metadata_ban =
-        valid.replace("Do not include AI agent, assistant, or model metadata", "");
     assert!(
         pr_template_violations(&missing_metadata_ban)
             .iter()
@@ -154,36 +95,14 @@ fn pr_template_ratchet_negative_fixtures_fail_closed() {
         "negative fixture without AI/model metadata ban must fail closed"
     );
 
-    let missing_na = valid.replacen(PURE_POLICY_NA, "", 1);
+    let missing_na = "Do not include AI agent, assistant, or model metadata\n\
+         - [ ] **`make test-integration` passes on the host before PR creation**\n\
+         - [ ] **`make test-host-integration` passes on the host before PR creation**\n";
     assert!(
-        pr_template_violations(&missing_na)
+        pr_template_violations(missing_na)
             .iter()
             .any(|violation| violation.contains("N/A escape hatches")),
         "negative fixture without host-gate N/A hatches must fail closed"
-    );
-
-    let old_pre_pr = valid
-        .replace(
-            "`make test-integration` passes in the final validator lane",
-            "`make test-integration` passes on the host before PR creation",
-        )
-        .replace(
-            "`make test-host-integration` passes in the final validator lane",
-            "`make test-host-integration` passes on the host before PR creation",
-        );
-    assert!(
-        pr_template_violations(&old_pre_pr)
-            .iter()
-            .any(|violation| violation.contains("final validator lane")),
-        "obsolete pre-PR host-gate wording must fail closed"
-    );
-
-    let requested_model = format!("- **Model:** gemini\n{valid}");
-    assert!(
-        pr_template_violations(&requested_model)
-            .iter()
-            .any(|violation| violation.contains("provenance fields")),
-        "PR template model/provenance fields must fail closed"
     );
 }
 

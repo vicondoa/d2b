@@ -1,16 +1,17 @@
-# Guest-side wiring for realm-broker-managed sshd host keys.
+# Guest-side wiring for host-managed sshd host keys.
 #
 # Point sshd at the keys provisioned on the host by
-# the workload key resource and shared in via the `d2b-ssh-host` virtiofs
-# tag. Disable
+# `nixos-modules/host-ssh-host-keys.nix` and shared in via the
+# `d2b-ssh-host` virtiofs tag from `nixos-modules/store.nix`. Disable
 # the NixOS default `ssh-keygen -A` activation hook so sshd does not
 # try to generate keys into the read-only nix store at boot.
 #
-# Imported into every local VM workload's guest composition.
+# Imported into every enabled VM's NixOS config via host.nix's
+# per-VM imports list.
 { config, lib, ... }:
 
 {
-  # The realm controller DAG wires the read-only share. The guest only consumes it.
+  # microvm.nix wires the share — see store.nix. Guest just consumes.
   services.openssh = lib.mkIf config.services.openssh.enable {
     # Disable the upstream NixOS activation script that runs
     # `ssh-keygen -A` and writes into /etc/ssh/. Without this the

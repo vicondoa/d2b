@@ -1,0 +1,77 @@
+{ lib, ... }:
+
+let
+  # ---------------------------------------------------------------------------
+  # daemon-only end-state.
+  #
+  # Pre- this module generated an exact-unit allowlist covering every
+  # per-VM sidecar the bash CLI drove via `systemctl <verb>
+  # <unit>`: `d2b@<vm>.service`,
+  # `d2b-<vm>-{gpu,snd,swtpm,store-sync}.service`,
+  # `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}`, plus a
+  # second rule scoped to the per-VM `d2b-<vm>-gpu` system user
+  # granting it start/stop/restart of its paired
+  # `d2b-<vm>-snd.service`.
+  #
+  # All of those grants are vestigial post-clean-break (ADR 0015)
+  #
+  #   * `` + ``
+  #     delete the bash CLI and every per-VM systemd template the
+  #     allowlist named — there is no longer any unit shaped like
+  #     `d2b@<vm>` / `d2b-<vm>-*` / `d2b-sys-<env>-*`
+  #     for polkit to be asked about.
+  #   * The  bash fallback bridge was retired in; mutating verbs
+  #     run daemon-only end-to-end. The operator-facing control plane
+  #     is the daemon's public socket (group-readable to `d2bd`),
+  #     authorised at accept time via SO_PEERCRED — polkit is no
+  #     longer in the per-VM lifecycle path.
+  #
+  # What is KEPT: the launcher-group allowlist for the two daemon-only
+  # singleton units that operators still drive directly with
+  # `systemctl`
+  #
+  #   * `d2bd.service` — the public daemon. It may restart after a
+  #     `nixos-rebuild switch`; VM runners survive via KillMode=process
+  #     and daemon re-adoption.
+  #   * `d2b-priv-broker.service` + `d2b-priv-broker.socket` —
+  #     the privileged broker pair. Socket-activated; operators may
+  #     bounce them to recover from a stuck handler.
+  #
+  # Verbs are limited to `start`, `stop`, `restart`. `reload`,
+  # `try-restart`, `enable`, `disable`, `mask`, `manage-unit-files`,
+  # and `reload-daemon` still require the polkit default
+  # (admin-password) path. Action ids other than
+  # `org.freedesktop.systemd1.manage-units` are not granted.
+  #
+  # Default-deny invariant: the allowlist is a literal three-element
+  # array; an unknown unit name falls through the for-loop and the
+  # rule returns `undefined`, which polkit treats as "this rule has
+  # no opinion" — control passes to the next rule, ultimately to the
+  # password-prompt default.
+  # ---------------------------------------------------------------------------
+  launcherAllowedUnits = [
+    "d2bd.service"
+    "d2b-priv-broker.service"
+    "d2b-priv-broker.socket"
+  ];
+
+  launcherAllowedUnitsJs =
+    "[" + (lib.concatMapStringsSep ", " (u: ''"${u}"'') launcherAllowedUnits) + "]";
+in
+{
+  security.polkit.extraConfig = ''
+    polkit.addRule(function(action, subject) {
+      if (action.id !== "org.freedesktop.systemd1.manage-units") return;
+      if (!subject.isInGroup("d2b")) return;
+      var verb = action.lookup("verb") || "";
+      if (verb !== "start" && verb !== "stop" && verb !== "restart") return;
+      var unit = action.lookup("unit") || "";
+      var allowed = ${launcherAllowedUnitsJs};
+      for (var i = 0; i < allowed.length; i++) {
+        if (unit === allowed[i]) {
+          return polkit.Result.YES;
+        }
+      }
+    });
+  '';
+}

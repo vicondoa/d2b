@@ -2,10 +2,10 @@
 
 **Diataxis category:** reference.
 
-Realm policy is fail-closed and local by default. The local root retains its
-local lifecycle boundary, while child realms are owned by their controller and
-provider operations are admitted through typed in-process or provider-agent
-implementations.
+Realm policy is fail-closed and local by default. The host keeps the local
+fast path for bare VM names and the reserved `local` realm. Gateway-backed
+realms are fronted by a dedicated gateway guest in a separate d2b env/L2
+segment.
 
 Current Nix support for `d2b.realms.<realm>` records the declaration,
 emits private host-local controller metadata, and materializes host-local
@@ -16,22 +16,24 @@ evaluation, identity/enrollment, and realm-owned network partitions remain
 future work. Existing `d2b.envs` and `d2b.vms.<vm>.env` declarations remain
 the implemented workload substrate.
 
-## Policy ownership
+## Policy modes
 
-| Placement | Authority | Credential boundary | Cross-realm default |
+| Mode | Authority | Credential boundary | Cross-realm default |
 | --- | --- | --- | --- |
-| `host-local` | The owning realm controller and its broker boundary. | No provider credential bytes in host Nix metadata. | Deny. |
-| `provider-agent` | An authenticated provider agent bound to the exact realm, workload, and role. | Credentials remain co-located and cross provider boundaries only as opaque leases. | Deny. |
+| `host-resident` | Local host daemon for local workloads only. | No realm relay/provider credentials. | Deny. |
+| `gateway-backed` | The owning gateway guest for that realm. | Credentials are enrolled direct-to-guest or by opaque passthrough; the host never parses or stores them. | Deny. |
 
-The host is not a global realm-policy singleton. The removed gateway option
-surface is not a policy mode and does not provision an authority.
+The host is not a global realm-policy singleton. It publishes local gateway
+entrypoints and routes operators to the right gateway VM, but remote/provider
+policy storage and evaluation live in the owning gateway guest.
 
 ## Isolation rules
 
-- Work, personal, and provider realms must not share an L2 bridge when they
-  require separate network trust boundaries.
-- A provider-agent placement is not itself a network isolation boundary.
-  Operators must rely on declared realm/env topology and L3 isolation controls.
+- `local` is always host-resident and cannot be declared as gateway-backed.
+- Work, personal, and provider realms never share a gateway guest or L2 bridge.
+- Default routes inside a gateway guest are not an isolation boundary by
+  themselves; operators must rely on the dedicated gateway/env topology and L3
+  isolation controls below.
 - Deployments must validate that host L3 forwarding cannot transit between
   realm bridges. Use explicit firewall/nftables drops or equivalent
   namespace/routing isolation before treating realms as isolated at L3. This
@@ -47,8 +49,8 @@ surface is not a policy mode and does not provision an authority.
 ## Authorization and audit
 
 Local host authorization remains `SO_PEERCRED` plus the canonical `d2b`
-lifecycle group. Relay, provider-agent, and cross-realm identities never map
-to local lifecycle roles.
+lifecycle group. Relay, gateway, and cross-realm identities never map to local
+lifecycle roles.
 
 Future host-local realm access uses direct realm socket authorization. A local
 user or group listed for a realm is intended to connect to that realm's public

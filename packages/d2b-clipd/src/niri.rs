@@ -12,11 +12,6 @@ use thiserror::Error;
 use crate::policy::AttributionQuality;
 
 pub const DEFAULT_NIRI_MAX_LINE_BYTES: usize = 1024 * 1024;
-pub const MAX_NIRI_WINDOWS: usize = 4_096;
-pub const MAX_NIRI_WORKSPACES: usize = 1_024;
-pub const MAX_NIRI_APP_ID_BYTES: usize = 256;
-pub const MAX_NIRI_TITLE_BYTES: usize = 512;
-pub const MAX_NIRI_OUTPUT_BYTES: usize = 128;
 
 #[derive(Debug, Error)]
 pub enum NiriIpcError {
@@ -108,13 +103,7 @@ impl NiriJsonClient {
     pub fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
         let value: Value = self.request(&NiriRequest::Workspaces)?;
         let payload = value.get("Workspaces").cloned().unwrap_or(value);
-        let mut workspaces: Vec<NiriWorkspace> =
-            serde_json::from_value(payload).map_err(|err| NiriIpcError::Json(err.to_string()))?;
-        workspaces.truncate(MAX_NIRI_WORKSPACES);
-        for workspace in &mut workspaces {
-            bound_workspace(workspace);
-        }
-        Ok(workspaces)
+        serde_json::from_value(payload).map_err(|err| NiriIpcError::Json(err.to_string()))
     }
 
     pub fn read_event(&mut self) -> Result<NiriEvent, NiriIpcError> {
@@ -270,7 +259,7 @@ fn parse_niri_event(value: Value) -> NiriEvent {
                 .unwrap_or(true),
         },
         other => NiriEvent::Unknown {
-            type_name: Some(bounded_label(other, 64)),
+            type_name: Some(other.to_owned()),
         },
     }
 }
@@ -313,27 +302,16 @@ pub struct FocusedWindowSnapshot {
 
 impl FocusedWindowSnapshot {
     pub fn from_window(window: &NiriWindow, workspaces: &BTreeMap<u64, NiriWorkspace>) -> Self {
-        let output_label = window
-            .output_label
-            .as_deref()
-            .map(|label| bounded_label(label, MAX_NIRI_OUTPUT_BYTES))
-            .or_else(|| {
-                window
-                    .workspace_id
-                    .and_then(|id| workspaces.get(&id))
-                    .and_then(|workspace| workspace.output_label.as_deref())
-                    .map(|label| bounded_label(label, MAX_NIRI_OUTPUT_BYTES))
-            });
+        let output_label = window.output_label.clone().or_else(|| {
+            window
+                .workspace_id
+                .and_then(|id| workspaces.get(&id))
+                .and_then(|workspace| workspace.output_label.clone())
+        });
         Self {
             id: window.id,
-            app_id: window
-                .app_id
-                .as_deref()
-                .map(|label| bounded_label(label, MAX_NIRI_APP_ID_BYTES)),
-            title: window
-                .title
-                .as_deref()
-                .map(|label| bounded_label(label, MAX_NIRI_TITLE_BYTES)),
+            app_id: window.app_id.clone(),
+            title: window.title.clone(),
             workspace_id: window.workspace_id,
             output_label,
         }
@@ -369,8 +347,6 @@ impl NiriStateCache {
                 self.stale = self.focused.is_none();
             }
             NiriEvent::WindowChanged { window } => {
-                let mut window = window;
-                bound_window(&mut window);
                 if let Some(id) = window.id {
                     if window.is_focused.unwrap_or(false) || self.focused_window_id == Some(id) {
                         self.focused_window_id = Some(id);
@@ -383,8 +359,7 @@ impl NiriStateCache {
             NiriEvent::WindowsChanged { windows } => {
                 self.windows.clear();
                 self.focused = None;
-                for mut window in windows.into_iter().take(MAX_NIRI_WINDOWS) {
-                    bound_window(&mut window);
+                for window in windows {
                     if let Some(id) = window.id {
                         if window.is_focused.unwrap_or(false) || self.focused_window_id == Some(id)
                         {
@@ -394,10 +369,6 @@ impl NiriStateCache {
                         }
                         self.windows.insert(id, window);
                     }
-                }
-                if self.focused.is_none() {
-                    self.focused_window_id = None;
-                    self.stale = true;
                 }
             }
             NiriEvent::WindowClosed { id } => {
@@ -413,11 +384,6 @@ impl NiriStateCache {
             NiriEvent::WorkspacesChanged { workspaces } => {
                 self.workspaces = workspaces
                     .into_iter()
-                    .take(MAX_NIRI_WORKSPACES)
-                    .map(|mut workspace| {
-                        bound_workspace(&mut workspace);
-                        workspace
-                    })
                     .filter_map(|workspace| workspace.id.map(|id| (id, workspace)))
                     .collect();
             }
@@ -428,11 +394,8 @@ impl NiriStateCache {
 
     pub fn update_focused_window(
         &mut self,
-        mut focused: Option<NiriWindow>,
+        focused: Option<NiriWindow>,
     ) -> Option<FocusedWindowSnapshot> {
-        if let Some(window) = &mut focused {
-            bound_window(window);
-        }
         self.focused = focused;
         self.stale = false;
         if let Some(window) = &self.focused
@@ -457,48 +420,6 @@ impl NiriStateCache {
             .as_ref()
             .map(|window| FocusedWindowSnapshot::from_window(window, &self.workspaces))
     }
-}
-
-fn bound_window(window: &mut NiriWindow) {
-    window.app_id = window
-        .app_id
-        .take()
-        .map(|value| bounded_label(&value, MAX_NIRI_APP_ID_BYTES));
-    window.title = window
-        .title
-        .take()
-        .map(|value| bounded_label(&value, MAX_NIRI_TITLE_BYTES));
-    window.output_label = window
-        .output_label
-        .take()
-        .map(|value| bounded_label(&value, MAX_NIRI_OUTPUT_BYTES));
-}
-
-fn bound_workspace(workspace: &mut NiriWorkspace) {
-    workspace.name = workspace
-        .name
-        .take()
-        .map(|value| bounded_label(&value, MAX_NIRI_TITLE_BYTES));
-    workspace.output_label = workspace
-        .output_label
-        .take()
-        .map(|value| bounded_label(&value, MAX_NIRI_OUTPUT_BYTES));
-}
-
-pub fn bounded_label(value: &str, max_bytes: usize) -> String {
-    let mut bounded = String::new();
-    for character in value.chars() {
-        let replacement = if character.is_control() {
-            '\u{fffd}'
-        } else {
-            character
-        };
-        if bounded.len() + replacement.len_utf8() > max_bytes {
-            break;
-        }
-        bounded.push(replacement);
-    }
-    bounded
 }
 
 pub trait FocusedWindowProvider {
@@ -858,42 +779,5 @@ mod tests {
             Some("firefox".to_owned())
         );
         assert!(attributor.cache_mut().is_stale());
-    }
-
-    #[test]
-    fn focused_metadata_is_bounded_and_control_char_free() {
-        let snapshot = FocusedWindowSnapshot::from_window(
-            &NiriWindow {
-                id: Some(1),
-                app_id: Some(format!("app\n{}", "x".repeat(MAX_NIRI_APP_ID_BYTES * 2))),
-                title: Some(format!("secret\r{}", "y".repeat(MAX_NIRI_TITLE_BYTES * 2))),
-                output_label: Some("DP-1\tunexpected".to_owned()),
-                ..NiriWindow::default()
-            },
-            &BTreeMap::new(),
-        );
-        let app_id = snapshot.app_id.unwrap();
-        let title = snapshot.title.unwrap();
-        let output = snapshot.output_label.unwrap();
-        assert!(app_id.len() <= MAX_NIRI_APP_ID_BYTES);
-        assert!(title.len() <= MAX_NIRI_TITLE_BYTES);
-        assert!(output.len() <= MAX_NIRI_OUTPUT_BYTES);
-        assert!(!app_id.contains('\n'));
-        assert!(!title.contains('\r'));
-        assert!(!output.contains('\t'));
-    }
-
-    #[test]
-    fn cache_caps_compositor_collections() {
-        let mut cache = NiriStateCache::default();
-        cache.apply_event(NiriEvent::WindowsChanged {
-            windows: (0..MAX_NIRI_WINDOWS + 2)
-                .map(|id| NiriWindow {
-                    id: Some(id as u64),
-                    ..NiriWindow::default()
-                })
-                .collect(),
-        });
-        assert_eq!(cache.windows.len(), MAX_NIRI_WINDOWS);
     }
 }

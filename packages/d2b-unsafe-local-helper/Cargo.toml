@@ -1,9 +1,7 @@
 [package]
 name = "d2b-unsafe-local-helper"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 description = "Same-uid user-session runtime helper for d2b unsafe-local workloads"
@@ -12,23 +10,17 @@ description = "Same-uid user-session runtime helper for d2b unsafe-local workloa
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
 clap = { version = "4.5", features = ["derive"] }
-d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-services"] }
-d2b-core = { workspace = true }
-d2b-realm-core = { workspace = true }
-d2b-session.workspace = true
-d2b-session-unix = { workspace = true, features = ["host-socket"] }
-d2b-wayland-proxy = { workspace = true }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-wayland-proxy = { path = "../d2b-wayland-proxy", version = "0.1.0" }
 getrandom = "0.2"
 nix = { version = "0.29", features = ["fs", "poll", "socket", "uio", "user", "signal", "process"] }
-protobuf.workspace = true
 rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
+sha2 = "0.10"
 socket2 = "0.5"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
-ttrpc = { workspace = true, features = ["async"] }
 uzers = "0.12"
 zbus = { version = "5.16", features = ["blocking-api"] }

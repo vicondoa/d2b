@@ -4,5 +4,5 @@
   "mode": "dry-run",
   "notes": "d2b rollback --dry-run reports the planned operation; --apply uses the daemon-first bridge and falls back to the legacy bash path only when needed.",
   "planned": [],
-  "vm": "bm6ccueaqlr7wd2cskza"
+  "vm": "corp-vm"
 }

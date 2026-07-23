@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Bounded event payloads consumed by the desktop observer service.
+//! Typed security-key event enum.
 //!
-//! These values are application payloads carried by the authenticated
-//! `d2b.notify.v2` ComponentSession. They are not an endpoint-discovery or
-//! authorization mechanism.
+//! Events are emitted by the host security-key broker and consumed by the
+//! desktop notification layer. Each variant corresponds to one stage in the
+//! CTAP/WebAuthn ceremony lifecycle.
+//!
+//! Consumers (notification forwarder, Waybar helper, wlcontrol) receive these
+//! via the durable state file ([`crate::state`]) and must not perform any
+//! privileged host mutations in response — all callbacks route through
+//! `d2bd`/CLI via action nonces ([`crate::nonce`]).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-pub const MAX_EVENT_BYTES: usize = 4 * 1024;
-pub const MAX_SESSION_ID_CHARS: usize = 64;
-pub const MAX_VM_NAME_CHARS: usize = 64;
-pub const MAX_RP_ID_CHARS: usize = 128;
-pub const MAX_REASON_CHARS: usize = 128;
-pub const MAX_WAITING_VMS: usize = 16;
 
 /// Phase in a security-key ceremony at which the key is occupied by a
 /// concurrent request from a different VM.
@@ -126,43 +124,6 @@ pub enum SecurityKeyEvent {
 }
 
 impl SecurityKeyEvent {
-    /// Decode one event payload after enforcing the service payload bound.
-    pub fn from_json(payload: &[u8]) -> Result<Self, EventError> {
-        if payload.len() > MAX_EVENT_BYTES {
-            return Err(EventError::PayloadTooLarge);
-        }
-        let event: Self = serde_json::from_slice(payload).map_err(EventError::Json)?;
-        event.validate()?;
-        Ok(event)
-    }
-
-    /// Validate all variable-size fields before accepting an event into the
-    /// observer queue.
-    pub fn validate(&self) -> Result<(), EventError> {
-        bounded("sessionId", self.session_id(), MAX_SESSION_ID_CHARS)?;
-        bounded("vmName", self.vm_name(), MAX_VM_NAME_CHARS)?;
-        match self {
-            Self::Started {
-                rp_id: Some(rp_id), ..
-            } => bounded("rpId", rp_id, MAX_RP_ID_CHARS)?,
-            Self::Busy { detail, .. } => {
-                bounded("holderVm", &detail.holder_vm, MAX_VM_NAME_CHARS)?;
-                if detail.waiting_vms.len() > MAX_WAITING_VMS {
-                    return Err(EventError::TooManyWaitingVms);
-                }
-                for vm in &detail.waiting_vms {
-                    bounded("waitingVm", vm, MAX_VM_NAME_CHARS)?;
-                }
-            }
-            Self::Failed { reason, .. } => bounded("reason", reason, MAX_REASON_CHARS)?,
-            _ => {}
-        }
-        if serde_json::to_vec(self).map_err(EventError::Json)?.len() > MAX_EVENT_BYTES {
-            return Err(EventError::PayloadTooLarge);
-        }
-        Ok(())
-    }
-
     /// Opaque session identifier shared by all event variants.
     pub fn session_id(&self) -> &str {
         match self {
@@ -220,38 +181,6 @@ impl SecurityKeyEvent {
         )
     }
 }
-
-fn bounded(field: &'static str, value: &str, max_chars: usize) -> Result<(), EventError> {
-    if value.is_empty() || value.chars().count() > max_chars || value.chars().any(char::is_control)
-    {
-        Err(EventError::InvalidField(field))
-    } else {
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum EventError {
-    PayloadTooLarge,
-    InvalidField(&'static str),
-    TooManyWaitingVms,
-    Json(serde_json::Error),
-}
-
-impl std::fmt::Display for EventError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PayloadTooLarge => formatter.write_str("event payload exceeds service limit"),
-            Self::InvalidField(field) => write!(formatter, "invalid bounded event field: {field}"),
-            Self::TooManyWaitingVms => {
-                formatter.write_str("event waiting list exceeds service limit")
-            }
-            Self::Json(_) => formatter.write_str("invalid event payload"),
-        }
-    }
-}
-
-impl std::error::Error for EventError {}
 
 #[cfg(test)]
 mod tests {
@@ -340,41 +269,6 @@ mod tests {
         let json_val = json!({"kind": "zapped", "sessionId": "s1", "vmName": "vm1"});
         let result = serde_json::from_value::<SecurityKeyEvent>(json_val);
         assert!(result.is_err(), "unknown kind must be rejected");
-    }
-
-    #[test]
-    fn oversized_payload_is_rejected_before_decode() {
-        let payload = vec![b' '; MAX_EVENT_BYTES + 1];
-        assert!(matches!(
-            SecurityKeyEvent::from_json(&payload),
-            Err(EventError::PayloadTooLarge)
-        ));
-    }
-
-    #[test]
-    fn event_fields_and_waiting_list_are_bounded() {
-        let event = SecurityKeyEvent::Busy {
-            session_id: "s1".to_owned(),
-            vm_name: "work".to_owned(),
-            detail: BusyDetail {
-                holder_vm: "personal".to_owned(),
-                waiting_vms: vec!["vm".to_owned(); MAX_WAITING_VMS + 1],
-            },
-        };
-        assert!(matches!(
-            event.validate(),
-            Err(EventError::TooManyWaitingVms)
-        ));
-
-        let event = SecurityKeyEvent::Started {
-            session_id: "s1".to_owned(),
-            vm_name: "x".repeat(MAX_VM_NAME_CHARS + 1),
-            rp_id: None,
-        };
-        assert!(matches!(
-            event.validate(),
-            Err(EventError::InvalidField("vmName"))
-        ));
     }
 
     #[test]

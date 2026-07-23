@@ -1,2 +1,2 @@
-# ADR 0021 realm-role virtiofsd argv snapshot.
-/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-virtiofsd-1.13.0/bin/virtiofsd --socket-path=/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/sqp27tqz36s4bzbwtpea/ro-store.sock --socket-group=d2b-role-sqp27tqz36s4bzbwtpea --shared-dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/store-view/live --thread-pool-size=4 --cache=auto --inode-file-handles=never --readonly --sandbox=chroot
+# W4-H10 virtiofsd argv snapshot from d2b_host::virtiofsd_argv::generate_virtiofsd_argv(audit_ro_store_input())
+/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-virtiofsd-1.13.0/bin/virtiofsd --socket-path=corp-vm-virtiofs-ro-store.sock --socket-group=kvm --shared-dir=/nix/store --thread-pool-size=4 --posix-acl --xattr --cache=auto --inode-file-handles=prefer --readonly

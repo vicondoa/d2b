@@ -23,8 +23,7 @@
 use std::fs::{self, File};
 use std::io;
 use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -97,167 +96,6 @@ pub enum LiveHandlerError {
         audit: crate::ops::audit_op::SwtpmDirAudit,
         reason: &'static str,
     },
-}
-
-#[derive(Debug)]
-pub struct PreboundRealmListeners {
-    pub public: std::os::fd::OwnedFd,
-    pub broker: std::os::fd::OwnedFd,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RealmListenerOwnership {
-    pub uid: u32,
-    pub gid: u32,
-    pub mode: u32,
-}
-
-/// Pre-bind both realm listeners before either child exists. Existing entries
-/// are refused rather than unlinked, so a foreign or still-live listener can
-/// never be silently replaced.
-pub fn prebind_realm_listeners(
-    runtime_root: &Path,
-    realm_id: &str,
-) -> Result<PreboundRealmListeners, LiveHandlerError> {
-    prebind_realm_listeners_inner(runtime_root, realm_id, None)
-}
-
-pub fn prebind_realm_listeners_for_identities(
-    runtime_root: &Path,
-    realm_id: &str,
-    public: RealmListenerOwnership,
-    broker: RealmListenerOwnership,
-) -> Result<PreboundRealmListeners, LiveHandlerError> {
-    prebind_realm_listeners_inner(runtime_root, realm_id, Some((public, broker)))
-}
-
-fn prebind_realm_listeners_inner(
-    runtime_root: &Path,
-    realm_id: &str,
-    ownership: Option<(RealmListenerOwnership, RealmListenerOwnership)>,
-) -> Result<PreboundRealmListeners, LiveHandlerError> {
-    use nix::sys::socket::{
-        AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
-    };
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
-
-    fn validate_owned_directory(path: &Path) -> Result<(), LiveHandlerError> {
-        let metadata = std::fs::symlink_metadata(path)
-            .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        if !metadata.is_dir()
-            || metadata.file_type().is_symlink()
-            || metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o022 != 0
-        {
-            return Err(LiveHandlerError::Activation(
-                "realm runtime directory is not owned and write-protected".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-
-    d2b_host::realm_children::validate_realm_id(realm_id)
-        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-    if ownership.is_some_and(|(public, broker)| {
-        [public, broker].iter().any(|owner| {
-            owner.uid == 0
-                || owner.mode & !0o777 != 0
-                || owner.mode & 0o007 != 0
-                || owner.mode & 0o600 != 0o600
-        })
-    }) {
-        return Err(LiveHandlerError::Activation(
-            "realm listener ownership must be non-root and owner/group scoped".to_owned(),
-        ));
-    }
-    validate_owned_directory(runtime_root)?;
-    let realm_root = runtime_root.join(realm_id);
-    match std::fs::symlink_metadata(&realm_root) {
-        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-            return Err(LiveHandlerError::Activation(
-                "realm runtime root is not a safe directory".to_owned(),
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir(&realm_root)
-                .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        }
-        Err(error) => return Err(LiveHandlerError::Activation(error.to_string())),
-    }
-    validate_owned_directory(&realm_root)?;
-
-    fn bind_one(path: &Path) -> Result<std::os::fd::OwnedFd, LiveHandlerError> {
-        let fd = socket(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
-            None,
-        )
-        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        let address =
-            UnixAddr::new(path).map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        bind(fd.as_raw_fd(), &address)
-            .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        let backlog =
-            Backlog::new(128).map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-        if let Err(error) = listen(&fd, backlog) {
-            let _ = std::fs::remove_file(path);
-            return Err(LiveHandlerError::Activation(error.to_string()));
-        }
-        Ok(fd)
-    }
-
-    let public_path = realm_root.join("public.sock");
-    let public = bind_one(&public_path)?;
-    let broker_path = realm_root.join("broker.sock");
-    match bind_one(&broker_path) {
-        Ok(broker) => {
-            if let Some((public_owner, broker_owner)) = ownership {
-                let apply = |path: &Path, owner: RealmListenerOwnership| {
-                    let metadata = std::fs::symlink_metadata(path)
-                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-                    let path_fd = rustix::fs::open(
-                        path,
-                        rustix::fs::OFlags::PATH
-                            | rustix::fs::OFlags::NOFOLLOW
-                            | rustix::fs::OFlags::CLOEXEC,
-                        rustix::fs::Mode::empty(),
-                    )
-                    .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-                    let socket_stat = rustix::fs::fstat(&path_fd)
-                        .map_err(|error| LiveHandlerError::Activation(error.to_string()))?;
-                    if !metadata.file_type().is_socket() || metadata.ino() != socket_stat.st_ino {
-                        return Err(LiveHandlerError::Activation(
-                            "realm listener path does not match its bound socket".to_owned(),
-                        ));
-                    }
-                    crate::sys::path_safe::fchownat_empty_path(
-                        path_fd.as_fd(),
-                        Some(owner.uid),
-                        Some(owner.gid),
-                    )
-                    .and_then(|()| {
-                        crate::sys::path_safe::fchmodat_empty_path(path_fd.as_fd(), owner.mode)
-                    })
-                    .map_err(|error| LiveHandlerError::Activation(error.to_string()))
-                };
-                if let Err(error) = apply(&public_path, public_owner)
-                    .and_then(|()| apply(&broker_path, broker_owner))
-                {
-                    let _ = std::fs::remove_file(&public_path);
-                    let _ = std::fs::remove_file(&broker_path);
-                    return Err(error);
-                }
-            }
-            Ok(PreboundRealmListeners { public, broker })
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(public_path);
-            Err(error)
-        }
-    }
 }
 
 impl std::fmt::Display for LiveHandlerError {
@@ -1273,7 +1111,6 @@ pub fn live_usbip_unbind(
                 lock_path.display()
             )));
         }
-
         Some(_) => {}
         None => return Ok(()),
     }
@@ -2717,7 +2554,6 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
     if plan.uid == 0 {
         return Ok(());
     }
-
     for device in &plan.mount_policy.device_binds {
         match device.as_str() {
             "/dev/kvm" | "/dev/vhost-net" | "/dev/net/tun" | "/dev/dri/renderD128" => {
@@ -2859,16 +2695,16 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                         });
                     }
                     Ok(Some((file, meta))) => {
-                        if let Some(expected_uid) = wayland_user_uid
-                            && meta.uid() != expected_uid
-                        {
-                            return Err(LiveHandlerError::SpawnFailed {
-                                detail: format!(
-                                    "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
-                                         expected owner uid {expected_uid}",
-                                    plan.uid,
-                                ),
-                            });
+                        if let Some(expected_uid) = wayland_user_uid {
+                            if meta.uid() != expected_uid {
+                                return Err(LiveHandlerError::SpawnFailed {
+                                    detail: format!(
+                                        "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
+                                             expected owner uid {expected_uid}",
+                                        plan.uid,
+                                    ),
+                                });
+                            }
                         }
                         file
                     }
@@ -2999,69 +2835,6 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
     refresh_guest_control_fs_acl(plan)?;
 
     Ok(())
-}
-
-fn wayland_proxy_stdio(
-    plan: &SpawnRunnerPlan,
-) -> Result<Option<(OwnedFd, OwnedFd)>, LiveHandlerError> {
-    if plan.seccomp_policy_ref.as_deref() != Some("w1-wayland-proxy") {
-        return Ok(None);
-    }
-    let workload_id = plan
-        .argv
-        .windows(2)
-        .find_map(|pair| (pair[0] == "--workload-id").then_some(pair[1].as_str()))
-        .filter(|value| {
-            !value.is_empty()
-                && value.len() <= 128
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
-        .ok_or_else(|| LiveHandlerError::SpawnFailed {
-            detail: "wayland-proxy workload identity is missing or invalid".to_owned(),
-        })?;
-    let runtime_dir =
-        env_value(plan, "XDG_RUNTIME_DIR").ok_or_else(|| LiveHandlerError::SpawnFailed {
-            detail: "graphical-session-not-active: XDG_RUNTIME_DIR not set".to_owned(),
-        })?;
-    let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
-    let upstream =
-        UnixStream::connect(Path::new(runtime_dir).join(wayland_display)).map_err(|error| {
-            LiveHandlerError::SpawnFailed {
-                detail: format!("connect authenticated Wayland upstream descriptor: {error}"),
-            }
-        })?;
-
-    let listener_path = PathBuf::from(format!("/run/d2b-wlproxy/{workload_id}/wayland-0"));
-    match fs::symlink_metadata(&listener_path) {
-        Ok(metadata) if metadata.file_type().is_socket() => {
-            fs::remove_file(&listener_path).map_err(|error| LiveHandlerError::SpawnFailed {
-                detail: format!("remove stale Wayland listener: {error}"),
-            })?;
-        }
-        Ok(_) => {
-            return Err(LiveHandlerError::SpawnFailed {
-                detail: "refusing to replace non-socket Wayland listener".to_owned(),
-            });
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(LiveHandlerError::SpawnFailed {
-                detail: format!("inspect Wayland listener: {error}"),
-            });
-        }
-    }
-    let listener =
-        UnixListener::bind(&listener_path).map_err(|error| LiveHandlerError::SpawnFailed {
-            detail: format!("pre-bind Wayland listener descriptor: {error}"),
-        })?;
-    fs::set_permissions(&listener_path, fs::Permissions::from_mode(0o660)).map_err(|error| {
-        LiveHandlerError::SpawnFailed {
-            detail: format!("set Wayland listener posture: {error}"),
-        }
-    })?;
-    Ok(Some((upstream.into(), listener.into())))
 }
 
 fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
@@ -3618,7 +3391,6 @@ pub fn live_spawn_runner(
     let seccomp_program = load_runner_seccomp(&plan)?;
     let cgroup_fds = prepare_runner_cgroup_fds(&plan.cgroup_placement)?;
     refresh_spawn_runner_acls(&plan)?;
-    let inherited_stdio = wayland_proxy_stdio(&plan)?;
 
     // swtpm-dir first-run hardening (issue #64). Gated on the
     // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
@@ -3698,7 +3470,6 @@ pub fn live_spawn_runner(
         // The sys layer dup2's it to fd 10 in the user-NS child before
         // execve.
         pre_opened_device_fds,
-        inherited_stdio,
         memlock_limit_bytes,
     };
 

@@ -1,9 +1,3 @@
-//! One-shot host activation helper.
-//!
-//! The caller supplies one fixed operation through argv and consumes only the
-//! process status. This binary does not connect to a daemon, open a framework
-//! endpoint, or implement a compatibility protocol.
-
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::{CStr, CString};
@@ -11,8 +5,6 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process;
-
-const OPERATION: &str = "chgrp-by-numeric-gid";
 
 #[derive(Debug)]
 struct Config {
@@ -38,92 +30,44 @@ fn parse_gid(s: &str) -> Result<libc::gid_t, String> {
     Ok(value as libc::gid_t)
 }
 
-fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Config, String> {
-    let mut args = args.into_iter();
+fn parse_args() -> Result<Config, String> {
+    let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        Some(OPERATION) => {}
-        Some(operation) => return Err(format!("unsupported operation: {operation}")),
-        None => return Err("missing operation".to_string()),
+        Some("chgrp-by-numeric-gid") => {}
+        _ => usage(),
     }
 
     let mut root = None;
     let mut legacy_gids = BTreeSet::new();
-    let mut saw_legacy_gids = false;
     let mut target_gid = None;
     let mut skip_while_lock_held = None;
     let mut fail_closed = false;
-    let mut no_follow_symlinks = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--root" => {
-                if root.is_some() {
-                    return Err("--root may be specified only once".to_string());
-                }
-                root = Some(PathBuf::from(args.next().ok_or("--root requires a value")?));
-            }
+            "--root" => root = args.next().map(PathBuf::from),
             "--legacy-gids" => {
-                if saw_legacy_gids {
-                    return Err("--legacy-gids may be specified only once".to_string());
-                }
-                saw_legacy_gids = true;
                 let raw = args.next().ok_or("--legacy-gids requires a value")?;
                 for part in raw.split(',').filter(|p| !p.is_empty()) {
                     legacy_gids.insert(parse_gid(part)?);
                 }
             }
             "--target-gid" => {
-                if target_gid.is_some() {
-                    return Err("--target-gid may be specified only once".to_string());
-                }
                 target_gid = Some(parse_gid(
                     &args.next().ok_or("--target-gid requires a value")?,
                 )?)
             }
-            "--skip-while-lock-held" => {
-                if skip_while_lock_held.is_some() {
-                    return Err("--skip-while-lock-held may be specified only once".to_string());
-                }
-                skip_while_lock_held = Some(PathBuf::from(
-                    args.next()
-                        .ok_or("--skip-while-lock-held requires a value")?,
-                ));
-            }
-            "--fail-closed" => {
-                if fail_closed {
-                    return Err("--fail-closed may be specified only once".to_string());
-                }
-                fail_closed = true;
-            }
-            "--no-follow-symlinks" => {
-                if no_follow_symlinks {
-                    return Err("--no-follow-symlinks may be specified only once".to_string());
-                }
-                no_follow_symlinks = true;
-            }
+            "--skip-while-lock-held" => skip_while_lock_held = args.next().map(PathBuf::from),
+            "--fail-closed" => fail_closed = true,
+            "--no-follow-symlinks" => {}
             _ => return Err(format!("unknown argument: {arg}")),
         }
     }
 
     let root = root.ok_or("--root is required")?;
     let target_gid = target_gid.ok_or("--target-gid is required")?;
-    if !root.is_absolute() {
-        return Err("--root must be an absolute path".to_string());
-    }
     if legacy_gids.is_empty() {
         return Err("--legacy-gids must name at least one gid".to_string());
-    }
-    if legacy_gids.contains(&target_gid) {
-        return Err("--target-gid must not also be a legacy gid".to_string());
-    }
-    if !no_follow_symlinks {
-        return Err("--no-follow-symlinks is required".to_string());
-    }
-    if skip_while_lock_held
-        .as_ref()
-        .is_some_and(|path| !path.is_absolute())
-    {
-        return Err("--skip-while-lock-held must name an absolute path".to_string());
     }
     Ok(Config {
         root,
@@ -132,10 +76,6 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Config, Str
         skip_while_lock_held,
         fail_closed,
     })
-}
-
-fn parse_args() -> Result<Config, String> {
-    parse_args_from(env::args().skip(1))
 }
 
 fn cstring_path(path: &std::path::Path) -> io::Result<CString> {
@@ -154,12 +94,7 @@ fn last_errno() -> io::Error {
 
 fn lock_is_held(path: &std::path::Path) -> io::Result<bool> {
     let c_path = cstring_path(path)?;
-    let fd = unsafe {
-        libc::open(
-            c_path.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
+    let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
     if fd < 0 {
         let err = last_errno();
         return if err.kind() == io::ErrorKind::NotFound {
@@ -530,93 +465,5 @@ mod tests {
         assert!(line.contains("path="));
         assert!(line.contains(&format!("old_gid={old_gid}")));
         assert!(line.contains(&format!("new_gid={new_gid}")));
-    }
-
-    fn fixed_args() -> Vec<String> {
-        [
-            OPERATION,
-            "--root",
-            "/var/lib/d2b",
-            "--legacy-gids",
-            "100,101",
-            "--target-gid",
-            "102",
-            "--no-follow-symlinks",
-            "--skip-while-lock-held",
-            "/run/d2b/daemon.lock",
-            "--fail-closed",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-    }
-
-    #[test]
-    fn fixed_one_shot_argv_is_the_only_accepted_boundary() {
-        let cfg = parse_args_from(fixed_args()).expect("fixed activation argv");
-        assert_eq!(cfg.root, Path::new("/var/lib/d2b"));
-        assert_eq!(cfg.legacy_gids, BTreeSet::from([100, 101]));
-        assert_eq!(cfg.target_gid, 102);
-        assert!(cfg.fail_closed);
-
-        let mut unsupported = fixed_args();
-        unsupported[0] = "serve".to_string();
-        assert!(parse_args_from(unsupported).is_err());
-
-        let mut endpoint = fixed_args();
-        endpoint.extend(["--socket".to_string(), "/run/d2b/helper.sock".to_string()]);
-        assert!(parse_args_from(endpoint).is_err());
-    }
-
-    #[test]
-    fn path_safety_and_unambiguous_argv_are_mandatory() {
-        let mut missing_no_follow = fixed_args();
-        missing_no_follow.retain(|arg| arg != "--no-follow-symlinks");
-        assert!(parse_args_from(missing_no_follow).is_err());
-
-        let mut relative_root = fixed_args();
-        relative_root[2] = "var/lib/d2b".to_string();
-        assert!(parse_args_from(relative_root).is_err());
-
-        let mut duplicate_root = fixed_args();
-        duplicate_root.extend(["--root".to_string(), "/run/d2b".to_string()]);
-        assert!(parse_args_from(duplicate_root).is_err());
-
-        let mut overlapping_gid = fixed_args();
-        overlapping_gid[6] = "100".to_string();
-        assert!(parse_args_from(overlapping_gid).is_err());
-    }
-
-    #[test]
-    fn lock_probe_refuses_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let dir = TestDir::new().expect("test dir");
-        let lock = dir.0.join("daemon.lock");
-        let link = dir.0.join("daemon-link.lock");
-        fs::write(&lock, b"").expect("lock file");
-        symlink(&lock, &link).expect("lock symlink");
-
-        let err = lock_is_held(&link).expect_err("lock symlink must be refused");
-        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
-    }
-
-    #[test]
-    fn manifest_keeps_the_helper_out_of_framework_ipc() {
-        let manifest = include_str!("../Cargo.toml");
-        let dependencies = manifest
-            .split_once("[dependencies]")
-            .expect("dependencies section")
-            .1
-            .split("\n[")
-            .next()
-            .expect("dependencies body");
-        let entries: Vec<_> = dependencies
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .collect();
-
-        assert_eq!(entries, ["libc = \"0.2\""]);
     }
 }

@@ -229,10 +229,9 @@ fn bundle_tampered_to_envelope_round_trip() {
 }
 
 #[test]
-fn daemon_refuses_a_tampered_bundle_during_provider_registry_startup() {
+fn daemon_vm_start_returns_bundle_tampered_envelope() {
     let fixture = common::DaemonFixture::new("bundle-tampered-daemon.");
-    let username = common::current_username();
-    fixture.write_config(&[&username], &[&username]);
+    fixture.write_config(&["admin-user"], &["admin-user"]);
 
     let artifacts_dir = fixture.root().join("artifacts");
     fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
@@ -255,11 +254,25 @@ fn daemon_refuses_a_tampered_bundle_during_provider_registry_startup() {
     )
     .expect("rewrite daemon config with test artifact paths");
 
-    let server = common::spawn_d2bd_serve_expect_startup_failure(&fixture);
+    let server = common::spawn_d2bd_serve(&fixture, &common::TestPeer::admin(), true, None);
+    let (rc, output) = common::test_client(
+        &fixture.socket_path,
+        &[
+            common::HELLO_FRAME,
+            r#"{"type":"vmStart","vm":"__smoke-test-nonexistent__","dryRun":false,"apply":true,"json":false}"#,
+        ],
+    );
     let status = server.wait();
 
-    assert!(
-        !status.success(),
-        "d2bd must fail startup before serving a tampered provider bundle"
+    assert!(status.success(), "d2bd serve exited with {status:?}");
+    assert_eq!(
+        rc, 60,
+        "vmStart should return BundleTampered; output:\n{output}"
+    );
+    common::assert_contains(&output, r#""type":"error""#, "typed error frame");
+    common::assert_contains(
+        &output,
+        r#""kind":"bundle-tampered""#,
+        "bundle-tampered envelope",
     );
 }

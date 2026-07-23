@@ -88,6 +88,224 @@ rec {
         );
     };
 
+  vmRuntimeKind = vm: vm.runtime.kind or "nixos";
+  isNixosVm = vm: vmRuntimeKind vm == "nixos";
+  isQemuMediaVm = vm: vmRuntimeKind vm == "qemu-media";
+
+  enabledVms = vms: lib.filterAttrs (_: vm: vm.enable) vms;
+  normalNixosVms = vms: lib.filterAttrs (_: vm: vm.enable && isNixosVm vm) vms;
+  qemuMediaVms = vms: lib.filterAttrs (_: vm: vm.enable && isQemuMediaVm vm) vms;
+
+  localRuntimeProvider = { id, driver }: {
+    inherit id driver;
+    type = "local";
+  };
+
+  nixosRuntimeProvider = localRuntimeProvider {
+    id = "local-cloud-hypervisor";
+    driver = "cloud-hypervisor";
+  };
+
+  qemuMediaRuntimeProvider = localRuntimeProvider {
+    id = "local-qemu-media";
+    driver = "qemu";
+  };
+
+  mkServiceCapability =
+    { supported
+    , nodeId ? null
+    , runnerRole ? null
+    , driver ? null
+    , readiness ? null
+    , contract ? null
+    , transport ? null
+    , unitStrategy ? null
+    }:
+    {
+      inherit supported;
+    }
+    // lib.optionalAttrs (nodeId != null) { inherit nodeId; }
+    // lib.optionalAttrs (runnerRole != null) { inherit runnerRole; }
+    // lib.optionalAttrs (driver != null) { inherit driver; }
+    // lib.optionalAttrs (readiness != null) { inherit readiness; }
+    // lib.optionalAttrs (contract != null) { inherit contract; }
+    // lib.optionalAttrs (transport != null) { inherit transport; }
+    // lib.optionalAttrs (unitStrategy != null) { inherit unitStrategy; };
+
+  mkRuntimeCapabilities =
+    { legacy }:
+    legacy;
+
+  runtimeServiceSummary = { id, role, optional ? false }: {
+    inherit id role optional;
+  };
+
+  nixosRuntimeCapabilities = mkRuntimeCapabilities {
+    legacy = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = true;
+      exec = true;
+      configSync = true;
+      ssh = true;
+      storeSync = true;
+      keys = true;
+      inGuestObservability = true;
+    };
+  };
+
+  nixosRuntimeOperationCapabilities = {
+    lifecycle = {
+      start = true;
+      stop = true;
+      restart = true;
+      switch = true;
+      hostPrepare = true;
+    };
+    media = {
+      usbHotplug = true;
+      removableMedia = false;
+      qemuMedia = false;
+    };
+    display = {
+      display = true;
+      graphics = true;
+      video = true;
+      waylandProxy = true;
+    };
+    guest = {
+      guestControl = true;
+      exec = true;
+      shell = true;
+      configSync = true;
+      ssh = true;
+      keys = true;
+      inGuestObservability = true;
+    };
+    storage = {
+      storeSync = true;
+      virtiofs = true;
+      volumes = true;
+    };
+  };
+
+  qemuMediaRuntimeCapabilities = mkRuntimeCapabilities {
+    legacy = {
+      lifecycle = true;
+      display = true;
+      usbHotplug = true;
+      guestControl = false;
+      exec = false;
+      configSync = false;
+      ssh = false;
+      storeSync = false;
+      keys = false;
+      inGuestObservability = false;
+    };
+  };
+
+  qemuMediaRuntimeOperationCapabilities = {
+    lifecycle = {
+      start = true;
+      stop = true;
+      restart = true;
+      switch = false;
+      hostPrepare = true;
+    };
+    media = {
+      usbHotplug = true;
+      removableMedia = true;
+      qemuMedia = true;
+    };
+    display = {
+      display = true;
+      graphics = false;
+      video = false;
+      waylandProxy = false;
+    };
+    guest = {
+      guestControl = false;
+      exec = false;
+      shell = false;
+      configSync = false;
+      ssh = false;
+      keys = false;
+      inGuestObservability = false;
+    };
+    storage = {
+      storeSync = false;
+      virtiofs = false;
+      volumes = false;
+    };
+  };
+
+  nixosHypervisorService = mkServiceCapability {
+    supported = true;
+    nodeId = "cloud-hypervisor";
+    runnerRole = "cloud-hypervisor-runner";
+    driver = "cloud-hypervisor";
+    readiness = "api-socket";
+    contract = "spawn-runner";
+    unitStrategy = "microvm-or-graphics-sidecar";
+  };
+
+  qemuMediaHypervisorService = mkServiceCapability {
+    supported = true;
+    nodeId = "qemu-media";
+    runnerRole = "qemu-media-runner";
+    driver = "qemu";
+    readiness = "qmp-socket";
+    contract = "spawn-runner";
+    unitStrategy = "daemon-supervised-runner";
+  };
+
+  runtimeHypervisorService = kind: (runtimeProviderCatalog.${kind}
+    or (throw "d2b: unsupported runtime kind '${kind}'"))._hypervisorService;
+
+  runtimeProviderCatalog = {
+    nixos = {
+      kind = "nixos";
+      provider = nixosRuntimeProvider;
+      capabilities = nixosRuntimeCapabilities;
+      operationCapabilities = nixosRuntimeOperationCapabilities;
+      autostartPolicy = "host-boot-eligible";
+      services = [
+        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; })
+        (runtimeServiceSummary { id = "store-virtiofs-preflight"; role = "storage"; })
+        (runtimeServiceSummary { id = "virtiofsd"; role = "storage"; })
+        (runtimeServiceSummary { id = "cloud-hypervisor"; role = "hypervisor"; })
+        (runtimeServiceSummary { id = "guest-control-health"; role = "guest-control"; })
+        (runtimeServiceSummary { id = "swtpm"; role = "tpm"; optional = true; })
+        (runtimeServiceSummary { id = "gpu"; role = "display"; optional = true; })
+        (runtimeServiceSummary { id = "audio"; role = "audio"; optional = true; })
+        (runtimeServiceSummary { id = "video"; role = "video"; optional = true; })
+        (runtimeServiceSummary { id = "usbip"; role = "usb"; optional = true; })
+      ];
+      _hypervisorService = nixosHypervisorService;
+    };
+    qemu-media = {
+      kind = "qemu-media";
+      provider = qemuMediaRuntimeProvider;
+      capabilities = qemuMediaRuntimeCapabilities;
+      operationCapabilities = qemuMediaRuntimeOperationCapabilities;
+      autostartPolicy = "manual-only";
+      services = [
+        (runtimeServiceSummary { id = "host-reconcile"; role = "host"; })
+        (runtimeServiceSummary { id = "qemu-media"; role = "hypervisor"; })
+        (runtimeServiceSummary { id = "usbip"; role = "usb"; optional = true; })
+      ];
+      _hypervisorService = qemuMediaHypervisorService;
+    };
+  };
+
+  vmRuntimeMetadata = _name: vm:
+    let
+      kind = vmRuntimeKind vm;
+      runtime = runtimeProviderCatalog.${kind}
+        or (throw "d2b: unsupported runtime kind '${kind}'");
+    in builtins.removeAttrs runtime [ "_hypervisorService" ];
+
   # Shared helper extracted from minijail-profiles.nix and
   # host-users.nix to eliminate the 4-line duplicate that was a
   # drift-risk for broker/ownership-matrix UID agreement. If the hash
@@ -265,27 +483,120 @@ rec {
     in
     lib.toUpper "02:${pair 0}:${pair 2}:${pair 4}:${pair 6}:${hex2 index}";
 
-  # vmRunner — single access point for per-workload runner config.
-  # Reads from `config.d2b._computedWorkloads.<workloadId>.config.microvm.*`
-  # — the d2b-owned per-workload evaluator output (see
-  # `nixos-modules/vm-evaluator.nix`, composed by `host.nix`). No
-  # upstream microvm.nix dependency, and no read of the removed
-  # `d2b.vms`/`d2b._computed` (singular) surface: real consumers
-  # (processes-json.nix, closures-json.nix) already read
-  # `cfg._computedWorkloads.${workloadId}` directly, and this helper
-  # exists as the equivalent named access point for callers that
-  # prefer it.
-  vmRunner = config: workloadId:
-    config.d2b._computedWorkloads.${workloadId}.config.microvm or { };
+  # vmRunner — single access point for per-VM runner config that
+  # processes-json.nix / closures-json.nix /
+  # minijail-profiles.nix / store.nix consume. Reads from
+  # `config.d2b._computed.vms.<name>.config.microvm.*` — the
+  # d2b-owned per-VM evaluator output (see
+  # `nixos-modules/vm-evaluator.nix`). The
+  # `d2b._computed.vms.<name>` storage location is a SIBLING
+  # to `d2b.vms.<name>` to avoid module-system infinite
+  # recursion (host.nix's composeVm pass cannot map over cfg.vms
+  # and write back to d2b.vms.<name>.computed without
+  # cycling). NO upstream microvm.nix dependency.
+  vmRunner = config: name:
+    config.d2b._computed.${name}.config.microvm or { };
 
-  # Sibling helper for the per-workload toplevel build.
-  vmToplevel = config: workloadId:
-    config.d2b._computedWorkloads.${workloadId}.config.system.build.toplevel;
+  # Sibling helper for the per-VM toplevel build.
+  vmToplevel = config: name:
+    config.d2b._computed.${name}.config.system.build.toplevel;
 
-  # Sibling helper for the per-workload declared runner derivation.
+  # Sibling helper for the per-VM declared runner derivation.
   # In v1.1+ this is always null (the broker generates runner
   # argv in Rust via `packages/d2b-host/src/*_argv.rs`); the
   # helper returns null for backward compat with consumers that
   # touch the path.
-  vmDeclaredRunner = _config: _workloadId: null;
+  vmDeclaredRunner = _config: _name: null;
+
+  # guestConfigForbiddenNamespaces — namespace-containment policy check
+  # for the per-VM guest-editable `guestConfigFile`.
+  #
+  # Returns the host-owned option path(s) (under `microvm.*` /
+  # `d2b.*`) that the guest file — OR ANY MODULE IT IMPORTS /
+  # GENERATES — defined. An empty list means the guest file touched only
+  # guest-OS options.
+  #
+  # Mechanism: evaluate the guest file (and its full import closure) with
+  # `lib.evalModules` over the REAL nixpkgs NixOS module set, so a guest
+  # module that READS a standard option (e.g.
+  # `config.networking.hostName` in a `mkIf` guard) resolves instead of
+  # crashing the host eval. `microvm` and `d2b` are redeclared as
+  # detector options that nothing else defines, and a namespace is
+  # reported iff `options.<ns>.isDefined` — i.e. the guest contributed a
+  # real definition. Detection is by definition-EXISTENCE, so a guest's
+  # `imports`, a `builtins.toFile`-generated module, and `_file`
+  # spoofing are all caught (none can hide a definition from the option
+  # system).
+  #
+  # SCOPE / NON-GOAL: this is a best-effort namespace-containment policy
+  # lint, NOT a sound eval-time security sandbox. Two known limits, both
+  # inherent to evaluating guest-authored Nix as a module and both with
+  # the SAME backstop (the operator-review-and-approve trust gate — the
+  # host only ever evaluates a guest file the operator reviewed via
+  # `config diff` and approved) and the SAME deferred sound fix (a
+  # restricted/pure evaluator whose normalized output is the only thing
+  # the host consumes — see docs/adr/0024 "Future work"):
+  #   1. `lib.evalModules` cannot stop an approved guest file from
+  #      reading host paths at eval time (e.g. `builtins.readFile`).
+  #   2. This lint evaluates the guest file over the base NixOS module
+  #      set, NOT the full per-VM module stack (`vm.config`, components,
+  #      framework). So the `config.*` context can differ from the real
+  #      eval, which has two consequences:
+  #      (a) a forbidden `microvm.*`/`d2b.*` definition gated on
+  #          `lib.mkIf <cond>` where `<cond>` depends on a value the real
+  #          eval sets but this context does not can evaluate false here
+  #          and true in the real eval, escaping the lint (false NEGATIVE);
+  #      (b) a contained guest file that READS a framework-declared option
+  #          (e.g. `config.d2b.sshUser`, declared by the framework but
+  #          here only an undefined `anything` detector root) fails the
+  #          sandbox eval and is reported fail-closed (false POSITIVE).
+  #      Sound attribution of a guest's contribution in the FULL context
+  #      is not reliably expressible — definition counts conflate
+  #      defaults, value comparison forces (and is perturbed by) the whole
+  #      runner closure, and source-file attribution is `_file`-spoofable
+  #      — hence the deferred restricted-evaluator.
+  # The lint reliably catches the common case: UNCONDITIONAL host-owned
+  # sets, and conditional ones whose guard resolves the same here as in
+  # the real eval — from any source (`imports`, `builtins.toFile`,
+  # `_file` spoofing), since detection is by definition-existence. Guest
+  # files that read framework-declared `d2b.*`/`microvm.*` options
+  # are not supported (they read host-owned state the guest layer should
+  # not depend on).
+  #
+  # `pkgs` + `specialArgs` mirror what the real per-VM evaluator passes
+  # so a guest config valid in the real eval applies here too. Any eval
+  # failure is treated fail-closed (reported as a violation).
+  guestConfigForbiddenNamespaces = { pkgs, specialArgs ? { } }: guestFile:
+    let
+      modulesPath = toString (pkgs.path + "/nixos/modules");
+      baseModules = import (modulesPath + "/module-list.nix");
+      ev = lib.evalModules {
+        specialArgs = {
+          inherit lib pkgs modulesPath baseModules;
+          utils = import (pkgs.path + "/nixos/lib/utils.nix") {
+            inherit lib pkgs;
+            config = ev.config;
+          };
+        } // specialArgs;
+        modules = baseModules ++ [
+          {
+            nixpkgs.pkgs = pkgs;
+            nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
+          }
+          {
+            options.microvm = lib.mkOption { type = lib.types.anything; };
+            options.d2b = lib.mkOption { type = lib.types.anything; };
+          }
+          guestFile
+        ];
+      };
+      namesIn = ns:
+        lib.optionals ev.options.${ns}.isDefined
+          (lib.concatMap
+            (def: map (k: "${ns}.${k}") (lib.attrNames def))
+            ev.options.${ns}.definitions);
+      probe = builtins.tryEval (namesIn "microvm" ++ namesIn "d2b");
+    in
+    if probe.success then probe.value
+    else [ "<guestConfigFile failed to evaluate in the containment check>" ];
 }

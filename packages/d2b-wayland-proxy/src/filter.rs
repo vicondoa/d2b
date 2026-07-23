@@ -8,11 +8,15 @@
 //!           -> FilterXdgSurfaceHandler (per xdg_surface)
 //!             -> FilterXdgToplevelHandler (per xdg_toplevel)
 
+use rustix::event::PollFlags;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
-    os::fd::OwnedFd,
+    io::Read,
+    os::{fd::OwnedFd, unix::net::UnixStream},
+    path::PathBuf,
     rc::{Rc, Weak},
+    time::Instant,
 };
 use wl_proxy::{
     client::{Client, ClientHandler},
@@ -72,7 +76,10 @@ use wl_proxy::{
 };
 
 use crate::{
-    bridge::{BridgeTransferKind, BridgeTransferMetadata},
+    bridge::{
+        BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
+        BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
+    },
     clipboard::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
         global_disposition,
@@ -88,26 +95,6 @@ use crate::{
 
 const MAX_MIME_TYPES_PER_SOURCE: usize = 64;
 const MAX_PENDING_BRIDGE_HANDOFFS: usize = 64;
-
-pub enum DescriptorHandoff {
-    Delivered,
-    Backpressure(OwnedFd),
-    Failed,
-}
-
-impl std::fmt::Debug for DescriptorHandoff {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Delivered => "DescriptorHandoff::Delivered",
-            Self::Backpressure(_) => "DescriptorHandoff::Backpressure(<fd>)",
-            Self::Failed => "DescriptorHandoff::Failed",
-        })
-    }
-}
-
-pub trait ClipboardDescriptorBridge: std::fmt::Debug {
-    fn handoff(&mut self, fd: OwnedFd, metadata: &BridgeTransferMetadata) -> DescriptorHandoff;
-}
 
 /// State-level handler: creates per-client display handlers.
 pub struct FilterStateHandler {
@@ -204,7 +191,11 @@ pub struct VirtualClipboardState {
     identity: ProxyIdentity,
     vm_name: String,
     diag: Rc<RefCell<DiagRateLimiter>>,
-    descriptor_bridge: Option<Box<dyn ClipboardDescriptorBridge>>,
+    bridge_path: Option<PathBuf>,
+    bridge: Option<UnixStream>,
+    bridge_read_buffer: Vec<u8>,
+    bridge_reconnect: BridgeReconnectMachine,
+    next_bridge_retry: Option<Instant>,
     pending_bridge_handoffs: VecDeque<PendingBridgeHandoff>,
     mime_policy: ClipboardMimePolicy,
     devices: Vec<Weak<WlDataDevice>>,
@@ -241,7 +232,7 @@ struct VirtualOffer {
 
 #[derive(Debug)]
 struct PendingBridgeHandoff {
-    fd: OwnedFd,
+    fd: LocalTransferFd,
     metadata: BridgeTransferMetadata,
 }
 
@@ -300,7 +291,7 @@ impl VirtualClipboardState {
     pub fn new(
         identity: impl Into<ProxyIdentity>,
         diag: Rc<RefCell<DiagRateLimiter>>,
-        descriptor_bridge: Option<Box<dyn ClipboardDescriptorBridge>>,
+        bridge_config: BridgeConfig,
     ) -> Self {
         let identity = identity.into();
         let vm_name = identity.log_label();
@@ -308,7 +299,11 @@ impl VirtualClipboardState {
             identity,
             vm_name,
             diag,
-            descriptor_bridge,
+            bridge_path: bridge_config.socket_path.clone(),
+            bridge: None,
+            bridge_read_buffer: Vec::new(),
+            bridge_reconnect: BridgeReconnectMachine::new(&bridge_config),
+            next_bridge_retry: None,
             pending_bridge_handoffs: VecDeque::new(),
             mime_policy: ClipboardMimePolicy::v1_defaults(),
             devices: Vec::new(),
@@ -461,7 +456,7 @@ impl VirtualClipboardState {
     }
 
     fn route(&self) -> ClipboardRoute {
-        if self.descriptor_bridge.is_some() {
+        if self.bridge_path.is_some() {
             ClipboardRoute::HostOrCrossRealm
         } else {
             ClipboardRoute::SameEndpoint
@@ -528,10 +523,64 @@ impl VirtualClipboardState {
         }
     }
 
+    fn ensure_bridge_connected(&mut self) -> Option<&mut UnixStream> {
+        if self.bridge.is_some() {
+            return self.bridge.as_mut();
+        }
+        let path = self.bridge_path.clone()?;
+        let now = Instant::now();
+        match self.bridge_reconnect.state() {
+            BridgeConnectionState::Disabled => return None,
+            BridgeConnectionState::Connected { .. } => {
+                self.bridge_reconnect.disconnected();
+                match self.bridge_reconnect.state() {
+                    BridgeConnectionState::Backoff { .. } => {
+                        self.schedule_bridge_retry();
+                        return None;
+                    }
+                    BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
+                    BridgeConnectionState::Disabled => return None,
+                    BridgeConnectionState::Connecting { .. } => {}
+                    BridgeConnectionState::Connected { .. } => return None,
+                }
+            }
+            BridgeConnectionState::Backoff { .. } => {
+                if self.next_bridge_retry.is_some_and(|retry| retry > now) {
+                    return None;
+                }
+                self.bridge_reconnect.retry_due();
+            }
+            BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
+            BridgeConnectionState::Connecting { .. } => {}
+        }
+        match connect_bridge_nonblocking(&path) {
+            Ok(stream) => {
+                self.bridge_reconnect.connect_succeeded();
+                self.next_bridge_retry = None;
+                self.bridge = Some(stream);
+            }
+            Err(error) => {
+                let vm = self.vm_name.clone();
+                let error = bounded_error_detail(error.to_string());
+                self.diag
+                    .borrow_mut()
+                    .warn("clipboard-bridge", "connect-failed", || {
+                        format!(
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=connect-failed error={error}"
+                        )
+                    });
+                self.bridge_reconnect.connect_failed();
+                self.schedule_bridge_retry();
+            }
+        }
+
+        self.bridge.as_mut()
+    }
+
     fn handoff_via_bridge(&mut self, fd: &OwnedFd, metadata: &BridgeTransferMetadata) {
         self.flush_pending_bridge_handoffs();
         let local_fd = match rustix::io::fcntl_dupfd_cloexec(fd, 0) {
-            Ok(fd) => fd,
+            Ok(fd) => LocalTransferFd::new(fd),
             Err(error) => {
                 let vm = self.vm_name.clone();
                 let error = bounded_error_detail(error.to_string());
@@ -545,17 +594,18 @@ impl VirtualClipboardState {
                 return;
             }
         };
-        if !self.pending_bridge_handoffs.is_empty() || self.descriptor_bridge.is_none() {
+        if !self.pending_bridge_handoffs.is_empty() {
             self.enqueue_bridge_handoff(local_fd, metadata);
+            self.ensure_bridge_connected();
             return;
         }
-        let status = self
-            .descriptor_bridge
-            .as_mut()
-            .expect("bridge checked above")
-            .handoff(local_fd, metadata);
-        match status {
-            DescriptorHandoff::Delivered => {
+        let Some(bridge) = self.ensure_bridge_connected() else {
+            self.enqueue_bridge_handoff(local_fd, metadata);
+            return;
+        };
+        match bridge.handoff_transfer_fd(&local_fd, metadata) {
+            crate::bridge::HandoffStatus::Delivered => {
+                let _ = local_fd.close_after_handoff(crate::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] target={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
                     self.vm_name,
@@ -563,25 +613,34 @@ impl VirtualClipboardState {
                     bounded_log_mime(&metadata.mime_type)
                 );
             }
-            DescriptorHandoff::Backpressure(fd) => {
-                self.enqueue_bridge_handoff(fd, metadata);
+            crate::bridge::HandoffStatus::Backpressure => {
+                self.enqueue_bridge_handoff(local_fd, metadata);
             }
-            DescriptorHandoff::Failed => {
+            crate::bridge::HandoffStatus::Failed(error) => {
+                let status = crate::bridge::HandoffStatus::Failed(error);
+                let error = match status {
+                    crate::bridge::HandoffStatus::Failed(error) => error,
+                    _ => unreachable!(),
+                };
+                let _ = local_fd.close_after_handoff(crate::bridge::HandoffStatus::Failed(error));
+                self.mark_bridge_disconnected();
+                self.ensure_bridge_connected();
                 let vm = self.vm_name.clone();
                 let kind = metadata.kind;
                 let mime = bounded_log_mime(&metadata.mime_type);
+                let error = handoff_error_detail(error);
                 self.diag
                     .borrow_mut()
                     .warn("clipboard-bridge", "handoff-deferred", || {
                         format!(
-                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=handoff-deferred kind={kind:?} mime={mime}"
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=handoff-deferred kind={kind:?} mime={mime} error={error}"
                         )
                     });
             }
         }
     }
 
-    fn enqueue_bridge_handoff(&mut self, fd: OwnedFd, metadata: &BridgeTransferMetadata) {
+    fn enqueue_bridge_handoff(&mut self, fd: LocalTransferFd, metadata: &BridgeTransferMetadata) {
         if self.pending_bridge_handoffs.len() >= MAX_PENDING_BRIDGE_HANDOFFS {
             let vm = self.vm_name.clone();
             let kind = metadata.kind;
@@ -607,13 +666,12 @@ impl VirtualClipboardState {
             let Some(pending) = self.pending_bridge_handoffs.pop_front() else {
                 break;
             };
-            let Some(bridge) = self.descriptor_bridge.as_mut() else {
+            let Some(bridge) = self.ensure_bridge_connected() else {
                 self.pending_bridge_handoffs.push_front(pending);
                 break;
             };
-            let metadata = pending.metadata;
-            let status = bridge.handoff(pending.fd, &metadata);
-            if self.handle_pending_handoff_status(metadata, status) == PendingHandoffStep::Stop {
+            let status = bridge.handoff_transfer_fd(&pending.fd, &pending.metadata);
+            if self.handle_pending_handoff_status(pending, status) == PendingHandoffStep::Stop {
                 break;
             }
         }
@@ -621,33 +679,38 @@ impl VirtualClipboardState {
 
     fn handle_pending_handoff_status(
         &mut self,
-        metadata: BridgeTransferMetadata,
-        status: DescriptorHandoff,
+        pending: PendingBridgeHandoff,
+        status: crate::bridge::HandoffStatus,
     ) -> PendingHandoffStep {
         match status {
-            DescriptorHandoff::Delivered => {
+            crate::bridge::HandoffStatus::Delivered => {
+                let _ = pending
+                    .fd
+                    .close_after_handoff(crate::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] target={} event=clipboard-bridge reason=queued-handoff-delivered kind={:?} mime={}",
                     self.vm_name,
-                    metadata.kind,
-                    bounded_log_mime(&metadata.mime_type)
+                    pending.metadata.kind,
+                    bounded_log_mime(&pending.metadata.mime_type)
                 );
                 PendingHandoffStep::Continue
             }
-            DescriptorHandoff::Backpressure(fd) => {
-                self.pending_bridge_handoffs
-                    .push_front(PendingBridgeHandoff { fd, metadata });
+            crate::bridge::HandoffStatus::Backpressure => {
+                self.pending_bridge_handoffs.push_front(pending);
                 PendingHandoffStep::Stop
             }
-            DescriptorHandoff::Failed => {
+            crate::bridge::HandoffStatus::Failed(error) => {
                 let vm = self.vm_name.clone();
-                let kind = metadata.kind;
-                let mime = bounded_log_mime(&metadata.mime_type);
+                let kind = pending.metadata.kind;
+                let mime = bounded_log_mime(&pending.metadata.mime_type);
+                let error = handoff_error_detail(error);
+                self.mark_bridge_disconnected();
+                self.pending_bridge_handoffs.push_front(pending);
                 self.diag
                     .borrow_mut()
                     .warn("clipboard-bridge", "queued-handoff-failed", || {
                         format!(
-                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=queued-handoff-failed kind={kind:?} mime={mime}"
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=queued-handoff-failed kind={kind:?} mime={mime} error={error}"
                         )
                     });
                 PendingHandoffStep::Stop
@@ -655,9 +718,134 @@ impl VirtualClipboardState {
         }
     }
 
-    pub fn drive_bridge_io(clipboard: &Rc<RefCell<Self>>) {
+    pub fn drive_bridge_io(clipboard: &Rc<RefCell<Self>>, bridge_ready: bool) {
         let mut state = clipboard.borrow_mut();
-        state.flush_pending_bridge_handoffs();
+        if state.pending_bridge_handoffs.is_empty() {
+            if state.bridge.is_none() {
+                state.ensure_bridge_connected();
+            }
+            return;
+        }
+        let had_bridge = state.bridge.is_some();
+        if state.bridge.is_none() {
+            state.ensure_bridge_connected();
+        }
+        if state.bridge.is_some() && (bridge_ready || !had_bridge) {
+            state.flush_pending_bridge_handoffs();
+        }
+    }
+
+    pub fn bridge_retry_deadline(&self) -> Option<Instant> {
+        self.next_bridge_retry
+    }
+
+    fn pending_bridge_poll_flags(&self) -> PollFlags {
+        let mut flags = PollFlags::IN;
+        if !self.pending_bridge_handoffs.is_empty() {
+            flags |= PollFlags::OUT;
+        }
+        flags
+    }
+
+    #[cfg(test)]
+    fn pending_handoff_count_for_tests(&self) -> usize {
+        self.pending_bridge_handoffs.len()
+    }
+
+    #[cfg(test)]
+    fn has_connected_bridge_for_tests(&self) -> bool {
+        self.bridge.is_some()
+    }
+
+    pub fn bridge_poll_stream_and_flags(&self) -> Option<(&UnixStream, PollFlags)> {
+        self.bridge
+            .as_ref()
+            .map(|stream| (stream, self.pending_bridge_poll_flags()))
+    }
+
+    pub fn drain_bridge_messages(clipboard: &Rc<RefCell<Self>>) {
+        let mut refresh = false;
+        {
+            let mut state = clipboard.borrow_mut();
+            let vm = state.vm_name.clone();
+            let mut disconnected = false;
+            let mut read_bytes = Vec::new();
+            if let Some(bridge) = state.ensure_bridge_connected() {
+                loop {
+                    let mut buf = [0_u8; 512];
+                    match bridge.read(&mut buf) {
+                        Ok(0) => {
+                            disconnected = true;
+                            break;
+                        }
+
+                        Ok(n) => read_bytes.extend_from_slice(&buf[..n]),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error) => {
+                            let error = bounded_error_detail(error.to_string());
+                            state.diag.borrow_mut().warn(
+                                "clipboard-bridge",
+                                "read-failed",
+                                || {
+                                    format!(
+                                        "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=read-failed error={error}"
+                                    )
+                                },
+                            );
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            state.bridge_read_buffer.extend_from_slice(&read_bytes);
+            while let Some(newline) = state
+                .bridge_read_buffer
+                .iter()
+                .position(|byte| *byte == b'\n')
+            {
+                let frame = state
+                    .bridge_read_buffer
+                    .drain(..=newline)
+                    .collect::<Vec<_>>();
+                if frame
+                    .windows(br#""type":"refresh_selection""#.len())
+                    .any(|window| window == br#""type":"refresh_selection""#)
+                {
+                    refresh = true;
+                }
+            }
+            if state.bridge_read_buffer.len() > 4096 {
+                state.bridge_read_buffer.clear();
+            }
+            if disconnected {
+                state.mark_bridge_disconnected();
+            }
+        }
+        if refresh {
+            broadcast_selection(clipboard);
+        }
+    }
+
+    fn mark_bridge_disconnected(&mut self) {
+        self.bridge.take();
+        self.bridge_read_buffer.clear();
+        self.bridge_reconnect.disconnected();
+        if matches!(
+            self.bridge_reconnect.state(),
+            BridgeConnectionState::Backoff { .. }
+        ) {
+            self.schedule_bridge_retry();
+        } else {
+            self.next_bridge_retry = None;
+        }
+    }
+
+    fn schedule_bridge_retry(&mut self) {
+        if let BridgeConnectionState::Backoff { delay, .. } = self.bridge_reconnect.state() {
+            self.next_bridge_retry = Some(Instant::now() + delay);
+        }
     }
 }
 
@@ -789,6 +977,13 @@ fn bounded_log_mime(mime: &str) -> String {
         }
     }
     out
+}
+
+fn handoff_error_detail(error: Option<nix::errno::Errno>) -> String {
+    error.map_or_else(
+        || "short-write".to_owned(),
+        |errno| bounded_error_detail(std::io::Error::from_raw_os_error(errno as i32).to_string()),
+    )
 }
 
 /// Per-registry handler: filters globals and intercepts binds.
@@ -2622,6 +2817,30 @@ fn bind_matches_advertised_cap(
     requested_interface == advertised.interface && requested_version <= advertised.version
 }
 
+fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
+
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(errno_to_io)?;
+    let addr = UnixAddr::new(path).map_err(errno_to_io)?;
+    match connect(fd.as_raw_fd(), &addr) {
+        Ok(()) | Err(nix::errno::Errno::EINPROGRESS | nix::errno::Errno::EAGAIN) => {
+            Ok(UnixStream::from(fd))
+        }
+        Err(error) => Err(errno_to_io(error)),
+    }
+}
+
+fn errno_to_io(error: nix::errno::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(error as i32)
+}
+
 /// Minimal `ClientHandler` that logs disconnections for debugging.
 pub struct FilterClientHandler {
     vm: String,
@@ -2665,20 +2884,26 @@ impl ClientHandler for FilterClientHandler {
     }
 }
 
-/// Create a `State` connected through the authenticated upstream descriptor, using the
+/// Create a `State` connected to the compositor at `upstream_path`, using the
 /// full `Baseline::ALL_OF_THEM` so every known protocol passes through to our
 /// `handle_global` callback for policy classification.
-pub fn build_state(upstream: &Rc<OwnedFd>) -> Result<Rc<State>, wl_proxy::state::StateError> {
+pub fn build_state(upstream_path: &str) -> Result<Rc<State>, wl_proxy::state::StateError> {
     State::builder(wl_proxy::baseline::Baseline::ALL_OF_THEM)
-        .with_server_fd(upstream)
+        .with_server_display_name(upstream_path)
         .build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::IoSliceMut;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixListener;
 
-    use crate::policy::{FilterPolicy, PolicyInput};
+    use crate::{
+        bridge::BridgeReconnectPolicy,
+        policy::{FilterPolicy, PolicyInput},
+    };
 
     fn policy() -> Rc<FilterPolicy> {
         Rc::new(FilterPolicy::build(PolicyInput {
@@ -2692,7 +2917,7 @@ mod tests {
         Rc::new(RefCell::new(VirtualClipboardState::new(
             "work".to_owned(),
             diag,
-            None,
+            BridgeConfig::disabled(),
         )))
     }
 
@@ -2751,7 +2976,7 @@ mod tests {
         let mut clipboard = VirtualClipboardState::new(
             "work".to_owned(),
             Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned()))),
-            None,
+            BridgeConfig::disabled(),
         );
         let source = Rc::new(RefCell::new(VirtualSource {
             source: Weak::new(),
@@ -2783,6 +3008,197 @@ mod tests {
         assert!(clipboard.offers.is_empty());
         assert!(clipboard.devices.is_empty());
         assert!(clipboard.selection.is_none());
+    }
+
+    #[test]
+    fn nonblocking_bridge_connect_errors_trigger_backoff() {
+        assert_eq!(
+            errno_to_io(nix::errno::Errno::EAGAIN).raw_os_error(),
+            Some(nix::errno::Errno::EAGAIN as i32)
+        );
+        assert_eq!(
+            errno_to_io(nix::errno::Errno::EINPROGRESS).raw_os_error(),
+            Some(nix::errno::Errno::EINPROGRESS as i32)
+        );
+    }
+
+    #[test]
+    fn bridge_handoff_is_queued_when_bridge_unavailable() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut clipboard = VirtualClipboardState::new(
+            "work".to_owned(),
+            diag,
+            BridgeConfig::from_parts(
+                Some(PathBuf::from("target/d2b-nonexistent-bridge.sock")),
+                std::path::Path::new("/run/d2b/clipd"),
+                None,
+                "work",
+                BridgeReconnectPolicy::default(),
+            )
+            .expect("bridge config"),
+        );
+        let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
+        let fd: OwnedFd = fd.into();
+        let metadata = BridgeTransferMetadata {
+            identity: ProxyIdentity::from("work"),
+            mime_type: "text/plain".to_owned(),
+            source_id: 7,
+            kind: BridgeTransferKind::PasteRequest,
+        };
+
+        clipboard.handoff_via_bridge(&fd, &metadata);
+
+        assert_eq!(clipboard.pending_handoff_count_for_tests(), 1);
+        assert!(clipboard.bridge_retry_deadline().is_some());
+    }
+
+    #[test]
+    fn flush_pending_bridge_handoffs_delivers_and_removes_queue_item() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut clipboard =
+            VirtualClipboardState::new("work".to_owned(), diag, BridgeConfig::disabled());
+        let (bridge, peer) = UnixStream::pair().expect("bridge pair");
+        clipboard.bridge = Some(bridge);
+        let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
+        clipboard
+            .pending_bridge_handoffs
+            .push_back(PendingBridgeHandoff {
+                fd: fd.into(),
+                metadata: BridgeTransferMetadata {
+                    identity: ProxyIdentity::from("work"),
+                    mime_type: "text/plain".to_owned(),
+                    source_id: 7,
+                    kind: BridgeTransferKind::PasteRequest,
+                },
+            });
+
+        clipboard.flush_pending_bridge_handoffs();
+
+        assert_eq!(clipboard.pending_handoff_count_for_tests(), 0);
+        let mut frame = [0_u8; 256];
+        let mut iov = [IoSliceMut::new(&mut frame)];
+        let mut cmsg_space = vec![0_u8; crate::bridge::SCM_RIGHTS_MIN_CONTROL_BYTES];
+        const {
+            assert!(crate::bridge::SCM_RIGHTS_CONTROL_FD_SLOTS >= crate::bridge::SCM_RIGHTS_MIN_FDS)
+        };
+        let msg = nix::sys::socket::recvmsg::<()>(
+            peer.as_raw_fd(),
+            &mut iov,
+            Some(&mut cmsg_space),
+            nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
+        )
+        .expect("recvmsg");
+        assert!(crate::bridge::recv_flags_are_fail_closed(msg.flags));
+        assert!(msg.bytes > 0);
+        for cmsg in msg.cmsgs().expect("cmsgs") {
+            if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
+                for fd in fds {
+                    let _ = nix::unistd::close(fd);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pending_handoff_backpressure_stops_flush_and_requeues_front() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut clipboard =
+            VirtualClipboardState::new("work".to_owned(), diag, BridgeConfig::disabled());
+        let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
+        let pending = PendingBridgeHandoff {
+            fd: fd.into(),
+            metadata: BridgeTransferMetadata {
+                identity: ProxyIdentity::from("work"),
+                mime_type: "text/plain".to_owned(),
+                source_id: 7,
+                kind: BridgeTransferKind::PasteRequest,
+            },
+        };
+
+        let step = clipboard
+            .handle_pending_handoff_status(pending, crate::bridge::HandoffStatus::Backpressure);
+
+        assert_eq!(step, PendingHandoffStep::Stop);
+        assert_eq!(clipboard.pending_handoff_count_for_tests(), 1);
+        assert_eq!(
+            clipboard
+                .pending_bridge_handoffs
+                .front()
+                .expect("requeued")
+                .metadata
+                .source_id,
+            7
+        );
+    }
+
+    #[test]
+    fn queued_handoff_failure_preserves_queue_and_respects_backoff() {
+        let root = PathBuf::from("target").join(format!(
+            "wlp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let path = root.join("bridge.sock");
+        let listener = UnixListener::bind(&path).expect("listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut clipboard = VirtualClipboardState::new(
+            "work".to_owned(),
+            diag,
+            BridgeConfig::from_parts(
+                Some(path.clone()),
+                std::path::Path::new("/run/d2b/clipd"),
+                None,
+                "work",
+                BridgeReconnectPolicy::default(),
+            )
+            .expect("bridge config"),
+        );
+        let (bad_bridge, bad_peer) = UnixStream::pair().expect("bad bridge pair");
+        drop(bad_peer);
+        clipboard.bridge = Some(bad_bridge);
+        clipboard.bridge_reconnect.start_connect();
+        clipboard.bridge_reconnect.connect_succeeded();
+        let metadata = BridgeTransferMetadata {
+            identity: ProxyIdentity::from("work"),
+            mime_type: "text/plain".to_owned(),
+            source_id: 7,
+            kind: BridgeTransferKind::PasteRequest,
+        };
+        for source_id in [7, 8] {
+            let (fd, _peer) = UnixStream::pair().expect("transfer pair");
+            let mut metadata = metadata.clone();
+            metadata.source_id = source_id;
+            clipboard
+                .pending_bridge_handoffs
+                .push_back(PendingBridgeHandoff {
+                    fd: fd.into(),
+                    metadata,
+                });
+        }
+
+        clipboard.flush_pending_bridge_handoffs();
+
+        assert_eq!(clipboard.pending_handoff_count_for_tests(), 2);
+        assert!(!clipboard.has_connected_bridge_for_tests());
+        assert!(clipboard.bridge_retry_deadline().is_some());
+        drop(listener);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn handoff_error_detail_is_human_readable() {
+        assert_eq!(handoff_error_detail(None), "short-write");
+        let detail = handoff_error_detail(Some(nix::errno::Errno::EPIPE));
+
+        assert!(!detail.chars().all(|ch| ch.is_ascii_digit()));
+        assert!(!detail.is_empty());
     }
 
     #[test]

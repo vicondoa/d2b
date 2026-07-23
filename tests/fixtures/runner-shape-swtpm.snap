@@ -1,10 +1,10 @@
-# canonical realm-role argv
-microvm-swtpm@ucvmyzodoxhnswumcjsa
+# argv
+microvm-swtpm@personal-dev
 socket
 --tpmstate
-dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm
+dir=/var/lib/d2b/vms/personal-dev/swtpm
 --ctrl
-type=unixio,path=/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/x32sq7fxfsib6wmcybhq/tpm.sock,mode=0660
+type=unixio,path=/run/d2b/vms/personal-dev/tpm.sock,mode=0660
 --tpm2
 --flags
 startup-clear

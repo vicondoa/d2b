@@ -26,7 +26,7 @@ pinned_channel=$(
 )
 [ -n "$pinned_channel" ] || { fail "could not read pinned Rust channel from $toolchain_file"; exit 1; }
 
-d2b_activate_rust_toolchain_path "$pinned_channel" || true
+d2b_activate_rust_toolchain_path || true
 
 # Bootstrap the pinned toolchain through rustup/nix when cargo is absent (CI).
 if [ -z "${D2B_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
@@ -47,17 +47,6 @@ fi
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 export CARGO_BUILD_RUSTC_WRAPPER="" RUSTC_WRAPPER=""
 
-# The Layer-1 runner may provide one global target root while proof crates select
-# a different pinned rustc. Keep each proof/toolchain below its own target
-# directory so concurrent workspace and proof jobs cannot reuse incompatible
-# metadata.
-proof_target_base=
-if [ -n "${D2B_PROOF_TARGET_DIR:-}" ]; then
-  proof_target_base=$D2B_PROOF_TARGET_DIR
-elif [ -n "${CARGO_TARGET_DIR:-}" ]; then
-  proof_target_base="$CARGO_TARGET_DIR/d2b-proofs/$RUSTUP_TOOLCHAIN"
-fi
-
 # Ensure the clippy component exists for the pinned toolchain. On CI runners
 # that ship rustup pre-installed, cargo is already on PATH so the nix-shell
 # bootstrap above is skipped; but the pinned toolchain then auto-installs as
@@ -69,17 +58,6 @@ if command -v rustup >/dev/null 2>&1; then
   rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true
   rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy
 fi
-proof_rustc=$(type -P rustc)
-proof_rustdoc=$(type -P rustdoc)
-proof_clippy_driver=$(type -P clippy-driver)
-[ -n "$proof_rustc" ] && [ -n "$proof_rustdoc" ] && [ -n "$proof_clippy_driver" ] || {
-  fail "pinned rustc/rustdoc/clippy-driver executables are unavailable"
-  exit 1
-}
-if [ "$("$proof_clippy_driver" -vV)" != "$("$proof_rustc" -vV)" ]; then
-  fail "clippy-driver does not match pinned rustc"
-  exit 1
-fi
 
 rc=0
 for proof in chunked-stdio-conformance w0-ch-connect-proof; do
@@ -89,16 +67,8 @@ for proof in chunked-stdio-conformance w0-ch-connect-proof; do
     continue
   fi
   log "--> proofs/$proof: clippy + test"
-  clippy_target_args=()
-  test_target_args=()
-  if [ -n "$proof_target_base" ]; then
-    clippy_target_args=(--target-dir "$proof_target_base/$proof/clippy")
-    test_target_args=(--target-dir "$proof_target_base/$proof/test")
-  fi
-  if RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" CLIPPY_DRIVER="$proof_clippy_driver" \
-    cargo clippy "${clippy_target_args[@]}" --manifest-path "$manifest" --all-targets -- -D warnings \
-    && RUSTC="$proof_rustc" RUSTDOC="$proof_rustdoc" \
-    cargo test "${test_target_args[@]}" --manifest-path "$manifest"; then
+  if cargo clippy --manifest-path "$manifest" --all-targets -- -D warnings \
+    && cargo test --manifest-path "$manifest"; then
     ok "proofs/$proof"
   else
     fail "proofs/$proof"

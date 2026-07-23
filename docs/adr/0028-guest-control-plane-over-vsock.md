@@ -1,6 +1,6 @@
 # ADR 0028: Guest control plane over virtio-vsock
 
-- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
+- Status: Accepted
 - Date: 2026-06-08
 - Related: ADR 0010 (wire protocol and typed errors), ADR 0015
   (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018

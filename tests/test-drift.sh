@@ -5,7 +5,7 @@
 #   * tests/unit/gates/drift-check.sh  — consolidated xtask gen-* drift
 #                                        (error-codes, daemon-api, schemas, …)
 #   * tests/unit/gates/vms-json-parity.sh — rendered vms.json vs manifest parity
-#   * cargo xtask layer1 workflow check — generated CI workflow drift
+#   * tests/tools/layer1-jobs.py check-workflow — generated CI workflow drift
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 
@@ -40,8 +40,8 @@ for gate in \
   fi
 done
 
-log "--> make layer1-workflow-check (Rust xtask)"
-if make --no-print-directory layer1-workflow-check; then
+log "--> tests/tools/layer1-jobs check-workflow"
+if bash "$ROOT/tests/tools/layer1-jobs" check-workflow; then
   ok "layer1 workflow generated artifact"
 else
   fail "layer1 workflow generated artifact"

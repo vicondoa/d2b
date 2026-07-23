@@ -93,32 +93,30 @@ let
           yubikey.enable = false;
         };
 
-        d2b.acceptDestructiveV2Cutover = true;
-        d2b.realms.work = {
-          path = "work";
-          placement = "host-local";
-          broker = {
-            enable = true;
-            hostMutation = true;
-          };
-          network = {
-            mode = "declared";
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-          providers.runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          # Headless workload: graphics and audio remain disabled.
-          workloads.headless-vm = {
-            providerRefs.runtime = "runtime";
-            config = {
-              networking.hostName = lib.mkDefault "headless-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
+        # One env — exercises network.nix materialisation, the
+        # route preflight unit, and the CIDR validation chain.
+        d2b.envs.work = {
+          lanSubnet    = "10.20.0.0/24";
+          uplinkSubnet = "192.0.2.0/30";
+        };
+
+        # One headless workload VM — graphics + audio explicitly
+        # LEFT OFF (their defaults are false, this is just a
+        # readability marker). The host.nix platform gate
+        # lets this through; any future regression that adds an
+        # unconditional graphics/audio import will surface here.
+        d2b.vms.headless-vm = {
+          enable = true;
+          env = "work";
+          index = 10;
+          ssh.user = "alice";
+          # graphics.enable = false (default) — gate stays inert
+          # audio.enable    = false (default) — gate stays inert
+          config = {
+            networking.hostName = lib.mkDefault "headless-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
             };
           };
         };

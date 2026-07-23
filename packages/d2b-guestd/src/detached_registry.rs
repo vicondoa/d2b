@@ -1117,7 +1117,6 @@ impl DetachedRegistry {
         if boot_id != self.config.boot_id {
             return Err(ExecError::StaleSession);
         }
-
         let slot = self.resolve_slot(exec_id)?;
         self.reconcile_slot(slot).await;
         if self.is_terminal(slot) {
@@ -1155,14 +1154,6 @@ impl DetachedRegistry {
             self.mark_lost(slot);
         }
         Ok(false)
-    }
-
-    /// Cancel a handle recovered without an in-memory service-layer record.
-    /// Inspection first re-resolves the durable slot and exact adopted unit
-    /// identity; cancellation is never attempted from the opaque handle alone.
-    pub async fn cancel_verified(&self, exec_id: &str, boot_id: &str) -> Result<bool, ExecError> {
-        self.inspect(exec_id, boot_id).await?;
-        self.cancel(exec_id, boot_id).await
     }
 
     // ---- live reconciliation + TTL/GC ------------------------------------
@@ -3268,41 +3259,6 @@ mod tests {
         // Still no status → marked lost.
         let snapshot = h.registry.inspect(&id, "boot-A").await.unwrap();
         assert_eq!(snapshot.state, ExecState::LostGuestd);
-    }
-
-    #[tokio::test]
-    async fn reconciled_record_is_inspectable_and_cancelable_after_restart() {
-        let h = harness_with_clock_step(CANCEL_DEADLINE_MS + 1);
-        h.units.set_live(0, true);
-        h.store.set_status(0, StatusPhase::Started);
-        let (id, _) = h
-            .registry
-            .create("boot-A", command(), DetachedCaps::standard(0))
-            .await
-            .unwrap();
-        let restarted = DetachedRegistry::new(
-            Arc::new(h.units.clone()),
-            Arc::new(h.store.clone()),
-            Arc::new(FakeClock {
-                now: Arc::clone(&h.now),
-            }),
-            Arc::new(FakeSleeper {
-                now: Arc::clone(&h.now),
-                step: CANCEL_DEADLINE_MS + 1,
-            }),
-            Arc::new(SeqIds {
-                next: AtomicU64::new(100),
-            }),
-            test_registry_config(),
-        );
-        restarted.reconcile_on_startup().await;
-        assert_eq!(
-            restarted.inspect(&id, "boot-A").await.unwrap().state,
-            ExecState::Running
-        );
-        assert!(!restarted.cancel_verified(&id, "boot-A").await.unwrap());
-        assert!(h.store.cancel_written(0));
-        assert!(h.units.stopped(0));
     }
 
     #[tokio::test]

@@ -21,7 +21,7 @@ For the option schema and CLI contract, see
 - [5. Comparison with Qubes qubes-app-u2f](#5-comparison-with-qubes-qubes-app-u2f)
 - [6. Trust model and security properties](#6-trust-model-and-security-properties)
 - [7. Known limitations](#7-known-limitations)
-- [8. Future hardening option: sys-usb backend](#8-future-hardening-option-sys-usb-backend)
+- [8. Phase-2 hardening option: sys-usb backend](#8-phase-2-hardening-option-sys-usb-backend)
 
 ---
 
@@ -92,18 +92,17 @@ Firefox in personal-dev / work-aad
 guest libfido2 / browser internal
   │  CTAP HID reports via /dev/hidraw* (virtual device)
   ▼
-d2b-sk-frontend (guest frontend)
+d2b-fido-front (guest frontend, daemon-supervised DAG node)
   │  creates /dev/hidraw* via Linux /dev/uhid
-  │  authenticated d2b.security-key.v2 ComponentSession
-  │  credit-bounded named stream of 64-byte CTAPHID reports
+  │  relays 64-byte CTAP HID reports
   ▼
-AF_VSOCK (port 14320; attachments disabled)
+AF_VSOCK (CID = VM index, port 14319)
   ▼
-authenticated host controller — lease serializer
+d2bd (host daemon) — lease serializer
   │  one active ceremony per physical key
   │  queues, timeouts, cancellation, audit log
   ▼
-live broker op OpenHidrawSecurityKey → SCM_RIGHTS fd
+broker op UsbSecurityKeyOpenDevice → SCM_RIGHTS fd
   │  d2b-priv-broker resolves stable selector → opens /dev/hidrawN
   ▼
 physical YubiKey (host hidraw node)
@@ -112,32 +111,33 @@ physical YubiKey (host hidraw node)
 response relayed back through the same path
 ```
 
-### Guest frontend (`d2b-sk-frontend`)
+### Guest frontend (`d2b-fido-front`)
 
-The guest frontend runs as `d2b-sk-frontend.service` inside the guest. It:
+The guest frontend is a daemon-supervised DAG node (not a NixOS systemd unit).
+It:
 
 1. Opens `/dev/uhid` in the guest and registers a FIDO2 HID descriptor,
    creating a new `/dev/hidraw*` node that browsers and `libfido2` treat as a
    normal security key.
-2. Connects to the host over AF_VSOCK port `14320` and establishes the exact
-   `d2b.security-key.v2` / `security-key` ComponentSession.
-3. Exchanges 64-byte CTAP HID reports on one credit-bounded named stream.
-   Session attachments are disabled, so the host device descriptor cannot
-   cross into the guest.
+2. Connects to the host over AF_VSOCK (CID derived from the VM's d2b index,
+   port `14319`).
+3. Relays 64-byte CTAP HID reports bidirectionally between the guest kernel
+   (via the `uhid` device) and the host broker.
 4. Handles reconnection with exponential backoff so the virtual device
    survives guest-starts-before-host-broker and daemon restarts.
-5. Keeps the UHID device alive across authenticated session reconnects and
-   recreates it only after a UHID failure.
+5. Destroys and recreates the `/dev/uhid` device cleanly when the VSOCK
+   connection drops, so browsers see a clean device re-appear rather than
+   a stuck/stale HID descriptor.
 
-### Host controller
+### Host broker
 
-The contracted host controller enforces one active CTAP ceremony per physical
-key:
+The host broker runs inside `d2bd` and enforces one active CTAP ceremony per
+physical key:
 
-1. Authenticates the exact ComponentSession package, purpose, endpoint roles,
-   channel binding, and nonzero reconnect generation. AF_VSOCK provenance is a
-   transport input, not an in-band guest identity claim.
-2. Authorizes the authenticated workload against the active device policy.
+1. Authenticates VM connections by the kernel-supplied AF_VSOCK peer CID (not
+   by any in-band guest claim).
+2. Authorizes the connecting CID against the d2b VM index with
+   `usb.securityKey.enable = true`.
 3. Acquires a per-physical-key lease before forwarding any CTAP traffic.
 4. Parses CTAPHID headers (per FIDO Alliance CTAPHID spec §7): enforces 64-byte
    report framing, tracks channel/transaction state from `CTAPHID_INIT` through
@@ -150,13 +150,12 @@ key:
 ### Privileged device access
 
 Opening `/dev/hidrawN` for a FIDO-class device requires elevated privilege. The
-controller dispatches the live `OpenHidrawSecurityKey` operation to
-`d2b-priv-broker`,
+broker dispatches a `UsbSecurityKeyOpenDevice` operation to `d2b-priv-broker`,
 which:
 
-1. Resolves the opaque selector by scanning for a matching FIDO hidraw device.
-2. Verifies the device's usage-page is `0xF1D0` (FIDO), with a restricted
-   device-group fallback when the kernel prevents descriptor reads.
+1. Resolves the configured stable selector to a `/dev/hidrawN` path.
+2. Verifies the device's usage-page is `0xF1D0` (FIDO) and optionally verifies
+   vendor/product/serial.
 3. Opens the path and returns the file descriptor to `d2bd` via `SCM_RIGHTS`.
 4. Logs the operation to the d2b audit log.
 
@@ -215,18 +214,18 @@ compile-time mutual-exclusion assertion. See the
 | Transport | qrexec (Qubes-proprietary IPC) | AF_VSOCK (Linux VM sockets, standard) |
 | Backend location | `sys-usb` VM (USB-isolated VM) | Host broker (`d2bd`) |
 | Policy granularity | Per-qrexec-service per-qube | Per-VM enable/disable; RP ID denylist/allowlist in future policy |
-| Implementation language | Python (`python-fido2`) | Rust (`d2bd`, `d2b-sk-frontend`) |
+| Implementation language | Python (`python-fido2`) | Rust (`d2bd`, `d2b-fido-front`) |
 | Token multiplexing | Single backend mux returns first valid response | Serialized lease per physical key; queue/timeout for second VM |
-| WINK support | Not supported (documented limitation) | Not supported |
-| Credential compartmentalization | Optional per-credential qube binding | Planned as future RP policy |
+| WINK support | Not supported (documented limitation) | Not supported in phase 1 |
+| Credential compartmentalization | Optional per-credential qube binding | Not in phase 1; planned as future RP policy |
 
-### Why d2b does not use `sys-usb`
+### Why d2b does not use `sys-usb` in phase 1
 
 A Qubes-style `sys-usb` VM provides better USB-stack isolation: the host OS
 never parses USB device traffic from the token because the USB controller is
 assigned to the dedicated VM.
 
-d2b uses a host-side broker for these reasons:
+d2b uses a host-side broker in phase 1 for these reasons:
 
 1. **Existing trust model**: d2b already treats the host as the trusted control
    plane for VM lifecycle, VSOCK relays, USBIP binding, and per-VM policy. A
@@ -243,8 +242,8 @@ d2b uses a host-side broker for these reasons:
    behavior before adding a new trusted VM, its lifecycle ordering, policy
    routing, and recovery surface.
 
-A `sys-usb`-style backend remains a future hardening option (see
-[§8](#8-future-hardening-option-sys-usb-backend)).
+A `sys-usb`-style backend remains a phase-2 hardening option (see
+[§8](#8-phase-2-hardening-option-sys-usb-backend)).
 
 ---
 
@@ -252,10 +251,13 @@ A `sys-usb`-style backend remains a future hardening option (see
 
 ### VM authorization
 
-The host controller admits only the exact authenticated ComponentSession
-policy: `d2b.security-key.v2`, purpose `security-key`, frontend/controller
-roles, the allocator-provided channel binding, and a nonzero reconnect
-generation. No request field or report byte can select guest identity.
+VM connections to the host broker are authorized by the kernel-supplied
+AF_VSOCK peer CID. The CID is set by the KVM hypervisor and cannot be forged
+by guest software. The broker maps CID to the d2b VM index and checks whether
+that VM has `usb.securityKey.enable = true` in the active bundle.
+
+No in-band claims from the guest (e.g., a VM claiming to be `work-aad` in the
+protocol header) are trusted.
 
 ### Protocol boundary
 
@@ -288,36 +290,31 @@ the CTAP proxy. Guests with `usb.securityKey.enable = true` but without
 
 ## 7. Known limitations
 
-- **Composition is pending**: the checked-in guest unit does not yet provide
-  the channel binding or reconnect generation required by `d2b-sk-frontend`,
-  and the matching authenticated host controller is not composed. The frontend
-  fails closed before opening a report stream.
-
 - **Not simultaneous**: the broker serializes ceremonies per physical key. Two
   VMs cannot run an active CTAP transaction at exactly the same time. The queue
   window (default 15 seconds) is shorter than typical browser WebAuthn timeouts
   so the second VM fails predictably rather than hanging.
 
 - **WINK not forwarded**: the `CTAPHID_WINK` command (ask the token to identify
-  itself visually) is not forwarded. The physical key's normal
+  itself visually) is not forwarded in phase 1. The physical key's normal
   user-presence blink occurs without a virtual-device WINK trigger.
 
 - **No per-credential RP policy**: the broker does not enforce which VMs may
-  use which credentials. All opted-in VMs share access to the same
+  use which credentials in phase 1. All opted-in VMs share access to the same
   physical key's credential store. Per-RP or per-credential VM allowlists are
   planned as a future policy option.
 
-- **Selector resolution is provisional**: the live broker operation scans for
-  the first matching FIDO hidraw device. It does not yet resolve a configured
-  multi-device selector registry.
+- **One physical key**: the proxy serializes one physical key. Multiple physical
+  keys are supported by adding separate selector entries; each key has its own
+  independent lease.
 
-- **Mutual exclusion with USBIP**: CTAP proxy and USBIP cannot target
+- **Phase 1 mutual exclusion with USBIP**: CTAP proxy and USBIP cannot target
   the same physical key from the same VM simultaneously. This is a deliberate
-  safety boundary.
+  simplification; a future phase may relax this for non-overlapping time windows.
 
 ---
 
-## 8. Future hardening option: sys-usb backend
+## 8. Phase-2 hardening option: sys-usb backend
 
 A Qubes-style `sys-usb` backend is viable as a future hardening option if the
 threat model changes from "host is the trusted d2b control plane" to "the host
@@ -336,4 +333,4 @@ In this design:
 
 This reduces the host OS USB attack surface at the cost of a new trusted VM,
 additional lifecycle ordering, and more complex recovery. It is a hardening
-path, not a requirement of the current host-controller design.
+path, not a phase-1 requirement.

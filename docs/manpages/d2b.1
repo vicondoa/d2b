@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH d2b 1 1970-01-01 "d2b 2.0.0" "d2b CLI"
+.TH d2b 1 1970-01-01 "d2b 0.0.0-bootstrap" "d2b CLI"
 .SH NAME
 d2b \- d2b — opinionated NixOS desktop microVM CLI.
 .SH SYNOPSIS
@@ -8,7 +8,7 @@ d2b \- d2b — opinionated NixOS desktop microVM CLI.
 .SH DESCRIPTION
 d2b — daemon\-native CLI for d2b microVMs.
 .PP
-Mutating verbs dispatch through d2bd; privileged host mutations additionally use d2b\-priv\-broker. Daemon\-backed verbs use the authenticated d2b.daemon.v2 ComponentSession and fail closed when that exact service is unavailable. See `d2b <COMMAND> \-\-help` for per\-verb usage.
+Mutating verbs dispatch through d2bd; privileged host mutations additionally use d2b\-priv\-broker. Read\-only verbs (list, status, audit, host check) prefer d2bd\*(Aqs public socket and fall back to static/local sources where documented. See `d2b <COMMAND> \-\-help` for per\-verb usage.
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -19,10 +19,10 @@ Print version
 .SH SUBCOMMANDS
 .TP
 d2b\-list(1)
-List typed daemon workload projections over ComponentSession
+List declared VMs with daemon runtime state when d2bd is reachable
 .TP
 d2b\-status(1)
-Show typed daemon workload status plus bridge health
+Show per\-VM runtime status plus bridge health
 .TP
 d2b\-launch(1)
 Launch a trusted configured workload item through its runtime provider
@@ -111,4 +111,4 @@ Clipboard authority operations (picker\-driven paste replay via d2b\-clipd)
 d2b\-help(1)
 Print this message or the help of the given subcommand(s)
 .SH VERSION
-v2.0.0
+v0.0.0\-bootstrap

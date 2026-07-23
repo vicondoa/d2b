@@ -1,22 +1,68 @@
-use d2b_contracts::v2_component_session::{
-    COMPONENT_SESSION_MAJOR, COMPONENT_SESSION_MINOR, PREFACE_MAGIC, ServicePackage,
-};
-use d2bd::daemon_service::{daemon_channel_binding, daemon_endpoint_policy};
+mod common;
 
-#[test]
-fn daemon_protocol_is_component_session_v2_without_semver_negotiation() {
-    assert_eq!(PREFACE_MAGIC, *b"D2BCS2\r\n");
-    assert_eq!(COMPONENT_SESSION_MAJOR, 2);
-    assert_eq!(COMPONENT_SESSION_MINOR, 0);
-    let policy =
-        daemon_endpoint_policy(1, daemon_channel_binding(1000, 100)).expect("fixed daemon policy");
-    assert_eq!(policy.service, ServicePackage::DaemonV2);
-}
+mod daemon_version_negotiation {
+    use super::common::{
+        DaemonFixture, HELLO_FRAME, TestPeer, assert_contains, spawn_d2bd_serve, test_client,
+    };
 
-#[test]
-fn old_public_hello_is_absent_from_daemon_wire_source() {
-    let source = include_str!("../src/wire.rs");
-    assert!(!source.contains("parse_hello"));
-    assert!(!source.contains("hello_ok"));
-    assert!(!source.contains("negotiate_version"));
+    fn run_case(frames: &[&str], expect_rc: i32, expect_a: &str, expect_b: &str) {
+        let fixture = DaemonFixture::new("daemon-version-negotiation.");
+        fixture.write_config(&["launcher-user"], &["admin-user"]);
+        let server = spawn_d2bd_serve(&fixture, &TestPeer::launcher(), true, None);
+
+        let (rc, output) = test_client(&fixture.socket_path, frames);
+        let status = server.wait();
+        assert!(status.success(), "d2bd serve exited with {status:?}");
+        assert_eq!(rc, expect_rc, "daemon version-negotiation exit code");
+        assert_contains(&output, expect_a, "primary match");
+        assert_contains(&output, expect_b, "secondary match");
+    }
+
+    #[test]
+    fn version_mismatch_is_rejected() {
+        run_case(
+            &[r#"{"type":"hello","clientVersion":"<0.4.0","supportedFeatures":[]}"#],
+            52,
+            r#""reason":"versionMismatch""#,
+            r#""kind":"wire-version-mismatch""#,
+        );
+    }
+
+    #[test]
+    fn unknown_feature_flags_are_accepted() {
+        run_case(
+            &[
+                r#"{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":["future-flag","future-flag-2"]}"#,
+                r#"{"type":"authStatus"}"#,
+            ],
+            0,
+            r#""type":"helloOk""#,
+            r#""type":"authStatusResponse""#,
+        );
+    }
+
+    #[test]
+    fn unknown_hello_field_is_rejected() {
+        run_case(
+            &[
+                r#"{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":[],"unexpected":true}"#,
+            ],
+            51,
+            r#""type":"helloRejected""#,
+            r#""kind":"wire-unknown-field""#,
+        );
+    }
+
+    #[test]
+    fn invalid_ifname_is_rejected() {
+        run_case(
+            &[
+                HELLO_FRAME,
+                r#"{"type":"hostCheck","strict":false,"ifName":"abcdefghijklmnop"}"#,
+            ],
+            53,
+            r#""kind":"wire-ifname-invalid""#,
+            r#""type":"error""#,
+        );
+    }
 }

@@ -1,6 +1,6 @@
 # 0015. Daemon-only clean break (v1.0)
 
-- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
+- Status: Accepted
 - Date: 2026-05-31
 - Wave: P6
 - Plan slice: §"Phase 6: clean break — daemon-only end-state", docs-4
@@ -337,8 +337,8 @@ v2 → v3 auto-rewriter.
 ## Verification
 
 - [`packages/d2b-contract-tests/tests/policy_lints.rs`](../../packages/d2b-contract-tests/tests/policy_lints.rs)
-  (`adr_0015_superseded_with_historical_invariants`) asserts this historical
-  record remains intact and is cross-referenced from `AGENTS.md`.
+  (`adr_0015_present_with_header_and_cross_references`) asserts this file
+  exists and is cross-referenced from `AGENTS.md`.
 - [`tests/legacy-unit-denylist-eval.sh`](../../tests/legacy-unit-denylist-eval.sh)
   (P6 `ph6-p6-unit-denylist-gate`) asserts none of the deleted unit
   names appear in `nixos-rebuild dry-build` output on any example.

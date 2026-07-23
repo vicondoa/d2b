@@ -6,15 +6,15 @@ previously validated broker audit log shape on a 24h cadence.
 
 Source of truth: `packages/d2bd/src/audit_check.rs`.
 
-The checker remains an in-process validation primitive. It is not an HTTP
-surface on the daemon public socket.
+This folds the host singleton into the unprivileged daemon's health
+surface.
 
 ## What it replaces
 
 | Legacy host singleton                          | Replacement                                             |
 | ---------------------------------------------- | ------------------------------------------------------- |
-| `d2b-audit-check.service` (oneshot) | In-process checker used by daemon health evaluation |
-| `d2b-audit-check.timer` (`OnCalendar=daily`) | Supervisor-owned periodic evaluation |
+| `d2b-audit-check.service` (oneshot)        | `GET /health/audit-check` on the daemon's HTTP surface  |
+| `d2b-audit-check.timer` (`OnCalendar=daily`) | Supervisor event-loop sweep every 5 minutes (default) |
 
 Both legacy units were declared in `nixos-modules/host-audit.nix`
 with scheduled-removal markers in their `description` so operators saw
@@ -60,9 +60,24 @@ whose name matches `broker-YYYY-MM-DD.jsonl`, optionally filtered by
 The check is read-only and hermetic. It never invokes the broker,
 never touches the cgroup tree, and never opens a socket.
 
-## Result contract
+## When it runs
 
-One completed sweep produces an `AuditCheckReport`:
+* **Per request.** `GET /health/audit-check` runs one sweep
+  synchronously and returns the report as JSON.
+* **Periodic.** The supervisor event loop runs the same sweep every
+  `DEFAULT_SWEEP_INTERVAL_SECS` (5 minutes). Operators can override
+  this in a later phase if hosts with very large audit volume need a
+  lower cadence; the constant lives in
+  `d2bd::audit_check::DEFAULT_SWEEP_INTERVAL_SECS`.
+
+## HTTP contract
+
+```
+GET /health/audit-check HTTP/1.1
+```
+
+Response: `200 OK`, `Content-Type: application/json`, body is the
+`AuditCheckReport`:
 
 ```json
 {
@@ -72,15 +87,21 @@ One completed sweep produces an `AuditCheckReport`:
 }
 ```
 
-When defects are present, the sweep still completed; the `defects` array tells
-the operator which lines tripped which assertion. An unreadable audit directory
-is a sweep failure rather than a report with synthetic defects.
+When defects are present the response is still `200 OK` — the sweep
+ran to completion, so the request itself succeeded; the report's
+`defects` array tells the operator which lines tripped which
+assertion. `d2b host doctor` consumes the same JSON and
+surfaces non-empty `defects` as a host-doctor finding.
 
-`/run/d2b/public.sock` accepts only authenticated `d2b.daemon.v2`
-ComponentSessions. It never accepts HTTP. The generated admin-only
-`ExportAudit` RPC routes to the broker adapter and returns exported bytes on an
-authenticated named stream; it does not weaken the checker or expose raw host
-paths.
+`5xx` is reserved for sweep failure (e.g., audit directory exists
+but is unreadable). Body shape:
+
+```json
+{ "error": "permission denied (os error 13)" }
+```
+
+Other methods return `405 Method Not Allowed`; other paths return
+`404 Not Found`.
 
 ### Defect payload shape
 
@@ -106,13 +127,16 @@ paths.
 ## Migration notes for operators
 
 * **No more `systemctl start d2b-audit-check.service`.** Use
-  `d2b host doctor`; do not send HTTP to the daemon socket.
+  `curl --unix-socket … http://localhost/health/audit-check` (or
+  `d2b host doctor`, which polls the daemon for you).
+* **No more daily timer wait.** The 5-minute sweep catches malformed
+  records within minutes instead of within a day.
 * **No `d2b audit --strict` reuse.** The retired oneshot invoked
   `d2b audit --strict` to validate broker audit log shape. The
   shape check is now narrower and faster: it does not re-run the
   full security audit, only the broker audit-log invariants. Use
   `d2b audit` directly if you want the broader scan (it's
-  daemon-mediated through the generated `ExportAudit` operation).
+  daemon-mediated via `ExportBrokerAudit`).
 
 See also: `docs/reference/daemon-api.md` §"Audit",
 `docs/reference/daemon-metrics.md`,
@@ -120,9 +144,9 @@ See also: `docs/reference/daemon-api.md` §"Audit",
 
 > **Local scope of this check.** The audit check described in this
 > document covers only the local broker audit log
-> (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`). Realm-controller and
-> provider-agent audit (realm access events and provider operation records)
-> is separate and belongs to the component that owns those decisions.
+> (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`). Any future
+> gateway or realm audit (realm access events, provider operation
+> records) is separate and resides inside the gateway guest VM.
 > Relay or realm identity never enters the local broker audit or
 > auth path: `peer_uid` and `authz_result` in the records above
 > reflect only the local `SO_PEERCRED`-derived classification.

@@ -1,10 +1,9 @@
-//! Hermetic local-root allocator decision engine.
+//! Hermetic local-root allocator engine over fake host observations.
 //!
 //! The engine is deliberately pure: it reconciles typed allocator data models against
-//! caller-supplied ledger, liveness, and observation adapters and emits decisions,
-//! audit metadata, and low-cardinality metric samples. Adapters expose already-loaded
-//! state only; the engine performs no netlink, nftables, filesystem, systemd, broker,
-//! or other live host mutation.
+//! in-memory fake ledger/liveness/observation backends and emits decisions,
+//! audit metadata, and low-cardinality metric samples. It performs no netlink,
+//! nftables, filesystem, systemd, broker, or other live host mutation.
 
 use crate::allocator::{
     AllocatorConflict, AllocatorEventKind, AllocatorEventMetadata, AllocatorLease,
@@ -16,7 +15,6 @@ use crate::allocator::{
     ResourceAcquisitionKey, ResourceDelegation, ResourceObservationSource, ResourceShareMode,
 };
 use crate::ids::{AllocatorLeaseId, CorrelationId, HostResourceId, IdempotencyKey, OperationId};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Allocation/reconciliation decision made by the pure engine.
@@ -177,7 +175,7 @@ pub struct AllocatorReconciliationAction {
     pub decision: AllocatorEngineDecision,
 }
 
-/// Result of reconciling observed host state against persisted leases.
+/// Result of reconciling fake observed host state against fake persisted leases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllocatorEngineReconciliation {
     pub report: ReconciliationReport,
@@ -185,313 +183,52 @@ pub struct AllocatorEngineReconciliation {
     pub metrics: Vec<AllocatorMetricEvent>,
 }
 
-/// Closed failure surface for allocator state access.
-///
-/// Variants deliberately carry no paths, lock names, generations, host state, or
-/// underlying error strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AllocatorEngineError {
-    LedgerLockUnavailable,
-    LedgerIo,
-    LedgerGenerationConflict,
-    LedgerTampered,
-}
-
-impl std::fmt::Display for AllocatorEngineError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::LedgerLockUnavailable => "allocator ledger lock unavailable",
-            Self::LedgerIo => "allocator ledger I/O failed",
-            Self::LedgerGenerationConflict => "allocator ledger generation changed",
-            Self::LedgerTampered => "allocator ledger integrity check failed",
-        })
-    }
-}
-
-impl std::error::Error for AllocatorEngineError {}
-
-/// Opaque compare-and-swap generation for one durable ledger snapshot.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AllocatorLedgerGeneration(u64);
-
-impl AllocatorLedgerGeneration {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn checked_next(self) -> Result<Self, AllocatorEngineError> {
-        self.0
-            .checked_add(1)
-            .map(Self)
-            .ok_or(AllocatorEngineError::LedgerTampered)
-    }
-}
-
-/// One consistent, generation-bound read of durable allocator state.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AllocatorLedgerSnapshot {
-    generation: AllocatorLedgerGeneration,
-    leases: Vec<AllocatorLease>,
-    idempotency: Vec<AllocatorIdempotencyRecord>,
-}
-
-impl AllocatorLedgerSnapshot {
-    pub fn new(
-        generation: AllocatorLedgerGeneration,
-        leases: Vec<AllocatorLease>,
-        idempotency: Vec<AllocatorIdempotencyRecord>,
-    ) -> Self {
-        Self {
-            generation,
-            leases,
-            idempotency,
-        }
-    }
-
-    pub const fn generation(&self) -> AllocatorLedgerGeneration {
-        self.generation
-    }
-
-    pub fn leases(&self) -> &[AllocatorLease] {
-        &self.leases
-    }
-
-    pub fn idempotency_record(&self, key: &IdempotencyKey) -> Option<&AllocatorIdempotencyRecord> {
-        self.idempotency.iter().find(|record| record.key() == key)
-    }
-}
-
-/// Outcome type requested by an atomic allocator ledger commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AllocatorLedgerCommitKind {
-    Grant,
-    Denial,
-}
-
-/// Engine-created transaction passed to [`AllocatorLedger::commit_allocation`].
-///
-/// Its fields are private so adapters cannot replace the engine-owned request
-/// fingerprint or grant contents. An adapter chooses a lease id while holding its
-/// exclusive lock, calls [`Self::materialize`], and durably publishes the sequence,
-/// lease, and idempotency record as one transaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AllocatorLedgerCommit {
-    expected_generation: AllocatorLedgerGeneration,
-    request: LeaseAllocationRequest,
-    decision: PendingAllocationDecision,
-}
-
-impl AllocatorLedgerCommit {
-    pub const fn expected_generation(&self) -> AllocatorLedgerGeneration {
-        self.expected_generation
-    }
-
-    pub fn idempotency_key(&self) -> &IdempotencyKey {
-        &self.request.idempotency_key
-    }
-
-    pub const fn kind(&self) -> AllocatorLedgerCommitKind {
-        match &self.decision {
-            PendingAllocationDecision::Grant { .. } => AllocatorLedgerCommitKind::Grant,
-            PendingAllocationDecision::Denial { .. } => AllocatorLedgerCommitKind::Denial,
-        }
-    }
-
-    /// Materialize the exact engine-owned result and idempotency record.
-    ///
-    /// Grant commits require exactly one adapter-reserved lease id. Denial commits
-    /// require none.
-    pub fn materialize(
-        &self,
-        lease_id: Option<AllocatorLeaseId>,
-    ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError> {
-        let result = match (&self.decision, lease_id) {
-            (PendingAllocationDecision::Grant { resources }, Some(lease_id)) => {
-                LeaseAllocationResult::Granted {
-                    lease: AllocatorLease {
-                        lease_id,
-                        owner: self.request.owner.clone(),
-                        state: AllocatorLeaseState::Granted,
-                        resources: resources.clone(),
-                    },
-                }
-            }
-            (PendingAllocationDecision::Denial { reason, conflicts }, None) => {
-                LeaseAllocationResult::Denied {
-                    reason: *reason,
-                    conflicts: conflicts.clone(),
-                }
-            }
-            _ => return Err(AllocatorEngineError::LedgerTampered),
-        };
-        Ok(AllocatorLedgerCommitResult {
-            idempotency: AllocatorIdempotencyRecord::from_request(&self.request, result.clone()),
-            result,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PendingAllocationDecision {
-    Grant {
-        resources: Vec<GrantedHostResource>,
-    },
-    Denial {
-        reason: AllocatorReasonCode,
-        conflicts: Vec<AllocatorConflict>,
-    },
-}
-
-/// Exact result durably published by an allocator ledger transaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AllocatorLedgerCommitResult {
-    result: LeaseAllocationResult,
-    idempotency: AllocatorIdempotencyRecord,
-}
-
-impl AllocatorLedgerCommitResult {
-    pub fn result(&self) -> &LeaseAllocationResult {
-        &self.result
-    }
-
-    pub fn idempotency_record(&self) -> &AllocatorIdempotencyRecord {
-        &self.idempotency
-    }
-}
-
-/// Durable allocator state required by [`LocalRootAllocatorEngine`].
-///
-/// `load` must return one consistent snapshot. `commit_allocation` must acquire the
-/// adapter's exclusive lock, compare `expected_generation`, and publish all changes
-/// atomically. A grant reserves its lease id, advances the sequence/generation,
-/// inserts the lease, and stores the idempotency record in the same durable commit.
-/// On any error, it must expose either the complete old state or the complete new
-/// state, never an intermediate state.
-pub trait AllocatorLedger: Send + Sync {
-    fn load(&self) -> Result<AllocatorLedgerSnapshot, AllocatorEngineError>;
-
-    fn commit_allocation(
-        &mut self,
-        commit: AllocatorLedgerCommit,
-    ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError>;
-}
-
-/// Already-observed host resource state required by the allocator engine.
-///
-/// Observation and host I/O happen before this adapter is passed to the engine.
-pub trait ObservedAllocatorState: Send + Sync {
-    fn resources(&self) -> &[ObservedHostResource];
-}
-
-/// Controller-generation liveness snapshot required by the allocator engine.
-pub trait AllocatorLiveness: Send + Sync {
-    fn is_live(&self, owner: &LeaseOwner) -> bool;
-}
-
-/// Opaque engine-owned idempotency record stored by an [`AllocatorLedger`].
-///
-/// Adapters may retain and return this value, but request fingerprint construction
-/// and comparison remain engine-owned.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AllocatorIdempotencyRecord {
-    key: IdempotencyKey,
-    signature: AllocationRequestSignature,
-    result: LeaseAllocationResult,
-}
-
-impl AllocatorIdempotencyRecord {
-    /// Construct the canonical record for a completed request.
-    pub fn from_request(request: &LeaseAllocationRequest, result: LeaseAllocationResult) -> Self {
-        Self {
-            key: request.idempotency_key.clone(),
-            signature: AllocationRequestSignature::from_request(request),
-            result,
-        }
-    }
-
-    /// Key used by ledger adapters to index this record.
-    pub fn key(&self) -> &IdempotencyKey {
-        &self.key
-    }
-
-    /// Previously committed result. Adapters persist it as opaque engine-owned
-    /// state and must not reinterpret it.
-    pub fn result(&self) -> &LeaseAllocationResult {
-        &self.result
-    }
-}
-
-/// In-memory observed-state adapter for tests and support tooling.
-#[cfg(any(test, feature = "test-support"))]
+/// In-memory fake observed host state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FakeObservedAllocatorState {
     pub resources: Vec<ObservedHostResource>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl FakeObservedAllocatorState {
     pub fn new(resources: Vec<ObservedHostResource>) -> Self {
         Self { resources }
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-impl ObservedAllocatorState for FakeObservedAllocatorState {
-    fn resources(&self) -> &[ObservedHostResource] {
-        &self.resources
-    }
-}
-
-/// In-memory liveness adapter for tests and support tooling.
-#[cfg(any(test, feature = "test-support"))]
+/// In-memory fake owner-liveness backend.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FakeAllocatorLiveness {
     pub live_owners: Vec<LeaseOwner>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl FakeAllocatorLiveness {
     pub fn new(live_owners: Vec<LeaseOwner>) -> Self {
         Self { live_owners }
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl AllocatorLiveness for FakeAllocatorLiveness {
     fn is_live(&self, owner: &LeaseOwner) -> bool {
         self.live_owners.iter().any(|candidate| candidate == owner)
     }
 }
 
-/// In-memory ledger adapter for tests and support tooling.
-#[cfg(any(test, feature = "test-support"))]
+/// In-memory fake allocator ledger, including idempotency replay records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeAllocatorLedger {
     pub leases: Vec<AllocatorLease>,
     idempotency: Vec<AllocatorIdempotencyRecord>,
     next_lease_sequence: u64,
-    generation: AllocatorLedgerGeneration,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl Default for FakeAllocatorLedger {
     fn default() -> Self {
         Self {
             leases: Vec::new(),
             idempotency: Vec::new(),
             next_lease_sequence: 1,
-            generation: AllocatorLedgerGeneration::default(),
         }
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl FakeAllocatorLedger {
     pub fn new(leases: Vec<AllocatorLease>) -> Self {
         Self {
@@ -499,70 +236,49 @@ impl FakeAllocatorLedger {
             ..Self::default()
         }
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl AllocatorLedger for FakeAllocatorLedger {
-    fn load(&self) -> Result<AllocatorLedgerSnapshot, AllocatorEngineError> {
-        Ok(AllocatorLedgerSnapshot::new(
-            self.generation,
-            self.leases.clone(),
-            self.idempotency.clone(),
-        ))
-    }
-
-    fn commit_allocation(
+    fn remember_idempotency(
         &mut self,
-        commit: AllocatorLedgerCommit,
-    ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError> {
-        if commit.expected_generation() != self.generation
-            || self
-                .idempotency
-                .iter()
-                .any(|record| record.key() == commit.idempotency_key())
-        {
-            return Err(AllocatorEngineError::LedgerGenerationConflict);
-        }
+        key: IdempotencyKey,
+        signature: AllocationRequestSignature,
+        result: LeaseAllocationResult,
+    ) {
+        self.idempotency.push(AllocatorIdempotencyRecord {
+            key,
+            signature,
+            result,
+        });
+    }
 
-        let mut next_sequence = self.next_lease_sequence;
-        let mut leases = self.leases.clone();
-        let mut idempotency = self.idempotency.clone();
-        let lease_id = if commit.kind() == AllocatorLedgerCommitKind::Grant {
-            let existing = leases
-                .iter()
-                .map(|lease| lease.lease_id.as_str())
-                .collect::<BTreeSet<_>>();
-            Some(loop {
-                let candidate = format!("lease-engine-{next_sequence}");
-                next_sequence = next_sequence
-                    .checked_add(1)
-                    .ok_or(AllocatorEngineError::LedgerTampered)?;
-                if existing.contains(candidate.as_str()) {
-                    continue;
-                }
-                break AllocatorLeaseId::parse(candidate)
-                    .map_err(|_| AllocatorEngineError::LedgerTampered)?;
-            })
-        } else {
-            None
-        };
-        let committed = commit.materialize(lease_id)?;
-        if let LeaseAllocationResult::Granted { lease } = committed.result() {
-            leases.push(lease.clone());
-        }
-        idempotency.push(committed.idempotency_record().clone());
-        let generation = self.generation.checked_next()?;
+    fn idempotency_record(&self, key: &IdempotencyKey) -> Option<&AllocatorIdempotencyRecord> {
+        self.idempotency.iter().find(|record| &record.key == key)
+    }
 
-        self.leases = leases;
-        self.idempotency = idempotency;
-        self.next_lease_sequence = next_sequence;
-        self.generation = generation;
-        Ok(committed)
+    fn next_lease_id(&mut self) -> AllocatorLeaseId {
+        let existing = self
+            .leases
+            .iter()
+            .map(|lease| lease.lease_id.as_str())
+            .collect::<BTreeSet<_>>();
+        loop {
+            let candidate = format!("lease-engine-{}", self.next_lease_sequence);
+            self.next_lease_sequence += 1;
+            if existing.contains(candidate.as_str()) {
+                continue;
+            }
+            return AllocatorLeaseId::parse(candidate).expect("generated lease id is valid");
+        }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AllocatorIdempotencyRecord {
+    key: IdempotencyKey,
+    signature: AllocationRequestSignature,
+    result: LeaseAllocationResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AllocationRequestSignature {
     owner: LeaseOwner,
     resources: Vec<RequestedResourceSignature>,
@@ -590,8 +306,7 @@ impl AllocationRequestSignature {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestedResourceSignature {
     key: ResourceAcquisitionKey,
     share: ResourceShareMode,
@@ -611,29 +326,23 @@ impl Ord for RequestedResourceSignature {
     }
 }
 
-/// Pure allocator engine over explicitly injected state adapters.
-///
-/// No fake adapter defaults exist on the production surface.
+/// Pure allocator engine using fake ledger, observed-state, and liveness
+/// backends.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRootAllocatorEngine<L, O, V>
-where
-    L: AllocatorLedger,
-    O: ObservedAllocatorState,
-    V: AllocatorLiveness,
-{
+pub struct LocalRootAllocatorEngine {
     allocator_owner: LeaseOwner,
-    ledger: L,
-    observed: O,
-    liveness: V,
+    pub ledger: FakeAllocatorLedger,
+    pub observed: FakeObservedAllocatorState,
+    pub liveness: FakeAllocatorLiveness,
 }
 
-impl<L, O, V> LocalRootAllocatorEngine<L, O, V>
-where
-    L: AllocatorLedger,
-    O: ObservedAllocatorState,
-    V: AllocatorLiveness,
-{
-    pub fn new(allocator_owner: LeaseOwner, ledger: L, observed: O, liveness: V) -> Self {
+impl LocalRootAllocatorEngine {
+    pub fn new(
+        allocator_owner: LeaseOwner,
+        ledger: FakeAllocatorLedger,
+        observed: FakeObservedAllocatorState,
+        liveness: FakeAllocatorLiveness,
+    ) -> Self {
         Self {
             allocator_owner,
             ledger,
@@ -642,138 +351,88 @@ where
         }
     }
 
-    pub fn ledger(&self) -> &L {
-        &self.ledger
-    }
-
-    pub fn observed(&self) -> &O {
-        &self.observed
-    }
-
-    pub fn liveness(&self) -> &V {
-        &self.liveness
-    }
-
-    pub fn into_adapters(self) -> (L, O, V) {
-        (self.ledger, self.observed, self.liveness)
-    }
-
     /// Allocate a typed lease request without touching the live host.
-    ///
-    /// A successful grant is returned only after the ledger has durably committed
-    /// its lease id reservation, lease, idempotency record, and generation change.
-    pub fn allocate(
-        &mut self,
-        request: LeaseAllocationRequest,
-    ) -> Result<AllocatorEngineAllocation, AllocatorEngineError> {
-        let snapshot = self.ledger.load()?;
-        validate_snapshot(&snapshot)?;
+    pub fn allocate(&mut self, request: LeaseAllocationRequest) -> AllocatorEngineAllocation {
         let acquired = request.acquisition_order();
         let signature = AllocationRequestSignature::from_request(&request);
 
-        if let Some(record) = snapshot.idempotency_record(&request.idempotency_key) {
-            if record.key == request.idempotency_key && record.signature == signature {
+        if let Some(record) = self.ledger.idempotency_record(&request.idempotency_key) {
+            if record.signature == signature {
                 let metric = metric_from_replay_result(&record.result);
                 let response = LeaseAllocationResponse {
                     operation_id: request.operation_id.clone(),
                     correlation_id: request.correlation_id.clone(),
                     result: record.result.clone(),
                 };
-                return Ok(AllocatorEngineAllocation {
+                return AllocatorEngineAllocation {
                     response,
                     decisions: Vec::new(),
                     events: Vec::new(),
                     metrics: vec![metric],
                     acquired,
-                });
+                };
             }
 
             return self.deny_request(
-                &snapshot,
                 &request,
                 acquired,
                 AllocatorReasonCode::InvalidRequest,
                 Vec::new(),
-                false,
             );
         }
 
         if !self.liveness.is_live(&request.owner) {
             return self.deny_request(
-                &snapshot,
                 &request,
                 acquired,
                 AllocatorReasonCode::OwnerNotLive,
                 Vec::new(),
-                true,
             );
         }
 
         if request.resources.is_empty() || request.resources.len() > MAX_ALLOCATOR_REQUEST_RESOURCES
         {
             return self.deny_request(
-                &snapshot,
                 &request,
                 acquired,
                 AllocatorReasonCode::InvalidRequest,
                 Vec::new(),
-                true,
             );
         }
 
         if has_duplicate_requested_resources(&request) {
             return self.deny_request(
-                &snapshot,
                 &request,
                 acquired,
                 AllocatorReasonCode::InvalidRequest,
                 Vec::new(),
-                true,
             );
         }
 
-        let conflicts = self.allocation_conflicts(&request, snapshot.leases());
+        let conflicts = self.allocation_conflicts(&request);
         if !conflicts.is_empty() {
             return self.deny_request(
-                &snapshot,
                 &request,
                 acquired,
                 AllocatorReasonCode::ResourceConflict,
                 conflicts,
-                true,
             );
         }
 
-        let expected_resources = grant_resources_in_order(&request);
-        let commit = AllocatorLedgerCommit {
-            expected_generation: snapshot.generation(),
-            request: request.clone(),
-            decision: PendingAllocationDecision::Grant {
-                resources: expected_resources.clone(),
-            },
+        let lease = AllocatorLease {
+            lease_id: self.ledger.next_lease_id(),
+            owner: request.owner.clone(),
+            state: AllocatorLeaseState::Granted,
+            resources: grant_resources_in_order(&request),
         };
-        let committed = self.ledger.commit_allocation(commit)?;
-        let LeaseAllocationResult::Granted { lease } = committed.result() else {
-            return Err(AllocatorEngineError::LedgerTampered);
-        };
-        if lease.owner != request.owner
-            || lease.state != AllocatorLeaseState::Granted
-            || lease.resources != expected_resources
-            || snapshot
-                .leases()
-                .iter()
-                .any(|existing| existing.lease_id == lease.lease_id)
-        {
-            return Err(AllocatorEngineError::LedgerTampered);
-        }
-        let result = LeaseAllocationResult::Granted {
-            lease: lease.clone(),
-        };
-        if committed.idempotency_record()
-            != &AllocatorIdempotencyRecord::from_request(&request, result.clone())
-        {
-            return Err(AllocatorEngineError::LedgerTampered);
-        }
+        self.ledger.leases.push(lease.clone());
+
+        let result = LeaseAllocationResult::Granted { lease };
+        self.ledger.remember_idempotency(
+            request.idempotency_key.clone(),
+            signature,
+            result.clone(),
+        );
 
         let decisions = request
             .resources
@@ -805,26 +464,24 @@ where
             result,
         };
 
-        Ok(AllocatorEngineAllocation {
+        AllocatorEngineAllocation {
             response,
             decisions,
             events,
             metrics,
             acquired,
-        })
+        }
     }
 
-    /// Reconcile observed host state against persisted leases.
+    /// Reconcile fake observed host state against fake persisted leases.
     pub fn reconcile(
         &self,
         operation_id: OperationId,
         correlation_id: CorrelationId,
-    ) -> Result<AllocatorEngineReconciliation, AllocatorEngineError> {
-        let snapshot = self.ledger.load()?;
-        validate_snapshot(&snapshot)?;
+    ) -> AllocatorEngineReconciliation {
         let mut resources = BTreeMap::<ResourceKey, ResourcePair>::new();
 
-        for lease in snapshot.leases() {
+        for lease in &self.ledger.leases {
             for resource in &lease.resources {
                 let key = ResourceKey::new(resource.kind, resource.resource_id.clone());
                 resources
@@ -839,7 +496,7 @@ where
             }
         }
 
-        for observed in self.observed.resources() {
+        for observed in &self.observed.resources {
             let key = ResourceKey::new(observed.kind, observed.resource_id.clone());
             resources.entry(key).or_default().observed = Some(observed.clone());
         }
@@ -902,21 +559,17 @@ where
             events,
         };
 
-        Ok(AllocatorEngineReconciliation {
+        AllocatorEngineReconciliation {
             report,
             actions,
             metrics,
-        })
+        }
     }
 
-    fn allocation_conflicts(
-        &self,
-        request: &LeaseAllocationRequest,
-        leases: &[AllocatorLease],
-    ) -> Vec<AllocatorConflict> {
+    fn allocation_conflicts(&self, request: &LeaseAllocationRequest) -> Vec<AllocatorConflict> {
         let mut conflicts = Vec::new();
         for resource in request.acquisition_order() {
-            if let Some(conflict) = self.persisted_conflict(leases, &request.owner, &resource) {
+            if let Some(conflict) = self.persisted_conflict(&request.owner, &resource) {
                 conflicts.push(conflict);
             }
             if let Some(conflict) = self.observed_conflict(&resource) {
@@ -931,11 +584,11 @@ where
 
     fn persisted_conflict(
         &self,
-        leases: &[AllocatorLease],
         owner: &LeaseOwner,
         resource: &ResourceAcquisitionKey,
     ) -> Option<AllocatorConflict> {
-        leases
+        self.ledger
+            .leases
             .iter()
             .filter(|lease| !lease.state.is_terminal())
             .find_map(|lease| {
@@ -960,7 +613,7 @@ where
 
     fn observed_conflict(&self, resource: &ResourceAcquisitionKey) -> Option<AllocatorConflict> {
         self.observed
-            .resources()
+            .resources
             .iter()
             .find(|observed| {
                 observed.kind == resource.kind && observed.resource_id == resource.resource_id
@@ -1049,13 +702,11 @@ where
 
     fn deny_request(
         &mut self,
-        snapshot: &AllocatorLedgerSnapshot,
         request: &LeaseAllocationRequest,
         acquired: Vec<ResourceAcquisitionKey>,
         reason: AllocatorReasonCode,
         conflicts: Vec<AllocatorConflict>,
-        persist: bool,
-    ) -> Result<AllocatorEngineAllocation, AllocatorEngineError> {
+    ) -> AllocatorEngineAllocation {
         let conflicts = conflicts
             .into_iter()
             .take(MAX_ALLOCATOR_CONFLICTS)
@@ -1098,40 +749,29 @@ where
                 .map(|decision| metric_from_decision(&decision.decision, Some(decision.kind))),
         );
         let result = LeaseAllocationResult::Denied { reason, conflicts };
-        if persist {
-            let commit = AllocatorLedgerCommit {
-                expected_generation: snapshot.generation(),
-                request: request.clone(),
-                decision: match &result {
-                    LeaseAllocationResult::Denied { reason, conflicts } => {
-                        PendingAllocationDecision::Denial {
-                            reason: *reason,
-                            conflicts: conflicts.clone(),
-                        }
-                    }
-                    LeaseAllocationResult::Granted { .. } => unreachable!(),
-                },
-            };
-            let committed = self.ledger.commit_allocation(commit)?;
-            if committed.result() != &result
-                || committed.idempotency_record()
-                    != &AllocatorIdempotencyRecord::from_request(request, result.clone())
-            {
-                return Err(AllocatorEngineError::LedgerTampered);
-            }
+        if self
+            .ledger
+            .idempotency_record(&request.idempotency_key)
+            .is_none()
+        {
+            self.ledger.remember_idempotency(
+                request.idempotency_key.clone(),
+                AllocationRequestSignature::from_request(request),
+                result.clone(),
+            );
         }
         let response = LeaseAllocationResponse {
             operation_id: request.operation_id.clone(),
             correlation_id: request.correlation_id.clone(),
             result,
         };
-        Ok(AllocatorEngineAllocation {
+        AllocatorEngineAllocation {
             response,
             decisions,
             events,
             metrics,
             acquired,
-        })
+        }
     }
 }
 
@@ -1151,55 +791,6 @@ impl ResourceKey {
 struct ResourcePair {
     persisted: Vec<PersistedResourceLease>,
     observed: Option<ObservedHostResource>,
-}
-
-fn validate_snapshot(snapshot: &AllocatorLedgerSnapshot) -> Result<(), AllocatorEngineError> {
-    let mut lease_ids = BTreeSet::new();
-    if snapshot
-        .leases
-        .iter()
-        .any(|lease| !lease_ids.insert(lease.lease_id.clone()))
-    {
-        return Err(AllocatorEngineError::LedgerTampered);
-    }
-
-    let mut idempotency_keys = BTreeSet::new();
-    for record in &snapshot.idempotency {
-        if !idempotency_keys.insert(record.key.clone()) {
-            return Err(AllocatorEngineError::LedgerTampered);
-        }
-        if let LeaseAllocationResult::Granted { lease } = &record.result {
-            let Some(persisted) = snapshot
-                .leases
-                .iter()
-                .find(|candidate| candidate.lease_id == lease.lease_id)
-            else {
-                return Err(AllocatorEngineError::LedgerTampered);
-            };
-            if persisted != lease {
-                return Err(AllocatorEngineError::LedgerTampered);
-            }
-            let mut granted_signature = lease
-                .resources
-                .iter()
-                .map(|resource| RequestedResourceSignature {
-                    key: ResourceAcquisitionKey {
-                        order: resource.acquisition_order,
-                        kind: resource.kind,
-                        resource_id: resource.resource_id.clone(),
-                    },
-                    share: resource.share,
-                })
-                .collect::<Vec<_>>();
-            granted_signature.sort();
-            if record.signature.owner != lease.owner
-                || record.signature.resources != granted_signature
-            {
-                return Err(AllocatorEngineError::LedgerTampered);
-            }
-        }
-    }
-    Ok(())
 }
 
 fn has_duplicate_requested_resources(request: &LeaseAllocationRequest) -> bool {
@@ -1354,7 +945,6 @@ mod tests {
     };
     use crate::ids::{ControllerGenerationId, NodeId, RealmId};
     use crate::realm::RealmPath;
-    use std::sync::{Arc, Mutex};
 
     fn id(raw: &str) -> HostResourceId {
         HostResourceId::parse(raw).unwrap()
@@ -1455,304 +1045,12 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Default)]
-    struct CustomLedger {
-        leases: Vec<AllocatorLease>,
-        idempotency: Vec<AllocatorIdempotencyRecord>,
-        next_sequence: u64,
-        generation: AllocatorLedgerGeneration,
-    }
-
-    impl CustomLedger {
-        fn with_next_sequence(next_sequence: u64) -> Self {
-            Self {
-                next_sequence,
-                ..Self::default()
-            }
-        }
-    }
-
-    impl AllocatorLedger for CustomLedger {
-        fn load(&self) -> Result<AllocatorLedgerSnapshot, AllocatorEngineError> {
-            Ok(AllocatorLedgerSnapshot::new(
-                self.generation,
-                self.leases.clone(),
-                self.idempotency.clone(),
-            ))
-        }
-
-        fn commit_allocation(
-            &mut self,
-            commit: AllocatorLedgerCommit,
-        ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError> {
-            if commit.expected_generation() != self.generation {
-                return Err(AllocatorEngineError::LedgerGenerationConflict);
-            }
-            let lease_id = (commit.kind() == AllocatorLedgerCommitKind::Grant).then(|| {
-                AllocatorLeaseId::parse(format!("lease-custom-{}", self.next_sequence))
-                    .expect("custom test lease id")
-            });
-            let committed = commit.materialize(lease_id)?;
-            let mut leases = self.leases.clone();
-            if let LeaseAllocationResult::Granted { lease } = committed.result() {
-                leases.push(lease.clone());
-            }
-            let mut idempotency = self.idempotency.clone();
-            idempotency.push(committed.idempotency_record().clone());
-            let generation = self.generation.checked_next()?;
-
-            self.leases = leases;
-            self.idempotency = idempotency;
-            self.generation = generation;
-            if matches!(committed.result(), LeaseAllocationResult::Granted { .. }) {
-                self.next_sequence += 1;
-            }
-            Ok(committed)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum CommitFailureStage {
-        AcquireLock,
-        ReserveLeaseId,
-        WriteLease,
-        WriteIdempotency,
-        DurableSync,
-        AfterDurableCommit,
-    }
-
-    #[derive(Debug)]
-    struct FaultInjectingLedger {
-        leases: Vec<AllocatorLease>,
-        idempotency: Vec<AllocatorIdempotencyRecord>,
-        next_sequence: u64,
-        generation: AllocatorLedgerGeneration,
-        failure: Option<CommitFailureStage>,
-    }
-
-    impl FaultInjectingLedger {
-        fn new(failure: CommitFailureStage) -> Self {
-            Self {
-                leases: Vec::new(),
-                idempotency: Vec::new(),
-                next_sequence: 1,
-                generation: AllocatorLedgerGeneration::default(),
-                failure: Some(failure),
-            }
-        }
-
-        fn fail_at(&mut self, stage: CommitFailureStage) -> bool {
-            if self.failure == Some(stage) {
-                self.failure = None;
-                true
-            } else {
-                false
-            }
-        }
-    }
-
-    impl AllocatorLedger for FaultInjectingLedger {
-        fn load(&self) -> Result<AllocatorLedgerSnapshot, AllocatorEngineError> {
-            Ok(AllocatorLedgerSnapshot::new(
-                self.generation,
-                self.leases.clone(),
-                self.idempotency.clone(),
-            ))
-        }
-
-        fn commit_allocation(
-            &mut self,
-            commit: AllocatorLedgerCommit,
-        ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError> {
-            if self.fail_at(CommitFailureStage::AcquireLock) {
-                return Err(AllocatorEngineError::LedgerLockUnavailable);
-            }
-            if commit.expected_generation() != self.generation {
-                return Err(AllocatorEngineError::LedgerGenerationConflict);
-            }
-
-            let mut next_sequence = self.next_sequence;
-            let mut leases = self.leases.clone();
-            let mut idempotency = self.idempotency.clone();
-            let lease_id = if commit.kind() == AllocatorLedgerCommitKind::Grant {
-                let lease_id =
-                    AllocatorLeaseId::parse(format!("lease-fault-{next_sequence}")).unwrap();
-                next_sequence += 1;
-                if self.fail_at(CommitFailureStage::ReserveLeaseId) {
-                    return Err(AllocatorEngineError::LedgerIo);
-                }
-                Some(lease_id)
-            } else {
-                None
-            };
-            let committed = commit.materialize(lease_id)?;
-            if let LeaseAllocationResult::Granted { lease } = committed.result() {
-                leases.push(lease.clone());
-            }
-            if self.fail_at(CommitFailureStage::WriteLease) {
-                return Err(AllocatorEngineError::LedgerIo);
-            }
-            idempotency.push(committed.idempotency_record().clone());
-            if self.fail_at(CommitFailureStage::WriteIdempotency) {
-                return Err(AllocatorEngineError::LedgerIo);
-            }
-            let generation = self.generation.checked_next()?;
-            if self.fail_at(CommitFailureStage::DurableSync) {
-                return Err(AllocatorEngineError::LedgerIo);
-            }
-
-            self.leases = leases;
-            self.idempotency = idempotency;
-            self.next_sequence = next_sequence;
-            self.generation = generation;
-            if self.fail_at(CommitFailureStage::AfterDurableCommit) {
-                return Err(AllocatorEngineError::LedgerIo);
-            }
-            Ok(committed)
-        }
-    }
-
-    #[derive(Debug)]
-    struct ErrorLedger(AllocatorEngineError);
-
-    impl AllocatorLedger for ErrorLedger {
-        fn load(&self) -> Result<AllocatorLedgerSnapshot, AllocatorEngineError> {
-            Err(self.0)
-        }
-
-        fn commit_allocation(
-            &mut self,
-            _commit: AllocatorLedgerCommit,
-        ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError> {
-            panic!("commit must not run after a failed read")
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct SharedLedgerState {
-        leases: Vec<AllocatorLease>,
-        idempotency: Vec<AllocatorIdempotencyRecord>,
-        next_sequence: u64,
-        generation: AllocatorLedgerGeneration,
-    }
-
-    #[derive(Debug)]
-    struct OfdStyleLedger {
-        shared: Arc<Mutex<SharedLedgerState>>,
-        stale_read: Option<AllocatorLedgerSnapshot>,
-    }
-
-    impl OfdStyleLedger {
-        fn new(shared: Arc<Mutex<SharedLedgerState>>) -> Self {
-            Self {
-                shared,
-                stale_read: None,
-            }
-        }
-
-        fn with_stale_read(
-            shared: Arc<Mutex<SharedLedgerState>>,
-            stale_read: AllocatorLedgerSnapshot,
-        ) -> Self {
-            Self {
-                shared,
-                stale_read: Some(stale_read),
-            }
-        }
-    }
-
-    impl AllocatorLedger for OfdStyleLedger {
-        fn load(&self) -> Result<AllocatorLedgerSnapshot, AllocatorEngineError> {
-            if let Some(snapshot) = &self.stale_read {
-                return Ok(snapshot.clone());
-            }
-            let state = self
-                .shared
-                .lock()
-                .map_err(|_| AllocatorEngineError::LedgerLockUnavailable)?;
-            Ok(AllocatorLedgerSnapshot::new(
-                state.generation,
-                state.leases.clone(),
-                state.idempotency.clone(),
-            ))
-        }
-
-        fn commit_allocation(
-            &mut self,
-            commit: AllocatorLedgerCommit,
-        ) -> Result<AllocatorLedgerCommitResult, AllocatorEngineError> {
-            let mut state = self
-                .shared
-                .lock()
-                .map_err(|_| AllocatorEngineError::LedgerLockUnavailable)?;
-            if commit.expected_generation() != state.generation {
-                return Err(AllocatorEngineError::LedgerGenerationConflict);
-            }
-            let next_sequence = if commit.kind() == AllocatorLedgerCommitKind::Grant {
-                Some(
-                    state
-                        .next_sequence
-                        .checked_add(1)
-                        .ok_or(AllocatorEngineError::LedgerTampered)?,
-                )
-            } else {
-                None
-            };
-            let lease_id = next_sequence.map(|sequence| {
-                AllocatorLeaseId::parse(format!("lease-shared-{sequence}")).unwrap()
-            });
-            let committed = commit.materialize(lease_id)?;
-            let mut leases = state.leases.clone();
-            if let LeaseAllocationResult::Granted { lease } = committed.result() {
-                leases.push(lease.clone());
-            }
-            let mut idempotency = state.idempotency.clone();
-            idempotency.push(committed.idempotency_record().clone());
-            let generation = state.generation.checked_next()?;
-            state.leases = leases;
-            state.idempotency = idempotency;
-            state.generation = generation;
-            if let Some(next_sequence) = next_sequence {
-                state.next_sequence = next_sequence;
-            }
-            Ok(committed)
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct CustomObserved {
-        resources: Vec<ObservedHostResource>,
-    }
-
-    impl ObservedAllocatorState for CustomObserved {
-        fn resources(&self) -> &[ObservedHostResource] {
-            &self.resources
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct CustomLiveness {
-        live: Vec<LeaseOwner>,
-    }
-
-    impl AllocatorLiveness for CustomLiveness {
-        fn is_live(&self, owner: &LeaseOwner) -> bool {
-            self.live.iter().any(|candidate| candidate == owner)
-        }
-    }
-
-    type FakeEngine = LocalRootAllocatorEngine<
-        FakeAllocatorLedger,
-        FakeObservedAllocatorState,
-        FakeAllocatorLiveness,
-    >;
-
     fn engine(
         owner: LeaseOwner,
         leases: Vec<AllocatorLease>,
         observations: Vec<ObservedHostResource>,
         live_owners: Vec<LeaseOwner>,
-    ) -> FakeEngine {
+    ) -> LocalRootAllocatorEngine {
         LocalRootAllocatorEngine::new(
             owner,
             FakeAllocatorLedger::new(leases),
@@ -1762,462 +1060,21 @@ mod tests {
     }
 
     #[test]
-    fn fake_support_adapters_conform_and_engine_is_send_sync() {
-        fn assert_ledger<T: AllocatorLedger>() {}
-        fn assert_observed<T: ObservedAllocatorState>() {}
-        fn assert_liveness<T: AllocatorLiveness>() {}
-        fn assert_send_sync<T: Send + Sync>() {}
-
-        assert_ledger::<FakeAllocatorLedger>();
-        assert_observed::<FakeObservedAllocatorState>();
-        assert_liveness::<FakeAllocatorLiveness>();
-        assert_send_sync::<FakeEngine>();
-        assert_send_sync::<LocalRootAllocatorEngine<CustomLedger, CustomObserved, CustomLiveness>>(
-        );
-    }
-
-    #[test]
-    fn commit_failures_before_durability_leave_no_partial_state_and_retry_cleanly() {
-        let failure_stages = [
-            CommitFailureStage::AcquireLock,
-            CommitFailureStage::ReserveLeaseId,
-            CommitFailureStage::WriteLease,
-            CommitFailureStage::WriteIdempotency,
-            CommitFailureStage::DurableSync,
-        ];
-
-        for stage in failure_stages {
-            let lease_owner = owner("work");
-            let allocation_request = request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                lease_owner.clone(),
-                vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-            );
-            let mut engine = LocalRootAllocatorEngine::new(
-                owner("root"),
-                FaultInjectingLedger::new(stage),
-                CustomObserved::default(),
-                CustomLiveness {
-                    live: vec![lease_owner],
-                },
-            );
-
-            let error = engine.allocate(allocation_request.clone()).unwrap_err();
-            assert_eq!(
-                error,
-                if stage == CommitFailureStage::AcquireLock {
-                    AllocatorEngineError::LedgerLockUnavailable
-                } else {
-                    AllocatorEngineError::LedgerIo
-                }
-            );
-            assert!(engine.ledger().leases.is_empty());
-            assert!(engine.ledger().idempotency.is_empty());
-            assert_eq!(engine.ledger().next_sequence, 1);
-            assert_eq!(
-                engine.ledger().generation,
-                AllocatorLedgerGeneration::default()
-            );
-
-            let retry = engine.allocate(allocation_request).unwrap();
-            let LeaseAllocationResult::Granted { lease } = retry.response.result else {
-                panic!("retry after rolled-back commit must grant");
-            };
-            assert_eq!(lease.lease_id, lease_id("lease-fault-1"));
-            assert_eq!(engine.ledger().leases.len(), 1);
-            assert_eq!(engine.ledger().idempotency.len(), 1);
-        }
-    }
-
-    #[test]
-    fn lost_commit_ack_returns_error_then_replays_the_durable_grant() {
-        let lease_owner = owner("work");
-        let allocation_request = request(
-            "op-1",
-            "corr-1",
-            "idem-1",
-            lease_owner.clone(),
-            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-        );
-        let mut engine = LocalRootAllocatorEngine::new(
-            owner("root"),
-            FaultInjectingLedger::new(CommitFailureStage::AfterDurableCommit),
-            CustomObserved::default(),
-            CustomLiveness {
-                live: vec![lease_owner],
-            },
-        );
-
-        assert_eq!(
-            engine.allocate(allocation_request.clone()).unwrap_err(),
-            AllocatorEngineError::LedgerIo
-        );
-        assert_eq!(engine.ledger().leases.len(), 1);
-        assert_eq!(engine.ledger().idempotency.len(), 1);
-        assert_eq!(engine.ledger().next_sequence, 2);
-        assert_eq!(
-            engine.ledger().generation,
-            AllocatorLedgerGeneration::new(1)
-        );
-
-        let replay = engine.allocate(allocation_request).unwrap();
-        let LeaseAllocationResult::Granted { lease } = replay.response.result else {
-            panic!("retry must replay the durably committed grant");
-        };
-        assert_eq!(lease.lease_id, lease_id("lease-fault-1"));
-        assert_eq!(
-            replay.metrics[0].outcome,
-            AllocatorEngineOutcome::IdempotentReplay
-        );
-        assert_eq!(engine.ledger().leases.len(), 1);
-    }
-
-    #[test]
-    fn denial_is_not_returned_until_its_idempotency_record_is_durable() {
-        let lease_owner = owner("work");
-        let allocation_request = request(
-            "op-1",
-            "corr-1",
-            "idem-1",
-            lease_owner.clone(),
-            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-        );
-        let mut engine = LocalRootAllocatorEngine::new(
-            owner("root"),
-            FaultInjectingLedger::new(CommitFailureStage::WriteIdempotency),
-            CustomObserved {
-                resources: vec![observed(
-                    "bridge-1",
-                    HostResourceKind::Bridge,
-                    ObservedResourceState::ForeignOwner,
-                )],
-            },
-            CustomLiveness {
-                live: vec![lease_owner],
-            },
-        );
-
-        assert_eq!(
-            engine.allocate(allocation_request.clone()).unwrap_err(),
-            AllocatorEngineError::LedgerIo
-        );
-        assert!(engine.ledger().idempotency.is_empty());
-        assert_eq!(
-            engine
-                .allocate(allocation_request.clone())
-                .unwrap()
-                .response
-                .result,
-            engine.allocate(allocation_request).unwrap().response.result
-        );
-        assert_eq!(engine.ledger().idempotency.len(), 1);
-    }
-
-    #[test]
-    fn fallible_reads_propagate_closed_errors_without_a_response() {
-        for error in [
-            AllocatorEngineError::LedgerLockUnavailable,
-            AllocatorEngineError::LedgerIo,
-            AllocatorEngineError::LedgerGenerationConflict,
-            AllocatorEngineError::LedgerTampered,
-        ] {
-            let lease_owner = owner("work");
-            let allocation_request = request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                lease_owner.clone(),
-                vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-            );
-            let mut engine = LocalRootAllocatorEngine::new(
-                owner("root"),
-                ErrorLedger(error),
-                CustomObserved::default(),
-                CustomLiveness {
-                    live: vec![lease_owner],
-                },
-            );
-            assert_eq!(engine.allocate(allocation_request).unwrap_err(), error);
-            assert!(!error.to_string().contains("bridge"));
-        }
-
-        let engine = LocalRootAllocatorEngine::new(
-            owner("root"),
-            ErrorLedger(AllocatorEngineError::LedgerIo),
-            CustomObserved::default(),
-            CustomLiveness::default(),
-        );
-        assert_eq!(
-            engine.reconcile(op("op-1"), corr("corr-1")).unwrap_err(),
-            AllocatorEngineError::LedgerIo
-        );
-    }
-
-    #[test]
-    fn snapshot_tamper_is_rejected_before_commit() {
-        let lease_owner = owner("work");
-        let missing_lease = lease(
-            "lease-missing",
-            lease_owner.clone(),
-            AllocatorLeaseState::Granted,
-            vec![granted("bridge-1", HostResourceKind::Bridge)],
-        );
-        let allocation_request = request(
-            "op-1",
-            "corr-1",
-            "idem-1",
-            lease_owner.clone(),
-            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-        );
-        let record = AllocatorIdempotencyRecord::from_request(
-            &allocation_request,
-            LeaseAllocationResult::Granted {
-                lease: missing_lease,
-            },
-        );
-        let mut ledger = CustomLedger::default();
-        ledger.idempotency.push(record);
-        let mut engine = LocalRootAllocatorEngine::new(
-            owner("root"),
-            ledger,
-            CustomObserved::default(),
-            CustomLiveness {
-                live: vec![lease_owner],
-            },
-        );
-
-        assert_eq!(
-            engine.allocate(allocation_request).unwrap_err(),
-            AllocatorEngineError::LedgerTampered
-        );
-        assert!(engine.ledger().leases.is_empty());
-    }
-
-    #[test]
-    fn idempotency_record_serializes_for_durable_restart_replay() {
-        let allocation_request = request(
-            "op-1",
-            "corr-1",
-            "idem-1",
-            owner("work"),
-            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-        );
-        let result = LeaseAllocationResult::Denied {
-            reason: AllocatorReasonCode::PolicyDenied,
-            conflicts: Vec::new(),
-        };
-        let record = AllocatorIdempotencyRecord::from_request(&allocation_request, result.clone());
-
-        let encoded = serde_json::to_string(&record).unwrap();
-        let decoded: AllocatorIdempotencyRecord = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded, record);
-        assert_eq!(decoded.result(), &result);
-        assert!(
-            serde_json::from_str::<AllocatorIdempotencyRecord>(&encoded.replacen(
-                '{',
-                "{\"unexpected\":true,",
-                1
-            ))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn ofd_style_stale_generation_conflict_never_returns_granted() {
-        let shared = Arc::new(Mutex::new(SharedLedgerState::default()));
-        let stale_snapshot = OfdStyleLedger::new(shared.clone()).load().unwrap();
-        let lease_owner = owner("work");
-        let live = CustomLiveness {
-            live: vec![lease_owner.clone()],
-        };
-        let mut first = LocalRootAllocatorEngine::new(
-            owner("root"),
-            OfdStyleLedger::with_stale_read(shared.clone(), stale_snapshot.clone()),
-            CustomObserved::default(),
-            CustomLiveness {
-                live: live.live.clone(),
-            },
-        );
-        let mut concurrent = LocalRootAllocatorEngine::new(
-            owner("root"),
-            OfdStyleLedger::with_stale_read(shared.clone(), stale_snapshot),
-            CustomObserved::default(),
-            live,
-        );
-
-        first
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                lease_owner.clone(),
-                vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
-        let error = concurrent
-            .allocate(request(
-                "op-2",
-                "corr-2",
-                "idem-2",
-                lease_owner.clone(),
-                vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap_err();
-        assert_eq!(error, AllocatorEngineError::LedgerGenerationConflict);
-        assert_eq!(shared.lock().unwrap().leases.len(), 1);
-
-        let mut retry = LocalRootAllocatorEngine::new(
-            owner("root"),
-            OfdStyleLedger::new(shared.clone()),
-            CustomObserved::default(),
-            CustomLiveness {
-                live: vec![lease_owner.clone()],
-            },
-        );
-        let allocation = retry
-            .allocate(request(
-                "op-3",
-                "corr-3",
-                "idem-2",
-                lease_owner,
-                vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
-        assert!(matches!(
-            allocation.response.result,
-            LeaseAllocationResult::Granted { .. }
-        ));
-        assert_eq!(shared.lock().unwrap().leases.len(), 2);
-    }
-
-    #[test]
-    fn custom_adapters_preserve_replay_generation_and_restart_semantics() {
-        let allocator_owner = owner("root");
-        let lease_owner = owner("work");
-        let initial = request(
-            "op-1",
-            "corr-1",
-            "idem-1",
-            lease_owner.clone(),
-            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-        );
-        let mut engine = LocalRootAllocatorEngine::new(
-            allocator_owner.clone(),
-            CustomLedger::with_next_sequence(41),
-            CustomObserved::default(),
-            CustomLiveness {
-                live: vec![lease_owner.clone()],
-            },
-        );
-
-        let first = engine.allocate(initial.clone()).unwrap();
-        let LeaseAllocationResult::Granted { lease } = &first.response.result else {
-            panic!("expected custom adapter grant");
-        };
-        assert_eq!(lease.lease_id, lease_id("lease-custom-41"));
-
-        let (ledger, _, _) = engine.into_adapters();
-        let mut restarted = LocalRootAllocatorEngine::new(
-            allocator_owner,
-            ledger,
-            CustomObserved {
-                resources: vec![observed(
-                    "bridge-1",
-                    HostResourceKind::Bridge,
-                    ObservedResourceState::Present,
-                )],
-            },
-            CustomLiveness {
-                live: vec![lease_owner.clone()],
-            },
-        );
-        let mut replay_request = initial.clone();
-        replay_request.operation_id = op("op-2");
-        replay_request.correlation_id = corr("corr-2");
-        let replay = restarted.allocate(replay_request).unwrap();
-        assert_eq!(replay.response.result, first.response.result);
-        assert_eq!(
-            replay.metrics[0].outcome,
-            AllocatorEngineOutcome::IdempotentReplay
-        );
-        let next = restarted
-            .allocate(request(
-                "op-next",
-                "corr-next",
-                "idem-next",
-                lease_owner.clone(),
-                vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
-        let LeaseAllocationResult::Granted { lease } = next.response.result else {
-            panic!("expected post-restart grant");
-        };
-        assert_eq!(lease.lease_id, lease_id("lease-custom-42"));
-
-        let reconciliation = restarted.reconcile(op("op-3"), corr("corr-3")).unwrap();
-        assert_eq!(
-            reconciliation.actions[0].decision,
-            AllocatorEngineDecision::Reconcile
-        );
-        let changed = restarted
-            .allocate(request(
-                "op-changed",
-                "corr-changed",
-                "idem-1",
-                lease_owner.clone(),
-                vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
-        assert!(matches!(
-            changed.response.result,
-            LeaseAllocationResult::Denied {
-                reason: AllocatorReasonCode::InvalidRequest,
-                ..
-            }
-        ));
-
-        let (ledger, observed, _) = restarted.into_adapters();
-        let mut generation_changed = lease_owner;
-        generation_changed.controller_generation = ControllerGenerationId::parse("gen-2").unwrap();
-        let restarted_without_owner = LocalRootAllocatorEngine::new(
-            owner("root"),
-            ledger,
-            observed,
-            CustomLiveness {
-                live: vec![generation_changed],
-            },
-        );
-        let reconciliation = restarted_without_owner
-            .reconcile(op("op-4"), corr("corr-4"))
-            .unwrap();
-        assert_eq!(
-            reconciliation.actions[0].decision,
-            AllocatorEngineDecision::Reclaim {
-                reason: AllocatorReasonCode::OwnerNotLive
-            }
-        );
-    }
-
-    #[test]
     fn grants_resources_in_total_acquisition_order() {
         let owner = owner("work");
         let mut engine = engine(owner.clone(), Vec::new(), Vec::new(), vec![owner.clone()]);
-        let allocation = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                owner,
-                vec![
-                    request_resource("tap-1", HostResourceKind::Tap, 3, 0),
-                    request_resource("bridge-1", HostResourceKind::Bridge, 1, 5),
-                    request_resource("cgroup-1", HostResourceKind::CgroupSubtree, 1, 5),
-                    request_resource("nft-1", HostResourceKind::NftablesTable, 1, 1),
-                ],
-            ))
-            .unwrap();
+        let allocation = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            owner,
+            vec![
+                request_resource("tap-1", HostResourceKind::Tap, 3, 0),
+                request_resource("bridge-1", HostResourceKind::Bridge, 1, 5),
+                request_resource("cgroup-1", HostResourceKind::CgroupSubtree, 1, 5),
+                request_resource("nft-1", HostResourceKind::NftablesTable, 1, 1),
+            ],
+        ));
 
         let LeaseAllocationResult::Granted { lease } = allocation.response.result else {
             panic!("expected grant");
@@ -2262,15 +1119,13 @@ mod tests {
             vec![requester.clone(), other],
         );
 
-        let allocation = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                requester,
-                vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
+        let allocation = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            requester,
+            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
+        ));
 
         let LeaseAllocationResult::Denied { reason, conflicts } = allocation.response.result else {
             panic!("expected denial");
@@ -2300,20 +1155,18 @@ mod tests {
             vec![requester.clone()],
         );
 
-        let allocation = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                requester,
-                vec![request_resource(
-                    "bridge-foreign",
-                    HostResourceKind::Bridge,
-                    1,
-                    0,
-                )],
-            ))
-            .unwrap();
+        let allocation = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            requester,
+            vec![request_resource(
+                "bridge-foreign",
+                HostResourceKind::Bridge,
+                1,
+                0,
+            )],
+        ));
 
         let LeaseAllocationResult::Denied { reason, conflicts } = allocation.response.result else {
             panic!("expected denial");
@@ -2336,22 +1189,20 @@ mod tests {
         let duplicate = request_resource("bridge-1", HostResourceKind::Bridge, 1, 0);
         let mut engine = engine(owner.clone(), Vec::new(), Vec::new(), vec![owner.clone()]);
 
-        let allocation = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                owner,
-                vec![duplicate.clone(), duplicate],
-            ))
-            .unwrap();
+        let allocation = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            owner,
+            vec![duplicate.clone(), duplicate],
+        ));
 
         let LeaseAllocationResult::Denied { reason, conflicts } = allocation.response.result else {
             panic!("expected denial");
         };
         assert_eq!(reason, AllocatorReasonCode::InvalidRequest);
         assert!(conflicts.is_empty());
-        assert!(engine.ledger().leases.is_empty());
+        assert!(engine.ledger.leases.is_empty());
     }
 
     #[test]
@@ -2371,24 +1222,20 @@ mod tests {
         );
         let resource = request_resource("bridge-1", HostResourceKind::Bridge, 1, 0);
 
-        let first = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-denied",
-                requester.clone(),
-                vec![resource.clone()],
-            ))
-            .unwrap();
-        let second = engine
-            .allocate(request(
-                "op-2",
-                "corr-2",
-                "idem-denied",
-                requester,
-                vec![resource],
-            ))
-            .unwrap();
+        let first = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-denied",
+            requester.clone(),
+            vec![resource.clone()],
+        ));
+        let second = engine.allocate(request(
+            "op-2",
+            "corr-2",
+            "idem-denied",
+            requester,
+            vec![resource],
+        ));
 
         assert_eq!(second.response.operation_id, op("op-2"));
         assert_eq!(second.response.correlation_id, corr("corr-2"));
@@ -2405,18 +1252,14 @@ mod tests {
         let owner = owner("work");
         let resource = request_resource("bridge-1", HostResourceKind::Bridge, 1, 0);
         let mut engine = engine(owner.clone(), Vec::new(), Vec::new(), vec![owner.clone()]);
-        let first = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                owner.clone(),
-                vec![resource.clone()],
-            ))
-            .unwrap();
-        let second = engine
-            .allocate(request("op-2", "corr-2", "idem-1", owner, vec![resource]))
-            .unwrap();
+        let first = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            owner.clone(),
+            vec![resource.clone()],
+        ));
+        let second = engine.allocate(request("op-2", "corr-2", "idem-1", owner, vec![resource]));
 
         assert_eq!(second.response.operation_id, op("op-2"));
         assert_eq!(second.response.correlation_id, corr("corr-2"));
@@ -2425,31 +1268,27 @@ mod tests {
             second.metrics[0].outcome,
             AllocatorEngineOutcome::IdempotentReplay
         );
-        assert_eq!(engine.ledger().leases.len(), 1);
+        assert_eq!(engine.ledger.leases.len(), 1);
     }
 
     #[test]
     fn rejects_reused_idempotency_key_for_different_request() {
         let owner = owner("work");
         let mut engine = engine(owner.clone(), Vec::new(), Vec::new(), vec![owner.clone()]);
-        let _ = engine
-            .allocate(request(
-                "op-1",
-                "corr-1",
-                "idem-1",
-                owner.clone(),
-                vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
-        let second = engine
-            .allocate(request(
-                "op-2",
-                "corr-2",
-                "idem-1",
-                owner,
-                vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
-            ))
-            .unwrap();
+        let _ = engine.allocate(request(
+            "op-1",
+            "corr-1",
+            "idem-1",
+            owner.clone(),
+            vec![request_resource("bridge-1", HostResourceKind::Bridge, 1, 0)],
+        ));
+        let second = engine.allocate(request(
+            "op-2",
+            "corr-2",
+            "idem-1",
+            owner,
+            vec![request_resource("bridge-2", HostResourceKind::Bridge, 1, 0)],
+        ));
 
         let LeaseAllocationResult::Denied { reason, conflicts } = second.response.result else {
             panic!("expected denial");
@@ -2473,7 +1312,7 @@ mod tests {
             vec![owner],
         );
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.actions[0].decision,
@@ -2508,7 +1347,7 @@ mod tests {
             vec![owner],
         );
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.actions[0].decision,
@@ -2539,7 +1378,7 @@ mod tests {
             vec![owner],
         );
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.actions[0].decision,
@@ -2574,7 +1413,7 @@ mod tests {
             Vec::new(),
         );
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.actions[0].decision,
@@ -2603,7 +1442,7 @@ mod tests {
             vec![owner],
         );
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.actions[0].decision,
@@ -2644,7 +1483,7 @@ mod tests {
             vec![owner],
         );
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.actions[0].decision,
@@ -2668,9 +1507,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let allocation = engine
-            .allocate(request("op-1", "corr-1", "idem-1", owner, resources))
-            .unwrap();
+        let allocation = engine.allocate(request("op-1", "corr-1", "idem-1", owner, resources));
 
         assert!(allocation.events.len() <= MAX_ALLOCATOR_EVENTS);
         assert!(allocation.metrics.len() <= MAX_ALLOCATOR_EVENTS);
@@ -2701,7 +1538,7 @@ mod tests {
             .collect::<Vec<_>>();
         let engine = engine(owner.clone(), Vec::new(), observations, vec![owner]);
 
-        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1")).unwrap();
+        let reconciliation = engine.reconcile(op("op-1"), corr("corr-1"));
 
         assert_eq!(
             reconciliation.report.records.len(),

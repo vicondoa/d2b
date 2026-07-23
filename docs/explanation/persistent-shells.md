@@ -11,21 +11,22 @@ d2b shell <target> [ACTION]
 
 where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
 attaches to the target's configured default session. Local VM names stay on the
-local daemon fast path. Provider-managed targets require an authenticated
-provider agent that positively advertises persistent-shell capability.
+local daemon fast path. Gateway-backed management actions route through the
+configured realm gateway; interactive gateway attach remains fail-closed until
+semantic ADR 0039 attach support lands.
 
 ## Persistence boundary
 
 Persistent shell state belongs to the target runtime, not to the host CLI
 process. For a VM that runtime is the guest-local shell pool. For an
-unsafe-local workload it is a separate transient user-scope supervisor that owns
-the PTY and bounded output ring rather than the reconnectable runtime agent. A
-session is expected to survive:
+unsafe-local workload it is a separate user-scope supervisor that owns the PTY
+and reconnect listener rather than the short-lived user helper. A session is
+expected to survive:
 
 - the local CLI disconnecting;
 - the terminal window closing;
 - guestd restart when guestd can adopt the still-running shell pool;
-- systemd-user runtime agent or d2bd reconnect while the verified user scope and
+- unsafe-local helper or d2bd reconnect while the verified user scope and
   supervisor remain alive.
 
 It is not expected to survive:
@@ -42,34 +43,39 @@ connection-owned and exits with the command's status.
 ## Local dispatch and network surface
 
 The host CLI connects to the local `d2bd` public socket for local targets.
-Provider-managed shell operations stay semantic provider operations and
-terminal streams. They are never translated into provider-native exec, raw
-guest-control, or a gateway-guest command. Missing provider-agent capability
-fails closed.
+For gateway-backed `list`, `detach`, and `kill`, it enters the realm trust
+boundary by running the same `d2b shell <target> ...` command inside the
+gateway VM over the typed guest-control exec path. The host still does not load
+realm credentials or provider transports. Gateway-backed interactive attach
+fails closed on the host facade; operators can enter the realm gateway and run
+`d2b shell <target>` there until the semantic ADR 0039 attach stream lands.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing
 daemon public socket and authenticated guest-control transport.
 
-Unsafe-local shell control uses the authenticated `d2b.shell.v2`
-ComponentSession from the exact requester-UID systemd-user runtime agent. It is
-not a root service, broker operation, or per-VM unit. The runtime service
-validates exactly one connected CLOEXEC terminal fd for attach and reserves each
-bounded output ring against the per-agent total before creating the shell.
-Closing that session detaches the terminal stream; it does not kill the
-user-scope shell.
+Unsafe-local uses only same-UID Unix sockets. Its per-shell listener lives
+beneath the validated user runtime directory and is not a root service, broker
+operation, or per-VM unit. `d2bd` resolves the target and bundle-owned shell
+policy, asks the exact requester-UID helper to create or reconnect, validates the
+single connected terminal fd, and multiplexes it behind a fresh opaque public
+attachment handle. Closing that public connection detaches the helper-owned
+terminal stream; it does not kill the user-scope shell.
 
-Daemon and runtime-agent restarts are reconnect events. Neither persists fd
-authority. Adoption revalidates the transient scope owner, invocation identity,
-and cgroup before reuse. Ambiguous metadata remains degraded and never triggers
-a broad same-UID cleanup; kill targets only the exact reverified scope.
+Daemon and helper restarts are reconnect events. The daemon intentionally keeps
+no persisted fd authority, while the helper snapshot revalidates the
+user-scope `InvocationID`, cgroup, and supervisor status before adoption.
+Ambiguous metadata is reported degraded and never triggers a broad kill.
 
-## Same-UID boundary
+## Same-UID AF_UNIX boundary
 
 Inside a guest, shpool exposes an AF_UNIX socket under the workload user's
-runtime directory. Unsafe-local instead uses an authenticated local
-ComponentSession whose peer is the exact host uid. Both are same-UID trust
-boundaries, not separation from code already running as that workload user.
+runtime directory. Unsafe-local supervisors use the authenticated host user's
+runtime directory for the equivalent reconnect boundary. Helpers that connect
+to either socket run as the workload UID.
+The socket is a same-UID IPC boundary, not a cryptographic separation boundary:
+code already running as that workload user can potentially interact with the
+same shell pool.
 
 For unsafe-local this is also the containment boundary: there is **no
 containment from other processes running as the same host uid**. The transient

@@ -20,9 +20,7 @@ Canonical reference for host-visible d2b naming. AGENTS.md and the design doc ke
 | Legacy per-VM system users | `d2b-<vm>-{gpu,video,snd,swtpm,store-sync}` | Legacy framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `d2b.slice/<vm>/<role>`. Notable exceptions: `d2b-<vm>-store-sync` runs as root (no dedicated user) and `d2b-<vm>-gpu` is shared by the GPU and video runners. |
 | Launcher group | `d2b` | v1.2 Unix group allowed to talk to `d2bd` over `/run/d2b/public.sock` (mode 0660, group `d2b`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-v1.2 `d2b-launcher` / `d2b-launchers` groups are empty migration tombstones only. |
 | Unsafe-local helper group | `d2b-unsafe-local` | Narrow helper-socket access group populated only from users allowed to use an enabled unsafe-local realm. |
-| User agent socket | `/run/d2b/u/<uid>/userd.sock` | User-manager-owned authenticated `SOCK_SEQPACKET` endpoint. |
-| User runtime agent socket | `/run/d2b/u/<uid>/runtime-agent.sock` | User-manager-owned authenticated `SOCK_SEQPACKET` endpoint for unsafe-local runtime operations. |
-| Clipboard sockets | `/run/d2b/u/<uid>/clipd/{control,picker,bridge}.sock` | User-manager-owned authenticated clipboard control, picker, and bridge endpoints. |
+| Unsafe-local helper socket | `/run/d2b/unsafe-local-helper.sock` | Daemon-owned private `SOCK_SEQPACKET` listener; not a systemd socket unit and not a fourth root service. |
 
 ## Broker caller-role audit labels
 
@@ -45,44 +43,37 @@ See [ADR 0015](../adr/0015-daemon-only-clean-break.md) for the
 daemon-only authz/audit invariants that make these labels stable across
 host-side group renames.
 
-## Realm, workload, provider, and role identifiers
+## Realm, workload, VM, and env identifiers
 
-Realm labels, workload names, and configured provider instance ids use
-`^[a-z][a-z0-9-]*$` and are at most 63 ASCII bytes. Realm paths are
-most-specific first and end in `local-root`. The canonical public workload
-target form is:
+- VM name regex: `^[a-z][a-z0-9-]*$`
+- Reserved VM prefix: `sys-`
+- Reserved VM name: `launcher`
+- `sys-<env>-net` is framework-reserved for the auto-declared net VM.
 
-```text
-<workload>.<realm>[.<ancestor>...].local-root.d2b
-```
-
-Runtime identities are 20-character lowercase unpadded RFC 4648 base32 values
-derived by the canonical domain-separated v2 identity grammar:
-
-- realm id: canonical realm path;
-- workload id: realm id plus canonical workload name;
-- provider id: realm id, primary provider type, and configured provider id;
-- role id: realm id, workload id, and closed role kind.
-
-Nix rejects collisions across the complete realm configuration. Human labels,
-canonical targets, configured provider ids, device ids, and bus ids remain
-metadata and never become runtime path components.
-
-The normalized index is the only Nix source for these identities and for
-generated storage/resource ids. Runtime paths use only fixed anchors and
-canonical short ids:
+Realm and workload labels use the same lowercase label shape. The canonical
+public workload target form is:
 
 ```text
-/etc/d2b/r/<realm-id>/w/<workload-id>/
-/var/lib/d2b/r/<realm-id>/providers/<provider-id>/
-/var/lib/d2b/r/<realm-id>/w/<workload-id>/
-/var/cache/d2b/r/<realm-id>/
-/run/d2b/r/<realm-id>/p/<provider-id>/
-/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/
+<workload>.<realm>[.<ancestor>...].d2b
 ```
 
-Consumers look up normalized rows by canonical id or canonical target; they do
-not rescan realm/provider configuration or maintain a parallel VM/env index.
+During the v2 transition, `d2b.realms.<realm>.workloads.<workload>.legacyVmName`
+maps that public workload id to the existing local VM substrate. For example,
+`workloads.aad.legacyVmName = "work-aad"` makes `aad.work.d2b` resolve to the
+local `work-aad` VM for status and guest-control exec while preserving
+`/var/lib/d2b/vms/work-aad`.
+
+These constraints let the CLI, manifest, and host-side units resolve resources
+mechanically without collisions. When docs and code differ, the passing code is
+canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
+
+Launcher item ids also use `^[a-z][a-z0-9-]*$`. They are scoped to one workload
+and appear in `d2b launch <target> --item <id>`.
+
+Private configured unsafe-local and local-VM launcher data is installed as
+`/etc/d2b/unsafe-local-workloads.json`. Public provider-neutral launcher
+metadata uses `/etc/d2b/realm-workloads-launcher-v2.json`; the compatibility
+schema remains `/etc/d2b/realm-workloads-launcher.json`.
 
 ## Persistent shell session names
 
@@ -131,8 +122,9 @@ transition metadata only in the current implementation; bridge and TAP
 names below are still generated from `d2b.envs` and `d2b.vms.<vm>.env`.
 See [Realm option schema](./realm-options.md).
 
-Consumers should read canonical realm and provider identities from generated
-metadata rather than reconstructing process or endpoint names from realm paths.
+Gateway-backed realms use a configured realm entrypoint. Consumers should read
+the generated access/entrypoint metadata rather than reconstructing gateway
+names from realm paths.
 
 ## Network device names
 

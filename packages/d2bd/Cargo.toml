@@ -1,9 +1,7 @@
 [package]
 name = "d2bd"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -12,48 +10,30 @@ workspace = true
 
 [dependencies]
 arc-swap = "1"
-async-trait.workspace = true
-base64 = "0.22"
+async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 libc = "0.2"
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "poll"] }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
-d2b-core = { workspace = true }
-d2b-host = { workspace = true }
-d2b-contracts = { workspace = true, features = ["unsafe-local", "v2-guest-configured-launches", "v2-provider"] }
-d2b-provider = { workspace = true, default-features = false }
-d2b-provider-audio-pipewire-vhost-user = { workspace = true, default-features = false }
-d2b-provider-device-host-mediated = { workspace = true, default-features = false }
-d2b-provider-display-wayland = { workspace = true, default-features = false }
-d2b-provider-network-local-realm = { workspace = true, default-features = false }
-d2b-provider-observability-local = { workspace = true, default-features = false }
-d2b-provider-runtime-azure-container-apps = { workspace = true, default-features = false }
-d2b-provider-runtime-local = { workspace = true, default-features = false }
-d2b-provider-storage-local = { workspace = true, default-features = false }
-d2b-provider-substrate-host = { workspace = true, default-features = false }
-d2b-provider-transport-azure-relay = { workspace = true, default-features = false }
-d2b-provider-transport-local = { workspace = true, default-features = false }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).
-d2b-realm-core = { workspace = true }
-d2b-realm-provider = { workspace = true }
-d2b-realm-router = { workspace = true }
-d2b-session = { workspace = true }
-d2b-session-unix = { workspace = true, features = ["host-socket", "native-vsock"] }
-d2b-gateway = { workspace = true }
-d2b-gateway-runtime = { workspace = true }
-# Retained until the v1 ACA and Relay call paths are routed through the
-# canonical provider registry.
-d2b-provider-aca = { workspace = true }
-d2b-provider-relay = { workspace = true }
-protobuf.workspace = true
-futures.workspace = true
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
+d2b-realm-router = { path = "../d2b-realm-router", version = "0.0.0-bootstrap" }
+d2b-gateway = { path = "../d2b-gateway", version = "0.0.0-bootstrap" }
+d2b-gateway-runtime = { path = "../d2b-gateway-runtime", version = "0.0.0-bootstrap" }
+d2b-provider-aca = { path = "../d2b-provider-aca", version = "0.0.0-bootstrap" }
+d2b-provider-relay = { path = "../d2b-provider-relay", version = "0.0.0-bootstrap" }
+protobuf = "3.7.2"
 semver = "1"
 serde.workspace = true
-sha2.workspace = true
+sha2 = "0.10"
 tracing = "0.1"
 # v1.1.1 live-deploy fu9: stderr tracing subscriber for d2bd
 # so RUST_LOG=debug actually surfaces in journalctl. Without this
@@ -64,13 +44,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
 subtle = "2.6"
-zeroize.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
-ttrpc = { workspace = true, default-features = false, features = ["async", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
 uzers = "0.12"
 
 [dev-dependencies]
-d2b-core = { workspace = true, features = ["test-support"] }
-d2b-provider-toolkit = { workspace = true }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 regex = "1"
 tempfile = "3"

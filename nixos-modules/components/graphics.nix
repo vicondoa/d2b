@@ -1,5 +1,6 @@
-# Graphics support for realm-owned local VM workloads (virtio-gpu +
-# Wayland cross-domain forwarding to the host compositor).
+# Graphics support for d2b VMs (virtio-gpu + Wayland cross-domain
+# forward to the host compositor). Imported by host.nix whenever a VM
+# sets `d2b.vms.<name>.graphics.enable = true`.
 #
 # Hypervisor: cloud-hypervisor (chosen over crosvm because crosvm has
 # no swtpm backend — its only `--vtpm-proxy` flag wires to ChromeOS's
@@ -302,13 +303,13 @@ in
   options.d2b.graphics.virglVideo = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Experimental realm-workload setting that enables rutabaga/virglrenderer video forwarding for the crosvm GPU sidecar.";
+    description = "Experimental guest-side mirror of d2b.vms.<vm>.graphics.virglVideo. Enables rutabaga/virglrenderer video forwarding for the crosvm GPU sidecar.";
   };
 
   options.d2b.graphics.xwayland.enable = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Realm-workload Xwayland setting. Intentionally unsupported: graphics.xwayland.enable = true fails eval with a clear message for the Wayland-only migration period.";
+    description = "Guest-side mirror of d2b.vms.<vm>.graphics.xwayland.enable. Intentionally unsupported: graphics.xwayland.enable = true fails eval with a clear message for the Wayland-only migration period.";
   };
 
   config = {

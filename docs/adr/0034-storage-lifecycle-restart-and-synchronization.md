@@ -1,6 +1,6 @@
 # ADR 0034: Storage lifecycle, restart adoption, and synchronization
 
-- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
+- Status: Accepted
 - Date: 2026-06-19
 - Related: ADR 0002 (non-root daemon and privileged broker), ADR 0011
   (cgroup v2 delegation and pidfd handoff), ADR 0015 (daemon-only clean

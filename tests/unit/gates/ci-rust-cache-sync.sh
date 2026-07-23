@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# tests/unit/gates/ci-rust-cache-sync.sh — fail-closed gate: pinned gate
-# compiler artifacts must stay isolated from CI cache restoration. Run by
-# `make test-drift`.
+# tests/unit/gates/ci-rust-cache-sync.sh — fail-closed gate: the CI
+# rust-cache directory list must cover every CARGO_TARGET_DIR used by
+# tests/test-rust.sh. Run by `make test-drift`.
 #
-# Restoring a partially populated Cargo target can preserve fingerprints while
-# omitting build-script executables, producing false "No such file" failures.
-# rust-cache still caches the registry; the pinned gate rebuilds compiler
-# metadata in its toolchain-scoped target on each CI run.
+# If test-rust.sh adds a new target dir (e.g. a new broker feature
+# pass), this gate catches the missing CI cache entry so warm builds
+# don't silently degrade to cold.
 
 set -euo pipefail
 
@@ -23,25 +22,43 @@ test_script="$ROOT/tests/test-rust.sh"
 
 rc=0
 
-if ! grep -q 'd2b_cargo_gate_target_dir' "$test_script"; then
-  log "FAIL: test-rust.sh does not use the toolchain-scoped target helper"
-  rc=1
-fi
+# --- Build the set of target dirs that test-rust.sh actually uses ---
+# These are the paths that MUST be cached for warm CI builds.
+declared_dirs=(
+  "packages -> target"
+  "packages/d2b-priv-broker -> target"
+)
+# Broker parallel feature-pass target dirs: the script uses
+# ${broker_target_dir%/}-<suffix> where broker_target_dir resolves to
+# packages/d2b-priv-broker/target.
+while IFS= read -r suffix; do
+  declared_dirs+=("packages/d2b-priv-broker/target-${suffix}")
+done < <(
+  grep -oP '(?<=broker_target_dir%/\}-)[a-z0-9]+' "$test_script" | sort -u
+)
 
-for workflow in \
-  "$wf" \
-  "$ROOT/.github/workflows/release-host-binaries.yml"
-do
-  if grep -q 'packages/.d2b-gate-targets' "$workflow"; then
-    log "FAIL: toolchain-scoped Cargo gate targets must not be restored from CI cache: $workflow"
+# --- Extract cached dirs from CI workflow (simple grep) ---
+# The workflow's Swatinem/rust-cache step declares paths in `workspaces:`
+# (format: "path -> target") and `cache-directories:` (plain paths).
+cached_in_ci=$(
+  grep -E '^\s+(packages|packages/)' "$wf" \
+    | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' \
+    | sort -u
+)
+
+# --- Check that every declared dir is cached ---
+for dir in "${declared_dirs[@]}"; do
+  if ! echo "$cached_in_ci" | grep -qxF "$dir"; then
+    log "FAIL: target dir '$dir' used by test-rust.sh is NOT in CI rust-cache config"
     rc=1
   fi
 done
 
 if [ "$rc" = 0 ]; then
-  ok "ci-rust-cache-sync: pinned Cargo gate targets are isolated from CI cache"
+  ok "ci-rust-cache-sync: all test-rust.sh target dirs are cached in CI"
 else
-  fail "ci-rust-cache-sync: pinned Cargo gate target isolation drifted"
+  fail "ci-rust-cache-sync: one or more target dirs missing from .github/workflows/pr-l1-static-fast.yml rust-cache config"
+  log "  Fix: add the missing paths to the Swatinem/rust-cache step's workspaces/cache-directories"
 fi
 
 exit "$rc"

@@ -1,52 +1,200 @@
-# TPM device resource
+# `d2b.vms.<vm>.tpm.*`
 
-Declare `tpm` in a realm workload's capability list and configure one
-`host-mediated` device provider in that host-local realm:
+> Reference for the `tpm` component module.
+> Source: [`nixos-modules/components/tpm.nix`](../../nixos-modules/components/tpm.nix)
+> Host-side wiring: [`nixos-modules/host-sidecars.nix`](../../nixos-modules/host-sidecars.nix), [`nixos-modules/host-users.nix`](../../nixos-modules/host-users.nix)
 
-```nix
-d2b.realms.work = {
-  path = "work.local-root";
-  providers.runtime = {
-    type = "runtime";
-    implementationId = "cloud-hypervisor";
-  };
-  providers.devices = {
-    type = "device";
-    implementationId = "host-mediated";
-  };
-  workloads.desktop = {
-    provider = "runtime";
-    launcher.capabilities = [ "tpm" ];
-  };
-};
-```
+## What this component does
 
-## Contract
+Attaches a software-emulated TPM 2.0 device to the guest. Per-VM
+`swtpm socket` runs on the host as a dedicated `d2b-<vm>-swtpm`
+system user; cloud-hypervisor connects to it via
+`--tpm socket=/run/d2b/vms/<vm>/tpm.sock`. The guest kernel sees a normal
+TPM CRB device, exposes `/dev/tpm0` + `/dev/tpmrm0`, and an in-guest
+oneshot provisions the TPM2 Storage Root Key at the standard
+persistent handle `0x81000001` (ECC P-256 preferred, RSA-2048
+fallback) so downstream services (Himmelblau, sbctl, systemd-tpm2-setup
+consumers) can bind keys without bootstrapping themselves.
 
-Evaluation emits a `tpm` device row with:
+TPM state — including the SRK and any keys bound to it by services
+running inside the VM — is **persisted on the host** at
+`/var/lib/d2b/vms/<vm>/swtpm/`.
 
-- canonical realm, workload, provider, and `swtpm` role short IDs;
-- capability `tpm2-stateful`;
-- an exclusive `device-tpm-<workload-id>` allocator lease;
-- state resource ID `workload/<workload-id>/tpm`;
-- FD-only, realm-local broker mediation.
+## Options (host-side)
 
-The control socket is:
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `d2b.vms.<vm>.tpm.enable` | bool | `false` | Attach an swtpm 2.0 device to this VM as TPM CRB. Implies `hypervisor = cloud-hypervisor` (the only one microvm.nix can wire swtpm to). |
 
-```text
-/run/d2b/r/<realm-id>/w/<workload-id>/roles/<swtpm-role-id>/tpm.sock
-```
+## Options (guest-side propagation)
 
-Cloud Hypervisor receives that canonical socket. The guest sees a TPM CRB
-device and provisions the standard storage root key.
+None. The component module is layered directly into the guest config
+by `host.nix` (`++ lib.optional vm'.tpm.enable ./components/tpm.nix`);
+all guest-side wiring is unconditional within the module.
 
-## Persistence and recovery
+## Host-side resources created
 
-TPM state is workload identity. Never delete, replace, or copy it between
-workloads: doing so can look like device tampering and invalidate bound
-credentials. Provisioning and recovery remain broker-owned and fail closed
-when previously provisioned state is missing or has the wrong identity.
+- **`d2b-<vm>-swtpm` system user + group**
+  ([`host-users.nix`](../../nixos-modules/host-users.nix)). Static
+  per-VM user — `DynamicUser = false` so state under
+  `/var/lib/d2b/vms/<vm>/swtpm/` has a stable owner.
+- **`d2b-<vm>-swtpm.service`**
+  ([`host-sidecars.nix`](../../nixos-modules/host-sidecars.nix)).
+  - Runs as `d2b-<vm>-swtpm:d2b-<vm>-swtpm`.
+  - `StateDirectory = "d2b/vms/<vm>/swtpm"`, `StateDirectoryMode = 0700`.
+  - `RuntimeDirectory = "swtpm/<vm>"`, `RuntimeDirectoryMode = 0711`.
+  - `ExecStart`:
+    `swtpm socket --tpmstate dir=/var/lib/d2b/vms/<vm>/swtpm
+    --ctrl type=unixio,path=/run/d2b/vms/<vm>/tpm.sock,mode=0660 --tpm2
+    --flags startup-clear`.
+  - `ExecStartPost`: `setfacl -m u:d2b-<vm>-gpu:rw /run/d2b/vms/<vm>/tpm.sock`
+    so cloud-hypervisor (running as `d2b-<vm>-gpu` when graphics
+    is also enabled) can connect. Failures are tolerated for non-
+    graphics VMs.
+  - `partOf = [ "microvms.target" ]` so a system-wide microvm
+    restart cycles it; `Restart = "on-failure"`, `RestartSec = 2`.
+  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) — a
+    `nixos-rebuild switch` updates the unit file but does NOT
+    cycle the running swtpm. Killing swtpm under a live VM means
+    the guest loses its TPM socket and Entra/Intune device-bound
+    credentials become unreachable; the framework refuses to do
+    this silently. Use `d2b vm restart <vm> --apply` to apply pending
+    changes. (Pre-v0.1.7 this was the broken
+    `unitConfig.X-RestartIfChanged = false` form; see v0.1.7
+    CHANGELOG.)
+- **State directory** `/var/lib/d2b/vms/<vm>/swtpm/`, mode 0700
+  owned by `d2b-<vm>-swtpm`. Contents are swtpm NVRAM + state
+  blobs — not human-readable, not portable across VMs. In the
+  daemon/broker model the privileged broker **provisions this
+  directory on first VM start** (fd-safe create, owner
+  `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared); an
+  existing directory with the correct owner is reconciled in place
+  (never wiped). If a previously-provisioned directory is missing or
+  replaced, the broker **fails the start closed**
+  (`previously-provisioned-swtpm-state-missing`) rather than
+  re-creating an empty TPM — see
+  [components-tpm recovery](#) and the v1.2→v1.3 migration guide.
+- **Parent-dir posture.** The VM's state root at
+  `/var/lib/d2b/vms/<vm>/` is `d2bd:users 3770` — `setgid`
+  so role users inherit the group, and **sticky (`+t`)** so a
+  per-VM role UID (which holds rwx via POSIX ACL) cannot rename or
+  unlink the principal-owned `swtpm/` directory it does not own. The
+  `d2b-<vm>-swtpm` principal additionally gets a `--x` traverse
+  ACL on the parent (gated on `tpm.enable`) so swtpm can reach its
+  state directory. Without the traverse grant swtpm starts but
+  EACCES'es on `tpm2-00.permall` → libtpms enters failure mode →
+  guest boots with a fresh TPM → Entra/Intune treats the device
+  as tampered. **No manual `chown` or `setfacl` required for new
+  installs or per-VM additions; the framework handles it.**
 
-The physical storage location is resolved from the opaque state resource ID.
-Callers must not construct it from the realm label, workload label, TPM
-contents, or host device metadata.
+## Lifecycle (v0.1.5+)
+
+`d2b-<vm>-swtpm.service` carries `restartIfChanged = false`
+(matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
+A `nixos-rebuild switch` updates the unit file but does NOT cycle
+the running swtpm — killing swtpm under a live VM tears down the
+CH TPM socket, the guest's libtpms enters failure mode, and
+Entra/Intune device-bound creds become unreachable. After a
+rebuild, `d2b list` flags the VM with `[pending restart]` if
+its `current` closure has drifted from `booted`; apply with
+`d2b vm restart <vm> --apply` (clean down+up cycles swtpm and CH
+together so the TPM socket survives the round-trip). See
+[`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
+
+## Guest-side resources created
+
+- `microvm.hypervisor = "cloud-hypervisor"` (via `mkDefault`).
+- `microvm.cloud-hypervisor.extraArgs =
+  [ "--tpm" "socket=/run/d2b/vms/<hostname>/tpm.sock" ]`.
+- `security.tpm2.enable = true`.
+- `boot.kernelModules = [ "tpm" "tpm_crb" ]` — belt-and-suspenders;
+  the kernel normally auto-probes when it sees the CH TPM CRB at
+  `fed40000-fed40fff`.
+- `environment.systemPackages = [ pkgs.tpm2-tools ]` for in-guest
+  diagnostics (`tpm2_getcap properties-fixed`, `tpm2_getrandom 16`).
+- `systemd.services.tpm2-flush-sessions` — early oneshot, wanted by
+  `sysinit.target`, that flushes only loaded/saved TPM sessions via
+  `/dev/tpmrm0`. This prevents stale swtpm saved sessions from filling
+  the TPM active-session table after guest reboots while preserving NV
+  indices and persistent handles.
+- `systemd.services.tpm2-srk-provision` — oneshot, `RemainAfterExit`,
+  `wantedBy = [ "multi-user.target" ]`. Idempotently provisions the
+  SRK at `0x81000001`. Pins `TPM2TOOLS_TCTI = "device:/dev/tpmrm0"`
+  to skip the tabrmd D-Bus probe and orders after
+  `tpm2-flush-sessions.service`. Services that need the SRK in place
+  should add `after = [ "tpm2-srk-provision.service" ]`.
+
+## Runtime invariants
+
+- Each TPM-enabled VM has exactly one `d2b-<vm>-swtpm.service`
+  on the host. The socket at `/run/d2b/vms/<vm>/tpm.sock` is mode 0660,
+  owned by `d2b-<vm>-swtpm`. ACLs grant `d2b-<vm>-gpu` rw;
+  no other user (including the kvm group) can reach the control
+  protocol out-of-band.
+- swtpm NVRAM persists across `d2b vm start`/`d2b vm stop` cycles
+  and across host reboots — by design. Anything the guest binds to
+  the TPM (LUKS keys, Himmelblau device key, sbctl PCR policies)
+  survives a VM restart.
+- The SRK at `0x81000001` exists exactly once. The provisioning
+  oneshot short-circuits via
+  `tpm2_getcap handles-persistent | grep -q $SRK_HANDLE`.
+
+## Hardening notes
+
+`d2b-<vm>-swtpm.service`:
+
+- Dedicated static system user per VM. Earlier revisions ran swtpm
+  under `DynamicUser` in the `kvm` group; this was tightened so a
+  kvm-group process on the host cannot speak the swtpm control
+  protocol.
+- `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateDevices`, `PrivateTmp`, `ProtectKernelModules`,
+  `ProtectKernelTunables`, `ProtectKernelLogs`,
+  `ProtectControlGroups`, `LockPersonality`,
+  `MemoryDenyWriteExecute = true`.
+- `RestrictAddressFamilies = [ "AF_UNIX" ]` — swtpm needs no network.
+- `UMask = "0007"` (v1.1.2-final, was `"0177"`): the broker's child
+  closure honours the `umask` field declared in the swtpm role
+  profile, which sets `umask = 0o007` so the bound control socket is
+  mode 0660.
+- The control socket is mode `0660` (v1.1.2-final, was `0600`); only
+  per-VM ephemeral UIDs that have a default-ACL named-user grant on
+  `/run/d2b/vms/<vm>/` (cloud-hypervisor's UID + the swtpm UID
+  itself) can open it. Cross-VM UIDs do NOT have access because the
+  per-VM runtime dir's default ACL only enumerates that VM's roles.
+
+## Common gotchas / failure modes
+
+- **DO NOT WIPE `/var/lib/d2b/vms/<vm>/swtpm/`.** Removing or
+  replacing this directory regenerates a fresh, empty TPM with a
+  new endorsement key. To remote IdPs (Entra ID via Himmelblau,
+  any TPM-bound enrolment) this looks like device tampering and
+  forces re-enrolment — and, depending on the IdP, may require
+  out-of-band admin action to unblock. Treat the directory as part
+  of the VM's stable identity.
+- **Backups: encrypted, access-controlled media only.** swtpm state
+  contains key material; a backup that leaks the state files leaks
+  every key the VM bound to its TPM. If you back up
+  `/var/lib/d2b/vms/<vm>/swtpm/`, do it to a LUKS volume (or
+  equivalent) and limit who can mount it.
+- **No swtpm without cloud-hypervisor.** `tpm.enable = true` pins
+  `microvm.hypervisor` to `cloud-hypervisor` via `mkDefault`. The
+  graphics and audio components also pin CH via `mkDefault`, so the
+  three compose cleanly. A VM that hand-rolls `microvm.hypervisor =
+  "qemu"` and sets `tpm.enable = true` will end up with an unwired
+  TPM (CH `extraArgs` are emitted, but ignored by qemu).
+- **`tpm2_*` complaining about TCTI.** The provisioning oneshot
+  pins `TPM2TOOLS_TCTI = "device:/dev/tpmrm0"`. Ad-hoc invocations
+  from a guest shell may default to dialing tabrmd over D-Bus and
+  emit harmless warnings; pass `-T device:/dev/tpmrm0` or set
+  the env var.
+
+## See also
+
+- [Design / threat model](../explanation/design.md) — TPM-bound
+  credentials at rest is one of the in-scope threats.
+- [Manifest schema](./manifest-schema.md) — `units.swtpm` field.
+- [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
+  enables `tpm.enable` alongside graphics + audio.
+- [`examples/with-entra-id`](../../examples/with-entra-id/) — uses
+  the swtpm to bind the Entra device key.

@@ -11,6 +11,18 @@ let
     path = profile.relativePath;
   }) (config.d2b._bundle.minijailProfiles or { }));
 
+  d2bLib = import ./lib.nix { inherit lib; };
+  normalNixosVms = d2bLib.normalNixosVms config.d2b.vms;
+  managedKeyOverrides = lib.sortOn (entry: entry.vm) (lib.filter (entry: entry != null)
+    (lib.mapAttrsToList (name: vm:
+      if vm.ssh.keyPath == null
+      then null
+      else {
+        vm = name;
+        keyPath = toString vm.ssh.keyPath;
+      }
+    ) normalNixosVms));
+
   # Per-artifact SHA-256 hashes are computed in the bundle derivation
   # below, not with builtins.hashFile at eval time. The closure artifacts
   # are pkgs.closureInfo-backed build outputs, so hashing them during
@@ -59,17 +71,7 @@ let
         key = "/etc/d2b/unsafe-local-workloads.json";
         path = config.d2b._bundle.unsafeLocalWorkloadsJson.path;
       }
-      {
-        key = "/etc/d2b/provider-registry-v2.json";
-        path = config.d2b._bundle.providerRegistryV2Json.path;
-      }
     ]
-    ++ lib.optional
-      (config.d2b._bundle.extraArtifacts ? observabilitySecretsJson)
-      {
-        key = "/etc/d2b/observability-secrets.json";
-        path = config.d2b._bundle.extraArtifacts.observabilitySecretsJson.path;
-      }
     ++ map (ref: {
       key = ref.path;
       path = config.d2b._bundle.closures.${ref.vm}.path;
@@ -87,7 +89,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 13;
+    bundleVersion = 11;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
     hostPath = "/etc/d2b/host.json";
@@ -100,17 +102,12 @@ let
     realmIdentityPath = "/etc/d2b/realm-identity.json";
     realmWorkloadsLauncherV2Path = "/etc/d2b/realm-workloads-launcher-v2.json";
     unsafeLocalWorkloadsPath = "/etc/d2b/unsafe-local-workloads.json";
-    providerRegistryV2Path = "/etc/d2b/provider-registry-v2.json";
-    observabilitySecretsPath =
-      if config.d2b._bundle.extraArtifacts ? observabilitySecretsJson
-      then "/etc/d2b/${config.d2b._bundle.extraArtifacts.observabilitySecretsJson.installFileName}"
-      else null;
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {
       keysDir = toString config.d2b.site.keysDir;
       knownHostsPath = "${config.d2b.site.stateDir}/known_hosts.d2b";
-      overrides = [ ];
+      overrides = managedKeyOverrides;
     };
     generation = {
       generator = "nixos-modules/bundle.nix";

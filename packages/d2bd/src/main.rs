@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use d2bd::{
-    DEFAULT_CONFIG_PATH, LockOnlyOptions, ServeOptions, banner, banner_note, lock_only, serve,
+    DEFAULT_CONFIG_PATH, LockOnlyOptions, ServeOptions, TestClientOptions, banner, banner_note,
+    lock_only, run_test_client, serve,
 };
 
 #[derive(Debug, Parser)]
@@ -47,6 +48,12 @@ enum Command {
         hold_seconds: u64,
         #[arg(long, hide = true)]
         allow_unprivileged_runtime_dir: bool,
+    },
+    TestClient {
+        #[arg(long)]
+        socket: PathBuf,
+        #[arg(long = "frame-json", required = true)]
+        frame_json: Vec<String>,
     },
 }
 
@@ -110,6 +117,15 @@ async fn main() {
             })
             .await
         }
+        Some(Command::TestClient { socket, frame_json }) => run_test_client(TestClientOptions {
+            socket_path: socket,
+            frame_json,
+        })
+        .map(|exit_code| {
+            if exit_code != 0 {
+                std::process::exit(i32::from(exit_code));
+            }
+        }),
     };
 
     if let Err(error) = result {

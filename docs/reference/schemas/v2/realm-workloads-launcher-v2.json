@@ -419,7 +419,7 @@
           ]
         },
         "providerId": {
-          "description": "Opaque, per-realm derived provider identifier (e.g. `wrk-corp-vm-cloud-hypervisor`); never a fixed literal.",
+          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
           "anyOf": [
             {
               "$ref": "#/definitions/ContractId"
@@ -445,7 +445,7 @@
           }
         },
         "runtimeKind": {
-          "description": "Opaque runtime implementation identifier (e.g. `systemd-user` for unsafe-local workloads, `cloud-hypervisor`/`qemu-media` for local-VM-backed workloads).",
+          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
           "anyOf": [
             {
               "$ref": "#/definitions/ContractId"

@@ -96,92 +96,84 @@
   # host actually sits on. Replace with your real LAN.
   d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
-  d2b.acceptDestructiveV2Cutover = true;
+  # ---------------------------------------------------------------
+  # d2b.envs.desktop — one isolated env
+  # ---------------------------------------------------------------
+  #   - lanSubnet must be /24; workload VM gets 10.42.0.10 (.index)
+  #     and the auto-declared net VM takes .1.
+  #   - uplinkSubnet must be /30 (point-to-point host ↔ net VM);
+  #     192.0.2.0/30 is inside RFC 5737 documentation space.
+  #   - env name must be ≤ 8 chars (IFNAMSIZ limit for the
+  #     `br-<env>-lan` / `br-<env>-up` bridges).
+  # ---------------------------------------------------------------
+  d2b.envs.desktop = {
+    lanSubnet    = "10.42.0.0/24";
+    uplinkSubnet = "192.0.2.0/30";
+  };
 
-  d2b.realms.desktop = {
-    path = "desktop.local-root";
-    placement = "host-local";
-    broker = {
-      enable = true;
-      hostMutation = true;
-    };
+  # ---------------------------------------------------------------
+  # d2b.vms.corp-desktop — the workstation VM, full stack
+  # ---------------------------------------------------------------
+  # graphics + audio + YubiKey USBIP. This is the example's reason
+  # for existing — the headless baseline is in
+  # `examples/minimal/`; this layers all three component toggles
+  # on top.
+  #
+  # `autostart` is intentionally left at the default `false` —
+  # graphics VMs cannot autostart because there is no Wayland
+  # session at multi-user.target. Use `d2b vm start corp-desktop --apply`
+  # from a Plasma terminal once you're logged in.
+  # ---------------------------------------------------------------
+  d2b.vms.corp-desktop = {
+    enable = true;
 
-    providers.runtime = {
-      type = "runtime";
-      implementationId = "cloud-hypervisor";
-      capabilities = [ "start" "stop" "exec" ];
-    };
-    providers.devices = {
-      type = "device";
-      implementationId = "host-mediated";
-      capabilities = [
-        "plan-attach"
-        "attach"
-        "inspect"
-        "adopt"
-        "detach"
-      ];
-    };
-    providers.display = {
-      type = "display";
-      implementationId = "wayland";
-    };
-    providers.sound = {
-      type = "audio";
-      implementationId = "pipewire-vhost-user";
-    };
-    providers.network = {
-      type = "network";
-      implementationId = "local-realm";
-    };
-    providers.storage = {
-      type = "storage";
-      implementationId = "local";
-    };
-    providers.transport = {
-      type = "transport";
-      implementationId = "cloud-hypervisor-vsock";
-    };
+    env    = "desktop";
+    index  = 10;                    # IP = 10.42.0.10
 
-    network = {
-      mode = "declared";
-      lanSubnet = "10.42.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
+    ssh.user = "alice";
+    # ssh.keyPath left null: the framework-managed key under
+    # /var/lib/d2b/keys/corp-desktop_ed25519 is used.
 
-    workloads.corp-desktop = {
-      providerRefs = {
-        runtime = "runtime";
-        device = "devices";
-        display = "display";
-        audio = "sound";
-        network = "network";
-        storage = "storage";
-        transport = "transport";
+    # --- component toggles (the point of this example) ---------
+    graphics.enable = true;         # crosvm GPU sidecar
+    # Opt into the cross-domain + host-filter path this example documents.
+    # Do not enable this for VMs that run privileged Docker/container workloads.
+    graphics.crossDomainTrusted = true;
+    audio.enable    = true;         # vhost-user-sound → host PipeWire
+    usbip.yubikey   = true;         # `d2b usb attach corp-desktop <busid> --apply`
+    guest.control.enable = true;    # guestd owns guest-side USBIP import
+
+    # Audio grants are OFF by default. The host-side audio sidecar
+    # is installed, but the per-VM state file at
+    # /var/lib/d2b/vms/corp-desktop/state/audio-state.json
+    # records `mic = false, speaker = false` on first
+    # materialisation. Use `d2b audio mic on corp-desktop` /
+    # `d2b audio speaker on corp-desktop` to grant interactively
+    # after the VM is up. The README documents the full flow.
+    #
+    # If you want the VM to come up with mic/speaker already
+    # granted (e.g. a video-call VM), uncomment:
+    #   audio.allowMicByDefault     = true;
+    #   audio.allowSpeakerByDefault = true;
+
+    config = { lib, pkgs, ... }: {
+      networking.hostName = lib.mkDefault "corp-desktop";
+
+      # The in-VM user that d2b SSHes in as. The framework
+      # injects the authorized pubkey at boot via
+      # `d2b-load-host-keys.service`; you only have to declare
+      # the user.
+      users.users.alice = {
+        isNormalUser = true;
+        uid = 1000;
+        extraGroups = [ "wheel" ];
       };
-      autostart = false;
-      tpm.enable = true;
-      graphics = {
-        enable = true;
-        videoSidecar = true;
-      };
-      audio.enable = true;
-      usbip.enable = true;
-      display.wayland = true;
-      launcher = {
-        enable = true;
-        label = "Corporate desktop";
-        capabilities = [ "gpu" "usbip" ];
-      };
-      config = { pkgs, ... }: {
-        users.users.alice = {
-          isNormalUser = true;
-          uid = 1000;
-          extraGroups = [ "wheel" ];
-        };
-        # environment.systemPackages = with pkgs; [ firefox foot ];
-        system.stateVersion = "25.11";
-      };
+
+      # Real desktop apps go here. The list below is illustrative;
+      # the example leaves it empty so the eval is fast.
+      # environment.systemPackages = with pkgs; [ firefox foot ];
+
+      system.stateVersion = "25.11";
     };
   };
 }

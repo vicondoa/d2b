@@ -1,24 +1,18 @@
 [package]
 name = "d2b-clipd"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
-description = "Authenticated bounded clipboard services for d2b"
+description = "Host-session clipboard authority daemon for d2b"
 
 [lints]
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
 command-fds = "0.3"
-d2b-contracts = { workspace = true, features = ["v2-services"] }
-d2b-core = { workspace = true }
-d2b-realm-core = { workspace = true }
-d2b-session.workspace = true
-d2b-session-unix = { workspace = true, features = ["host-socket"] }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 env_logger = "0.11"
 html2text = "0.15.3"
 log = "0.4"
@@ -29,8 +23,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror = "2"
-tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
-ttrpc = { workspace = true, features = ["async"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }

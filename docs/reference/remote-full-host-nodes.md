@@ -9,13 +9,6 @@ Azure Relay over a live WAN, remote host install, and remote host
 prepare) are not yet supported. Do not depend on this interface for
 production workloads.
 
-> **Compatibility terminology.** This adapter and its DTOs still use
-> `gateway` names, so this page preserves those exact code-level terms until
-> the adapter is replaced. The removed `d2b.gateways` Nix surface cannot
-> provision a gateway guest, and this preview is not a gateway deployment
-> guide. Canonical new provider composition uses realm controllers and
-> authenticated provider agents.
-
 This page documents the committed adapter model for gateway-managed
 remote d2b hosts: registration, heartbeat/liveness, capability
 gating, operation routing, remote-side deduplication and idempotency,

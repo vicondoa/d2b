@@ -129,8 +129,10 @@ Concretely:
   framework keep the host/guest boundary consistent.
 - One human, one host. Multi-tenant trust boundaries are out of scope.
 - Wayland-native. There is no X11 fallback for graphics VMs.
-- Headless workloads also work. Realms own their networks, providers,
-  workloads, storage, processes, devices, and observability resources.
+- Headless workloads also work. During the v2 migration the runtime
+  substrate is still `d2b.envs.<env>` + `d2b.vms.<vm>`, while
+  `d2b.realms.<realm>.workloads.<workload>` carries realm-native workload
+  identity and desktop metadata.
 
 ## What d2b is NOT
 
@@ -175,10 +177,10 @@ d2b into an existing host config.
 | Path | Audience | Notes |
 | --- | --- | --- |
 | [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` — sentinel TODOs + assertion gates |
-| [`examples/minimal`](./examples/minimal) | Read-and-copy headless starter | One host-local realm and one workload. |
-| [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop workload | Requires a compositor on the host. |
-| [`examples/multi-env`](./examples/multi-env) | Two isolated realms | Demonstrates separate work and personal network boundaries. |
-| [`examples/with-observability`](./examples/with-observability) | Realm observability | Demonstrates realm-native telemetry resources. |
+| [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
+| [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
+| [`examples/multi-env`](./examples/multi-env) | Two isolated runtime envs (work + personal) | Demonstrates the transition substrate that realms can point at with `network.mode = "inherit-env"`. |
+| [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs` VM (native SigNoz + ClickHouse) and wires host/guest OTel collectors over virtio-vsock. |
 
 ## Quick start (Rust CLI / examples)
 
@@ -188,9 +190,13 @@ one of these checked example layouts and use the native `vm start`
 path:
 
 ```bash
-# headless personal workspace
+# headless personal workspace (examples/personal-dev → examples/minimal)
 sudo d2b vm start personal-dev --apply
 ```
+
+The alias directory exists so the README, examples index, and migration
+notes can use a stable VM name while CI keeps the checked flake in
+`examples/minimal`.
 
 ## Quick start (template path)
 
@@ -206,12 +212,18 @@ nix flake init -t github:vicondoa/d2b
 # see templates/default/README.md for the full table.
 sudo nixos-rebuild build  --flake .#desktop
 sudo nixos-rebuild switch --flake .#desktop
-d2b realm list
+d2b list                          # corp-vm + sys-work-net
+# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
+# corp-vm            work      false     false false   10.20.0.10      stopped
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
+d2b status                        # same table + bridge-health footer
 d2b vm start corp-vm --apply
 ```
 
-The template declares a realm-native workload and exposes a canonical target
-such as `corp-vm.work.d2b`. See
+For v2-ready configs, add `d2b.realms.<realm>.workloads.<workload>` metadata
+with `legacyVmName = "<existing-vm>"` so desktop tools and CLI output expose
+canonical targets such as `corp-vm.work.d2b` without moving state. The
+scaffold is ~150 lines and is documented inline. See
 [`templates/default/README.md`](./templates/default/README.md) for
 the full TODO walk-through.
 
@@ -242,8 +254,11 @@ rather than starting fresh, this is the minimum surface area.
 }
 ```
 
-**2. Drop in a `configuration.nix` block.** Declare a host-local realm,
-its network, one runtime provider, and one workload.
+**2. Drop in a `configuration.nix` block.** This is the minimum
+d2b needs from you — pick a Wayland user (alice here) plus
+one env + one VM. Everything else (sidecar users, SSH-key
+generation, dnsmasq, NAT, firewall, the auto-declared
+net VM) is materialised by the framework.
 
 ```nix
 # configuration.nix
@@ -267,31 +282,29 @@ its network, one runtime provider, and one workload.
     yubikey.enable = false;
   };
 
-  d2b.acceptDestructiveV2Cutover = true;
-  d2b.realms.work = {
-    path = "work";
-    placement = "host-local";
-    broker = {
-      enable = true;
-      hostMutation = true;
-    };
-    network = {
-      mode = "declared";
-      lanSubnet = "10.20.0.0/24";
-      uplinkSubnet = "192.0.2.0/30";
-    };
-    providers.runtime = {
-      type = "runtime";
-      implementationId = "cloud-hypervisor";
-    };
-    workloads.corp-vm = {
-      provider = "runtime";
-      config = { ... }: {
-        networking.hostName = "corp-vm";
-        users.users.alice = {
-          isNormalUser = true;
-          uid = 1000;
-        };
+  # One env. Two CIDRs: a /30 for the host↔net-VM uplink,
+  # a /24 for workload VMs on the LAN. RFC 5737 documentation
+  # ranges are safe defaults for the uplink; pick whatever
+  # 10.x or 192.168.x LAN you want for the workloads.
+  d2b.envs.work = {
+    lanSubnet    = "10.20.0.0/24";
+    uplinkSubnet = "192.0.2.0/30";
+  };
+
+  # One workload VM in the env. ssh.keyPath is left null, so the
+  # framework-managed key under d2b.site.keysDir is used.
+  d2b.vms.corp-vm = {
+    enable = true;
+    env = "work";
+    index = 10;                    # workload IP = 10.20.0.10
+    ssh.user = "alice";
+    config = { ... }: {
+      networking.hostName = "corp-vm";
+      users.users.alice = {
+        isNormalUser = true;
+        uid = 1000;
+        # Inside the VM, give Alice a normal shell. The framework
+        # injects the authorized SSH key automatically.
       };
     };
   };
@@ -311,20 +324,37 @@ sudo nixos-rebuild build --flake .#desktop
 sudo nixos-rebuild switch --flake .#desktop
 ```
 
-The generated bundle is keyed by canonical realm and workload identifiers.
-The local-root allocator owns host-global allocation; each realm controller
-owns its workload DAGs.
+The activation creates `/var/lib/d2b/keys/corp-vm_ed25519`
+(the framework-managed SSH key), spawns the `sys-work-net` net
+VM, materialises `br-work-up` + `br-work-lan` bridges, and
+installs the `d2b` CLI on your `$PATH`.
+
+Guest configuration is still built on the host, but guest activation
+stays inside the guest. The host build produces the VM's NixOS
+`system.build.toplevel`; d2b's broker/store-view path publishes
+that closure into the per-VM live store pool; virtiofs serves that pool
+as the guest's `/nix/store`; and guestd activates the prepared toplevel
+inside the running VM for `switch`, `test`, and live `rollback`.
+Stopped VMs do not run live activation from the host: use `d2b boot
+<vm> --apply` to stage the declared toplevel for the next start.
 
 **4. Verify and use.**
 
 ```bash
-d2b realm list
+d2b list                          # expect 'corp-vm' + 'sys-work-net'
+# NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
+# corp-vm            work      false     false false   10.20.0.10      stopped
+# sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
+d2b status                        # same table + "=== Bridge health ===" footer
 d2b vm start corp-vm --apply      # preferred Rust CLI path
+ssh -i /var/lib/d2b/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
 d2b vm stop corp-vm --apply       # clean shutdown
 ```
 
-Add a second trust boundary as another realm. Add workloads under the owning
-realm and bind them to an enabled provider in that realm.
+That's it. Add a second env or a second VM by repeating the
+`d2b.envs.<env>` / `d2b.vms.<name>` blocks; the framework
+deals with bridges, broker-spawned sidecars, SSH-key generation,
+and dnsmasq in lockstep.
 
 ## Common gotchas
 
@@ -338,7 +368,12 @@ A handful of things consistently bite first-time users.
   = null` is an eval error. There is no X11 path; the GPU
   sidecar binds the host compositor's `/run/user/<uid>/wayland-0`
   socket directly.
-- **CIDR overlap is detected.** Two realms whose `lanSubnet` or
+- **`ssh.keyPath` default.** Leave it null and the framework-
+  managed key under `${cfg.site.keysDir}/<vm>_ed25519` is used.
+  Override only if you supply your own per-VM key. The CLI's
+  `d2b keys rotate <vm>` only rotates the framework-managed
+  key; consumer-supplied keys are untouched.
+- **CIDR overlap is detected.** Two envs whose `lanSubnet` or
   `uplinkSubnet` overlap (including containment like
   `10.0.0.0/16` ⊃ `10.0.1.0/24`) is a hard eval error. Same
   for env-vs-host overlap. Pick non-overlapping ranges.
@@ -379,8 +414,17 @@ The Rust `d2b` CLI is the only operator surface. Run
   to callers in `d2b.site.adminUsers`, the role gate enforced via
   `SO_PEERCRED` at the daemon socket.
 
-Guest execution policy is provider-owned and resolved from the integrity-pinned
-private bundle. Operators elevate inside the authenticated workload session.
+To enable guest exec on a VM: set `d2b.vms.<vm>.guest.control.enable
+= true` and `guest.exec.enable = true` (the VM must have a workload user
+via `ssh.user`); add your operator account to `d2b.site.adminUsers`;
+rebuild and let the notify-ready daemon restart into the new generation
+(or run `sudo systemctl restart d2bd` explicitly);
+then start the VM on the guest-control generation and run the verbs.
+Every exec runs the requested command as the VM's workload user
+(`ssh.user`) — **never root** — inside a real PAM login session, so
+graphical and login-shell workflows see the same environment an SSH
+login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
+profile). Operators elevate with `sudo` inside the session.
 
 Run-state ships in `/var/lib/d2b/`; per-host config emitted by
 the NixOS module ships in `/etc/d2b/` (bundle + privileges +

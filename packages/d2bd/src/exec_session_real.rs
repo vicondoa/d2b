@@ -7,6 +7,7 @@
 //! returned [`RealExecClient`] proxies each subsequent exec op with a FRESH
 //! per-op deadline (never the exhausted one-shot establishment budget).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use crate::exec_session::{
 #[cfg(test)]
 use crate::guest_control_bridge::connect_and_build_client_for_tests;
 use crate::guest_control_bridge::{
-    GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, UnavailableLegacyGuestProofSigner, VMADDR_CID_HOST,
+    BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, VMADDR_CID_HOST,
     connect_and_build_client, host_nonce,
 };
 use crate::guest_control_health::{
@@ -47,6 +48,7 @@ pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(20);
 /// path so it is `Send + Sync` and can move into the worker thread.
 pub struct RealExecConnector {
     params: ProbeParams,
+    broker_socket_path: PathBuf,
     deadlines: ExecOpDeadlines,
     /// Test-only: route the connect through the relaxed-directory test policy so
     /// a hermetic test can reach the genuine socket-missing transport branch
@@ -56,9 +58,14 @@ pub struct RealExecConnector {
 }
 
 impl RealExecConnector {
-    pub fn new(params: ProbeParams, deadlines: ExecOpDeadlines) -> Self {
+    pub fn new(
+        params: ProbeParams,
+        broker_socket_path: PathBuf,
+        deadlines: ExecOpDeadlines,
+    ) -> Self {
         Self {
             params,
+            broker_socket_path,
             deadlines,
             #[cfg(test)]
             allow_test_dirs: false,
@@ -68,9 +75,14 @@ impl RealExecConnector {
     /// Test constructor that drives the real `establish` path but connects
     /// through the relaxed-directory test policy.
     #[cfg(test)]
-    fn new_for_tests(params: ProbeParams, deadlines: ExecOpDeadlines) -> Self {
+    fn new_for_tests(
+        params: ProbeParams,
+        broker_socket_path: PathBuf,
+        deadlines: ExecOpDeadlines,
+    ) -> Self {
         Self {
             params,
+            broker_socket_path,
             deadlines,
             allow_test_dirs: true,
         }
@@ -96,7 +108,7 @@ impl RealExecConnector {
 impl ExecGuestConnector for RealExecConnector {
     async fn establish(&self, spec: &ExecStartSpec) -> Result<Established, ExecEstablishError> {
         let budget = AttemptBudget::from_now(ESTABLISH_TIMEOUT, GUEST_CONTROL_ATTEMPT_CAP);
-        let signer = UnavailableLegacyGuestProofSigner;
+        let signer = BrokerSigner::new(self.broker_socket_path.clone(), budget);
         let nonce = host_nonce().map_err(|_| ExecEstablishError::Transport)?;
         let client = self
             .connect_client(budget)
@@ -784,7 +796,13 @@ mod tests {
             expected_peer_uid: 0,
             expected_peer_gid: 0,
         };
-        let connector = RealExecConnector::new_for_tests(params, ExecOpDeadlines::default());
+        // A broker socket path that is never reached: the connect fails first,
+        // so no broker sign and no exec op is ever attempted.
+        let connector = RealExecConnector::new_for_tests(
+            params,
+            dir.path().join("broker.sock"),
+            ExecOpDeadlines::default(),
+        );
 
         let spec = ExecStartSpec {
             vm: "work".to_owned(),

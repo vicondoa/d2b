@@ -2,7 +2,8 @@ name: eval-with-entra-id
 on:
   push:
     branches: [main]
-  pull_request: {}
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -11,20 +12,7 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout candidate head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - name: Verify candidate checkout
-        id: candidate
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          actual_sha=$(git rev-parse HEAD)
-          test "$actual_sha" = "$EXPECTED_SHA"
-          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -32,7 +20,6 @@ jobs:
             experimental-features = nix-command flakes
             access-tokens = github.com=${{ github.token }}
       - name: Eval with-entra-id example
-        id: eval
         run: |
           cd examples/with-entra-id
           rm -f flake.lock
@@ -40,14 +27,3 @@ jobs:
             --override-input nixpkgs github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb \
             --override-input entrablau github:vicondoa/entrablau.nix/bbefb679a5d92fd4eb939b0a6e289b22380dd4b1 \
             --override-input entrablau/himmelblau github:himmelblau-idm/himmelblau/b3c48849cc7b468e33b9e44bb1a1210e49e1391f
-      - name: Summarize checked tree
-        if: always()
-        env:
-          CHECKED_TREE: ${{ steps.candidate.outputs.sha }}
-          EVAL_OUTCOME: ${{ steps.eval.outcome }}
-        run: |
-          {
-            printf '## Entra ID example eval\n\n'
-            printf -- '- tree: `%s`\n' "$CHECKED_TREE"
-            printf -- '- eval: `%s`\n' "$EVAL_OUTCOME"
-          } >> "$GITHUB_STEP_SUMMARY"

@@ -238,7 +238,7 @@ fn spawn_runner_request_workload_identity_refs_workload_identity() {
 #[test]
 fn vm_process_dag_without_workload_identity_deserializes() {
     let json = serde_json::json!({
-        "vm": "bm6ccueaqlr7wd2cskza",
+        "vm": "corp-vm",
         "nodes": [],
         "edges": [],
         "invariants": {
@@ -250,7 +250,7 @@ fn vm_process_dag_without_workload_identity_deserializes() {
     });
     let dag: VmProcessDag =
         serde_json::from_value(json).expect("VmProcessDag without workloadIdentity must parse");
-    assert_eq!(dag.vm, "bm6ccueaqlr7wd2cskza");
+    assert_eq!(dag.vm, "corp-vm");
     assert!(
         dag.workload_identity.is_none(),
         "workload_identity must be None when absent from JSON"
@@ -262,7 +262,7 @@ fn vm_process_dag_without_workload_identity_deserializes() {
 #[test]
 fn vm_process_dag_with_null_workload_identity_deserializes() {
     let json = serde_json::json!({
-        "vm": "bm6ccueaqlr7wd2cskza",
+        "vm": "corp-vm",
         "workloadIdentity": null,
         "nodes": [],
         "edges": [],
@@ -286,7 +286,7 @@ fn vm_process_dag_with_null_workload_identity_deserializes() {
 #[test]
 fn vm_process_dag_none_workload_identity_omitted_from_json() {
     let dag = VmProcessDag {
-        vm: "bm6ccueaqlr7wd2cskza".to_owned(),
+        vm: "corp-vm".to_owned(),
         workload_identity: None,
         nodes: vec![],
         edges: vec![],
@@ -381,16 +381,17 @@ fn processes_json_nix_uses_split_string_for_realm_path() {
     );
 }
 
-/// Every emitted process DAG is now backed by a normalized workload row, so
-/// the Nix emitter must always attach its canonical identity.
+/// `processes-json.nix` must gate the `workloadIdentity` block with
+/// `lib.optionalAttrs` so VMs without a realm workload declaration do not emit
+/// the field at all (satisfying the skip_serializing_if invariant in the
+/// Nix→JSON path).
 #[test]
-fn processes_json_nix_emits_required_workload_identity() {
+fn processes_json_nix_uses_optional_attrs_for_workload_identity() {
     let emitter = read_repo_file("nixos-modules/processes-json.nix");
     assert!(
-        emitter.contains("workloadIdentity = {")
-            && emitter.contains("workloadId")
-            && emitter.contains("canonicalTarget"),
-        "processes-json.nix must emit canonical workloadIdentity for every process DAG"
+        emitter.contains("lib.optionalAttrs") && emitter.contains("workloadIdentity"),
+        "processes-json.nix must use lib.optionalAttrs to conditionally include \
+         workloadIdentity in VmProcessDag"
     );
 }
 
@@ -400,37 +401,61 @@ fn processes_json_nix_emits_required_workload_identity() {
 #[test]
 fn processes_json_nix_no_kind_in_workload_identity() {
     let emitter = read_repo_file("nixos-modules/processes-json.nix");
+    // We check that the identity attrset block does not contain `kind = vmWorkloadRow`
+    // which would be a wrong field reference.
     assert!(
-        !emitter.contains("kind = workload"),
-        "processes-json.nix must not assign the normalized row's kind inside the workload \
+        !emitter.contains("kind = vmWorkloadRow"),
+        "processes-json.nix must not assign 'kind = vmWorkloadRow' inside the workload \
          identity block; WorkloadIdentity has no 'kind' field"
     );
 }
 
-/// The workload's normalized runtime binding is the source of the DTO's
-/// `providerId` field.
+/// `processes-json.nix` must use `runtimeProviderId` as the *Nix value source*
+/// but emit it as `providerId` (the DTO field name). Check that the JSON key
+/// name `runtimeProviderId =` is absent from the emitter.
 #[test]
-fn processes_json_nix_emits_provider_id_from_runtime_binding() {
+fn processes_json_nix_emits_provider_id_not_runtime_provider_id() {
     let emitter = read_repo_file("nixos-modules/processes-json.nix");
     assert!(
-        emitter.contains("providerId = workload.runtimeBinding.providerId;"),
-        "processes-json.nix must populate providerId from the normalized workload runtime binding"
+        !emitter.contains("runtimeProviderId ="),
+        "processes-json.nix must not use 'runtimeProviderId =' as a JSON key; \
+         the WorkloadIdentity DTO field is 'providerId'"
     );
 }
 
-/// Cloud Hypervisor and QEMU workloads flow through the same normalized
-/// workload composer rather than separate VM-name-based DAG builders.
+/// `processes-json.nix` must use `vmWorkloadRow.runtimeProviderId` as the value
+/// source (accessed from the index row) for the `providerId` JSON key.
 #[test]
-fn processes_json_nix_uses_one_canonical_workload_dag_composer() {
+fn processes_json_nix_reads_runtime_provider_id_from_row() {
     let emitter = read_repo_file("nixos-modules/processes-json.nix");
     assert!(
-        emitter.contains("workloadDag = workload:")
-            && emitter.contains("dags = map workloadDag workloads;"),
-        "processes-json.nix must compose every runtime from canonical workload rows"
+        emitter.contains("runtimeProviderId"),
+        "processes-json.nix must read runtimeProviderId from the workload index row \
+         to populate the 'providerId' identity field"
     );
+}
+
+/// The separation invariant: `processes-json.nix` must emit `workloadIdentity`
+/// blocks for BOTH `vmDag` (Cloud Hypervisor VMs) and `qemuMediaDag` (QEMU
+/// media VMs) — the two primary local VM runtime kinds. Both functions appear
+/// in the file and both must contain the realm workload identity lookup.
+#[test]
+fn processes_json_nix_emits_workload_identity_in_both_dag_functions() {
+    let emitter = read_repo_file("nixos-modules/processes-json.nix");
+
+    // Count occurrences of the workload identity lookup pattern.
+    // Each vmDag/qemuMediaDag defines `vmWorkloadRow` and `vmWorkloadIdentity`.
+    let row_count = emitter.matches("vmWorkloadRow").count();
     assert!(
-        !emitter.contains("vmDag =") && !emitter.contains("qemuMediaDag ="),
-        "processes-json.nix must not retain separate VM-name-based DAG composers"
+        row_count >= 4,
+        "processes-json.nix must declare vmWorkloadRow in both vmDag and qemuMediaDag \
+         (expected ≥4 occurrences, found {row_count})"
+    );
+    let identity_count = emitter.matches("vmWorkloadIdentity").count();
+    assert!(
+        identity_count >= 4,
+        "processes-json.nix must declare vmWorkloadIdentity in both vmDag and qemuMediaDag \
+         (expected ≥4 occurrences, found {identity_count})"
     );
 }
 

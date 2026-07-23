@@ -78,8 +78,3 @@ Nix derivations are not a secret store. Graphical items require the d2b Wayland
 proxy and fail visibly if it is unavailable; they never fall back to the direct
 compositor.
 
-The per-user runtime accepts only an authenticated
-`d2b.runtime.systemd-user.v2` ComponentSession for the requesting uid. If the
-runtime agent is unavailable, repair the user's systemd service or login
-session. Do not work around it with a host shell, direct compositor command, or
-an older helper socket.

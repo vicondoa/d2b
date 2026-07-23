@@ -27,19 +27,18 @@
         d2b.nixosModules.default
         ./configuration.nix
 
-        # Realm workload glue: register `work-entra` with d2b, hand its
+        # Per-VM glue: register `work-entra` with d2b, hand its
         # NixOS config (including the entrablau module) to
         # the framework via `config.imports`. The two flakes know
         # nothing about each other; this attrset is where they meet.
         {
-          d2b.realms.work.workloads.work-entra = {
-            providerRefs = {
-              runtime = "runtime";
-              device = "devices";
-              network = "network";
-              storage = "storage";
-            };
+          d2b.vms.work-entra = {
+            enable = true;
             tpm.enable = true;
+            env = "work";
+            index = 10;
+            ssh.user = "alice";
+
             config = {
               imports = [
                 entrablau.nixosModules.default

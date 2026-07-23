@@ -202,7 +202,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_contract_present", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_has_exact_public_bindings_and_private_delivery", "packages/d2b-contract-tests/tests/policy_guest.rs::legacy_guest_token_materializer_and_signing_authority_are_absent", "packages/d2b-contract-tests/tests/policy_guest.rs::privileges_parity_does_not_hide_live_guest_control_sign"]
+successor_ids = ["packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_missing_source_without_path_leak", "packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_relative_source_without_path_leak", "packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_store_child_source_without_path_leak", "packages/d2b-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_store_root_source_without_path_leak"]
 exercised_today = "yes"
 
 [[script]]
@@ -454,7 +454,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/per-vm-state-ownership.nix — realm/workload short-ID ownership, broker-only repair, TPM role ownership, guest-session credential, and hardlink-farm carve-out coverage via mkEval)", "packages/d2b-contract-tests/tests/policy_ownership_preflight.rs (realm/workload store-view rows remain broker-owned and non-recursive; inactive storage emitters contain no parallel VM/env repair; store.nix and daemon ownership preflight retain no legacy root:kvm/2775 policy)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/per-vm-state-ownership.nix — per-VM ownership matrix structure/presence/owner-group-mode/recursive-required/store-view layout via mkEval)", "packages/d2b-contract-tests/tests/policy_ownership_preflight.rs (gated via the D2B_FIXTURES contract step in tests/tools/rust-workspace-checks.sh — the source-lint store-sync/daemon-preflight regression guards: store.nix keeps chown d2bd:users + chmod 0755 META_DIR fix-ups and carries no chown root:kvm / chmod 2775; no nixos-modules file enforces store/store-meta 2775; ownership_preflight.rs declares no store* path at mode 0o2775)"]
 exercised_today = "yes"
 
 [[script]]
@@ -490,7 +490,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-priv-broker/tests/broker_export_audit.rs::audit_export_is_a_generated_authenticated_broker_method (pins ExportAudit in the authenticated BrokerV2 generated inventory; default workspace pass in tests/tools/rust-workspace-checks.sh)", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-priv-broker broker_export_audit::export_audit_requires_admin_and_exports_op_audit_records) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -499,7 +499,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-priv-broker/tests/broker_socket_acl.rs::broker_endpoint_requires_host_local_directional_identity (pins the host-local Unix seqpacket endpoint to directional identity and the local-root controller initiator; default workspace pass in tests/tools/rust-workspace-checks.sh)", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-priv-broker broker_socket_acl::socket_acl_rejects_non_d2bd_peers_and_accepts_daemon) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -517,7 +517,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2bd/tests/daemon_socket_acl.rs::{launcher_role_allows_configured_terminal_openers_but_not_lifecycle_mutation,admin_role_can_dispatch_every_daemon_operation,shutdown_role_is_scoped_to_stop} (pins the complete authenticated ComponentSession role/method authorization matrix; default cargo test --workspace via tests/tools/rust-workspace-checks.sh)", "tests/golden/pinned/daemon-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2bd/tests/daemon_socket_acl.rs::daemon_socket_acl::{non_launcher_uid_is_rejected,wheel_non_launcher_is_rejected,configured_launcher_is_accepted,daemon_self_client_is_rejected} — default cargo test --workspace via tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/daemon-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -535,7 +535,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2bd/tests/daemon_state_persistence.rs::daemon_state_persistence::restores_pidfd_table_before_component_session_dispatch (asserts restart adoption before authenticated dispatch and continued pidfd supervision; default cargo test --workspace via tests/tools/rust-workspace-checks.sh)", "tests/golden/pinned/daemon-state-persistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2bd/tests/daemon_state_persistence.rs::daemon_state_persistence::restores_pidfd_table_and_clears_after_vm_stop — default cargo test --workspace via tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-persistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -544,7 +544,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2bd/tests/daemon_version_negotiation.rs::{daemon_protocol_is_component_session_v2_without_semver_negotiation,old_public_hello_is_absent_from_daemon_wire_source} (pins the fixed ComponentSession v2 preface/package and retirement of old public Hello negotiation; default cargo test --workspace via tests/tools/rust-workspace-checks.sh)", "tests/golden/pinned/daemon-version-negotiation.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2bd/tests/daemon_version_negotiation.rs::daemon_version_negotiation::{version_mismatch_is_rejected,unknown_feature_flags_are_accepted,unknown_hello_field_is_rejected,invalid_ifname_is_rejected} — default cargo test --workspace via tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/daemon-version-negotiation.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -562,7 +562,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{usbip_carveout_inserted_before_generic,comment_marker_prefix_on_every_managed_rule,fake_backend_refuses_carveout_after_generic}) — already gated in tests/tools/rust-workspace-checks.sh", "focused broker package cargo test [+ --features layer1-bootstrap] (d2b-priv-broker ops::usbip_firewall::tests::{bind_firewall_rule_produces_audit_with_busid_and_hash,carveout_ordering_invariant_via_op,w6_ops_refused_with_unknown_operation_audit}) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/usbip-firewall-skeleton.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the workspace and focused broker passes)", "retired script's UsbipBind/UsbipUnbind/UsbipProxyReconcile static grep is covered by ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit, which enumerates those variants and asserts unknown-operation refusal audit payloads"]
+successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{usbip_carveout_inserted_before_generic,comment_marker_prefix_on_every_managed_rule,fake_backend_refuses_carveout_after_generic}) — already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-priv-broker ops::usbip_firewall::tests::{bind_firewall_rule_produces_audit_with_busid_and_hash,carveout_ordering_invariant_via_op,w6_ops_refused_with_unknown_operation_audit}) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/usbip-firewall-skeleton.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "retired script's UsbipBind/UsbipUnbind/UsbipProxyReconcile static grep is covered by ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit, which enumerates those variants and asserts unknown-operation refusal audit payloads"]
 exercised_today = "yes"
 
 [[script]]
@@ -607,7 +607,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/tools/rust-workspace-checks.sh", "focused broker package cargo test [+ --features layer1-bootstrap] (d2b-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the workspace and focused broker passes)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
+successor_ids = ["cargo test --workspace (d2b-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
 exercised_today = "yes"
 
 [[script]]
@@ -823,7 +823,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit-state (tests/unit/nix/cases/principal-uid-collision.nix — exact local-root and child-realm principal shapes, lifecycle/public-group separation, least-privilege controller and broker memberships, socket ownership/ACL rows, and deterministic UID/GID collision checks)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_misc.rs::polkit_allowlist_daemon_only_singletons (nixos-modules/host-polkit.nix: launcher-group allowlist names ONLY the daemon-only singletons d2bd.service/d2b-priv-broker.service/d2b-priv-broker.socket, the executable region (awk '/^in$/,0' scope) carries no retired per-VM/per-env unit shapes, and the surviving grant keeps the manage-units action-id guard, the `d2b` group guard, the start/stop/restart verb allowlist, and exactly one polkit.addRule callback); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -841,7 +841,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_misc.rs::workload_composition_shape (legacy vm-submodule.nix and vm-options.nix stay deleted and vm-evaluator.nix owns `_composeWorkload`); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_misc.rs::vm_submodule_compose_vm_shape (nixos-modules/vm-submodule.nix exists and carries the composeVm ownership shape via the unanchored `composeVm\\s*=` grep, which matches the current `_composeVm =` binding; toplevel-hash parity covered separately); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -886,7 +886,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_docs.rs::agents_md_reflects_realm_local_control_plane (AGENTS.md accepted ADR 0045 invariant: realm-local parent-spawned/pidfd-supervised controller and broker processes, concurrent validator/panel lanes, reviewer/validator separation, plus historical ADR 0015 no-bash/no-per-workload-unit invariants and the retired-surface scan); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_docs.rs::agents_md_reflects_daemon_only_end_state (AGENTS.md daemon-only end-state invariant: positive — '## Daemon-only end-state (P6 onward)' section + ADR 0015 cross-ref + d2bd / d2b-priv-broker.socket / SpawnRunner mentions; negative — per-line forbidden legacy-as-live scan exempting lines that carry an explicit historical/retired marker, forbidden_re + allowed_marker_re ported verbatim); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -949,7 +949,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::activation_storage_repair_is_absent (the destructive realm cutover removes legacy group migration and all activation repair below fixed storage anchors; realm/workload paths are broker-created from opaque storage ids)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::group_migration_fresh_install (fresh-install legacy-gid migration activation block in nixos-modules/host-activation.nix: d2bGroupMigration stringAfter ordering, root-existence guard, chgrp-by-numeric-gid helper routing, --skip-while-lock-held, the fd-safe O_DIRECTORY|O_NOFOLLOW / F_OFD_SETLK / AT_SYMLINK_NOFOLLOW helper invariants, and the no-raw-chgrp-in-migration-block awk port); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "skip"
 
 [[script]]
@@ -958,7 +958,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::lifecycle_group_is_local_root_only (the d2b group remains the sole local-root lifecycle admission surface, launcher users join it directly, and child realm public groups stay distinct)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::group_rename_semantic (d2b lifecycle-group rename semantics in nixos-modules: users.groups.d2b declaration, launcherUsers extraGroups join, daemon publicSocketGroup=d2b, state-dir ACL LAUNCHER_GROUP=d2b, the g:$LAUNCHER_GROUP traversal render in state-dir-acl.sh, the empty legacy-group tombstones, and the no-legacy-group-in-extraGroups scan over nixos-modules); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -985,7 +985,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::fixed_storage_anchors_are_activation_only (activation owns only fixed /var/lib/d2b and /var/cache/d2b anchors and never crosses into realm/workload leaves; realm rows declare the broker as sole creator and repair owner)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::state_dir_acl (/var/lib/d2b state-dir declaration + ACL invariants in nixos-modules: 0750 root d2bd tmpfiles decl (not 0755), d2bStateDirAcl activation script, per-user/per-group --x traversal grants incl. g:kvm:--x and the g:d2b:--x grant (direct or via the sourced state-dir-acl.sh helper), and the no-`setfacl -d -m`-default-ACL-on-state-dir-root negative with the comment-line filter); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1003,7 +1003,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::store_sync_export (the host collector consumes only the realm observability row's broker-owned bounded StoreSync projection, forwards it through the canonical OTLP endpoint, grants ACLs only on that projection, and never reads raw broker audit or legacy host-global export paths)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_state.rs::store_sync_export (StoreSync-only observability export static invariants in nixos-modules/components/observability/host.nix: storeSyncExportDir/Glob shape, the filelog/store_sync_audit receiver + json_parser + logs/store_sync_audit pipeline forwarded over otlp, the host-singleton resource attrs plus source=store-sync-audit with target_vm/target_env never promoted, the d2b-host-otel-collector export-dir-only ACL grants, and the deny scans for broker audit-log/glob, priv.sock, and any collector ACL on an audit path; over a comment-stripped view); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1021,7 +1021,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::retired_guest_control_nongoals_are_now_shipped_goals (the guest-control-health readiness and admin-only guest execution surfaces are shipped goals); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_session_credential_contract_present (the runtime-only authenticated ComponentSession credential replaces the long-lived token share and caller-selected token path); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::retired_guest_control_nongoals_are_now_shipped_goals (the W15 guest-control-health readiness non-goal and the W16 `d2b exec` CLI non-goal are now shipped goals: ProcessRole::GuestControlHealth + the readiness predicate in d2b-core/src/processes.rs, and the admin-only `vm exec` / `vm konsole` verbs in d2b/src/lib.rs); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh", "packages/d2b-contract-tests/tests/policy_guest.rs::guest_control_auth_core_token_share_contract_present (the auth-core token-share / LoadCredential contract the retired nix-eval smoke exercised — d2b-gctl share + /run/d2b-guest-control-host mount + guest_control_token LoadCredential + auth.tokenFile absolute/outside-/nix/store validation — is present in the module source; the nix eval itself remains covered by tests/unit/nix/cases/guest-control-auth.nix); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1102,7 +1102,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_modules.rs::vm_submodule_cutover (asserts no non-exempt nixos-modules/ consumer reads config.microvm.vms.${name}.config.config directly; lib.nix and host.nix are transitional compatibility exemptions); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_modules.rs::vm_submodule_cutover (asserts no non-exempt nixos-modules/ consumer reads config.microvm.vms.${name}.config.config directly; lib.nix/host.nix/vm-submodule.nix exempt); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1111,7 +1111,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_lints.rs (gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh) — adr_0015_superseded_with_historical_invariants (ADR 0015 superseded header plus retained sections/cross-references) and adr_0045_accepted_with_realm_and_delivery_contracts (accepted ADR 0045 parent-spawned realm-process and concurrent-lane invariants)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_lints.rs (gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh -> static.sh) — adr_0015_present_with_header_and_cross_references (ADR 0015 file/header/section invariants + AGENTS.md & docs/adr/README.md cross-refs)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1174,7 +1174,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b/tests/cli_json_contract.rs::keys_list_daemon_down_returns_structured_envelope (`keys list --json` with a missing public socket: exit 1, empty stderr, and the exact typed daemon-down envelope)", "packages/d2b/tests/cli_json_contract.rs::audit_json_stays_json_on_tty_with_daemon_down_envelope (runs `audit --json` on a real PTY with a missing public socket and requires the typed JSON daemon-down envelope)", "packages/d2b/src/service_v2.rs::tests::typed_status_preserves_json_and_human_fields (typed daemon projection preserves pendingRestart/current/booted and service/readiness fields)", "tests/test-rust.sh (runs cargo test -p d2b --tests)", "tests/golden/pinned/cli-json.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2b/tests/cli_json_contract.rs::list_reports_pending_restart_when_booted_differs_and_active (spawns the real d2b binary against D2B_FIXTURES; copies the fixture-smoke bundle into a hermetic temp bundle with the absolute /etc/d2b processesPath/hostPath rewritten to relative basenames; per-VM state-root with corp-vm current!=booted symlinks + daemon-state pidfd-table marking ch-runner running + system-state fixture pinning d2bd.service active; asserts `list --json` deserialized strictly into d2b::ListOutputV2 (deny_unknown_fields == the bash jq key-set check) reports corp-vm status==pending-restart)", "packages/d2b/tests/cli_json_contract.rs::status_reports_pending_restart_with_consistent_current_booted (same pending-restart env; `status corp-vm --json` deserialized strictly into d2b::StatusVmOutputV2 (deny_unknown_fields == the bash jq key-set check for status/services/runnerParity/livePoolIntegrity); asserts pendingRestart=true, current=/nix/store/d2b-current, booted=/nix/store/d2b-booted, services.d2b=active, services.microvm=running, runtime=unknown, runnerParity.runnerParityOk=true)", "packages/d2b/tests/cli_json_contract.rs::keys_list_daemon_down_returns_structured_envelope (`keys list --json` with D2B_PUBLIC_SOCKET pointed at a missing socket: exit 1, empty stderr, structured daemon-down envelope on stdout with the exact key set [code,docsAnchor,exitCode,kind,observedState,remediation,whatWasChecked], kind==\"d2b keys list requires d2bd\", code=daemon-down, exitCode=1, docsAnchor=docs/reference/error-codes.md#daemon-down)", "packages/d2b/tests/cli_json_contract.rs::audit_json_stays_json_on_tty_with_daemon_down_envelope (reproduces the bash `script`-PTY case via rustix::pty: spawns `audit --json` with stdin/stdout/stderr on a real PTY slave and a missing public socket; asserts the CLI stays JSON on a TTY — not the human-on-stderr form — exit 1, daemon-down envelope with kind==\"d2b audit requires d2bd\" and the exact key set)", "tests/tools/rust-workspace-checks.sh (CLI-contract step: builds fixture-smoke, runs `cargo test -p d2b --tests` with D2B_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-json.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1183,7 +1183,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = [
+successor_ids = ["packages/d2b/tests/host_check_contract.rs::host_check_pass_fixture_exits_zero_and_matches_schema (pass fixture -> exit 0, stdout strictly deserializes into d2b::HostCheckOutputV2 (deny_unknown_fields == host-check schema check), summary.fail==0 warn==0)", "packages/d2b/tests/host_check_contract.rs::host_check_built_in_kernel_modules_pass (kvm module in builtInModules not loadedModules -> exit 0, kernel-module severity=pass message 'built into the running kernel')", "packages/d2b/tests/host_check_contract.rs::host_check_ufw_active_warns (D2B_TEST_UFW_ACTIVE=1 -> exit 1, firewall-coexistence warn ufw_active=true)", "packages/d2b/tests/host_check_contract.rs::host_check_systemctl_unavailable_warns (D2B_TEST_SYSTEMCTL_UNAVAILABLE=1 -> exit 1, firewall-coexistence warn 'could not be fully determined' + systemctl-unavailable detail)", "packages/d2b/tests/host_check_contract.rs::host_check_runner_parity_drift_warns_without_strict (runner-drift bundle no --strict -> exit 1, summary.warn>0 fail==0, runner-parity warn)", "packages/d2b/tests/host_check_contract.rs::host_check_runner_parity_drift_fails_under_strict (runner-drift bundle + --strict -> exit 2, summary.fail>0, runner-parity fail)", "packages/d2b/tests/host_check_contract.rs::host_check_hard_failure_exits_two (kernelRelease=6.5.0-d2b old-kernel hard failure -> exit 2, summary.fail>0)", "packages/d2b/tests/host_check_contract.rs::host_check_modules_probe_error_envelope (loadedModulesError -> exit 1, stderr internal-io envelope owningCommand 'host check' code 50 'forced /proc/modules read failure')", "packages/d2b/tests/host_check_contract.rs::host_check_nft_probe_error_envelope (nftError -> exit 1, stderr internal-io envelope 'forced nft probe failure')", "packages/d2b/tests/host_check_contract.rs::host_check_ufw_probe_error_envelope (ufwError -> exit 1, stderr internal-io envelope 'forced ufw probe failure')", "packages/d2b/tests/host_check_contract.rs::host_check_usage_error_exits_three (host check --bogus clap usage error -> exit 3)", "packages/d2b/tests/host_check_contract.rs::host_check_human_groups_findings_by_severity (pass fixture --human -> exit 0, stdout 'summary: pass=' + PASS severity grouping)", "packages/d2b/tests/host_check_contract.rs::daemon_host_check_pass_runs_full_probe_battery (real d2bd serve --once + test-client hostCheck -> summary.failures==0 warnings==0, checks[] has kernel-module:kvm + nftables-table + firewall-coexistence + runner-parity; via tests/common spawn_d2bd_host_check)", "packages/d2b/tests/host_check_contract.rs::daemon_host_check_fails_closed_on_old_kernel_and_missing_cgroup_v2 (kernelRelease=6.5.0-d2b + cgroupV2Present=false -> summary.failures>=2, kernel-version=fail + cgroup-v2=fail)", "packages/d2b/tests/host_check_contract.rs::daemon_host_check_strict_runner_parity_fails (runner-drift bundle + strict=true -> summary.failures>0, runner-parity=fail)", "tests/tools/rust-workspace-checks.sh (CLI-contract step builds fixture-smoke + d2bd, exports D2B_FIXTURES + D2B_TEST_D2BD_BIN, runs cargo test -p d2b --tests — gated in static.sh)", "tests/golden/pinned/cli-host-check.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1192,7 +1192,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b/tests/audit_contract.rs::audit_reports_daemon_down_without_bash_fallback (missing socket + D2B_LEGACY_* poison-pill -> typed daemon-down envelope exit 1, never execs bash/exit 99)", "packages/d2b/tests/audit_contract.rs::audit_strict_returns_not_yet_implemented_envelope (audit --strict -> exit 78 not-yet-implemented envelope)", "packages/d2b/tests/audit_contract.rs::audit_relays_daemon_auditresponse_frames (in-process SOCK_SEQPACKET mock daemon hello/helloOk/audit/auditResponse -> lines relayed to stdout)", "packages/d2b/tests/audit_contract.rs::audit_admin_rejection_frame_has_no_fallback (in-process SOCK_SEQPACKET mock daemon maps authz-audit-requires-admin to exit 32 without daemon-down)", "packages/d2bd/src/lib.rs::audit_authorization_tests::launcher_is_denied_audit_before_broker_access (daemon role enforcement rejects launcher before broker access)", "tests/test-rust.sh (CLI-contract step runs cargo test -p d2b --tests with D2B_FIXTURES and daemon unit coverage)", "tests/golden/pinned/cli-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2b/tests/audit_contract.rs::audit_reports_daemon_down_without_bash_fallback (missing socket + D2B_LEGACY_* poison-pill -> typed daemon-down envelope exit 1, never execs bash/exit 99)", "packages/d2b/tests/audit_contract.rs::audit_strict_returns_not_yet_implemented_envelope (audit --strict -> exit 78 not-yet-implemented envelope)", "packages/d2b/tests/audit_contract.rs::audit_relays_daemon_auditresponse_frames (in-process SOCK_SEQPACKET mock daemon hello/helloOk/audit/auditResponse -> lines relayed to stdout)", "packages/d2b/tests/audit_contract.rs::audit_admin_rejected_against_live_daemon_without_fallback (real d2bd serve --once, launcher peer -> exit 32 authz-audit-requires-admin, no daemon-down; via tests/common daemon-spawn harness)", "tests/tools/rust-workspace-checks.sh (CLI-contract step builds d2bd + exports D2B_TEST_D2BD_BIN, runs cargo test -p d2b --tests with D2B_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "skip"
 
 [[script]]
@@ -1219,7 +1219,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b/tests/status_contract.rs::status_check_bridges_returns_frozen_not_yet_implemented_envelope (`status --check-bridges --json` classifies as StatusOutputV2::CheckBridges and strictly deserializes into StatusBridgeCheckOutputV2)", "packages/d2b/src/service_v2.rs::tests::typed_status_preserves_json_and_human_fields (typed daemon projection preserves status JSON fields and human rendering)", "packages/d2b/src/lib.rs::host_install_dispatch_tests::daemon_backed_v2_commands_emit_typed_daemon_down_envelopes (status emits typed daemon-down before a missing public socket)", "tests/test-rust.sh (runs cargo test -p d2b --tests)", "tests/golden/pinned/cli-status.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2b/tests/status_contract.rs::status_vm_json_matches_schema_and_static_state (spawns the real d2b binary against D2B_FIXTURES; copies the fixture-smoke bundle into a hermetic temp bundle with the absolute /etc/d2b processesPath/hostPath rewritten to relative basenames so the host's deployed manifest cannot shadow the fixture; `status --vm corp-vm --json` classified as StatusOutputV2::Vm and deserialized strictly into d2b::StatusVmOutputV2 (deny_unknown_fields == the docs/reference/cli-output/status.schema.json check); asserts env=work, runtime=unknown, services.d2b=inactive, services.microvm=stopped, services.virtiofsd=stopped, declaredRoles contains cloud-hypervisor-runner, runnerParity.runnerParityOk=true, pendingRestart=false)", "packages/d2b/tests/status_contract.rs::status_vm_flag_and_positional_json_are_equivalent (`status --vm corp-vm --json` and positional `status corp-vm --json` produce byte-identical stdout)", "packages/d2b/tests/status_contract.rs::status_check_bridges_returns_frozen_not_yet_implemented_envelope (`status --check-bridges --json` classified as StatusOutputV2::CheckBridges + strictly deserialized into d2b::StatusBridgeCheckOutputV2; asserts mode=check-bridges, status=not-yet-implemented)", "packages/d2b/tests/status_contract.rs::status_human_renders_runner_parity_and_bridge_sections (`status --vm corp-vm --human` stdout contains 'runner parity: ok' and 'Bridge health')", "tests/tools/rust-workspace-checks.sh (CLI-contract step: cargo test -p d2b --tests with D2B_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-status.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1237,7 +1237,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = [
+successor_ids = ["packages/d2b/tests/vm_verbs_contract.rs::mutating_verbs_emit_daemon_down_without_bash_fallback (up/down/restart + vm start/stop/restart against a missing public socket all surface the typed daemon-down envelope (.code==daemon-down, .exitCode==1) and exit 1; the exit-99 poison-pill legacy CLI is never exec'd even with D2B_LEGACY_BASH_OPT_IN=1 set)", "packages/d2b/tests/vm_verbs_contract.rs::legacy_bash_opt_in_is_a_no_op (spot-check: D2B_LEGACY_BASH_OPT_IN=1 + poison-pill legacy path never reaches the poison-pill; escape hatch removed)", "packages/d2b/tests/vm_verbs_contract.rs::vm_list_is_daemon_native_json (vm list --json returns the rust-native command==\"vm list\" envelope, exit 0, no bash fallback)", "packages/d2b/tests/vm_verbs_contract.rs::top_level_list_is_daemon_native_json (d2b list --json returns the native manifest array including the synthetic test-vm, exit 0, no bash fallback)", "packages/d2b/tests/vm_verbs_contract.rs::vm_konsole_dry_run_emits_guest_control_shape (vm konsole --dry-run --json emits command/mode/vm/terminal=konsole/transport=guest-control + argv hosting `vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l`; retired SSH host/user/key fields absent)", "packages/d2b/tests/vm_verbs_contract.rs::vm_konsole_terminal_override_reflected (--terminal xterm reflected in .terminal and argv[0])", "packages/d2b/tests/vm_verbs_contract.rs::vm_konsole_rejects_retired_ssh_flags (retired --host/--user/--key each exit non-zero)", "packages/d2b/tests/vm_verbs_contract.rs::vm_konsole_rejects_unknown_vm (unknown vm name exits non-zero)", "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_missing_command_emits_cli_usage_envelope (vm exec with no command exits 2 with the cli/usage envelope via clap+dispatch)", "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_no_daemon_emits_transport_unavailable_envelope (vm exec -- /bin/true with no daemon exits non-zero with source=transport reason=guest-control-transport-unavailable; never SSH/bash)", "packages/d2b/tests/vm_verbs_contract.rs::vm_exec_rejects_interactive_without_tty (vm exec -i without -t exits 2 and cites the -t/--tty requirement)", "tests/tools/rust-workspace-checks.sh (CLI-contract step: cargo test -p d2b --tests — gated in static.sh)", "tests/golden/pinned/cli-vm-verbs.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1246,7 +1246,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b/tests/cli_contract.rs::list_json_missing_daemon_emits_typed_daemon_down (spawns the real d2b binary with a missing public socket and requires one typed daemon-down JSON envelope, exit 1, no stderr, and no static inventory fallback)", "tests/test-rust.sh (CLI-contract step runs cargo test -p d2b --tests)", "tests/golden/pinned/cli-contract.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["packages/d2b/tests/cli_contract.rs::list_json_matches_smoke_inventory_and_schema (spawns the real d2b binary against D2B_FIXTURES bundle + hermetic system-state/daemon-state fixture; `list --json` deserialized strictly into d2b::ListOutputV2 (deny_unknown_fields == the docs/reference/cli-output/list.schema.json check) + asserts the 2-VM smoke inventory: corp-vm stopped + runnerParityOk, sys-work-net net-vm running + runnerParityOk)", "tests/tools/rust-workspace-checks.sh (CLI-contract step: builds fixture-smoke, runs `cargo test -p d2b --tests` with D2B_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-contract.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1345,7 +1345,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/guest-control-auth.nix — authenticated runtime credential cases cover exact public-key/generation/channel bindings, optional operation PSK binding, private owner/modes, read-only delivery, fail-closed rotation/adoption, child-realm confinement, and absence from bundle artifacts)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/guest-control-auth.nix — 5 auth-token-delivery cases: default parameterization asserts the exact d2b-gctl token share + LoadCredential JSON; /nix/store, /nix/store/<child>, and relative auth.tokenFile each reject at eval time, as does a tokenFile set without guest.control.enable; imports tests/unit/nix/eval-cases/guest-control-auth-eval.nix via a mkEval flake shim)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1435,7 +1435,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/store-overlay-emit.nix — 9 realm-native cases covering short-ID store-view paths, broker ownership, hardlink invariants, read-only virtiofs serving, and host-store exclusion)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/store-overlay-emit.nix — 9 cases)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1507,7 +1507,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host devices #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host devices #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1525,7 +1525,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1534,7 +1534,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::modprobe #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "skip"
 
 [[script]]

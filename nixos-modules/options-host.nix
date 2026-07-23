@@ -1,5 +1,5 @@
 # d2b.host.* — host-level infrastructure knobs for d2b subsystems
-# that are owned at the host layer (not per-workload or per-realm). Currently
+# that are owned at the host layer (not per-VM or per-env). Currently
 # contains the USB security-key proxy configuration.
 #
 # Contrast with `d2b.site.*`, which holds site-customisation defaults
@@ -92,58 +92,21 @@ let
   };
 in
 {
-  options.d2b._hostToolPackages = {
-    d2b = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal resolved d2b CLI package.";
-    };
-
-    d2bd = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal resolved realm controller package.";
-    };
-
-    d2bUnsafeLocalHelper = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal resolved same-uid workload helper package.";
-    };
-
-    d2bWaylandProxy = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal resolved mediated Wayland proxy package.";
-    };
-
-    d2bGatewayRuntime = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      internal = true;
-      description = "Internal resolved provider-agent runtime package.";
-    };
-  };
-
   options.d2b.host.usb.securityKey = {
     enable = lib.mkEnableOption ''
       Host-side USB security-key proxy.
 
       When enabled, the d2b host broker is authorised to open the
       configured FIDO/CTAP hidraw node(s) and relay CTAP HID traffic
-      to requesting guest VMs over AF_VSOCK. Each workload must
+      to requesting guest VMs over AF_VSOCK. Guest VMs must
       individually opt in with
-      `d2b.realms.<realm>.workloads.<workload>.securityKey.enable = true`.
+      `d2b.vms.<name>.usb.securityKey.enable = true`.
 
       Phase 1 note: security-key proxying and YubiKey USBIP
-      passthrough (`d2b.realms.<realm>.workloads.<workload>.usbip.enable`)
-      are mutually exclusive per workload; a workload cannot simultaneously
-      use both proxy modes for the same physical key. The eval-time
-      assertion in `nixos-modules/assertions.nix` enforces this constraint.
+      passthrough (`d2b.vms.<name>.usbip.yubikey`) are mutually
+      exclusive per VM; a VM cannot simultaneously use both proxy
+      modes for the same physical key. The eval-time assertion in
+      `nixos-modules/assertions.nix` enforces this constraint.
 
       Disabling this option removes all udev group grants and broker
       capability flags for hidraw access; it does NOT affect the

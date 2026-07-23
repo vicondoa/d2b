@@ -1,20 +1,20 @@
-# Realm-role swtpm argv snapshot from d2b_host::swtpm_argv::generate_swtpm_argv(audit_swtpm_input())
+# P1 swtpm argv snapshot from d2b_host::swtpm_argv::generate_swtpm_argv(audit_swtpm_input())
 # Format: argv joined by '\n', one argument per line. Update via cargo test --lib swtpm_argv
 # (the audit_swtpm_input_parity_golden test panics with the observed vs expected diff).
-# The workload state root is persistent; the role endpoint is runtime-only.
+# Plan: ph1-p1-swtpm-persistence — the long-lived swtpm sidecar argv shape is locked here.
 /nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm
 socket
 --tpm2
 --tpmstate
-dir=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm
+dir=/var/lib/d2b/vms/corp-vm/tpm
 --ctrl
-type=unixio,path=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100
+type=unixio,path=/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100
 --server
-type=unixio,path=/run/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/roles/x32sq7fxfsib6wmcybhq/tpm.sock,mode=0660,uid=1100,gid=1100
+type=unixio,path=/run/d2b/vms/corp-vm/swtpm.sock,mode=0660,uid=1100,gid=1100
 --flags
 startup-clear
 --log
-file=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/swtpm.log,level=20
+file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.log,level=20
 --pid
-file=/var/lib/d2b/r/tft6a4n527flrfmxjwna/w/ucvmyzodoxhnswumcjsa/tpm/swtpm.pid
+file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid
 --daemon=false

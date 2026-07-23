@@ -37,44 +37,29 @@ let
           extraSpecialArgs.inputs = { };
         };
 
-        d2b.acceptDestructiveV2Cutover = true;
-        d2b.realms.work = {
-          path = "work";
-          placement = "host-local";
-          broker = {
-            enable = true;
-            hostMutation = true;
-          };
-          network = {
-            mode = "declared";
-            lanSubnet = "10.20.0.0/24";
-            uplinkSubnet = "192.0.2.0/30";
-          };
-          providers.runtime = {
-            type = "runtime";
-            implementationId = "cloud-hypervisor";
-          };
-          workloads.corp-vm = {
-            providerRefs.runtime = "runtime";
-            config = {
-              networking.hostName = lib.mkDefault "corp-vm";
-              users.users.alice = {
-                isNormalUser = true;
-                uid = 1000;
-              };
+        d2b.envs.work = {
+          lanSubnet = "10.20.0.0/24";
+          uplinkSubnet = "192.0.2.0/30";
+        };
+
+        d2b.vms.corp-vm = {
+          enable = true;
+          env = "work";
+          index = 10;
+          ssh.user = "alice";
+          config = {
+            networking.hostName = lib.mkDefault "corp-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
             };
           };
         };
       })
     ];
   };
-  workload = lib.findFirst
-    (row: row.workloadName == "corp-vm")
-    (throw "corp-vm workload missing from normalized index")
-    nixos.config.d2b._index.workloads.enabledList;
   guestSystemPackages =
-    nixos.config.d2b._computedWorkloads.${workload.workloadId}
-      .config.environment.systemPackages;
+    nixos.config.d2b._computed.corp-vm.config.environment.systemPackages;
 in
 assert lib.all (pkg: builtins.elem pkg guestSystemPackages) expected;
 builtins.toJSON (map toString expected)

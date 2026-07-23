@@ -1,32 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Presentation DTO for an authenticated `d2b-wlcontrol` action client.
+//! Data contract for the `d2b-wlcontrol` status/action surface.
 //!
-//! The observer projection is rendered as a status row or panel. Action
-//! authority is represented only by an opaque capability issued by
-//! `NotifyService`; no command or target crosses this DTO.
+//! `d2b-wlcontrol` reads the durable security-key state and renders it as a
+//! status row or panel.  This module defines the typed DTO that wlcontrol
+//! reads — it is produced by the host runtime and consumed by wlcontrol.
 //!
 //! ## Rendering contract
 //!
-//! Composition calls [`WlcontrolSkStatus::from_state`] for the in-process
-//! observer projection. The client MUST NOT discover a state-file control
-//! endpoint or embed ceremony lifecycle logic.
+//! wlcontrol MUST read `SkNotifyState` from the state file and call
+//! [`WlcontrolSkStatus::from_state`] to obtain the surface DTO.  It MUST NOT
+//! embed business logic about ceremony lifecycle; all lifecycle logic lives in
+//! `d2b-notify`.
 //!
 //! ## Action routing
 //!
-//! Each [`WlcontrolAction`] carries an opaque capability. The client supplies
-//! fresh request and idempotency identifiers and invokes
-//! `NotifyService.InvokeAction` on its authenticated `ComponentSession`.
-//! There is no CLI, file, or alternate socket fallback.
+//! Each [`WlcontrolAction`] carries a pre-minted nonce token in `action_key`
+//! (see [`crate::nonce`]).  When the user triggers an action, wlcontrol MUST
+//! forward it as a `d2b usb security-key cancel --action-token <token>` CLI
+//! invocation (or the equivalent daemon RPC) and MUST NOT perform any
+//! privileged host mutation directly.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    services::actions::{
-        ActionKind, ActionOffer, IDEMPOTENCY_KEY_BYTES, InvokeActionRequest, REQUEST_ID_BYTES,
-    },
-    state::{CeremonySummary, SkNotifyState},
-};
+use crate::state::{CeremonySummary, SkNotifyState};
 
 /// Overall status of the USB security-key subsystem as presented in wlcontrol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -44,51 +41,20 @@ pub enum SkOverallStatus {
     Error,
 }
 
-/// A single action offer. Its capability is intentionally target-free.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// A single actionable item in the wlcontrol action list.
+///
+/// The `action_key` is the full `d2b-sk-<verb>:<nonce>` string; wlcontrol
+/// must pass it verbatim to the CLI or daemon without modifying it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WlcontrolAction {
+    /// Full action key including the nonce, as produced by
+    /// [`crate::nonce::action_key_for`].
+    pub action_key: String,
+    /// Human-readable label for the action button.
     pub label: String,
-    pub offer: ActionOffer,
-}
-
-impl std::fmt::Debug for WlcontrolAction {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("WlcontrolAction")
-            .field("label", &self.label)
-            .field("kind", &self.offer.kind)
-            .field("capability", &"<redacted>")
-            .finish()
-    }
-}
-
-impl WlcontrolAction {
-    pub fn from_offer(offer: ActionOffer) -> Self {
-        let label = match offer.kind {
-            ActionKind::CancelSecurityKeyCeremony => "Cancel request",
-        };
-        Self {
-            label: label.to_owned(),
-            offer,
-        }
-    }
-
-    pub fn invocation(
-        &self,
-        request_id: [u8; REQUEST_ID_BYTES],
-        idempotency_key: [u8; IDEMPOTENCY_KEY_BYTES],
-        issued_at_unix_ms: u64,
-        expires_at_unix_ms: u64,
-    ) -> InvokeActionRequest {
-        InvokeActionRequest::new(
-            request_id,
-            idempotency_key,
-            self.offer.capability.clone(),
-            issued_at_unix_ms,
-            expires_at_unix_ms,
-        )
-    }
+    /// Session this action applies to.
+    pub session_id: String,
 }
 
 /// Per-ceremony row in the wlcontrol panel.
@@ -120,8 +86,10 @@ pub struct WlcontrolSkStatus {
 impl WlcontrolSkStatus {
     /// Derive the wlcontrol DTO from the durable state.
     ///
-    /// `action_builder` is a trusted in-process callback that issues zero or
-    /// more opaque service offers for each active ceremony.
+    /// `action_builder` is a callback invoked per active ceremony; it returns
+    /// zero or more [`WlcontrolAction`]s for that ceremony (e.g. a "Cancel"
+    /// button backed by a freshly minted nonce).  Pass `|_| vec![]` when no
+    /// actions are available or when tests want a simpler fixture.
     pub fn from_state<F>(state: &SkNotifyState, mut action_builder: F) -> Self
     where
         F: FnMut(&CeremonySummary) -> Vec<WlcontrolAction>,
@@ -193,34 +161,9 @@ fn summary_status_label(summary: &CeremonySummary) -> String {
 mod tests {
     use super::*;
     use crate::events::SecurityKeyEvent;
-    use crate::services::actions::{ActionService, ActionSession, EstablishedComponentSession};
     use crate::state::SkNotifyState;
 
     const T0: u64 = 1_750_000_000;
-
-    struct Session;
-
-    impl EstablishedComponentSession for Session {
-        fn service_package(&self) -> &str {
-            crate::services::actions::SERVICE_PACKAGE
-        }
-        fn endpoint_purpose(&self) -> &str {
-            crate::services::actions::ENDPOINT_PURPOSE
-        }
-        fn endpoint_role(&self) -> &str {
-            crate::services::actions::ENDPOINT_ROLE
-        }
-        fn is_authenticated(&self) -> bool {
-            true
-        }
-        fn uses_pre_authorized_transport(&self) -> bool {
-            true
-        }
-    }
-
-    fn action_service() -> ActionService {
-        ActionService::new(ActionSession::admit(&Session).unwrap())
-    }
 
     #[test]
     fn idle_state_is_idle() {
@@ -300,28 +243,14 @@ mod tests {
             },
             T0,
         );
-        let offer = action_service().offer_cancel("s1", T0).unwrap();
-        let action = WlcontrolAction::from_offer(offer);
+        let action = WlcontrolAction {
+            action_key: "d2b-sk-cancel:".to_owned() + &"a".repeat(64),
+            label: "Cancel request".to_owned(),
+            session_id: "s1".to_owned(),
+        };
         let status = WlcontrolSkStatus::from_state(&state, |_| vec![action.clone()]);
         let json = serde_json::to_string(&status).unwrap();
         let decoded: WlcontrolSkStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.active[0].actions[0].label, "Cancel request");
-        assert_eq!(
-            decoded.active[0].actions[0].offer.capability,
-            action.offer.capability
-        );
-        assert!(!json.contains("\"target\""));
-        assert!(!json.contains("s1\",\"label\""));
-    }
-
-    #[test]
-    fn invocation_contains_only_service_metadata_and_opaque_capability() {
-        let offer = action_service().offer_cancel("private-target", T0).unwrap();
-        let action = WlcontrolAction::from_offer(offer);
-        let request = action.invocation([1; 16], [2; 16], T0 * 1_000, T0 * 1_000 + 1_000);
-        let wire = serde_json::to_string(&request).unwrap();
-        assert!(!wire.contains("private-target"));
-        assert!(!wire.contains("cancel"));
-        assert!(!format!("{action:?}").contains(action.offer.capability.expose()));
+        assert_eq!(decoded.active[0].actions[0].action_key, action.action_key);
     }
 }

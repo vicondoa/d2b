@@ -1,30 +1,30 @@
 {
-  "version": "1.4.1",
+  "version": "1.4.0",
   "system": "x86_64-linux",
   "binaries": {
     "d2b": {
-      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-eZJbPlB3p1Gk0q4Au46Rm4+b9rkilt51Ja1agB9umAE="
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-2BRAIc8DRG9bpaYHLUzwkhl56ZZC9VUtWPn3GqUpPNc="
     },
     "d2b-activation-helper": {
-      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-activation-helper-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-krP84+rfDOi/7EghxtPqjIWMx9Klryz9JLFMPZnGV8M="
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-activation-helper-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-cGzwcipd/i0ouj3gtambTVhwA+2X0E6pm64ZiAKkCfk="
     },
     "d2b-priv-broker": {
-      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-priv-broker-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-qY5eXFpenVG6UrgwwV4nQC+QQxFr3O+mJHVdOSj256A="
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-priv-broker-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-cJDh84Cm9jqluzvbRKHbU0ASF18Oof/wCHqhD7rUzxs="
     },
     "d2b-unsafe-local-helper": {
-      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-unsafe-local-helper-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-SP9+mvCNedtOS3PxQN9bNi9fo8Z+BT1/qbOlzUWbDck="
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-unsafe-local-helper-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-egmrzD2lxdHydGpVHyMNRCMLBe2gdjMx604kiG5kGUQ="
     },
     "d2b-wayland-proxy": {
-      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-wayland-proxy-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-Rq7+w4JcDGY9ca7VAEFdHH00XFfb9V4YuxnPYNVPWIg="
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-wayland-proxy-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-nTJV4QDLOyVl/BsM7l9Bl8OyO4SLYiRY8Rlvgmwk3K4="
     },
     "d2bd": {
-      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2bd-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-8ccn5AiYjiwW8Sjally4pWYPwIzjC34sybKfXoXxujk="
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2bd-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-rM893EZS0h3N+LW+qdKDt8epatb0lOT/dyEFjtXCjCg="
     }
   }
 }

@@ -1,9 +1,7 @@
 [package]
 name = "d2b-contract-tests"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+version = "0.0.0-bootstrap"
+edition = "2024"
 publish = false
 license.workspace = true
 
@@ -11,14 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-d2b-core = { workspace = true }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 serde = { workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
-d2b-contracts = { workspace = true, features = ["schema"] }
-d2b-host = { workspace = true }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 regex = "1"
-snow.workspace = true
-tree-sitter = "0.26.11"
-tree-sitter-bash = "0.25.1"

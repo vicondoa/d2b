@@ -154,7 +154,7 @@ avoid the pre-existing CLI exits `2`/`3`/`33`/`78`.
 
 `vm exec --json` always emits exactly one terminal JSON document on
 stdout for every outcome (including early transport / auth /
-old-generation establishment failures); a usage error (missing `--`,
+old-generation establishment failures); a usage error (bad `--env`,
 `--json` combined with `-i`/`-t`, missing command) is `source: "cli"`,
 `reason: "usage"`, exit `2`.
 

@@ -34,31 +34,6 @@ fn assert_no_line_matches(content: &str, pattern: &str, context: &str) {
     );
 }
 
-fn feature_array<'a>(manifest: &'a str, feature: &str) -> &'a str {
-    let marker = format!("{feature} = [");
-    let start = manifest
-        .find(&marker)
-        .unwrap_or_else(|| panic!("missing feature definition: {feature}"));
-    let value = &manifest[start..];
-    let end = value
-        .find("\n]")
-        .unwrap_or_else(|| panic!("unterminated feature definition: {feature}"));
-    &value[..end + 2]
-}
-
-fn assert_guest_feature_is_ttrpc_free(manifest: &str) {
-    assert_no_line_matches(
-        feature_array(manifest, "guest"),
-        r"ttrpc",
-        "guest bindings: the guest feature must remain message-only and ttrpc-free",
-    );
-    assert!(
-        manifest.contains(r#"ttrpc = { workspace = true, features = ["async"], optional = true }"#)
-            && feature_array(manifest, "v2-services").contains(r#""dep:ttrpc""#),
-        "ttrpc must remain optional and activated only by v2-services"
-    );
-}
-
 #[test]
 fn guest_proto_bindings_are_message_only_and_codegen_free() {
     let generated_file_rel = "packages/d2b-contracts/src/generated/guest_control.rs";
@@ -87,7 +62,11 @@ fn guest_proto_bindings_are_message_only_and_codegen_free() {
     );
 
     let ipc_manifest = read_repo_file(ipc_manifest_rel);
-    assert_guest_feature_is_ttrpc_free(&ipc_manifest);
+    assert_no_line_matches(
+        &ipc_manifest,
+        r"ttrpc",
+        "guest-proto-bindings: d2b-contracts must not depend on ttrpc for message-only bindings",
+    );
     assert!(
         !repo_path_exists(ipc_build_rs_rel),
         "guest-proto-bindings: d2b-contracts must not generate guest protobuf bindings during normal builds"
@@ -100,7 +79,7 @@ fn guest_proto_bindings_are_message_only_and_codegen_free() {
 }
 
 #[test]
-fn guest_ttrpc_bindings_are_xtask_only_and_guest_contract_stays_message_only() {
+fn guest_ttrpc_bindings_are_xtask_only_and_ipc_stays_ttrpc_free() {
     let generated_file_rel = "packages/d2b-guestd/src/generated/guest_control_ttrpc.rs";
     let guestd_manifest_rel = "packages/d2b-guestd/Cargo.toml";
     let guestd_build_rs_rel = "packages/d2b-guestd/build.rs";
@@ -138,5 +117,9 @@ fn guest_ttrpc_bindings_are_xtask_only_and_guest_contract_stays_message_only() {
     );
 
     let ipc_manifest = read_repo_file(ipc_manifest_rel);
-    assert_guest_feature_is_ttrpc_free(&ipc_manifest);
+    assert_no_line_matches(
+        &ipc_manifest,
+        r"ttrpc",
+        "guest-ttrpc-bindings: d2b-contracts must remain message-only and ttrpc-free",
+    );
 }

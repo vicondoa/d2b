@@ -23,10 +23,7 @@ fn open_hidraw_security_key_audit_fields_scrubbed() {
         resolved: true,
     };
     let json = serde_json::to_string(&fields).expect("serialize OpenHidrawSecurityKey fields");
-    assert!(
-        json.contains("personal-dev"),
-        "vm_id must appear in audit fields"
-    );
+    assert!(json.contains("personal-dev"), "vm_id must appear in audit fields");
     assert!(json.contains("hidraw-fido"), "device_class must appear");
     // Raw hidraw paths must never appear in the audit JSON.
     assert!(
