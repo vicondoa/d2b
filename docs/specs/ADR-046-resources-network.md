@@ -211,6 +211,39 @@ Both non-null is also rejected.
 
 ## NetworkStatus
 
+### Three-layer status shape (D088)
+
+D088 freezes `Network` status as three layers. The universal `ResourceStatus`
+base (Layer 1) lives at top-level `status` and owns `observedGeneration`,
+`phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, and
+bounded `outcome`. The `Network`-specific status fields documented in this
+section constitute the ResourceType-common `status.resource` (Layer 2) object
+and never restate the universal base. Optional implementation-only observation
+belongs in `status.provider` (Layer 3) with exactly `providerRef`, qualified
+immutable `schemaId`, semver `MAJOR.MINOR` `schemaVersion`, numeric
+`observedProviderGeneration`, and strict, bounded, redacted,
+unknown-field-denied `details`. Generic API, CLI, and controllers MUST consume
+only the base-only projection (`status` base plus `status.resource`).
+Controllers MUST write all present layers atomically in one status mutation with
+one expected revision. D087/D088 mapping is: shared observations go to
+`status.resource`; implementation-specific bounded non-secret observations go to
+`status.provider.details`; secret, large, or private observations go to an
+optional Volume. D088 bounds apply: total status <= 64 KiB, `status.resource` <=
+32 KiB, `status.provider.details` <= 32 KiB, 32 conditions, 64-entry lists/maps,
+and 4 KiB strings; violations use `status-oversize`,
+`status-provider-schema-invalid`, or `status-provider-overlap`.
+
+Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
+
+The existing `status.network` sub-object is carried within `status.resource` as
+`status.resource.network` by the mapping convention. `Network` currently uses
+`network-local`; the provider-neutral Network fields are frozen in
+`status.resource` for `network-local` and any future implementation. Uplink/LAN
+addresses, bridge observations, firewall digest, external attachment, and
+attachment status are the shared cross-resource dependency surface. Any
+implementation-specific observation belongs only in that implementation's
+`status.provider.details`; shared fields MUST NOT be duplicated there.
+
 ```yaml
 status:
   observedGeneration: 1

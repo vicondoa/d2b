@@ -676,6 +676,20 @@ has an outage**:
 and writes the status by aggregating component (Process and Volume) health.
 The observability-otel controller does **not** write Provider status.
 
+Per D088, core writes the Provider universal `ResourceStatus` base at top-level
+`status.*` and any Provider ResourceType-common aggregate under
+`Provider.status.resource` (core-derived per D085). The observability-otel
+controller writes status only for collector/forwarder Process resources it owns:
+Process-common observation lives in `Process.status.resource`, while bounded
+non-secret OTEL-specific export, ingestion, or backpressure detail lives in
+`Process.status.provider` with `providerRef: Provider/observability-otel`,
+qualified schema IDs such as `observability-otel.d2b.io/Process/status`,
+`schemaVersion` (semver MAJOR.MINOR), `observedProviderGeneration`, and a strict
+unknown-field-denied, ≤32 KiB, redacted `details` object registered and signed
+in the Provider manifest. The controller writes all present layers atomically in
+one status mutation; shared fields are promoted to `status.resource` and never
+duplicated into `status.provider`.
+
 **Core-derived phase rules:**
 
 | Phase | Core derivation rule |

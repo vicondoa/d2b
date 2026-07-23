@@ -132,7 +132,17 @@ reported as status payload bytes. The `ProviderStateSet` is therefore empty.
 - `Unknown`
 
 Initialization, deletion, steady-state nuance, or terminal-cause detail belongs in the
-resource-specific `status.detail` object and conditions, not in ad hoc phase strings.
+resource-specific `status.resource.detail` object and conditions, not in ad hoc phase strings.
+
+Per D088, `ShellPool` and `ShellSession` status use the universal
+`ResourceStatus` base at top-level `status.*`; the typed pool/session fields
+below are their ResourceType-common `status.resource` objects. Optional
+`status.provider` carries only implementation-only observation (`providerRef`,
+qualified immutable `schemaId`, semver `schemaVersion`, numeric
+`observedProviderGeneration`, strict unknown-field-denied redacted `details`
+≤32 KiB registered/signed in the Provider manifest) and never duplicates shared
+fields. The controller writes all present layers atomically in one status
+mutation.
 
 ## `shell-terminal.d2b.io.ShellPool` ResourceType
 
@@ -378,6 +388,9 @@ controller principal. All other creates are rejected.
 
 `loginShellPid` is intentionally omitted from status. The supervisor owns the PTY and the
 login shell, but PID values never cross the resource, audit, or telemetry boundary.
+No terminal, clipboard, or notification bytes, secrets, paths, PIDs, unit names,
+or authority-conferring handles appear in any status layer; terminal bytes stay
+in process memory and named streams only.
 
 ### `status.detail.kind` enum
 

@@ -301,6 +301,17 @@ runtime.
 
 ### `AudioState.status` fields
 
+Per D088, `AudioState.status` is layered: universal `ResourceStatus` fields
+(`observedGeneration`, `phase`, `conditions`, timestamps, and `outcome`) remain
+at top-level `status.*`, while the typed audio fields below are the
+ResourceType-common `status.resource` object for
+`audio-pipewire.d2b.io.AudioState`. Optional `status.provider` carries only
+implementation-only observation (`providerRef`, qualified immutable `schemaId`,
+semver `schemaVersion`, numeric `observedProviderGeneration`, strict
+unknown-field-denied redacted `details` ≤32 KiB registered/signed in the
+Provider manifest); shared fields are never duplicated there. The controller
+writes all present layers atomically in one status mutation.
+
 | Field | Type | Notes |
 | --- | --- | --- |
 | `phase` | enum | Common framework phase: `Pending\|Ready\|Degraded\|Failed\|Unknown`. `Deleted` exists only as a revision-log event, not a live resource phase. Audio-specific detail is in `conditions` and `outcome.code`. |
@@ -918,9 +929,10 @@ Status is observation only. It is revisioned, optimistic-status-writer
 controlled, RBAC-readable, redacted, bounded to the global/provider-detail
 limits, written only on material change, and re-verified against external
 PipeWire and guest-agent reality after restart. It never contains secrets,
-tokens, socket paths, argv/env, PIDs, unit names, private PipeWire object dumps,
-terminal or audio bytes, authority handles, large blobs, or unbounded
-collections; oversize status is rejected with `status-oversize`.
+tokens, socket paths, argv/env, paths, PIDs, unit names, private PipeWire object
+dumps, terminal/clipboard/notification/audio bytes, authority-conferring
+handles, large blobs, or unbounded collections; oversize status is rejected
+with `status-oversize`.
 
 There is no bootstrap state-Volume mechanism; the previous bootstrap exception
 (D086, superseded by D087) does not apply.

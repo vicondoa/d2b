@@ -550,6 +550,19 @@ resource.
 
 ## Lifecycle
 
+Per D088, `Provider/transport-vsock` does not write resource status directly:
+core owns the universal `ResourceStatus` base and the ResourceType-common
+`status.resource` projection for Provider and ZoneLink resources. Cross-provider
+transport observations returned to core are promoted to `ZoneLink.status.resource`;
+any bounded, non-secret vsock-only observation that core persists for this
+Provider uses `ZoneLink.status.provider` with `providerRef:
+Provider/transport-vsock`, qualified `schemaId:
+transport-vsock.d2b.io/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted `details` schema registered and signed in the Provider manifest. Core
+writes all present layers atomically and never copies shared
+`status.resource` fields into `status.provider`.
+
 ### Provider installation
 
 1. Nix module emits `Provider/transport-vsock` resource into the Zone resource
@@ -564,8 +577,8 @@ resource.
 4. Service process connects to d2b-bus; receives a dirfd into its `/state` view
    from the volume-local Provider; registers
    `d2b.transport.vsock.v3.VsockTransportService` on the Zone service registry.
-5. Service emits readiness; Provider controller sets `Provider/transport-vsock`
-   status to `Ready`.
+5. Service emits readiness; core ProviderDeployment observes it and sets
+   `Provider/transport-vsock` status to `Ready`.
 
 ### Transport open (per ZoneLink session request from core)
 

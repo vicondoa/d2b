@@ -621,22 +621,46 @@ Teardown is the reverse:
 | `release_withhold` | `release_device_withhold(uid, &token)` |
 | `release_lock` | `release_lease(uid, token)` |
 
-Each step is idempotent. The controller reads `providerStatus.usbip.completedSteps`
-from Device status on every reconcile entry and skips already-completed steps.
+Each step is idempotent. The controller reads
+`status.provider.details.usbip.completedSteps` from Device status on every
+reconcile entry and skips already-completed steps.
 
 ---
 
 ## Typed Device status
 
-Step detail lives in the typed provider status extension, not in the common
-Device phase:
+Per D088, ResourceType-common Device observation lives in
+`status.resource`: the provider-neutral claim/arbitration/presence base that is
+identical across Device implementations. USBIP attach/detach observations live
+only in `status.provider` with `providerRef`, qualified `schemaId`
+`device-usbip.d2b.io/Device/status`, `schemaVersion`,
+`observedProviderGeneration`, and strict bounded redacted `details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared
+fields are never duplicated into `status.provider`, and the extension schema is
+registered and signed in the Provider manifest.
+
+Step detail lives in `status.provider.details.usbip`, not in the common Device
+phase:
 
 ```yaml
 status:
   phase: Pending | Ready | Degraded | Failed | Unknown   # common phase ONLY
   conditions: []
-  device:
-    providerStatus:
+  resource:
+    present: true
+    health: healthy | degraded | failed | unknown
+    holderRefs:
+      - Guest/corp-vm
+    claims: []
+    provisionedAt: null
+    lastProbedAt: "2024-01-15T10:23:44Z"
+  provider:
+    providerRef: Provider/device-usbip
+    schemaId: "device-usbip.d2b.io/Device/status"
+    schemaVersion: "1.0.0"
+    observedProviderGeneration: 1
+    details:
       usbip:
         currentStep:    firewall   # last attempted step
         completedSteps:
@@ -664,8 +688,8 @@ status:
 | `Failed` | Terminal failure; manual intervention required |
 | `Unknown` | Controller unreachable or crashed; last known status stale |
 
-The `providerStatus.usbip.currentStep` / `completedSteps` fields carry the
-step-level detail. The common `phase` field is driven only by the overall
+The `status.provider.details.usbip.currentStep` / `completedSteps` fields carry
+the step-level detail. The common `phase` field is driven only by the overall
 bring-up / teardown result, not by individual step names.
 
 ---
@@ -679,7 +703,7 @@ claim is approved and the Network dependency is Ready. The operator authors
 only the Device resource and the Zone claim.
 
 Claim source: `UsbipClaimSource::Declared { device_uid, network_uid }` —
-tracked in `providerStatus.usbip.claimSource`; never exposed to the requesting
+tracked in `status.provider.details.usbip.claimSource`; never exposed to the requesting
 Guest.
 
 ### `claimMode: explicit`
@@ -694,7 +718,8 @@ calls `guest_effect.attach(device_uid, claim_uid)` through the injected
 `UsbipGuestEffectPort` to complete the Guest-side import. No Process resource
 is created in the Guest.
 
-Claim source: `UsbipClaimSource::Explicit` — tracked in providerStatus.
+Claim source: `UsbipClaimSource::Explicit` — tracked in
+`status.provider.details.usbip.claimSource`.
 
 ---
 
@@ -745,7 +770,7 @@ and 4.** Independent Device resources run concurrently under a semaphore budget
 
 On restart, the controller:
 1. Lists all Device resources it owns.
-2. Reads `providerStatus.usbip.completedSteps` from each Device status.
+2. Reads `status.provider.details.usbip.completedSteps` from each Device status.
 3. Skips completed steps idempotently.
 4. Attempts adoption of child Process resources (`adoptionPolicy: adopt-on-restart`).
 5. Resumes from the earliest non-completed step.
@@ -789,13 +814,13 @@ Teardown on deletion request:
 1. Controller detects `deletionTimestamp` set.
 2. Executes teardown sequence (proxy stop → unbind → daemon stop → firewall
    release → withhold release → lease release).
-3. Marks teardown progress in `providerStatus.usbip.teardownSteps` (same
+3. Marks teardown progress in `status.provider.details.usbip.teardownSteps` (same
    pattern as `completedSteps`; idempotent on restart).
 4. Clears the finalizer only after all teardown steps succeed.
 5. Core commits the finalizer removal; the resource is garbage-collected.
 
 If a teardown step fails terminally, the controller sets `phase: Degraded` and
-`providerStatus.usbip.teardownBlocked: true`, emits a structured event, and
+`status.provider.details.usbip.teardownBlocked: true`, emits a structured event, and
 requeuess under exponential backoff.
 
 ---
@@ -816,10 +841,10 @@ ProviderStateSet(zone, "device-usbip") =
 `Provider/device-usbip` declares **no** Provider state Volume; its
 `ProviderStateSet` is empty. The controller has no durable payload state beyond
 `Device` resource status, its child `Process` resources, and the core Operation
-ledger. Its bounded non-secret operational state — attach/detach reconcile
-stage, per-busid attach observations, bounded counters, and closed-enum
-arbitration detail — lives in the owning resource's `status` subresource and the
-core Operation ledger (D087).
+ledger. Its bounded non-secret provider-specific state — attach/detach
+reconcile stage, per-busid attach observations, bounded counters, and
+closed-enum USBIP detail — lives in `status.provider.details.usbip`; the common
+Device claim/arbitration/presence base lives in `status.resource` (D087/D088).
 
 Because this Provider's operational state is fully derivable from spec,
 `status`, the core Operation ledger, and independent external observation
@@ -897,13 +922,13 @@ The controller registers these typed d2b-bus methods on the Device ResourceType:
 | --- | --- | --- |
 | `AttachDevice` | Admin | Trigger `bind` and `proxy` steps in `explicit` claim mode. Returns immediately; progress reflected in Device status. |
 | `DetachDevice` | Admin | Initiate teardown from `proxy` step backward. Returns immediately. |
-| `ProbeDevice` | Admin | Re-run physical probe; update `providerStatus.usbip.lastProbeResult`. Returns synchronously. |
-| `GetDeviceStatus` | Admin, StatusReader | Return current `providerStatus.usbip.*` snapshot. |
+| `ProbeDevice` | Admin | Re-run physical probe; update `status.provider.details.usbip.lastProbeResult`. Returns synchronously. |
+| `GetDeviceStatus` | Admin, StatusReader | Return current `status.provider.details.usbip.*` snapshot. |
 | `ListBusIds` | Admin | Return the Zone's USBIP device catalog (name-digests and logical labels only; no raw busids). |
 
 No bus method returns or accepts a raw busid, lock path, or broker wire type.
-The `ListBusIds` response contains only the logical label and `providerStatus`
-snapshot; the internal busid is never surfaced.
+The `ListBusIds` response contains only the logical label and
+`status.provider.details.usbip` snapshot; the internal busid is never surfaced.
 
 ---
 
@@ -970,7 +995,7 @@ required integration gate.
 The adapter's `probe_device` implementation validates the physical device's
 vendor/product/serial against the signed bundle's expected values. An
 anti-spoofing mismatch returns `UsbipEffectError::AntiSpoofFailed` and the
-Device transitions to `Failed` with `providerStatus.usbip.lastProbeResult.antiSpoofFailed: true`.
+Device transitions to `Failed` with `status.provider.details.usbip.lastProbeResult.antiSpoofFailed: true`.
 
 The controller never uses the spec-level `vendorId`/`productId` fields for
 anti-spoofing decisions; those are configuration-level filters only. The
@@ -1111,7 +1136,7 @@ assert settings.networkRef zone == device zone;
 | --- | --- | --- |
 | `packages/d2b-contracts/src/usbip.rs` — `validate_bus_id`, `SYSFS_BUS_ID_MAX`, `UsbipClaimSource`, `sanitize_usb_hex_id` | Copy unchanged into `d2b-contracts`; reference from Provider crate | These are contracts, not broker internals; safe to reference |
 | `packages/d2bd/src/usbip_state_machine.rs` — `CANONICAL_STEPS`, `UsbipBusidStep`, step ordering | Adapt step ordering into `src/reconcile.rs` EffectPort model; remove all broker-call sites | Step semantics and idempotency invariants preserved |
-| `packages/d2bd/src/usbip_reconcile_state.rs` — desired/carrier/bind/proxy state enums | Map to `providerStatus.usbip.*` typed status fields | Restart-safe reconcile model preserved; state now in Device status |
+| `packages/d2bd/src/usbip_reconcile_state.rs` — desired/carrier/bind/proxy state enums | Map to `status.provider.details.usbip.*` typed status fields | Restart-safe reconcile model preserved; state now in Device status |
 | `packages/d2b-host/src/usbip_argv.rs` — argv generators | Remain in `d2b-host`; called by the core adapter only | Provider crate has no compile dependency on `d2b-host` |
 | `packages/d2b-priv-broker/src/ops/usbip_firewall.rs` — `bind_firewall_rule`, audit structs | Adapter-internal only; Provider crate never imports this | Audit structs are broker-internal; `UsbipBindFirewallRuleAudit` never visible to Provider |
 | `packages/d2b-priv-broker/src/ops/usbip_host.rs` — `withhold_device` impl | Adapter-internal | Same as above |
@@ -1195,7 +1220,7 @@ of this Provider.
 
 Implement the full bring-up/teardown step machine consuming `UsbipEffectPort`.
 Map `usbip_reconcile_state.rs` desired/carrier/bind/proxy states to
-`providerStatus.usbip.completedSteps`. Implement finalizer add/clear. Implement
+`status.provider.details.usbip.completedSteps`. Implement finalizer add/clear. Implement
 skip-already-completed-step idempotency on restart. Implement async watch receiver
 that continues reading while per-resource effect tasks run (reconciliation spec
 steps 10–11). Implement declared vs explicit claim mode branching.
@@ -1230,11 +1255,11 @@ calls; no Process resource is created in the Guest.
 
 ---
 
-### ADR046-usbip-006: Typed providerStatus
+### ADR046-usbip-006: Typed status.provider.details
 
 | Field | Value |
 | --- | --- |
-| Title | Define and implement typed `providerStatus.usbip` status extension |
+| Title | Define and implement typed `status.provider.details.usbip` status extension |
 | Destination | `packages/d2b-provider-device-usbip/src/status.rs` |
 | Depends on | ADR046-usbip-003; Device status extension schema |
 | Source | Adapt: `packages/d2bd/src/usbip_reconcile_state.rs` state fields |
@@ -1326,7 +1351,7 @@ Deletion sequence:
 | --- | --- |
 | `controller_state_machine.rs` | Bring-up step sequence with `FakeUsbipEffectPort` and `FakeUsbipGuestEffectPort`; teardown; step skip on restart with partial `completedSteps`; daemon/proxy Process create/delete; explicit mode calls `UsbipGuestEffectPort.attach`, no Process in Guest |
 | `effect_port_contract.rs` | `UsbipEffectPort` and `UsbipGuestEffectPort` trait object safety; all method signatures callable from Provider crate; no import of broker types or `d2b-priv-broker`; `TransientDetail` Debug output is `<redacted>` |
-| `conformance.rs` | Device ResourceTypeSchema serde round-trip; deny_unknown_fields; `providerStatus.usbip` JSON fidelity |
+| `conformance.rs` | Device ResourceTypeSchema serde round-trip; deny_unknown_fields; `status.provider.details.usbip` JSON fidelity |
 | `state_volume.rs` | Controller Volume schema conformance: `stateSchema: {}`, layout `ownerRef: User/<name>` (not ComponentPrincipal), `sensitivityClass: private`, single `state` view; no cross-component Volume; dirfd delivery to controller only |
 | `status_serde.rs` | Typed `UsbipProviderStatus` JSON serialization; no raw busid in output; `labelDigest` is non-empty hash |
 | `validation_corpus.rs` | Bus-id max length (31 chars); metachar rejection; leading-zero segment rejection; vendor/product id exactly 4 hex digits; `busClass != usb` → `unsupported-bus-class` |

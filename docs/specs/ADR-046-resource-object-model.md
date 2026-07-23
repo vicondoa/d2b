@@ -113,7 +113,46 @@ possible. Separate durable state storage (a Provider-owned Volume, see
 private datum, is large/binary/file content, or is otherwise unsuitable for the
 revisioned status API.
 
-### Common fields
+### Three-layer status shape (D088)
+
+Every resource's `status` has a frozen three-layer shape. Generic API, CLI, and
+controllers depend only on Layers 1 and 2; the Layer-3 Provider extension builds
+on — never replaces, overrides, or duplicates — the fields below it.
+
+| Layer | Location | Owner | Consumers |
+| --- | --- | --- | --- |
+| 1. Universal `ResourceStatus` base | top-level `status.*` common fields | every resource | all generic tooling |
+| 2. ResourceType-common | `status.resource` | the ResourceType schema (provider-neutral) | all implementations + cross-resource/provider consumers |
+| 3. Provider-specific extension | optional `status.provider` | the installed Provider (signed schema) | that Provider's own tooling only |
+
+```yaml
+status:
+  # Layer 1 — universal ResourceStatus base (present on every resource)
+  observedGeneration: 4
+  phase: Ready
+  conditions: [ ... ]
+  lastReconciledAt: 2026-07-23T00:00:01Z
+  startedAt: 2026-07-23T00:00:00Z
+  completedAt: null
+  outcome: null
+  # Layer 2 — ResourceType-common, provider-neutral (required across all implementations)
+  resource:
+    # exact typed fields frozen by the ResourceType schema
+    ...
+  # Layer 3 — optional Provider-specific extension
+  provider:
+    providerRef: Provider/<name>
+    schemaId: <provider-name>.d2b.io/<ResourceType>/status
+    schemaVersion: "1.0"
+    observedProviderGeneration: 7
+    details:
+      # strict, bounded, redacted, unknown-field-denied implementation observation
+      ...
+```
+
+### Layer 1: universal ResourceStatus base
+
+The universal base is present on every resource at `status` top level:
 
 | Field | Rules |
 | --- | --- |
@@ -150,8 +189,53 @@ occurredAt: 2026-07-22T00:00:01Z
 `code` and `reason` are stable lower-kebab-case machine values. `message` may
 contain actionable Provider detail but is bounded, UTF-8/control-character
 validated, and must not contain secrets, tokens, credential material, terminal
-bytes, argv/environment, state contents, or host/provider paths. ResourceType
-schemas add typed status fields; they do not replace the common fields.
+bytes, argv/environment, state contents, or host/provider paths.
+
+### Layer 2: ResourceType-common status (`status.resource`)
+
+`status.resource` is the provider-neutral, typed object frozen by the
+ResourceType schema. It holds the observation fields that every implementation
+of that ResourceType and every cross-resource/provider consumer must be able to
+read — for example Guest runtime readiness/capabilities, the Device claim base,
+Credential lease metadata, or the Volume attachment base. It extends the
+universal base (Layer 1) and never restates it. Generic API/CLI/controllers
+depend only on the universal base plus `status.resource`. Any field shared
+across two or more implementations MUST be promoted here and MUST NOT be copied
+into individual Provider extensions.
+
+### Layer 3: Provider-specific extension (`status.provider`)
+
+`status.provider` is optional and carries implementation-only observation that
+is not shared across implementations:
+
+| Field | Rules |
+| --- | --- |
+| `providerRef` | `Provider/<name>` of the writing Provider |
+| `schemaId` | Qualified, immutable status-extension schema ID (per the D080 grammar, e.g. `<provider-name>.d2b.io/<ResourceType>/status`) |
+| `schemaVersion` | Semver `MAJOR.MINOR` of the extension schema |
+| `observedProviderGeneration` | Numeric `Provider/<name>` resource generation this observation reflects |
+| `details` | Strict typed object: unknown-field-denied, size/cardinality bounded, redacted/non-secret |
+
+The `status.provider.details` schema is signed into and registered with the
+Provider package (see `ADR-046-provider-model-and-packaging`). A `status.provider`
+whose `schemaId`/`schemaVersion` is not registered for the installed Provider, or
+whose `details` carries an unknown field, is rejected. `status.provider` builds
+on Layers 1 and 2 and MUST NOT replace, override, or duplicate any universal or
+`status.resource` field.
+
+**Atomic layered write.** The owning controller writes all present layers
+(universal base, `status.resource`, and any `status.provider`) in one status
+mutation with a single expected revision; the layers never diverge across
+separate writes.
+
+**Status-first state mapping (D087 + D088).** State shared across
+implementations goes in `status.resource`; implementation-specific bounded
+non-secret observation goes in `status.provider.details`; secret, large, or
+private state goes in an optional Volume (`ADR-046-provider-state`), never in
+status.
+
+ResourceType schemas add typed `status.resource` fields and register any
+`status.provider` extension; they do not replace the universal base.
 
 ### Status bounds
 
@@ -162,8 +246,9 @@ nothing and the caller may re-read and retry with a smaller status):
 
 | Bound | Limit |
 | --- | --- |
-| Total canonical serialized status object | 64 KiB |
-| ResourceType-/provider-specific typed status detail (all typed fields beyond the common fields) | 32 KiB |
+| Total canonical serialized status object (all three layers) | 64 KiB |
+| `status.resource` ResourceType-common typed detail | 32 KiB |
+| `status.provider.details` Provider-specific extension | 32 KiB |
 | `conditions` entries | 32 |
 | Any status list or map field | 64 entries |
 | Any single bounded status string (`message`, opaque handle, digest) | 4 KiB |
@@ -318,10 +403,10 @@ The following are not standalone ResourceTypes:
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `workload.rs`, `error.rs`; `packages/d2b-core/src/storage.rs`, `processes.rs` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs` |
-| Detailed design | Implement strict ResourceEnvelope, metadata, spec/status values, phase/condition/outcome, canonical JSON, bounds/redaction, ownerRef/UID fields |
+| Detailed design | Implement strict ResourceEnvelope, metadata, spec/status values, the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields |
 | Integration | Store/API/SDK/Nix/codegen consume one contract |
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
-| Validation | Golden JSON/protobuf vectors; serde unknown-field; status redaction/size/time/phase tests |
+| Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests |
 | Removal proof | Old DTOs removed per owning ResourceType wave only after rendered/runtime consumers move |
 
 ### ADR046-object-002

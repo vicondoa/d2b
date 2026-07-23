@@ -733,6 +733,17 @@ automatically retry; it waits for the flush EphemeralProcess to be cleaned up
 
 ## 10. Device status
 
+Per D088, ResourceType-common Device observation lives in
+`status.resource`: the provider-neutral claim/arbitration/presence base that is
+identical across Device implementations. TPM-specific observation lives only in
+`status.provider` with `providerRef`, qualified `schemaId`
+`device-tpm.d2b.io/Device/status`, `schemaVersion`,
+`observedProviderGeneration`, and strict bounded redacted `details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared
+fields are never duplicated into `status.provider`, and the extension schema is
+registered and signed in the Provider manifest.
+
 ### 10.1 Common phase model
 
 `Provider/device-tpm` uses the standard Device phase model without
@@ -757,24 +768,34 @@ status:
   startedAt: "2026-07-22T00:00:01Z"
   completedAt: null
   outcome: null
-  device:
+  resource:
     present: true
     health: healthy
     holderRefs:
       - Guest/corp-vm
     claims: []
     provisionedAt: "2026-07-22T00:00:05Z"
-    tpm:
-      stateVolumeRef: "Volume/device-7f3a9e12b4c6-tpm-state"   # ResourceRef; opaque to path
-      swtpmProcessRef: "Process/device-7f3a9e12b4c6-swtpm"     # ResourceRef; for diagnostics
-      markerStatus: "verified"         # verified|missing|replaced|unknown
-      tpmEndpointId: "<opaque-handle>" # TpmEndpointHandle; NOT a ResourceRef; NOT a path
-      lastFlushRef: "EphemeralProcess/device-7f3a9e12b4c6-flush"
-      lastFlushPhase: "Succeeded"
-      lastFlushAt: "2026-07-22T00:00:09Z"
+  provider:
+    providerRef: Provider/device-tpm
+    schemaId: "device-tpm.d2b.io/Device/status"
+    schemaVersion: "1.0.0"
+    observedProviderGeneration: 1
+    details:
+      tpm:
+        stateVolumeRef: "Volume/device-7f3a9e12b4c6-tpm-state"   # ResourceRef; opaque to path
+        swtpmProcessRef: "Process/device-7f3a9e12b4c6-swtpm"     # ResourceRef; for diagnostics
+        markerStatus: "verified"         # verified|missing|replaced|unknown
+        tpmEndpointId: "<opaque-handle>" # TpmEndpointHandle; NOT a ResourceRef; NOT a path
+        lastFlushRef: "EphemeralProcess/device-7f3a9e12b4c6-flush"
+        lastFlushPhase: "Succeeded"
+        lastFlushAt: "2026-07-22T00:00:09Z"
 ```
 
-### 10.3 Typed TPM status fields
+### 10.3 Typed TPM provider details fields
+
+The fields below are TPM-specific and therefore live under
+`status.provider.details.tpm`; the Device claim/arbitration/presence base stays
+promoted to `status.resource`.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -794,7 +815,7 @@ and spec are canonical `ResourceType/<name>` strings in the same Zone.
 
 When the Guest runtime Provider needs the TPM socket for Cloud Hypervisor:
 
-1. Reads `Device.status.device.tpm.tpmEndpointId` (opaque bounded string).
+1. Reads `Device.status.provider.details.tpm.tpmEndpointId` (opaque bounded string).
 2. Presents the opaque ID to the Zone runtime endpoint resolver.
 3. Zone runtime returns an inherited fd attachment in the Guest's LaunchTicket.
 4. Cloud Hypervisor receives the socket fd (not a path) via the inherited fd table.
@@ -841,10 +862,10 @@ trigger: spec-generation-changed | dependency-changed | startup-relist | schedul
  9. TpmEffectPort.watch_tpm_endpoint(swtpm_process_id) → TpmEndpointHandle
 10. UpdateStatus (expected revision):
     - phase = Ready
-    - device.present = true; device.health = healthy
-    - device.tpm.tpmEndpointId = handle (opaque string; no path)
-    - device.tpm.markerStatus from Volume.status
-    - device.tpm.stateVolumeRef / swtpmProcessRef / lastFlushRef (ResourceRefs)
+    - status.resource.present = true; status.resource.health = healthy
+    - status.provider.details.tpm.tpmEndpointId = handle (opaque string; no path)
+    - status.provider.details.tpm.markerStatus from Volume.status
+    - status.provider.details.tpm.stateVolumeRef / swtpmProcessRef / lastFlushRef (ResourceRefs)
 11. Emit Claim for holderRef from Device ownerRef or claim request.
 12. Return converged.
 ```

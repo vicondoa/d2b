@@ -1016,6 +1016,21 @@ bounded non-secret observations status does carry is provided by the status
 subresource's RBAC read authorization; status is never used to store a secret
 whose exposure would depend on redaction alone.
 
+**Three-layer status shape (D088).** All three status layers — the universal
+`ResourceStatus` base, the ResourceType-common `status.resource`, and the
+optional Provider-specific `status.provider` — are redacted and non-secret. The
+`status.provider.details` extension schema is signed into and registered with
+the Provider package and is versioned; the resource store validates every
+`status.provider` write against that registered schema with strict unknown-field
+denial and per-layer size/cardinality bounds, rejecting an unregistered or
+version-mismatched extension (`status-provider-schema-invalid`) or one that
+duplicates a universal/`status.resource` field (`status-provider-overlap`). The
+signed, versioned, strict, bounded extension surface prevents an implementation
+from smuggling secret, unbounded, or authority-conferring data into status under
+a private field, and keeps cross-provider consumers on the provider-neutral
+base-only projection (universal base + `status.resource`) so no consumer parses
+another Provider's opaque details.
+
 Two invariants close the specific attacks Volume state is most exposed to:
 
 - **TPM Volume never re-provisioned.** After the swtpm provisioning marker

@@ -942,6 +942,19 @@ The following values are **never** logged, audited, or emitted as metric labels:
 The Provider resource `spec` contains the `artifactId` and signed descriptor
 digests. Its `status` is managed by the core ProviderDeployment:
 
+Per D088, core writes the Provider universal `ResourceStatus` base at top-level
+`status.*` and any Provider ResourceType-common observation in
+`Provider.status.resource` (core-derived per D085). `Provider/transport-unix`
+does not write Provider status directly. If this Provider ever writes bounded,
+non-secret implementation-specific observation on a resource it owns, that
+detail must live in `status.provider` with `providerRef:
+Provider/transport-unix`, a qualified `schemaId` such as
+`transport-unix.d2b.io/<ResourceType>/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted `details` object registered and signed in the Provider manifest; the
+writer updates all present layers atomically and never duplicates shared fields
+from `status.resource`.
+
 | Phase | Meaning |
 | --- | --- |
 | `Pending` | Provider resource created; package not yet verified or service Process not yet Ready |
@@ -961,6 +974,11 @@ controller reports:
 
 `Succeeded` is not a steady-state phase for this long-lived service; the
 process lifecycle is `Restart: Always`.
+
+For the service Process, ResourceType-common observation belongs in
+`Process.status.resource`; any transport-unix-specific bounded detail would use
+the D088 `status.provider.details` extension schema rather than a copied common
+field.
 
 ### Transport handle lifecycle
 

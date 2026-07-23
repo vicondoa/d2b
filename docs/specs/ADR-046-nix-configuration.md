@@ -1343,7 +1343,13 @@ d2b.zones.<zone>.resources.<name> = {
 `apiVersion` is defaulted to `"resources.d2b.io/v3"` — never specified in Nix.
 `status` is omitted from all emitted artifacts and is read-only; the Zone
 runtime fills `uid`, `generation`, `revision`, `timestamps`, and management
-metadata at first activation and on subsequent reconciles.
+metadata at first activation and on subsequent reconciles. All three status
+layers (D088) — the universal `ResourceStatus` base, the ResourceType-common
+`status.resource`, and any Provider-specific `status.provider` — are runtime
+observation and are never authored in Nix. The `status.provider.details`
+extension schema is signed into and registered with the **Provider package**
+(resolved via `spec.artifactId`), not authored or emitted by the Zone Nix
+configuration; Nix authors only `type` + `spec`.
 
 The `managedBy` field (`configuration | controller | api`) is a core-set
 management metadata field set exclusively by the core runtime. It is not

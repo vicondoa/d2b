@@ -660,13 +660,16 @@ the two endpoints. The bus never buffers or stores the records.
 
 ### 9.1 State machine
 
-The latest bounded lease checkpoint (`leaseState`, `leaseHandle`,
-`expiresAtUnixMs`, `rotationGeneration`, `sourceVersion`, retry counters, and
-closed-enum outcome) is status/Operation-ledger state, not a Provider state
-Volume payload. Any `leaseHandle` written to status is opaque, non-authorizing,
-bounded, safe for authorized status readers, and independently revalidated
-against the Secret Service port before use. Secret Service object paths and
-credential bytes never enter status, audit, telemetry, or storage.
+The latest bounded lease checkpoint is status/Operation-ledger state, not a
+Provider state Volume payload. Per D088, Credential lease metadata common to all
+implementations (`leaseState`, opaque non-authorizing `leaseHandle`, `audience`,
+expiry/issue timestamps, and phase) lives in `status.resource`; Secret
+Service-specific observations (`rotationGeneration`, `sourceVersion`, retry
+counters, and closed-enum outcome) live in `status.provider.details`. Any
+`leaseHandle` written to status is opaque, non-authorizing, bounded, safe for
+authorized status readers, and independently revalidated against the Secret
+Service port before use. Secret Service object paths and credential bytes never
+enter status, audit, telemetry, or storage.
 
 ```
 Absent
@@ -833,6 +836,18 @@ A failing canary test is a hard error that blocks the PR.
 ---
 
 ## 11. Status, errors, audit, and OTEL
+
+Per D088, ResourceType-common Credential observation lives in `status.resource`:
+the non-secret lease metadata base that is identical across Credential
+implementations. Secret Service-specific lease observations live only in
+`status.provider` with `providerRef`, qualified `schemaId`
+`credential-secret-service.d2b.io/Credential/status`, `schemaVersion`,
+`observedProviderGeneration`, and strict bounded redacted `details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared
+fields are never duplicated into `status.provider`, and the extension schema is
+registered and signed in the Provider manifest. No secret bytes appear in any
+status layer.
 
 ### 11.1 Status conditions
 

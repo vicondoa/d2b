@@ -664,9 +664,12 @@ value above 256 fails the Provider spec validation at install.
 ### State machine
 
 The non-secret state transitions below are reflected in `Credential.status` and
-core Operation ledger records only. `lease_ref` values recorded in status are
-opaque, non-authorizing, bounded, safe for authorized status readers, and
-independently revalidated; they are never token sources. Token and signature
+core Operation ledger records only. Per D088, Credential lease metadata common to
+all implementations (phase, audience, expiry, and opaque non-authorizing
+`lease_ref`) lives in `status.resource`; Entra-specific lease/enrollment
+observations live in `status.provider.details`. `lease_ref` values recorded in
+status are opaque, non-authorizing, bounded, safe for authorized status readers,
+and independently revalidated; they are never token sources. Token and signature
 bytes remain transient in the `entra-agent` process and are zeroized after
 Noise_KK delivery.
 
@@ -873,22 +876,40 @@ The **agent** additionally:
 
 ### Status fields
 
-The `Credential.status.credential` sub-object written by `entra-controller`:
+Per D088, ResourceType-common Credential observation lives in `status.resource`:
+the non-secret lease metadata base that is identical across Credential
+implementations. Entra-specific lease/enrollment observations live only in
+`status.provider` with `providerRef`, qualified `schemaId`
+`credential-entra.d2b.io/Credential/status`, `schemaVersion`,
+`observedProviderGeneration`, and strict bounded redacted `details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared
+fields are never duplicated into `status.provider`, and the extension schema is
+registered and signed in the Provider manifest.
+
+Common `status.resource` lease metadata:
 
 | Field | Non-secret constraint |
 | --- | --- |
-| `leaseHandle` | Opaque bounded newtype (max 256 chars); never a token or partial token |
+| `leaseRef` | Opaque bounded newtype (max 256 chars); never a token or partial token |
 | `leaseState` | `Active \| Expired \| Revoked \| Unknown`; closed enum |
-| `rotationGeneration` | Monotonic u64; bounded |
-| `sourceVersion` | Opaque bounded newtype from `EntraLeaseInspection`; not a version string from any external system |
+| `audience` | Opaque bounded audience alias or digest; never a raw Azure scope, token, or endpoint URI |
 | `expiresAtUnixMs` | Unix milliseconds timestamp; 0 when absent |
 | `issuedAtUnixMs` | Unix milliseconds timestamp of last successful acquisition |
+
+Entra-specific `status.provider.details` fields:
+
+| Field | Non-secret constraint |
+| --- | --- |
+| `rotationGeneration` | Monotonic u64; bounded |
+| `sourceVersion` | Opaque bounded newtype from `EntraLeaseInspection`; not a version string from any external system |
 | `lastRefreshedAt` | RFC 3339 UTC string |
 | `lastRotatedAt` | RFC 3339 UTC string or null |
 | `placementBinding` | `user-agent \| guest-agent`; closed enum |
 
-No status field ever contains a tenant ID literal, audience literal, endpoint
-URI, token prefix/suffix, or any byte from `EntraLeaseGrant.token_bytes`.
+No status field in any layer ever contains a tenant ID literal, raw Azure
+audience/scope literal, endpoint URI, token prefix/suffix, or any byte from
+`EntraLeaseGrant.token_bytes`.
 
 ### Stable error codes
 

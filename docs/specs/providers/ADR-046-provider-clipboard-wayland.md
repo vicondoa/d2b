@@ -105,6 +105,14 @@ Key structural rules:
 4. **Core derives Provider status.** The core controller aggregates exact
    child Process/EphemeralProcess statuses into `Provider/clipboard-wayland`
    status. The clipboard-wayland controller does not write Provider status.
+   Per D088, that core-owned status uses universal top-level `status.*` plus
+   the Provider ResourceType-common `status.resource`; optional
+   `status.provider` is only for implementation observation (`providerRef`,
+   qualified immutable `schemaId`, semver `schemaVersion`, numeric
+   `observedProviderGeneration`, strict unknown-field-denied redacted `details`
+   ≤32 KiB registered/signed in the Provider manifest) and never duplicates
+   shared fields. Core writes all present layers atomically in one status
+   mutation.
 
 5. **Core delivers Guest lifecycle messages.** The orchestrator sends
    authenticated `GuestStopped`, `GuestLocked`, `GuestDestroyed` messages
@@ -741,11 +749,12 @@ or reset/destroy hooks are declared for component state.
 
 Clipboard history remains bounded in-memory state in `clipd-host`'s process
 heap and is never written to a Volume or status. Clipboard bytes, entry data,
-terminal data, socket paths, FDs, and authority-conferring handles are excluded
-from status, audit, metrics, and Operations. Status is revisioned, optimistic
-status-writer controlled, RBAC-readable, redacted, written only on material
-change, and re-verified against external reality after restart; oversize status
-is rejected with `status-oversize`.
+terminal or notification bytes, secrets, paths, socket paths, FDs, PIDs, unit
+names, and authority-conferring handles are excluded from every status layer,
+audit, metrics, and Operations. Status is revisioned, optimistic status-writer
+controlled, RBAC-readable, redacted, written only on material change, and
+re-verified against external reality after restart; oversize status is rejected
+with `status-oversize`.
 
 There is no bootstrap state-Volume mechanism; the previous bootstrap exception
 (D086, superseded by D087) does not apply. This dossier declares no runtime
@@ -1101,6 +1110,10 @@ violated by any implementation:
 
 13. **Core derives Provider status.** `Provider/clipboard-wayland.status` is
     written only by core. The clipboard-wayland controller does not write it.
+    D088 layers that status as universal `status.*` plus core-owned
+    `status.resource`; any optional `status.provider` extension is strict,
+    unknown-field-denied, manifest-registered/signed, bounded, redacted, and
+    shared-field-free.
 
 ---
 

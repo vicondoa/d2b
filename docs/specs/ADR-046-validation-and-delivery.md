@@ -549,6 +549,25 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   fixed bootstrap components reach Ready from status/the core Operation ledger
   (D086, superseded by D087), and a Guest still bootstraps its own Guest-local
   `volume-local` without a parent-Host dirfd leak.
+- Three-layer status shape tests (D088): every resource carries the universal
+  `ResourceStatus` base; the ResourceType-common `status.resource` schema
+  validates provider-neutral; the optional `status.provider` extension carries
+  `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`.
+  Schema-parity/conformance across implementations: for each multi-implementation
+  ResourceType (Guest, Device, Credential, Volume, Process) assert every
+  implementation populates the same `status.resource` fields with identical
+  shape, and no shared field is duplicated in any `status.provider`
+  (`status-provider-overlap` rejection). Provider-extension tests: unregistered
+  `schemaId`/`schemaVersion` → `status-provider-schema-invalid`; unknown field in
+  `details` → rejected; version mismatch (installed Provider vs written
+  extension) → rejected; `status.provider.details` over 32 KiB or over cardinality
+  → `status-oversize`; `status.provider` restating a universal/`status.resource`
+  field → `status-provider-overlap`. Base-only projection/watch compatibility:
+  a generic consumer that requests only the universal base + `status.resource`
+  reads and watches successfully with `status.provider` absent, unknown, or from
+  a different Provider version, and never parses `details`. Atomic layered write:
+  all present layers are committed in one status mutation with one expected
+  revision; a partial-layer write is rejected.
 - Quota/EmergencyPolicy tests: hierarchical Host/Guest allocation against
   Zone capacity, overcommit blocking, digest/Provider/Host/Guest/Zone/global
   emergency disable and route/session/grant revocation, incident-held

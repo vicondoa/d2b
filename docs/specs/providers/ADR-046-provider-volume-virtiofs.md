@@ -260,9 +260,16 @@ spec:
     socketGroup: null         # null → broker-default gid
 status:
   phase: Ready                # Pending|Ready|Degraded|Failed|Unknown
-  exportReady: true           # export socket present and virtiofsd Process Ready
-  guestMountReady: true       # guest-control probe returned MountReady
-  workerProcessRef: Process/vol-work-state-virtiofsd-work-vm
+  resource:
+    exportReady: true         # export socket present and virtiofsd Process Ready
+    guestMountReady: true     # guest-control probe returned MountReady
+  provider:
+    providerRef: Provider/volume-virtiofs
+    schemaId: volume-virtiofs.d2b.io/Volume/status
+    schemaVersion: 1.0.0
+    observedProviderGeneration: 1
+    details:
+      workerProcessRef: Process/vol-work-state-virtiofsd-work-vm
   conditions:
     - type: WorkerReady
       status: "True"
@@ -815,6 +822,18 @@ Export-level status conditions (on `virtiofs.d2b.io.Export`):
 | `GuestMountReady` | `"True"` / reason `health-probe-ok` | `"False"` / `Unknown` on probe timeout or Guest off |
 | `FinalizerDraining` | `"False"` (not draining) | `"True"` while virtiofsd Process deletion is pending |
 
+Per D088, `volume-virtiofs` contributes only bounded virtiofs-specific
+attachment/export observations: Volume attachment readiness promoted for generic
+consumers is `Volume.status.resource.attachmentStatuses`, identical to sibling
+Volume implementations and written by `volume-local` from aggregated Export
+status. Virtiofs worker/export detail stays in `status.provider.details`
+with `providerRef: Provider/volume-virtiofs`, qualified `schemaId`
+(`volume-virtiofs.d2b.io/Volume/status`), `schemaVersion`, and
+`observedProviderGeneration`. Any status writer writes all present layers
+atomically in one mutation; shared fields are never duplicated into
+`status.provider`, and the strict, ≤32 KiB, redacted extension schema is
+registered and signed in the Provider manifest.
+
 Volume-level conditions (written by volume-local from aggregated Export statuses):
 
 | Condition type | Normal value | Abnormal state |
@@ -1239,7 +1258,7 @@ it does not import session implementation internals directly.
 | Current source | No analog; new ResourceType |
 | Reuse action | new |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/export.rs`; `packages/d2b-contracts/src/v3/virtiofs_export.rs` |
-| Detailed design | Declare `virtiofs.d2b.io.Export` ResourceType in `d2b-contracts`. Fields: `volumeRef`, `executionRef`, `view`, `access`, `mountPath`, `settings` (as in §4.2). Status fields: `phase`, `exportReady`, `guestMountReady`, `workerProcessRef`, `conditions`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema is signed and included in the Provider package. |
+| Detailed design | Declare `virtiofs.d2b.io.Export` ResourceType in `d2b-contracts`. Fields: `volumeRef`, `executionRef`, `view`, `access`, `mountPath`, `settings` (as in §4.2). Status fields: top-level `phase`/`conditions`, `status.resource.exportReady`, `status.resource.guestMountReady`, and `status.provider.details.workerProcessRef`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema and provider status extension schema are signed and included in the Provider package. |
 | Integration | `d2b-contracts` exports the Export DTO; volume-virtiofs controller and volume-local both import it for ResourceClient typed operations |
 | Data migration | None; new type |
 | Validation | `tests/schema_conformance.rs`: `export_schema_canonical_json_stable`, `export_spec_denied_unknown_fields`, `export_status_exportready_is_boolean_not_path`, `export_owner_must_be_volume` |

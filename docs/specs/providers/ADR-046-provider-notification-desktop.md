@@ -767,8 +767,17 @@ projection and the action nonce store — remains exclusively in the host-sink
 process heap and is never persisted. No notification summary, body, action
 label, icon identifier, nonce, or content byte is ever written to durable
 storage. Its bounded non-secret operational state — component readiness,
-reconcile stage, and closed-enum error/health detail — lives in the owning
-resource's `status` subresource and the core Operation ledger (D087).
+reconcile stage, and closed-enum error/health detail — lives in core-owned
+Provider status and the core Operation ledger (D087).
+
+Per D088, notification-desktop exports no semantic ResourceType and writes no
+ResourceType status of its own. Core-owned Provider status uses universal
+top-level `status.*` plus the Provider ResourceType-common `status.resource`;
+optional `status.provider` is only for implementation observation
+(`providerRef`, qualified immutable `schemaId`, semver `schemaVersion`, numeric
+`observedProviderGeneration`, strict unknown-field-denied redacted `details`
+≤32 KiB registered/signed in the Provider manifest) and never duplicates shared
+fields. Core writes all present layers atomically in one status mutation.
 
 Because this Provider's operational state is fully derivable from spec,
 `status`, the core Operation ledger, and its live process memory, it fails the
@@ -783,7 +792,11 @@ resources only (see §16).
 `Provider/system-core` aggregates the overall Provider status from the health
 reports emitted by component processes; the notification controller manages
 child Process lifecycle and emits health reports but does not write
-Provider-level status directly.
+Provider-level status directly. D088 requires that any optional
+`status.provider` extension name `providerRef`, a qualified immutable
+`schemaId`, semver `schemaVersion`, numeric `observedProviderGeneration`, and
+strict unknown-field-denied redacted `details` ≤32 KiB registered and signed in
+the Provider manifest.
 
 On host-sink restart the nonce store is empty; any action nonces issued before
 restart are invalidated (`action-capability-unavailable` on the next invocation
@@ -791,7 +804,9 @@ attempt).  The in-memory projection is likewise empty; connected observer
 clients receive a stream-close event and must reconnect.  The controller
 re-derives component readiness from live `status` observation and reverifies
 against the running processes, treating `status` as observation, never
-authority (D087). No notification bytes are ever persisted.
+authority (D087). No notification bytes, clipboard or terminal bytes, secrets,
+paths, PIDs, unit names, or authority-conferring handles are ever persisted or
+placed in any status layer.
 
 ---
 

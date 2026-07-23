@@ -822,11 +822,13 @@ query-time grouping of declared Provider state Volumes; for
 `Provider/device-security-key` the set is empty.
 
 Bounded non-secret operational state belongs in the owning `Device` status and
-the core Operation ledger: phase, conditions, current claim, virtual frontend
-reference, relay/frontend Process references, observation timestamps, session
-lifecycle summaries, and finalizer progress. CTAP bytes, relay stream content,
-UHID/hidraw fds, session keys, and cancellation handles are transient in-process
-or fd-scoped data and must never be persisted or exposed through status.
+the core Operation ledger. Per D088, the common Device claim/arbitration/presence
+base lives in `status.resource`; security-key-specific virtual frontend,
+relay/frontend Process, observation timestamp, session lifecycle, and finalizer
+progress observations live in `status.provider.details`. CTAP bytes, relay stream
+content, UHID/hidraw fds, session keys, and cancellation handles are transient
+in-process or fd-scoped data and must never be persisted or exposed through
+status.
 
 Storage-need test rationale: v1 security-key controller, relay, and frontend
 state has no durable secret recovery payload, no large or binary file content, no
@@ -938,7 +940,16 @@ The broker ignores any other field.
 
 ## Device status
 
-Status fields specific to this Provider, beyond the standard Device status:
+Per D088, ResourceType-common Device observation lives in `status.resource`: the
+provider-neutral claim/arbitration/presence base that is identical across Device
+implementations. Security-key relay/session observations live only in
+`status.provider` with `providerRef`, qualified `schemaId`
+`device-security-key.d2b.io/Device/status`, `schemaVersion`,
+`observedProviderGeneration`, and strict bounded redacted `details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared
+fields are never duplicated into `status.provider`, and the extension schema is
+registered and signed in the Provider manifest.
 
 ```yaml
 status:
@@ -957,7 +968,7 @@ status:
     - type: ClaimConflict
       status: "True"
       reason: usbip-mutual-exclusion | second-exclusive-claim
-  device:
+  resource:
     present: true | false | null
     health: healthy | degraded | failed | unknown
     holderRefs: ["Guest/<vm>"]          # at most 1 for exclusive
@@ -966,11 +977,22 @@ status:
         claim: exclusive
         passthrough: hidraw-relay
         claimedAt: "2026-07-22T00:05:00Z"
-        sessionId: "sk-abc123def456-42"  # opaque; NOT hidraw path or descriptor
         health: healthy | degraded | failed | unknown
     provisionedAt: null                  # physical device; always null
     lastProbedAt: "2026-07-22T00:05:00Z"
-    providerDiagnostic: null             # bounded ≤128 UTF-8; never paths/secrets
+  provider:
+    providerRef: Provider/device-security-key
+    schemaId: "device-security-key.d2b.io/Device/status"
+    schemaVersion: "1.0.0"
+    observedProviderGeneration: 1
+    details:
+      securityKey:
+        virtualFrontendRef: Device/<virtual-name>
+        relayProcessRef: Process/<relay-name>
+        frontendProcessRef: Process/<frontend-name>
+        sessionId: "sk-abc123def456-42"  # opaque; NOT hidraw path or descriptor
+        sessionState: active | idle | degraded | failed | unknown
+        providerDiagnostic: null         # bounded ≤128 UTF-8; never paths/secrets
 ```
 
 **Phase transitions:**

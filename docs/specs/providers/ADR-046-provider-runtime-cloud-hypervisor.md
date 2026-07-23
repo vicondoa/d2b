@@ -340,8 +340,8 @@ Each `NetworkAttachmentSpec` entry in `Guest.spec.networkAttachments` resolves
 one TAP interface on the host. The TAP name and MAC are derived from the Network
 resource's `attachments` table, which names the Guest's `executionRef`. The
 controller does not compute or store TAP names in the Guest spec or status; it
-reads the `Network.status.network.attachments[*].tapIfName` field once the
-Network is Ready.
+reads the provider-neutral `Network.status.resource.attachments[*]` readiness
+and opaque handoff record once the Network is Ready.
 
 TAP creation is a privileged broker effect. The VMM Process supervisor ticket
 mediates TAP fd passing to the CH binary using the appropriate net-handoff mode
@@ -352,9 +352,10 @@ fd number, or broker socket path appears in the Process spec.
 
 The Network resource declares an optional `ExternalAttachmentSpec` with
 `mode: macvtap`. When this is present, the network-local Provider creates the
-macvtap interface and reports it in `Network.status.network.externalAttachment`.
-The `runtime-cloud-hypervisor` controller reads the reported macvtap interface
-name from the Network status and passes it to the VMM supervisor ticket.
+macvtap interface and reports the provider-neutral readiness base in
+`Network.status.resource.externalAttachment`. The `runtime-cloud-hypervisor`
+controller receives the private interface handoff from the dependency resolver
+and passes it to the VMM supervisor ticket.
 No macvtap interface name, fd, or host interface path appears in the Guest
 spec or VMM Process spec.
 
@@ -541,8 +542,9 @@ After a Guest `spec` durable commit:
    expected-revision preconditions.
 7. Stale conflict on any batch → discard result; toolkit re-reads and the
    handler retries under policy.
-8. Write Guest status (`providerPhase`, `bootstrapReady`, `guestIdentityDigest`,
-   conditions) via `update-status` with expected revision.
+8. Write Guest status (`status.resource.bootstrapReady`, Guest readiness,
+   conditions, and Cloud Hypervisor `status.provider.details`) atomically via
+   `update-status` with expected revision.
 9. Return `converged`, `pending`, `failed-retryable`, or `failed-terminal`.
 
 ### 9.4 Adoption after controller restart
@@ -1128,7 +1130,8 @@ Finalizer ID: `runtime.runtime-cloud-hypervisor.d2b.io/guest`
 
 Algorithm on `deletion-requested`:
 
-1. Set Guest status: `providerPhase: draining`, condition `GuestDraining=True`.
+1. Set Guest status atomically: `status.provider.details.providerPhase: draining`,
+   condition `GuestDraining=True`.
 2. Set `desiredLifecycle: stopped` on the VMM Process via expected-revision
    `update-spec`.
 3. Wait for the owned VMM Process to be deleted (owner-child cascade with its
@@ -1224,8 +1227,8 @@ The following are forbidden in any Guest spec, providerSettings, or status field
 - credential bytes or token material;
 - argv fragments or environment variable values.
 
-Bounded bounded `guestIdentityDigest` and `providerPhase` are the only
-provider-observable runtime identity fields in status.
+Bounded `status.provider.details.guestIdentityDigest` and `providerPhase` are the
+only provider-observable runtime identity fields in status.
 
 ### 17.3 Audit records
 
@@ -1266,6 +1269,19 @@ This invariant is validated by `tests/minijail-validator-virtiofsd.sh` and
 
 ### 18.1 Guest status
 
+D088 status layering is normative: the controller populates the Guest
+ResourceType-common `status.resource` with runtime readiness, capabilities,
+observed lifecycle phase, bootstrap readiness, and active process count in the
+same shape as sibling Guest runtime providers. Cloud Hypervisor-specific VMM
+lifecycle/adoption observations, including `providerPhase` and the bounded
+non-authorizing guest identity digest, live only in `status.provider.details`
+with `providerRef: Provider/runtime-cloud-hypervisor`, qualified `schemaId`
+(`runtime-cloud-hypervisor.d2b.io/Guest/status`), `schemaVersion`, and
+`observedProviderGeneration`. Controller status writes include all present
+layers atomically in one status mutation; shared fields are never duplicated
+into `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
+registered and signed in the Provider manifest.
+
 ```yaml
 status:
   observedGeneration: 1
@@ -1292,10 +1308,21 @@ status:
       observedGeneration: 1
       lastTransitionAt: 2026-07-22T00:00:01Z
   lastReconciledAt: 2026-07-22T00:00:03Z
-  providerPhase: running
-  bootstrapReady: true
-  guestIdentityDigest: sha256:<bounded-hex>
-  activeProcessCount: 1
+  resource:
+    observedLifecyclePhase: running
+    runtimeReady: true
+    bootstrapReady: true
+    capabilitiesVerified: true
+    activeProcessCount: 1
+  provider:
+    providerRef: Provider/runtime-cloud-hypervisor
+    schemaId: runtime-cloud-hypervisor.d2b.io/Guest/status
+    schemaVersion: 1.0.0
+    observedProviderGeneration: 1
+    details:
+      providerPhase: running
+      guestIdentityDigest: sha256:<bounded-hex>
+      vmmProcess: ready
 ```
 
 ### 18.2 Stable error codes

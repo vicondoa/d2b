@@ -172,6 +172,15 @@ connection grants are transient in-process attachments and never durable state.
 After restart, the controller re-lists current resources and re-verifies external
 Process/Device reality before writing materially changed status.
 
+Per D088, `WaylandSession` and `WaylandPolicy` status use the universal
+`ResourceStatus` base at top-level `status.*` plus their ResourceType-common
+typed `status.resource` objects. Optional `status.provider` is only for
+implementation-only observation (`providerRef`, qualified immutable `schemaId`,
+semver `schemaVersion`, numeric `observedProviderGeneration`, and strict
+unknown-field-denied redacted `details` ≤32 KiB registered/signed in the
+Provider manifest); shared fields are never duplicated there. The controller
+writes all present layers atomically in one status mutation.
+
 Storage-need test rationale: display controller and portal state contains no
 secret recovery material, no large or binary payload, no private data that must be
 hidden from authorized status readers, and no bounded-but-revision-unsuitable
@@ -256,6 +265,12 @@ When cross-domain is not desired the operator should not declare a
 
 ### 5.2 WaylandSession status
 
+D088 status layering applies here: fields common to every resource remain in the
+top-level `status.*` base, while the Wayland typed fields are
+`status.resource`; `status.provider` is unnecessary unless a concrete
+implementation has bounded redacted details that are not shared by all
+display-wayland implementations.
+
 ```yaml
 status:
   phase: Pending | Ready | Degraded | Failed | Unknown
@@ -274,7 +289,7 @@ status:
       status: "True"
       reason: device-gpu-endpoint-ready
   lastReconciledAt: null
-  session:
+  resource:
     proxyProcessRef: Process/corp-vm-display-proxy
     guestFrontendProcessRef: Process/corp-vm-display-guest
     policyDigest: sha256:<hex>
@@ -282,8 +297,10 @@ status:
 ```
 
 `proxyProcessRef`, `guestFrontendProcessRef`, `policyDigest`, and
-`endpointRevision` are opaque bounded strings. No socket path, compositor
-socket name, user identity, window title, or raw argv appears in status.
+`endpointRevision` are opaque bounded strings in `status.resource`. No socket
+path, compositor socket name, user identity, window title, raw argv, PID, unit
+name, terminal/clipboard/notification byte, secret, or authority-conferring
+handle appears in any status layer.
 
 ### 5.3 Condition types
 

@@ -867,28 +867,36 @@ description.
 ## 13. Process and EphemeralProcess status additions
 
 The following fields are specific to `Provider/system-minijail` as the
-implementation. They appear as part of the common `Process`/`EphemeralProcess`
-status defined in `ADR-046-resources-host-guest-process-user`. This section
-describes the specific values system-minijail writes.
+implementation. Per D088, ResourceType-common Process/EphemeralProcess
+observation written by system-minijail lives in `status.resource`, while
+bounded non-secret minijail-only observation lives in `status.provider.details`
+with `providerRef: Provider/system-minijail`, qualified schema IDs
+`system-minijail.d2b.io/Process/status` or
+`system-minijail.d2b.io/EphemeralProcess/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted schema registered and signed in the Provider manifest. The controller
+writes all present layers atomically in one status mutation, and shared fields
+are promoted to `status.resource` rather than duplicated into
+`status.provider`.
 
 ### Process status values
 
-| Field | Written value |
-| --- | --- |
-| `providerImplementation` | `"system-minijail"` |
-| `waitReapOwner` | `"d2b"` |
-| `sandboxRevisionDigest` | Opaque hex digest of the compiled sandbox plan (namespace + capability + seccomp + mount + environment + userNamespace + rlimit + umask classes and version). Max 128 chars. |
-| `adoptionState` | One of `adopted`, `fresh`, `quarantined`, `adoption-failed`. |
+| Layer/path | Field | Written value |
+| --- | --- | --- |
+| `status.resource` | `providerImplementation` | `"system-minijail"` when required by cross-provider Process consumers |
+| `status.resource` | `waitReapOwner` | `"d2b"` |
+| `status.provider.details` | `sandboxRevisionDigest` | Opaque hex digest of the compiled sandbox plan (namespace + capability + seccomp + mount + environment + userNamespace + rlimit + umask classes and version). Max 128 chars. |
+| `status.provider.details` | `adoptionState` | One of `adopted`, `fresh`, `quarantined`, `adoption-failed`. |
 
 ### EphemeralProcess status values
 
-| Field | Written value |
-| --- | --- |
-| `providerImplementation` | `"system-minijail"` |
-| `waitReapOwner` | `"d2b"` |
-| `sandboxRevisionDigest` | Same as Process. |
-| `cleanupEligibleAt` | Set after terminal phase + TTL; RFC 3339 UTC. |
-| `incidentHeld` | Mirrors `spec.incidentHold` at last reconcile. |
+| Layer/path | Field | Written value |
+| --- | --- | --- |
+| `status.resource` | `providerImplementation` | `"system-minijail"` when required by cross-provider EphemeralProcess consumers |
+| `status.resource` | `waitReapOwner` | `"d2b"` |
+| `status.provider.details` | `sandboxRevisionDigest` | Same as Process. |
+| `status.provider.details` | `cleanupEligibleAt` | Set after terminal phase + TTL; RFC 3339 UTC. |
+| `status.provider.details` | `incidentHeld` | Mirrors `spec.incidentHold` at last reconcile. |
 
 No PID, pidfd file descriptor number, cgroup leaf path, mount table entry,
 socket address, argv, environment variable, capability bitmask, seccomp BPF

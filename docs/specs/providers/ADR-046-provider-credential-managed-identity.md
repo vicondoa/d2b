@@ -216,13 +216,26 @@ bootstrap state Volume mechanism or exception (D086, superseded by D087).
 
 ### Status-first operational state
 
+Per D088, ResourceType-common Credential observation lives in `status.resource`:
+the non-secret lease metadata base that is identical across Credential
+implementations. Managed-identity-specific lease observations live only in
+`status.provider` with `providerRef`, qualified `schemaId`
+`credential-managed-identity.d2b.io/Credential/status`, `schemaVersion`,
+`observedProviderGeneration`, and strict bounded redacted `details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared
+fields are never duplicated into `status.provider`, and the extension schema is
+registered and signed in the Provider manifest.
+
 The owning `Credential/<name>.status` carries only bounded, redacted,
-RBAC-readable observation: lease phase, credential readiness, rotation
-generation, expiry timestamps, audience, placement binding, bounded retry
-counters, closed-enum error detail, and opaque lease IDs that are non-secret,
-non-authorizing, bounded, safe for authorized status readers, and independently
-revalidated before use. The core Operation ledger carries in-flight
-idempotency/retry; status carries the latest bounded lease result/checkpoint.
+RBAC-readable observation. `status.resource` carries lease phase, credential
+readiness, expiry timestamps, audience, and opaque lease IDs that are
+non-secret, non-authorizing, bounded, safe for authorized status readers, and
+independently revalidated before use. `status.provider.details` carries
+managed-identity-specific rotation generation, placement binding, bounded retry
+counters, closed-enum error detail, and source observations. The core Operation
+ledger carries in-flight idempotency/retry; status carries the latest bounded
+lease result/checkpoint.
 
 Status is revisioned, optimistic-status-writer controlled, observation-only,
 reverified against external IMDS/effect-port reality after restart, written only
@@ -358,7 +371,8 @@ path with an injected client bound to the closed alias.
 | `user-agent` | **Rejected** | Managed identity is a machine-level credential, not a user-session credential. Provider install validation and eval-time assertion both reject `domainFilter=user`. |
 
 The placement binding is derived by the Credential controller from the Credential
-resource's `scope` fields and stored in `status.credential.placementBinding`.
+resource's `scope` fields and stored in
+`status.provider.details.placementBinding`.
 The Provider schema declares `supportedPlacementBindings: [host-system,
 guest-agent]` and `rejectedPlacementBindings: [user-agent]`. Any Credential
 resource whose `scope.domainFilter = "user"` fails the NixOS eval-time assertion
@@ -1003,17 +1017,25 @@ or placed in any provider output surface.
 
 ### Zero-secret status
 
-The Credential **controller** writes only the following to `status.credential`
-(received from the agent via status-update RPC):
+The Credential **controller** writes only the following status fields (received
+from the agent via status-update RPC):
+
+Common `status.resource` lease metadata:
 
 | Field | Value written | Secret? |
 | --- | --- | --- |
 | `leaseHandle` | `ManagedIdentityLeaseHandle` opaque newtype value | No |
 | `leaseState` | Closed enum: `Active`, `Expired`, `Revoked`, `Unknown` | No |
-| `rotationGeneration` | Monotonic counter | No |
-| `sourceVersion` | Opaque bounded string from grant | No |
+| `audience` | Opaque bounded audience alias or digest; never raw Azure resource ID | No |
 | `expiresAtUnixMs` | Unix milliseconds | No |
 | `issuedAtUnixMs` | Unix milliseconds | No |
+
+Managed-identity-specific `status.provider.details`:
+
+| Field | Value written | Secret? |
+| --- | --- | --- |
+| `rotationGeneration` | Monotonic counter | No |
+| `sourceVersion` | Opaque bounded string from grant | No |
 | `lastRefreshedAt` | RFC 3339 UTC timestamp | No |
 | `lastRotatedAt` | RFC 3339 UTC timestamp or null | No |
 | `placementBinding` | `host-system` or `guest-agent` | No |
@@ -1058,10 +1080,11 @@ details, subscription IDs, or resource path fragments.
 ### `ManagedIdentityLeaseState`
 
 The non-secret lease state below is observed through `Credential.status` and the
-core Operation ledger. Status may include expiry, audience, phase,
-rotationGeneration, bounded retry/outcome detail, and opaque lease IDs that are
-non-secret and non-authorizing; token bytes are never status fields and never
-persist to any Provider state Volume.
+core Operation ledger. `status.resource` may include expiry, audience, phase,
+and opaque lease IDs that are non-secret and non-authorizing; managed-identity
+rotationGeneration and bounded retry/outcome detail live in
+`status.provider.details`. Token bytes are never status fields and never persist
+to any Provider state Volume.
 
 ```
 Absent (no active lease)

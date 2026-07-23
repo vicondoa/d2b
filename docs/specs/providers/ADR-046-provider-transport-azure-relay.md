@@ -902,54 +902,72 @@ The relay transport service does **not** write ZoneLink status. Core receives
 a `Stream<TransportObservation>` from `ObserveTransport` and aggregates those
 observations into the ZoneLink transport status sub-object.
 
-The ZoneLink handler writes the following shape based on observations received:
+Per D088, core writes the ZoneLink universal `ResourceStatus` base at top-level
+`status.*` and cross-provider ZoneLink/transport observation under
+`status.resource`. Azure-specific bounded, non-secret observation belongs in
+`status.provider` with `providerRef: Provider/transport-azure-relay`, qualified
+`schemaId: transport-azure-relay.d2b.io/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted `details` object registered and signed in the Provider manifest. Core
+writes all present layers atomically in one status mutation; shared fields are
+promoted to `status.resource` and never duplicated into `status.provider`.
+
+The ZoneLink handler writes the following D088 shape based on observations
+received:
 
 ```yaml
 status:
   # ZoneLink core status (managed by core ZoneLink controller):
   phase: Ready
   conditions: [...]
-  zoneLink:
-    sessionGeneration: 3
-    reconnectCount: 1
-    lastConnectedAt: 2026-07-22T00:00:00Z
-    ...
-  # Transport sub-object (written by core from ObserveTransport observations;
-  # relay service has no write access to this):
-  transport:
+  resource:
+    zoneLink:
+      sessionGeneration: 3
+      reconnectCount: 1
+      lastConnectedAt: 2026-07-22T00:00:00Z
+      ...
+    transport:
+      providerRef: Provider/transport-azure-relay
+      phase: Connected           # Pending | Connected | Reconnecting | Failed | Unknown
+      lastConnectedAt: 2026-07-22T00:00:00Z
+      lastDisconnectedAt: null
+      lastDisconnectReason: null       # bounded redacted string; no secret bytes
+      reconnectAttempt: 0
+  provider:
     providerRef: Provider/transport-azure-relay
-    phase: Connected           # Pending | Connected | Reconnecting | Failed | Unknown
-    relayEndpoint:
-      namespaceId: relns-d2b-prod   # non-secret; echoed from transportSettings
-      entityId: hc-d2b-k2           # non-secret; echoed from transportSettings
-    lastConnectedAt: 2026-07-22T00:00:00Z
-    lastDisconnectedAt: null
-    lastDisconnectReason: null       # bounded redacted string; no secret bytes
-    reconnectAttempt: 0
-    credentialExpiresAtUnixMs: 1753232401000   # listener credential expiry
-    conditions:
-      - type: RelayConnected
-        status: "True"
-        reason: websocket-open
-        lastTransitionAt: 2026-07-22T00:00:00Z
-      - type: CredentialValid
-        status: "True"
-        reason: lease-active
-        lastTransitionAt: 2026-07-22T00:00:01Z
+    schemaId: transport-azure-relay.d2b.io/ZoneLink/status
+    schemaVersion: "1.0"
+    observedProviderGeneration: 3
+    details:
+      relayEndpoint:
+        namespaceId: relns-d2b-prod   # non-secret; echoed from transportSettings
+        entityId: hc-d2b-k2           # non-secret; echoed from transportSettings
+      credentialExpiresAtUnixMs: 1753232401000   # listener credential expiry
+      conditions:
+        - type: RelayConnected
+          status: "True"
+          reason: websocket-open
+          lastTransitionAt: 2026-07-22T00:00:00Z
+        - type: CredentialValid
+          status: "True"
+          reason: lease-active
+          lastTransitionAt: 2026-07-22T00:00:01Z
 ```
 
 Rules:
 
-- `transport.relayEndpoint.namespaceId` and `.entityId` are non-secret identifiers
-  echoed from `transportSettings` for operator diagnostics.
+- `status.provider.details.relayEndpoint.namespaceId` and `.entityId` are
+  non-secret Azure identifiers echoed from `transportSettings` for operator
+  diagnostics.
 - `lastDisconnectReason` is a bounded (max 256 chars), redacted string.
   It never contains token bytes, SAS values, stack traces, or internal paths.
-- `credentialExpiresAtUnixMs` is the listener credential lease expiry from
-  `Credential.status.credential.expiresAtUnixMs`. Never a token or key.
-- The `RelayConnected` and `CredentialValid` conditions reflect carriage health,
-  not Zone routing health. Core derives `ZoneLink.status.conditions.SessionEstablished`
-  from the Noise KK handshake outcome, which succeeds only after relay transport
-  is `Connected`.
+- `status.provider.details.credentialExpiresAtUnixMs` is the listener credential
+  lease expiry from `Credential.status.credential.expiresAtUnixMs`. Never a
+  token or key.
+- The provider-extension `RelayConnected` and `CredentialValid` conditions
+  reflect carriage health, not Zone routing health. Core derives
+  `ZoneLink.status.conditions.SessionEstablished` from the Noise KK handshake
+  outcome, which succeeds only after relay transport is `Connected`.
 
 ### Status phases
 

@@ -271,6 +271,15 @@ checkpoints. It is written only on a material change and never carries secrets,
 authority-conferring handles, private path/argv/environment/PID/unit data, or
 high-frequency streams (see `ADR-046-resource-object-model` § Status bounds).
 
+Status has the frozen three-layer shape (D088): the universal `ResourceStatus`
+base, the ResourceType-common `status.resource` object, and an optional
+Provider-specific `status.provider` extension. A controller writes all present
+layers in one status mutation with a single expected revision; the layers never
+diverge. Cross-resource and cross-provider reconcilers depend only on the
+universal base plus `status.resource` (a base-only projection) and never read a
+peer's `status.provider.details`; any field a second implementation needs is
+promoted to `status.resource`.
+
 On a Zone or controller restart a controller re-reads its owned resources'
 status and treats every field as **observation, not authority**. Before
 relying on any recovered observation it reverifies against external reality —

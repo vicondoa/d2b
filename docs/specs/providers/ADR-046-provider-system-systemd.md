@@ -667,6 +667,19 @@ those into the Provider-level status using the common phase enum. Systemd
 `ProcessEffect` audit records; they do not appear as raw strings in any
 Provider or Process status field.
 
+Per D088, the Process/EphemeralProcess universal `ResourceStatus` base remains
+at top-level `status.*`, and ResourceType-common process observation written by
+system-systemd lives in `status.resource`. Any bounded, non-secret
+systemd-specific observation lives in `status.provider` with
+`providerRef: Provider/system-systemd`, a qualified `schemaId` such as
+`system-systemd.d2b.io/Process/status` or
+`system-systemd.d2b.io/EphemeralProcess/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted `details` object registered and signed in the Provider manifest. Each
+controller write updates all present layers atomically in one status mutation;
+shared fields are promoted to `status.resource` and never copied into
+`status.provider`.
+
 ---
 
 ## 12. RBAC and broker/effect boundaries
@@ -741,6 +754,10 @@ The framework aggregates those into the Provider-level status using the common
 phase enum. Systemd `ActiveState` and `SubState` are tracked internally by the
 effect port as typed detail exposed only through `ProcessEffect` audit records;
 they never surface as raw strings in Provider or Process status fields.
+Any implementation-specific bounded observation that is not audit-only follows
+the D088 `status.provider.details` extension contract on the owned
+Process/EphemeralProcess resource; fields needed by cross-provider Process
+consumers are instead promoted to `status.resource`.
 
 `ProviderStateSet` is the optional, query-time grouping of the *declared*
 `Volume` resources in a Zone whose `metadata.ownerRef` resolves to
@@ -777,11 +794,13 @@ status:
       status: "True"     # system manager reachable via effect port
     - type: UserEffectReady
       status: "True"     # False when user manager unreachable via port
-  activeProcessCount: 12
-  activeEphemeralProcessCount: 3
+  resource:
+    activeProcessCount: 12
+    activeEphemeralProcessCount: 3
 ```
 
-Provider-level status fields:
+Provider-level `status.resource` fields (core-derived per D085/D088, not
+written by the systemd controller):
 
 | Field | Type | Description |
 | --- | --- | --- |

@@ -80,12 +80,19 @@ one versioned deterministic encoding owned by d2b-contracts.
 
 Status is the default durable observation surface for bounded non-secret
 operational state (D087) and is stored inside the resource envelope, not in a
-side stream. A status write is validated against the frozen status bounds
-before storage — total canonical serialized status ≤ 64 KiB,
-ResourceType-/provider-specific typed detail ≤ 32 KiB, and bounded
-condition/list/map cardinality — and an over-limit write fails closed with
-`status-oversize` before any redb mutation (see
-`ADR-046-resource-object-model` § Status bounds). Controllers write status only
+side stream. Status has the frozen three-layer shape (D088): the universal
+`ResourceStatus` base, the ResourceType-common `status.resource` object, and an
+optional Provider-specific `status.provider` extension. A status write is
+validated per layer before storage — total canonical serialized status ≤ 64 KiB,
+`status.resource` typed detail ≤ 32 KiB, `status.provider.details` ≤ 32 KiB, and
+bounded condition/list/map cardinality — and a `status.provider` is validated
+against the installed Provider's registered, signed extension schema
+(`schemaId`/`schemaVersion`) with strict unknown-field denial. An over-limit
+write fails closed with `status-oversize`, an unregistered/unknown-field
+extension with `status-provider-schema-invalid`, and a duplicated
+universal/`status.resource` field with `status-provider-overlap`, all before any
+redb mutation (see `ADR-046-resource-object-model` § Status). All present layers
+are committed atomically in one status mutation. Controllers write status only
 on a material change, so status churn cannot outpace revision compaction; there
 are no high-frequency byte streams, logs, metrics, or ring buffers in the
 store.

@@ -46,6 +46,7 @@ authored or independently duplicated in the resource row:
 - permission claims;
 - CLI projection;
 - events/telemetry/state contracts;
+- registered `status.provider` extension schemas (D088): per owned or written ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `status.provider.details` object the Provider may write;
 - component placement templates;
 - upgrade/drain/restart policy.
 
@@ -53,6 +54,17 @@ Manifest/package/component/resource/status/generated properties are read-only
 derived data, never authored Provider spec fields. Core ProviderDeployment
 reads this signed manifest/catalog entry and creates the Provider's static
 component graph from it (see `ADR-046-components-processes-and-sandbox`).
+
+**Status extension registration (D088).** A Provider that writes a
+Provider-specific `status.provider` extension on any ResourceType registers the
+extension schema in its signed manifest: the qualified immutable `schemaId`, the
+`schemaVersion`, and the strict JSON Schema for `details` (unknown-field-denied,
+size/cardinality bounded, redacted/non-secret). The resource store validates
+every `status.provider` write against the installed Provider's registered schema
+and rejects an unregistered `schemaId`/`schemaVersion` or unknown field. Fields
+shared across implementations of a ResourceType are promoted to the
+ResourceType-common `status.resource` object and are never registered or written
+under `status.provider` (see `ADR-046-resource-object-model` § Status).
 
 Provider status contains:
 
@@ -70,7 +82,10 @@ Provider status is derived, not self-declared: core computes the aggregate
 Provider status from component/dependency/process health. A Provider
 controller writes status only for the ResourceTypes it owns and for the
 authorized children/status fields its descriptor grants; it never authors its
-own aggregate Provider-resource status.
+own aggregate Provider-resource status. When a Provider controller writes an
+owned resource's status it writes the three layers (universal base,
+`status.resource`, and its own `status.provider`) atomically in one mutation
+(D088).
 
 ## Crate/package boundary
 

@@ -1680,12 +1680,19 @@ accepted in any Volume spec field.
 ### Provider controller status
 
 The `Provider/volume-local` controller itself uses only the common `phase` field
-(`Pending`/`Ready`/`Degraded`/`Failed`/`Unknown`). No custom provider-level
-status extensions are defined. Individual Volume resources managed by the
-controller retain their full status schema (conditions, `layoutPhase`,
-`stateSchemaPhase`, `markerStatus`, `sealingStatus`, `quotaUsage`, `snapshots`,
-etc.) as described below. The controller watch loop remains responsive to new
-Volume spec changes while per-resource effect calls run concurrently.
+(`Pending`/`Ready`/`Degraded`/`Failed`/`Unknown`). Individual Volume resources
+managed by the controller follow D088: Volume attachment base, layout phase,
+marker base, quota base, and sealing/schema base are promoted to the
+ResourceType-common `status.resource` shape shared by all Volume implementations.
+Local filesystem-specific marker/quota/snapshot/migration observations live only
+in `status.provider.details` with `providerRef: Provider/volume-local`,
+qualified `schemaId` (`volume-local.d2b.io/Volume/status`), `schemaVersion`, and
+`observedProviderGeneration`. The controller writes all present layers atomically
+in one status mutation; shared fields are never duplicated into
+`status.provider`, and the strict, ≤32 KiB, redacted extension schema is
+registered and signed in the Provider manifest. The controller watch loop remains
+responsive to new Volume spec changes while per-resource effect calls run
+concurrently.
 
 ### Core Volume status
 
@@ -1703,12 +1710,30 @@ status:
       status: "True"
       reason: all-attachments-ready
       observedGeneration: 1
-  layoutPhase: Ready    # Pending | Ready | Degraded | Failed
-  layoutConditions: []  # per-entry: EntryMissing | EntryDrift | EntryQuarantined | InvariantViolated | ForeignAclViolation
-  attachmentStatuses: []
+  resource:
+    layoutPhase: Ready    # Pending | Ready | Degraded | Failed
+    layoutConditions: []  # per-entry: EntryMissing | EntryDrift | EntryQuarantined | InvariantViolated | ForeignAclViolation
+    attachmentStatuses: []
+    stateSchemaPhase: current
+    markerStatus: verified
+    sealingStatus: sealed
+    quotaUsage: { usedBytes: 0, inodeCount: 0 }
+  provider:
+    providerRef: Provider/volume-local
+    schemaId: volume-local.d2b.io/Volume/status
+    schemaVersion: 1.0.0
+    observedProviderGeneration: 1
+    details:
+      localMarkerObservation: verified
+      quotaBackend: project-quota
+      snapshots: []
 ```
 
 ### State-extension fields
+
+The following fields are `status.resource` base fields unless noted; provider-
+specific filesystem observations remain in `status.provider.details` and never
+carry raw host paths, secret bytes, or unbounded records.
 
 | Field | Values | Notes |
 | --- | --- | --- |

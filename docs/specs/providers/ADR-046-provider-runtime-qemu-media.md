@@ -65,7 +65,7 @@ ADR 0036 established the manual-only posture, QMP-mediated attach/detach
 protocol, and the `QemuMedia*` broker op family. This Provider supersedes
 that design. The broker op family is retired; media is delivered through
 Volume virtio-blk attachments. The manual-only posture is preserved as a
-typed `Guest.status.providerPhase = "paused-at-boot"` state.
+typed `Guest.status.provider.details.providerPhase = "paused-at-boot"` state.
 
 **Required crate layout** (workspace policy gate `make test-policy`):
 
@@ -190,7 +190,16 @@ spec:
     extraFeatures: []
 status:
   phase: Pending
-  providerPhase: ""
+  resource:
+    observedLifecyclePhase: pending
+    runtimeReady: false
+  provider:
+    providerRef: Provider/runtime-qemu-media
+    schemaId: runtime-qemu-media.d2b.io/Guest/status
+    schemaVersion: 1.0.0
+    observedProviderGeneration: 1
+    details:
+      providerPhase: ""
 ```
 
 `spec.systemArtifactId` is `null` for media-boot Guests; no NixOS guest system
@@ -811,19 +820,19 @@ OBSERVE: Guest Created/Updated or receives deletion-requested hint
   FOR each dependency in [Device/host-kvm, Network/*, Volume/boot-media, Volume/removable*, WaylandSession/*]:
     IF dep.phase != Ready:
       set Guest.conditions[dep type] = False, reason = <dep>-not-ready
-      set Guest.providerPhase = "waiting-dependencies"
+      set Guest.status.provider.details.providerPhase = "waiting-dependencies"
       return (requeue on dep watch event)
   ensure runtime tmpfs Volume exists and is Ready
   ensure runner Process spec is current (create or UpdateSpec)
   IF runner Process.phase = Ready:
     set Guest.phase = Ready
-    set Guest.providerPhase = "paused-at-boot" (if pauseAtBoot) or "running"
+    set Guest.status.provider.details.providerPhase = "paused-at-boot" (if pauseAtBoot) or "running"
   ELIF runner Process.phase = Failed:
     set Guest.phase = Failed
-    set Guest.providerPhase = "runner-failed"
+    set Guest.status.provider.details.providerPhase = "runner-failed"
   ELIF runner Process.phase = Pending | Degraded:
     set Guest.phase = Degraded
-    set Guest.providerPhase = "runner-starting"
+    set Guest.status.provider.details.providerPhase = "runner-starting"
 ```
 
 The controller does not hold a queue slot during dependency waits; it
@@ -1049,8 +1058,20 @@ d2b component except through the standard fd-inherited interfaces.
 
 ### 16.2 providerPhase
 
-`Guest.status.providerPhase` is a bounded string carrying backend lifecycle
-detail. Transitions are controlled by the controller only:
+D088 status layering is normative: the controller populates the Guest
+ResourceType-common `status.resource` with runtime readiness, capabilities,
+observed lifecycle phase, bootstrap readiness, and active process count in the
+same shape as sibling Guest runtime providers. QEMU media-specific QMP/runner
+lifecycle detail, including `providerPhase`, lives only in
+`status.provider.details` with `providerRef: Provider/runtime-qemu-media`,
+qualified `schemaId` (`runtime-qemu-media.d2b.io/Guest/status`), `schemaVersion`,
+and `observedProviderGeneration`. Controller status writes include all present
+layers atomically in one status mutation; shared fields are never duplicated
+into `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
+registered and signed in the Provider manifest.
+
+`status.provider.details.providerPhase` is a bounded string carrying backend
+lifecycle detail. Transitions are controlled by the controller only:
 
 | providerPhase | Meaning |
 | --- | --- |

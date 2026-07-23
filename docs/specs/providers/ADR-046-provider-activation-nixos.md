@@ -181,18 +181,29 @@ spec:
 ```yaml
 status:
   phase: Pending                   # common framework phase; see §4.4
-  activationDetail: planning       # typed provider-specific detail enum; see §4.3.1
   conditions: []                   # common Condition list
   outcome:
     code: null                     # bounded outcome code on terminal phase
     message: null                  # bounded operator-visible message; no paths/digests
   lastReconciledAt: "2026-07-22T12:00:00Z"
   observedGeneration: 1
+  resource:
+    activationDetail: planning     # typed NixosGeneration detail enum; see §4.3.1
 ```
+
+Per D088, `NixosGeneration` status uses the universal `ResourceStatus` base at
+top-level `status.*`; activation-specific typed fields are the
+ResourceType-common `status.resource` object for
+`activation-nixos.d2b.io.NixosGeneration`. Optional `status.provider` carries
+only implementation-only observation (`providerRef`, qualified immutable
+`schemaId`, semver `schemaVersion`, numeric `observedProviderGeneration`,
+strict unknown-field-denied redacted `details` ≤32 KiB registered/signed in the
+Provider manifest); shared fields are never duplicated there. The controller
+writes all present layers atomically in one status mutation.
 
 #### 4.3.1 activationDetail enum
 
-`activationDetail` is a typed, bounded provider-specific detail field. It
+`activationDetail` is a typed, bounded resource detail field. It
 carries provider-internal progress that the common `phase` does not encode.
 Operators use it to distinguish intermediate states within a phase.
 
@@ -207,7 +218,7 @@ Operators use it to distinguish intermediate states within a phase.
 | `rolled-back` | `switch` mode with `priorGenerationRef`: rollback activation completed; prior generation superseded |
 | `superseded` | A newer generation has become active for the same `executionRef`; this generation is now historical |
 
-`activationDetail` is a status field only. It never appears in spec.
+`activationDetail` is a `status.resource` field only. It never appears in spec.
 
 ### 4.4 Phase transitions
 
@@ -402,9 +413,10 @@ the target execution context after restart.
 Status is observation only. The optimistic status writer records only bounded,
 redacted, revisioned status fields and material changes; it never stores
 secrets, authority-conferring handles, host paths, argv/env, PIDs, unit names,
-store paths, raw command output, large blobs, or unbounded collections. Oversize
-status is rejected with `status-oversize` and restart recovery re-verifies the
-status against external reality before treating it as current.
+store paths, raw command output, terminal/clipboard/notification bytes, large
+blobs, or unbounded collections. Oversize status is rejected with
+`status-oversize` and restart recovery re-verifies the status against external
+reality before treating it as current.
 
 There is no controller state mount, identity-only state layout principal,
 migration worker, Provider state reset/destroy path, or bootstrap state-Volume

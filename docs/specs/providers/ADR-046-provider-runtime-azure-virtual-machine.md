@@ -479,7 +479,7 @@ counters, closed-enum error detail) lives in `status`/the core Operation ledger
 | Watch selectors | `type=Guest, spec.providerRef=Provider/runtime-azure-virtual-machine` |
 | Dependency aliases | `credential` → `spec.config.armCredentialRef` |
 | Internal service | `d2b.azure-vm.controller.v1` |
-| Status authority | `update-status` authorized for all Guest resources with this Provider; writes common `Guest.status.phase` + typed `providerPhase` detail |
+| Status authority | `update-status` authorized for all Guest resources with this Provider; writes top-level `status.phase`, common Guest `status.resource`, and typed Azure `status.provider.details` atomically |
 | State Volume | one guest-local **sealed** Provider state Volume (created by core ProviderDeployment before first Process start from the controller `stateNamespaces` descriptor) holding only the secret PSK/admission/enrolled private recovery material that cannot enter status; ARM operation/idempotency and non-secret observed cloud state live in `Guest.status`/the core Operation ledger (D087); controller consumes required view dirfd only; does not own/create/reconcile the Volume; `sensitivityClass: private`; Nix-preprovisioned `User/azure-vm-controller` layout principal |
 | Reconcile concurrency | 4 concurrent Guest resources |
 | Maximum pending | 64 Guest resources |
@@ -693,10 +693,13 @@ assertion. Does not expose ARM URLs to test assertions.
 `Pending | Ready | Succeeded | Degraded | Failed | Deleted | Unknown`.
 
 The controller is the **authorized `update-status` writer** for all Guest
-resources with `providerRef = Provider/runtime-azure-virtual-machine`. It
-writes both common `phase` and `providerPhase` detail via `UpdateStatus`.
-Core aggregates Provider resource status (the Provider's own component
-status, not per-Guest status).
+resources with `providerRef = Provider/runtime-azure-virtual-machine`. Per D088
+it writes the top-level common `phase`, Guest ResourceType-common
+`status.resource`, and Azure-specific `status.provider.details` in one atomic
+`UpdateStatus`. Core aggregates Provider resource status (the Provider's own
+component status, not per-Guest status). Shared fields are never duplicated into
+`status.provider`; the strict, ≤32 KiB, redacted extension schema is registered
+and signed in the Provider manifest.
 
 `Deleted` is a terminal event-only phase; the resource row is removed after
 the audit record is appended post-commit (core deletion contract).
@@ -977,6 +980,14 @@ This Provider declares no relay credential reference in `spec.config`.
 
 ### Guest.status extensions
 
+Azure VM-specific ARM/session phase and opaque non-authorizing operation or
+enrollment digests live only in `status.provider.details` with `providerRef:
+Provider/runtime-azure-virtual-machine`, qualified `schemaId`
+(`runtime-azure-virtual-machine.d2b.io/Guest/status`), `schemaVersion`, and
+`observedProviderGeneration`. Guest runtime readiness, capabilities, observed
+lifecycle phase, bootstrap readiness, and active process count are promoted to
+`status.resource` and remain identical to sibling Guest runtime providers.
+
 ```yaml
 status:
   phase: Ready
@@ -990,14 +1001,25 @@ status:
     - type: CredentialReady
       status: "True"
       reason: arm-credential-active
-  providerPhase: "Ready"
-  bootstrapReady: true
-  guestIdentityDigest: "sha256:<hex-of-enrolled-noise-static-pubkey>"
-  activeProcessCount: 0
+  resource:
+    observedLifecyclePhase: running
+    runtimeReady: true
+    bootstrapReady: true
+    activeProcessCount: 0
+  provider:
+    providerRef: Provider/runtime-azure-virtual-machine
+    schemaId: runtime-azure-virtual-machine.d2b.io/Guest/status
+    schemaVersion: 1.0.0
+    observedProviderGeneration: 1
+    details:
+      providerPhase: Ready
+      guestIdentityDigest: sha256:<hex-of-enrolled-noise-static-pubkey>
+      azureOperationHandleDigest: sha256:<bounded-hex>
 ```
 
 No ARM resource ID path, ARM resource URI, cloud subscription/tenant IDs,
-poll URLs, PSK material, or Noise key material appear in status.
+poll URLs, PSK material, Noise key material, or raw operation handles appear in
+status.
 
 ### Stable error codes
 
@@ -1246,7 +1268,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `d2b-realm-provider/src/conformance.rs`; main `a1cc0b2d`: `d2b-provider-toolkit/src/reconciler_loop.rs` |
 | Reuse action | Copy/adapt main toolkit; adapt conformance shape |
 | Destination | `src/controller/{mod.rs,lifecycle.rs,idempotency.rs}` |
-| Detailed design | Non-blocking reconcile: `start_*(...)` → persist `AzureOperationHandle` → `requeue-at`; `poll_lro` on subsequent ticks; controller as authorized `update-status` writer for Guest resources; finalizer held until ARM delete confirmed; common `phase` + `providerPhase` written atomically |
+| Detailed design | Non-blocking reconcile: `start_*(...)` → persist `AzureOperationHandle` → `requeue-at`; `poll_lro` on subsequent ticks; controller as authorized `update-status` writer for Guest resources; finalizer held until ARM delete confirmed; top-level `phase`, `status.resource`, and Azure `status.provider.details.providerPhase` written atomically |
 | Validation | `tests/lifecycle_hermetic.rs`; `tests/conformance.rs` |
 | Removal proof | Old `WorkloadProvider::provision`/`deprovision` paths retired |
 

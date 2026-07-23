@@ -270,6 +270,7 @@ in any of them and remain `ADR-only`.
 | CLI dynamic Provider-projection discovery with bounded deadline/size | `ADR-only` | Yes — SPIKE-13 |
 | Clean v3 reset/cutover (no v2 alias dispatch, fresh Zone bootstrap) | `ADR-only` | Yes — SPIKE-14 |
 | Representative local/cloud/interaction Provider end-to-end composition | `ADR-only` | Yes — SPIKE-15 |
+| Three-layer status shape: schema parity across implementations, base-only projection, extension versioning/unknown-field | `ADR-only` | Yes — SPIKE-16 |
 | Current v3 storage/DAG/pidfd/spawn_runner/router files exist and pass their own tests | `implemented-and-reachable`/`production-reachable` for current role (E4) | No — already evidenced |
 
 ## Mandatory disposable spike catalog
@@ -523,6 +524,22 @@ performed by this documentation-only spec.
 | Failure interpretation | A composition that only reaches Ready by adding a code path not already covered by SPIKE-01 through SPIKE-14 is itself a finding: it means the feasibility catalog is incomplete for that composition, and the missing capability must be added to this catalog (via a spec revision) before the corresponding production work item is scheduled, per anti-claim rule 7 ("no unresolved entries") applied prospectively. A metric-4 RSS miss revises the per-Zone footprint budget or the number of Zones assumed to co-reside on one host, never the individual Zone target already fixed by `ADR-046-resource-store-redb`. |
 | Affected decisions/work items | D006, D007, D008, D043, D044, D047, D048, D076; every Guest/Volume/Credential/interaction Provider dossier's own implementation work items, and the core bootstrap work items in `ADR-046-components-processes-and-sandbox`. |
 | Cleanup | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce compositions (a), (b), and (c) against real (non-fake) Zone/store/bus/broker code, at which point this spike's role — proving the fakes compose without a missing capability — is fully subsumed. |
+| Status | Specified — not yet executed. |
+
+### SPIKE-16 — three-layer status shape: schema parity, base-only projection, extension versioning
+
+| Field | Value |
+| --- | --- |
+| Hypothesis | The frozen three-layer status shape (D088) — universal `ResourceStatus` base + ResourceType-common `status.resource` + optional Provider-specific `status.provider` — supports (a) identical `status.resource` shape across multiple implementations of one ResourceType; (b) a generic base-only consumer (universal base + `status.resource`) that reads/watches successfully while ignoring an absent, unknown, or version-mismatched `status.provider`; (c) strict per-layer bounds and signed/registered `status.provider.details` validation with unknown-field denial; and (d) an atomic single-mutation write of all present layers, with no shared field duplicated across provider extensions. |
+| Minimal disposable artifact | `proofs/status-shape-spike/` — an in-process fake resource store (a `HashMap` oracle, not real redb) with a registered extension-schema table; two fake `Guest` implementations (`runtime-cloud-hypervisor`, `runtime-azure-container-apps`) each writing the same `status.resource` and their own `status.provider.details`; a fake base-only consumer reading only universal + `status.resource`. |
+| Inputs | (a) two Guest implementations writing identical `status.resource` runtime-readiness/capability fields plus distinct `status.provider.details`; (b) a `status.provider` with an unregistered `schemaId`; (c) a `status.provider.details` carrying an unknown field; (d) a `status.provider` restating a `status.resource` field; (e) an oversize `details` (>32 KiB); (f) a base-only consumer against each of (a)-(e). |
+| Command/harness | `cargo test --manifest-path proofs/status-shape-spike/Cargo.toml -- --test-threads=1 status_three_layer_shape`. |
+| Metrics | (1) both Guest implementations produce a byte-identical `status.resource` shape for equivalent observed state; (2) base-only consumer reads/watches all cases successfully and never parses `details`; (3) unregistered schema → `status-provider-schema-invalid`; unknown field → rejected; overlap with `status.resource`/base → `status-provider-overlap`; oversize → `status-oversize`; (4) all present layers commit in exactly one status mutation with one expected revision; a forced partial-layer write is rejected. |
+| Pass/fail threshold | All four metrics binary pass; metric (2) base-only compatibility across an unknown/newer `status.provider` is a hard zero-tolerance gate (a base-only consumer must never fail because a Provider extension changed). |
+| Expected resource budget | ≤2 minutes wall time; ≤32 MiB RSS (pure in-memory shape/validation checks). |
+| Failure interpretation | A base-only consumer that fails on an unknown/newer `status.provider`, or two implementations that diverge on `status.resource`, is a severity-blocking finding against D088: the shared field is either mis-placed in a provider extension (must be promoted to `status.resource`) or the base-only projection is not truly provider-neutral. Fixed structurally, never suppressed. |
+| Affected decisions/work items | D027, D028, D037, D088; resource object/API/store/reconcile work items and every Provider dossier's status-schema work item. |
+| Cleanup | Deleted once the real resource-contract crate (`packages/d2b-contracts`) and the provider conformance kit reach equal schema-parity, base-only-projection, and extension-version test coverage. |
 | Status | Specified — not yet executed. |
 
 ## Implementation validation — how a spike is retired

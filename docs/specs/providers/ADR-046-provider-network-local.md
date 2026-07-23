@@ -516,20 +516,38 @@ and halts reconciliation until the operator adjusts `networkName`.
 
 ### 6.3 Network status schema
 
+D088 status layering is normative: the controller populates the Network
+ResourceType-common `status.resource` with network readiness, fabric readiness,
+and attachment readiness in the same provider-neutral shape read by all generic
+Network consumers. Local bridge/firewall/config observations, including bounded
+firewall and config-volume digests, live only in `status.provider.details` with
+`providerRef: Provider/network-local`, qualified `schemaId`
+(`network-local.d2b.io/Network/status`), `schemaVersion`, and
+`observedProviderGeneration`. Controller status writes include all present layers
+atomically in one status mutation; shared fields are never duplicated into
+`status.provider`, and the strict, ≤32 KiB, redacted extension schema is
+registered and signed in the Provider manifest.
+
 ```yaml
 status:
   observedGeneration: 1
   phase: Ready          # Pending|Ready|Degraded|Failed|Deleted|Unknown
   conditions: []
   lastReconciledAt: "2026-07-22T00:00:00Z"
-  network:
+  resource:
     # Per-workload attachment phases — opaque phase only; no raw IfName or IP
     attachments:
       - executionRef: Guest/corp-vm
         phase: Ready                          # Pending|Ready|Degraded|Absent
-    firewallDigest:  "<hex-sha256>"           # SHA-256 of applied inet-d2b table; drift reference
     fabricReady: true                         # bridges created and Ready
-    configVolumeRevisionDigest: "<hex>"       # digest of last committed config Volume content
+  provider:
+    providerRef: Provider/network-local
+    schemaId: network-local.d2b.io/Network/status
+    schemaVersion: 1.0.0
+    observedProviderGeneration: 1
+    details:
+      firewallDigest: "<hex-sha256>"          # SHA-256 of applied inet-d2b table; drift reference
+      configVolumeRevisionDigest: "<hex>"     # digest of last committed config Volume content
 ```
 
 **No** raw `ifName`, `bridgeName`, `tapIfName`, `hostUplinkIp`, `netVmUplinkIp`,
@@ -1189,7 +1207,7 @@ Tap creation for workload Guests is performed by **`Provider/runtime-cloud-hyper
 not by the network-local controller.  The network-local controller:
 1. Calls `NetworkEffectPort.declare_attachment_tap()` to record the attachment intent
    and receive an `AttachmentHandle`;
-2. Stores the handle in `Network.status.network.attachments[]`;
+2. Stores the handle in `Network.status.resource.attachments[]`;
 3. Calls `NetworkEffectPort.set_attachment_isolation()` to apply isolated/
    neigh-suppress bridge port flags when the tap is created.
 
@@ -1245,7 +1263,7 @@ The controller calls `NetworkEffectPort.apply_host_firewall()` with a
 - coexists with other firewall managers per `FirewallCoexistencePolicy`
   (Coexist/Refuse/RequireUnmanaged matrix from `d2b-host/src/nftables.rs`).
 
-The returned `FirewallDigest` is stored in `status.network.firewallDigest` for
+The returned `FirewallDigest` is stored in `status.provider.details.firewallDigest` for
 drift detection.  No rule text appears in status, audit, or telemetry.
 
 ### 13.3 Net-VM-side firewall (via config Volume)
@@ -1259,7 +1277,7 @@ chain).
 ### 13.4 Drift detection (observe)
 
 On each observe cycle (`observeInterval: 60s`):
-- `NetworkEffectPort.read_firewall_digest()` → compare against `status.network.firewallDigest`;
+- `NetworkEffectPort.read_firewall_digest()` → compare against `status.provider.details.firewallDigest`;
   if drift, set `FirewallReady=False/nftables-drift` and queue reconcile.
 - `NetworkEffectPort.read_sysctl_state()` → compare against expected IPv6 suppression;
   if drift, queue reconcile.
@@ -1277,7 +1295,7 @@ Observation commits status-only updates without incrementing resource generation
 A workload Guest requests attachment by appearing in `Network.spec.attachments`.
 The network-local controller:
 1. Calls `NetworkEffectPort.declare_attachment_tap()` → receives `AttachmentHandle`.
-2. Stores handle in `Network.status.network.attachments[]` (opaque; no raw IfName).
+2. Stores handle in `Network.status.resource.attachments[]` (opaque; no raw IfName).
 3. Calls `NetworkEffectPort.set_attachment_isolation()` with `isolated: !spec.isolation.allowEastWest`.
 
 The runtime-cloud-hypervisor Provider resolves the `AttachmentHandle` to an FD

@@ -52,8 +52,8 @@ A managed ACA sandbox `Guest` differs from a local VM Guest in the following fix
 | `spec.allowedDomains` | `[system, user]` typical | `[system]` — no local PAM user manager; user domain processes inside the sandbox are not d2b Process resources |
 | Attachment types | virtiofs Volume, local Network bridge | ZoneLink only; no local virtiofsd, no Host-local bridge attachment |
 | Controller location | VMM controller runs on Host | Controller runs inside gateway Guest; Host has no Process from this Provider |
-| `status.bootstrapReady` | Set after VMM + guest-control vsock reach Ready | Set after the enrolled Noise KK ComponentSession from the gateway Guest to the ACA sandbox becomes established and the sandbox passes the Provider's authenticated health check |
-| `status.guestIdentityDigest` | Boot-token + generation digest | SHA-256 hex of `(sandboxId_bytes \|\| providerGeneration_be64 \|\| configFingerprint_bytes)` — not the ACA resource ID string |
+| `status.resource.bootstrapReady` | Set after VMM + guest-control vsock reach Ready | Set after the enrolled Noise KK ComponentSession from the gateway Guest to the ACA sandbox becomes established and the sandbox passes the Provider's authenticated health check |
+| `status.provider.details.guestIdentityDigest` | Provider-specific bounded digest | SHA-256 hex of `(sandboxId_bytes \|\| providerGeneration_be64 \|\| configFingerprint_bytes)` — not the ACA resource ID string |
 | Process/EphemeralProcess | Full d2b Process resource model inside guest | Only controller-managed service processes declared in the Provider's own component templates; arbitrary guest-side processes are not d2b resources |
 
 The controller (inside the gateway Guest) is the exclusive authority for each managed sandbox's lifecycle. No external agent, operator script, or sibling Provider may mutate the ACA sandbox directly. Finalization revokes all active Credential leases, stops the sandbox, and deletes the ACA resource before the `Deleted` revision and row-removal transaction.
@@ -600,7 +600,7 @@ Provisioning → Ready → Running ↔ Idle → Stopping → Stopped
 | `Deleted` | Sandbox no longer exists at ACA |
 | `Unknown` | Lifecycle state cannot be determined; inspect required |
 
-The controller maps `AcaSandboxLifecycle` to `Guest.status.providerPhase` using stable lower-kebab-case labels: `provisioning`, `ready`, `running`, `idle`, `stopping`, `stopped`, `failed`, `deleted`, `unknown`.
+The controller maps `AcaSandboxLifecycle` to `Guest.status.provider.details.providerPhase` using stable lower-kebab-case labels: `provisioning`, `ready`, `running`, `idle`, `stopping`, `stopped`, `failed`, `deleted`, `unknown`.
 
 ### 9.2 Core Operation ledger adapter
 
@@ -639,10 +639,10 @@ The `RuntimeAdopt` method reconciles a Guest resource that was created with a pr
 1. Acquire a `Adopt`-purpose credential lease.
 2. Call `find_sandboxes` with the `AcaWorkloadQuery` derived from the current `AcaResourceBinding` (realm/zone ID, workload/guest UID, provider generation, configuration fingerprint).
 3. If exactly one candidate matches by binding: record the observed
-   `AcaSandboxRecord` binding digest in `Guest.status` (bounded, non-secret,
-   reverified), transition sandbox lifecycle to observed state, set
-   `status.bootstrapReady = false` until the enrolled ComponentSession is
-   re-established.
+   `AcaSandboxRecord` binding digest in `Guest.status.provider.details`
+   (bounded, non-secret, reverified), transition sandbox lifecycle to observed
+   state, set `status.resource.bootstrapReady = false` until the enrolled
+   ComponentSession is re-established.
 4. If zero candidates match: the controller proceeds with fresh `RuntimeEnsure`.
 5. If multiple candidates match: set `Guest.status.phase = Degraded` with `reason: ambiguous-adoption`, emit a `critical`-severity bounded audit record (`AuditEventKind::GuestAdoptionAmbiguous`), and requeue. Do not proceed with any candidate.
 
@@ -782,12 +782,24 @@ The controller (`aca-controller`) Process, running inside the gateway Guest, hol
 
 ### 13.1 Guest status exposed fields
 
+D088 status layering is normative: the controller populates the Guest
+ResourceType-common `status.resource` with runtime readiness, capabilities,
+observed lifecycle phase, bootstrap readiness, and active process count in the
+same shape as sibling Guest runtime providers. ACA-specific ARM/session phase
+and opaque non-authorizing sandbox binding digests live only in
+`status.provider.details` with `providerRef: Provider/runtime-azure-container-apps`,
+qualified `schemaId` (`runtime-azure-container-apps.d2b.io/Guest/status`),
+`schemaVersion`, and `observedProviderGeneration`. Controller status writes
+include all present layers atomically in one status mutation; shared fields are
+never duplicated into `status.provider`, and the strict, ≤32 KiB, redacted
+extension schema is registered and signed in the Provider manifest.
+
 | Field | Allowed content | Forbidden content |
 | --- | --- | --- |
-| `status.providerPhase` | One of: `provisioning`, `ready`, `running`, `idle`, `stopping`, `stopped`, `failed`, `deleted`, `unknown` | Azure resource ID, ACA sandbox URL, container name, management ARM path |
-| `status.guestIdentityDigest` | SHA-256 hex of `(sandboxId_bytes \|\| providerGeneration_be64 \|\| configFingerprint_bytes)` | The raw sandbox ID string, container group name, subscription scope |
-| `status.bootstrapReady` | Boolean | Any credential byte or token prefix |
-| `status.activeProcessCount` | Integer count of non-terminal Process resources targeting this Guest | — |
+| `status.provider.details.providerPhase` | One of: `provisioning`, `ready`, `running`, `idle`, `stopping`, `stopped`, `failed`, `deleted`, `unknown` | Azure resource ID, ACA sandbox URL, container name, management ARM path |
+| `status.provider.details.guestIdentityDigest` | SHA-256 hex of `(sandboxId_bytes \|\| providerGeneration_be64 \|\| configFingerprint_bytes)` | The raw sandbox ID string, container group name, subscription scope |
+| `status.resource.bootstrapReady` | Boolean | Any credential byte or token prefix |
+| `status.resource.activeProcessCount` | Integer count of non-terminal Process resources targeting this Guest | — |
 | Condition messages | Bounded stable reason codes (max 256 chars); no dynamic data | Token values, ARM IDs, sandbox hostnames, internal error messages |
 
 ### 13.2 Error codes (stable, bounded)
@@ -1168,7 +1180,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-aca/src/lib.rs`: `AcaWorkloadProvider`, 2841 lines production-reachable; `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs`: `AzureContainerAppsRuntimeProvider`, 2796 lines (test-only at v3 baseline) |
 | Reuse action | REPLACE (old) + ADAPT (main types/traits) |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
-| Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`. Operation ledger persisted to Volume inside gateway Guest. Credential lease acquire/revoke per call. Noise KK enrollment via ZoneLink (from gateway Guest to managed ACA sandbox). `providerPhase` and `guestIdentityDigest` in status; no raw endpoint/path in any status field. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** |
+| Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`. Operation ledger persisted to Volume inside gateway Guest. Credential lease acquire/revoke per call. Noise KK enrollment via ZoneLink (from gateway Guest to managed ACA sandbox). `providerPhase` and `guestIdentityDigest` in `status.provider.details`; no raw endpoint/path in any status field. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** |
 | Integration | Zone ResourceClient → ProviderDeployment → Process launch inside gateway Guest → d2b-bus → deployment service |
 | Data migration | Full reset; no v2 provider state compatibility |
 | Validation | Controller conformance suite; adoption/ambiguity tests; deadline/cancellation matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template`, canonical `sandbox`/`budget`/`networkUsage`/`endpoints`/`readiness`/`restartPolicy` fields, `mounts` with `required: true`, `providerRef: Provider/system-minijail`); ProviderDeployment creates both Processes (controller never self-spawns); no raw endpoint/path in Guest status |

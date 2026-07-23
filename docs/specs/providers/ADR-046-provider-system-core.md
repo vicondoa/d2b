@@ -217,13 +217,26 @@ status:
   startedAt: "2026-07-22T00:00:00Z"
   completedAt: null
   outcome: null
-  capabilities: []        # HostCapabilityClass[] observed
-  kernelRelease: ""       # bounded 64 chars; diagnostic only; not in audit payloads
-  osName: ""              # bounded 128 chars
-  userManagerAvailable: false
-  isolationPosture: null  # null | "none"
-  activeProcessCount: 0
+  resource:
+    capabilities: []        # HostCapabilityClass[] observed
+    kernelRelease: ""       # bounded 64 chars; diagnostic only; not in audit payloads
+    osName: ""              # bounded 128 chars
+    userManagerAvailable: false
+    isolationPosture: null  # null | "none"
+    activeProcessCount: 0
 ```
+
+Per D088, the universal `ResourceStatus` fields remain at top-level
+`status.*`; Host ResourceType-common observation written by system-core lives
+only in `status.resource` and is identical across Host implementations. Any
+future bounded, non-secret system-core-only Host observation must use
+`status.provider` with `providerRef: Provider/system-core`, a qualified
+`schemaId` such as `system-core.d2b.io/Host/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted `details` object registered and signed in the Provider manifest. A
+Host status write updates all present layers atomically in one mutation; shared
+fields are promoted to `status.resource` and never duplicated into
+`status.provider`.
 
 No PID, pidfd, socket path, internal node name, raw diagnostic, cgroup path,
 or host filesystem path appears in public status or audit.
@@ -347,14 +360,25 @@ status:
   phase: Ready          # Pending|Ready|Succeeded|Degraded|Failed|Unknown|Deleted
   conditions: []
   lastReconciledAt: "2026-07-22T00:00:01Z"
-  uid: null             # u32; discovered OS UID; diagnostic; not an authz input
-  gid: null             # u32; discovered primary OS GID
-  homeExists: false
-  shellValid: false
-  sessionManagerAvailable: false
-  groupMembershipVerified: false
-  observedGroups: []    # 0..256 OS group names; max 63 chars each
+  resource:
+    uid: null             # u32; discovered OS UID; diagnostic; not an authz input
+    gid: null             # u32; discovered primary OS GID
+    homeExists: false
+    shellValid: false
+    sessionManagerAvailable: false
+    groupMembershipVerified: false
+    observedGroups: []    # 0..256 OS group names; max 63 chars each
 ```
+
+Per D088, User ResourceType-common observation written by system-core lives only
+in `status.resource`. Any future bounded, non-secret system-core-only User
+observation uses `status.provider` with `providerRef: Provider/system-core`, a
+qualified `schemaId` such as `system-core.d2b.io/User/status`, `schemaVersion` (semver MAJOR.MINOR),
+`observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
+redacted `details` object registered and signed in the Provider manifest. The
+controller writes the universal base, `status.resource`, and any
+`status.provider` layer atomically; shared User fields are never duplicated into
+the Provider extension.
 
 Numeric UIDs and GIDs are diagnostic only and must not be used as authorization
 inputs. Authorization uses the canonical `User/<name>` ResourceRef.

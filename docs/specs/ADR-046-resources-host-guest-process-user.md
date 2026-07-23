@@ -323,6 +323,30 @@ Full field table:
 
 ### Status schema
 
+#### Three-layer status shape (D088)
+
+D088 freezes `Host` status as three layers. The universal `ResourceStatus`
+base (Layer 1) lives at top-level `status` and owns `observedGeneration`,
+`phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, and
+bounded `outcome`. The `Host`-specific status fields documented in this
+section constitute the ResourceType-common `status.resource` (Layer 2) object
+and never restate the universal base. Optional implementation-only observation
+belongs in `status.provider` (Layer 3) with exactly `providerRef`, qualified
+immutable `schemaId`, semver `MAJOR.MINOR` `schemaVersion`, numeric
+`observedProviderGeneration`, and strict, bounded, redacted,
+unknown-field-denied `details`. Generic API, CLI, and controllers MUST consume
+only the base-only projection (`status` base plus `status.resource`).
+Controllers MUST write all present layers atomically in one status mutation with
+one expected revision. D087/D088 mapping is: shared observations go to
+`status.resource`; implementation-specific bounded non-secret observations go to
+`status.provider.details`; secret, large, or private observations go to an
+optional Volume. D088 bounds apply: total status <= 64 KiB, `status.resource` <=
+32 KiB, `status.provider.details` <= 32 KiB, 32 conditions, 64-entry lists/maps,
+and 4 KiB strings; violations use `status-oversize`,
+`status-provider-schema-invalid`, or `status-provider-overlap`.
+
+Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
+
 ```yaml
 status:
   observedGeneration: 1
@@ -490,6 +514,39 @@ rejects unknown top-level `providerSettings` fields not declared by the
 installed Provider's schema.
 
 ### Status schema
+
+#### Three-layer status shape (D088)
+
+D088 freezes `Guest` status as three layers. The universal `ResourceStatus`
+base (Layer 1) lives at top-level `status` and owns `observedGeneration`,
+`phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, and
+bounded `outcome`. The `Guest`-specific status fields documented in this
+section constitute the ResourceType-common `status.resource` (Layer 2) object
+and never restate the universal base. Optional implementation-only observation
+belongs in `status.provider` (Layer 3) with exactly `providerRef`, qualified
+immutable `schemaId`, semver `MAJOR.MINOR` `schemaVersion`, numeric
+`observedProviderGeneration`, and strict, bounded, redacted,
+unknown-field-denied `details`. Generic API, CLI, and controllers MUST consume
+only the base-only projection (`status` base plus `status.resource`).
+Controllers MUST write all present layers atomically in one status mutation with
+one expected revision. D087/D088 mapping is: shared observations go to
+`status.resource`; implementation-specific bounded non-secret observations go to
+`status.provider.details`; secret, large, or private observations go to an
+optional Volume. D088 bounds apply: total status <= 64 KiB, `status.resource` <=
+32 KiB, `status.provider.details` <= 32 KiB, 32 conditions, 64-entry lists/maps,
+and 4 KiB strings; violations use `status-oversize`,
+`status-provider-schema-invalid`, or `status-provider-overlap`.
+
+Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
+
+`Guest` has multiple runtime implementations (`runtime-cloud-hypervisor`,
+`runtime-qemu-media`, `runtime-azure-container-apps`, and
+`runtime-azure-virtual-machine`). Runtime readiness, capability, observed
+lifecycle phase, bootstrap readiness, identity-digest, and active-process
+observations are frozen in `status.resource` and MUST be identical across all
+implementations. Implementation-specific observation belongs only in that
+implementation's `status.provider.details`; shared fields MUST NOT be duplicated
+there.
 
 ```yaml
 status:
@@ -697,6 +754,30 @@ Process-specific fields:
 | `class` | `provider-defined` | `provider-defined` | — | Health check mechanism defined by the Provider template. |
 
 ### Status schema
+
+#### Three-layer status shape (D088)
+
+D088 freezes `Process` status as three layers. The universal `ResourceStatus`
+base (Layer 1) lives at top-level `status` and owns `observedGeneration`,
+`phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, and
+bounded `outcome`. The `Process`-specific status fields documented in this
+section constitute the ResourceType-common `status.resource` (Layer 2) object
+and never restate the universal base. Optional implementation-only observation
+belongs in `status.provider` (Layer 3) with exactly `providerRef`, qualified
+immutable `schemaId`, semver `MAJOR.MINOR` `schemaVersion`, numeric
+`observedProviderGeneration`, and strict, bounded, redacted,
+unknown-field-denied `details`. Generic API, CLI, and controllers MUST consume
+only the base-only projection (`status` base plus `status.resource`).
+Controllers MUST write all present layers atomically in one status mutation with
+one expected revision. D087/D088 mapping is: shared observations go to
+`status.resource`; implementation-specific bounded non-secret observations go to
+`status.provider.details`; secret, large, or private observations go to an
+optional Volume. D088 bounds apply: total status <= 64 KiB, `status.resource` <=
+32 KiB, `status.provider.details` <= 32 KiB, 32 conditions, 64-entry lists/maps,
+and 4 KiB strings; violations use `status-oversize`,
+`status-provider-schema-invalid`, or `status-provider-overlap`.
+
+Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
 
 ```yaml
 status:
@@ -985,6 +1066,30 @@ non-zero, phase becomes `Failed` and the TTL begins at `completedAt`.
 
 ### Status schema
 
+#### Three-layer status shape (D088)
+
+D088 freezes `EphemeralProcess` status as three layers. The universal `ResourceStatus`
+base (Layer 1) lives at top-level `status` and owns `observedGeneration`,
+`phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, and
+bounded `outcome`. The `EphemeralProcess`-specific status fields documented in this
+section constitute the ResourceType-common `status.resource` (Layer 2) object
+and never restate the universal base. Optional implementation-only observation
+belongs in `status.provider` (Layer 3) with exactly `providerRef`, qualified
+immutable `schemaId`, semver `MAJOR.MINOR` `schemaVersion`, numeric
+`observedProviderGeneration`, and strict, bounded, redacted,
+unknown-field-denied `details`. Generic API, CLI, and controllers MUST consume
+only the base-only projection (`status` base plus `status.resource`).
+Controllers MUST write all present layers atomically in one status mutation with
+one expected revision. D087/D088 mapping is: shared observations go to
+`status.resource`; implementation-specific bounded non-secret observations go to
+`status.provider.details`; secret, large, or private observations go to an
+optional Volume. D088 bounds apply: total status <= 64 KiB, `status.resource` <=
+32 KiB, `status.provider.details` <= 32 KiB, 32 conditions, 64-entry lists/maps,
+and 4 KiB strings; violations use `status-oversize`,
+`status-provider-schema-invalid`, or `status-provider-overlap`.
+
+Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
+
 EphemeralProcess uses all common status fields plus:
 
 ```yaml
@@ -1149,6 +1254,30 @@ User spec contains no credential material, SSH public key, PAM configuration,
 or authentication token of any kind. Credentials are Credential resources.
 
 ### Status schema
+
+#### Three-layer status shape (D088)
+
+D088 freezes `User` status as three layers. The universal `ResourceStatus`
+base (Layer 1) lives at top-level `status` and owns `observedGeneration`,
+`phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, and
+bounded `outcome`. The `User`-specific status fields documented in this
+section constitute the ResourceType-common `status.resource` (Layer 2) object
+and never restate the universal base. Optional implementation-only observation
+belongs in `status.provider` (Layer 3) with exactly `providerRef`, qualified
+immutable `schemaId`, semver `MAJOR.MINOR` `schemaVersion`, numeric
+`observedProviderGeneration`, and strict, bounded, redacted,
+unknown-field-denied `details`. Generic API, CLI, and controllers MUST consume
+only the base-only projection (`status` base plus `status.resource`).
+Controllers MUST write all present layers atomically in one status mutation with
+one expected revision. D087/D088 mapping is: shared observations go to
+`status.resource`; implementation-specific bounded non-secret observations go to
+`status.provider.details`; secret, large, or private observations go to an
+optional Volume. D088 bounds apply: total status <= 64 KiB, `status.resource` <=
+32 KiB, `status.provider.details` <= 32 KiB, 32 conditions, 64-entry lists/maps,
+and 4 KiB strings; violations use `status-oversize`,
+`status-provider-schema-invalid`, or `status-provider-overlap`.
+
+Mapping convention: within this spec a reference to `status.<field>` denotes the ResourceType-common `status.resource.<field>` unless `<field>` is a universal base field (`observedGeneration`, `phase`, `conditions`, `lastReconciledAt`, `startedAt`, `completedAt`, `outcome`).
 
 ```yaml
 status:

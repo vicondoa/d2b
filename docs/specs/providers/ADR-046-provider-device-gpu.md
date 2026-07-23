@@ -920,6 +920,19 @@ the render-node model).
 
 ### Status shape
 
+Per D088, ResourceType-common Device observation lives in
+`status.resource`: the provider-neutral claim/arbitration/presence base that is
+identical across Device implementations. GPU-specific observations (DRM/render
+node mode and availability, worker refs/readiness, video sidecar and
+wire-contract observations, bounded diagnostics) live only in `status.provider`
+with `providerRef`, qualified `schemaId` `device-gpu.d2b.io/Device/status`,
+`schemaVersion`, `observedProviderGeneration`, and strict bounded redacted
+`details`
+(≤32 KiB, unknown-field-denied). The controller writes all present layers
+atomically in one status mutation; shared fields are never duplicated
+into `status.provider`, and the extension schema is registered and signed in the
+Provider manifest.
+
 ```yaml
 status:
   observedGeneration: 1
@@ -947,14 +960,26 @@ status:
       status: "True" | "False"
       reason: gpu-effect-available | gpu-effect-unavailable
   lastReconciledAt: null
-  device:
+  resource:
     present: true | false | null
     health: healthy | degraded | failed | unknown
     holderRefs: []
     claims: []
     provisionedAt: null
     lastProbedAt: null
-    providerDiagnostic: null  # bounded redacted one-line; never paths/secrets
+  provider:
+    providerRef: Provider/device-gpu
+    schemaId: "device-gpu.d2b.io/Device/status"
+    schemaVersion: "1.0.0"
+    observedProviderGeneration: 1
+    details:
+      gpu:
+        mode: full | render-node
+        renderNodeAvailable: true | false | null
+        workerRefs: []
+        videoWorkerRef: null
+        wireContract: ok | failed | unknown
+        providerDiagnostic: null  # bounded redacted one-line; never paths/secrets
 ```
 
 ### Phase semantics
@@ -1124,14 +1149,16 @@ LaunchTicket and the privileged broker, not a Provider state Volume.
 ### Status-first operational state
 
 Bounded non-secret operational state is written to the owning `Device.status`,
-`Provider.status`, and the core Operation ledger: phase, conditions, observed
-render-node/card availability, claim/arbitration summaries, Process references,
-readiness observations, finalizer progress, restart/adoption observations, and
-wire-contract check results. Status is revisioned, optimistic-status-writer
-controlled, RBAC-readable, redacted, observation-only, bounded, and written only
-on material change. After restart, the controller re-lists Device and Process
-resources, revalidates external DRM/render-node and worker reality, and updates
-status; status never acts as host-mutation or repair authority.
+`Provider.status`, and the core Operation ledger. The common Device
+claim/arbitration/presence summary lives in `status.resource`; GPU-specific
+render-node/card availability, Process references, readiness observations,
+finalizer progress, restart/adoption observations, and wire-contract check
+results live in `status.provider.details.gpu`. Status is revisioned,
+optimistic-status-writer controlled, RBAC-readable, redacted,
+observation-only, bounded, and written only on material change. After restart,
+the controller re-lists Device and Process resources, revalidates external
+DRM/render-node and worker reality, and updates status; status never acts as
+host-mutation or repair authority.
 
 Worker Processes (`gpu-worker`, `render-node-worker`, `video-worker`) declare no
 Provider state Volume and no `/state` mount. Their live fds and process-local

@@ -189,17 +189,32 @@ controller disconnect cannot write success; status becomes Unknown through the
 authorized observer/core rule.
 
 Status is the default durable observation and recovery surface for bounded
-non-secret operational state (D087). `UpdateStatus` is bounded: the resource
-store rejects a status replacement whose total canonical serialized size
-exceeds 64 KiB, whose ResourceType-/provider-specific typed detail exceeds
-32 KiB, or whose condition/list/map cardinality exceeds the frozen limits (see
-`ADR-046-resource-object-model` § Status bounds) with a typed `status-oversize`
-error; the write changes nothing and the caller re-reads and retries. Status
-never carries secrets, authority-conferring handles, private
-path/argv/environment/PID/unit data, terminal/clipboard/CTAP bytes, raw cloud
-error bodies, or high-frequency streams; those stay in their owning surfaces.
-Controllers write status only on a material change in observed state, and never
-treat status as a host-mutation or repair authority.
+non-secret operational state (D087) and has a frozen three-layer shape (D088):
+the universal `ResourceStatus` base, the ResourceType-common `status.resource`
+object, and an optional Provider-specific `status.provider` extension. The
+owning controller writes all present layers in one `UpdateStatus` mutation with
+a single expected revision; the layers never diverge across separate writes.
+
+`UpdateStatus` is bounded and validated per layer: the resource store rejects a
+status replacement whose total canonical serialized size exceeds 64 KiB, whose
+`status.resource` typed detail exceeds 32 KiB, whose `status.provider.details`
+exceeds 32 KiB, or whose condition/list/map cardinality exceeds the frozen
+limits (see `ADR-046-resource-object-model` § Status bounds) with a typed
+`status-oversize` error. A `status.provider` whose `providerRef`/`schemaId`/
+`schemaVersion` is not registered for the installed Provider, or whose `details`
+carries an unknown field, is rejected with `status-provider-schema-invalid`; the
+write changes nothing and the caller re-reads and retries. A `status.provider`
+that restates, overrides, or duplicates a universal or `status.resource` field
+is rejected with `status-provider-overlap`.
+
+Generic API/CLI/controllers request and depend on a **base-only projection**
+(the universal base plus `status.resource`); the optional `status.provider`
+extension is ignored by base-only consumers and never required for a Watch or
+Get to succeed. Status never carries secrets, authority-conferring handles,
+private path/argv/environment/PID/unit data, terminal/clipboard/CTAP bytes, raw
+cloud error bodies, or high-frequency streams; those stay in their owning
+surfaces. Controllers write status only on a material change in observed state,
+and never treat status as a host-mutation or repair authority.
 
 ## OwnerRef authorization
 
@@ -283,6 +298,8 @@ Stable classes include:
 - resource-controller-mismatch;
 - resource-status-owner-mismatch;
 - status-oversize;
+- status-provider-schema-invalid;
+- status-provider-overlap;
 - authorization-denied;
 - revision-expired;
 - backpressure;
