@@ -8,21 +8,21 @@
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owners | `d2b-provider-observability-otel`, `TelemetryService`/`TelemetryState` controllers, telemetry/observability integrator |
+| Owners | `d2b-provider-observability-otel`, `TelemetryService`/`TelemetryBinding` controllers, telemetry/observability integrator |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-primitive-resource-composition`, `ADR-046-components-processes-and-sandbox`, `ADR-046-componentsession-and-bus`, `ADR-046-resources-volume`, `ADR-046-resources-credential`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
 | Supersedes | `ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone) |
 
 ## Purpose
 
 This dossier exhaustively specifies `Provider/observability-otel`: the d2b 3.0
-observability telemetry Provider and its universal cross-Zone service/state
+observability telemetry Provider and its universal cross-Zone service/binding
 pair:
 
 - `observability-otel.d2bus.org.TelemetryService` is the semantic ingest
   capability. The owner-Zone authority instance represents the one
   SigNoz/OTLP ingest service and is the `ResourceExport` target. Each producer
   Zone receives a core-owned local projection of the same type.
-- `observability-otel.d2bus.org.TelemetryState` is per-Zone or per-Guest
+- `observability-otel.d2bus.org.TelemetryBinding` is per-Zone or per-Guest
   producer intent and bounded, non-secret operational status. It references a
   same-Zone `TelemetryService` and owns the edge realization.
 
@@ -47,14 +47,14 @@ not affect authoritative audit.
 
 | Baseline name / symbol | v3 target | Evidence class |
 | --- | --- | --- |
-| `ProcessRole::OtelHostBridge` (`d2b-core/src/processes.rs`) | `Process` resource with `ownerRef: observability-otel.d2bus.org.TelemetryState/<name>`; template `otel-collector` | implemented-and-reachable |
+| `ProcessRole::OtelHostBridge` (`d2b-core/src/processes.rs`) | `Process` resource with `ownerRef: observability-otel.d2bus.org.TelemetryBinding/<name>`; template `otel-collector` | implemented-and-reachable |
 | `RunnerRole::OtelHostBridge` (`d2b-contracts/src/broker_wire.rs`) | ProviderSupervisor launch ticket issued by observability-otel controller; broker `SpawnRunner` retired | implemented-and-reachable |
 | `OtelHostBridgeArgvInputs` (`packages/d2b-host/src/otel_host_bridge_argv.rs`) | native OTLP/gRPC-over-vsock forwarder owned by the Provider; socat argv retired | implemented-and-reachable |
-| `OtelHostBridgeReadiness::{Ready,Pending,Failed}` (`packages/d2bd/src/otel_host_bridge_readiness.rs`) | `TelemetryState` ResourceType-common phase/conditions and bounded Provider status extension | implemented-and-reachable |
+| `OtelHostBridgeReadiness::{Ready,Pending,Failed}` (`packages/d2bd/src/otel_host_bridge_readiness.rs`) | `TelemetryBinding` ResourceType-common phase/conditions and bounded Provider status extension | implemented-and-reachable |
 | `nixos-modules/components/observability/host.nix` `otelRuntimeDir = "/run/d2b/otel"` | `$ZONE_STATE/telemetry/` Volume owned by observability-otel controller | implemented-and-reachable |
 | `nixos-modules/components/observability/host.nix` `hostEgressSocket` | `$ZONE_STATE/telemetry/emitter.sock` datagram socket, owned by the collector process UID | implemented-and-reachable |
-| `nixos-modules/components/observability/stack.nix` `ingressSources` per `vmName` | authority `TelemetryService` plus one producer `TelemetryState` per Zone/Guest; source identity is stamped from `producerRef` | generated-or-eval-contract |
-| `nixos-modules/components/observability/guest.nix` per-VM guest collector | `TelemetryState`-owned edge collector/forwarder children route through the same-Zone `TelemetryService` | generated-or-eval-contract |
+| `nixos-modules/components/observability/stack.nix` `ingressSources` per `vmName` | authority `TelemetryService` plus one producer `TelemetryBinding` per Zone/Guest; source identity is stamped from `producerRef` | generated-or-eval-contract |
+| `nixos-modules/components/observability/guest.nix` per-VM guest collector | `TelemetryBinding`-owned edge collector/forwarder children route through the same-Zone `TelemetryService` | generated-or-eval-contract |
 | `d2b.observability.vmName` / `identityName` Nix options | `d2b.zones.<name>` attr key populates Zone name; `d2b.observability.host.identityName` preserved unchanged | generated-or-eval-contract |
 
 ---
@@ -71,7 +71,7 @@ not affect authoritative audit.
 | Bootstrap role | none; ordinary optional Process only |
 | Core aggregate budget | not counted; optional Provider has its own separate budget |
 | SDK linkage | this crate is the **only** place that depends on `opentelemetry_sdk` and `opentelemetry-otlp` |
-| Qualified ResourceTypes | `observability-otel.d2bus.org.TelemetryService`, `observability-otel.d2bus.org.TelemetryState` |
+| Qualified ResourceTypes | `observability-otel.d2bus.org.TelemetryService`, `observability-otel.d2bus.org.TelemetryBinding` |
 
 ---
 
@@ -82,10 +82,10 @@ packages/d2b-provider-observability-otel/
   src/
     lib.rs                  provider identity + version constants
     config.rs               config schema DTOs and validation
-    controller.rs           TelemetryService/TelemetryState reconciliation
+    controller.rs           TelemetryService/TelemetryBinding reconciliation
     authority.rs            D097 owner proof and uniqueness
     service.rs              authority and imported service-projection semantics
-    state.rs                producer intent, child ownership, and status
+    binding.rs              producer intent, child ownership, and status
     projection.rs           core-owned import projection adapter
     share_adapter.rs        D096 ExportAdapter/ImportAdapter
     collector_bin.rs        collector binary entry point (full OTEL SDK)
@@ -109,7 +109,7 @@ packages/d2b-provider-observability-otel/
     controller_conformance.rs
     provider_state.rs
     config_schema.rs
-    resource_service_state.rs
+    resource_service_binding.rs
     projection_chain.rs
     redaction.rs
   integration/
@@ -131,44 +131,44 @@ Workspace policy rejects a Provider crate missing any of `src/`, `tests/`,
 
 ### edge collector (controller-managed, long-lived Process)
 
-One edge collector realizes each admitted `TelemetryState`. It runs the full
-OTEL SDK and sends only through the State's same-Zone `serviceRef`.
+One edge collector realizes each admitted `TelemetryBinding`. It runs the full
+OTEL SDK and sends only through the Binding's same-Zone `serviceRef`.
 
 | Field | Value |
 | --- | --- |
 | Binary | `d2b-provider-observability-otel-collector` (built from `src/collector_bin.rs`) |
 | Process template name | `otel-collector` |
 | Component type | `service` |
-| cardinality | exactly one per admitted `TelemetryState` |
+| cardinality | exactly one per admitted `TelemetryBinding` |
 | executionRef | derived from the same-Zone `producerRef` and Provider extension |
 | domain | `system` |
-| ownerRef | `observability-otel.d2bus.org.TelemetryState/<name>` |
+| ownerRef | `observability-otel.d2bus.org.TelemetryBinding/<name>` |
 | `managedBy` | `controller` |
 | Restart policy | restart-on-failure with bounded exponential backoff; max 5 restarts in 10 min before `Failed` |
 | SDK linkage | `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry_sdk::export::trace`, `opentelemetry_sdk::metrics` |
 
 **Process responsibilities:**
-1. Owns the State-private `emitter.sock` Unix datagram Endpoint and drains
+1. Owns the Binding-private `emitter.sock` Unix datagram Endpoint and drains
    compact telemetry frames from authorized `BoundedEmitter` instances.
-2. Owns the State-private `otlp.sock` Endpoint for Provider processes that
+2. Owns the Binding-private `otlp.sock` Endpoint for Provider processes that
    embed the full SDK.
 3. Decodes frames and reconstructs the selected OTEL metrics/traces/logs.
 4. Resolves the same-Zone `TelemetryService` named by
-   `TelemetryState.spec.serviceRef` and exports only through its authorized
+   `TelemetryBinding.spec.serviceRef` and exports only through its authorized
    route. It never resolves a remote ResourceRef.
-5. Enforces the State's quotas, redaction/cardinality policy, and
+5. Enforces the Binding's quotas, redaction/cardinality policy, and
    drop/backpressure behavior before sending.
 6. Upserts source identity from the trusted `producerRef` observation;
    incoming self-asserted Zone/Guest identity never overrides that stamp.
 7. Runs optional journald ingestion only when enabled by the strict
-   `TelemetryState.spec.provider.settings` extension.
+   `TelemetryBinding.spec.provider.settings` extension.
 8. Registers the `d2b.observability.v1.SelfMetrics` ComponentSession service on
    d2b-bus (`direction: local`) for `d2b zone doctor` and support bundles.
 
-### vsock-forwarder (long-lived Process, one per Guest State)
+### vsock-forwarder (long-lived Process, one per Guest Binding)
 
-A long-lived Process active for a Guest-scoped `TelemetryState`, launched by
-the observability-otel controller to forward telemetry to that State's edge
+A long-lived Process active for a Guest-scoped `TelemetryBinding`, launched by
+the observability-otel controller to forward telemetry to that Binding's edge
 collector.
 
 | Field | Value |
@@ -176,21 +176,21 @@ collector.
 | Binary | `d2b-provider-observability-otel-forwarder` (built from `src/forwarder_bin.rs`) |
 | Process template name | `otel-vsock-forwarder` |
 | Component type | `worker` (long-lived Process) |
-| cardinality | at most one per Guest-scoped `TelemetryState` |
+| cardinality | at most one per Guest-scoped `TelemetryBinding` |
 | executionRef | Host backing the same-Zone `producerRef` |
 | domain | `system` |
-| ownerRef | `observability-otel.d2bus.org.TelemetryState/<name>` |
+| ownerRef | `observability-otel.d2bus.org.TelemetryBinding/<name>` |
 | `managedBy` | `controller` |
-| Restart policy | restart-on-failure with bounded backoff; desired lifecycle set to `Stopped` on producer/State deletion |
+| Restart policy | restart-on-failure with bounded backoff; desired lifecycle set to `Stopped` on producer/Binding deletion |
 | SDK linkage | none; this binary is a thin vsock ↔ Unix stream relay only |
 
 **Process responsibilities:**
 1. Listens on a privately allocated vsock transport Endpoint.
 2. Accepts OTLP/gRPC from the exact Guest named by `producerRef`.
-3. Forwards frames to the State-private collector Endpoint through a
+3. Forwards frames to the Binding-private collector Endpoint through a
    LaunchTicket; no locator appears in spec/status/audit.
-4. Enforces per-frame bounded size (max 4 MiB), State quota/credit, and timeout.
-5. Stops before the owning State finalizer clears.
+4. Enforces per-frame bounded size (max 4 MiB), Binding quota/credit, and timeout.
+5. Stops before the owning Binding finalizer clears.
 6. Uses no OTEL SDK.
 7. Replaces the socat-based `OtelHostBridgeArgvInputs` relay.
 
@@ -200,7 +200,7 @@ collector.
 
 Provider root config installs the controller and sets only bounded
 installation-wide implementation defaults. Semantic producer intent belongs to
-`TelemetryState`; ingest authority and routing belong to `TelemetryService`.
+`TelemetryBinding`; ingest authority and routing belong to `TelemetryService`.
 No `serviceRef`, `producerRef`, signal selection, quota, policy, Endpoint,
 transport route, token, password, key, URI, CID, port, TLS material, or
 Credential ref may appear in `Provider.spec.config`.
@@ -233,14 +233,14 @@ The signed Provider manifest declares these public qualified ResourceTypes:
 | ResourceType | Scope | Semantic role | Exportability |
 | --- | --- | --- | --- |
 | `observability-otel.d2bus.org.TelemetryService` | one authority in the owner Zone; one core-owned projection in each importing producer Zone | stable SigNoz/OTLP ingest service capability | authority instance is the `ResourceExport` target; projections are never re-exported |
-| `observability-otel.d2bus.org.TelemetryState` | one per Zone or Guest producer | producer intent and bounded operational state | forbidden; it is never a `ResourceExport` target |
+| `observability-otel.d2bus.org.TelemetryBinding` | one per Zone or Guest producer | producer intent and bounded operational status | forbidden; it is never a `ResourceExport` target |
 
 The manifest registers exact base spec/status schema versions and fingerprints
 for both types. The canonical API type IDs use
 `observability-otel.d2bus.org.TelemetryService` and
-`observability-otel.d2bus.org.TelemetryState`; ResourceRefs use
+`observability-otel.d2bus.org.TelemetryBinding`; ResourceRefs use
 `observability-otel.d2bus.org.TelemetryService/<name>` and
-`observability-otel.d2bus.org.TelemetryState/<name>`.
+`observability-otel.d2bus.org.TelemetryBinding/<name>`.
 
 #### TelemetryService base spec (D089)
 
@@ -285,7 +285,7 @@ Authority conditions that are inapplicable to projections are absent, not
 false. Projection loss/revocation sets `ImportBound=False`,
 `RouteReady=False`, and phase `Degraded`.
 
-#### TelemetryState base spec (D089)
+#### TelemetryBinding base spec (D089)
 
 | Field | Type | Required | Bounds/semantics |
 | --- | --- | --- | --- |
@@ -303,7 +303,7 @@ one strict extension:
 
 ```yaml
 provider:
-  schemaId: observability-otel.d2bus.org/TelemetryState/spec
+  schemaId: observability-otel.d2bus.org/TelemetryBinding/spec
   schemaVersion: "1.0"
   settings:
     executionRef: Host/host-system
@@ -326,7 +326,7 @@ The extension is signed, versioned/digested, deny-unknown, bounded, and cannot
 shadow `serviceRef`, `producerRef`, signals, quota, policy, update policy, or
 source identity. It contains no locator or secret.
 
-`TelemetryState.status.resource` contains observed Service and producer
+`TelemetryBinding.status.resource` contains observed Service and producer
 generations, effective signals/quota/policy digests, bounded owned
 Process/Endpoint/Volume refs and readiness summaries, queue occupancy/drop
 counters, last successful export class/time, and D091 currency. Source identity
@@ -335,11 +335,11 @@ payload fields are never echoed. `status.provider.details` may carry only
 implementation-specific bounded non-secret collector stage, retry class, and
 closed error code.
 
-Closed State conditions are `ProducerReady`, `ServiceResolved`,
+Closed Binding conditions are `ProducerReady`, `ServiceResolved`,
 `CollectorReady`, `ForwarderReady`, `PrivateEndpointsReady`,
 `SourceIdentityStamped`, `QuotaEnforced`, `BackpressureActive`,
 `ExportAvailable`, `Draining`, and `UpgradeRequired`. Export outage or
-backpressure degrades the State but never fails Zone startup or authoritative
+backpressure degrades the Binding but never fails Zone startup or authoritative
 audit.
 
 #### Ownership, finalizers, and Endpoint boundary
@@ -347,16 +347,16 @@ audit.
 - An authority Service is explicitly configuration/API-owned in the authority
   Zone; the controller never auto-creates a second authority. A projection
   Service is always core-owned with `ownerRef: ResourceImport/<name>`.
-- A State may be configuration-owned or owned by its same-Zone producer. Every
+- A Binding may be configuration-owned or owned by its same-Zone producer. Every
   edge collector/forwarder Process, runtime sockets Volume, and private ingest
-  Endpoint has `ownerRef: observability-otel.d2bus.org.TelemetryState/<name>`.
-- Service deletion stops dependent States, revokes exports/import leases, and
+  Endpoint has `ownerRef: observability-otel.d2bus.org.TelemetryBinding/<name>`.
+- Service deletion stops dependent Bindings, revokes exports/import leases, and
   then releases local Endpoint references. Projection deletion is owned by the
   `ResourceImport` finalizer.
-- State deletion stops/drains Processes, revokes private Endpoint leases,
+- Binding deletion stops/drains Processes, revokes private Endpoint leases,
   deletes Endpoints, deletes the runtime Volume after producer exit, and only
-  then clears `observability-otel.d2bus.org/telemetry-state`.
-- `Endpoint` is implementation transport. A State references the Service, never
+  then clears `observability-otel.d2bus.org/telemetry-binding`.
+- `Endpoint` is implementation transport. A Binding references the Service, never
   an Endpoint, for semantic ingest. No local imported Endpoint can substitute
   for a projected `TelemetryService`.
 
@@ -366,10 +366,10 @@ audit.
 | --- | --- |
 | `Provider` (self) | controller watches own resource for config changes |
 | `TelemetryService` | reconcile authority instances; observe core-owned projections without taking import ownership |
-| `TelemetryState` | reconcile producer intent and write layered status |
+| `TelemetryBinding` | reconcile producer intent and write layered status |
 | `ResourceExport` / `ResourceImport` | observe export/import lifecycle, projection ownership, revocation, and D091 propagation |
-| `Endpoint` | create/delete State-private Endpoints; read authority backend/ingest Endpoint readiness |
-| `Process` | create/update/delete State-owned edge collector and forwarder children |
+| `Endpoint` | create/delete Binding-private Endpoints; read authority backend/ingest Endpoint readiness |
+| `Process` | create/update/delete Binding-owned edge collector and forwarder children |
 | `Volume` | create/delete desired runtime socket Volume resources and observe status; `Provider/volume-local` remains the sole filesystem reconciler |
 | `Zone` / `Guest` | resolve and watch `producerRef`; derive trusted source identity |
 | `Host` | resolve extension `executionRef` and producer placement |
@@ -396,10 +396,10 @@ async reconcile loop over d2b-bus/ComponentSession, using the standard toolkit
 
 **Scope.** Core creates only the controller Process from the signed
 `ProviderDeployment` descriptor. The controller reconciles authority
-`TelemetryService` resources and producer `TelemetryState` resources. Core owns
+`TelemetryService` resources and producer `TelemetryBinding` resources. Core owns
 `ResourceImport` and projected-Service base lifecycle; the Provider import
 adapter supplies semantic admission/observation without taking ownership from
-core. The controller writes layered Service/State status, never Provider status.
+core. The controller writes layered Service/Binding status, never Provider status.
 The Process and Volume Providers remain the only reconcilers of their effects.
 
 **Controller watch plan:**
@@ -407,10 +407,10 @@ The Process and Volume Providers remain the only reconcilers of their effects.
 ```text
 watch Provider/observability-otel          # own resource; detect config changes
 watch observability-otel.d2bus.org.TelemetryService/*
-watch observability-otel.d2bus.org.TelemetryState/*
+watch observability-otel.d2bus.org.TelemetryBinding/*
 watch ResourceExport/*, ResourceImport/*   # projection/revocation/currency
-watch Endpoint/*                           # authority and State-private transport
-watch Process/*, Volume/*                  # State-owned realization status
+watch Endpoint/*                           # authority and Binding-private transport
+watch Process/*, Volume/*                  # Binding-owned realization status
 watch Zone/*, Guest/*, Host/*              # producer identity and placement
 ```
 
@@ -436,32 +436,32 @@ watch Zone/*, Guest/*, Host/*              # producer identity and placement
 4. On revocation/ZoneLink loss, revoke credits and set the projection Degraded.
    Reconnect revalidates generation/fingerprint before `Ready`.
 
-**Reconcile flow for `TelemetryState`:**
+**Reconcile flow for `TelemetryBinding`:**
 
 1. Resolve `producerRef` and `serviceRef` in the same Zone; validate signal
    subset and clamp requested quota/policy to the Service/import ceiling.
 2. Derive and pin the trusted source identity from the observed producer.
 3. Create the runtime sockets `Volume`, edge collector `Process`, and private
    collector Endpoints with
-   `ownerRef: observability-otel.d2bus.org.TelemetryState/<name>`. A Guest producer
+   `ownerRef: observability-otel.d2bus.org.TelemetryBinding/<name>`. A Guest producer
    additionally causes one forwarder Process and private vsock Endpoint.
 4. Observe child readiness and atomically write universal,
    ResourceType-common, and Provider status layers. No live effect precedes the
    D090 `CommittedRevisionProof`.
-5. On Service disruption, preserve State identity, bound queue occupancy, apply
+5. On Service disruption, preserve Binding identity, bound queue occupancy, apply
    credit/backpressure/drop policy, and report Degraded without touching audit.
 
 **Reconcile flow on `deletion-requested`:**
 
-1. State: reject new producer sessions; drain bounded queues; stop forwarder then
+1. Binding: reject new producer sessions; drain bounded queues; stop forwarder then
    collector; wait for Process finalizers; revoke/delete private Endpoints;
-   delete the runtime Volume and wait for volume-local; clear State finalizer.
-2. Authority Service: stop dependent local States; quiesce new imports; let the
+   delete the runtime Volume and wait for volume-local; clear Binding finalizer.
+2. Authority Service: stop dependent local Bindings; quiesce new imports; let the
    `ResourceExport` finalizer revoke remote leases; release Endpoint refs; clear
    Service finalizer. It never deletes a separately owned backend.
-3. Projection Service: the `ResourceImport` finalizer stops local State
+3. Projection Service: the `ResourceImport` finalizer stops local Binding
    consumers, releases the remote lease, deletes the projection, then clears.
-4. Provider: require all owned Services/States gone before controller finalizer
+4. Provider: require all owned Services/Bindings gone before controller finalizer
    clears. Core commits the Deleted-phase revision and post-commit
    `ResourceMutation` audit record.
 
@@ -475,9 +475,9 @@ conformance, finalizer ordering, and D090 commit-before-effect.
 
 ## Volume: telemetry socket directory
 
-The controller creates one desired runtime `Volume` per `TelemetryState`;
+The controller creates one desired runtime `Volume` per `TelemetryBinding`;
 `Provider/volume-local` alone realizes its layout, ACL, quota, and cleanup. The
-Volume is a State-owned ephemeral child, not Provider durable state.
+Volume is a Binding-owned ephemeral child, not Provider durable state.
 
 ### Exact Volume ResourceSpec
 
@@ -487,12 +487,12 @@ type: Volume
 metadata:
   name: observability-otel--work--sockets--host-system
   zone: work                       # Zone name resolved at runtime
-  ownerRef: observability-otel.d2bus.org.TelemetryState/work
+  ownerRef: observability-otel.d2bus.org.TelemetryBinding/work
   finalizers: []
 spec:
   providerRef: Provider/volume-local
   source:
-    executionRef: Host/host-system  # resolved from State producer/extension
+    executionRef: Host/host-system  # resolved from Binding producer/extension
     settings:
       kind: tmpfs                   # memory-backed; kernel-enforces quota
       sourcePolicyId: observability-otel-sockets-tmpfs
@@ -584,7 +584,7 @@ ProviderStateSet(zone, "observability-otel") =
 ```
 
 `Provider/observability-otel` declares **no** Provider state Volume; its
-`ProviderStateSet` is empty. `TelemetryState` is a public producer-intent
+`ProviderStateSet` is empty. `TelemetryBinding` is a public producer-intent
 ResourceType, not a `ProviderState` or Volume alias. Edge collectors carry no
 durable data across restarts: telemetry is exported through the same-Zone
 Service, and the authority backend owns metrics/traces by construction. Its
@@ -613,7 +613,7 @@ ProviderStateSet.
   and none is shared with the runtime `sockets` Volume (`kind: tmp`) or with a
   forwarder worker Process.
 - `Volume` is not a Provider-defined ResourceType. The controller may create a
-  desired State-owned runtime Volume, but never performs Volume effects.
+  desired Binding-owned runtime Volume, but never performs Volume effects.
 - The controller re-derives collector readiness from live `status` observation
   after restart and reverifies against the running process, treating `status`
   as observation, never authority (D087).
@@ -621,13 +621,13 @@ ProviderStateSet.
 
 ## Canonical Process templates
 
-The `TelemetryState` controller creates edge collector Processes and, for
-Guest-scoped States, forwarder Processes. Both use `providerRef:
+The `TelemetryBinding` controller creates edge collector Processes and, for
+Guest-scoped Bindings, forwarder Processes. Both use `providerRef:
 Provider/system-minijail`. The mount uses the named view declared in the
-State-owned Volume spec. No executable path, UID/GID, host path, or raw
+Binding-owned Volume spec. No executable path, UID/GID, host path, or raw
 capability appears in these specs; system-minijail compiles the sandbox.
 
-### otel-collector Process (dynamic; created per TelemetryState)
+### otel-collector Process (dynamic; created per TelemetryBinding)
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -635,11 +635,11 @@ type: Process
 metadata:
   name: observability-otel--work--collector
   zone: work
-  ownerRef: observability-otel.d2bus.org.TelemetryState/work
+  ownerRef: observability-otel.d2bus.org.TelemetryBinding/work
   finalizers: []
 spec:
   providerRef: Provider/system-minijail
-  executionRef: Host/host-system         # resolved from State producer/extension
+  executionRef: Host/host-system         # resolved from Binding producer/extension
   domain: system
   userRef: User/observability-otel-system
   processClass: service
@@ -681,9 +681,9 @@ spec:
     resetAfter: "600s"
 ```
 
-### otel-vsock-forwarder Process (dynamic; created per Guest TelemetryState)
+### otel-vsock-forwarder Process (dynamic; created per Guest TelemetryBinding)
 
-One instance per admitted Guest-scoped State. `<guest-uid-short>` is a stable
+One instance per admitted Guest-scoped Binding. `<guest-uid-short>` is a stable
 opaque short ID derived from the Guest UID; it is not the Guest name.
 
 ```yaml
@@ -692,7 +692,7 @@ type: Process
 metadata:
   name: observability-otel--fwd-<guest-uid-short>
   zone: work
-  ownerRef: observability-otel.d2bus.org.TelemetryState/dev-vm
+  ownerRef: observability-otel.d2bus.org.TelemetryBinding/dev-vm
   finalizers: []
 spec:
   providerRef: Provider/system-minijail
@@ -746,11 +746,11 @@ from the Guest, relay to `otlp.sock` in the Volume mount, enforce size bounds
 ## Endpoint resources (D092)
 
 `Provider/observability-otel` declares standard `Endpoint` base-schema
-conformance. Authority backend/ingest transport and State-private collector or
+conformance. Authority backend/ingest transport and Binding-private collector or
 forwarder transport are owned `Endpoint` resources with `producerRef`; they are
 not inline `Process.spec` fields. An ordinary telemetry producer references
-`TelemetryState.spec.serviceRef`, never an Endpoint, as its semantic capability.
-Only the Service/State controller, its exact child Processes, and
+`TelemetryBinding.spec.serviceRef`, never an Endpoint, as its semantic capability.
+Only the Service/Binding controller, its exact child Processes, and
 `ResourceExport.endpointRef` resolve Endpoints for implementation transport.
 
 Endpoint spec/status/CLI/audit/telemetry never include raw socket paths, CIDs,
@@ -771,7 +771,7 @@ type: Endpoint
 metadata:
   name: observability-otel-work-bounded-emitter-ingest
   zone: work
-  ownerRef: observability-otel.d2bus.org.TelemetryState/work
+  ownerRef: observability-otel.d2bus.org.TelemetryBinding/work
 spec:
   providerRef: Provider/observability-otel
   producerRef: Process/observability-otel--work--collector
@@ -799,7 +799,7 @@ type: Endpoint
 metadata:
   name: observability-otel-work-otlp-ingest
   zone: work
-  ownerRef: observability-otel.d2bus.org.TelemetryState/work
+  ownerRef: observability-otel.d2bus.org.TelemetryBinding/work
 spec:
   providerRef: Provider/observability-otel
   producerRef: Process/observability-otel--work--collector
@@ -827,7 +827,7 @@ type: Endpoint
 metadata:
   name: observability-otel-vsock-ingest-<guest-uid-short>
   zone: work
-  ownerRef: observability-otel.d2bus.org.TelemetryState/dev-vm
+  ownerRef: observability-otel.d2bus.org.TelemetryBinding/dev-vm
 spec:
   providerRef: Provider/observability-otel
   producerRef: Process/observability-otel--fwd-<guest-uid-short>
@@ -895,20 +895,20 @@ When `Provider/observability-otel` is **absent (not installed)**:
 6. Doctor reports `telemetry: { "phase": "unavailable" }` (informational only).
 7. When the Provider is later installed, the emitter resumes draining in FIFO order.
 
-When the Provider is installed but an authored `TelemetryState` edge collector
+When the Provider is installed but an authored `TelemetryBinding` edge collector
 is not yet `Ready`:
 
 1. Same emitter drop behavior as absent (socket does not yet exist).
-2. The controller sets that State `Pending` with `CollectorReady=False`; core
+2. The controller sets that Binding `Pending` with `CollectorReady=False`; core
    may aggregate the installed Provider `Degraded`, but the Zone readiness gate
    remains unblocked because telemetry is optional.
 3. Doctor reports `telemetry: { "phase": "buffering" }`.
-4. When the collector and same-Zone Service become `Ready`, the State returns
+4. When the collector and same-Zone Service become `Ready`, the Binding returns
    to `Ready`.
 
 When a collector, Service route, or exporter fails:
 
-1. The affected `TelemetryState` and any unavailable projected
+1. The affected `TelemetryBinding` and any unavailable projected
    `TelemetryService` become `Degraded`; core may aggregate Provider phase
    `Degraded`.
 2. See §Exporter outage for detailed behavior.
@@ -923,9 +923,9 @@ The observability-otel controller does **not** write Provider status.
 
 Per D088, core writes the Provider universal `ResourceStatus` and aggregate
 health. The observability controller writes all present status layers
-atomically for `TelemetryService` and `TelemetryState`. Universal phase,
+atomically for `TelemetryService` and `TelemetryBinding`. Universal phase,
 conditions, timestamps, outcome, and update currency remain top-level;
-provider-neutral Service/State observations live in `status.resource`; only
+provider-neutral Service/Binding observations live in `status.resource`; only
 implementation-specific bounded non-secret details live in
 `status.provider.details`. The strict Provider status schemas are ≤32 KiB,
 deny unknown fields, redacted, signed, and versioned. Shared fields are promoted
@@ -933,7 +933,7 @@ to `status.resource`, never duplicated into the extension.
 
 The Process Provider writes Process-common observation. The Volume Provider
 writes Volume status. Observability reads those statuses and projects bounded
-summaries into its owning State; it does not impersonate either controller.
+summaries into its owning Binding; it does not impersonate either controller.
 
 **Phase derivation:**
 
@@ -941,7 +941,7 @@ summaries into its owning State; it does not impersonate either controller.
 | --- | --- | --- | --- |
 | authority `TelemetryService` | unique authority, backend and ingest Endpoints Ready | authority admitted but dependencies not yet Ready | duplicate/ambiguous authority fails closed; backend/ingest outage degrades |
 | projection `TelemetryService` | import bound, fingerprint/generation current, route credits available | waiting for import | ZoneLink loss/revocation/stale fingerprint degrades; forbidden backend ownership fails |
-| `TelemetryState` | producer and Service Ready, children Ready, quota/source stamp enforced | waiting for Service/children | export outage, queue saturation, or route loss degrades; invalid ownership/schema or exhausted child restart may fail |
+| `TelemetryBinding` | producer and Service Ready, children Ready, quota/source stamp enforced | waiting for Service/children | export outage, queue saturation, or route loss degrades; invalid ownership/schema or exhausted child restart may fail |
 
 The closed conditions are those declared in §ResourceTypes. Condition reasons
 are closed enums (`Starting`, `Ready`, `DependencyUnavailable`,
@@ -957,9 +957,9 @@ D091 currency and upgrade: the observability-otel controller implements
 `UpgradeRequired` rather than being applied in place, while
 non-disruptive changes reconcile normally. These currency fields are
 universal/ResourceType base fields, never `status.provider`. Authority Service
-upgrade drains admitted producer States before recycling its backend/ingest
+upgrade drains admitted producer Bindings before recycling its backend/ingest
 realization. D091 propagates authority → export → import → projected Service →
-TelemetryState → owned children. A State upgrade preserves its UID/spec and
+TelemetryBinding → owned children. A Binding upgrade preserves its UID/spec and
 recycles only its collector/forwarder/private Endpoints/ephemeral Volume.
 Endpoint generations may change without replacing Service identity. Telemetry
 is best-effort and lossy; no payload, secret, path, credential, locator, or
@@ -978,7 +978,7 @@ single-flight priority lane.
 
 **Status-first state.** Collector readiness, route/import stage, bounded
 queue/drop counters, source-stamping result, and closed error classes live in
-Service/State status and the core Operation ledger. No parallel state file or
+Service/Binding status and the core Operation ledger. No parallel state file or
 durable Provider state Volume is permitted. Status is observation, never repair
 authority; restart re-observes Process, Endpoint, Volume, import generation, and
 authority owner proof before reporting Ready.
@@ -1007,7 +1007,7 @@ The collector stamps these resource attributes on all outgoing OTLP data:
 | `d2b.provider` | `observability-otel` | closed Provider name catalog |
 | `d2b.component` | `collector` or `vsock-forwarder` | signed component descriptor |
 
-Before export, the collector derives source identity from the State's observed
+Before export, the collector derives source identity from the Binding's observed
 same-Zone `producerRef` and upserts the protected `d2b.zone`, `vm.name`,
 `vm.env`, `vm.role`, `host.name`, and `source` fields. Self-asserted incoming
 values for those keys are ignored; other allowed
@@ -1085,7 +1085,7 @@ resource attributes only.
 
 The observability-otel Provider does not emit any new audit record classes
 beyond those defined in `ADR-046-telemetry-audit-and-support`. Process lifecycle
-generates standard `ProcessEffect`; Service/State/Export/Import mutations
+generates standard `ProcessEffect`; Service/Binding/Export/Import mutations
 generate `ResourceMutation`; import admission and route lease changes generate
 the standard `RouteAdmission` records. Audit includes bounded ResourceRefs,
 operation/outcome, and closed reason codes, never telemetry payloads, source
@@ -1110,17 +1110,17 @@ has already delivered or raised an error to the SDK):
 1. The OTEL SDK export call returns an error.
 2. `d2b_otel_export_batch_total{outcome="error"}` increments.
 3. `d2b_otel_exporter_failures_consecutive` gauge increments.
-4. The SDK applies bounded retry from the State Provider extension while the
-   State and Service quotas remain authoritative.
+4. The SDK applies bounded retry from the Binding Provider extension while the
+   Binding and Service quotas remain authoritative.
 5. If the SDK exhausts retries, the batch is dropped:
    `d2b_otel_export_batch_total{outcome="dropped"}` increments;
    `d2b_telemetry_drop_total{reason="export_error"}` increments.
-6. If consecutive failures reach the State extension's `failureThreshold`:
-   - Controller writes `ExportAvailable=False` (`ExporterOutage`) on that State.
-   - The State becomes `Degraded`; Service remains independently observed.
+6. If consecutive failures reach the Binding extension's `failureThreshold`:
+   - Controller writes `ExportAvailable=False` (`ExporterOutage`) on that Binding.
+   - The Binding becomes `Degraded`; Service remains independently observed.
    - `d2b zone doctor` reports `telemetry: { "phase": "unavailable" }`.
 7. On next successful export: `d2b_otel_exporter_failures_consecutive` resets
-   to 0; controller clears the State condition and returns it to `Ready` when
+   to 0; controller clears the Binding condition and returns it to `Ready` when
    all other conditions are satisfied.
 
 Zone mutations, reconciliation, process launch, and authoritative audit are
@@ -1128,20 +1128,20 @@ unaffected throughout.
 
 ### Backpressure
 
-When the OTLP SDK queue reaches the lesser of the State's common quota and the
+When the OTLP SDK queue reaches the lesser of the Binding's common quota and the
 extension `maxQueueSize`:
 
 1. `d2b_otel_backpressure_active` gauge is set to 1.
 2. New incoming frames from `emitter.sock` that cannot be enqueued are dropped
    from the emitter ring in FIFO order.
 3. `d2b_telemetry_drop_total{reason="buffer_full"}` increments per dropped frame.
-4. Controller sets `BackpressureActive=True` (`QueueFull`) on the State; import
+4. Controller sets `BackpressureActive=True` (`QueueFull`) on the Binding; import
    credit exhaustion also sets `QuotaSaturated=True` on the projected Service.
-5. The affected State becomes `Degraded` (not `Failed`).
+5. The affected Binding becomes `Degraded` (not `Failed`).
 6. When queue depth drops below `maxQueueSize * 0.75` (75% watermark):
    - `d2b_otel_backpressure_active` is reset to 0.
-   - Controller clears the State/Service backpressure conditions.
-   - The State returns to `Ready` if no other degraded condition remains.
+   - Controller clears the Binding/Service backpressure conditions.
+   - The Binding returns to `Ready` if no other degraded condition remains.
 
 The emitter socket drain loop continues accepting frames during backpressure; it
 simply discards frames that cannot be enqueued rather than blocking.
@@ -1155,16 +1155,16 @@ simply discards frames that cannot be enqueued rather than blocking.
 1. Core installs the Provider and launches only its controller Process from the
    signed `ProviderDeployment`.
 2. The controller observes an authority or projected `TelemetryService`.
-3. For each committed `TelemetryState`, it validates the same-Zone
+3. For each committed `TelemetryBinding`, it validates the same-Zone
    `producerRef`/`serviceRef`, signal subset, quotas, policy, and source stamp.
-4. The controller creates the State-owned runtime Volume, private Endpoints,
+4. The controller creates the Binding-owned runtime Volume, private Endpoints,
    edge collector Process, and Guest forwarder when required.
 5. ProviderSupervisor launches the children. The collector opens its private
    sockets, initializes the OTEL SDK, and resolves the Service route.
 6. For an imported Service, core/import adapter opens the per-import bounded
    encrypted named stream only after fingerprint/generation/lease validation.
 7. Collector begins the drain loop and reports readiness; controller writes
-   State status from observed child and Service status.
+   Binding status from observed child and Service status.
 
 Before step 7, `BoundedEmitter` writes may drop into their bounded rings.
 Zone startup and authoritative audit are unaffected.
@@ -1177,13 +1177,13 @@ On ordered stop (SIGTERM received by the collector binary):
 2. Accept no new writes on `emitter.sock` (close the socket; new writes from
    core processes will fail and increment `d2b_telemetry_drop_total`).
 3. Drain the remaining emitter ring contents; encode and enqueue for OTLP export.
-4. Flush pending SDK export batches up to the strict State extension timeout.
+4. Flush pending SDK export batches up to the strict Binding extension timeout.
 5. After flush completes or timeout expires, exit cleanly.
 6. The owning Process controller receives exit; sets Process `Succeeded` or
    `Failed` based on exit code.
 
 Drain timeout is enforced by the ProviderSupervisor via a SIGKILL if the
-collector does not exit within the bounded State extension drain timeout.
+collector does not exit within the bounded Binding extension drain timeout.
 
 ### Restart
 
@@ -1196,16 +1196,16 @@ On unexpected exit:
 4. Process controller applies bounded exponential backoff restart; max 5 restarts
    in 10 min (per restart spec in the Process template).
 5. Emitter ring continues accumulating frames during restart; controller marks
-   the owning `TelemetryState` `Degraded`.
-6. After max restarts, Process phase becomes `Failed` and the State becomes
+   the owning `TelemetryBinding` `Degraded`.
+6. After max restarts, Process phase becomes `Failed` and the Binding becomes
    `Failed`; optional telemetry still does not block Zone bootstrap.
 
 ### Zone stop
 
 On Zone-level shutdown (all Processes stopped):
 
-1. Core requests deletion of producer States before Services/Provider.
-2. Each State stops forwarder first, drains collector, revokes/deletes private
+1. Core requests deletion of producer Bindings before Services/Provider.
+2. Each Binding stops forwarder first, drains collector, revokes/deletes private
    Endpoints, and deletes the runtime Volume.
 3. Imports release routes and delete projected Services; authority export
    revocation completes before authority Service teardown.
@@ -1236,9 +1236,9 @@ observability-otel component descriptor declares:
 
 | Alias | Bound to | Purpose |
 | --- | --- | --- |
-| `telemetry-service` | State's same-Zone `TelemetryService` | semantic ingest capability; authority or imported projection |
-| `process` | `Provider/system-minijail` | State-owned edge collector/forwarder realization |
-| `volume` | `Provider/volume-local` | State-owned ephemeral socket Volume realization |
+| `telemetry-service` | Binding's same-Zone `TelemetryService` | semantic ingest capability; authority or imported projection |
+| `process` | `Provider/system-minijail` | Binding-owned edge collector/forwarder realization |
+| `volume` | `Provider/volume-local` | Binding-owned ephemeral socket Volume realization |
 
 The `credential` alias is absent. Cross-Zone transport and authentication belong
 to core ZoneLink/ResourceImport routing; authority backend transport/auth belong
@@ -1254,11 +1254,11 @@ claims:
 | --- | --- | --- |
 | `Provider` (self) | `get`, `watch` | controller reads own spec for config changes |
 | `TelemetryService` | `get`, `list`, `watch`, `update-status`, `finalize` | reconcile authority; observe/write semantic status for core-owned projections |
-| `TelemetryState` | `get`, `list`, `watch`, `update-status`, `finalize` | reconcile producer intent and child-first deletion |
+| `TelemetryBinding` | `get`, `list`, `watch`, `update-status`, `finalize` | reconcile producer intent and child-first deletion |
 | `ResourceExport`, `ResourceImport` | `get`, `list`, `watch` | observe export/import binding, revocation, projection, and update currency |
-| `Process` | `get`, `list`, `watch`, `create`, `update`, `delete` | manage State-owned collector/forwarder desired resources |
-| `Endpoint` | `get`, `list`, `watch`, `create`, `update`, `delete` | observe Service endpoints and manage State-private endpoints |
-| `Volume` | `get`, `list`, `watch`, `create`, `delete` | manage State-owned desired runtime Volume; no Volume effects |
+| `Process` | `get`, `list`, `watch`, `create`, `update`, `delete` | manage Binding-owned collector/forwarder desired resources |
+| `Endpoint` | `get`, `list`, `watch`, `create`, `update`, `delete` | observe Service endpoints and manage Binding-private endpoints |
+| `Volume` | `get`, `list`, `watch`, `create`, `delete` | manage Binding-owned desired runtime Volume; no Volume effects |
 | `Zone`, `Guest`, `Host` | `get`, `list`, `watch` | resolve producer identity and placement |
 
 The controller cannot create/update/delete `ResourceExport`, `ResourceImport`,
@@ -1320,23 +1320,23 @@ only the export adapter's transport front door. Every producer Zone declares a
 `ResourceImport` expecting/projecting `TelemetryService`; core creates
 `observability-otel.d2bus.org.TelemetryService/<projection>` with
 `ownerRef: ResourceImport/<name>`.
-`TelemetryState.spec.serviceRef` names that same-Zone projection.
+`TelemetryBinding.spec.serviceRef` names that same-Zone projection.
 
 The projection has no SigNoz backend, backend/ingest Endpoint ownership,
 authority descriptor, or durable state. Core/import adapter routes it to the
 authority over per-import bounded encrypted named streams with exact identity,
 quota, credits, backpressure, session generation, deadline, and cancel.
 Intermediaries see ciphertext; no FD/socket/resource grant crosses a Zone.
-Authority and State controllers enforce the signal schema, trusted
+Authority and Binding controllers enforce the signal schema, trusted
 source-identity stamp, quota, redaction, and cardinality caps. Export removal or
 ZoneLink loss revokes credits/lease and degrades the projected Service and its
-States. Reconnect revalidates generation/fingerprint. A D091 upgrade propagates
-authority → export → import → projection → State and drains producers before
+Bindings. Reconnect revalidates generation/fingerprint. A D091 upgrade propagates
+authority → export → import → projection → Binding and drains producers before
 recycling authority realization.
 
-**Service/State separation.** `TelemetryService` answers “where is the stable
-ingest capability?”; `TelemetryState` answers “what does this producer emit and
-what bounded state is observed?”. A State is never exported. An Endpoint or
+**Service/Binding separation.** `TelemetryService` answers “where is the stable
+ingest capability?”; `TelemetryBinding` answers “what does this producer emit and
+what bounded state is observed in status?”. A Binding is never exported. An Endpoint or
 named stream answers only “how is this realization transported?” and can never
 be used as the imported semantic projection.
 
@@ -1355,7 +1355,7 @@ no OTEL SDK dependency.
 **Explicit gaps (conservative; refined by evidence before final commit).** These
 are recorded as gaps in the current baseline and are NOT claimed as implemented:
 
-- The `TelemetryService`/`TelemetryState` bindings and signed export/import
+- The `TelemetryService`/`TelemetryBinding` resources and signed export/import
   adapter are net-new work grounded in the current bridge/stack.
 - **Retention/sampling options are not actually wired** in the current baseline;
   the dossier's retention/sampling knobs are target design, gated behind the
@@ -1471,7 +1471,7 @@ d2b.zones.work.resources.signoz = {
 
 # Producer intent references the same-Zone projected Service.
 d2b.zones.work.resources.zone-telemetry = {
-  type = "observability-otel.d2bus.org.TelemetryState";
+  type = "observability-otel.d2bus.org.TelemetryBinding";
   spec = {
     providerRef = "Provider/observability-otel";
     serviceRef = "observability-otel.d2bus.org.TelemetryService/signoz";
@@ -1494,7 +1494,7 @@ d2b.zones.work.resources.zone-telemetry = {
     };
     updatePolicy.mode = "manual-disruptive";
     provider = {
-      schemaId = "observability-otel.d2bus.org/TelemetryState/spec";
+      schemaId = "observability-otel.d2bus.org/TelemetryBinding/spec";
       schemaVersion = "1.0";
       settings = {
         executionRef = "Host/host-system";
@@ -1521,7 +1521,7 @@ d2b.zones.work.resources.zone-telemetry = {
 ### Canonical ResourceSpec JSON shapes (Nix bundle output)
 
 The Nix bundle contains the authored authority Service, Export, Import, and
-State. The core-created projection is not configuration-owned. Representative
+Binding. The core-created projection is not configuration-owned. Representative
 canonical shapes:
 
 ```json
@@ -1567,7 +1567,7 @@ canonical shapes:
 }
 ```
 
-The projection has no backend ownership. The State separately carries
+The projection has no backend ownership. The Binding separately carries
 `serviceRef`, `producerRef`, signals, quotas/policy, and its strict Provider
 extension. No shape contains a raw address, socket, CID, port, stream handle,
 credential, or secret.
@@ -1584,13 +1584,13 @@ credential, or secret.
    or carry an authority descriptor; only core may create one under a
    `ResourceImport`.
 4. `ResourceExport.resourceRef`, `exportedType`, and `endpointRef` form the
-   Service → local ingest Endpoint chain. Exporting a State or Endpoint as the
+   Service → local ingest Endpoint chain. Exporting a Binding or Endpoint as the
    semantic telemetry type fails.
 5. `ResourceImport.expectedType` and `projectionType` are both
    `TelemetryService`; an Endpoint projection fails.
-6. State `serviceRef` and `producerRef` resolve in the same Zone; signals are a
+6. Binding `serviceRef` and `producerRef` resolve in the same Zone; signals are a
    non-empty Service subset; quotas/policy satisfy all bounds.
-7. The strict State Provider extension validates `executionRef` locally and
+7. The strict Binding Provider extension validates `executionRef` locally and
    numeric implementation settings; it cannot shadow common fields.
 8. Any raw address, socket path, CID, port, FD, stream handle, Credential ref,
    or secret-like value fails eval.
@@ -1615,7 +1615,7 @@ credential, or secret.
 2. Validates exactly one authority Service owner proof and local Endpoint refs.
 3. Validates Export → authority Service → ingest Endpoint and Import →
    projected Service fingerprints/capabilities.
-4. Resolves each State's same-Zone Service/producer and clamps quota to the
+4. Resolves each Binding's same-Zone Service/producer and clamps quota to the
    admitted Service/import ceiling.
 5. Validates Provider package/schema generation and extension digest.
 6. On failure, rejects the generation before effects with a bounded
@@ -1645,7 +1645,7 @@ larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
 per-test budget.
 
-Service/State schema, ownership, and projection-chain tests use only in-memory
+Service/Binding schema, ownership, and projection-chain tests use only in-memory
 resource fixtures and fake adapters, so they remain fast hermetic tests. Any
 test that launches a real SigNoz/ClickHouse/Keeper process, opens a real vsock
 or ZoneLink/ComponentSession stream, or performs stream encryption/rendezvous is
@@ -1653,34 +1653,34 @@ integration-only.
 
 ### Unit and hermetic Cargo tests (`tests/`)
 
-#### `tests/resource_service_state.rs`
+#### `tests/resource_service_binding.rs`
 
 - Accept one authority `TelemetryService` with local backend/ingest Endpoints
   and the exact D097 external-service descriptor.
 - Reject a second authority, an authority without local Endpoint refs, and a
   projection carrying backend ownership or an authority descriptor.
-- Accept `TelemetryState` with same-Zone `serviceRef`/`producerRef`, signal
+- Accept `TelemetryBinding` with same-Zone `serviceRef`/`producerRef`, signal
   subset, common quota/policy, and strict Provider extension.
-- Reject exporting a State, using an Endpoint as `serviceRef`, moving common
+- Reject exporting a Binding, using an Endpoint as `serviceRef`, moving common
   fields into the extension, unknown extension fields, or quota overflow.
-- Assert State-owned collector/forwarder/Volume/private Endpoints have
-  `ownerRef: observability-otel.d2bus.org.TelemetryState/<name>` and finalizers
+- Assert Binding-owned collector/forwarder/Volume/private Endpoints have
+  `ownerRef: observability-otel.d2bus.org.TelemetryBinding/<name>` and finalizers
   delete child-first.
 
 #### `tests/projection_chain.rs`
 
 - In memory, build authority Service → `ResourceExport.resourceRef`, local
   ingest Endpoint → `ResourceExport.endpointRef`, `ResourceImport` → core-owned
-  projected Service → producer State `serviceRef`.
+  projected Service → producer Binding `serviceRef`.
 - Assert Export/Import expected/projected type is `TelemetryService`, never
   `Endpoint`, and projection owner is exactly `ResourceImport/<name>`.
 - Assert the projection has no backend/ingest Endpoint ownership or authority
   descriptor, while a fake import route reaches the authority.
-- Revoke the export and lose the fake ZoneLink; assert projection and State
+- Revoke the export and lose the fake ZoneLink; assert projection and Binding
   become Degraded, credits are revoked, and reconnect requires matching
   generation/fingerprint.
 - Assert source identity is upserted from `producerRef`, quotas/backpressure are
-  applied at State/import/authority, intermediaries receive only fake
+  applied at Binding/import/authority, intermediaries receive only fake
   ciphertext, and audit authority remains local.
 
 #### `tests/emitter_socket_receive.rs`
@@ -1712,7 +1712,7 @@ integration-only.
 
 - Configure ring capacity to 10 frames (test override).
 - Write 20 frames; assert `d2b_telemetry_drop_total` reaches exactly 10.
-- Assert the owning State transitions to `Degraded` (not `Failed`).
+- Assert the owning Binding transitions to `Degraded` (not `Failed`).
 - Assert Zone startup fixture is not blocked.
 - Assert oldest 10 frames arrive at mock OTLP sink (FIFO eviction).
 
@@ -1745,18 +1745,18 @@ integration-only.
 - Configure a mock OTLP server that returns a gRPC error on all requests.
 - Run the collector drain loop with 50 frames.
 - Assert `d2b_otel_export_batch_total{outcome="error"}` increments on each attempt.
-- Assert OTEL SDK-level batch retry and State quota/backpressure are applied;
+- Assert OTEL SDK-level batch retry and Binding quota/backpressure are applied;
   ZoneLink/import transport retry is outside this unit.
 - Assert `d2b_otel_export_batch_total{outcome="dropped"}` increments when SDK
   retries exhausted.
 - Assert `d2b_otel_exporter_failures_consecutive` gauge increments monotonically.
-- Assert `TelemetryState` condition `ExportAvailable=False`
+- Assert `TelemetryBinding` condition `ExportAvailable=False`
   (`reason: "ExporterOutage"`) after `failureThreshold` failures.
-- Assert State phase transitions to `Degraded` (not `Failed`).
+- Assert Binding phase transitions to `Degraded` (not `Failed`).
 - Assert `d2b_telemetry_drop_total{reason="export_error"}` increments for
   each dropped batch.
 - Restore mock OTLP server to healthy; assert `d2b_otel_exporter_failures_consecutive`
-  resets to 0; assert State `ExportAvailable=True`; assert State returns `Ready`.
+  resets to 0; assert Binding `ExportAvailable=True`; assert Binding returns `Ready`.
 - Assert Zone mutations and audit writes continue unaffected throughout the
   outage period.
 
@@ -1773,14 +1773,14 @@ integration-only.
 - Assert subsequent frames are dropped from the emitter ring in FIFO order.
 - Assert `d2b_telemetry_drop_total{reason="buffer_full"}` increments for each
   dropped frame beyond `maxQueueSize`.
-- Assert State `BackpressureActive=True` (`reason: "QueueFull"`) and projected
+- Assert Binding `BackpressureActive=True` (`reason: "QueueFull"`) and projected
   Service `QuotaSaturated=True` when import credits are exhausted.
-- Assert State phase is `Degraded` (not `Failed`) during backpressure.
+- Assert Binding phase is `Degraded` (not `Failed`) during backpressure.
 - Unblock the mock OTLP server; allow all queued batches to drain.
 - Assert `d2b_otel_backpressure_active` resets to 0 when queue depth drops
   below the 75% watermark.
-- Assert State/Service backpressure conditions clear.
-- Assert State returns to `Ready`.
+- Assert Binding/Service backpressure conditions clear.
+- Assert Binding returns to `Ready`.
 - Assert drain loop continues accepting frames from the socket throughout the
   backpressure period (no socket closure).
 - Assert no audit records or Zone mutations are affected.
@@ -1791,12 +1791,12 @@ integration-only.
 §Nix configuration and resource bundle tests.
 
 - `bundle_is_sorted_canonically`: render Provider, authority Service, Export,
-  Import, and State resources;
+  Import, and Binding resources;
   assert JSON keys at every level are in ascending alphabetical order; assert
   resources are sorted by `(type, name)`.
 - `bundle_digest_is_deterministic`: render the same config twice; assert the
   generation digest round-trips identically.
-- `bundle_contains_no_secret_values`: set a State extension and Service policy;
+- `bundle_contains_no_secret_values`: set a Binding extension and Service policy;
   assert the rendered JSON contains no key named `secretValue`, `password`,
   `token`, `key`, or any value matching a secret pattern.
 - `bundle_schema_validates_against_provider_schema`: assert Provider plus both
@@ -1806,28 +1806,28 @@ integration-only.
 
 **Source:** new; required by standard `d2b-provider-toolkit` conformance suite.
 
-- Drive authority Service, projected Service, and Zone/Guest State reconciliation
+- Drive authority Service, projected Service, and Zone/Guest Binding reconciliation
   with a fake store, fake ProviderSupervisor, and fake import adapter.
-- Assert the State controller creates desired runtime Volume, collector,
-  private Endpoints, and Guest forwarder with State ownership; only
+- Assert the Binding controller creates desired runtime Volume, collector,
+  private Endpoints, and Guest forwarder with Binding ownership; only
   `Provider/volume-local` performs Volume effects.
 - Assert: the collector declares no Provider state Volume; the
   ProviderStateSet query (`ownerRef == Provider/observability-otel`) returns
   zero Volumes.
 - Assert: no cross-component Volume sharing; the runtime sockets Volume view is
   not reachable from any forwarder Process mount outside its declared view.
-- Assert: controller writes Service/State layered status but not Provider status.
+- Assert: controller writes Service/Binding layered status but not Provider status.
 - Assert: controller creates collector and vsock-forwarder `Process` (with `providerRef:
   Provider/system-minijail`, canonical mount to `view: forwarder-write`, and
-  `processClass: worker`) for a committed Guest `TelemetryState`.
+  `processClass: worker`) for a committed Guest `TelemetryBinding`.
 - Assert: forwarder Process spec has `capabilityClasses: []` and
   `startRoot: false`.
 - Assert: forwarder has one owned
   `Endpoint/observability-otel-vsock-ingest-<guest-uid-short>` with
   `producerRef` pointing at the forwarder Process and ownerRef pointing at the
-  State.
+  Binding.
 - Assert: controller handles `deletion-requested` hint: sets desired lifecycle to
-  `Stopped` on State-owned Processes, revokes/deletes private Endpoints, deletes
+  `Stopped` on Binding-owned Processes, revokes/deletes private Endpoints, deletes
   the runtime Volume, and waits for finalizers;
   final deletion uses event-only Deleted-phase revision + post-commit audit.
 - Assert: all mutations use `ResourceMutationBatch` with expected-revision
@@ -1835,7 +1835,7 @@ integration-only.
 - Assert: stale-revision conflicts trigger bounded requeue with backoff.
 - Assert: idempotent reconcile: second reconcile with unchanged state emits no
   additional mutations.
-- Assert Service/State finalizer ordering and D090 commit-before-effect.
+- Assert Service/Binding finalizer ordering and D090 commit-before-effect.
 
 #### `tests/provider_state.rs`
 
@@ -1845,14 +1845,14 @@ integration-only.
   installed; assert `ProviderStateSet(zone, "observability-otel")` is empty (the
   collector declares no state Volume) and no
   `observability-otel--collector--runtime-state--*` Volume exists.
-- `operational_state_in_status`: assert the State's bounded non-secret
+- `operational_state_in_status`: assert the Binding's bounded non-secret
   operational state (readiness, export/backpressure reconcile stage, bounded
   drop/queue counters, closed-enum error detail) is written to the owning
   resource's `status` subresource within the frozen status bounds and carries no
   secret/path/argv/PID/unit content.
 - `sockets_volume_is_state_owned`: assert the runtime sockets Volume
   (`kind: tmp`) exists with
-  `ownerRef: observability-otel.d2bus.org.TelemetryState/<name>` and is not a
+  `ownerRef: observability-otel.d2bus.org.TelemetryBinding/<name>` and is not a
   Provider state Volume.
 - `no_cross_component_volume_sharing`: assert no forwarder Process mount points
   to any state Volume; the sockets Volume view `forwarder-write` covers only the
@@ -1867,10 +1867,10 @@ integration-only.
 
 **Source:** new; adapts `policy_observability.rs` pattern.
 
-- Assert Provider root config rejects misplaced Service/State/export settings.
+- Assert Provider root config rejects misplaced Service/Binding/export settings.
 - Assert authority/projection Service conditional schemas and exact D097
   descriptor.
-- Assert same-Zone State `serviceRef`/`producerRef`, signal subset, and common
+- Assert same-Zone Binding `serviceRef`/`producerRef`, signal subset, and common
   quota/policy bounds.
 - Assert extension `executionRef` format, bounded implementation settings,
   deny-unknown behavior, and no common-field shadowing.
@@ -1902,8 +1902,8 @@ integration-only.
 End-to-end: fake Zone store → observability-otel controller → collector process
 (real binary) → mock OTLP server.
 
-- Bootstrap a local authority `TelemetryService` and Zone `TelemetryState`.
-- Start controller; assert Service and State reach `Ready`.
+- Bootstrap a local authority `TelemetryService` and Zone `TelemetryBinding`.
+- Start controller; assert Service and Binding reach `Ready`.
 - Send 200 mixed frames (metrics, traces, logs) via the emitter socket.
 - Assert mock OTLP server receives all 200 frames, partitioned by signal type.
 - Assert `d2b.zone = "dev"` resource attribute on all received OTLP records.
@@ -1921,8 +1921,8 @@ End-to-end: fake Zone store → observability-otel controller → collector proc
 vsock-forwarder path: Guest → vsock → host forwarder → `otlp.sock` → collector
 → mock OTLP backend.
 
-- Bootstrap a Guest-scoped `TelemetryState` referencing a same-Zone Service.
-- Assert controller creates the State-owned forwarder and private Endpoint.
+- Bootstrap a Guest-scoped `TelemetryBinding` referencing a same-Zone Service.
+- Assert controller creates the Binding-owned forwarder and private Endpoint.
 - Start vsock-forwarder binary; open connection to simulated vsock endpoint.
 - Send 50 OTLP/gRPC frames from the simulated Guest-side collector.
 - Assert mock OTLP server receives all 50 frames.
@@ -1943,10 +1943,10 @@ vsock-forwarder path: Guest → vsock → host forwarder → `otlp.sock` → col
 #### `integration/scenario_real_projection_stream.rs`
 
 - Launch two isolated Zones, a real enrolled ZoneLink/ComponentSession stream,
-  one Service Export/Import, core-owned projected Service, and producer State.
+  one Service Export/Import, core-owned projected Service, and producer Binding.
 - Verify bytes traverse the real bounded encrypted named stream while
   intermediate controllers see ciphertext and no FD/socket crosses the Zone.
-- Revoke/reconnect and verify lease/credit teardown, State/projection Degraded,
+- Revoke/reconnect and verify lease/credit teardown, Binding/projection Degraded,
   then generation/fingerprint revalidation before readiness.
 - Verify authoritative audit remains in the producer Zone.
 
@@ -1960,7 +1960,7 @@ deletion and Zone status.
 - Assert `Provider/observability-otel` receives `metadata.deletionRequestedAt`.
 - Assert `deletion-pending` condition is set on Provider.
 - Assert Zone `pending-cleanup` condition is set; Zone phase is `Degraded`.
-- Assert States are deleted first; controller drains/deletes their owned
+- Assert Bindings are deleted first; controller drains/deletes their owned
   Processes/private Endpoints and desired runtime Volumes.
 - Assert Imports revoke and core deletes projected Services before authority
   Export/Service deletion. No Provider state Volume exists.
@@ -1993,10 +1993,10 @@ Old and new suites never run in parallel indefinitely.
 | --- | --- |
 | Current anchor | `packages/d2b-host/src/otel_host_bridge_argv.rs` (`OtelHostBridgeArgvInputs`, `otel_host_bridge_argv`, vsock forwarding via socat); `packages/d2bd/src/otel_host_bridge_readiness.rs` (`OtelHostBridgeReadiness::{Ready,Pending,Failed}`); `packages/d2b-core/src/processes.rs::ProcessRole::OtelHostBridge`; `packages/d2b-contracts/src/broker_wire.rs::RunnerRole::OtelHostBridge`; `nixos-modules/components/observability/host.nix` (ACL/socket pattern, `scrapeJournal`, `identityName`); `nixos-modules/components/observability/stack.nix` (SigNoz stack, `ingressSources`); `nixos-modules/components/observability/guest.nix` (per-VM guest collector); `packages/d2b-contract-tests/tests/{policy_observability.rs,minijail_relay_otel.rs}` |
 | Evidence class | `otel_host_bridge_argv.rs`, readiness module, `ProcessRole::OtelHostBridge`, `RunnerRole::OtelHostBridge`: implemented-and-reachable. Nix `observability/{host,stack,guest}.nix`: implemented-and-reachable for the v1 daemon pipeline. `d2b-provider-observability-otel` crate: ADR-only. |
-| Behavior retained | Native adaptation of the vsock pattern; readiness state machine mapped to Service/State status; per-source ingress mapped to trusted `producerRef` stamping; ACL/socket pattern; edge retry/queue; SigNoz loopback stack; bounded redaction/cardinality allowlist; audit separation |
-| Required delta | Two qualified public ResourceTypes and signed base/extension schemas; one D097 authority `TelemetryService`; D096 Service Export/Import/projection chain; per-producer `TelemetryState`; State-owned collector/forwarder/private Endpoints/runtime Volume; source stamping; quota/backpressure status; self-metrics; Nix authoring and conformance tests; full OTEL SDK only in the Provider |
-| Reuse path | Adapt `OtelHostBridgeArgvInputs` into State-owned native forwarding; adapt readiness into Service/State conditions; adapt `otelRuntimeDir` into a State-owned desired Volume; adapt `ingressSources` into trusted producer identity and one authority Service; preserve `scrapeJournal`, SigNoz stack, policy tests, and redaction gates |
-| Replacement/deletion | Retire socat runner, old readiness gate, `ProcessRole::OtelHostBridge`, and `RunnerRole::OtelHostBridge` after Service/State and projection-chain parity. Retire per-VM guest collector after State-owned edge children pass. Endpoint remains private transport; no Endpoint projection compatibility alias. |
+| Behavior retained | Native adaptation of the vsock pattern; readiness state machine mapped to Service/Binding status; per-source ingress mapped to trusted `producerRef` stamping; ACL/socket pattern; edge retry/queue; SigNoz loopback stack; bounded redaction/cardinality allowlist; audit separation |
+| Required delta | Two qualified public ResourceTypes and signed base/extension schemas; one D097 authority `TelemetryService`; D096 Service Export/Import/projection chain; per-producer `TelemetryBinding`; Binding-owned collector/forwarder/private Endpoints/runtime Volume; source stamping; quota/backpressure status; self-metrics; Nix authoring and conformance tests; full OTEL SDK only in the Provider |
+| Reuse path | Adapt `OtelHostBridgeArgvInputs` into Binding-owned native forwarding; adapt readiness into Service/Binding conditions; adapt `otelRuntimeDir` into a Binding-owned desired Volume; adapt `ingressSources` into trusted producer identity and one authority Service; preserve `scrapeJournal`, SigNoz stack, policy tests, and redaction gates |
+| Replacement/deletion | Retire socat runner, old readiness gate, `ProcessRole::OtelHostBridge`, and `RunnerRole::OtelHostBridge` after Service/Binding and projection-chain parity. Retire per-VM guest collector after Binding-owned edge children pass. Endpoint remains private transport; no Endpoint projection compatibility alias. |
 | Feasibility proof | `OtelHostBridgeArgvInputs` vsock forwarding proven in the v3 baseline. SigNoz OTLP collector proven operational in `stack.nix`. Unix datagram socket ACL/emitter pattern proven in `host.nix`. `OtelHostBridgeReadiness` state machine proven in `otel_host_bridge_readiness.rs`. OTLP/gRPC client proven by `minijail_relay_otel.rs`. |
 | Future owner | Work items below |
 
@@ -2011,13 +2011,13 @@ Old and new suites never run in parallel indefinitely.
 | Work item ID | `ADR046-otel-001` |
 | Dependency/owner | ADR046-telem-001 (BoundedEmitter crate); W0/W2; telemetry/observability owner |
 | Current source | `packages/d2b-host/src/otel_host_bridge_argv.rs` (`OtelHostBridgeArgvInputs`, `otel_host_bridge_argv`, `OtelHostBridgeArgvError`); `packages/d2bd/src/otel_host_bridge_readiness.rs` (`OtelHostBridgeReadiness`, `otel_host_bridge_read`); `packages/d2b-contracts/src/broker_wire.rs::RunnerRole::OtelHostBridge`; `packages/d2b-core/src/processes.rs::ProcessRole::OtelHostBridge` |
-| Reuse action | adapt (`OtelHostBridgeArgvInputs` vsock logic → native Rust OTLP relay); adapt (`OtelHostBridgeReadiness` → `TelemetryState` conditions); delete-after-cutover (`RunnerRole::OtelHostBridge`, `ProcessRole::OtelHostBridge`) |
-| Destination | `packages/d2b-provider-observability-otel/src/{forwarder_bin,controller,state}.rs` |
-| Detailed design | State-owned forwarder: accept OTLP only from the exact Guest producer, relay through the State-private Endpoint/Volume to its edge collector, enforce bounded frames/quota/session timeout, and use no OTEL SDK. Map readiness to State common status; Process Provider owns launch/pidfd. |
+| Reuse action | adapt (`OtelHostBridgeArgvInputs` vsock logic → native Rust OTLP relay); adapt (`OtelHostBridgeReadiness` → `TelemetryBinding` conditions); delete-after-cutover (`RunnerRole::OtelHostBridge`, `ProcessRole::OtelHostBridge`) |
+| Destination | `packages/d2b-provider-observability-otel/src/{forwarder_bin,controller,binding}.rs` |
+| Detailed design | Binding-owned forwarder: accept OTLP only from the exact Guest producer, relay through the Binding-private Endpoint/Volume to its edge collector, enforce bounded frames/quota/session timeout, and use no OTEL SDK. Map readiness to Binding common status; Process Provider owns launch/pidfd. |
 | Integration | Controller creates vsock-forwarder long-lived `Process` → ProviderSupervisor → system-minijail/systemd launch → vsock socket bind → Guest side connects |
 | Data migration | Full reset; existing socat bridge retired after cutover |
 | Validation | `integration/scenario_obs_zone_forwarding.rs`; adapted `minijail_relay_otel.rs` shape test for Provider-managed runner; assert `RunnerRole::OtelHostBridge` is absent from `d2b-contracts` after removal |
-| Removal proof | Legacy symbols removed only after State ownership/readiness and forwarding integration pass |
+| Removal proof | Legacy symbols removed only after Binding ownership/readiness and forwarding integration pass |
 
 ### ADR046-otel-002
 
@@ -2027,9 +2027,9 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-otel-001 + ADR046-telem-001 + ADR046-provider-001 (Provider toolkit) + resource/Endpoint/Volume contracts; W2; observability owner |
 | Current source | `nixos-modules/components/observability/host.nix` (`otelRuntimeDir`, `hostEgressSocket`, `setfacl` ACL pattern, `scrapeJournal` option, `identityName`); `nixos-modules/components/observability/stack.nix` (`ingressSources`, `vmName`, `receiverGrpcPort`, loopback binding, `signoz.listenPort`) |
 | Reuse action | adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone name; replace socat runner with vsock-forwarder long-lived Process; adapt `ingressSources` per-Zone entry) |
-| Destination | `packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,exporter,controller,service,state}.rs`; updated Nix observability modules |
-| Detailed design | Register both qualified ResourceTypes and strict schemas. Reconcile each State into an edge collector, private Endpoints, runtime Volume, and optional forwarder. Collector links the full OTEL SDK, resolves `serviceRef`, stamps trusted producer identity, and enforces common signals/quota/policy plus strict batching extension. Write Service/State status-first observations; no state file or Provider state Volume. Provider root config remains installation-only. |
-| Integration | `BoundedEmitter` → State-private Endpoint → edge collector/OTEL SDK → same-Zone authority or projected Service → SigNoz |
+| Destination | `packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,exporter,controller,service,binding}.rs`; updated Nix observability modules |
+| Detailed design | Register both qualified ResourceTypes and strict schemas. Reconcile each Binding into an edge collector, private Endpoints, runtime Volume, and optional forwarder. Collector links the full OTEL SDK, resolves `serviceRef`, stamps trusted producer identity, and enforces common signals/quota/policy plus strict batching extension. Write Service/Binding status-first observations; no state file or Provider state Volume. Provider root config remains installation-only. |
+| Integration | `BoundedEmitter` → Binding-private Endpoint → edge collector/OTEL SDK → same-Zone authority or projected Service → SigNoz |
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh per Zone |
 | Validation | `tests/emitter_socket_receive.rs`; `tests/exporter_outage.rs`; `tests/exporter_backpressure.rs`; `integration/scenario_full_pipeline.rs`; adapted `policy_observability.rs` (retain all existing assertions; add new `d2b.zone`, `d2b.provider` allowlist entries) |
 | Removal proof | `guest.nix` per-VM guest collector retired after `integration/scenario_obs_zone_forwarding.rs` passes |
@@ -2043,7 +2043,7 @@ Old and new suites never run in parallel indefinitely.
 | Current source | `nixos-modules/components/observability/host.nix::journaldStorageDir`, `scrapeJournal` option; journald cgroup-path filtering pattern |
 | Reuse action | adapt journald receiver config for per-Zone cgroup filter |
 | Destination | `packages/d2b-provider-observability-otel/src/nix/journald.nix`; `packages/d2b-provider-observability-otel/src/journald.rs` |
-| Detailed design | Per `ADR-046-telemetry-audit-and-support` §journald stdout/stderr ingestion: cgroup filter derived from trusted `producerRef`; redaction drops credential/secret/path fields, `_CMDLINE`, `_EXE`, and `INVOCATION_ID`; the strict `TelemetryState.spec.provider.settings.journald.enable` defaults false. |
+| Detailed design | Per `ADR-046-telemetry-audit-and-support` §journald stdout/stderr ingestion: cgroup filter derived from trusted `producerRef`; redaction drops credential/secret/path fields, `_CMDLINE`, `_EXE`, and `INVOCATION_ID`; the strict `TelemetryBinding.spec.provider.settings.journald.enable` defaults false. |
 | Integration | Collector binary journald receiver config path → cgroup filter expression → OTel Collector journald receiver → redaction filter → OTLP export |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Nix eval test: filter expression set when enabled; assert `_CMDLINE` and `INVOCATION_ID` in drop list; `tests/redaction.rs` for journald field redaction |
@@ -2074,13 +2074,13 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | SigNoz ingest authority (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
 | Reuse action | net-new (implement the signed observability export/import adapter) |
 | Destination | `packages/d2b-provider-observability-otel/src/share_adapter.rs` |
-| Detailed design | Implement the signed adapter: `sys-obs` exports the authority `TelemetryService`, with one referenced local ingest Endpoint as transport; every producer imports a core-owned local `TelemetryService` projection. State `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. |
+| Detailed design | Implement the signed adapter: `sys-obs` exports the authority `TelemetryService`, with one referenced local ingest Endpoint as transport; every producer imports a core-owned local `TelemetryService` projection. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. |
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
 | Data migration | None — full d2b 3.0 reset |
 | Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
 | Removal proof | Not applicable |
 
-### ADR046-otel-006: TelemetryService authority and TelemetryState realization (D096/D097)
+### ADR046-otel-006: TelemetryService authority and TelemetryBinding realization (D096/D097)
 
 | Field | Value |
 | --- | --- |
@@ -2088,13 +2088,13 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-otel-005, ADR046-zone-control-019, ADR046-zone-control-020; observability Provider owner |
 | Current source | `nixos-modules/components/observability/{stack,host,guest}.nix` (SigNoz/ClickHouse/Keeper loopback authority, per-source vsock ingress, source-identity `upsert`, `sending_queue`/`retry_on_failure`, allow-list projection); `nixos-modules/{index,observability-vm}.nix`; `packages/d2b-host/src/{otel_host_bridge_argv,vsock_relay_argv}.rs` (pre-opened vsock fds; broker rejects source VM ≠ obs VM); `packages/d2bd/src/otel_host_bridge_readiness.rs` |
 | Reuse source | Same baseline stack/bridge/readiness symbols; `packages/d2b-provider/src/share_adapter.rs` traits |
-| Reuse action | net-new universal `TelemetryService`/`TelemetryState` pair; adapt existing authority/edge behavior |
-| Destination | `packages/d2b-provider-observability-otel/src/{authority,service,state,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` `TelemetryService` |
-| Detailed design | Implement one D097 authority Service representing the loopback SigNoz stack and referencing its local backend/ingest Endpoints. Core rejects duplicates and adopts by owner proof. Implement core-owned imported Service projections with no backend ownership. Implement per-producer States with common service/producer/signals/quota/policy fields and strict implementation extension; States own/cause edge collector/forwarder/private Endpoints/runtime Volume. Preserve trusted source upsert, retry/queue, bounded cardinality/redaction, audit non-transfer, status-first state, and no OTEL SDK in core. Endpoint is transport only. |
+| Reuse action | net-new universal `TelemetryService`/`TelemetryBinding` pair; adapt existing authority/edge behavior |
+| Destination | `packages/d2b-provider-observability-otel/src/{authority,service,binding,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` `TelemetryService` |
+| Detailed design | Implement one D097 authority Service representing the loopback SigNoz stack and referencing its local backend/ingest Endpoints. Core rejects duplicates and adopts by owner proof. Implement core-owned imported Service projections with no backend ownership. Implement per-producer Bindings with common service/producer/signals/quota/policy fields and strict implementation extension; Bindings own/cause edge collector/forwarder/private Endpoints/runtime Volume. Preserve trusted source upsert, retry/queue, bounded cardinality/redaction, audit non-transfer, status-first state, and no OTEL SDK in core. Endpoint is transport only. |
 | Integration | Ingest authority + export (ADR046-otel-005); core export/import controller and projection lifecycle (ADR046-zone-control-019/020); ComponentSession per-import encrypted streams; d2b-telemetry closed-label metrics |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Fast `resource_service_state.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove separation, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only. |
-| Removal proof | Legacy fixed per-source vsock ingress and old gates are removed only after the Service/State/ComponentSession successor passes; no Endpoint-projection alias or duplicate suite remains. |
+| Validation | Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove separation, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only. |
+| Removal proof | Legacy fixed per-source vsock ingress and old gates are removed only after the Service/Binding/ComponentSession successor passes; no Endpoint-projection alias or duplicate suite remains. |
 
 ---
 
@@ -2104,15 +2104,15 @@ Old and new suites never run in parallel indefinitely.
 
 1. **Provider identity**: `Provider/observability-otel`, crate name, API major version.
 2. **Purpose**: the only place linking `opentelemetry_sdk`; core uses only `BoundedEmitter`.
-3. **ResourceTypes**: authority/projected `TelemetryService` and per-producer `TelemetryState`, including strict schemas/status/conditions.
-4. **Cross-Zone chain**: authority Service → Export plus local ingest Endpoint → Import → core-owned projected Service → State `serviceRef`; Endpoint is never the semantic projection.
+3. **ResourceTypes**: authority/projected `TelemetryService` and per-producer `TelemetryBinding`, including strict schemas/status/conditions.
+4. **Cross-Zone chain**: authority Service → Export plus local ingest Endpoint → Import → core-owned projected Service → Binding `serviceRef`; Endpoint is never the semantic projection.
 5. **D097**: descriptor on the authority Service, one SigNoz ingest, duplicate rejection/adoption/quarantine.
-6. **State intent**: same-Zone Service/producer refs, signals, common quotas/policy, strict Provider extension, and no State export.
-7. **Ownership**: State-owned collector/forwarder/private Endpoints/runtime Volume; projection owned by ResourceImport; child-first finalizers.
+6. **Binding intent**: same-Zone Service/producer refs, signals, common quotas/policy, strict Provider extension, and no Binding export.
+7. **Ownership**: Binding-owned collector/forwarder/private Endpoints/runtime Volume; projection owned by ResourceImport; child-first finalizers.
 8. **Status/update**: status-first bounded non-secret state and D091 authority-to-child propagation; no Provider state Volume.
-9. **Components/placement**: State-owned edge collector and optional Guest forwarder under system-minijail.
+9. **Components/placement**: Binding-owned edge collector and optional Guest forwarder under system-minijail.
 10. **RBAC/security**: minimum claims, zero capabilities, no ambient network/credentials/remote Refs, no Provider-self status write.
 11. **Telemetry policy**: trusted source stamping, signal/quotas/backpressure, redaction/cardinality, and audit non-transfer.
 12. **Startup/lifecycle**: optional Provider never blocks Zone bootstrap; drain/restart/revoke/delete ordering.
-13. **Tests**: fast hermetic Service/State separation and projection-chain tests; real SigNoz and real stream tests integration-only.
+13. **Tests**: fast hermetic Service/Binding separation and projection-chain tests; real SigNoz and real stream tests integration-only.
 14. **Standalone consumption**: Nix artifact registration and authority/producer authoring examples.
