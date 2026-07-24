@@ -37,8 +37,6 @@ Provider-specific desired extension and replaces the former top-level
 `observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
 rather than observed.
 
-Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
-
 **D091 update policy.** The universal base spec carries `spec.updatePolicy` for
 every Device: disruptive changes default to manual, while automatic
 non-disruptive upgrades are permitted by policy. A `spec.provider` extension MAY
@@ -88,7 +86,7 @@ spec:
   inventory:
     selector: {}             # emulated devices carry no physical selector
   provider:
-    schemaId: device-tpm.d2bus.org/spec
+    schemaId: device-tpm.d2bus.org/Device/spec
     schemaVersion: "1.0"
     settings: {}             # Provider-specific settings
 status:
@@ -113,7 +111,7 @@ status:
 | `arbitration` | enum | yes | — | `exclusive` \| `shared` | Whether the device may be simultaneously claimed by more than one holder |
 | `maxConcurrentClaims` | uint | no | 1 | 1–16 | Maximum simultaneous claimants; must equal 1 when `arbitration=exclusive` |
 | `inventory` | object | yes | — | see below | Physical or emulated device selector |
-| `settings` | object | no | `{}` | Provider-specific schema | Provider-validated device configuration |
+| `provider` | object? | no | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional selected-Provider extension envelope (D089). `settings` carries Provider-validated implementation-only device configuration (`<provider>.d2bus.org/Device/spec`); strict deny-unknown, bounded. MUST NOT shadow a base field. |
 
 ### Inventory selector
 
@@ -466,10 +464,10 @@ These invariants are preserved exactly in the device-tpm Provider.
 
 - Full GPU (virtio-gpu, card-node access, VFIO passthrough): always
   `arbitration: exclusive`. Only one Guest may hold a full GPU claim at a time.
-- Render-node-only mode (`settings.renderNodeOnly=true`) may use
+- Render-node-only mode (`spec.provider.settings.renderNodeOnly=true`) may use
   `arbitration: shared` when the Device spec explicitly sets
   `arbitration: shared`. A Device spec with `arbitration: shared` and
-  `settings.renderNodeOnly=false` is rejected at admission. The default
+  `spec.provider.settings.renderNodeOnly=false` is rejected at admission. The default
   arbitration for GPU devices is `exclusive` regardless of mode; operators must
   explicitly opt into shared render-node mode.
 - Gpu and GpuRenderNode claim `kvm`, `dri`, `nvidia-ctl`, `nvidia-uvm`,
@@ -588,9 +586,12 @@ spec:
   maxConcurrentClaims: 1
   inventory:
     selector: {}
-  settings:
-    logLevel: 20
-    startupClear: true
+  provider:
+    schemaId: device-tpm.d2bus.org/Device/spec
+    schemaVersion: "1.0"
+    settings:
+      logLevel: 20
+      startupClear: true
 ```
 
 ### Worker processes
@@ -655,7 +656,13 @@ d2b.zones.<zone>.resources."<vm>-tpm" = {
     providerRef  = "Provider/device-tpm";
     deviceClass  = "emulated";
     arbitration  = "exclusive";
-    settings.startupClear = true;
+    provider = {
+      schemaId = "device-tpm.d2bus.org/Device/spec";
+      schemaVersion = "1.0";
+      settings = {
+        startupClear = true;
+      };
+    };
   };
 };
 ```
@@ -723,8 +730,11 @@ spec:
       vendorId: "1050"
       productId: "0407"
       serial: null
-  settings:
-    env: work
+  provider:
+    schemaId: device-usbip.d2bus.org/Device/spec
+    schemaVersion: "1.0"
+    settings:
+      env: work
 ```
 
 ### Worker processes
@@ -858,8 +868,11 @@ spec:
       vendorId: "1050"
       productId: "0407"
       serial: null
-  settings:
-    vsockPort: 14320
+  provider:
+    schemaId: device-security-key.d2bus.org/Device/spec
+    schemaVersion: "1.0"
+    settings:
+      vsockPort: 14320
 ```
 
 ### Process model
@@ -1032,15 +1045,18 @@ spec:
     selector:
       busClass: drm
       label: host-gpu
-  settings:
-    renderNodeOnly: false
-    videoSidecar: true
-    videoNvidiaDecode: false
-    contextTypes: [virgl, virgl2, cross-domain]
-    displays: [{hidden: true}]
-    egl: true
-    vulkan: true
-    crossDomainTrusted: false
+  provider:
+    schemaId: device-gpu.d2bus.org/Device/spec
+    schemaVersion: "1.0"
+    settings:
+      renderNodeOnly: false
+      videoSidecar: true
+      videoNvidiaDecode: false
+      contextTypes: [virgl, virgl2, cross-domain]
+      displays: [{hidden: true}]
+      egl: true
+      vulkan: true
+      crossDomainTrusted: false
 ```
 
 ### Worker processes
@@ -1052,8 +1068,8 @@ spec:
 | `device-<uid-short>-video` | Process | `crosvm device video-decoder --backend vaapi` | system | Host | Video decode; separate Process, shares Device claim |
 
 Only one of `device-<uid-short>-gpu` and `device-<uid-short>-render-node` is
-active at a time, selected by `settings.renderNodeOnly`. The video Process is
-active only when `settings.videoSidecar=true`.
+active at a time, selected by `spec.provider.settings.renderNodeOnly`. The
+video Process is active only when `spec.provider.settings.videoSidecar=true`.
 
 Process resource names are derived deterministically from the owner Device UID
 (`uid-short` = first 12 hex chars) and a component template from the signed
@@ -1118,10 +1134,14 @@ d2b.zones.<zone>.resources."<vm>-gpu" = {
       busClass = "drm";
       label    = "host-gpu";
     };
-    settings = {
-      videoSidecar      = true;
-      contextTypes      = ["cross-domain" "virgl" "virgl2"];
-      crossDomainTrusted = false;
+    provider = {
+      schemaId = "device-gpu.d2bus.org/Device/spec";
+      schemaVersion = "1.0";
+      settings = {
+        videoSidecar      = true;
+        contextTypes      = ["cross-domain" "virgl" "virgl2"];
+        crossDomainTrusted = false;
+      };
     };
   };
 };
@@ -1281,7 +1301,11 @@ d2b.zones.<zone>.resources.<name> = {
     # inventory.selector.label    = "<stable-label>";  # required for physical
     # inventory.selector.<field>  = ...;               # variant-specific fields only
 
-    settings = {};   # Provider-specific; see Provider settings schema
+    provider = {
+      schemaId = "<provider-name>.d2bus.org/Device/spec";
+      schemaVersion = "1.0";
+      settings = {};   # Provider-specific; see Provider settings schema
+    };
   };
 };
 ```
@@ -1307,8 +1331,8 @@ d2b.zones.<zone>.resources.<name> = {
 committed ResourceTypeSchema (`docs/reference/schemas/v3/device.schema.json`) and
 the per-Provider settings schemas. There is no second bespoke Nix vocabulary:
 `spec` field names, types, bounds, and defaults in Nix are identical to those in
-the schema. A `spec` field absent from the schema fails eval. A `settings` field
-absent from the Provider schema fails eval.
+the schema. A `spec` field absent from the schema fails eval. A
+`spec.provider.settings` field absent from the Provider schema fails eval.
 
 ### Artifact catalog
 
@@ -1342,13 +1366,13 @@ d2b.artifacts.<id> = {
   with `artifact-type-mismatch`.
 
 **Device Provider binary resolution** does not use `artifactId` fields in the
-Device `spec.settings`. The swtpm, swtpm_ioctl, and usbip binaries are
+Device `spec.provider.settings`. The swtpm, swtpm_ioctl, and usbip binaries are
 dependencies bundled inside the `d2b-provider-device-tpm` and
 `d2b-provider-device-usbip` package closures respectively. Their exact
 executable paths and content digests are embedded in the **signed component
 descriptor** shipped inside each Provider's closure; the Provider process
 resolves them at startup without any Device-spec field. No Device Provider
-settings field carries a store path or an `artifactId`.
+`spec.provider.settings` field carries a store path or an `artifactId`.
 
 The four frozen Device Providers are therefore all closed with respect to
 artifact catalog references from the Device resource's spec: the Device spec
@@ -1373,18 +1397,18 @@ check` time against the committed ResourceTypeSchema:
 | Selector contains only fields declared for its `busClass` variant | `selector-unknown-field` |
 | `spec.arbitration=exclusive` ⟹ `spec.maxConcurrentClaims = 1` | `exclusive-max-claims-conflict` |
 | `spec.arbitration=shared` ⟹ `spec.deviceClass=physical` | `emulated-shared-arbitration` |
-| `spec.arbitration=shared` + GPU Provider ⟹ `spec.settings.renderNodeOnly=true` | `shared-arbitration-requires-render-node-only` |
+| `spec.arbitration=shared` + GPU Provider ⟹ `spec.provider.settings.renderNodeOnly=true` | `shared-arbitration-requires-render-node-only` |
 | `spec.maxConcurrentClaims` ∈ 1–16 | `max-claims-out-of-bounds` |
 | No two Device resources in the same Zone share the same `spec.inventory.selector.label` | `duplicate-device-label` |
 | USBIP and security-key Provider both referencing same selector label | `usbip-sk-mutual-exclusion` |
-| `spec.settings` validates against the Provider's signed JSON Schema | `invalid-provider-settings` |
-| No inline secret strings in `spec.settings` (must use `credentialRef`) | `inline-secret-in-settings` |
+| `spec.provider.settings` validates against the Provider's signed JSON Schema | `invalid-provider-settings` |
+| No inline secret strings in `spec.provider.settings` (must use `credentialRef`) | `inline-secret-in-settings` |
 
 ### Provider settings schema validation
 
-Each Device Provider registers a JSON Schema for its `settings` sub-object as
+Each Device Provider registers a JSON Schema for its `spec.provider.settings` sub-object as
 part of its signed Provider descriptor. The Nix emitter imports this schema from
-the Provider's store path and validates `spec.settings` against it at eval time.
+the Provider's store path and validates `spec.provider.settings` against it at eval time.
 The schema fingerprint is committed to
 `docs/reference/schemas/v3/providers/device-<name>.settings.json`; the drift
 gate (`make test-drift` / `cargo xtask gen-schemas`) fails the build on any
@@ -1393,15 +1417,15 @@ mismatch.
 Settings fields that accept sensitive values use a `credentialRef` entry pointing
 to a `Credential/<name>` resource in the same Zone. Inline strings in sensitive
 settings fields fail eval with `inline-secret-in-settings`. The four frozen
-Device Providers have no `artifactId` field in their `spec.settings`; binary
+Device Providers have no `artifactId` field in their `spec.provider.settings`; binary
 paths are resolved from Provider package closures (see "Artifact catalog").
 
 ```nix
 # Correct — sensitive value via Credential ref
-spec.settings.exampleSecret = { credentialRef = "Credential/device-example-key"; };
+spec.provider.settings.exampleSecret = { credentialRef = "Credential/device-example-key"; };
 
 # Rejected at eval time — inline string in a credentialRef-constrained field
-spec.settings.exampleSecret = "raw-secret-value";
+spec.provider.settings.exampleSecret = "raw-secret-value";
 ```
 
 The four frozen Device Providers have no settings fields that accept secrets.
@@ -1432,11 +1456,15 @@ not emitted by the Nix build and are filled by the runtime after first apply.
     "deviceClass": "emulated",
     "inventory": { "selector": {} },
     "maxConcurrentClaims": 1,
-    "providerRef": "Provider/device-tpm",
-    "settings": {
-      "logLevel": 20,
-      "startupClear": true
-    }
+    "provider": {
+      "schemaId": "device-tpm.d2bus.org/Device/spec",
+      "schemaVersion": "1.0",
+      "settings": {
+        "logLevel": 20,
+        "startupClear": true
+      }
+    },
+    "providerRef": "Provider/device-tpm"
   }
 }
 ```
@@ -1465,8 +1493,12 @@ not emitted by the Nix build and are filled by the runtime after first apply.
       }
     },
     "maxConcurrentClaims": 1,
-    "providerRef": "Provider/device-usbip",
-    "settings": { "env": "work" }
+    "provider": {
+      "schemaId": "device-usbip.d2bus.org/Device/spec",
+      "schemaVersion": "1.0",
+      "settings": { "env": "work" }
+    },
+    "providerRef": "Provider/device-usbip"
   }
 }
 ```
@@ -1495,12 +1527,16 @@ not emitted by the Nix build and are filled by the runtime after first apply.
       }
     },
     "maxConcurrentClaims": 1,
-    "providerRef": "Provider/device-security-key",
-    "settings": {
-      "leaseTimeoutSecs": 300,
-      "sessionRingSize": 32,
-      "vsockPort": 14320
-    }
+    "provider": {
+      "schemaId": "device-security-key.d2bus.org/Device/spec",
+      "schemaVersion": "1.0",
+      "settings": {
+        "leaseTimeoutSecs": 300,
+        "sessionRingSize": 32,
+        "vsockPort": 14320
+      }
+    },
+    "providerRef": "Provider/device-security-key"
   }
 }
 ```
@@ -1527,18 +1563,22 @@ not emitted by the Nix build and are filled by the runtime after first apply.
       }
     },
     "maxConcurrentClaims": 1,
-    "providerRef": "Provider/device-gpu",
-    "settings": {
-      "contextTypes": ["cross-domain", "virgl", "virgl2"],
-      "crossDomainTrusted": false,
-      "displays": [{ "hidden": true }],
-      "egl": true,
-      "renderNodeOnly": false,
-      "videoNvidiaDecode": false,
-      "videoSidecar": false,
-      "virglVideo": false,
-      "vulkan": true
-    }
+    "provider": {
+      "schemaId": "device-gpu.d2bus.org/Device/spec",
+      "schemaVersion": "1.0",
+      "settings": {
+        "contextTypes": ["cross-domain", "virgl", "virgl2"],
+        "crossDomainTrusted": false,
+        "displays": [{ "hidden": true }],
+        "egl": true,
+        "renderNodeOnly": false,
+        "videoNvidiaDecode": false,
+        "videoSidecar": false,
+        "virglVideo": false,
+        "vulkan": true
+      }
+    },
+    "providerRef": "Provider/device-gpu"
   }
 }
 ```
@@ -1565,25 +1605,29 @@ not emitted by the Nix build and are filled by the runtime after first apply.
       }
     },
     "maxConcurrentClaims": 4,
-    "providerRef": "Provider/device-gpu",
-    "settings": {
-      "contextTypes": ["virgl2"],
-      "crossDomainTrusted": false,
-      "displays": [],
-      "egl": true,
-      "renderNodeOnly": true,
-      "videoNvidiaDecode": false,
-      "videoSidecar": false,
-      "virglVideo": false,
-      "vulkan": false
-    }
+    "provider": {
+      "schemaId": "device-gpu.d2bus.org/Device/spec",
+      "schemaVersion": "1.0",
+      "settings": {
+        "contextTypes": ["virgl2"],
+        "crossDomainTrusted": false,
+        "displays": [],
+        "egl": true,
+        "renderNodeOnly": true,
+        "videoNvidiaDecode": false,
+        "videoSidecar": false,
+        "virglVideo": false,
+        "vulkan": false
+      }
+    },
+    "providerRef": "Provider/device-gpu"
   }
 }
 ```
 
 Array elements are sorted: primitive arrays lexicographically, object arrays by
-first key. `null`-default optional selector fields are included explicitly; absent
-settings fields receive their schema default.
+first key. `null`-default optional selector fields are included explicitly;
+absent `spec.provider.settings` fields receive their schema default.
 
 ### Zone resource bundle/generation
 
@@ -1616,7 +1660,7 @@ Bundle properties:
   Zone runtime regardless of `configGeneration`.
 - The Nix build fails if any `(type, metadata.name)` pair is duplicated, if the
   computed digest does not match, if any spec fails ResourceTypeSchema
-  validation, or if any settings fails Provider schema validation.
+  validation, or if any `spec.provider.settings` field fails Provider schema validation.
 - The bundle file is `root:d2bd` `0640`; the Zone runtime reads it at startup and
   on generation-change signal.
 
@@ -1631,12 +1675,12 @@ New assertions added to `nixos-modules/assertions.nix`:
    mutually exclusive: no two Device resources in the same Zone may have the same
    `spec.inventory.selector.label` if one uses `Provider/device-security-key` and
    the other uses `Provider/device-usbip`.
-3. `spec.settings.videoSidecar=true` requires a Device resource for the same
-   Guest with `spec.settings.renderNodeOnly=false` (full GPU).
-4. `spec.settings.virglVideo=true` and `spec.settings.videoSidecar=true` are
+3. `spec.provider.settings.videoSidecar=true` requires a Device resource for the same
+   Guest with `spec.provider.settings.renderNodeOnly=false` (full GPU).
+4. `spec.provider.settings.virglVideo=true` and `spec.provider.settings.videoSidecar=true` are
    mutually exclusive on the same Guest.
 5. A Device with `spec.arbitration=shared` requires `spec.deviceClass=physical`
-   and, for `Provider/device-gpu`, `spec.settings.renderNodeOnly=true`.
+   and, for `Provider/device-gpu`, `spec.provider.settings.renderNodeOnly=true`.
 6. No two Device resources in the same Zone have the same
    `spec.inventory.selector.label` value.
 
@@ -1696,7 +1740,7 @@ When the Zone runtime activates generation N+1:
 6. **Orphan-sweep prohibition:** Core never sweeps `managedBy=controller`
    resources for deletion merely because they are absent from the Nix bundle.
 7. **Owner-controller reconcile:** if a `managedBy=configuration` resource's spec
-   changes (e.g., Device settings updated), its child Processes receive
+   changes (e.g., Device `spec.provider.settings` updated), its child Processes receive
    `dependency-changed` triggers and the owner controller reconciles them.
 
 ### Zone cleanup status
@@ -1790,7 +1834,7 @@ Provider controller's existing per-op audit path.
 - `tests/unit/nix/cases/device-gen-cleanup-eval.nix`: generation diff — resource removed from Nix config appears in `pendingDeletion`; resource absent from prior generation does not appear; bundle `contentDigest` changes.
 - `tests/unit/nix/cases/device-bundle-canonical.nix`: bundle JSON is canonical (sorted keys, sorted resources, stable contentDigest); two identical config subtrees produce identical digests.
 - `tests/unit/nix/cases/device-inline-secret-rejected.nix`: inline string in settings field with `credentialRef` constraint fails eval with `inline-secret-in-settings`.
-- `tests/unit/nix/cases/device-artifact-catalog.nix`: store path absent from all Device ResourceSpec JSON outputs; `spec.settings` for TPM/USBIP carries no `artifactId` field; private catalog structure (type/digest/closure) is not present in the emitted resource bundle.
+- `tests/unit/nix/cases/device-artifact-catalog.nix`: store path absent from all Device ResourceSpec JSON outputs; `spec.provider.settings` for TPM/USBIP carries no `artifactId` field; private catalog structure (type/digest/closure) is not present in the emitted resource bundle.
 
 ### Layer-1 Rust (contract tests)
 

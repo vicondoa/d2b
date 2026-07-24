@@ -1444,6 +1444,42 @@ allocated edge, generation, allowed prefixes, and capability ceiling.
 Allocation changes (e.g. ceiling narrowing) require the child to issue
 a new advertisement under the new generation.
 
+## ResourceExport advertisement and ResourceImport routing (D096)
+
+`ResourceExport` and `ResourceImport` (defined in
+[`ADR-046-resources-zone-control.md` §8A](ADR-046-resources-zone-control.md))
+use the mechanisms above unchanged; this section states how they compose. No new
+transport, cross-Zone reference, or FD-forwarding path is introduced.
+
+- **Advertisement.** The owner Zone's core export/import controller advertises a
+  `ResourceExport` to the exact `consumerZonePolicy` selector over the existing
+  authenticated advertisement envelope, carrying only the bounded `exportKey`,
+  `exportedType`, `baseSchemaFingerprint`, the closed operation set, arbitration,
+  and the capability ceiling — never the local `resourceRef`/`endpointRef`, a
+  path, an address, or bytes. Withdrawal and renewal reuse the withdrawal/renewal
+  machinery; export removal or ceiling narrowing issues a new generation.
+- **Import matching.** The consumer Zone's `ResourceImport` names only its local
+  `zoneLinkRef` plus `exportKey`; core matches `exportKey` +
+  `expectedBaseSchemaFingerprint` against the advertisement. A mismatch,
+  unauthorized Zone, or absent advertisement fails closed. This preserves the
+  "No cross-Zone resource references" invariant: neither side holds a Ref into
+  the other Zone.
+- **Capability/RBAC ceiling.** Every hop applies the ceiling-propagation and
+  RBAC-narrowing rules; `requestedCapabilities` is clamped to the export
+  capability ceiling and to the ZoneLink allocation. No import can exceed the
+  advertised operation set.
+- **Payload carriage.** Shared bytes flow only over the bounded encrypted named
+  streams described in "Named streams over ZoneLink", with a per-import session
+  generation, credits/backpressure, cancel, deadline, and idempotency;
+  intermediate controllers see ciphertext. The "No FD, credential, or host path
+  forwarding" invariant holds — no device FD, socket, or token crosses a Zone.
+- **Projection and lifecycle.** Core owns one local typed projection per import
+  (`ownerRef: ResourceImport/<name>`). Link failure, revocation, or export
+  withdrawal revokes leases and degrades the projection through the existing
+  link-failure/revocation paths; reconnect revalidates the remote generation and
+  fingerprint before rebinding, so no stale authority survives. D091 currency
+  propagates remote → import → projection/owners.
+
 ## Nearest-common-ancestor (NCA) algorithm
 
 The route decision algorithm is a direct adaptation of

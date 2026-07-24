@@ -47,6 +47,8 @@ authored or independently duplicated in the resource row:
 - CLI projection;
 - events/telemetry/state contracts;
 - per bound ResourceType, the exact base spec and base status schema version/fingerprint the `ResourceApiBinding` implements, and the signed **standard capability matrix** of supported/unsupported optional base capabilities (D089);
+- optional signed export/import adapter capabilities (`ExportAdapter`/
+  `ImportAdapter`) for ResourceTypes the Provider owns (D096);
 - registered `spec.provider` extension schemas (D089): per owned or bound ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `spec.provider.settings` object the Provider accepts;
 - registered `status.provider` extension schemas (D088): per owned or written ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `status.provider.details` object the Provider may write;
 - component placement templates;
@@ -78,6 +80,15 @@ implementations of a ResourceType are promoted to the ResourceType base
 `spec.provider`/`status.provider` (see `ADR-046-resource-object-model` § Spec /
 § Status). The `spec.provider` and `status.provider` schemas align for the same
 Provider.
+
+**Export/import adapters (D096).** A Provider descriptor MAY advertise a signed
+`ExportAdapter` and/or `ImportAdapter` capability for a ResourceType it owns. The
+adapter still satisfies D089 base conformance for the exported/imported type and
+performs only semantic admission, arbitration, and bounded observation. Core owns
+`ResourceExport`/`ResourceImport` routing, base lifecycle, local projection
+ownership, and layered status writes. D096 does not require a new Provider; it
+adds optional adapter capabilities to the Provider that already owns the
+resource semantics.
 
 **Currency, upgrade, and expedited reconcile (D090/D091).** Every controller
 component implements, alongside ordinary reconcile, the toolkit methods

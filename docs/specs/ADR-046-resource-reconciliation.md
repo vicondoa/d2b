@@ -267,6 +267,16 @@ On any child mutation:
 
 Propagation to ancestors is acyclic, depth/budget bounded, and coalesced.
 
+### ResourceImport projection ownership (D096)
+
+A `ResourceImport` owns exactly one local typed projection resource through
+`metadata.ownerRef: ResourceImport/<name>`. Core and the selected import adapter
+keep projection readiness synchronized with the import lease state; ordinary
+consumers depend on the projection, not the import object. `ResourceExport`
+removal or ZoneLink loss revokes the lease, marks the import degraded/revoked,
+and triggers the D091 dependency-aware planner so the projection and its owners
+degrade or upgrade in topological order rather than observing stale authority.
+
 ## Process fast path
 
 When a Process or EphemeralProcess durable commit completes and dependencies

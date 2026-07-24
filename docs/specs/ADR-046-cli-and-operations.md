@@ -169,13 +169,23 @@ a `resource-not-found` error class.
 
 **ResourceType validation:** The frozen standard ResourceType set (Zone,
 ZoneLink, Provider, Role, RoleBinding, Host, Guest, Process, EphemeralProcess,
-Volume, Network, Device, User, Credential, Quota, EmergencyPolicy) is validated
-locally at compile time against the names defined in this spec. A syntactically
+Volume, Network, Device, User, Credential, Endpoint, ResourceExport,
+ResourceImport, Quota, EmergencyPolicy) is
+validated locally at compile time against the names defined in this spec
+(19 standard types; `Endpoint` added by D092; `ResourceExport` and
+`ResourceImport` added by D096). A syntactically
 valid type name that contains a vendor qualifier (e.g. `acme.corp/FooResource`)
 is passed through to the live Zone catalog; the API returns
 `resource-schema-invalid` if the Zone does not recognize it. Any other
 unrecognized type name fails locally with exit code 2 and class `ref-invalid`
-without a Zone round-trip.
+without a Zone round-trip. `Endpoint/<name>` is accepted by the local
+ResourceRef parser exactly like every other standard type; consumers reference
+endpoints only through the `Endpoint/<name>` ResourceRef and never through a raw
+transport locator. `ResourceExport/<name>` and `ResourceImport/<name>` are
+likewise accepted by the local parser; a `ResourceExport` names only local
+`resourceRef`/`endpointRef` and a `ResourceImport` names only a local
+`zoneLinkRef` plus a bounded `exportKey` — the parser and API reject any
+cross-Zone ResourceRef in either type (D096).
 
 ## Nix configuration, ResourceSpec JSON, and generation lifecycle
 
@@ -1282,6 +1292,101 @@ d2b device security-key test <Device>/<name> [--zone <zone>]
 
 **Successor to:** `d2b usb security-key test <vm>`.
 
+## `d2b endpoint` — Endpoint resource commands
+
+Maps to the `Endpoint` ResourceType (D092). Endpoints are provider-neutral
+managed endpoint identities produced by a `Process`, `Device`, `Guest`, or
+`Host` (or a qualified resource); the CLI surface is read-and-reference only and
+never exposes a raw path, address, CID, port, fd, or credential.
+
+```
+d2b endpoint get <name>
+d2b endpoint list [--endpoint-class <service|device|transport|control|data>]
+d2b endpoint watch [--endpoint-class <class>]
+d2b endpoint status <name> [--watch] [--deadline <duration>]
+d2b endpoint resolve <name>
+```
+
+All accept `[--zone <zone>] [--json | --human]`.
+
+- `get`/`list`/`watch`/`status` use the standard resource verbs on
+  `Endpoint/<name>`. Output is the base Endpoint envelope only: base spec
+  (`providerRef`, `producerRef`, `endpointClass`, `transport`, `purpose`,
+  service/schema fingerprint or capability class, locality/visibility,
+  attachment support/policy, consumer policy/ref bounds, lifecycle/recycle
+  policy) and base status (readiness, observed producer/resource generation,
+  connection/lease availability, endpoint generation, closed
+  capability/locality/transport observations, `status.update` currency,
+  conditions). Any `status.provider` projection is bounded, redacted, and
+  deny-unknown; **no raw locator** (path/address/CID/port/fd/credential) appears
+  in any field.
+- `d2b endpoint resolve <name>` resolves the `Endpoint/<name>` ResourceRef and
+  prints its provider-neutral resolution projection — `producerRef`,
+  `endpointClass`, transport class, readiness, and capability/locality
+  observations. It NEVER prints or returns a private transport handle or raw
+  locator; actual resolution to a private transport/FD happens only inside
+  Core/ProviderSupervisor through EffectPort/LaunchTicket, never through the CLI.
+- Endpoints are controller-created by their signed component/semantic owner;
+  `d2b endpoint create`/`update-spec`/`delete` are rejected for the operator
+  surface except for statically Nix/API-authored Endpoints whose schema permits
+  it. `status.update` currency and `d2b upgrade Endpoint/<name>` visibility
+  follow the standard resource verbs and D091, so operators see endpoint update
+  state and disruption without any raw locator exposure.
+
+## `d2b export` — ResourceExport commands (cross-Zone sharing, D096)
+
+Maps to the `ResourceExport` ResourceType. Runs in the owner/authority Zone. A
+`ResourceExport` shares one local resource (mic/speaker, security key, SigNoz
+ingest) with child Zones through a single Provider authority; it references only
+a local `resourceRef` and a local `endpointRef` — never a remote Ref.
+
+```
+d2b export get <name>
+d2b export list [--exported-type <type>]
+d2b export watch [--exported-type <type>]
+d2b export status <name> [--watch] [--deadline <duration>]
+d2b export create [--spec-file <path> | --spec-stdin]
+d2b export update-spec <name> [--revision <rev>] [--spec-file <path> | --spec-stdin]
+d2b export delete <name> [--revision <rev>]
+```
+
+All accept `[--zone <zone>] [--json | --human]`. `status` shows advertised/ready/
+revoking state, active/pending consumer counts, and bounded per-consumer lease
+summaries (consumer Zone, capability subset, lease state) — **no raw bytes,
+path, device node, socket, or token**. `create`/`update-spec` reject any
+cross-Zone ResourceRef, an unauthorized `consumerZonePolicy` Zone, or a
+non-exportable Credential/token target. `delete` revokes leases child-first and
+degrades every bound `ResourceImport`.
+
+## `d2b import` — ResourceImport commands (cross-Zone sharing, D096)
+
+Maps to the `ResourceImport` ResourceType. Runs in the consumer (child) Zone. A
+`ResourceImport` binds a local `zoneLinkRef` and a bounded `exportKey` to a
+locally-owned typed **projection** resource; ordinary consumers use the
+projection Ref (e.g. `Device/<key>`, `audio-pipewire.d2bus.org/AudioState`),
+never `ResourceImport` directly.
+
+```
+d2b import get <name>
+d2b import list [--expected-type <type>]
+d2b import watch [--expected-type <type>]
+d2b import status <name> [--watch] [--deadline <duration>]
+d2b import projection <name>
+d2b import create [--spec-file <path> | --spec-stdin]
+d2b import update-spec <name> [--revision <rev>] [--spec-file <path> | --spec-stdin]
+d2b import delete <name> [--revision <rev>]
+```
+
+All accept `[--zone <zone>] [--json | --human]`. `status` shows
+pending/reachable/bound/degraded/revoked, observed remote export generation and
+fingerprint, the local `projectionRef`, lease state/count, and `status.update`
+currency — no remote Ref or raw locator. `d2b import projection <name>` prints
+the local projection Ref and its base status so operators can reach the typed
+resource ordinary consumers use. `create`/`update-spec` reject a remote Ref, a
+schema-fingerprint mismatch, or `requestedCapabilities` outside the export
+capability ceiling. `delete` releases the remote lease and deletes the local
+projection child-first.
+
 ## `d2b user` — User resource commands
 
 Maps to the `User` ResourceType.
@@ -1518,6 +1623,14 @@ their own resource types, not through Zone fields.
 | Unit | `d2b quota get/list/status/create/update-spec/delete` parse and route correctly | Quota resource noun wired |
 | Unit | `d2b emergency-policy get/list/status/create/update-spec/delete` parse and route correctly | EmergencyPolicy resource noun wired |
 | Unit | `Quota` and `EmergencyPolicy` accepted as frozen standard types (local validation) | Compile-time type list complete |
+| Unit | `Endpoint` accepted as a frozen standard type; `Endpoint/<name>` parses via the local ResourceRef parser without a Zone round-trip | Compile-time type list complete (19 types) |
+| Unit | `ResourceExport` and `ResourceImport` accepted as frozen standard types; `ResourceExport/<name>` and `ResourceImport/<name>` parse locally without a Zone round-trip | Compile-time type list complete (19 types) |
+| Unit | `d2b export get/list/watch/status/create/update-spec/delete` and `d2b import get/list/watch/status/projection/create/update-spec/delete` parse and route correctly | ResourceExport/ResourceImport nouns wired (D096) |
+| Unit | `d2b export create`/`d2b import create` reject a cross-Zone ResourceRef, a schema-fingerprint mismatch, an unauthorized consumer Zone, and `requestedCapabilities` outside the export capability ceiling | Cross-Zone sharing guards (D096) |
+| Unit | `d2b import projection <name>` prints the local projection Ref/status; `d2b export status`/`d2b import status` carry no raw bytes/path/device/socket/token or remote Ref | No cross-Zone leakage (D096) |
+| Unit | `d2b endpoint get/list/watch/status/resolve` parse and route correctly on `Endpoint/<name>` | Endpoint resource noun wired |
+| Unit | `d2b endpoint get`/`resolve` output carries no raw path/address/CID/port/fd/credential field; provider status projection is bounded/redacted | No raw locator exposure (D092) |
+| Unit | `d2b list Endpoint --updates` and `d2b upgrade Endpoint/<name>` expose `status.update` currency and disruption | Endpoint update visibility (D091) |
 | Unit | `d2b get Quota/default` routes to Zone catalog without a round-trip for type validation | Local type validation path |
 | Unit | `d2b get EmergencyPolicy/lockdown` routes correctly | Local type validation path |
 
@@ -2312,3 +2425,35 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | Full reset from current manifest/processes/realm-entrypoints JSON format; prior Nix-generated artifacts (`/etc/d2b/processes.json`, `/etc/d2b/realm-entrypoints.json`) deleted after Zone resource bundle activates |
 | Validation | Runtime integration: all CLI-visible cleanup/status/rollback/gc/audit tests (§CLI-visible tests for activation and cleanup), including no force-finalizer path; Nix unit and build tests owned by ADR-046-nix-configuration spec |
 | Removal proof | Old `nixos-modules/manifest.nix`, `nixos-modules/bundle-artifacts.nix` emitters removed only after `bundle-emit.nix` produces equivalent-or-superseding output and all downstream consumers of the old bundle format are migrated |
+
+### ADR046-cli-012
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-cli-012` |
+| Dependency/owner | ADR046-cli-001, ADR046-cli-010; CLI crate owner |
+| Current source | None — net-new v3 work; `Endpoint` is a new standard ResourceType added by D092; no pre-ADR45 baseline equivalent |
+| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()` and `ConnectedClient::open_server_stream()` — copy unchanged; used for Endpoint Get/List/Status and Watch; (2) `packages/d2b-client/src/session.rs` `NamedStream` — copy unchanged; Watch stream output; (3) the ADR046-cli-010 generic resource-verb dispatch — reuse for `d2b endpoint get/list/watch/status`; the `d2b endpoint resolve` projection verb is net-new. No raw transport/FD handle type is imported into the CLI; resolution to a private transport/FD remains inside Core/ProviderSupervisor via EffectPort/LaunchTicket |
+| Reuse action | adapt |
+| Destination | `packages/d2b/src/endpoint.rs` (`d2b endpoint get/list/watch/status/resolve`) |
+| Detailed design | Add `Endpoint` to the frozen standard ResourceType set (17 types; local ResourceRef parser accepts `Endpoint/<name>` with no Zone round-trip). Implement `d2b endpoint get/list/watch/status` over the ADR046-cli-010 generic verbs and `d2b endpoint resolve <name>` as a provider-neutral resolution projection printing `producerRef`, `endpointClass`, transport class, readiness, and capability/locality observations. Endpoint output is the base envelope only (base spec + base status per D092); any `status.provider` projection is bounded, redacted, and deny-unknown. **No raw locator** (path/address/CID/port/fd/credential) appears in any CLI field or the `resolve` projection. `status.update` currency and `d2b upgrade Endpoint/<name>` visibility follow the standard verbs and D091. `create`/`update-spec`/`delete` are rejected on the operator surface except for statically Nix/API-authored Endpoints whose schema permits it. |
+| Integration | ZoneContext → `ConnectedClient` → resource API for `Endpoint`; consumers reference endpoints only through `Endpoint/<name>` ResourceRefs |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Validation | `Endpoint` accepted as a frozen standard type; `Endpoint/<name>` parses locally without a Zone round-trip; `d2b endpoint get/list/watch/status/resolve` parse and route correctly; `get`/`resolve` output carries no raw path/address/CID/port/fd/credential; provider status projection is bounded/redacted; `d2b list Endpoint --updates` and `d2b upgrade Endpoint/<name>` expose `status.update` currency and disruption; operator `create`/`update-spec`/`delete` rejected for controller-owned Endpoints |
+| Removal proof | Not applicable (new surface) |
+
+### ADR046-cli-013
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-cli-013` |
+| Dependency/owner | ADR046-cli-001, ADR046-cli-010, ADR046-zone-control-019; CLI crate owner |
+| Current source | None — net-new v3 work; `ResourceExport`/`ResourceImport` are new standard ResourceTypes added by D096; no pre-ADR45 baseline equivalent |
+| Reuse source | ADR046-cli-010 generic resource-verb dispatch; `packages/d2b-client/src/client.rs` `ConnectedClient::invoke`/`open_server_stream` — copy unchanged |
+| Reuse action | adapt |
+| Destination | `packages/d2b/src/share.rs` (`d2b export …` and `d2b import …` nouns) |
+| Detailed design | Add `ResourceExport` and `ResourceImport` to the frozen standard ResourceType set (19 types; local parser accepts `ResourceExport/<name>`/`ResourceImport/<name>` and rejects any cross-Zone ResourceRef in either type). Implement `d2b export get/list/watch/status/create/update-spec/delete` and `d2b import get/list/watch/status/projection/create/update-spec/delete` over the ADR046-cli-010 generic verbs plus the `d2b import projection <name>` projection-resolution verb. `export status` shows advertised/ready/revoking, consumer counts, bounded lease summaries; `import status` shows pending/reachable/bound/degraded/revoked, remote generation/fingerprint, local projectionRef, lease state. No raw bytes/path/device/socket/token or remote Ref in any field. `create`/`update-spec` reject a cross-Zone Ref, a fingerprint mismatch, an unauthorized consumer Zone, a non-exportable Credential target, and `requestedCapabilities` outside the capability ceiling; `delete` revokes/tears down child-first. |
+| Integration | ZoneContext → `ConnectedClient` → resource API for `ResourceExport`/`ResourceImport`; consumers use the local projection Ref, never `ResourceImport` directly |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Validation | Both types accepted as frozen standard types and parse locally; `d2b export`/`d2b import` verbs route correctly; cross-Zone-Ref/fingerprint-mismatch/unauthorized-Zone/capability-ceiling rejections; `d2b import projection` returns the local projection Ref; no raw locator/bytes/remote-Ref leakage |
+| Removal proof | Not applicable (new surface) |

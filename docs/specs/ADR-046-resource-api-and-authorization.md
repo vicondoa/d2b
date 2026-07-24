@@ -172,6 +172,18 @@ consumer that is not authorized (by RoleBinding and the Endpoint's
 and receives no locator. A producer restart bumps `status.update`/
 `endpointGeneration`, firing the consumer's `dependency-changed` reconcile.
 
+### ResourceExport and ResourceImport (D096)
+
+`ResourceExport` and `ResourceImport` are standard ResourceTypes and use the
+ordinary `Create`/`Get`/`List`/`Watch`/`UpdateSpec`/`UpdateStatus`/`Delete`/
+`Upgrade` verbs plus Role/RoleBinding authorization. Cross-Zone advertisement
+and import are still per-hop: native RBAC, the export's consumer-Zone policy,
+the ZoneLink relationship, and the export capability ceiling must all allow the
+operation. Core admission rejects any cross-Zone `ResourceRef` in either type:
+an export may reference only local `resourceRef`/`endpointRef`, and an import
+may reference only a local `zoneLinkRef` plus bounded `exportKey`. Admission also
+rejects `requestedCapabilities` that exceed the export's capability ceiling.
+
 ## Native RBAC resources
 
 ### Bootstrap authorization

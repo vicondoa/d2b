@@ -131,11 +131,6 @@ implementation state), and `spec.provider` omits `providerRef` and
 is desired, not observed. The selected `spec.provider` schema and the
 `status.provider` schema align for the same Provider.
 
-**Mapping convention.** Within any spec a reference to `spec.providerSettings`
-(or, for Device, the former top-level `spec.settings`) denotes the canonical
-`spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is
-ResourceType base.
-
 **Base-schema conformance.** Every Provider `ResourceApiBinding` declares and
 MUST implement the exact ResourceType base spec schema version/fingerprint and
 pass the base lifecycle/status/error/finalizer/conformance suite. It MUST accept
@@ -482,7 +477,13 @@ Standard execution/shared:
 - Credential;
 - Endpoint.
 
-There are 17 standard ResourceTypes (Endpoint added by D092). Provider-specific
+Cross-Zone sharing (D096):
+
+- ResourceExport;
+- ResourceImport.
+
+There are 19 standard ResourceTypes (Endpoint added by D092; ResourceExport and
+ResourceImport added by D096). Provider-specific
 semantic ResourceTypes may extend the set through signed schemas/API bindings.
 They use this same envelope/status/ownership contract.
 

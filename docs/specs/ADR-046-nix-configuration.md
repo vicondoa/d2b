@@ -59,8 +59,8 @@ artifacts are produced, staged, and rolled back. It covers:
 - Zone self-resource declaration and naming;
 - Provider package catalog and `Provider/<name>` install resources;
 - `Host`, `Guest`, and shared `ExecutionPolicy` specs;
-- `Process`, `EphemeralProcess`, `Volume`, `Network`, `Device`, `User`, and
-  `Credential` specs;
+- `Process`, `EphemeralProcess`, `Volume`, `Network`, `Device`, `User`,
+  `Credential`, `ResourceExport`, and `ResourceImport` specs;
 - `Role` and `RoleBinding` resources and RBAC compilation;
 - controller placement templates;
 - ref validation at eval time;
@@ -145,7 +145,7 @@ and `IsolationPosture` enums. These drive current `WorkloadExecutionPosture`.
 | `LocalVm` | Locally supervised NixOS VM (Cloud Hypervisor) | `Guest` + `providerRef: Provider/runtime-cloud-hypervisor` |
 | `QemuMedia` | Locally supervised QEMU external-media runner | `Guest` + `providerRef: Provider/runtime-qemu-media` |
 | `ProviderManaged` | Runtime owned by a provider adapter | `Guest` + exact frozen `providerRef` selected in config (e.g., `Provider/runtime-azure-container-apps`, `Provider/runtime-azure-virtual-machine`) |
-| `UnsafeLocal` | Host-user process, no isolation boundary | User-only `Host` under `Provider/system-core` with `providerSettings.isolationPosture: "none"` |
+| `UnsafeLocal` | Host-user process, no isolation boundary | User-only `Host` under `Provider/system-core` with `spec.isolationPosture: "none"` |
 
 For current `WorkloadProviderKind::ProviderManaged` workloads, the `providerRef`
 in the compiled `Guest` resource is the exact frozen catalog entry selected by
@@ -724,7 +724,7 @@ The no-isolation posture is preserved explicitly across all surfaces:
 
 - **Host status** — `Provider/system-core` sets a stable `NoIsolation` condition
   on `Host` status. The condition is present whenever
-  `spec.providerSettings.isolationPosture` is `"none"`; it is never absent or
+  `spec.isolationPosture` is `"none"`; it is never absent or
   cleared by a later upgrade.
 - **CLI/UI** — `d2b host inspect` and any status display always render the
   no-isolation warning when the Host carries the `NoIsolation` condition.
@@ -741,31 +741,29 @@ d2b.zones.dev.resources.host-unsafe-local = {
     defaultDomain  = "user";
     allowedDomains = ["user"];
     defaultUserRef = "User/alice";
-    providerSettings = {
-      isolationPosture = "none";   # declared in Host schema; required for user-only
-                                   # system-core Hosts; cannot be set to any other value
-    };
+    isolationPosture = "none";   # promoted Host base field; required for user-only
+                                  # system-core Hosts; cannot be set to any other value
   };
 };
 ```
 
 Eval assertions:
 
-- `providerSettings.isolationPosture` set to any value other than `"none"` for a
+- `spec.isolationPosture` set to any value other than `"none"` for a
   user-only (`defaultDomain: user`, `allowedDomains: [user]`)
   `Provider/system-core` Host is rejected at eval time.
 - A Process with `executionRef: Host/host-unsafe-local` and `domain: system`
   is rejected at eval time.
 - No `Guest` ref is emitted for an unsafe-local declaration.
 
-`providerSettings.isolationPosture: "none"` is declared in the `Host`
-ResourceTypeSchema under `providerSettings` (visible to all controllers and
-inspectable via the resource API). It is not a freeform field; the schema
-restricts it to the bounded enum. `status.isolationPosture` reflects `none`
-when `spec.providerSettings.isolationPosture` is `none`. The `NoIsolation`
-status condition and the `no_isolation=true` `ProcessEffect` audit field are
-required whenever this posture is in effect; OTEL telemetry never carries
-an isolation label.
+`isolationPosture: "none"` is a promoted Host base field declared at top-level
+`spec.isolationPosture` in the `Host` ResourceTypeSchema (visible to all
+controllers and inspectable via the resource API). It is not a freeform field;
+the schema restricts it to the bounded enum. `status.isolationPosture` reflects
+`none` when `spec.isolationPosture` is `none`. The `NoIsolation` status
+condition and the `no_isolation=true` `ProcessEffect` audit field are required
+whenever this posture is in effect; OTEL telemetry never carries an isolation
+label.
 
 ## Guest resource
 
@@ -804,11 +802,10 @@ d2b.zones.dev.resources.dev-vm = {
 The canonical `spec.provider = { schemaId, schemaVersion, settings }` envelope
 (D089) replaces the former Host/Guest/Credential `providerSettings` and Device
 `settings`; `spec.providerRef` and every other `spec.*` field is ResourceType
-base. Mapping convention: a reference to `spec.providerSettings` (or Device's
-former `spec.settings`) denotes `spec.provider.settings`. The `settings` object
-is declared by the selected Provider's signed, versioned, deny-unknown JSON
-Schema and validated against `spec.providerRef` at eval time and at API
-admission; it may not shadow a base field, and any field shared across
+base. The `spec.provider.settings` object is declared by the selected Provider's
+signed, versioned, deny-unknown JSON Schema and validated against
+`spec.providerRef` at eval time and at API admission; it may not shadow a base
+field, and any field shared across
 implementations is promoted to the ResourceType base rather than carried here.
 Values that reference Nix derivation outputs (e.g., a closure, a kernel module
 path) are serialized as named closure-entry identifiers or content digests
@@ -838,6 +835,63 @@ the ResourceType schema permits. An authored `Endpoint` spec carries only closed
 through the effect adapter at runtime). `ProcessSpec` carries no inline
 `endpoints`; a Process's stable endpoints are owned `Endpoint` resources with
 `producerRef`, and consumers reference `Endpoint/<name>`.
+
+**ResourceExport and ResourceImport (D096).** Cross-Zone singleton sharing uses
+ordinary `d2b.zones.<zone>.resources.<name>` declarations. The Nix compiler does
+not redefine the types: `type = "ResourceExport"` and `type = "ResourceImport"`
+emit the exact `ADR-046-resources-zone-control` §8A base fields plus the strict
+`spec.provider` extension when declared by the Provider schema. They bring the
+standard ResourceType catalog to 19 entries; `Endpoint` remains standard.
+`ResourceExport` lives in the owner Zone and may reference only local
+`providerRef`, `resourceRef`, and `endpointRef`. `ResourceImport` lives in the
+child/consumer Zone and may reference only local `providerRef` and `zoneLinkRef`;
+its `exportKey` is a bounded opaque string, never a remote `ResourceRef`.
+
+```nix
+# Owner/authority Zone: export a local microphone through the audio authority.
+d2b.zones.host.resources.mic-export = {
+  type = "ResourceExport";
+  spec = {
+    providerRef = "Provider/audio-pipewire";
+    resourceRef = "Device/host-mic";
+    endpointRef = "Endpoint/audio-authority";
+    exportedType = "audio-pipewire.d2bus.org/AudioState";
+    baseSchemaFingerprint = "sha256:...";
+    operations = [ "capture" ];
+    arbitration = "exclusive";
+    quota = { fairness = "fifo"; leaseDeadlineMs = 30000; };
+    consumerZonePolicy = {
+      zones = [ "Zone/work" ];
+      capabilityCeiling = [ "capture" ];
+    };
+    visibility = "named-zones";
+    updatePolicy = { mode = "manual-disruptive"; };
+    revocationPolicy = { graceMs = 5000; };
+  };
+};
+
+# Child Zone: import a local projection over its local ZoneLink.
+d2b.zones.work.resources.mic-import = {
+  type = "ResourceImport";
+  spec = {
+    providerRef = "Provider/audio-pipewire";
+    zoneLinkRef = "ZoneLink/work-uplink";
+    exportKey = "host/mic-export";
+    expectedType = "audio-pipewire.d2bus.org/AudioState";
+    expectedBaseSchemaFingerprint = "sha256:...";
+    projectionName = "mic";
+    projectionType = "audio-pipewire.d2bus.org/AudioState";
+    requestedCapabilities = [ "capture" ];
+    requestedQuota = { leaseDeadlineMs = 30000; };
+    updatePolicy = { mode = "manual-disruptive"; };
+    disconnectPolicy = { mode = "degrade"; };
+  };
+};
+```
+
+Ordinary consumers reference the local projection core creates
+(`metadata.ownerRef: ResourceImport/<name>`), not `ResourceImport/<name>` itself
+where a typed resource ref is expected.
 
 **Entra identity Guest composition (D093).** `credential-entra` login/token
 acquisition is grounded in an Entrablau-enabled identity `Guest`, never a Host
@@ -1256,8 +1310,12 @@ d2b.zones.dev.resources.work-entra = {
       onOwnerDelete         = "immediate";
       onProviderGeneration  = "immediate";
     };
-    # providerSettings validated against Provider's signed schema; no secret bytes.
-    providerSettings  = { tenantId = "..."; };  # optional; only when Provider schema declares it
+    # spec.provider.settings validated against Provider's signed schema; no secret bytes.
+    provider = {
+      schemaId      = "credential-entra.d2bus.org/Credential/spec";
+      schemaVersion = "1.0";
+      settings      = { tenantId = "..."; };  # optional; only when Provider schema declares it
+    };
   };
 };
 ```
@@ -1265,12 +1323,13 @@ d2b.zones.dev.resources.work-entra = {
 Credential spec fields mirror the `Credential` ResourceTypeSchema exactly:
 `providerRef`, `scope.{executionRef,domainFilter,userRef}`, `audience`,
 `consumerRef`, `allowedOperations`, `rotation`, `expiry`, `revocation`, and
-optional `providerSettings` (permitted when the Provider schema declares it;
-validated against signed Provider schema; no secret bytes). No invented fields
-(`credentialType`, `ownerRef`, `domain`). The emitted spec never contains key
-material, token bytes, or PEM. Current `identity_config.rs` values that carry
-credential bytes are forbidden from the emitted spec; they remain inside the
-Provider's external secret service.
+optional canonical `spec.provider` extension (`spec.provider.settings` is
+permitted when the Provider schema declares it; validated against signed
+Provider schema; no secret bytes). No invented fields (`credentialType`,
+`ownerRef`, `domain`). The emitted spec never contains key material, token
+bytes, or PEM. Current `identity_config.rs` values that carry credential bytes
+are forbidden from the emitted spec; they remain inside the Provider's external
+secret service.
 
 ## Role and RoleBinding
 
@@ -1394,6 +1453,8 @@ All ref validation runs at Nix eval time:
 | `subjects` entries | Each entry is a canonical `<ResourceType>/<name>` ref string resolving to a declared resource of the stated type in the same Zone; type must be in the closed subject set |
 | `transportProviderRef` resolution | The named Provider is declared in `d2b.zones.<z>.resources` with `type = "Provider"`; required on every ZoneLink; no default |
 | `childZoneName` check | The named child Zone is declared in `d2b.zones`; plain Zone name, not a ResourceRef |
+| `ResourceExport` local refs | `providerRef`, `resourceRef`, and `endpointRef` resolve in the export's own Zone; cross-Zone refs reject |
+| `ResourceImport` local route | `providerRef` and `zoneLinkRef` resolve in the import's own Zone; `zoneLinkRef` targets the same parent/child hierarchy; `exportKey` is a bounded opaque string, not a ResourceRef |
 | `artifactId` / `systemArtifactId` format | Plain bounded string `^[a-z][a-z0-9-]*$`; not a `<Type>/<name>` ResourceRef; no `*Ref` suffix |
 | `catalogEntryId` check | The named entry exists in `d2b.providerCatalog`; resolved to its `artifactId` |
 
@@ -1515,9 +1576,13 @@ succeeds. The drift gate `make test-drift` enforces `xtask gen-schemas` +
 | Numeric/string bounds (e.g., vsockCid range) | Eval |
 | `config` matches Provider's signed settings schema (Provider ResourceSpec) | Build |
 | `config` must not contain raw host paths or store path strings | Build |
-| `providerSettings` matches Provider's signed settings schema (where schema declares it) | Build |
-| `providerSettings` must not contain raw host paths, store paths, or secret bytes | Build |
+| `spec.provider.settings` matches Provider's signed settings schema (where schema declares it) | Build |
+| `spec.provider.settings` must not contain raw host paths, store paths, or secret bytes | Build |
 | Store paths absent from all public ResourceSpecs, status, audit, and OTEL telemetry | Build/Runtime |
+| `ResourceImport.expectedBaseSchemaFingerprint` matches the advertised `ResourceExport.baseSchemaFingerprint` | Build |
+| `ResourceImport` consumer Zone authorized by `ResourceExport.consumerZonePolicy` | Eval/Build |
+| `ResourceImport.requestedCapabilities` is a subset of the export `operations` and capability ceiling | Eval/Build |
+| `ResourceExport.resourceRef` does not name `Credential/*` or token-bearing resources unless a future reviewed export capability explicitly marks them exportable | Eval/Build |
 
 A structured eval error identifies the exact NixOS option path and rejected
 value for every rule violation.
@@ -1526,11 +1591,11 @@ value for every rule violation.
 
 The `Provider` ResourceSpec uses a `config` field validated against the
 Provider's signed settings schema. Other semantic ResourceTypes (`Host`, `Guest`,
-`Credential`, and others) may use a `providerSettings` field only when their
-canonical ResourceTypeSchema declares it; if the schema does not declare
-`providerSettings`, the field is absent and must not appear in Nix input. All
-other spec fields are those declared in the ResourceTypeSchema exactly. Nix
-mirrors each ResourceSpec 1:1; no blanket rule applies across types.
+`Credential`, and others) may use the canonical `spec.provider` extension only
+when their ResourceTypeSchema declares it; if the schema does not declare
+`spec.provider`, the field is absent and must not appear in Nix input. All other
+spec fields are those declared in the ResourceTypeSchema exactly. Nix mirrors
+each ResourceSpec 1:1; no blanket rule applies across types.
 
 Validation is offline; no network access occurs during the build. The schema
 fingerprint is recorded in `provider-catalog.json` under `settingsSchemaDigest`
@@ -1540,10 +1605,10 @@ is a build error.
 Rules:
 - Additional fields not declared in the Provider schema are rejected
   (`additionalProperties: false`).
-- `config` and any `providerSettings` value must not contain raw host paths or
+- `config` and any `spec.provider.settings` value must not contain raw host paths or
   Nix store path strings; derivation outputs are expressed as artifact IDs or
-  opaque source policy IDs. No provider-specific field in `providerSettings` may
-  accept secret bytes.
+  opaque source policy IDs. No provider-specific field in
+  `spec.provider.settings` may accept secret bytes.
 - Numeric, string, and boolean bounds declared in the Provider schema are
   enforced at build time; out-of-bounds values fail the derivation.
 
@@ -1551,13 +1616,13 @@ Rules:
 
 No secret value (credential bytes, token, PSK material, key PEM, password,
 certificate DER/PEM, bearer token, HMAC key) may appear in any Nix spec field,
-any `providerSettings` value, or generated artifact. See "Prohibited fields
-summary" below for the complete list. Provider-required secrets are always
-declared as `Credential/<name>` refs. The `Credential` resource spec carries
-configuration-only fields (`providerRef`, `scope`, `audience`, `consumerRef`,
-`allowedOperations`, `rotation`, `expiry`, `revocation`, and optional
-`providerSettings` where the Provider schema declares it) — never credential
-bytes, tokens, or key material.
+any `spec.provider.settings` value, or generated artifact. See "Prohibited
+fields summary" below for the complete list. Provider-required secrets are
+always declared as `Credential/<name>` refs. The `Credential` resource spec
+carries configuration-only fields (`providerRef`, `scope`, `audience`,
+`consumerRef`, `allowedOperations`, `rotation`, `expiry`, `revocation`, and
+optional `spec.provider` extension where the Provider schema declares it) —
+never credential bytes, tokens, or key material.
 
 Actual secret bytes are injected at runtime via the broker's `StoreCredential`
 op, which is never invoked from Nix. An eval assertion rejects any string field
@@ -1967,8 +2032,8 @@ marked compile-only.
 | `SyncJson`, OFD lock rows | `d2b-core/src/sync.rs`, `nixos-modules/sync-json.nix` | Live | Internal `d2b-contracts` implementation mechanism; removed from Nix artifacts | ADR046-nix-007 |
 | `RealmControllersJson`, `RealmControllerMetadataSummary` | `d2b-core/src/realm_controller_config.rs`; read live by d2bd `realm_access_resolver` | Live | Zone self-resource + ZoneLink bootstrap; `realm-controllers.json` retained during migration | ADR046-nix-008 |
 | `RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary` | `d2b-core/src/realm_workloads_launcher.rs` | Live | Process resource annotations in `zones/<z>/processes.json` | ADR046-nix-009 |
-| `RealmIdentityConfigJson` | `d2b-realm-core/src/identity_config.rs`; loaded live by d2bd | Live | Credential resource `scope`/`audience`/`allowedOperations`/`providerSettings` fields; `realm-identity.json` retained during migration | ADR046-nix-009 |
-| `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | `d2b-realm-core/src/workload.rs` | Live in launcher metadata | `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.providerRef` per table; `UnsafeLocal` → user-only `Host` with `providerSettings.isolationPosture: "none"` (never `Guest`; not a v3 Provider) | ADR046-nix-001 |
+| `RealmIdentityConfigJson` | `d2b-realm-core/src/identity_config.rs`; loaded live by d2bd | Live | Credential resource `scope`/`audience`/`allowedOperations`/`spec.provider.settings` fields; `realm-identity.json` retained during migration | ADR046-nix-009 |
+| `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | `d2b-realm-core/src/workload.rs` | Live in launcher metadata | `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.providerRef` per table; `UnsafeLocal` → user-only `Host` with `spec.isolationPosture: "none"` (never `Guest`; not a v3 Provider) | ADR046-nix-001 |
 | `Capability` enum, `CapabilitySet` | `d2b-realm-core/src/capability.rs` | Live in provider advertisement | Role verbs / Provider descriptor fields per Capability disposition table | ADR046-nix-001 |
 | `RuntimeProvider`, `WorkloadProvider`, `HostSubstrateProvider` traits | `d2b-realm-provider/src/provider.rs` | Live (ACA/local-vm implement these) | Provider component descriptors + `ADR-046-provider-<name>.md` dossiers | ADR046-provider-001 |
 | `OperationRouter`, `DurableExecTable`, `TargetResolver` | `d2b-realm-router/src/`; `d2bd/src/realm_stubs.rs` | COMPILE-ONLY at baseline (`dead_code`-allowed, not called) | `d2b-bus` routing; adapt `RealmSessionAuthority`/`CredentialCustody`/`RealmServiceLimits` from `main:packages/d2b-realm-router/src/service_v2.rs` | ADR046-bus-010 |
@@ -2018,8 +2083,8 @@ Never accepted in any Nix-authored resource spec or generated artifact:
 | Ref validation rejection | Malformed or missing ref fails eval with structured error |
 | Conflict detection | CIDR overlap, owner cycle, and duplicate type/name rejection at eval time |
 | ProcessRole parity | Every `ProcessRole` variant has a corresponding test case in the Process/EphemeralProcess resource schema |
-| Unsafe-local Host | User-only `Host` with `providerSettings.isolationPosture: "none"` reconciled by `Provider/system-core`; child Processes use normal Process Providers; `NoIsolation` condition present in Host status; `no_isolation=true` in `ProcessEffect` audit events; OTEL never labels isolation; CLI/UI warning non-suppressible; no `Guest` emitted |
-| ResourceTypeSchema validation | Every emitted `spec` validates against committed JSON Schema at build time; schema drift gate passes; unknown field in `providerSettings` (where schema declares it) or Provider `config` fails build |
+| Unsafe-local Host | User-only `Host` with `spec.isolationPosture: "none"` reconciled by `Provider/system-core`; child Processes use normal Process Providers; `NoIsolation` condition present in Host status; `no_isolation=true` in `ProcessEffect` audit events; OTEL never labels isolation; CLI/UI warning non-suppressible; no `Guest` emitted |
+| ResourceTypeSchema validation | Every emitted `spec` validates against committed JSON Schema at build time; schema drift gate passes; unknown field in `spec.provider.settings` (where schema declares it) or Provider `config` fails build |
 | Credential ref enforcement | PEM header in spec field fails eval; `Credential/<name>` ref accepted; no secret bytes in any emitted artifact |
 | Bundle integrity | Byte-identical rebuild from identical inputs; `candidateId`/`contentId` match computed values; file digest mismatch fails activation |
 | Absent-resource async Delete | Generation 1 has resource R (`managedBy=configuration`); generation 2 omits R; R enters Pending/PendingDeletion; Zone Degraded; a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone Ready |
@@ -2223,7 +2288,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Current source | `nixos-modules/realm-workloads-launcher-v2-json.nix` (`RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary`; live); `nixos-modules/realm-identity-config-json.nix` (`RealmIdentityConfigJson`; live, read by d2bd from `/etc/d2b/realm-identity.json`); `packages/d2b-core/src/realm_workloads_launcher.rs`; `packages/d2b-realm-core/src/identity_config.rs` |
 | Reuse action | adapt |
 | Destination | Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/processes.json`; `Provider/credential-entra` Credential resource; `realm-identity.json` RETAINED during migration |
-| Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `scope`, `audience`, `allowedOperations`, `providerSettings` where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
+| Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `scope`, `audience`, `allowedOperations`, canonical `spec.provider` extension where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
 | Integration | Provider/display-wayland, Provider/shell-terminal, and Provider/credential-entra consume Process/Credential resources; `d2bd` continues reading `realm-identity.json` until the Credential reader lands. |
 | Data migration | Launcher and identity config are re-emitted as v3 resources; full d2b 3.0 reset; no v2 launcher/identity state import. |
 | Validation | Launcher metadata shape regression; no-secret assertion vectors |
@@ -2238,11 +2303,11 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | ADR046-nix-001; unsafe-local migration |
 | Current source | `nixos-modules/unsafe-local-workloads-json.nix` (`WorkloadProviderKind::UnsafeLocal`/`IsolationPosture::UnsafeLocal`; current `unsafe-local-workloads.json` artifact); `nixos-modules/unsafe-local-helper.nix` (user-domain process/helper definitions); `packages/d2b-core/src/unsafe_local_workloads.rs` |
 | Reuse action | adapt |
-| Destination | User-only `Host` resource in `zones/<z>/hosts.json` (`providerSettings.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/processes.json` using normal Process Providers; shell session supervisor → `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
-| Detailed design | `providerSettings.isolationPosture: "none"` is declared in the Host schema under `providerSettings`; enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; every `ProcessEffect` audit event under this Host carries `no_isolation=true`; OTEL telemetry never carries an isolation label; CLI/UI warning non-suppressible |
+| Destination | User-only `Host` resource in `zones/<z>/hosts.json` (`spec.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/processes.json` using normal Process Providers; shell session supervisor → `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
+| Detailed design | `isolationPosture: "none"` is a promoted Host base field declared at top-level `spec.isolationPosture` in the Host schema; enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; every `ProcessEffect` audit event under this Host carries `no_isolation=true`; OTEL telemetry never carries an isolation label; CLI/UI warning non-suppressible |
 | Integration | The unsafe-local Nix emitter produces a user-only Host plus Process resources; Provider/system-core and shell-terminal consume them; CLI/UI and audit/telemetry surfaces read resulting status/events. |
 | Data migration | unsafe-local declarations migrate to Host/Process resources in Nix; full d2b 3.0 reset; no helper runtime state import. |
-| Validation | User-only Host rejection of system-domain Process refs; `providerSettings.isolationPosture != "none"` assertion rejection for user-only system-core Hosts; `NoIsolation` condition present in status; `no_isolation=true` in `ProcessEffect` audit event; OTEL attribute absent; no Guest emitted for unsafe-local declaration |
+| Validation | User-only Host rejection of system-domain Process refs; `spec.isolationPosture != "none"` assertion rejection for user-only system-core Hosts; `NoIsolation` condition present in status; `no_isolation=true` in `ProcessEffect` audit event; OTEL attribute absent; no Guest emitted for unsafe-local declaration |
 | Tests | `tests/unit/nix/cases/zones-unsafe-local.nix`; `tests/host-integration/unsafe-local-helper.nix` extended |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `unsafe-local-workloads-json.nix` and unsafe-local-specific Nix code removed after user-only Host/Process resources pass all `tests/host-integration/unsafe-local-helper.nix` tests |
@@ -2378,11 +2443,11 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | ADR046-nix-005; ADR046-nix-001; `d2b-contracts` schema generation (ADR046-nix-027) |
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, mode/ownership); `nixos-modules/bundle.nix` (digest chain, SHA256SUMS); `packages/xtask/src/main.rs` (`gen-schemas`); no current per-ResourceType JSON Schema under `docs/reference/schemas/v3/` |
 | Reuse action | extend xtask schema generation; new Nix eval/build validation hooks |
-| Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `providerSettings` where declared in schema, and Provider `config`, against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |
+| Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `spec.provider.settings` where declared in schema, and Provider `config`, against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |
 | Detailed design | `cargo xtask gen-schemas` emits one JSON Schema per ResourceType under `docs/reference/schemas/v3/`; Nix derivation reads these schemas from `pkgs.d2b-resource-schemas` and validates every emitted `spec` JSON before producing the Zone bundle; Provider-settings validation reads `settingsSchemaDigest` from `provider-catalog.json` and resolves the schema from the Provider package closure; Credential ref enforcement: eval assertion rejects any `spec` string field matching `-----BEGIN`, `eyJ`, or a hex string ≥ 32 bytes in a secret-typed field; `managedBy` in any input spec rejected at eval (core-set runtime field, never in Nix input); bundle integrity: `candidateId`/`contentId` computed over canonical sorted output |
 | Integration | Validation hooks wired into `bundle-zones.nix` derivation; `d2b-activation-helper` re-verifies digest chain at staging |
 | Data migration | None — docs/tooling only; no runtime state |
-| Validation | Schema round-trip: emit spec, validate against schema, verify byte-identical re-emit; `providerSettings` rejection test (unknown field, out-of-bounds value, raw store path, secret bytes) where schema declares the field; Provider `config` rejection test (unknown field); Credential ref enforcement: PEM-in-spec rejected; secret-pattern-in-spec rejected; valid `Credential/<name>` ref accepted; `managedBy` in spec input rejected at eval |
+| Validation | Schema round-trip: emit spec, validate against schema, verify byte-identical re-emit; `spec.provider.settings` rejection test (unknown field, out-of-bounds value, raw store path, secret bytes) where schema declares the field; Provider `config` rejection test (unknown field); Credential ref enforcement: PEM-in-spec rejected; secret-pattern-in-spec rejected; valid `Credential/<name>` ref accepted; `managedBy` in spec input rejected at eval |
 | Tests | `tests/unit/nix/cases/resource-schema-validation.nix`; `tests/unit/nix/cases/provider-settings-validation.nix`; `tests/unit/nix/cases/credential-ref-enforcement.nix`; `tests/unit/nix/cases/managed-by-rejection.nix`; `packages/d2b-contract-tests/tests/resource-schema-round-trip.rs` |
 | Drift pin | `make test-drift` after any `gen-schemas` run; `make nix-unit-pin` after adding cases |
 | Removal proof | Not removed; extended as new ResourceTypes are added |

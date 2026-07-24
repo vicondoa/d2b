@@ -45,8 +45,6 @@ Provider-specific desired extension and replaces the former Host/Guest
 `observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
 rather than observed.
 
-Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
-
 **D091 update policy.** The universal base spec carries `spec.updatePolicy` for
 every Host, Guest, Process, EphemeralProcess, and User resource: disruptive
 changes default to manual, while automatic non-disruptive upgrades are permitted
@@ -83,8 +81,8 @@ plus base status. For the same Provider, the `spec.provider` and
 `status.provider` schemas align.
 
 In Host, the no-isolation `isolationPosture` semantic is a promoted Host base
-field wherever this file's older `providerSettings` examples mention it; it is
-not a Provider extension.
+field at top-level `spec.isolationPosture`; it is never carried in the
+`spec.provider` extension.
 
 ## Shared field schemas
 
@@ -141,7 +139,7 @@ except `providerRef`.
 | `networkAttachments` | NetworkAttachmentList | `[]` | 0..64 items | Ordered list of Zone Networks that Processes under this Host or Guest may attach to. Each entry: `{networkRef: Network/<name>, default: bool}`. At most one entry may set `default: true`. |
 | `deviceAttachments` | DeviceAttachmentList | `[]` | 0..64 items | Device refs available for Process device usage. Each entry: `{deviceRef: Device/<name>, exclusive: bool}`. |
 | `volumeAttachmentDefaults` | VolumeAttachmentDefaultList | `[]` | 0..64 items | Default Volume attachment settings propagated to Processes that reference listed volumes. |
-| `providerSettings` | object | `{}` | bounded; schema from Provider | Provider-specific settings validated against the installed Provider's exported Host or Guest schema extension. Unknown fields are rejected unless the Provider schema declares a bounded vendor extension object. |
+| `provider` | object? | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional selected-Provider extension envelope (D089). `settings` carries implementation-only desired settings validated against the selected Provider's exported Host or Guest schema (`<provider>.d2bus.org/<Type>/spec`); strict deny-unknown, bounded. MUST NOT shadow or restate a base field. |
 
 NetworkAttachmentList entry:
 
@@ -358,15 +356,19 @@ Full field table:
 | `networkAttachments` | list | no | `[]` | 0..64 | Network refs available to Processes on this Host. |
 | `deviceAttachments` | list | no | `[]` | 0..64 | Device refs available to Processes on this Host. |
 | `volumeAttachmentDefaults` | list | no | `[]` | 0..64 | Volume attachment defaults propagated to child Processes. |
-| `providerSettings` | object | no | `{}` | Provider schema | system-core typed Host extension settings. |
+| `isolationPosture` | string? | no | `null` | `null\|"none"` | Promoted Host base field (not a provider extension). `"none"` marks a user-only no-isolation Host and requires `defaultDomain=user`, `allowedDomains=["user"]`, and `defaultUserRef` set (and that tuple conversely requires `"none"`; `null` used to evade the no-isolation warning is rejected). Reflected in status. System processes are denied at admission when set to `"none"`. |
+| `provider` | object? | no | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional `Provider/system-core` extension envelope (D089), schema `system-core.d2bus.org/Host/spec`; see `spec.provider.settings` below. Strict deny-unknown; MUST NOT shadow a base field. |
 
-`providerSettings` for `Provider/system-core`:
+`spec.provider.settings` for `Provider/system-core` (schemaId `system-core.d2bus.org/Host/spec`, schemaVersion `1.0`):
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `isolationPosture` | string? | `null` | If `"none"`, this Host is a user-only no-isolation Host: `defaultDomain` must be `user`, `allowedDomains` must be exactly `["user"]`, and `defaultUserRef` must be set. Conversely, `defaultDomain=user` + `allowedDomains=["user"]` + `defaultUserRef` set requires `isolationPosture="none"`; using `null` to evade the no-isolation warning is rejected. Reflected in status. System processes are denied at admission when set to `"none"`. |
 | `kernelVersionMin` | string? | `null` | Minimum required kernel version string, e.g. `"6.1"`. Reconcile fails if running kernel is older. |
 | `capabilities` | `[HostCapabilityClass]` | `[]` | Capabilities this Host is expected to expose. Reconcile reports status.capabilities against this claim. |
+
+The no-isolation `isolationPosture` field is a promoted Host base field at
+top-level `spec.isolationPosture` (see the base spec table above); it is never a
+`spec.provider.settings` field.
 
 `HostCapabilityClass` enumeration:
 
@@ -456,7 +458,7 @@ Host-specific status fields:
 | `kernelRelease` | string | Observed kernel release string from uname(2). Bounded to 64 chars. Not included in audit payloads. |
 | `osName` | string | Bounded OS identifier string from /etc/os-release NAME. Max 128 chars. |
 | `userManagerAvailable` | bool | True when the configured `defaultUserRef`'s systemd user manager is reachable and healthy. |
-| `isolationPosture` | string? | Reflects `spec.providerSettings.isolationPosture`. `"none"` when this is a user-only no-isolation Host. Shown in operator UI as explicit no-isolation warning. Null/absent for all other Hosts. |
+| `isolationPosture` | string? | Reflects `spec.isolationPosture`. `"none"` when this is a user-only no-isolation Host. Shown in operator UI as explicit no-isolation warning. Null/absent for all other Hosts. |
 | `activeProcessCount` | u32 | Count of non-terminal Process/EphemeralProcess resources targeting this Host. Informational only. |
 
 No PID, pidfd, socket path, internal node name, or raw host diagnostic is
@@ -466,8 +468,8 @@ exposed in public status or audit.
 
 | Condition type | Ready = True when | Ready = False when | reason codes |
 | --- | --- | --- | --- |
-| `HostAvailable` | Host OS is reachable and matches providerSettings | Host OS unreachable or kernel version requirement unmet | `host-unreachable`, `kernel-too-old`, `cgroup-unavailable` |
-| `CapabilitiesVerified` | All spec.providerSettings.capabilities are observed | One or more claimed capabilities absent | `capability-absent-<class>` |
+| `HostAvailable` | Host OS is reachable and matches `spec.provider.settings` | Host OS unreachable or kernel version requirement unmet | `host-unreachable`, `kernel-too-old`, `cgroup-unavailable` |
+| `CapabilitiesVerified` | All `spec.provider.settings.capabilities` are observed | One or more claimed capabilities absent | `capability-absent-<class>` |
 | `UserManagerReady` | User domain allowed and user manager reachable | User manager not running or unreachable | `user-manager-unavailable`, `user-manager-unknown` |
 | `PolicyValid` | spec fields pass admission invariants | allowedDomains/defaultUserRef inconsistency detected | `spec-invalid-domains`, `spec-missing-default-user-ref` |
 | `BudgetAdmitted` | Aggregate budget within Zone capacity | Overcommit detected | `budget-overcommit` |
@@ -578,23 +580,23 @@ Full field table:
 | `deviceAttachments` | list | no | `[]` | 0..64 | Devices available to Processes on this Guest. |
 | `volumeAttachmentDefaults` | list | no | `[]` | 0..64 | Volume attachment defaults. |
 | `systemArtifactId` | string? | no | `null` | `^[a-z][a-z0-9-]*$`; max 63 chars | Artifact ID for the NixOS system closure (kernel + initrd + rootfs). Must exist in `d2b.artifacts` with `type="nixos-system"`. Used by local VM Providers (e.g. `runtime-cloud-hypervisor`). `null` for cloud/remote Providers that do not boot a Nix-built system. |
-| `providerSettings` | object | no | `{}` | Provider schema extension | Provider-specific boot/identity/runtime settings. Validated against the selected runtime Provider's exported Guest schema. |
+| `provider` | object? | no | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional selected-Provider extension envelope (D089). `settings` carries Provider-specific boot/identity/runtime settings validated against the selected runtime Provider's exported Guest schema (`<runtime-provider>.d2bus.org/Guest/spec`). Strict deny-unknown; MUST NOT shadow a base field. |
 
-`providerSettings` is the primary extension point for Provider-specific
+`spec.provider.settings` is the primary extension point for Provider-specific
 behavior. Each runtime Provider exports its Guest schema extension through its
 `ResourceApiExport`. Common fields across all four providers (informative;
 exact fields owned by each Provider's dossier):
 
-| Provider | Typical providerSettings fields |
+| Provider (schemaId) | Typical `spec.provider.settings` fields |
 | --- | --- |
-| `runtime-cloud-hypervisor` | `vcpus`, `memoryMb`, `cmdline`, `vsockCid`, `machineType`, `consoleType`, `serialPort`, `pvpanic` |
-| `runtime-qemu-media` | `mediaSourceRef`, `mediaFormat`, `vcpus`, `memoryMb`, `machineType`, `displayOutput` |
-| `runtime-azure-container-apps` | `containerGroup`, `environmentId`, `revision`, `minReplicas`, `maxReplicas` |
-| `runtime-azure-virtual-machine` | `vmSize`, `imageRef`, `diskSku`, `adminUser`, `publicKeyRef`, `region` |
+| `runtime-cloud-hypervisor` (`runtime-cloud-hypervisor.d2bus.org/Guest/spec`) | `vcpus`, `memoryMb`, `cmdline`, `vsockCid`, `machineType`, `consoleType`, `serialPort`, `pvpanic` |
+| `runtime-qemu-media` (`runtime-qemu-media.d2bus.org/Guest/spec`) | `mediaSourceRef`, `mediaFormat`, `vcpus`, `memoryMb`, `machineType`, `displayOutput` |
+| `runtime-azure-container-apps` (`runtime-azure-container-apps.d2bus.org/Guest/spec`) | `containerGroup`, `environmentId`, `revision`, `minReplicas`, `maxReplicas` |
+| `runtime-azure-virtual-machine` (`runtime-azure-virtual-machine.d2bus.org/Guest/spec`) | `vmSize`, `imageRef`, `diskSku`, `adminUser`, `publicKeyRef`, `region` |
 
-This spec does not define the exact `providerSettings` field list for each
+This spec does not define the exact `spec.provider.settings` field list for each
 runtime Provider. That is owned by each Provider's dossier spec. API binding
-rejects unknown top-level `providerSettings` fields not declared by the
+rejects unknown `spec.provider.settings` fields not declared by the
 installed Provider's schema.
 
 ### Status schema
@@ -669,7 +671,7 @@ and `providerPhase` are the only provider-observable identity fields.
 | `BootstrapReady` | All required bootstrap sub-resources are Ready | One or more bootstrap resources Pending/Failed | `bootstrap-process-failed`, `bootstrap-process-pending` |
 | `GuestReachable` | Guest passes the runtime Provider's authenticated health check | Health check failed or timed out | `health-check-failed`, `health-check-timeout` |
 | `CapabilitiesVerified` | All declared device/network attachments reachable | Attachment missing or failed | `device-attachment-failed`, `network-attachment-failed` |
-| `PolicyValid` | spec passes admission invariants | allowedDomains/defaultUserRef/providerSettings error | `spec-invalid-domains`, `spec-provider-settings-invalid` |
+| `PolicyValid` | spec passes admission invariants | allowedDomains/defaultUserRef/`spec.provider.settings` error | `spec-invalid-domains`, `spec-provider-schema-invalid` |
 | `BudgetAdmitted` | Aggregate budget within Zone capacity | Overcommit | `budget-overcommit` |
 
 Phase is `Ready` only when `GuestProvisioned`, `BootstrapReady`, and
@@ -700,7 +702,7 @@ common contract:
 
 1. Receive trigger.
 2. Read fresh Guest spec snapshot plus owned children snapshot.
-3. Validate spec invariants and providerSettings against the Provider schema.
+3. Validate spec invariants and `spec.provider.settings` against the Provider schema.
 4. Assert or create the required owned child Process/EphemeralProcess bootstrap
    graph (VMM, virtiofsd, guest-control, etc.) using the owner-child mechanism.
 5. Wait for bootstrap children to reach Ready.
@@ -1548,7 +1550,7 @@ with a stable error code and a bounded redacted message. No partial mutation.
 
 ### User-only Host posture (no isolation)
 
-When `Host.spec.providerSettings.isolationPosture = "none"`:
+When `Host.spec.isolationPosture = "none"`:
 
 - `allowedDomains` must be exactly `[user]`. System processes rejected.
 - `defaultDomain` must be `user`.
@@ -1749,14 +1751,14 @@ Each entry in `d2b.zones.<zone>.resources` is a `types.submodule` with:
 | `metadata` | `types.submodule` | no | Author-settable metadata: `ownerRef`, `labels`, `annotations` only; all optional |
 | `spec` | `types.submodule` (type-dependent) | yes | Exact ResourceType spec fields; auto-generated from `packages/d2b-contracts/src/v3/schemas/<Type>.json`; field names 1:1 with the spec tables above; no renaming |
 
-`spec` submodule fields are generated from the committed ResourceTypeSchema JSON. For `spec.providerSettings`, sub-fields are additionally constrained by the Provider's `providerNixSettingsSchema` attribute; the schema version is recorded in the private bundle integrity metadata and verified by the activation controller (fail-closed on mismatch).
+`spec` submodule fields are generated from the committed ResourceTypeSchema JSON. For `spec.provider.settings`, sub-fields are additionally constrained by the Provider's `providerNixSettingsSchema` attribute; the schema version is recorded in the private bundle integrity metadata and verified by the activation controller (fail-closed on mismatch).
 
 **Key `spec` constraints by type** (full rule list below):
 
 | `type` | Key `spec` constraints enforced at eval time |
 | --- | --- |
-| `"Host"` | `spec.providerRef` must be a declared substrate Provider; `spec.allowedDomains` must include `spec.defaultDomain`; `spec.providerSettings.isolationPosture = "none"` implies `spec.allowedDomains == ["user"]`, `spec.defaultDomain == "user"`, and `spec.defaultUserRef` set (and vice-versa: that tuple implies `isolationPosture = "none"`) |
-| `"Guest"` | `spec.providerRef` must be a declared runtime Provider; `spec.providerSettings` validated against Provider settings schema; `spec.systemArtifactId`, if set, must exist in `d2b.artifacts` with `type="nixos-system"` (rule 17) |
+| `"Host"` | `spec.providerRef` must be a declared substrate Provider; `spec.allowedDomains` must include `spec.defaultDomain`; `spec.isolationPosture = "none"` implies `spec.allowedDomains == ["user"]`, `spec.defaultDomain == "user"`, and `spec.defaultUserRef` set (and vice-versa: that tuple implies `isolationPosture = "none"`) |
+| `"Guest"` | `spec.providerRef` must be a declared runtime Provider; `spec.provider.settings` validated against Provider settings schema; `spec.systemArtifactId`, if set, must exist in `d2b.artifacts` with `type="nixos-system"` (rule 17) |
 | `"Process"` | `spec.executionRef` resolves to a declared Host or Guest; `spec.domain ∈ executionRef.spec.allowedDomains`; `spec.template`, when set, is resolved at runtime by the controller of `metadata.ownerRef` (or `spec.providerRef`); no ownerRef type restriction |
 | `"EphemeralProcess"` | Same as Process; `spec.startDeadline` and `spec.runtimeDeadline` required; no `spec.restartPolicy` |
 | `"User"` | `spec.osUsername` required (1..255 bytes, no NUL/control/path separators); `spec.groups` items match `^[a-z_][a-z0-9_-]*$` |
@@ -1771,13 +1773,13 @@ The Nix resource compiler enforces all of the following at `nixos-rebuild build`
 4. **Provider kind check**: `spec.providerRef` for `type="Host"` must be a substrate Provider; for `type="Guest"` must be a runtime Provider; for `type="Process"` or `type="EphemeralProcess"` must be a Process Provider.
 5. **Domain inclusion**: `spec.defaultDomain ∈ spec.allowedDomains`; for Process/EphemeralProcess, `spec.domain ∈ executionRef.spec.allowedDomains`.
 6. **User-domain userRef**: when `spec.domain == "user"` and `spec.executionRef` target has no `spec.defaultUserRef`, `spec.userRef` must be set.
-7. **Isolation-posture constraints** (bidirectional): `spec.providerSettings.isolationPosture = "none"` implies `spec.allowedDomains == ["user"]`, `spec.defaultDomain == "user"`, and `spec.defaultUserRef` is set. Conversely, `spec.allowedDomains == ["user"]` + `spec.defaultDomain == "user"` + `spec.defaultUserRef` set implies `spec.providerSettings.isolationPosture == "none"`; `null` is rejected to prevent evasion of the no-isolation warning. Any value for `isolationPosture` other than `null` or `"none"` is a hard eval error.
+7. **Isolation-posture constraints** (bidirectional): `spec.isolationPosture = "none"` implies `spec.allowedDomains == ["user"]`, `spec.defaultDomain == "user"`, and `spec.defaultUserRef` is set. Conversely, `spec.allowedDomains == ["user"]` + `spec.defaultDomain == "user"` + `spec.defaultUserRef` set implies `spec.isolationPosture == "none"`; `null` is rejected to prevent evasion of the no-isolation warning. Any value for `isolationPosture` other than `null` or `"none"` is a hard eval error.
 8. **osUsername bounds**: `spec.osUsername` 1..255 bytes, no NUL/control/path-separator characters.
 9. **Budget bounds**: `spec.budget.<dim>.request ≤ spec.budget.<dim>.limit` for every dimension where both are set.
 10. **Mount uniqueness**: no two entries in `spec.mounts` have the same `mountPath`.
 11. **No self-referential ownerRef**: `metadata.ownerRef` must not equal `"<type>/<name>"` of the resource itself.
-12. **No inline secrets**: `spec.providerSettings` string fields with credential-suffix names (`password`, `token`, `secret`, `key`, `cert`, `credential`) are hard eval errors; credentials must be `Credential/<name>` refs.
-13. **Provider settings schema**: each Provider declaring `providerNixSettingsSchema` has `spec.providerSettings` validated against that schema; SHA-256 recorded as `providerSchemaFingerprint`.
+12. **No inline secrets**: `spec.provider.settings` string fields with credential-suffix names (`password`, `token`, `secret`, `key`, `cert`, `credential`) are hard eval errors; credentials must be `Credential/<name>` refs.
+13. **Provider settings schema**: each Provider declaring `providerNixSettingsSchema` has `spec.provider.settings` validated against that schema; SHA-256 recorded as `providerSchemaFingerprint`.
 14. **Groups grammar**: each item in `spec.groups` matches `^[a-z_][a-z0-9_-]*$`.
 15. **Template scoping**: `spec.template`, when set, satisfies `^[a-z][a-z0-9-]*$`, max 63 chars (grammar check). Template resolution is runtime: the registered controller of `metadata.ownerRef` (or `spec.providerRef` when ownerRef is absent) must declare this ID. No ownerRef type restriction at eval time.
 16. **Flat namespace uniqueness**: no two entries in `d2b.zones.<zone>.resources` may share the same `<name>` key regardless of `type`.
@@ -1817,7 +1819,11 @@ d2b.zones.dev.resources.host-system = {
     allowedDomains = [ "system" "user" ];
     defaultUserRef = "User/alice";
     budget = { cpu.request = "2000m"; cpu.limit = "8000m"; memory.request = "1Gi"; memory.limit = "16Gi"; };
-    providerSettings.capabilities = [ "kvm" "pidfd" "cgroup-v2" "user-namespace" "wayland" "audio-pipewire" ];
+    provider = {
+      schemaId = "system-core.d2bus.org/Host/spec";
+      schemaVersion = "1.0";
+      settings.capabilities = [ "kvm" "pidfd" "cgroup-v2" "user-namespace" "wayland" "audio-pipewire" ];
+    };
   };
 };
 ```
@@ -1833,9 +1839,9 @@ d2b.zones.dev.resources.host-system = {
     "allowedDomains": ["system", "user"],
     "budget": { "cpu": { "limit": "8000m", "request": "2000m" }, "memory": { "limit": "16Gi", "request": "1Gi" } },
     "defaultDomain": "system", "defaultUserRef": "User/alice",
-    "deviceAttachments": [], "networkAttachments": [],
-    "providerRef": "Provider/system-core",
-    "providerSettings": { "capabilities": ["audio-pipewire", "cgroup-v2", "kvm", "pidfd", "user-namespace", "wayland"], "isolationPosture": null }
+    "deviceAttachments": [], "isolationPosture": null, "networkAttachments": [],
+    "provider": { "schemaId": "system-core.d2bus.org/Host/spec", "schemaVersion": "1.0", "settings": { "capabilities": ["audio-pipewire", "cgroup-v2", "kvm", "pidfd", "user-namespace", "wayland"] } },
+    "providerRef": "Provider/system-core"
   },
   "type": "Host"
 }
@@ -1851,7 +1857,7 @@ d2b.zones.dev.resources.host-unsafe-local = {
     defaultDomain = "user";
     allowedDomains = [ "user" ];
     defaultUserRef = "User/alice";
-    providerSettings.isolationPosture = "none";
+    isolationPosture = "none";
   };
 };
 ```
@@ -1862,9 +1868,9 @@ d2b.zones.dev.resources.host-unsafe-local = {
   "metadata": { "annotations": {}, "labels": {}, "name": "host-unsafe-local", "ownerRef": null, "zone": "dev" },
   "spec": {
     "allowedDomains": ["user"], "budget": null, "defaultDomain": "user",
-    "defaultUserRef": "User/alice", "deviceAttachments": [], "networkAttachments": [],
-    "providerRef": "Provider/system-core",
-    "providerSettings": { "capabilities": [], "isolationPosture": "none" }
+    "defaultUserRef": "User/alice", "deviceAttachments": [], "isolationPosture": "none",
+    "networkAttachments": [], "provider": null,
+    "providerRef": "Provider/system-core"
   },
   "type": "Host"
 }
@@ -1886,10 +1892,14 @@ d2b.zones.dev.resources.dev-vm = {
     defaultDomain = "system";
     allowedDomains = [ "system" "user" ];
     defaultUserRef = "User/alice";
-    systemArtifactId = "dev-vm-system";   # top-level spec field; not in providerSettings
+    systemArtifactId = "dev-vm-system";   # top-level spec field; not in spec.provider.settings
     budget = { cpu.request = "1000m"; cpu.limit = "4000m"; memory.request = "512Mi"; memory.limit = "4Gi"; };
     networkAttachments = [ { networkRef = "Network/dev-lan"; default = true; } ];
-    providerSettings = { vcpus = 4; memoryMb = 4096; vsockCid = 3; machineType = "q35"; consoleType = "virtio"; };
+    provider = {
+      schemaId = "runtime-cloud-hypervisor.d2bus.org/Guest/spec";
+      schemaVersion = "1.0";
+      settings = { vcpus = 4; memoryMb = 4096; vsockCid = 3; machineType = "q35"; consoleType = "virtio"; };
+    };
   };
 };
 ```
@@ -1905,8 +1915,8 @@ Resource bundle JSON (`systemArtifactId` is a top-level spec field; no store pat
     "budget": { "cpu": { "limit": "4000m", "request": "1000m" }, "memory": { "limit": "4Gi", "request": "512Mi" } },
     "defaultDomain": "system", "defaultUserRef": "User/alice", "deviceAttachments": [],
     "networkAttachments": [{ "default": true, "networkRef": "Network/dev-lan" }],
+    "provider": { "schemaId": "runtime-cloud-hypervisor.d2bus.org/Guest/spec", "schemaVersion": "1.0", "settings": { "consoleType": "virtio", "machineType": "q35", "memoryMb": 4096, "vcpus": 4, "vsockCid": 3 } },
     "providerRef": "Provider/runtime-cloud-hypervisor",
-    "providerSettings": { "consoleType": "virtio", "machineType": "q35", "memoryMb": 4096, "vcpus": 4, "vsockCid": 3 },
     "systemArtifactId": "dev-vm-system",
     "volumeAttachmentDefaults": []
   },
@@ -2068,8 +2078,8 @@ The zone configuration controller retains the N most recently activated, cleanup
 **Eval/build tests** (run by `make test-flake` / `nix-unit`):
 
 1. `type = "Host"` with all `spec` fields renders exact golden JSON vector; `metadata.ownerRef = null`; `metadata.annotations = {}`; `metadata.labels = {}`; `spec` keys sorted; no `configOwned`, no `managedBy`, no `configurationGeneration`, no `schemaFingerprint`, no `providerSchemaFingerprint` in ResourceEnvelope.
-2. `type = "Host"`, `spec.providerSettings.isolationPosture = "none"`, `spec.allowedDomains = ["system"]` → eval error; rule 7 code.
-3. `type = "Host"`, `spec.providerSettings.isolationPosture = "none"`, `spec.defaultUserRef = null` → eval error; rule 7 code.
+2. `type = "Host"`, `spec.isolationPosture = "none"`, `spec.allowedDomains = ["system"]` → eval error; rule 7 code.
+3. `type = "Host"`, `spec.isolationPosture = "none"`, `spec.defaultUserRef = null` → eval error; rule 7 code.
 4. `type = "Guest"` with `spec.providerRef = "Provider/system-core"` (substrate, not runtime) → eval error; rule 4 code.
 5. `type = "Process"`, `spec.domain = "system"`, `spec.executionRef` resolves to Host with `spec.allowedDomains = ["user"]` → eval error; rule 5 code.
 6. `type = "Process"`, `spec.domain = "user"`, no `spec.userRef`, no `executionRef.spec.defaultUserRef` → eval error; rule 6 code.
@@ -2079,12 +2089,12 @@ The zone configuration controller retains the N most recently activated, cleanup
 10. `type = "Process"`, `metadata.ownerRef = "Guest/dev-vm"`: JSON has `metadata.ownerRef = "Guest/dev-vm"` and `spec` contains no `ownerRef` field.
 11. `metadata.ownerRef` referencing a non-existent resource in the same Zone → eval error; rule 3 code.
 12. `metadata.ownerRef = "Bogus/nonexistent"` (unknown ResourceType) → eval error; rule 3 code. Also: `metadata.ownerRef = "Process/self"` on the same resource → eval error; rule 11 (no-self-ref) code. Also: `metadata.ownerRef` referencing a declared resource in a different Zone → eval error; rule 3 cross-Zone rejection. Also: `metadata.ownerRef = "Host/unresolved"` where `Host/unresolved` is not declared in `d2b.zones.<zone>.resources` → eval error; rule 3 unresolved ref code.
-13. `d2b.artifacts.dev-vm-system = { package = <drv>; type = "nixos-system"; }`, Guest resource `spec.systemArtifactId = "dev-vm-system"` (top-level spec field) → valid; artifact catalog emits `"dev-vm-system": { "sha256": "...", "size": ..., "type": "nixos-system" }`; ResourceEnvelope contains `"systemArtifactId": "dev-vm-system"` in `spec` (not in providerSettings) and no store path anywhere in the envelope; rule 17 passes.
+13. `d2b.artifacts.dev-vm-system = { package = <drv>; type = "nixos-system"; }`, Guest resource `spec.systemArtifactId = "dev-vm-system"` (top-level spec field) → valid; artifact catalog emits `"dev-vm-system": { "sha256": "...", "size": ..., "type": "nixos-system" }`; ResourceEnvelope contains `"systemArtifactId": "dev-vm-system"` in `spec` (not in `spec.provider.settings`) and no store path anywhere in the envelope; rule 17 passes.
 14. Guest resource `spec.systemArtifactId = "missing-system"` with no `d2b.artifacts.missing-system` entry → hard eval error; rule 17 code.
 15. Guest resource `spec.systemArtifactId = "display-wayland-v1"` where `d2b.artifacts."display-wayland-v1".type = "provider"` → hard eval error; rule 17 code (type mismatch).
 16. Duplicate `d2b.artifacts.<id>` key in the same `d2b.artifacts` attrset → Nix parse-time attrset key collision error before any eval rule runs.
-17. `type = "Host"`, `spec.providerSettings.isolationPosture = "none"`, `spec.defaultDomain = "user"`, `spec.allowedDomains = ["user"]`, `spec.defaultUserRef = "User/alice"` → valid; rendered JSON has `"isolationPosture": "none"` in `providerSettings`; positive test for the user-only no-isolation Host configuration.
-18. `type = "Host"`, `spec.providerSettings.isolationPosture = null`, `spec.defaultDomain = "user"`, `spec.allowedDomains = ["user"]`, `spec.defaultUserRef = "User/alice"` → eval error; rule 7 code (bidirectional: null cannot be used to evade the no-isolation posture declaration).
+17. `type = "Host"`, `spec.isolationPosture = "none"`, `spec.defaultDomain = "user"`, `spec.allowedDomains = ["user"]`, `spec.defaultUserRef = "User/alice"` → valid; rendered JSON has top-level `"isolationPosture": "none"` in `spec` (not under `provider`); positive test for the user-only no-isolation Host configuration.
+18. `type = "Host"`, `spec.isolationPosture = null`, `spec.defaultDomain = "user"`, `spec.allowedDomains = ["user"]`, `spec.defaultUserRef = "User/alice"` → eval error; rule 7 code (bidirectional: null cannot be used to evade the no-isolation posture declaration).
 
 **Runtime/integration tests** (run by `make test-integration`):
 
@@ -2135,7 +2145,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate introduced by any w
 | `src/` | yes | Implementation source, binary entry points (`main.rs` / `bin/`), and colocated unit tests (`#[cfg(test)]` modules). All provider controller, reconcile, service, and worker logic lives here. |
 | `tests/` | yes | Hermetic Cargo integration tests with no external services or live sockets: ResourceType lifecycle (create/update/delete/watch), controller reconcile/finalize state machines, conformance gate (all shared process conformance cases must pass), and fault injection (crash/restart/timeout/overload). Tests in this directory are run by bare `cargo test -p <crate>`. |
 | `integration/` | yes | Heavier fixtures and scenarios that require containers, live Hosts or Guests, cross-process IPC, or real Provider subsystems. These are invoked by the existing test orchestration (`make test-integration`, `make test-host-integration`) and are not run by bare `cargo test`. Each scenario must include a `README.md` describing its prerequisites and invocation. |
-| `README.md` | yes | Provider identity and descriptor (ID, version, supported ResourceTypes); `spec.providerSettings` config schema with all fields, types, defaults, and validation rules; ResourceTypes reconciled by this Provider and their lifecycle guarantees; controllers, services, workers, and binaries with their roles and cgroup/principal placement; Host/Guest placement rules and restrictions; dependencies, RBAC verbs, and Credential requirements; security posture, state ownership model, and canonical telemetry labels; `cargo build`, `cargo test`, and integration test invocation commands; future standalone-repo usage notes. |
+| `README.md` | yes | Provider identity and descriptor (ID, version, supported ResourceTypes); `spec.provider.settings` config schema with all fields, types, defaults, and validation rules; ResourceTypes reconciled by this Provider and their lifecycle guarantees; controllers, services, workers, and binaries with their roles and cgroup/principal placement; Host/Guest placement rules and restrictions; dependencies, RBAC verbs, and Credential requirements; security posture, state ownership model, and canonical telemetry labels; `cargo build`, `cargo test`, and integration test invocation commands; future standalone-repo usage notes. |
 
 A work item whose `Destination` row introduces a new `d2b-provider-*` crate must list all four required paths in that row and must include README content acceptance criteria in its `Validation` row. Work items that extend an existing crate (adding new source files to `src/` or new tests to `tests/`) inherit the layout from the introducing work item and need not repeat it.
 
@@ -2178,7 +2188,7 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Dependency/owner | ADR046-exec-001; system-core Provider owner |
 | Current source | `packages/d2b-core/src/host_check.rs`: `HostCheckReport`, `HostCheckSummary`, `HostCheckFinding`, `HostCheckSeverity`; `packages/d2bd/src/pidfs_probe.rs`; `packages/d2bd/src/kernel_module_check.rs`; `packages/d2b-core/src/provider_capabilities.rs`; `packages/d2b-realm-core/src/ids.rs`: `HostResourceId` (current host-identity handle), `NodeId` (execution node identity); `packages/d2b-realm-core/src/node.rs`: `NodeKind::FullHost`, `NodeSummary` (host node's capability advertisement — direct reuse model for Host status `capabilities[]`) |
 | Reuse action | extract and adapt |
-| Destination | `packages/d2b-provider-system-core/src/host.rs`: HostReconciler; status/conditions/capability probe implementation; `packages/d2b-provider-system-core/tests/`: hermetic reconcile/conformance/fault tests; `packages/d2b-provider-system-core/integration/`: Host probe and lifecycle integration scenarios; `packages/d2b-provider-system-core/README.md`: Provider identity, providerSettings schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
+| Destination | `packages/d2b-provider-system-core/src/host.rs`: HostReconciler; status/conditions/capability probe implementation; `packages/d2b-provider-system-core/tests/`: hermetic reconcile/conformance/fault tests; `packages/d2b-provider-system-core/integration/`: Host probe and lifecycle integration scenarios; `packages/d2b-provider-system-core/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
 | Detailed design | Async Host reconcile loop per this spec's Reconcile section; HostCapabilityClass probe set (kvm/pidfd/cgroup-v2/user-namespace/wayland/audio-pipewire/gpu-render/tpm2/usbip); bounded OS probes with timeout; `isolationPosture` validation and status; aggregate budget reservation tracking via List; status write with expected revision |
 | Integration | Provider/system-core fixed bootstrap process; ResourceClient Get/List/UpdateStatus |
 | Data migration | New Host resources from Nix; no v2 state import |
@@ -2223,7 +2233,7 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Dependency/owner | ADR046-exec-001 + ADR046-exec-002; system-systemd Process Provider owner |
 | Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs`; `packages/d2b-guestd/src/exec.rs`: `SystemdRunUnitManager`, `ManagedUnit`, `ExecPolicy`; `packages/d2b-guestd/src/exec_linux.rs`; `packages/d2bd/src/supervisor/` (transient unit management) |
 | Reuse action | extract and adapt |
-| Destination | `packages/d2b-provider-system-systemd/src/`: launch.rs, adoption.rs, pidfd.rs, wait.rs, user_supervisor.rs; `packages/d2b-provider-system-systemd/tests/`: hermetic lifecycle/conformance/fault tests; `packages/d2b-provider-system-systemd/integration/`: transient-unit and user-supervisor integration scenarios; `packages/d2b-provider-system-systemd/README.md`: Provider identity, providerSettings schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
+| Destination | `packages/d2b-provider-system-systemd/src/`: launch.rs, adoption.rs, pidfd.rs, wait.rs, user_supervisor.rs; `packages/d2b-provider-system-systemd/tests/`: hermetic lifecycle/conformance/fault tests; `packages/d2b-provider-system-systemd/integration/`: transient-unit and user-supervisor integration scenarios; `packages/d2b-provider-system-systemd/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
 | Detailed design | system-systemd Process/EphemeralProcess provider conformance per this spec's system-systemd conformance section; transient system unit (Type=exec); InvocationID+cgroup+MainPID+start-time binding before pidfd_open; systemd-owned wait/reap; user domain via fixed user supervisor; adoption re-verification; sandboxSpec compilation to systemd hardening directives; runtimeDeadline enforcement; drainTimeout SIGTERM/SIGKILL sequence |
 | Integration | Zone-installed Provider/system-systemd; ProviderSupervisor LaunchTicket interface; ResourceClient UpdateStatus |
 | Data migration | Current ProcessRole/systemd unit roles converted by ProcessRole disposition table after parity |
@@ -2238,7 +2248,7 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Dependency/owner | ADR046-exec-001 + ADR046-exec-002; system-minijail Process Provider owner |
 | Current source | `packages/d2b-core/src/processes.rs`: `ProcessNode`, `RoleProfile`, `NamespaceSet`, `MountPolicy`, `CgroupPlacement`; `packages/d2b-core/src/minijail_profile.rs`: full; `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (if present at baseline); `packages/d2bd/src/supervisor/` pidfd/wait; `packages/d2b-core/src/process_builder.rs` |
 | Reuse action | extract and adapt |
-| Destination | `packages/d2b-provider-system-minijail/src/`: sandbox_compiler.rs, launch.rs, adoption.rs, pidfd.rs, wait.rs, user_ns.rs; `packages/d2b-provider-system-minijail/tests/`: hermetic sandbox-compilation/lifecycle/conformance/fault tests; `packages/d2b-provider-system-minijail/integration/`: clone3/user-namespace and broker-spawn integration scenarios; `packages/d2b-provider-system-minijail/README.md`: Provider identity, providerSettings schema, ResourceTypes, placement, RBAC, security posture (capabilities, namespaces, seccomp), telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
+| Destination | `packages/d2b-provider-system-minijail/src/`: sandbox_compiler.rs, launch.rs, adoption.rs, pidfd.rs, wait.rs, user_ns.rs; `packages/d2b-provider-system-minijail/tests/`: hermetic sandbox-compilation/lifecycle/conformance/fault tests; `packages/d2b-provider-system-minijail/integration/`: clone3/user-namespace and broker-spawn integration scenarios; `packages/d2b-provider-system-minijail/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture (capabilities, namespaces, seccomp), telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
 | Detailed design | system-minijail Process/EphemeralProcess provider conformance per this spec's system-minijail conformance section; SandboxSpec-to-minijail plan compilation; broker clone3(CLONE_PIDFD|CLONE_INTO_CGROUP); user namespace pre-establishment (ADR 0021); d2b-owned wait/reap; adoption via cgroup leaf + process identity verification; runtimeDeadline enforcement; drainTimeout; EphemeralProcess one-shot launch |
 | Integration | Zone-installed Provider/system-minijail fixed bootstrap process; ProviderSupervisor LaunchTicket; privileged broker effect adapter |
 | Data migration | Current RoleProfile/NamespaceSet/MountPolicy/CgroupPlacement adapted to SandboxSpec/BudgetSpec |
@@ -2266,10 +2276,10 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | --- | --- |
 | Work item ID | `ADR046-exec-009` |
 | Dependency/owner | ADR046-exec-001; unsafe-local migration owner |
-| Current source | `packages/d2b-unsafe-local-helper/src/lib.rs`: `UserdConfig`, protocol traits; `packages/d2b-unsafe-local-helper/src/runtime.rs` (`ScopeRuntime`, `SupervisorSpec`); `packages/d2b-unsafe-local-helper/src/systemd.rs`; `packages/d2bd/src/unsafe_local_helper.rs`; `packages/d2b-realm-core/src/workload.rs`: `WorkloadProviderKind::UnsafeLocal`, `IsolationPosture::UnsafeLocal` (current evidence that the no-isolation posture exists and is classified separately from VM isolation — the exact semantics this spec's `Host.spec.providerSettings.isolationPosture="none"` preserves); `packages/d2b-core/src/workload_identity.rs`: `WorkloadBackend::UnsafeLocal`; `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.workloads.<name>.kind = "unsafe-local"`) |
+| Current source | `packages/d2b-unsafe-local-helper/src/lib.rs`: `UserdConfig`, protocol traits; `packages/d2b-unsafe-local-helper/src/runtime.rs` (`ScopeRuntime`, `SupervisorSpec`); `packages/d2b-unsafe-local-helper/src/systemd.rs`; `packages/d2bd/src/unsafe_local_helper.rs`; `packages/d2b-realm-core/src/workload.rs`: `WorkloadProviderKind::UnsafeLocal`, `IsolationPosture::UnsafeLocal` (current evidence that the no-isolation posture exists and is classified separately from VM isolation — the exact semantics this spec's `Host.spec.isolationPosture="none"` preserves); `packages/d2b-core/src/workload_identity.rs`: `WorkloadBackend::UnsafeLocal`; `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.workloads.<name>.kind = "unsafe-local"`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-core/src/host.rs` (user-only no-isolation Host); `nixos-modules/options-zones.nix` (Nix unsafe-local Host declaration) |
-| Detailed design | v3 unsafe-local migration: `kind = "unsafe-local"` in the current Nix Realm workload model becomes a Host resource with `providerRef: Provider/system-core`, `providerSettings.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`. This is a Host ResourceType, not a Guest and not a v3 Provider. Child Process and EphemeralProcess resources on this Host use the normal Process Providers (Provider/system-systemd for user-domain transient user scope; Provider/system-minijail is also valid for callers that explicitly request namespace isolation within the user session). No special unsafe-local-specific Provider is introduced. The explicit no-isolation posture and its warnings are preserved: Host status reflects `isolationPosture="none"` and this is surfaced in every operator CLI/UI view as an explicit "no isolation boundary" warning; `ProcessEffect` audit records (launch, stop, adopt, quarantine) for child Processes and EphemeralProcesses carry the stable `no_isolation=true` attribute; operator CLI/UI always shows the warning and may not suppress it. The `no_isolation=true` attribute belongs on ProcessEffect records only — it must NOT appear on OTEL metric labels, span attributes, log fields, or audit records for other event kinds. The legacy helper protocol (`d2b-unsafe-local-helper`) is not exposed as a v3 ComponentSession service. |
+| Detailed design | v3 unsafe-local migration: `kind = "unsafe-local"` in the current Nix Realm workload model becomes a Host resource with `providerRef: Provider/system-core`, `spec.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`. This is a Host ResourceType, not a Guest and not a v3 Provider. Child Process and EphemeralProcess resources on this Host use the normal Process Providers (Provider/system-systemd for user-domain transient user scope; Provider/system-minijail is also valid for callers that explicitly request namespace isolation within the user session). No special unsafe-local-specific Provider is introduced. The explicit no-isolation posture and its warnings are preserved: Host status reflects `isolationPosture="none"` and this is surfaced in every operator CLI/UI view as an explicit "no isolation boundary" warning; `ProcessEffect` audit records (launch, stop, adopt, quarantine) for child Processes and EphemeralProcesses carry the stable `no_isolation=true` attribute; operator CLI/UI always shows the warning and may not suppress it. The `no_isolation=true` attribute belongs on ProcessEffect records only — it must NOT appear on OTEL metric labels, span attributes, log fields, or audit records for other event kinds. The legacy helper protocol (`d2b-unsafe-local-helper`) is not exposed as a v3 ComponentSession service. |
 | Integration | Host resource reconcile; User resource; system-systemd user-domain Process launch |
 | Data migration | Full reset; no unsafe-local session state migration |
 | Validation | User-only no-isolation Host rejected for system processes; `isolationPosture="none"` Host rejected for `allowedDomains` containing `system`; `allowedDomains=["user"]`+`defaultDomain=user`+`defaultUserRef` set with `isolationPosture=null` rejected at eval time (bidirectional evasion test); posture warning visible in CLI/UI status; `no_isolation=true` attribute present on ProcessEffect launch/stop/adopt/quarantine audit records for child Processes/EphemeralProcesses; `no_isolation=true` absent from OTEL span attributes, metric labels, log fields, and non-ProcessEffect audit records; user-domain Process under user-only Host starts correctly with normal Process Provider |
@@ -2314,10 +2324,10 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Current source | `nixos-modules/options-realms-workloads.nix`: `d2b.realms.<realm>.workloads.<name>.kind` = `local-vm`/`qemu-media` → `d2b.zones.<zone>.resources.<name>` (flat, `type="Guest"`); `unsafe-local` → `d2b.zones.<zone>.resources.<name>` (flat, `type="Host"`, user-only; see unsafe-local anchor); `nixos-modules/options-realms.nix`: top-level `d2b.realms` option shape including `providerKind` regex `^[a-z][a-z0-9-]*$` and `realmPath` regex `^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$` (Zone hierarchy path encoding); `nixos-modules/processes-json.nix`; `nixos-modules/options-host.nix`; `nixos-modules/host.nix`; `packages/d2b-realm-core/src/realm.rs`: `RealmPath`, `RealmControllerPlacement` (current Zone declaration structure analog) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-zones.nix`: `d2b.zones.<zone>.resources` option as `types.attrsOf (types.submodule resourceModule)` where each resource module has `type` (required enum), optional `metadata` submodule (`ownerRef`, `labels`, `annotations`), and `spec` (type-dependent, auto-generated submodule); `nixos-modules/zone-bundle.nix`: zone resource bundle emitter (see ADR046-exec-014); `nixos-modules/resource-schemas/`: generated per-type Nix option modules imported by `options-zones.nix` |
-| Detailed design | `d2b.zones.<zone>.resources` is a flat attrset; each entry has `type`, optional `metadata` (`ownerRef`, `labels`, `annotations`), and `spec`. The attrset key is the resource name. `spec` submodule fields and their Nix types/defaults/docs are auto-generated from the committed `packages/d2b-contracts/src/v3/schemas/<Type>.json` via `xtask gen-resource-nix-options`; no second vocabulary and no renaming of `spec.*` fields. `spec.providerSettings` sub-fields are constrained to the specific Provider's `providerNixSettingsSchema` attribute if present. All 17 eval-time validation rules from the "Eval-time validation rules" section are enforced by `lib.assertMsg` on the flat resource attrset. The `spec` object in the emitted JSON is the direct 1:1 serialization of the `spec` submodule. `metadata.ownerRef`, `metadata.labels`, `metadata.annotations` are serialized into the `metadata` object of the ResourceEnvelope JSON. `metadata.managedBy` and `metadata.configurationGeneration` are NOT in the bundle; they are set by the activation controller at runtime. `metadata.name` is the attrset key; `metadata.zone` is the enclosing zone key. Eval errors carry stable rule codes (1–17). Status is never present in the Nix option. `Guest.spec.systemArtifactId` (top-level spec field, not in providerSettings) is validated against `d2b.artifacts` by rule 17; the `spec` submodule never contains derivation values or store paths. |
+| Detailed design | `d2b.zones.<zone>.resources` is a flat attrset; each entry has `type`, optional `metadata` (`ownerRef`, `labels`, `annotations`), and `spec`. The attrset key is the resource name. `spec` submodule fields and their Nix types/defaults/docs are auto-generated from the committed `packages/d2b-contracts/src/v3/schemas/<Type>.json` via `xtask gen-resource-nix-options`; no second vocabulary and no renaming of `spec.*` fields. `spec.provider.settings` sub-fields are constrained to the specific Provider's `providerNixSettingsSchema` attribute if present. All 17 eval-time validation rules from the "Eval-time validation rules" section are enforced by `lib.assertMsg` on the flat resource attrset. The `spec` object in the emitted JSON is the direct 1:1 serialization of the `spec` submodule. `metadata.ownerRef`, `metadata.labels`, `metadata.annotations` are serialized into the `metadata` object of the ResourceEnvelope JSON. `metadata.managedBy` and `metadata.configurationGeneration` are NOT in the bundle; they are set by the activation controller at runtime. `metadata.name` is the attrset key; `metadata.zone` is the enclosing zone key. Eval errors carry stable rule codes (1–17). Status is never present in the Nix option. `Guest.spec.systemArtifactId` (top-level spec field, not in `spec.provider.settings`) is validated against `d2b.artifacts` by rule 17; the `spec` submodule never contains derivation values or store paths. |
 | Integration | Zone Nix configuration → eval-time validation → Nix-to-ResourceEnvelope compilers → zone bundle emitter (ADR046-exec-014) → configuration publication controller (ADR046-exec-015) |
 | Data migration | Full reset; Realm/Workload options removed in the Nix reset wave |
-| Validation | nix-unit eval/build tests 1–18 from the "Tests" section; eval validation rule tests 1–17 with expected error messages and stable codes; `spec` fields in emitted JSON match `spec` submodule values exactly (1:1 invariant test); `type` field in JSON matches `type` option value; `metadata.name` = attrset key; `metadata.zone` = enclosing zone key; `Guest.spec.systemArtifactId` plain string in resource bundle JSON at top-level spec (no store path, not in providerSettings); missing/wrong-type artifact ID raises rule 17 eval error |
+| Validation | nix-unit eval/build tests 1–18 from the "Tests" section; eval validation rule tests 1–17 with expected error messages and stable codes; `spec` fields in emitted JSON match `spec` submodule values exactly (1:1 invariant test); `type` field in JSON matches `type` option value; `metadata.name` = attrset key; `metadata.zone` = enclosing zone key; `Guest.spec.systemArtifactId` plain string in resource bundle JSON at top-level spec (no store path, not in `spec.provider.settings`); missing/wrong-type artifact ID raises rule 17 eval error |
 | Removal proof | Realm/Workload Nix options removed only after Zone resource Nix option parity and successful eval tests |
 
 ### ADR046-exec-013

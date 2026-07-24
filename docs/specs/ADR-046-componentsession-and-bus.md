@@ -238,6 +238,16 @@ Attachments are local Unix only. They require:
 Unix stream/vsock/remote Zone transports carry no SCM_RIGHTS. Destination
 controllers re-origin local resources/effects.
 
+### ResourceExport and ResourceImport streams (D096)
+
+Cross-Zone `ResourceExport`/`ResourceImport` payload bytes use the existing
+ComponentSession named-stream machinery only: bounded encrypted streams with
+per-stream and aggregate credits/backpressure, cancel, deadline, and idempotency,
+bound to a per-import session generation. No FD, SCM_RIGHTS attachment, or
+resource grant crosses a Zone. Intermediate Zone controllers route only the
+encrypted stream records and see ciphertext, never plaintext payload bytes,
+device handles, paths, or tokens.
+
 ## d2b-bus
 
 d2b-bus is an exact addressed router, not pub/sub.
