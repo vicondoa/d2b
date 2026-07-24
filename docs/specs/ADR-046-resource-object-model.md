@@ -542,10 +542,18 @@ effects are rejected before they happen.
 | `exportability` | enum | `forbidden\|explicit-export` (cross-Zone only via D096) |
 | `quota` | object | Quota/fairness policy for shared/multiplexed/partitioned arbitration |
 
-**Core authority index.** Core maintains an authority index keyed by
-`(Zone/scope, authorityClass, opaqueKeyDigest)` and rejects a conflicting
-authority Resource or Process **before any external effect**. `authorityKey` is
-internal; the stable authority itself is the existing typed Resource
+**Core authority index.** Core maintains an authority index and rejects a
+conflicting authority Resource or Process **before any external effect**. The
+index key is scoped to the level at which a collision can actually occur:
+`zone`-scoped authorities are keyed by `(Zone, authorityClass, opaqueKeyDigest)`,
+but `host`, `physical-device`, `seat`, and `external-service` authorities — where
+**two Zones on the same host can collide over one physical/kernel backing** (a
+GPU, physical TPM, USB device, `/dev/kvm`, a passthrough NIC, a globally-unique
+vsock CID, or a fixed listener port) — are keyed **Host-global** by
+`(Host, authorityClass, opaqueKeyDigest)`, not merely Zone-local. A Host-global
+authority admits exactly one owner across **all** Zones on that host; a second
+Zone claiming the same physical backing is a `duplicateConflict`. `authorityKey`
+is internal; the stable authority itself is the existing typed Resource
 (`Device`/`Network`/`Provider`/`Endpoint`/`Host`/`Guest`/`User`/`Zone`/…). One
 authority service opens/owns the physical/singleton backing; consumers get local
 refs/projections/leases/streams, and cross-Zone sharing is only via D096

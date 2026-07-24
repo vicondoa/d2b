@@ -2103,6 +2103,75 @@ initial singleton** (Zone/store/API/bus/controller/broker/audit/config
 publisher/allocator/net-VM-per-Network/`Quota`/`EmergencyPolicy` scope) admits
 exactly one owner and rejects a second.
 
+### 8B.3 Hardware singleton authorities (D097)
+
+The D097 hardware audit classifies every scarce/physical/kernel backing. These
+are **Host-global** authorities (keyed by `(Host, authorityClass,
+opaqueKeyDigest)`): two Zones on the same host collide over one physical backing,
+so the index admits exactly one owner across all Zones on the host.
+
+| Hardware authority | Scope | Cardinality | Owner | Arbitration | Exportability |
+| --- | --- | --- | --- | --- | --- |
+| GPU/DRM full device (primary/VFIO) | physical-device (Host-global) | zero-or-one per GPU | `Device`/`Provider/device-gpu` | exclusive | forbidden (FD/local kernel) |
+| GPU render-node | physical-device (Host-global) | bounded-many per render node | `Provider/device-gpu` | **shared** (explicitly) | forbidden |
+| GPU-owned `udmabuf`/video subresources | subresource of the GPU authority | n/a (internal) | GPU authority | n/a | not a separate resource — declared **authority subresource/DeviceGrant**, never a new Provider |
+| Per-Guest swtpm state + marker | physical-device (Host-global) | exactly-one per Guest | `Provider/device-tpm` | exclusive | forbidden; **state never wiped** (device-tampering signal) |
+| Physical TPM | physical-device (Host-global) | exactly-one (host singleton) | `Provider/device-tpm` | exclusive | forbidden |
+| USB physical device | physical-device (Host-global) | exclusive per device | `Provider/device-usbip` | exclusive | policy-gated exportable via the typed USBIP protocol |
+| `usbip-host` kernel module | host (Host-global) | exactly-one host-global | `Provider/device-usbip` | exclusive | forbidden |
+| Per-Network USBIP listener + firewall | zone | exactly-one per `Network` | `Network` authority | exclusive | forbidden (fixed port becomes an `Endpoint`) |
+| External NIC / macvtap `parentInterface` | physical-device (Host-global) | zero-or-one per interface | `Network`/`Provider/network-local` | `passthru` **globally exclusive across all Zones**; `bridge`/`private`/`vepa` per explicit policy | forbidden |
+| Host-shared KVM (`/dev/kvm`) | host (Host-global) | shared grant, one grant authority | **`Provider/system-core`** (host substrate/effect authority) | shared | forbidden |
+| Host-shared vhost-vsock (`/dev/vhost-vsock`) | host (Host-global) | shared grant, one grant authority | **`Provider/system-core`** | shared | forbidden |
+| vsock CID allocation | host (Host-global) | globally-unique per CID | core allocator | exclusive | forbidden (CID never crosses a Zone) |
+| Fixed listener port namespace | host (Host-global) | exactly-one per port | the listener's `Endpoint` | exclusive | forbidden (fixed ports are `Endpoint` resources) |
+| Host Nix store | host (Host-global) | exactly-one | Host substrate | shared read | forbidden |
+| Per-Guest store-view writer | physical-device (Host-global) | exactly-one writer per Guest | store-view writer | exclusive | forbidden |
+| Network TAP / bridge | zone | exactly-one per TAP/bridge | `Network` authority | exclusive | forbidden |
+
+**KVM/vhost-vsock ownership (no 28th Provider).** `/dev/kvm` and
+`/dev/vhost-vsock` are **host-shared kernel devices owned by
+`Provider/system-core`** (the existing Host substrate/effect authority, which
+already declares the `kvm` `HostCapabilityClass`) and granted to runtime
+Providers via the D077 EffectPort/LaunchTicket DeviceGrant. They are **not** a
+`Device` `busClass` (the closed set stays `usb|hidraw|drm|pci|tpm`) and do **not**
+require a `Provider/device-kvm` — any such reference resolves to a
+`Provider/system-core` host-shared grant (finding for the foreign dossiers that
+still name `Provider/device-kvm`). GPU-owned `udmabuf`/video and per-session
+`vhost-vsock` tokens stay **authority subresources / DeviceGrants**, never new
+Providers.
+
+**D096 exportability of hardware.** GPU, KVM, physical/emulated TPM, host Nix
+store, store-view writer, and macvtap/NIC `parentInterface` require an FD or
+local-kernel authority and are **non-exportable** (`forbidden`). **USBIP is
+policy-gated exportable** through its typed CTAPHID-free USBIP protocol (a single
+authority owner, explicit-export). Fixed listener ports are modeled as
+`Endpoint` resources. This supersedes any stale "no cross-Zone sharing" claim for
+hardware: each class is classified explicitly.
+
+### 8B.4 D097 hardware-audit consistency findings
+
+- **TPM flush TTL** — corrected in `ADR-046-resources-device` to the D094
+  canonical successful-EphemeralProcess TTL (`1h`), matching the device-tpm
+  dossier; a shorter `15m` would need an explicit justified override.
+- **`Provider/device-kvm` stale reference** — resolves to a
+  `Provider/system-core` host-shared grant (no 28th Provider, no `kvm` busClass);
+  finding for the foreign dossiers/validation that still name it.
+- **`device-tpm` physical TPM** — the device-tpm dossier MUST explicitly
+  implement or explicitly reject physical TPM (no second TPM Provider); finding
+  for that downstream dossier.
+- **macvtap `passthru`** conflict is Host-global across all Zones (covered by the
+  Host-global index); **`Create`/`DeleteBridge`** must be `NetworkEffectPort`
+  ops (finding for `resources-network`/`network-local`).
+- **USBIP port 3240** multiplex behavior and the fixed port become an `Endpoint`
+  resource; finding for the usbip/network downstream scope.
+- **vsock CID hardcoded `2`** migration to the global CID allocation authority —
+  corrected in `ADR-046-zone-routing`.
+- **store-view gcroots path** code-vs-spec: **code wins**; finding for the store
+  spec to align its prose to the implemented gcroots path.
+- **ZoneLink range capacity/quota** — an explicit bounded quota; corrected in
+  `ADR-046-zone-routing`.
+
 ---
 
 ## 9. Bootstrap authorization
@@ -4337,6 +4406,22 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None — full d2b 3.0 reset |
 | Validation | Duplicate-scope `Quota`/`EmergencyPolicy` rejected with `duplicateConflict`; single-scope admitted; union/individual scope flags honored; fast hermetic tests |
 | Removal proof | Not applicable (new implementation) |
+
+### ADR046-zone-control-024
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-zone-control-024` |
+| Dependency/owner | ADR046-zone-control-019, ADR046-zone-control-022; `d2b-core-controller` owner |
+| Current source | None — net-new D097 hardware-audit contract; today physical/kernel backings are guarded per-Zone or per-process, not Host-global |
+| Reuse source | Core authority index (ADR046-zone-control-019) |
+| Reuse action | net-new (Host-global index scope for host/physical-device authorities) |
+| Destination | `packages/d2b-core-controller/src/authority.rs` (Host-global index scope + hardware admission) |
+| Detailed design | Extend the core authority index so `host`, `physical-device`, `seat`, and `external-service` authorities are keyed **Host-global** (`(Host, authorityClass, opaqueKeyDigest)`), admitting exactly one owner across all Zones on the host, while `zone`-scoped authorities stay Zone-local. Enforce the §8B.3 hardware rows: GPU full-device exclusive vs render-node shared; per-Guest swtpm and physical TPM exclusive (state never wiped); USB device exclusive + host-global `usbip-host` module; macvtap/NIC `parentInterface` `passthru` globally exclusive across all Zones; host-shared `/dev/kvm` and `/dev/vhost-vsock` as `Provider/system-core` grants (no 28th Provider, no `kvm` busClass); globally-unique vsock CID; fixed listener ports as `Endpoint`s; host store + per-Guest store-view writer; Network TAP/bridge. A second Zone claiming the same physical backing is `duplicateConflict` before any open; restart adopts by `ownerProof`; Guest-stop drains dependent leases. GPU-owned `udmabuf`/video and per-session `vhost-vsock` tokens stay authority subresources/DeviceGrants (not resources/Providers). |
+| Integration | Core authority index (ADR046-zone-control-019); Provider cardinality admission (ADR046-zone-control-022); `Provider/system-core` KVM/vhost-vsock grant; `Provider/device-*` and `Network` authorities |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | Two Zones on one host cannot both claim one GPU/TPM/USB/`/dev/kvm`/passthru NIC/vsock CID/fixed port — second is `duplicateConflict`; render-node shared admits bounded holders; per-Guest swtpm exclusive and marker never wiped; host-global adoption by `ownerProof`; hardware D096 exportability (GPU/KVM/TPM/store/macvtap non-exportable; USBIP policy-gated); fast hermetic with fakes |
+| Removal proof | Not applicable (new surface) |
 
 ---
 

@@ -1444,6 +1444,24 @@ allocated edge, generation, allowed prefixes, and capability ceiling.
 Allocation changes (e.g. ceiling narrowing) require the child to issue
 a new advertisement under the new generation.
 
+The `ZoneLinkNamespaceAllocation` above **is** the explicit ZoneLink range
+capacity/quota (D097 hardware-audit finding): `allowedPrefixes` (1–16) and
+`maxRoutes` (1–64) are the bounded per-edge capacity; a child exceeding either
+bound is rejected, so a parent's ZoneLink namespace cannot be exhausted by one
+child edge.
+
+### Global vsock CID and fixed-port authority (D097)
+
+vsock CID allocation is a **Host-global** authority (keyed by `(Host, …)` in the
+core authority index): every CID is globally unique across all Zones on the host
+and a CID never crosses a Zone boundary. The historical hardcoded host-CID
+assumption (`CID = 2`) is migrated to this global allocation authority — no
+component assumes a fixed CID; the allocator assigns and the transport resolves
+the CID under authorization, never as a public locator. Fixed listener ports
+(vsock/Unix/TCP) are modeled as `Endpoint` resources with an `exactly-one`-per
+Host-global port authority (see `ADR-046-resources-zone-control` §8B.3); a second
+binder of the same fixed port is a `duplicateConflict`.
+
 ## ResourceExport advertisement and ResourceImport routing (D096)
 
 `ResourceExport` and `ResourceImport` (defined in

@@ -557,7 +557,7 @@ Process, waits for `Succeeded`, then creates the swtpm Process:
 
 ```text
 Device/corp-vm-tpm
-  └─ EphemeralProcess/device-<uid-short>-flush  (pre-start flush; successfulTtl=15m)
+  └─ EphemeralProcess/device-<uid-short>-flush  (pre-start flush; successfulTtl=1h, D094 canonical)
   └─ Process/device-<uid-short>-swtpm           (long-lived swtpm socket)
   └─ Volume/corp-vm-tpm-state                   (persistent TPM NVRAM; separate owner)
 ```

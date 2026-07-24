@@ -7205,6 +7205,21 @@
       "removalProof": "Not applicable (new implementation)"
     },
     {
+      "workItemId": "ADR046-zone-control-024",
+      "specId": "ADR-046-resources-zone-control",
+      "specPath": "docs/specs/ADR-046-resources-zone-control.md",
+      "dependencyOwner": "ADR046-zone-control-019, ADR046-zone-control-022; `d2b-core-controller` owner",
+      "currentSource": "None — net-new D097 hardware-audit contract; today physical/kernel backings are guarded per-Zone or per-process, not Host-global",
+      "reuseSource": "Core authority index (ADR046-zone-control-019)",
+      "reuseAction": "net-new (Host-global index scope for host/physical-device authorities)",
+      "destination": "`packages/d2b-core-controller/src/authority.rs` (Host-global index scope + hardware admission)",
+      "detailedDesign": "Extend the core authority index so `host`, `physical-device`, `seat`, and `external-service` authorities are keyed Host-global (`(Host, authorityClass, opaqueKeyDigest)`), admitting exactly one owner across all Zones on the host, while `zone`-scoped authorities stay Zone-local. Enforce the §8B.3 hardware rows: GPU full-device exclusive vs render-node shared; per-Guest swtpm and physical TPM exclusive (state never wiped); USB device exclusive + host-global `usbip-host` module; macvtap/NIC `parentInterface` `passthru` globally exclusive across all Zones; host-shared `/dev/kvm` and `/dev/vhost-vsock` as `Provider/system-core` grants (no 28th Provider, no `kvm` busClass); globally-unique vsock CID; fixed listener ports as `Endpoint`s; host store + per-Guest store-view writer; Network TAP/bridge. A second Zone claiming the same physical backing is `duplicateConflict` before any open; restart adopts by `ownerProof`; Guest-stop drains dependent leases. GPU-owned `udmabuf`/video and per-session `vhost-vsock` tokens stay authority subresources/DeviceGrants (not resources/Providers).",
+      "integration": "Core authority index (ADR046-zone-control-019); Provider cardinality admission (ADR046-zone-control-022); `Provider/system-core` KVM/vhost-vsock grant; `Provider/device-*` and `Network` authorities",
+      "dataMigration": "None — full d2b 3.0 reset",
+      "validation": "Two Zones on one host cannot both claim one GPU/TPM/USB/`/dev/kvm`/passthru NIC/vsock CID/fixed port — second is `duplicateConflict`; render-node shared admits bounded holders; per-Guest swtpm exclusive and marker never wiped; host-global adoption by `ownerProof`; hardware D096 exportability (GPU/KVM/TPM/store/macvtap non-exportable; USBIP policy-gated); fast hermetic with fakes",
+      "removalProof": "Not applicable (new surface)"
+    },
+    {
       "workItemId": "W-N01",
       "specId": "ADR-046-provider-device-security-key",
       "specPath": "docs/specs/providers/ADR-046-provider-device-security-key.md",
