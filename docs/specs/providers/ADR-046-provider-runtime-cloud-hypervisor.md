@@ -304,8 +304,12 @@ controller-created `Guest/<network-name>-net-vm`.
   settings), `environmentClass: minimal`.
 - **pidfd**: mandatory; d2b owns wait/reap for this template.
 - **networkUsage**: single object `{networkRef: null, ports: [], allowEgress:
-  false}`. All Network attachment controllers supply ready typed tap Fds in
-  the LaunchTicket; the VMM itself has no ambient egress.
+  false}`. The runtime controller supplies only opaque Network attachment refs.
+  The network-local controller declares each semantic attachment effect; the
+  Core-owned `NetworkEffectPort` adapter creates and configures the tap, then
+  transfers its connected CLOEXEC `OwnedFd` directly to `ProviderSupervisor`.
+  The LaunchTicket inherits that precreated fd; the VMM itself has no ambient
+  egress.
 - **deviceUsage**: one entry per `deviceAttachments` entry plus a required
   `Device/kvm` entry (purpose `kvm-fd`, access `shared` — KVM is safely
   shareable across multiple VMs). TPM and other exclusive devices use access
@@ -340,7 +344,8 @@ The controller enforces this ordering by watching resource statuses through
 1. All `Device` resources in `Guest.spec.deviceAttachments` (including
    `Device/kvm`) must be `Ready` before the VMM Process is created.
 2. All `Network` resources in `Guest.spec.networkAttachments` must be `Ready`
-   (bridges and tap dispatch in place) before the VMM Process is created.
+   (fabric and opaque attachment realization ready for Core resolution) before
+   the VMM Process is created.
 3. All virtiofs-exported Volumes referenced by the Guest must be `Ready` per
    `Provider/volume-virtiofs` before the VMM Process is created.
 
@@ -361,12 +366,25 @@ one TAP interface on the host. The TAP name and MAC are derived from the Network
 resource's `attachments` table, which names the Guest's `executionRef`. The
 controller does not compute or store TAP names in the Guest spec or status; it
 reads the provider-neutral `Network.status.resource.attachments[*]` readiness
-and opaque handoff record once the Network is Ready.
+and supplies only the opaque attachment ref when the Network is Ready. The
+runtime controller never receives a tap fd or network broker operation.
 
-TAP creation is a privileged broker effect. The VMM Process supervisor ticket
-mediates TAP fd passing to the CH binary using the appropriate net-handoff mode
-(`TapFd` or `PersistentTap`) discovered at host-check time. No raw TAP name,
-fd number, or broker socket path appears in the Process spec.
+The network-local controller declares the semantic attachment effect through
+`NetworkEffectPort`. Its Core-owned adapter performs
+`CreatePersistentTap → SetBridgePortFlags`, owns the connected `OwnedFd` with
+`FD_CLOEXEC` set, and transfers it directly to `ProviderSupervisor`.
+The Process LaunchTicket attachment inherits this precreated fd; only the
+declared child slot is made inheritable immediately before exec. No raw TAP
+name, fd number, bridge name, or broker socket path appears in the Guest or
+Process spec, status, ResourceAPI, ComponentSession, or d2b-bus payload.
+
+Adapter and supervisor parent copies remain CLOEXEC and close after successful
+spawn. Cancellation, LaunchTicket rejection, or spawn failure closes every fd
+copy before the Network adapter invokes generation-fenced
+`DeletePersistentTap`; the opaque realization remains retained until deletion
+is confirmed. Normal teardown likewise waits for the VMM child copy to close
+and confirms all adapter/supervisor copies are closed before issuing
+`DeletePersistentTap`.
 
 ### 6.2 macvtap (external attachment)
 
@@ -374,8 +392,9 @@ The Network resource declares an optional `ExternalAttachmentSpec` with
 `mode: macvtap`. When this is present, the network-local Provider creates the
 macvtap interface and reports the provider-neutral readiness base in
 `Network.status.resource.externalAttachment`. The `runtime-cloud-hypervisor`
-controller receives the private interface handoff from the dependency resolver
-and passes it to the VMM supervisor ticket.
+controller supplies only the opaque external-attachment ref. The dependency
+resolver transfers the private interface handoff directly to
+`ProviderSupervisor` for the VMM LaunchTicket.
 No macvtap interface name, fd, or host interface path appears in the Guest
 spec or VMM Process spec.
 
@@ -1020,7 +1039,8 @@ spec:
     seccompClass: vmm-default          # required; fixed by signed template; not caller-settable
     environmentClass: minimal
   networkUsage:                        # single object; not a list
-    networkRef: null                   # tap Fds supplied by LaunchTicket from Network controllers
+    # Guest attachment refs resolve to a precreated fd inherited by LaunchTicket.
+    networkRef: null
     ports: []
     allowEgress: false                 # VMM has no ambient egress
   deviceUsage:
@@ -1054,6 +1074,14 @@ are implementation details resolved at `ProviderSupervisor` dispatch time from
 the signed template's artifact catalog entry and the current resource/dependency
 state. `Process.spec.artifactId` is not a field in the Process ResourceType;
 the executable is entirely owned by the template.
+
+For each Network attachment, the runtime controller contributes only the opaque
+ref. The network-local controller declares the semantic effect, and the
+Core-owned `NetworkEffectPort` adapter completes
+`CreatePersistentTap → SetBridgePortFlags` before transferring its connected
+CLOEXEC `OwnedFd` directly to `ProviderSupervisor`. The LaunchTicket inherits
+that precreated fd; neither the fd nor a broker operation crosses the runtime
+controller boundary.
 
 The load-bearing stable endpoints are modeled as resources rather than inline
 Process fields:
@@ -1121,12 +1149,14 @@ unauthorized request fails `endpoint-resolve-denied`. A producer restart bumps
 
 ### Retained opaque handles
 
-Permitted opaque values are limited to controller-internal or high-churn data:
-`pidfd`/process generation observations, LaunchTicket fd indexes, per-session
+Permitted controller opaque values are limited to controller-internal or
+high-churn data: `pidfd`/process generation observations, per-session
 ComponentSession/OwnedTransport handles, operation IDs, and QMP/CH connection
-handles. They have no independent resource lifecycle, are not stable managed
-endpoint identities, and remain absent from public spec/status/CLI fields except
-as bounded non-authorizing diagnostics where already allowed.
+handles. ProviderSupervisor-only LaunchTicket fd indexes and `OwnedFd` values
+never cross the runtime controller boundary. These values have no independent
+resource lifecycle, are not stable managed endpoint identities, and remain
+absent from public spec/status/CLI fields except as bounded non-authorizing
+diagnostics where already allowed.
 
 ---
 
@@ -1201,10 +1231,19 @@ mediated through the `Provider/system-minijail` supervisor ticket. The
 supervisor ticket covers:
 
 - `clone3(CLONE_PIDFD)` spawn with compiled minijail/sandbox arguments;
-- TAP fd allocation and passing (via existing `TapBridgeAllocate` / net-handoff
-  broker chain, translated to supervisor ticket parameters);
+- direct inheritance of the precreated tap fd transferred by the Core-owned
+  `NetworkEffectPort` adapter after
+  `CreatePersistentTap → SetBridgePortFlags`; the runtime controller supplies
+  only the opaque attachment ref and receives neither the fd nor either broker
+  operation;
 - cgroup placement in the delegated Zone subtree;
 - pidfd return.
+
+The adapter and supervisor retain CLOEXEC ownership of parent copies and close
+them after successful spawn. Ticket rejection, cancellation, or spawn failure
+closes all copies before generation-fenced `DeletePersistentTap`; normal
+teardown waits for the child copy to close first. The opaque realization is
+retained until deletion is confirmed.
 
 The `SwtpmDir` broker op (current: `d2b-priv-broker/src/ops/swtpm_dir.rs`) is
 owned by `Provider/device-tpm` in v3, not by this Provider.
@@ -1604,7 +1643,7 @@ bundle and are never swept by configuration generation cleanup.
 | --- | --- |
 | Current anchor | `packages/d2b-host/src/runtime_provider.rs` (`CloudHypervisorRuntimeProvider`, `CloudHypervisorRuntimeControl`); `packages/d2b-host/src/ch_argv.rs` (`ChArgvInput`, `ChArgvGenerator`); `packages/d2bd/src/provider_shutdown.rs` (`CloudHypervisorShutdown`); `packages/d2b-core/src/processes.rs` (`ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`); `packages/d2b-host-providers/src/lib.rs` (`RuntimeProvider` adapter); `nixos-modules/components/tpm.nix`; `nixos-modules/network.nix`; `nixos-modules/processes-json.nix` (VMM/swtpm/net-VM process node emitters); `nixos-modules/store.nix` |
 | Evidence class | `production-reachable` for all items above; see migration map §2 |
-| Behavior retained | Typed argv generation (pure data, no syscalls); pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP net-handoff; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
+| Behavior retained | Typed argv generation (pure data, no syscalls); pidfd identity/adoption; direct cgroup placement; fail-closed adoption ambiguity; redacted Debug for paths/argv; process-scoped TAP fd handoff with CLOEXEC ownership; broker privilege mediation; minijail sandbox with user-NS for virtiofsd; swtpm pre-start flush; watchdog emission; OEM strings for observability |
 | Required delta | Controller as async ResourceReconciler; Guest ResourceSpec validation; VMM Process as single owned child resource; direct dependency-readiness gate via ResourceClient (no EphemeralProcess); ComponentSession guest-control health in observe handler; typed provider descriptor; framework-provisioned ProviderStateSet; bus-only resource access; ResourceMutationBatch status writes; explicit Device/kvm in Guest deviceAttachments; required controllerExecutionRef in Provider config |
 | Reuse path | See §22.2 |
 | Replacement/deletion | Current `d2b-<vm>-vm.service` systemd unit, `SpawnRunner{role: CloudHypervisor}` broker op, `RuntimeProvider` trait calls, and `CloudHypervisorRuntimeProvider` adapter remain until runtime-cloud-hypervisor integration passes full test parity |
@@ -1614,7 +1653,7 @@ bundle and are never swept by configuration generation cleanup.
 
 | Current symbol / path | Evidence class | Current callers | Reuse action | v3 destination |
 | --- | --- | --- | --- | --- |
-| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | production-reachable | `d2b-host/src/runtime_provider.rs` | EXTRACT and ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `ChArgvInput` fields are renamed to align with `spec.provider.settings` schema; store paths move to private artifact-catalog resolution; no `spec.*` exposure |
+| `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | production-reachable | `d2b-host/src/runtime_provider.rs` | EXTRACT and ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `ChArgvInput` fields are renamed to align with `spec.provider.settings` schema; store paths move to private artifact-catalog resolution; the v3 builder accepts only the declared LaunchTicket child fd slot for tap argv and has no handoff-mode or tap-name input; no `spec.*` exposure |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs`; `d2bd/src/lib.rs` | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; new controller owns reconcile loop, not a `RuntimeProvider` trait implementation |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeControl` trait | production-reachable | `d2bd`; supervisor test seams | REPLACE | Supervisor ticket passed through `Provider/system-minijail` LaunchTicket; no ambient trait |
 | `d2bd/src/provider_shutdown.rs::CloudHypervisorShutdown` | production-reachable | `d2bd` graceful shutdown | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`; integrates with Process finalizer drain handler |
@@ -1668,14 +1707,14 @@ per-test budget.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-001; Volume and Device foundation |
+| Dependency/owner | ADR046-ch-001; Volume, Device, and ADR046-network-005 foundations |
 | Current source | `d2b-core/src/processes.rs`; `nixos-modules/processes-json.nix`; `d2b-priv-broker/src/ops/swtpm_dir.rs`; `d2b-host/src/swtpm_argv.rs` |
 | Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` |
-| Detailed design | Single owned VMM Process resource; synchronous ResourceClient dependency check (Device/kvm + all declared Devices, Networks, virtiofs Volumes); immediate Process creation when all deps ready; no EphemeralProcess resources; conditional net-VM Guest creation; per-dependency readiness tracking in reconcile loop Primary reuse disposition: `replace`. Preserved source-plan detail: EXTRACT and REPLACE. |
-| Integration | Depends on `Provider/volume-virtiofs`, `Provider/device-tpm`, `Provider/device-kvm`, `Provider/network-local` ResourceType readiness |
+| Detailed design | Single owned VMM Process resource; synchronous ResourceClient dependency check (Device/kvm + all declared Devices, Networks, virtiofs Volumes); immediate Process creation when all deps ready; no EphemeralProcess resources; conditional net-VM Guest creation; per-dependency readiness tracking in reconcile loop. For each Network attachment the launch resolution carries only an opaque ref; network-local declares the semantic effect, the Core-owned `NetworkEffectPort` adapter performs `CreatePersistentTap → SetBridgePortFlags`, and `ProviderSupervisor` receives the connected CLOEXEC `OwnedFd` directly for LaunchTicket inheritance. The runtime controller receives no fd or broker operation. Primary reuse disposition: `replace`. Preserved source-plan detail: EXTRACT and REPLACE. |
+| Integration | Depends on `Provider/volume-virtiofs`, `Provider/device-tpm`, `Provider/device-kvm`, `Provider/network-local` ResourceType readiness, the ADR046-network-005 effect chain, and direct ProviderSupervisor LaunchTicket fd handoff |
 | Data migration | v3 reset; no v2 process graph migration |
-| Validation | Golden VMM Process spec vectors; dependency-ordering tests; parallel Guest tests (8 concurrent); net-VM creation tests; Device/kvm explicit-ref enforcement |
+| Validation | Golden VMM Process spec vectors; dependency-ordering tests; parallel Guest tests (8 concurrent); net-VM creation tests; Device/kvm explicit-ref enforcement; tap launch routing proves `CreatePersistentTap → SetBridgePortFlags → ProviderSupervisor LaunchTicket`; fd-lifetime tests prove CLOEXEC, one inheritable child slot, and close-before-generation-fenced-delete on every failed launch; boundary tests prove the controller and bus payloads contain only opaque refs |
 | Removal proof | `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm` variant callers deleted; `nixos-modules/processes-json.nix` VMM emitter deleted after parity |
 
 ### ADR046-ch-003 (VMM argv builder v3)
@@ -1686,11 +1725,11 @@ per-test budget.
 | Current source | `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv`; `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
-| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; golden tests for headless/q35/microvm/gpu/video/macvtap variants Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT. |
-| Integration | ProviderSupervisor LaunchTicket resolution |
+| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; tap argv accepts only the declared child fd slot inherited from the sealed LaunchTicket, with no runtime-selected handoff mode or host tap name; golden tests for headless/q35/microvm/gpu/video/macvtap variants Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT. |
+| Integration | ProviderSupervisor LaunchTicket resolution, including direct inheritance of the precreated connected tap fd |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; redaction test (no store path in Debug output) |
-| Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; old golden test files adapted |
+| Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; tap vector accepts only the declared LaunchTicket child fd slot; redaction test (no store path in Debug output) |
+| Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; the old network-handoff mode and tap-name branches have no v3 callers; old golden test files adapted |
 
 ### ADR046-ch-004 (Nix resource compiler)
 
@@ -1780,12 +1819,15 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     redaction_test.rs            # no store path in Debug, status, or audit output
     state_status_test.rs         # status projection round-trip; bound enforcement;
                                  # restart re-derivation without a state Volume
+    tap_fd_no_controller_test.rs # controller/bus accept opaque refs only; reject fd/broker DTOs
   integration/
     README.md                    # (optional) how to run integration fixtures; prerequisites
     vmm_boot_test.rs             # single Guest boot + guest-control health on real KVM
     vmm_adoption_test.rs         # controller restart + pidfd adoption with running VMM
     vmm_restart_test.rs          # unexpected VMM exit + backoff + restart + re-health
-    network_attachment_test.rs   # TAP allocation, macvtap external attachment
+    network_attachment_test.rs   # CreatePersistentTap -> flags -> direct LaunchTicket; macvtap
+    tap_fd_lifetime_test.rs      # CLOEXEC, one child slot, close-before-generation-fenced-delete
+    tap_failed_launch_cleanup_test.rs # rejection/cancel/spawn failure; retain opaque realization
     device_kvm_test.rs           # explicit Device/kvm dependency; TCG fallback without it
     device_tpm_test.rs           # swtpm Device dependency + VMM boot with TPM socket
     device_gpu_test.rs           # GPU Device dependency + vhost-user-gpu handoff
@@ -1838,12 +1880,16 @@ A work item is **not complete** until:
 6. The `d2b-host-providers` adapter crate is empty of `runtime_provider`
    content and scheduled for deletion once all Provider dossiers migrate (per
    `ADR046-provider-002`).
+7. The v3 runtime controller and its bus DTOs contain no tap fd, network broker
+   operation, handoff-mode, or host tap-name input; only opaque attachment refs
+   cross that boundary.
 
 The following specific removals are gated on ADR046-ch integration parity:
 
 | Current artifact | Removal gate |
 | --- | --- |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | ADR046-ch-002 parity |
+| `d2b-host/src/ch_argv.rs::ChNetHandoff` and tap-name argv branch | ADR046-ch-003 parity; v3 tap argv consumes only the declared LaunchTicket child fd slot |
 | `d2b-core/src/processes.rs::ProcessRole::{CloudHypervisor, NetVm}` | ADR046-ch-002 parity |
 | `nixos-modules/processes-json.nix` (VMM/NetVm process node emitters) | ADR046-ch-004 parity |
 | `nixos-modules/options-vms.nix` | ADR046-ch-004 parity + all VM consumers migrated |
