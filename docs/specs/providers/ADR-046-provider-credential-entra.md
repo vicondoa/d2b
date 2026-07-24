@@ -124,7 +124,7 @@ spec:
     userRef: null
   consumerRef: Provider/runtime-azure-container-apps
   audience: azure-resource-manager
-  allowedOperations: [acquire-token, refresh-token]
+  allowedOperations: [acquire-token, refresh-token, revoke-token, inspect-metadata]
   rotation:
     policy: proactive
     proactiveWindowMs: 300000
@@ -257,11 +257,12 @@ named stream on the authenticated session, not status text.
 | Method | Required Role permission | Direction | Secret output? | Purpose |
 | --- | --- | --- | --- | --- |
 | `BeginLogin` | `use-credential/acquire-token` | request/reply + named stream | No status secret; UI bytes stay on stream | Start or resume an Entrablau interactive login session inside `identityGuestRef`. Opens optional named stream `credential-entra.d2bus.org/login-ui`. |
-| `ObserveLogin` | `use-credential/observe` | request/reply | No | Return bounded non-secret observation for `interactionState`, session generation, deadline, and challenge metadata. |
-| `CancelLogin` | `use-credential/revoke` | request/reply | No | Cancel a pending login session by generation; idempotent. |
+| `ObserveLogin` | `use-credential/inspect-metadata` | request/reply | No | Return bounded non-secret observation for `interactionState`, session generation, deadline, and challenge metadata. |
+| `CancelLogin` | `use-credential/revoke-token` | request/reply | No | Cancel a pending login session by generation; idempotent. |
 | `AcquireAccessTokenLease` | `use-credential/acquire-token` | request/reply + sensitive KK record | Yes, only in KK record to consumer | Issue an on-demand access-token lease for `audience`/operation; outer reply carries metadata only. |
-| `RevokeAccessTokenLease` | `use-credential/revoke` | request/reply | No | Revoke a non-secret lease handle or mark it unusable. |
-| `InspectAccessTokenLease` | `use-credential/observe` | request/reply | No | Return bounded non-secret lease state. |
+| `RefreshAccessTokenLease` | `use-credential/refresh-token` | request/reply + sensitive KK record | Yes, only in KK record to consumer | Refresh an existing access-token lease; outer reply carries metadata only. |
+| `RevokeAccessTokenLease` | `use-credential/revoke-token` | request/reply | No | Revoke a non-secret lease handle or mark it unusable. |
+| `InspectAccessTokenLease` | `use-credential/inspect-metadata` | request/reply | No | Return bounded non-secret lease state. |
 
 `BeginLogin`, `ObserveLogin`, and `CancelLogin` are the Credential base
 interactive-login operations. The service may conduct browser, device, desktop,
@@ -386,6 +387,7 @@ trait EntraTokenLeaseClient: Send + Sync {
     async fn observe_login(&self, request: ObserveLoginRequest) -> Result<LoginObservation, CredentialError>;
     async fn cancel_login(&self, request: CancelLoginRequest) -> Result<LoginObservation, CredentialError>;
     async fn acquire_access_token_lease(&self, request: TokenLeaseRequest) -> Result<TokenLeaseMetadata, CredentialError>;
+    async fn refresh_access_token_lease(&self, request: TokenLeaseRequest) -> Result<TokenLeaseMetadata, CredentialError>;
     async fn revoke_access_token_lease(&self, request: RevokeLeaseRequest) -> Result<RevokeLeaseResult, CredentialError>;
     async fn inspect_access_token_lease(&self, request: InspectLeaseRequest) -> Result<TokenLeaseMetadata, CredentialError>;
 }
@@ -491,7 +493,12 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
       scope.domainFilter = "system";
       consumerRef = "Provider/runtime-azure-container-apps";
       audience = "azure-resource-manager";
-      allowedOperations = [ "acquire-token" "refresh-token" ];
+      allowedOperations = [
+        "acquire-token"
+        "refresh-token"
+        "revoke-token"
+        "inspect-metadata"
+      ];
       rotation.policy = "proactive";
       rotation.proactiveWindowMs = 300000;
       rotation.maxLeaseLifetimeMs = 3600000;
@@ -548,36 +555,51 @@ credential-entra lifecycle changes.
 | Verb | Who | Purpose |
 | --- | --- | --- |
 | `get`, `list`, `watch` | Authorized readers | Inspect non-secret spec/status. |
-| `create`, `update-spec`, `delete` plus `admin-credential/admin` | Authorized deployer/configuration controller | Administer Credential resource lifecycle; neither permission implies the other. |
+| `create` plus `admin-credential/create` | Authorized deployer/configuration controller | Create a Credential; neither permission implies the other. |
+| `update-spec` plus `admin-credential/update-spec` | Authorized deployer/configuration controller | Update a Credential spec; neither permission implies the other. |
+| `delete` plus `admin-credential/delete` | Authorized deployer/configuration controller | Delete a Credential; neither permission implies the other. |
 | `update-status` | `Provider/credential-entra` controller only | Write projected interaction/lease observations. |
 | `update-finalizers` | `Provider/credential-entra` controller | Revoke/finalize Credential resources. |
-| `use-credential/acquire-token` | Exact `consumerRef` plus RBAC | Begin login and acquire/refresh access-token leases permitted by `spec.allowedOperations`. |
-| `use-credential/observe` | Exact `consumerRef` plus RBAC | Observe login or inspect bounded lease/status metadata. |
-| `use-credential/revoke` | Exact `consumerRef` plus RBAC | Cancel login or revoke an access-token lease. |
-| `admin-credential/admin` | Authorized operator/configuration controller | Gate explicit Credential lifecycle and identity-reset administration. |
+| `use-credential/acquire-token` | Exact `consumerRef` plus RBAC | Begin login or acquire an access-token lease when `spec.allowedOperations` includes `acquire-token`. |
+| `use-credential/refresh-token` | Exact `consumerRef` plus RBAC | Refresh an access-token lease when `spec.allowedOperations` includes `refresh-token`. |
+| `use-credential/revoke-token` | Exact `consumerRef` plus RBAC | Cancel login or revoke an access-token lease when `spec.allowedOperations` includes `revoke-token`. |
+| `use-credential/inspect-metadata` | Exact `consumerRef` plus RBAC | Observe login or inspect bounded lease/status metadata when `spec.allowedOperations` includes `inspect-metadata`. |
 
 The value after `/` is an exact entry in the existing Role rule
 `subresources` field. The dossier defines no `operationClasses` Role field and
-no method-name verbs such as `begin-login`. A consumer Role is shaped as:
+no method-name verbs such as `begin-login`. A consumer Role rule is:
 
 ```yaml
 rules:
   - resourceTypes: [Credential]
     verbs: [use-credential]
-    subresources: [acquire-token, observe, revoke]
+    subresources: [acquire-token, refresh-token, revoke-token, inspect-metadata]
     resourceNames: [work-entra]
     zones: [work]
     executionRefs: [Guest/aca-gateway]
     sessionVerbs: []
 ```
 
-Service admission authenticates the exact consumer, checks the mapped
-verb/subresource before Endpoint dispatch, then independently checks the exact
-method operation class against `Credential.spec.allowedOperations`. Empty,
-wildcard, unknown, or verb/subresource-mismatched Credential grants fail closed.
-Administrative create/update/delete additionally require an
-`admin-credential` rule with `subresources: [admin]` and the corresponding
-ordinary mutation verb.
+A separate deployer Role rule is:
+
+```yaml
+rules:
+  - resourceTypes: [Credential]
+    verbs: [admin-credential]
+    subresources: [create, update-spec, delete]
+    resourceNames: [work-entra]
+    zones: [work]
+    executionRefs: []
+    sessionVerbs: []
+```
+
+Service admission authenticates the exact consumer and requires the same exact
+operation class in both `Credential.spec.allowedOperations` and the
+`use-credential` Role `subresources` before Endpoint dispatch. Empty, wildcard,
+unknown, noncanonical aliases, and mismatched classes fail closed.
+Administrative create/update/delete additionally require the matching
+`admin-credential` subresource (`create`, `update-spec`, or `delete`) and the
+corresponding ordinary CRUD verb.
 
 ### Stable error codes
 
@@ -612,7 +634,7 @@ or any digest derived from Credential identity.
 | Current source | `d2b-realm-provider/src/credential.rs:OpaqueAzureRef` remains a bounded opaque identifier reuse source only; no Host login/token implementation is retained |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-entra/src/{lib.rs,controller.rs,service.rs,controller_main.rs,agent_main.rs,audit.rs,telemetry.rs}` and corresponding tests/integration docs |
-| Detailed design | Implement secret-free controller/helper; require Credential base `identityGuestRef` and `loginEndpointRef`; resolve dependency alias `entra-login-token`; validate same-Zone Guest placement and exact `consumerRef`; implement typed `EntraTokenLeaseClient` whose production implementation is the Entrablau Endpoint; implement `BeginLogin`/`ObserveLogin`/`CancelLogin` projection to Credential base interaction status; admit service calls only through canonical `use-credential` Role rules with exact `acquire-token`/`observe`/`revoke` subresources and administrative lifecycle only through `admin-credential/admin` plus the ordinary mutation verb, with no Credential-specific Role fields; emit the login Endpoint with canonical `visibility = provider` and an exact `consumerPolicy` for the orchestration Provider and configured consumer; route access-token leases end-to-end from Entrablau service to exact consumer over Noise_KK; keep all refresh/login/TPM state inside the Entrablau Guest; declare no Provider state Volume; reject Host placement and all ambient fallback chains; enforce Credential name/ResourceRef/UID/digest as audit-only observable identity, with only `resource_name_digest` retained in authorized bounded audit and no Credential identity in status/errors/logs/OTEL Resource or span attributes/metric labels. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt tests/types where non-secret; replace production token acquisition with Entrablau Endpoint client. |
+| Detailed design | Implement secret-free controller/helper; require Credential base `identityGuestRef` and `loginEndpointRef`; resolve dependency alias `entra-login-token`; validate same-Zone Guest placement and exact `consumerRef`; implement typed `EntraTokenLeaseClient` whose production implementation is the Entrablau Endpoint; implement `BeginLogin`/`ObserveLogin`/`CancelLogin` projection to Credential base interaction status; admit service calls only when the same exact allowed operation (`acquire-token`, `refresh-token`, `revoke-token`, or `inspect-metadata`) is present in both `Credential.spec.allowedOperations` and the canonical `use-credential` Role `subresources`; require matching `create`, `update-spec`, or `delete` under `admin-credential` in addition to ordinary CRUD, with no Credential-specific Role fields or coarse aliases; emit the login Endpoint with canonical `visibility = provider` and an exact `consumerPolicy` for the orchestration Provider and configured consumer; route access-token leases end-to-end from Entrablau service to exact consumer over Noise_KK; keep all refresh/login/TPM state inside the Entrablau Guest; declare no Provider state Volume; reject Host placement and all ambient fallback chains; enforce Credential name/ResourceRef/UID/digest as audit-only observable identity, with only `resource_name_digest` retained in authorized bounded audit and no Credential identity in status/errors/logs/OTEL Resource or span attributes/metric labels. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt tests/types where non-secret; replace production token acquisition with Entrablau Endpoint client. |
 | Integration | Consumer composes `inputs.entrablau.nixosModules.default` into the identity Guest; sibling package declares login/token Process and Endpoint; d2b Credential resource binds `identityGuestRef`, `loginEndpointRef`, and `consumerRef` |
 | Data migration | Full v3 reset of d2b Credential metadata; Entrablau Guest state is preserved unless explicitly destroyed by the sibling-owned reset flow |
 | Validation | See §13 |
@@ -637,7 +659,7 @@ or any digest derived from Credential identity.
 | `test_host_placement_rejected` | Any `Host/*` `identityGuestRef`, `scope.executionRef`, or Host-system placement fails closed. |
 | `test_same_zone_accepted_cross_zone_rejected` | Same-Zone identity/consumer Guest works; any cross-Zone ResourceRef is rejected at eval/admission. |
 | `test_exact_consumer_rbac` | Only the authenticated `consumerRef` process can receive token delivery; other callers fail before Endpoint dispatch. |
-| `test_credential_role_subresource_matrix` | `use-credential` admits only exact `acquire-token`/`observe`/`revoke` mappings; `admin-credential/admin` plus the ordinary mutation verb gates lifecycle; empty/wildcard/unknown/mismatched subresources and method-name verbs fail before Endpoint dispatch. |
+| `test_credential_role_subresource_matrix` | Each service action requires the same exact `acquire-token`, `refresh-token`, `revoke-token`, or `inspect-metadata` value in `spec.allowedOperations` and `use-credential` subresources; each lifecycle action requires matching ordinary CRUD plus `admin-credential/create`, `admin-credential/update-spec`, or `admin-credential/delete`; empty/wildcard/unknown/mismatched/coarse aliases fail before Endpoint dispatch. |
 | `test_token_refresh_redaction` | Access token, refresh token, cookies, device codes, login URLs, and MSAL cache canaries are absent from spec/status/audit/OTEL/logs/Debug. |
 | `test_credential_identity_audit_only` | Credential name, canonical ResourceRef, UID, and derived-digest canaries are absent from status, errors, logs/Debug, every OTEL Resource/span attribute, and every metric label; the authorized bounded audit record retains only `resource_name_digest`, and an unauthorized request cannot elicit identity-bearing audit. Generic allowlisted OTEL Resource attributes remain present. |
 | `test_e2e_record_only_delivery` | Raw access token appears only in the Entrablau→consumer Noise_KK record; bus/controller/helper see ciphertext only. |
