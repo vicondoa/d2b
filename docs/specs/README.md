@@ -56,11 +56,13 @@ manifests, and the generated implementation-graph artifacts
 **Resource catalog (6)** — the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
 `Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `Host`, `Guest`,
 `Process`, `EphemeralProcess`, `User`, `Volume`, `Network`, `Device`,
-`Credential`, `Endpoint`, `ResourceExport`, `ResourceImport`) are owned across the foundation and these catalog
-specs:
+`Credential`, `Endpoint`, `ResourceExport`, `ResourceImport`) have the
+following exclusive ResourceType owners. Foundation specs define shared
+contracts but do not co-own these types:
 
 - [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) —
-  `Zone`, `ZoneLink`, `Quota`, `EmergencyPolicy`
+  `Zone`, `ZoneLink`, `Provider`, `Role`, `RoleBinding`, `Quota`,
+  `EmergencyPolicy`, `ResourceExport`, `ResourceImport`
 - [`ADR-046-resources-host-guest-process-user`](ADR-046-resources-host-guest-process-user.md) —
   `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`, `Endpoint`
 - [`ADR-046-resources-volume`](ADR-046-resources-volume.md) — `Volume`
@@ -101,7 +103,9 @@ members of the set.
   1) enumerates every implementation work item extracted from the member specs,
   sorted by `workItemId`, each bound to its `specId` and `specPath`. Every
   canonical required field is nonempty; `reuseSource` is `null` when a spec
-  declares no reuse source. Work-item IDs are unique across the whole set.
+  declares no reuse source. Work-item IDs satisfy the canonical ID contract
+  below and are unique across the whole set. Generation fails closed on an
+  incomplete, malformed, duplicate, or extra Markdown or manifest item.
 - `ADR-046-implementation-graph.json` (`artifactKind:
   d2b-adr-implementation-graph`, `schemaVersion` 1) and its rendered human view
   `ADR-046-implementation-graph.md` are the D095 machine-readable
@@ -287,17 +291,53 @@ Each spec contains an **Implementation work items** section. Every item has:
 
 | Field | Requirement |
 | --- | --- |
-| Work item ID | Stable `ADR046-<spec>-<ordinal>` ID |
+| Work item ID | Stable `ADR046-<spec-slug>-<ordinal>` ID |
 | Dependency/owner | Prerequisites, future wave, crate/component, shared owner |
 | Current source | Exact v3 paths, symbols, call sites, artifacts, and tests |
 | Reuse source | Optional exact main commit/paths/symbols/tests used for copy/adaptation |
-| Reuse action | `copy-unchanged`, `extract`, `adapt`, `wrap`, `replace`, or `delete-after-cutover` |
+| Reuse action | Exactly one canonical `reuseAction` value defined below |
 | Destination | Exact future crate/module/file and binary targets |
 | Detailed design | Types, APIs, algorithms, state, limits, errors, security |
 | Integration | Complete producer-to-consumer call/resource/process chain |
 | Data migration | State/config/artifact/reset behavior |
 | Validation | Exact test files/selectors and measurable acceptance |
 | Removal proof | Live successor path and tests required before deletion |
+
+The exact work-item ID regex is
+`^ADR046-[a-z0-9]+(?:-[a-z0-9]+)*-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$`.
+`<spec-slug>` is the owning Spec ID with the literal `ADR-046-` prefix removed;
+`<ordinal>` is a three-digit value from `001` through `999`.
+
+`reuseAction` is a closed scalar vocabulary:
+
+| Value | Disposition |
+| --- | --- |
+| `create` | Implement a net-new destination without copying an implementation source; `reuseSource` is `null`. |
+| `copy-unchanged` | Copy the named source while preserving its behavior and tests. |
+| `extract` | Separate the named reusable subset into the destination without changing its behavior. |
+| `adapt` | Reuse the named source with the contract or behavior changes stated in Detailed design. |
+| `wrap` | Keep the named implementation intact behind a new adapter, port, or facade. |
+| `replace` | Introduce and cut callers over to a named successor for an existing implementation or owner. |
+| `delete-after-cutover` | Remove the named old implementation only after the referenced successor and cutover tests are live. |
+
+Aliases, capitalization variants, free-form text, and compound values such as
+`copy + adapt` are invalid; split work with different primary dispositions into
+separate items.
+
+Generation and validation fail closed unless every normative member's
+Implementation work items section is complete:
+
+- every work-item heading matches the ID regex, uses its owning spec slug, and
+  is unique across the set;
+- every item has exactly one of each required table field above, no unknown or
+  duplicate fields, and its Work item ID field exactly matches its heading;
+- every required value is nonempty except an explicitly absent Reuse source,
+  which serializes as `null`; `create` requires that null value;
+- every Markdown item appears exactly once in `ADR-046-work-items.json`, every
+  manifest item resolves to exactly one Markdown item, and the bound `specId`
+  and `specPath` match the owning member; and
+- manifest items are sorted bytewise by `workItemId`; any parse ambiguity,
+  malformed `ADR046-` heading, count mismatch, or unconsumed item is an error.
 
 Broad items such as “update d2bd” are invalid. A work item that copies current
 behavior names the exact source symbols, the tests that move with them, the
