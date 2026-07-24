@@ -468,15 +468,29 @@ payloads owned by their respective resources and are retained unchanged.
 
 The controller declares a dependency alias `network → Provider/network-local`
 (bound via `config.networkProviderRef`). For each Guest with a non-empty
-`spec.networkAttachments`, the controller watches the referenced Network
-resources for `Ready` status.
+`spec.networkAttachments`, the controller watches the referenced opaque
+`Network/<name>` resources for `Ready` status. It never requests or receives a
+tap fd and never sees a network broker operation.
 
-When a Network resource is `Ready`, `Provider/network-local` has allocated a
-tap fd for the Guest's MAC address and bridge assignment. The controller
-requests the tap fd delivery through the network-local ComponentSession
-service. The tap fd is then included in the runner Process LaunchTicket's
-inherited fd table. QEMU receives the tap interface via a sealed fd slot; no
-bridge name, interface name, or host network path crosses the public surface.
+At Process launch, Core authorizes the Guest-to-Network attachment. The
+network-local controller declares the opaque attachment through
+`NetworkEffectPort`; its Core-owned adapter maps that semantic effect to the
+canonical `CreatePersistentTap`, applies `SetBridgePortFlags`, and gives the
+already-authorized connected `OwnedFd` directly to ProviderSupervisor.
+ProviderSupervisor places that fd in the QEMU Process LaunchTicket attachment.
+The fd never traverses the qemu Provider/controller, ResourceAPI,
+ComponentSession, or d2b-bus serialization. QEMU receives the tap through the
+inherited fd table; no bridge name, interface name, or host network path crosses
+the public surface.
+
+The adapter owns the `OwnedFd` with `FD_CLOEXEC` set until ProviderSupervisor
+accepts it. ProviderSupervisor retains a CLOEXEC parent copy, creates only the
+declared child fd slot immediately before exec, and closes its copy after
+successful spawn. QEMU then owns the child copy until exit. Cancellation,
+LaunchTicket rejection, or spawn failure closes every copy first and invokes
+the generation-fenced `DeletePersistentTap`; the opaque realization remains
+retained until deletion is confirmed. Normal teardown likewise waits for QEMU
+fd closure before `DeletePersistentTap`.
 
 If `spec.networkAttachments` is empty, the runner starts with no network
 interface (isolated).
@@ -644,9 +658,9 @@ spec:
       limit: 1024
 
   # --- Network ---
-  # The tap fd is pre-connected and delivered via the LaunchTicket inherited fd
-  # table (acquired from the network-local ComponentSession before runner
-  # creation). The runner process holds no live network stack; networkUsage is null.
+  # Core/ProviderSupervisor resolves the opaque Network ref and inserts the
+  # pre-authorized tap OwnedFd directly into the LaunchTicket inherited-fd
+  # table. The controller never receives the fd; networkUsage remains null.
   networkUsage: null
 
   # --- Device ---
@@ -731,7 +745,7 @@ spec:
   purpose: qmp-control
   serviceFingerprint: runtime-qemu-media.d2bus.org/qmp/v1
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
   consumerPolicy: [Provider/runtime-qemu-media]
   lifecyclePolicy: recycle-with-producer
@@ -750,7 +764,7 @@ spec:
   purpose: serial-console
   serviceFingerprint: runtime-qemu-media.d2bus.org/serial/v1
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
   consumerPolicy: [Provider/runtime-qemu-media]
   lifecyclePolicy: recycle-with-producer
@@ -758,6 +772,10 @@ spec:
 
 Consumers use `Endpoint/media-vm-qmp` and `Endpoint/media-vm-serial`; no raw
 socket path, fd number, or address appears in spec or status.
+`visibility` uses the Endpoint schema's exact closed values
+`owner | provider | zone`; these examples use `provider`.
+`consumerPolicy` provides the finer restriction to
+`Provider/runtime-qemu-media` and does not invent another visibility value.
 
 ---
 
@@ -920,9 +938,12 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
 2. **Runtime Volume:** Controller creates `<guest-uid-short>-runtime` Volume
    if absent. Waits for `Volume.phase = Ready`.
 
-3. **Tap fd acquisition:** Controller calls `network-local` ComponentSession
-   service to obtain the tap fd for the Guest's Network attachment. The fd is
-   added to the LaunchTicket.
+3. **Network attachment resolution:** Controller supplies only the opaque
+   `Network/<name>` ref. Core authorizes the attachment; the network-local
+   `NetworkEffectPort` adapter performs `CreatePersistentTap`, applies
+   `SetBridgePortFlags`, and transfers the connected CLOEXEC `OwnedFd` directly
+   to ProviderSupervisor for the LaunchTicket. The controller never receives
+   the broker operation or fd.
 
 4. **Media fd acquisition:** Volume controller (provider/volume-local) makes
    the boot media fd available via the Volume's virtio-blk attachment. The
@@ -939,14 +960,17 @@ tmpfs is unmounted only after the runner Process pidfd signals exit.
    backend.
 
 7. **Runner Process creation:** Controller creates (or UpdateSpec) the
-   `<guest-uid-short>-qemu-runner` Process resource with a fully-sealed
-   LaunchTicket and all fd slots resolved.
+   `<guest-uid-short>-qemu-runner` Process resource and supplies only opaque
+   Network/Endpoint refs to Core's attachment resolver. Core seals the
+   LaunchTicket only after every private fd attachment is authorized and
+   resolved.
 
 8. **ProviderSupervisor launch:** `system-minijail` ProviderSupervisor
    verifies the LaunchTicket, compiles the minijail sandbox plan, and spawns
    QEMU via `clone3(CLONE_PIDFD)` into the correct cgroup leaf. QEMU receives
    all required fds via its inherited fd table; no paths cross the supervisor
-   boundary.
+   boundary. Launch rejection or spawn failure closes the tap `OwnedFd` before
+   the Network adapter invokes generation-fenced `DeletePersistentTap`.
 
 9. **QMP readiness:** After spawn, the Process Provider monitors the `qmp`
    endpoint. When QEMU writes its initial capabilities JSON to the QMP socket,
@@ -1054,11 +1078,15 @@ disposition of every current baseline broker op:
 | --- | --- | --- |
 | `OpenDevice(kvm)` | Deliver `/dev/kvm` fd to `device-kvm` Provider for LaunchTicket inclusion | Issued by `device-kvm` Provider controller; never by `runtime-qemu-media` directly |
 | `SpawnRunner` (qemu-media-runner role) | Launch QEMU binary in cgroup leaf via `clone3(CLONE_PIDFD)` | Issued by `system-minijail` ProviderSupervisor on behalf of Process controller |
-| `TapFdDeliver` (network-local family) | Deliver tap fd for Guest MAC/bridge assignment | Issued by `network-local` Provider; consumed by `runtime-qemu-media` controller as a fd slot |
+| `CreatePersistentTap` | Create/adopt the opaque Guest Network attachment realization | Issued only by the Core-owned NetworkEffectPort adapter after network-local declares the semantic effect |
+| `SetBridgePortFlags` | Apply isolation and neighbor-suppression policy before launch | Issued by the same NetworkEffectPort adapter before fd handoff |
+| `DeletePersistentTap` | Remove the generation-fenced realization after fd closure | Issued by the NetworkEffectPort adapter on failed launch and normal teardown |
 
-`runtime-qemu-media` does not issue any broker operations directly. It
-communicates with `network-local` and `device-kvm` via their ComponentSession
-service contracts (d2b-bus), not via broker wire ops.
+`runtime-qemu-media` does not issue or receive any broker operation directly.
+Its controller supplies only opaque Network and Endpoint refs. The connected
+tap `OwnedFd` moves directly from the Core-owned NetworkEffectPort adapter to
+ProviderSupervisor and then the child fd table; it is never serialized on
+d2b-bus or delivered through the controller's ComponentSession.
 
 ---
 
@@ -1215,7 +1243,7 @@ closed; the controller never writes a value outside this table.
 | `runner-exited-unexpectedly` | Failed | Runner Process exited while Guest desiredPhase was running |
 | `display-provider-not-configured` | Failed | displayWindow=true but config.displayProviderRef=null |
 | `wayland-session-failed` | Failed | WaylandSession owned by this Guest is in Failed phase |
-| `network-tap-unavailable` | Degraded | network-local could not deliver tap fd |
+| `network-tap-unavailable` | Degraded | Core could not authorize or resolve the Network attachment for launch |
 
 ---
 
@@ -1669,10 +1697,10 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Current source | `packages/d2b-host/src/qemu_media_argv.rs` fd-index arg shape; `packages/d2b-core/src/processes.rs` `ProcessRole::QemuMediaRunner` sandbox/budget baseline |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/process_builder.rs |
-| Detailed design | Process spec builder and LaunchTicket assembly: build the canonical `qemu-media-runner` Process ResourceSpec from §10.1 and assemble the LaunchTicket with sealed fd slots for kvm, tap, media, and optional display fds. No raw path, argv, executable path, or principal appears in any public field. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt fd-slot and sandbox/budget concepts to canonical Process resources and sealed LaunchTickets; do not copy raw argv strings or path construction. |
-| Integration | Controller emits Process resources; system-minijail/Process Provider consumes the spec and LaunchTicket; QEMU runner receives only sealed fds; Endpoint resources represent QMP/serial connections. |
+| Detailed design | Process spec builder and LaunchTicket attachment resolution: build the canonical `qemu-media-runner` Process ResourceSpec from §10.1 and supply only opaque Network/Endpoint refs to Core's attachment resolver. Core, not the qemu controller, resolves authorized kvm, tap, media, and optional display attachments and seals their fd slots in the LaunchTicket. The qemu Provider/controller receives no broker operation or fd. No raw path, argv, executable path, or principal appears in any public field. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt sandbox/budget concepts to canonical Process resources and Core-sealed LaunchTickets; do not copy raw argv strings or path construction. |
+| Integration | Controller emits Process resources; Core resolves private attachments; system-minijail/Process Provider consumes the sealed LaunchTicket. The NetworkEffectPort adapter transfers its connected tap `OwnedFd` directly to ProviderSupervisor without ResourceAPI, ComponentSession, or d2b-bus serialization; QEMU receives only the declared child fd slot. Endpoint resources represent QMP/serial connections. |
 | Data migration | Full d2b 3.0 reset; existing QEMU runner process state is not imported and launch state is rebuilt from resources |
-| Validation | `tests/process_spec_golden.rs`; `tests/launch_ticket_fd_slots.rs`; `tests/no_raw_argv_in_spec.rs` |
+| Validation | `tests/process_spec_golden.rs`; `tests/launch_ticket_fd_slots.rs`; `tests/launch_ticket_tap_fd_lifetime.rs`; `tests/no_controller_fd_or_broker_op.rs`; `tests/no_raw_argv_in_spec.rs` |
 | Removal proof | `ProcessRole::QemuMediaRunner` and raw qemu-media argv launch surfaces are removable after canonical Process specs and LaunchTickets cover every runner launch |
 
 ---
@@ -1709,19 +1737,19 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### ADR046-qemu-media-012 Network tap fd acquisition
+### ADR046-qemu-media-012 Network attachment routing
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on ADR046-qemu-media-002 and Provider config `networkProviderRef`; owner: runtime-qemu-media network dependency integration |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002, ADR046-network-005, and Provider config `networkProviderRef`; owner: runtime-qemu-media network dependency integration |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/network.rs |
-| Detailed design | Network tap fd acquisition: call the `network-local` ComponentSession service to request a tap fd for a Guest MAC/bridge assignment and include the fd in the LaunchTicket. No bridge name or interface name appears in any public field. Primary reuse disposition: `create`. Preserved source-plan detail: net-new against the `network-local` ComponentSession contract. |
-| Integration | Guest networkAttachments drive requests to network-local; network-local returns a sealed tap fd; Process LaunchTicket carries the fd to the QEMU runner; Guest conditions report unavailable taps. |
+| Detailed design | Network attachment routing: project each Guest network attachment as an opaque `Network/<name>` ref and condition only. The network-local controller declares the opaque semantic effect; its Core-owned NetworkEffectPort adapter maps it to `CreatePersistentTap`, then `SetBridgePortFlags`, and transfers the already-authorized connected `OwnedFd` directly to ProviderSupervisor for the QEMU Process LaunchTicket. The adapter and supervisor keep `FD_CLOEXEC` set on parent copies; only the declared child slot is made inheritable immediately before exec. On cancellation, ticket rejection, or spawn failure, all fd copies close before generation-fenced `DeletePersistentTap`, and the opaque realization is retained until deletion confirmation. The qemu Provider/controller receives no broker operation, fd, bridge name, or interface name, and the fd is never serialized through ResourceAPI, ComponentSession, or d2b-bus. Primary reuse disposition: `create`. |
+| Integration | Guest `networkAttachments` drive opaque dependency watches; ADR046-network-005 owns the NetworkEffectPort effect chain and ProviderSupervisor owns fd handoff. Process LaunchTicket carries the fd directly to QEMU; Guest conditions report authorization/resolution failures without exposing the fd or broker operation. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | `tests/tap_fd_acquisition.rs`; `tests/tap_fd_unavailable.rs` |
-| Removal proof | None — tap fd acquisition through `network-local` is a new v3 dependency path |
+| Validation | `tests/tap_launch_routing.rs` proves `CreatePersistentTap → SetBridgePortFlags → ProviderSupervisor LaunchTicket` ordering; `tests/tap_fd_lifetime.rs` proves CLOEXEC, single child ownership, and close-before-`DeletePersistentTap`; `tests/tap_fd_no_bus_serialization.rs` rejects fd/broker DTOs at the qemu controller boundary; `tests/tap_fd_unavailable.rs` covers authorization and resolution failure |
+| Removal proof | None — Core-routed Network attachment resolution is a new v3 dependency path |
 
 ---
 
@@ -1874,7 +1902,9 @@ per-test budget.
 | `wayland_session_attachment_read.rs` | Opaque endpoint attachment consumed from display-wayland status |
 | `wayland_session_missing_provider.rs` | displayWindow=true + null displayProviderRef → Failed |
 | `process_spec_golden.rs` | Full canonical Process spec against §10.1 YAML |
-| `launch_ticket_fd_slots.rs` | LaunchTicket fd table completeness |
+| `launch_ticket_fd_slots.rs` | Core-sealed LaunchTicket fd table completeness; controller supplies only opaque refs |
+| `launch_ticket_tap_fd_lifetime.rs` | Tap `OwnedFd` stays CLOEXEC in adapter/supervisor, becomes inheritable only in declared child slot, and closes on all failure paths |
+| `no_controller_fd_or_broker_op.rs` | QEMU Provider/controller boundary rejects tap fds and broker DTOs |
 | `no_raw_argv_in_spec.rs` | No executable path in any Process spec field |
 | `qmp_capability_negotiation.rs` | QMP greeting exchange |
 | `qmp_command_dispatch.rs` | All QMP commands in §13.2; success and error paths |
@@ -1883,8 +1913,10 @@ per-test budget.
 | `hotplug_attach_sequence.rs` | blockdev-add + device_add via QMP attachment |
 | `hotplug_detach_sequence.rs` | device_del + blockdev-del via QMP attachment |
 | `hotplug_qmp_failure.rs` | QMP error → Degraded + `hotplug-media-failed` |
-| `tap_fd_acquisition.rs` | network-local ComponentSession; fd delivery |
-| `tap_fd_unavailable.rs` | `network-tap-unavailable` Degraded |
+| `tap_launch_routing.rs` | `CreatePersistentTap → SetBridgePortFlags →` direct ProviderSupervisor LaunchTicket attachment ordering |
+| `tap_fd_lifetime.rs` | Failed launch closes all copies before generation-fenced `DeletePersistentTap`; normal exit waits for QEMU closure |
+| `tap_fd_no_bus_serialization.rs` | Tap fd never appears in ResourceAPI, ComponentSession, or d2b-bus payloads |
+| `tap_fd_unavailable.rs` | Authorization/resolution failure → `network-tap-unavailable` Degraded |
 | `reconcile_dependency_gating.rs` | All dependencies missing/present combinations |
 | `reconcile_runner_exit_handling.rs` | Runner exit → Failed / re-create logic |
 | `finalize_sequence.rs` | Finalizer drain order (runner → WaylandSession → Volume) |

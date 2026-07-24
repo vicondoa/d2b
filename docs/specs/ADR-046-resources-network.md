@@ -541,8 +541,10 @@ spec:
   allowedDomains: [system]
   budget: { ... }
   # Core resolves the Network owner relationship and supplies tap/macvtap FDs
-  # to Provider/runtime-cloud-hypervisor through an authorized LaunchTicket.
-  # No IfName, address, MAC, parentInterface, or authority key is copied here.
+  # directly to the selected runtime's ProviderSupervisor through an authorized
+  # LaunchTicket. Runtime controllers, including runtime-qemu-media, receive
+  # only opaque Network/Endpoint refs. No IfName, address, MAC,
+  # parentInterface, fd, broker op, or authority key is copied here.
   systemArtifactId: <value-from-Network.spec.netVmSystemArtifactId>
   # Artifact ID referencing the net-VM nixos-system artifact (type=nixos-system)
   # in the artifact catalog. Set from the REQUIRED Network.spec.netVmSystemArtifactId;
@@ -828,13 +830,32 @@ AND via `ApplySysctl` at each reconcile cycle (defense-in-depth, handling
 boot-time Nix sysctl entry is required for specific bridge IfNames because
 bridges are created dynamically and do not exist at host activation.
 
-**Persistent-tap creation** is declared by the network-local controller through
-its semantic EffectPort and maps to `CreatePersistentTap`; Core supplies the
-resulting FD privately to `Provider/runtime-cloud-hypervisor` through the
-LaunchTicket path. `CreateTapFd` remains the runtime's non-persistent FD path.
-On attachment removal or Network finalization, network-local waits for the
-Guest/VMM FD owner to close and invokes the paired `DeletePersistentTap`
-through its EffectPort.
+**Persistent-tap creation** uses one operation chain. The network-local
+controller declares an opaque attachment realization through
+`NetworkEffectPort`. Its Core-owned adapter maps that semantic effect to
+`CreatePersistentTap`, applies `SetBridgePortFlags`, and transfers the
+already-authorized connected `OwnedFd` directly to ProviderSupervisor for the
+selected Guest runtime's Process LaunchTicket. For QEMU, the qemu
+Provider/controller receives only opaque Network/Endpoint refs; it receives no
+broker operation or fd. The fd is never represented in a ResourceSpec/status,
+serialized on d2b-bus, or delivered through a Provider controller
+ComponentSession.
+
+`CreateTapFd` is a distinct baseline operation-scoped, non-persistent
+SCM_RIGHTS path. This ADR does not use it for Network attachment realizations;
+the retained Network lifecycle and generation-fenced deletion require the
+canonical `CreatePersistentTap`/`DeletePersistentTap` pair.
+
+The Network adapter owns the connected `OwnedFd` with `FD_CLOEXEC` set until
+ProviderSupervisor accepts it. ProviderSupervisor keeps its parent copy
+CLOEXEC, makes only the declared child fd slot inheritable immediately before
+exec, and closes its copy after successful spawn. The Guest VMM owns the child
+copy until exit. Cancellation, LaunchTicket rejection, or spawn failure closes
+every copy before the adapter invokes generation-fenced
+`DeletePersistentTap`; the opaque realization remains retained until deletion
+is confirmed. On attachment removal or Network finalization, network-local
+likewise waits for the Guest/VMM fd owner to close before invoking
+`DeletePersistentTap`.
 
 `DeletePersistentTapRequest` contains only an opaque attachment ID,
 `expectedNetworkGeneration`, and `expectedAttachmentGeneration`. It accepts no
@@ -1006,10 +1027,13 @@ attachments:
     index: 11
 ```
 
-The attachment is owned by the Network, not the Guest. The network-local
-controller creates the tap interface and bridge-port configuration when a
-listed Guest exists and is in a Ready-or-better phase. The Guest's own spec
-references the network for firewall/routing/sandbox purposes:
+The attachment is owned by the Network, not the Guest. When a listed Guest
+exists and Core validates it as launch-eligible, the network-local controller
+declares the opaque attachment effect. The Core adapter performs
+`CreatePersistentTap → SetBridgePortFlags` and routes the connected CLOEXEC
+`OwnedFd` directly into ProviderSupervisor's LaunchTicket attachment; the
+runtime controller never receives the fd or broker operation. The Guest's own
+spec references the network for firewall/routing/sandbox purposes:
 
 ```yaml
 # In Guest/corp-vm spec (inline ExecutionPolicy field):
@@ -1237,11 +1261,20 @@ The network-local controller implements the full reconciliation contract from
       (`CAP_NET_ADMIN`/`CAP_NET_BIND_SERVICE`/`CAP_NET_RAW` effective in Guest network namespace only; no host capability; INV-NET-009),
       and mount `[{volumeRef: Volume/net-<networkName>-config, view: guest-readonly,
       mountPath: "/run/d2b/net-config", access: read-only, required: true}]`.
-      Create or update tap IfName records for each attachment entry that has a Ready
-      Guest. If `spec.mdns.enable = true`, create or update the owned mDNS reflector
+      Create or update opaque tap realization records for each attachment entry
+      that has a Core-authorized, launch-eligible Guest. Declare
+      `CreatePersistentTap` through
+      `NetworkEffectPort`; after the Core adapter creates/adopts the tap, apply
+      `SetBridgePortFlags` before it routes the connected CLOEXEC `OwnedFd`
+      directly to ProviderSupervisor's LaunchTicket attachment. No Provider
+      controller or d2b-bus payload receives the fd or broker operation. If
+      `spec.mdns.enable = true`, create or update the owned mDNS reflector
       `Process` resource (and local DNS bridge `Process` if `dnsmasqLocal = true`)
       with `executionRef: Guest/<netVmName>`.
-   j. Set bridge port flags (Isolated, neigh-suppress) for each tap via broker.
+   j. Confirm bridge port flags (Isolated, neigh-suppress) for every tap before
+      allowing its LaunchTicket handoff. On ticket rejection, cancellation, or
+      spawn failure, close every `OwnedFd` copy and invoke
+      `DeletePersistentTap`; retain the opaque realization until confirmed.
    k. For each attachment removed from the current spec, wait for its Guest/VMM
       FD ownership to close, then invoke `DeletePersistentTap` through the
       EffectPort with the retained opaque attachment ID and current expected
@@ -2492,8 +2525,10 @@ bridges at reconcile time).
 | Destination | `packages/d2b-provider-network-local/src/controller.rs`: async NetworkReconciler; `packages/d2b-provider-network-local/src/plan.rs`: ReconcilePlan computation; `packages/d2b-provider-network-local/src/observe.rs`: drift-detection observe loop. Full crate layout required (see [Package and crate boundary](#package-and-crate-boundary)): `src/` (controller/plan/observe + colocated unit tests), `tests/` (hermetic conformance and state-machine tests), `integration/` (provider-system reconcile fixtures), `README.md` (Network ResourceType, controller binary, placement, RBAC, security invariants, build/test/integration commands). |
 | Detailed design | Implements full async reconcile interface from `ADR-046-resource-reconciliation`. `plan()` computes desired vs. actual bridge-presence, sysctl, host-side nftables, hosts-file, NM-unmanaged, config Volume content, Guest, guest-agent Process, and mDNS-Process states. `reconcile()` dispatches in order: `CreateBridge` for each bridge not present (broker applies IPv6 sysctls atomically; `CreateBridge` failure sets `FabricReady=False/bridge-create-error` and aborts) → `ApplySysctl` (defense-in-depth IPv6) → `ApplyNftables` (host-side `inet d2b` table) → `ApplyNmUnmanaged` → `ApplyRoute` → `UpdateHostsFile` → `SeedDnsmasqLease` for new reservations → **Volume upsert** (two-phase): Phase 1 — create `Volume/net-<networkName>-config` with `kind: ephemeral`, `source.executionRef: Host/<hostName>`, `source.settings.kind: tmpfs`, `quota: {maxBytes: 4194304, maxInodes: 128, enforcement: hard}` (tmpfs quota charged to Host memory budget), `layout` entries (root directory with `type: directory` and four config files each with `type: file`, `ownerRef: User/net-local-controller`, `groupRef: User/net-local-controller`, `mode: "0640"`, `accessAcl: []`, `defaultAcl: []`, `noFollow: true`, conservative create/repair/cleanup policies), `views: {guest-readonly: {path: "", rights: [read, traverse]}}`, `attachments: []` (no Guest attachment); abort on terminal error with `ConfigVolumeReady=False/config-volume-error`. Wait for Volume backing to reach `Ready`; requeue on `Degraded`/`Failed` with `ConfigVolumeReady=False/volume-not-ready`. Write rendered config content through Volume write service (no raw host paths). Phase 2 — create Guest upsert with `systemArtifactId` from REQUIRED `Network.spec.netVmSystemArtifactId`. Wait for Guest `Ready`. Then update Volume with Guest attachment: `attachments: [{executionRef: Guest/<netVmName>, transport: virtiofs, view: guest-readonly, access: read-only, mountPath: "/run/d2b/net-config", settings: {posixAcl: false, xattr: false, cache: auto, inodeFileHandles: never, threadPoolSize: null, socketGroup: null}}]`; wait for attachment `Ready`; requeue on `Degraded` with `ConfigVolumeReady=False/attachment-not-ready`. Create or update guest-agent Process `Process/net-<networkName>-agent` with `processClass: worker`, `sandbox: {namespaceClasses: [], capabilityClasses: [network-admin, network-bind, network-raw]}` (inherits Guest network namespace; `network-admin`→`CAP_NET_ADMIN`, `network-bind`→`CAP_NET_BIND_SERVICE`, `network-raw`→`CAP_NET_RAW`, all effective in Guest network namespace only; INV-NET-009), `mounts: [{volumeRef: Volume/net-<networkName>-config, view: guest-readonly, mountPath: "/run/d2b/net-config", access: read-only, required: true}]`. mDNS Process upsert when `spec.mdns.enable = true` (D-NETWORK-001) → `SetBridgePortFlags` per tap. Removed attachments first wait for Guest/VMM FD ownership to close, then issue `DeletePersistentTap` with the retained opaque attachment ID and current expected Network/attachment generations; the handle remains retained until confirmed effect or validated absence. Stale generation refreshes/requeues, transient kernel error retries, and foreign marker fails closed. Each broker op returns typed audit evidence. `observe()` re-reads `firewallDigest` (host-side), bridge isolation flags, IPv6 sysctls, and guest-agent Process status (`dnsmasq-bound`, `firewall-applied` predicates); queues reconcile on drift. Metrics use only the fixed semantic labels in §OTEL spans and metrics; Zone/Network identity remains in OTEL resource attributes and permitted audit fields and never enters metric labels or span attributes. **Finalizer** (strictly child-first): `NetworkDraining` → stop workload Guests and await VMM FD closure → generation-fenced `DeletePersistentTap` for each retained attachment, awaiting confirmation → delete guest-agent Process and mDNS Processes; wait for each Deleted watch event → update Volume to remove Guest attachment (`attachments: []`); wait for attachment removal confirmed → delete `Guest/<netVmName>`; wait for Deleted watch event → delete `Volume/net-<networkName>-config`; wait for Deleted watch event → `ApplyNftables` (empty) → `ApplyNmUnmanaged` (empty) → `UpdateHostsFile` (empty) → `DeleteBridge` for each bridge (idempotent) → clear finalizer. No USBIP rules installed by Network; device-usbip issues the existing `UsbipBindFirewallRule` request with action `Ensure` for apply or `Remove` for release (D-NETWORK-002). |
 | Integration | Controller process registers descriptor, watches `Network` resources via d2b-bus/ComponentSession/ResourceClient. Owned Guest and Process mutations trigger owner reconciliation. Device-usbip watches only Network identity/readiness/generation; its Core adapter privately resolves relay/firewall effects (D-NETWORK-002). |
+| QEMU launch integration | For every authorized QEMU attachment, the controller supplies only the opaque realization to `NetworkEffectPort`. The Core adapter performs `CreatePersistentTap → SetBridgePortFlags`, then transfers the connected CLOEXEC `OwnedFd` directly to ProviderSupervisor's Process LaunchTicket attachment. The qemu Provider/controller receives only opaque Network/Endpoint refs and no broker op/fd; no fd is serialized through ResourceAPI, ComponentSession, or d2b-bus. Adapter/supervisor parent copies remain CLOEXEC and close after spawn; ticket rejection, cancellation, or spawn failure closes all copies before generation-fenced `DeletePersistentTap`, retaining the opaque realization until confirmation. |
 | Data migration | None after full reset |
 | Validation | `ADR046-reconcile-001` toolkit conformance; latency gates (p95 ≤5 ms hint-to-handler); Network-specific: CIDR conflict blocks reconcile, `CreateBridge` failure sets `FabricReady=False`, Volume creation failure sets `ConfigVolumeReady=False/config-volume-error`, `User/net-local-controller` not Ready aborts with `ConfigVolumeReady=False/user-not-ready`, Volume schema round-trip (kind=ephemeral, source.settings.kind=tmpfs, quota.enforcement=hard, layout type=file entries, views.guest-readonly.rights=[read,traverse]), tmpfs quota charged to Host memory budget (test Volume creation fails when Host memory budget exceeded), Guest not created before Volume backing `Ready`, Guest attachment not added before Guest `Ready`, guest-agent Process created after attachment `Ready` (`processClass: worker`, `namespaceClasses: []`, `capabilityClasses: [network-admin, network-bind, network-raw]`, `access: read-only`, `required: true`), host-capability leakage test: no host-netns process gains `CAP_NET_ADMIN`/`CAP_NET_BIND_SERVICE`/`CAP_NET_RAW` as result of guest-agent launch (INV-NET-009; `tests/host-integration/guest-agent-cap-confinement.nix`), removed attachment and finalizer call `DeletePersistentTap` only after Guest/VMM FD closure with opaque ID/current generations, validated absence succeeds, transient failure retains handle/retries, stale generation refreshes, foreign marker blocks without deletion, request/audit contain no IfName/path, `DeleteBridge` called only after tap confirmations, Volume attachment removed before net-VM Guest deletion in finalizer (test order: workload FD closure → persistent taps deleted → agent Deleted → Volume attachment removed → net-VM Guest Deleted → Volume Deleted → bridges), east-west invariant (INV-NET-003), hostBlocklist enforcement (INV-NET-004), macvtap attachment status (delegated to runtime-ch), mDNS Process created/deleted with `spec.mdns.enable` toggle, broker INV-NET-002 tests, config-only spec change updates Volume content and triggers agent reload without Guest restart (INV-NET-008); golden tests updated for v3 IfNames; structural metric descriptor test asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `network`, and every resource-name-derived label and verifies a Network-name canary is absent from emitted label values |
+| QEMU launch validation | `qemu_tap_launch_order` proves create → flags → ticket ordering; `qemu_tap_owned_fd_lifetime` proves CLOEXEC parent ownership, one intentional child slot, and closure on success/failure; `qemu_tap_failed_launch_cleanup` proves close-before-`DeletePersistentTap` and handle retention until confirmation; `qemu_tap_no_bus_serialization` proves the qemu Provider/controller and every ResourceAPI/ComponentSession/d2b-bus payload contain only opaque refs, never the fd or broker DTO. |
 | Removal proof | Daemon-orchestrated network/bridge lifecycle removed only after controller passes conformance and parity tests |
 
 ### ADR046-network-006
@@ -2506,6 +2541,7 @@ bridges at reconcile time).
 | Reuse action | adapt |
 | Destination | `tests/unit/nix/cases/net-vm-network.nix` (adapted to v3 resource API); updated golden pins; `tests/host-integration/bridge-isolation.nix` (adapted); `packages/d2b-priv-broker/tests/{bridge_lifecycle,persistent_tap_lifecycle}.rs` (new hermetic broker tests). Provider crate test directories: `packages/d2b-provider-network-local/tests/` — hermetic Cargo integration tests (conformance suite, controller state machine, CIDR validation vectors, IfName determinism, invariant tests INV-NET-001–007, reconcile/observe/finalize with deterministic clock, fault injection); `packages/d2b-provider-network-local/integration/` — container/Host/Guest lifecycle fixtures invoked by `make test-integration` (bridge isolation, east-west double opt-in, nftables drift detection, persistent-tap and macvtap lifecycle). Both directories required by package policy. |
 | Detailed design | Rust integration tests: NetworkSpec CIDR validation golden vectors; AttachmentSpec index uniqueness; ExternalAttachmentSpec mutual-exclusion validation; IfName derivation determinism; CIDR overlap arithmetic; INV-NET-001 through INV-NET-009 invariant tests; reconcile/observe/finalize state machine (deterministic clock). Broker tests: `create_bridge_applies_ipv6_sysctl` (INV-NET-002 layer 1); `delete_bridge_is_idempotent`; `delete_bridge_never_cascades_attached_tap`; `create_bridge_parameters_match_spec` (MTU, STP disabled, multicast snooping disabled); `delete_persistent_tap_pairs_with_create`; `delete_persistent_tap_absent_is_idempotent_after_ownership_validation`; `delete_persistent_tap_rejects_stale_network_generation`; `delete_persistent_tap_rejects_stale_attachment_generation`; `delete_persistent_tap_foreign_marker_fails_closed`; `delete_persistent_tap_request_and_audit_have_no_ifname_or_path`. Controller tests: `reconcile_applies_sysctl_defense_in_depth` (INV-NET-002 layer 2); `volume_created_before_guest`; `guest_not_created_until_volume_ready`; `agent_process_created_after_guest`; `removed_attachment_waits_for_vmm_then_delete_persistent_tap`; `finalizer_order_vmm_then_taps_then_agent_then_guest_then_volume_then_bridges`; `delete_persistent_tap_transient_retry_retains_handle`; `delete_persistent_tap_generation_mismatch_refreshes`; `delete_persistent_tap_foreign_marker_blocks_finalizer`; `config_only_spec_change_updates_volume_no_guest_restart` (INV-NET-008); `finalizer_calls_delete_bridge`; `mdns_process_created_on_enable`; `mdns_process_deleted_on_disable`; `host_capability_leakage` (INV-NET-009). nix-unit: INV-NET-001 lib.mkForce assertion; net-VM artifact has no inline mDNS service and no per-Network dnsmasq/nftables data (INV-NET-008); Network emitter CIDR constraint assertions; no `systemd.network.netdevs` bridge entries emitted. Host integration: bridge isolation with east-west opt-in; nftables drift detection; persistent-tap and macvtap create/delete lifecycle; config Volume update propagates to guest-agent without Guest restart; `tests/host-integration/guest-agent-cap-confinement.nix` (INV-NET-009 zero leakage to host netns). |
+| QEMU TAP tests | Add `qemu_tap_launch_order`, `qemu_tap_owned_fd_lifetime`, `qemu_tap_failed_launch_cleanup`, and `qemu_tap_no_bus_serialization` to the network-local/provider-supervisor integration fixture. Assert the exact `CreatePersistentTap → SetBridgePortFlags → LaunchTicket` chain, direct `OwnedFd` handoff, CLOEXEC discipline, close-before-generation-fenced-delete on every failed launch, no operation-scoped `CreateTapFd`, and no fd/broker DTO at the qemu controller or bus boundary. |
 | Integration | Pinned tests registered in `tests/golden/pinned/`; nix-unit cases in `tests/unit/nix/cases/`; host integration in `tests/host-integration/` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All listed tests must pass before `nixos-modules/network.nix` removal is eligible |
