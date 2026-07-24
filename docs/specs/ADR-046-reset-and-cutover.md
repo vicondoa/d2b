@@ -1749,7 +1749,7 @@ applies here exactly as everywhere else in the repository).
 | Work item ID | `ADR046-reset-005` |
 | Dependency/owner | ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-003`); core-controller owner (`ADR046-core-001`) |
 | Current source | None (bootstrap sequencing over Zone runtime startup, which is itself ADR-only) |
-| Reuse source | None from main |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-cutover/src/{store_bootstrap,provider_sequence}.rs` |
 | Detailed design | Phase 5 store creation per [Resource-store initialization](#resource-store-initialization); Phase 6 topological Provider install per [Provider install/topological start](#provider-installtopological-start), including the fixed staged default order and cycle-rejection check |
@@ -1797,7 +1797,7 @@ applies here exactly as everywhere else in the repository).
 | Work item ID | `ADR046-reset-008` |
 | Dependency/owner | ADR046-reset-007; owner of each retiring artifact's ADR 0046 successor work item |
 | Current source | `ADR-046-cli-and-operations` "Removal notes" (live-successor-before-deletion criterion) |
-| Reuse source | None from main |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-cutover/src/finalize.rs` |
 | Detailed design | Per-candidate independent gate evaluation exactly as tabled in [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates); separate consent phrase from `apply`; never partial-destroys a candidate |
@@ -1845,7 +1845,7 @@ applies here exactly as everywhere else in the repository).
 | Work item ID | `ADR046-reset-011` |
 | Dependency/owner | ADR046-reset-001 through ADR046-reset-010, fully landed |
 | Current source | `tests/integration/live/` conventions; `tests/host-integration/hardware/` conventions |
-| Reuse source | None from main |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `tests/integration/live/cutover-real-host.sh`, `tests/integration/live/cutover-real-host-cloud-guest.sh`, `tests/host-integration/hardware/cutover-real-tpm.sh`, `tests/host-integration/hardware/cutover-real-usbip-security-key.sh` |
 | Detailed design | Manual, `D2B_LIVE=1`/hardware-gated validation scripts described in [Tests](#tests) Type 11/12 rows; never run in CI; require operator sign-off and an independent out-of-band backup before execution |

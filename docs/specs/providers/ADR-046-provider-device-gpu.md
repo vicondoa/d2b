@@ -1664,7 +1664,7 @@ disposition contract test passes.
 | Work item ID | `ADR046-gpu-003` |
 | Dependency/owner | ADR046-gpu-002 |
 | Current source | `nixos-modules/assertions.nix` x86_64-linux guard; `packages/d2b-core/src/processes.rs` ProcessRole::Gpu/GpuRenderNode; no existing sysfs probe module |
-| Reuse source | None; probe is `ADR-only` |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-device-gpu/src/probe.rs` |
 | Detailed design | Call `GpuEffectPort::probe_drm_device(selector)` on each `scheduled-observe` trigger; the effect port resolves device presence against the trusted device table and returns a presence/health result without exposing raw sysfs or device paths to the controller. Three-strike failure counter; `observe_interval_secs` (10–60, default 30); emit `DevicePresent` condition and update `lastProbedAt`. |

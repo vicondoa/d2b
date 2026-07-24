@@ -1599,7 +1599,7 @@ Old and new suites never run in parallel indefinitely.
 | Work item ID | `ADR046-transport-unix-009` |
 | Dependency/owner | ADR046-transport-unix-001; Nix/build integrator |
 | Current source | `nixos-modules/options-realms.nix` realm options (v3 baseline); `nixos-modules/assertions.nix` |
-| Reuse source | None; new schema file |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`; `nixos-modules/assertions.nix` (assertion additions); generated `nixos-modules/generated/options-zones-ZoneLink.nix` `transportSettings` submodule |
 | Detailed design | Commit the JSON Schema; run `xtask gen-zone-schemas` and `xtask gen-zone-nix-options` to regenerate committed files; generate the exact six-field ZoneLink base; reject legacy provider envelopes and allocator-private fingerprint/capability fields; add assertions for stream+attachments conflict and sensitive key names; require an empty `transportCredentials` list; reuse the common topology assertions to require the ZoneLink and selected Provider in the same child Zone, self-matching `childZoneName`, compiler-only non-root `parentZone`, and no reciprocal parent resource; `xtask gen-zone-resources` adds Provider-selected `transportSettings` validation |
@@ -1617,7 +1617,7 @@ Old and new suites never run in parallel indefinitely.
 | Work item ID | `ADR046-transport-unix-010` |
 | Dependency/owner | ADR046-transport-unix-007; ADR-046-telemetry-audit-and-support |
 | Current source | v3 baseline `tracing` crate patterns; v3 `d2b-realm-router/src/service_v2.rs` audit field shapes |
-| Reuse source | None; new per v3 telemetry separation invariant |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-unix/src/{audit,metrics}.rs` |
 | Detailed design | `AuditRecordKind` enum with 6 event kinds from Audit section; `AuditRecord` carries only the fields listed (no uid/gid/pid/path/handle/ZoneLink name); emit via Zone runtime `emit_audit_record()` interface; `MetricCounter`/`MetricHistogram` with closed label types per Metrics section; emit via bounded in-process ring to OTEL Provider datagram socket; `tracing::instrument` spans on `PortalHandler` methods with the 3 permitted span attributes only |

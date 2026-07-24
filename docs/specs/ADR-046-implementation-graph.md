@@ -25,7 +25,7 @@ Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
 | Spec nodes | 55 |
 | Work-item nodes | 543 |
 | Total nodes | 598 |
-| Edges | 1908 |
+| Edges | 1938 |
 | Max topological rank | 22 |
 
 ## Waves (W0–W7)

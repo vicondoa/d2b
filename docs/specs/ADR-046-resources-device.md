@@ -423,7 +423,7 @@ privileged broker for operations that require root:
 | --- | --- | --- | --- |
 | `device-tpm` | `PrepareStateDir` (via `PrepareRuntimeDir`/`PrepareSwtpmDir` broker hook) | Provision/harden swtpm state dir, verify tamper marker | Yes |
 | `device-tpm` | `SpawnRunner` (swtpm role) | Spawn swtpm Process in user namespace | Yes |
-| `device-usbip` | `UsbipBindFirewallRule` | Add per-env/bus nftables rule | Yes |
+| `device-usbip` | `UsbipBindFirewallRule { action: Ensure \| Remove }` | Ensure or remove the exact per-Network/per-busid nftables rule | Yes |
 | `device-usbip` | `SpawnRunner` (usbip role) | Spawn usbipd/bind Process | Yes |
 | `device-security-key` | `SecurityKeyOpenDevice` | Open exact FIDO hidraw node; return fd via SCM_RIGHTS; never a path | Yes |
 | `device-security-key` | `SecurityKeyApplyUdevRules` | Write udev rules for configured FIDO hidraw nodes | Yes |
@@ -506,7 +506,9 @@ These invariants are preserved exactly in the device-tpm Provider.
 
 - USBIP per-env/per-busid firewall rules use the ownership-marker pattern:
   `comment "d2b managed: usbip:env:<env>:bus:<bus_id>"`.
-- Broker operation `UsbipBindFirewallRule` is audit-logged and destructive.
+- Broker operation `UsbipBindFirewallRule { action: Ensure | Remove }` is
+  audit-logged and destructive; acquisition and release share this one closed
+  operation.
 - The bus ID validation is governed by `packages/d2b-contracts/src/usbip.rs`:
   max 31 chars (`SYSFS_BUS_ID_MAX`), ASCII digits and separators only, no
   shell metacharacters, no leading zeros on segments.
@@ -768,7 +770,8 @@ spec:
 The per-Device usbipd daemon and proxy Processes are owned by
 `Provider/device-usbip`. The Network provider supplies only the
 dependency/status/firewall interface: bridge membership, port allocation, and
-the `UsbipBindFirewallRule` broker op surface. Network does not own or supervise
+the `UsbipBindFirewallRule { action: Ensure | Remove }` broker op surface.
+Network does not own or supervise
 USBIP Processes.
 
 Process resource names follow the `device-<uid-short>-<component>` template
@@ -793,14 +796,16 @@ step maps to a broker operation or host-side action:
 | `modprobe` | Load `usbip-host` kernel module | EphemeralProcess (modprobe) |
 | `lock` | Acquire per-busid OFD lock | — |
 | `withhold` | Prevent OS auto-claim of device | sysfs write via broker |
-| `firewall` | Add nftables rule | `UsbipBindFirewallRule` |
+| `firewall` | Ensure on acquisition; Remove on detach/finalize | `UsbipBindFirewallRule { action: Ensure \| Remove }` |
 | `backend` | Start per-env usbipd daemon | `SpawnRunner` (usbip role) |
 | `bind` | Bind bus ID to usbip-host | EphemeralProcess (usbip bind) |
 | `proxy` | Start TCP proxy on env-host IP | `SpawnRunner` (usbip proxy role) |
 
 ### Broker operations consumed
 
-- `UsbipBindFirewallRule`: add nftables rule per env/bus; audited/destructive.
+- `UsbipBindFirewallRule { action: Ensure | Remove }`: ensure the exact
+  per-Network/per-busid rule during acquisition and remove it during
+  detach/finalize; audited/destructive.
 - `SpawnRunner` (usbip backend role, `usbip-host` device token): spawn per-env usbipd.
 - `SpawnRunner` (usbip proxy role): spawn TCP proxy.
 
@@ -1227,7 +1232,7 @@ test for each limit is required in `packages/d2b-contract-tests/`):
 | --- | --- | --- | --- |
 | `SecurityKeyOpenDevice` | 1 concurrent per device label | 1 | One active hidraw session per Device at a time |
 | `SecurityKeyApplyUdevRules` | Activation-only | — | One batch per Provider activation; not a hot path |
-| `UsbipBindFirewallRule` | One bounded batch per activation | — | Ownership-marker check prevents duplicate rules |
+| `UsbipBindFirewallRule { action: Ensure \| Remove }` | One bounded batch per acquisition or release | — | Ownership-marker check prevents duplicate rules; Remove is idempotent |
 | `SpawnRunner` (swtpm) | 1 per Device per Guest start cycle | — | Idempotent; broker verifies tamper marker |
 | `SpawnRunner` (gpu/video) | 1 per Device (one GPU worker set per Guest) | — | One GPU worker set per Device |
 | `OpenDevice` (gpu) | Per-spawn call only | ≤8 per Process launch | Opened before clone; counted per-spawn |
@@ -2070,7 +2075,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-usbip/src/` (controller, daemon Process, bind/unbind EphemeralProcess, firewall); `packages/d2b-provider-device-usbip/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-usbip/integration/` (container/Host scenarios); `packages/d2b-provider-device-usbip/README.md` |
 | Detailed design | Device spec/status; bus ID validation; firewall rule ownership-marker; bind/unbind EphemeralProcess; per-Device daemon Process (owned by device-usbip; Network supplies dependency/firewall interface); Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Zone resource store; broker `UsbipBindFirewallRule`; nftables marker |
+| Integration | Zone resource store; broker `UsbipBindFirewallRule { action: Ensure \| Remove }`; nftables marker |
 | Data migration | None; full reset |
 | Validation | `src/`: bus ID corpus, firewall marker format, EphemeralProcess creation; `tests/`: `arbitration_conflict.rs`, `conformance.rs`, `firewall_marker.rs`, `explicit_attach_split.rs`; `integration/`: `arbitration_conflict/`, `busid_bind_cycle/`, `network_firewall_coexistence/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Usbip removed after parity |

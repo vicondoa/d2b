@@ -2830,7 +2830,7 @@ remote lease are released.
 | Work item ID | `ADR046-audio-007` |
 | Dependency/owner | Depends on `ADR046-audio-004`; ComponentSession service (ADR-046-componentsession-and-bus); libpipewire 1.x |
 | Current source | `packages/d2bd/src/audio_host_controller.rs` PipeWire session access patterns (reference only) |
-| Reuse source | None; new component |
+| Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-audio-pipewire/src/mediator/mod.rs`; `src/bin/audio_pipewire_mediator.rs` |
 | Detailed design | Owner AudioService implementation only. Long-lived user-session Process maintains per-AudioBinding nodes under the single owner backing, receives the pre-opened local PipeWire portal FD, and exposes `SetGrant`/`SetLevel` through `Endpoint/audio-pipewire-authority`. It enforces the authority arbiter's single microphone slot and mute-before-handoff result while speaker nodes remain mixed. Projection Services never start/call a local mediator and cannot receive its FD. No EphemeralProcess, wpctl, remote Ref, or node identity in external surfaces. |
