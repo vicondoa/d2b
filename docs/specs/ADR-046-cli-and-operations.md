@@ -1964,6 +1964,31 @@ class: `implemented-and-reachable`.
 **Retained behavior:** streaming audit lines; `--strict` (exit non-zero on
 parse error); bounded line lengths; redacted payloads.
 
+### `d2b zone audit export`
+
+```text
+d2b zone audit export [--zone <zone>]
+  [--after <segment>]
+  [--before <segment>]
+```
+
+The command invokes exactly `d2b.audit.v3.AuditService/Export` and requires the
+admin-only `audit-export` session verb. CLI help describes it as a diagnostic
+service grant, not a Zone resource verb; it supplies no resource `get`, `list`,
+or mutation authority.
+
+### `d2b zone support-bundle`
+
+```text
+d2b zone support-bundle [--zone <zone>]
+```
+
+The command invokes exactly
+`d2b.support.v3.SupportService/GenerateBundle` and requires the admin-only
+`support-bundle` session verb. CLI help does not describe it as a resource read
+grant: the admitted service performs bounded redacted internal reads and emits
+NDJSON.
+
 ## `d2b op` — operation inspection
 
 ```

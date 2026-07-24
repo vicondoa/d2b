@@ -566,8 +566,9 @@ credential-entra lifecycle changes.
 | `use-credential/inspect-metadata` | Exact `consumerRef` plus RBAC | Observe login or inspect bounded lease/status metadata when `spec.allowedOperations` includes `inspect-metadata`. |
 
 The value after `/` is an exact entry in the existing Role rule
-`subresources` field. The dossier defines no `operationClasses` Role field and
-no method-name verbs such as `begin-login`. A consumer Role rule is:
+`subresources` field. The dossier defines no alternate Credential-operation
+Role field and no method-name verbs such as `begin-login`. A consumer Role rule
+is:
 
 ```yaml
 rules:
@@ -584,6 +585,13 @@ A separate deployer Role rule is:
 
 ```yaml
 rules:
+  - resourceTypes: [Credential]
+    verbs: [create, update-spec, delete]
+    subresources: []
+    resourceNames: [work-entra]
+    zones: [work]
+    executionRefs: []
+    sessionVerbs: []
   - resourceTypes: [Credential]
     verbs: [admin-credential]
     subresources: [create, update-spec, delete]

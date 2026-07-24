@@ -626,19 +626,38 @@ parent allocator, other Providers, operators, or end-users) may invoke
 `OpenTransport`, `CloseTransport`, or `ObserveTransport`.
 
 ```yaml
-RBACPolicy:
-  subject: Principal/core-zone-link-controller
-  zone:    <child Zone containing Provider/transport-vsock and its ZoneLink>
+type: Role
+metadata:
+  name: transport-vsock-caller
+  zone: <child-zone>
+spec:
   rules:
-    - resource: d2b.transport.vsock.v3.VsockTransportService
-      verbs: [invoke]
-    - resource: ComponentSession/transport-vsock-service
-      verbs: [attach]
+    - resourceTypes: [Provider]
+      verbs: []
+      sessionVerbs: [invoke, attach]
+      subresources:
+        - d2b.transport.vsock.v3.VsockTransportService/OpenTransport
+        - d2b.transport.vsock.v3.VsockTransportService/CloseTransport
+        - d2b.transport.vsock.v3.VsockTransportService/ObserveTransport
+      resourceNames: [transport-vsock]
+      zones: [<child-zone>]
+      executionRefs: []
+---
+type: RoleBinding
+metadata:
+  name: transport-vsock-caller
+  zone: <child-zone>
+spec:
+  roleRef: Role/transport-vsock-caller
+  subjects: [Process/core-zone-link-controller]
+  externalPrincipalSelector: null
+  scopeNarrowing: null
 ```
 
 ### RBAC grants NOT required by this Provider
 
-`Provider/transport-vsock` requires NO verbs on `ZoneLink`, `Guest`, `Zone`,
+`Provider/transport-vsock` requires no resource verbs on `Provider`,
+`ZoneLink`, `Guest`, `Zone`,
 `Route`, `Credential`, `Certificate`, or any other ResourceType. All
 ZoneLink resource access is performed exclusively by the child Zone's core
 controller. The Provider service holds no permissions to read, watch, update,

@@ -155,6 +155,7 @@ subject
 Zone
 session purpose/service
 verb = connect | invoke | open-stream | relay | attach | cancel | observe
+     | audit-export | support-bundle
 method/stream kind
 target ResourceRef/Provider/Host/Guest
 forwarded target verb and target Zone (relay only)
@@ -172,9 +173,16 @@ language.
 already-authenticated inbound ZoneLink/transport subject to pass an
 already-admitted invocation or named stream to the route-selected next
 authorized hop. The peer cannot supply or replace the subject, target verb,
-target Zone, next hop, or authorization result. A relay grant conveys no
-resource CRUD, identity mapping, capability widening, attachment, credential,
-or local lifecycle authority.
+target Zone, next hop, named resource or nameless `List`/`Watch` selector,
+bounded filters, or authorization result. A relay grant conveys no resource
+CRUD, identity mapping, capability widening, attachment, credential, or local
+lifecycle authority.
+
+`audit-export` and `support-bundle` are the two admin-only diagnostic session
+verbs. They bind exactly to `d2b.audit.v3.AuditService/Export` and
+`d2b.support.v3.SupportService/GenerateBundle`, respectively. Neither may
+appear in a rule's resource `verbs`, and neither implies any resource read or
+mutation authority.
 
 Authorization:
 
@@ -420,5 +428,5 @@ transcript/session generation digest, route, and fixed outcome.
 | Detailed design | Exact service/resource routes, RBAC, pinned reverse route, cancellation, named stream bridge, no wildcard pub/sub Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Every ResourceClient/controller/Provider/CLI service |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Message isolation; closed session-verb enum including `relay`; relay missing/target verb missing/provider self-assertion fail-closed vectors; route/auth revocation; fairness; reconnect; no direct-store path |
+| Validation | Message isolation; closed session-verb enum including `relay`, `audit-export`, and `support-bundle`; exact diagnostic service/method binding with no implied resource grant; relay missing/target verb missing/provider self-assertion fail-closed vectors; named-target and nameless List/Watch selector/filter preservation at every hop; route/auth revocation; fairness; reconnect; no direct-store path |
 | Removal proof | Old direct dispatch branches removed only after route parity |

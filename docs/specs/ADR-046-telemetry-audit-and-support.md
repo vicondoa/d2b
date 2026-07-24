@@ -399,7 +399,7 @@ Target crate: `d2b-resource-api` (ADR-only). No current analog.
 
 | Metric | Type | Labels | Buckets (s) |
 | --- | --- | --- | --- |
-| `d2b_api_request_total` | counter | `verb={get,list,watch,create,update,patch,status,delete,finalize}`, `resource_type`, `outcome={ok,conflict,invalid,denied,not_found,quota,error}` | — |
+| `d2b_api_request_total` | counter | `verb={get,list,watch,create,update-spec,update-status,update-metadata,update-finalizers,delete,use-credential,admin-credential}`, `resource_type`, `outcome={ok,conflict,invalid,denied,not_found,quota,error}` | — |
 | `d2b_api_request_duration_seconds` | histogram | `verb`, `resource_type` | 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.5 |
 | `d2b_api_watch_active` | gauge | (none) | — |
 | `d2b_api_admission_rejected_total` | counter | `reason={auth,quota,conflict,invalid,schema}` | — |
@@ -1079,7 +1079,7 @@ unchanged. `trace_id` is the `TraceContext.trace_id` field from
 {
   "record_class": "resource-mutation",
   "resource_mutation_fields": {
-    "verb":              "create|update|patch|status|delete|finalize",
+    "verb":              "create|update-spec|update-status|update-metadata|update-finalizers|delete|use-credential|admin-credential",
     "resource_type":     "<closed catalog type>",
     "resource_uid":      "<opaque uid>",
     "generation":        12,
@@ -1142,7 +1142,7 @@ labels (cardinality rules below).
 {
   "record_class": "rbac-change",
   "rbac_change_fields": {
-    "verb":           "create|update|delete",
+    "verb":           "create|update-spec|delete",
     "resource_type":  "Role|RoleBinding",
     "resource_uid":   "<opaque uid>",
     "generation":     4,
@@ -1326,11 +1326,27 @@ authoritative Zone audit).
 
 `d2b zone audit export [--zone <name>] [--after <segment>] [--before <segment>]`
 
-- Requires `audit-export` verb on the Zone resource (admin-only).
+- Invokes exactly `d2b.audit.v3.AuditService/Export` and requires the
+  `audit-export` session verb (admin-only).
+- The grant is session-only: it implies no `get`, `list`, or other Zone
+  resource authority. The service itself performs the bounded authoritative
+  segment read after method admission.
 - Adapts `ExportBrokerAuditOk` response contract from
   `packages/d2b-priv-broker/tests/broker_export_audit.rs`.
 - Hash chain breaks reported inline in output stream.
 - No plaintext resource names, paths, argv, or credential bytes.
+
+The canonical Role rule is:
+
+```yaml
+resourceTypes: [Zone]
+verbs: []
+sessionVerbs: [audit-export]
+subresources: [d2b.audit.v3.AuditService/Export]
+resourceNames: [<zone-name>]
+zones: [<zone-name>]
+executionRefs: []
+```
 
 ## Doctor and support bundles
 
@@ -1376,7 +1392,20 @@ record content, raw error messages beyond stable codes.
 ### `d2b zone support-bundle [--zone <name>]`
 
 Bounded redacted diagnostic snapshot for operator/support use. Requires
-`support-bundle` verb (admin-only). Output is NDJSON.
+the `support-bundle` session verb (admin-only) on exactly
+`d2b.support.v3.SupportService/GenerateBundle`. The grant is session-only and
+implies no resource `get`/`list` authority; the admitted service performs its
+own bounded internal reads. Output is NDJSON.
+
+```yaml
+resourceTypes: [Zone]
+verbs: []
+sessionVerbs: [support-bundle]
+subresources: [d2b.support.v3.SupportService/GenerateBundle]
+resourceNames: [<zone-name>]
+zones: [<zone-name>]
+executionRefs: []
+```
 
 Contents:
 
@@ -2074,8 +2103,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b/tests/audit_contract.rs` (`d2b audit --strict` returns 78; `auditResponse` relay; `authz-audit-requires-admin` denial; daemon-down exit 1 without bash fallback); `packages/d2b-priv-broker/tests/broker_export_audit.rs` (`export_audit_requires_admin_and_exports_op_audit_records`: admin-only, path-free, NDJSON `ExportBrokerAuditOk` shape, `peer_uid` field, `ApplyNftables` operation name in records) |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand); `packages/d2b/tests/zone_audit_contract.rs` |
-| Detailed design | `d2b zone audit export` opens segments read-only (shared flock), streams NDJSON to stdout, validates hash chain inline, reports breaks as inline error records, enforces `audit-export` verb via resource API (admin-only, same `SO_PEERCRED`/Role check as current `ExportBrokerAuditOk`). Assert no `realm`, `node`, `workload_id` fields in exported records. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt audit CLI contract test (daemon-down/exit behavior); adapt broker export test to new `zone` field and v3 record schema. |
-| Integration | `d2b` CLI → resource API `audit-export` verb → `d2b-audit` export iterator → stdout |
+| Detailed design | `d2b zone audit export` opens segments read-only (shared flock), streams NDJSON to stdout, validates hash chain inline, reports breaks as inline error records, and invokes only `d2b.audit.v3.AuditService/Export` under the admin-only `audit-export` session verb (same `SO_PEERCRED`/Role check as current `ExportBrokerAuditOk`). The session grant provides no Zone resource authority. Assert no `realm`, `node`, `workload_id` fields in exported records. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt audit CLI contract test (daemon-down/exit behavior); adapt broker export test to new `zone` field and v3 record schema. |
+| Integration | `d2b` CLI → ComponentSession `d2b.audit.v3.AuditService/Export` with `sessionVerbs=[audit-export]` → `d2b-audit` export iterator → stdout |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `export_audit.rs`: admin-only, hash break inline, no old field names (`realm`/`node`/`workload_id`), no path/argv in output, exit 0 on clean chain |
 | Removal proof | `d2b audit` legacy command retained until `d2b zone audit export` covers all record classes |
@@ -2104,8 +2133,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b/tests/host_doctor_contract.rs` (env-redirect sandbox scaffold — no current `support-bundle` equivalent exists) |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/zone_support_bundle.rs`, `packages/d2b/tests/zone_support_bundle_contract.rs` |
-| Detailed design | `d2b zone support-bundle [--zone <name>]` requires `support-bundle` verb. Reads bounded resource status snapshots (32 per type, 512 total; metadata + status only; no spec bytes; no `metadata.name`), controller queue depths, schema catalog (names+versions only), audit segment inventory, OTEL collector metrics summary, bounded structured log ring (2000 entries). NDJSON output. On quarantine: `bundle_completeness: "partial"`, exit 1. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse env-redirect sandbox scaffold. |
-| Integration | `d2b` CLI → Zone resource API list (status subresource only) + controller introspection + audit segment reader + OTEL self-metrics |
+| Detailed design | `d2b zone support-bundle [--zone <name>]` invokes only `d2b.support.v3.SupportService/GenerateBundle` under the admin-only `support-bundle` session verb; the caller receives no resource read authority. The service reads bounded resource status snapshots (32 per type, 512 total; metadata + status only; no spec bytes; no `metadata.name`), controller queue depths, schema catalog (names+versions only), audit segment inventory, OTEL collector metrics summary, and a bounded structured log ring (2000 entries). NDJSON output. On quarantine: `bundle_completeness: "partial"`, exit 1. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse env-redirect sandbox scaffold. |
+| Integration | `d2b` CLI → ComponentSession `d2b.support.v3.SupportService/GenerateBundle` with `sessionVerbs=[support-bundle]` → bounded internal resource/controller/audit/OTEL readers |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `zone_support_bundle_contract.rs`: complete/partial bundles; no spec/name/path/argv; field completeness |
 | Removal proof | None — net-new; no prior owner to remove |

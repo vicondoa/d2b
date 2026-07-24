@@ -1446,6 +1446,8 @@ spec:
   roleRef: Role/network-local-controller
   subjects:
     - Provider/network-local
+  externalPrincipalSelector: null
+  scopeNarrowing: null
 ```
 
 Guest controllers may need `get` on `Network` to resolve a `networkRef` in

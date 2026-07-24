@@ -1051,8 +1051,8 @@ Each rule in `spec.rules` has:
 | Field | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `resourceTypes` | list of ResourceType names | required, non-empty | ResourceTypes this rule covers; short Zone-unique names or qualified vendor names |
-| `verbs` | list of resource verb tokens | required, non-empty | Resource operation verbs (see §5.3.2) |
-| `subresources` | list of subresource names | `[]` = no subresource restriction | Empty means all subresources; non-empty means exactly those subresources |
+| `verbs` | list of resource verb tokens | `[]` = no resource verbs | Resource operation verbs (see §5.3.2); at least one of `verbs` or `sessionVerbs` must be non-empty |
+| `subresources` | list of subresource or exact service/method selectors | `[]` = no subresource restriction | Empty means all subresources; non-empty means exactly those subresources or qualified service/method selectors |
 | `resourceNames` | list of ResourceName | `[]` = all | Empty means all names; non-empty means exactly those names; max 64 |
 | `zones` | list of Zone names | `[]` = this Zone only | Empty means only the evaluating Zone; non-empty means any listed Zone |
 | `executionRefs` | list of ResourceRefs | `[]` = no restriction | Restricts to operations whose target resource has one of these executionRefs; `[]` means unrestricted |
@@ -1075,8 +1075,12 @@ All list fields are deduplicated at admission. Order is not significant.
 | `update-metadata` | Bounded labels/annotations/ownerRef metadata change |
 | `update-finalizers` | Add/remove finalizers (ownership constrained) |
 | `delete` | Request resource deletion |
+| `use-credential` | Invoke a Credential operation selected by one exact Credential allowed-operation subresource |
+| `admin-credential` | Supplement matching ordinary Credential create/update-spec/delete authority using the same exact lifecycle subresource |
 
 Unknown verbs are rejected at admission.
+`use-credential` and `admin-credential` are valid only for `Credential` rules
+with the exact subresources defined by the Credential contract.
 
 **Session verbs** (exact closed set):
 
@@ -1089,10 +1093,15 @@ Unknown verbs are rejected at admission.
 | `attach` | Transfer a local file descriptor |
 | `cancel` | Cancel an in-progress operation |
 | `observe` | Subscribe to service health/event notifications |
+| `audit-export` | Invoke only `d2b.audit.v3.AuditService/Export` (admin-only) |
+| `support-bundle` | Invoke only `d2b.support.v3.SupportService/GenerateBundle` (admin-only) |
 
 Session verbs in a Role rule grant ComponentSession/d2b-bus access to the
 services bound by the same rule's `resourceTypes` and `zones` constraints.
 They are evaluated by the same native RBAC engine as resource verbs.
+`audit-export` and `support-bundle` require exact qualified service/method
+selectors in `subresources`, may appear only in `sessionVerbs`, and imply no
+resource read or mutation verb.
 
 `relay` is transport forwarding authority only. It permits the exact
 authenticated ZoneLink/transport subject to forward an invocation or named
@@ -1106,7 +1115,10 @@ A relay-bearing rule is admitted only when all of the following hold:
 
 - `relay` appears in `sessionVerbs`, never `verbs`;
 - `resourceTypes`, `resourceNames`, and `zones` exactly bound the forwarded
-  target; empty/all-name scope and every wildcard form are rejected;
+  target; empty/all-name scope and every wildcard form are rejected. Named
+  methods match one immutable resource name. Nameless `List`/`Watch` requests
+  retain a non-empty exact `resourceNames` allowlist and bounded filters whose
+  possible result set is a subset of that allowlist at every hop;
 - the Role and RoleBinding are core-generated with `ownerRef` naming the
   governing `ZoneLink`, and the binding's trusted external-principal selector
   matches the exact enrolled adjacent-`Zone` transport subject; or an
@@ -1150,8 +1162,8 @@ Roles) must be enforced at admission. For non-core-controller Roles,
 | --- | --- |
 | Rules per Role | 32 |
 | `resourceTypes` per rule | 16 |
-| `verbs` per rule | 16 (bounded by verb enum: currently 9 verbs) |
-| `sessionVerbs` per rule | 7 (bounded by session verb enum: currently 7 verbs) |
+| `verbs` per rule | 16 (bounded by verb enum: currently 11 verbs) |
+| `sessionVerbs` per rule | 9 (bounded by session verb enum: currently 9 verbs) |
 | `subresources` per rule | 16 |
 | `resourceNames` per rule | 64 |
 | `executionRefs` per rule | 32 |
@@ -1383,8 +1395,9 @@ Rules:
   with `resource-schema-invalid`;
 - narrowed rules are the intersection of the Role rules and the narrowing
   rules;
-- `sessionVerbs`, including `relay`, are intersected exactly like resource
-  verbs; narrowing cannot add relay or remove its exact target bounds;
+- `sessionVerbs`, including `relay`, `audit-export`, and `support-bundle`, are
+  intersected exactly like resource verbs; narrowing cannot add one or remove
+  its exact target or service/method bounds;
 - `scopeNarrowing: null` means the full Role is granted without restriction;
 - scope narrowing affects only this RoleBinding; the referenced Role is
   unchanged.
@@ -3099,11 +3112,13 @@ Eval-time validations: `spec.rules[*].verbs` against the closed verb enum;
 `spec.rules[*].executionRefs` format if non-empty. `spec.rules[*].resourceTypes`
 validation against the Zone API catalog is deferred to Phase 2 (catalog requires
 loading Provider manifests; core types are known at eval time).
-Generated option help lists all seven session verbs and describes `relay` as
-ZoneLink-scoped forwarding only. Nix recognizes `relay` as a session-verb token,
-but Phase 2 admission still rejects an unbounded, wildcard, Provider-asserted,
-or ordinary operator-authored relay grant unless explicit admin policy permits
-that exact bounded grant.
+Generated option help lists all nine session verbs, describes `relay` as
+ZoneLink-scoped forwarding only, and binds `audit-export` and `support-bundle`
+to their exact admin-only service/method selectors without granting resource
+authority. Nix recognizes all three as session-verb tokens, but Phase 2
+admission still rejects an unbounded, wildcard, Provider-asserted, or ordinary
+operator-authored relay grant unless explicit admin policy permits that exact
+bounded grant.
 
 ### 14.5 RoleBinding authoring
 
@@ -3111,26 +3126,30 @@ that exact bounded grant.
 d2b.zones.dev.resources.process-controller-binding = {
   type = "RoleBinding";
   spec = {
-    roleRef   = "Role/process-controller";
-    subjects  = [ "Provider/system-minijail" ];
-    # spec.externalPrincipalSelector: null (default; omit)
-    # spec.scopeNarrowing: null (full role scope; omit)
+    roleRef                  = "Role/process-controller";
+    subjects                 = [ "Provider/system-minijail" ];
+    externalPrincipalSelector = null;
+    scopeNarrowing            = null;
   };
 };
 
 d2b.zones.dev.resources.zone-reader-alice = {
   type = "RoleBinding";
   spec = {
-    roleRef  = "Role/zone-reader";
-    subjects = [ "User/alice" ];
+    roleRef                  = "Role/zone-reader";
+    subjects                 = [ "User/alice" ];
+    externalPrincipalSelector = null;
+    scopeNarrowing            = null;
   };
 };
 
 d2b.zones.dev.resources.zone-reader-bob = {
   type = "RoleBinding";
   spec = {
-    roleRef  = "Role/zone-reader";
-    subjects = [ "User/bob" ];
+    roleRef                  = "Role/zone-reader";
+    subjects                 = [ "User/bob" ];
+    externalPrincipalSelector = null;
+    scopeNarrowing            = null;
   };
 };
 ```

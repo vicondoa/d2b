@@ -1024,20 +1024,56 @@ Azure Resource Manager
 
 ```yaml
 type: Role
+metadata:
+  name: azure-vm-controller
+  zone: <zone>
 spec:
   rules:
     - resourceTypes: [Guest]
-      verbs: [get, list, watch, update-status, add-finalizer, remove-finalizer]
-      providerSelector: Provider/runtime-azure-virtual-machine
+      verbs: [get, list, watch, update-status, update-finalizers]
+      subresources: []
+      resourceNames: []
+      zones: [<zone>]
+      executionRefs: [Guest/<gateway-name>]
+      sessionVerbs: []
     - resourceTypes: [Credential]
-      verbs: [get, acquire-token, refresh-token]
+      verbs: [get, use-credential]
+      subresources: [acquire-token, refresh-token]
       resourceNames: [<armCredentialRef-name>]
+      zones: [<zone>]
+      executionRefs: [Guest/<gateway-name>]
+      sessionVerbs: []
     - resourceTypes: [Provider]
       verbs: [get]
+      subresources: []
       resourceNames: [transport-azure-relay]
+      zones: [<zone>]
+      executionRefs: []
+      sessionVerbs: []
     - resourceTypes: [Process]
-      verbs: [get, create, update-spec, update-status, request-deletion]
+      verbs: [get, create, update-spec, update-status, delete]
+      subresources: []
+      resourceNames: []
+      zones: [<zone>]
+      executionRefs: [Guest/<gateway-name>]
+      sessionVerbs: []
+---
+type: RoleBinding
+metadata:
+  name: azure-vm-controller
+  zone: <zone>
+spec:
+  roleRef: Role/azure-vm-controller
+  subjects: [Process/azure-vm-controller]
+  externalPrincipalSelector: null
+  scopeNarrowing: null
 ```
+
+Credential acquisition is not an `acquire-token` resource verb. Each call uses
+`use-credential` with the exact matching subresource and is further narrowed by
+`Credential.spec.allowedOperations`, `consumerRef`, scope, and structural
+component checks. Finalizer changes use `update-finalizers`; there are no
+`add-finalizer`, `remove-finalizer`, or `request-deletion` aliases.
 
 ### Azure RBAC
 

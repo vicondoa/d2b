@@ -1100,35 +1100,45 @@ d2b-bus or delivered through the controller's ComponentSession.
 
 | Claim | Target type | Verbs | Purpose |
 | --- | --- | --- | --- |
-| `guest-reconcile` | Guest | get, list, watch, create, update, delete | Own ResourceType |
-| `process-manage` | Process | get, list, watch, create, update, delete | Runner process lifecycle |
+| `guest-reconcile` | Guest | get, list, watch, create, update-spec, delete | Own ResourceType |
+| `process-manage` | Process | get, list, watch, create, update-spec, delete | Runner process lifecycle |
 | `volume-watch-media` | Volume | get, list, watch | Watch media Volume status |
-| `volume-create-runtime` | Volume | get, list, watch, create, update, delete | Create/delete runtime tmpfs Volume |
+| `volume-create-runtime` | Volume | get, list, watch, create, update-spec, delete | Create/delete runtime tmpfs Volume |
 | `network-watch` | Network | get, list, watch | Watch Network readiness |
 | `device-kvm-watch` | Device | get, list, watch | Watch Device/host-kvm status |
-| `waylandsession-manage` | display-wayland.d2bus.org.WaylandSession | get, list, watch, create, update, delete | Create/delete WaylandSession for display |
+| `waylandsession-manage` | display-wayland.d2bus.org.WaylandSession | get, list, watch, create, update-spec, delete | Create/delete WaylandSession for display |
 | `user-watch` | User | get, list, watch | Resolve Guest userRef |
 
-### 15.2 Operator RoleBindings required
+### 15.2 Operator Role and RoleBinding required
 
 The operator must grant the controller's identity (auto-created Service
 Account for `Provider/runtime-qemu-media`) at least the following:
 
 ```yaml
-# Minimum operator RoleBinding for the controller
+# Minimum Role rules for the controller
 rules:
-  - resources: [Guest]
-    verbs: [get, list, watch, create, update, delete]
-  - resources: [Process, EphemeralProcess]
-    verbs: [get, list, watch, create, update, delete]
-  - resources: [Volume]
-    verbs: [get, list, watch, create, update, delete]
-  - resources: [Network]
+  - resourceTypes: [Guest]
+    verbs: [get, list, watch, create, update-spec, delete]
+  - resourceTypes: [Process, EphemeralProcess]
+    verbs: [get, list, watch, create, update-spec, delete]
+  - resourceTypes: [Volume]
+    verbs: [get, list, watch, create, update-spec, delete]
+  - resourceTypes: [Network]
     verbs: [get, list, watch]
-  - resources: [Device]
+  - resourceTypes: [Device]
     verbs: [get, list, watch]
-  - resources: [display-wayland.d2bus.org.WaylandSession]
-    verbs: [get, list, watch, create, update, delete]
+  - resourceTypes: [display-wayland.d2bus.org.WaylandSession]
+    verbs: [get, list, watch, create, update-spec, delete]
+```
+
+The matching RoleBinding binds that Role to the Provider identity without
+adding expiry or authority:
+
+```yaml
+roleRef: Role/runtime-qemu-media-controller
+subjects: [Provider/runtime-qemu-media]
+externalPrincipalSelector: null
+scopeNarrowing: null
 ```
 
 ### 15.3 Worker process authority

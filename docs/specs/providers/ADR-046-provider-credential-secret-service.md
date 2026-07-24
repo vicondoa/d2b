@@ -391,22 +391,25 @@ Credential and Process health, never Provider-level status directly.
 The controller process serves the `d2b.credential.v3` protobuf/ttrpc service
 routed through d2b-bus. All methods are async.
 
-| Method | Port call | Outer DTO | Sensitive output |
-| --- | --- | --- | --- |
-| `Status` | `inspect_lease` + `state` | `CredentialStatusResponse` (leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs, placementBinding) | none |
-| `AcquireToken` | `issue_lease` | `AcquireTokenResponse` (leaseHandle, sourceVersion, rotationGeneration, expiresAtUnixMs) | raw token bytes in dedicated Noise_KK delivery record |
-| `RefreshToken` | `refresh_lease` | `RefreshTokenResponse` (leaseHandle, sourceVersion, rotationGeneration, new expiresAtUnixMs) | raw token bytes in dedicated Noise_KK delivery record |
-| `RevokeToken` | `revoke_lease` | `RevokeTokenResponse` (Revoked or AlreadyRevoked, revokedAtUnixMs) | none |
-| `InspectMetadata` | `inspect_lease` | `InspectMetadataResponse` (leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs) | none |
+| Method | Port call | Exact operation/Role subresource | Required Role permission | Outer DTO | Sensitive output |
+| --- | --- | --- | --- | --- | --- |
+| `AcquireToken` | `issue_lease` | `acquire-token` | `use-credential/acquire-token` | `AcquireTokenResponse` (leaseHandle, sourceVersion, rotationGeneration, expiresAtUnixMs) | raw token bytes in dedicated Noise_KK delivery record |
+| `RefreshToken` | `refresh_lease` | `refresh-token` | `use-credential/refresh-token` | `RefreshTokenResponse` (leaseHandle, sourceVersion, rotationGeneration, new expiresAtUnixMs) | raw token bytes in dedicated Noise_KK delivery record |
+| `RevokeToken` | `revoke_lease` | `revoke-token` | `use-credential/revoke-token` | `RevokeTokenResponse` (Revoked or AlreadyRevoked, revokedAtUnixMs) | none |
+| `SignChallenge` | none | `sign-challenge` | `use-credential/sign-challenge` | `credential-schema-invalid` because this Provider does not declare the operation | none |
+| `InspectMetadata` | `inspect_lease` | `inspect-metadata` | `use-credential/inspect-metadata` | `InspectMetadataResponse` (leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs) | none |
 
-`sign-challenge` is not implemented. Any request with `operationClass =
-sign-challenge` returns `credential-schema-invalid` immediately without
-consulting the port.
+`sign-challenge` is not implemented. A `SignChallenge` call returns
+`credential-schema-invalid` immediately without consulting the port. The method
+selects the operation class; requests do not carry a caller-selected
+operation-class field.
 
 Every method:
 - rejects a request where the authenticated subject is not the declared
-  `consumerRef` (when set) and RBAC `use-credential` is denied;
-- rejects an operation class not in `spec.allowedOperations`;
+  `consumerRef` (when set);
+- rejects before Provider dispatch unless the method's one exact operation is
+  present in both `spec.allowedOperations` and Role `subresources` under
+  `use-credential`;
 - returns a stable closed error code, never provider-internal diagnostics;
 - carries operation/idempotency/correlation IDs from d2b-bus context;
 - enforces a per-call deadline propagated from the d2b-bus context.
@@ -844,11 +847,11 @@ network calls.
 | `get` | Any authorized subject |
 | `list` | Any authorized subject |
 | `watch` | Any authorized subject |
-| `create` | Deployer/system-core configuration controller |
-| `update-spec` | Deployer/system-core configuration controller |
+| `create` plus `admin-credential/create` | Deployer/system-core configuration controller; neither permission implies the other |
+| `update-spec` plus `admin-credential/update-spec` | Deployer/system-core configuration controller; neither permission implies the other |
 | `update-status` | Credential controller (exact registered process generation) only |
 | `update-finalizers` | Credential controller; `consumerRef` controller |
-| `delete` | Deployer/system-core configuration controller |
+| `delete` plus `admin-credential/delete` | Deployer/system-core configuration controller; neither permission implies the other |
 | `use-credential` | Consumer subject authorized via `consumerRef` and Role/RoleBinding |
 
 `use-credential` Role rule shape:
@@ -857,14 +860,18 @@ network calls.
 rules:
   - resourceTypes: [Credential]
     verbs: [use-credential]
+    subresources: [acquire-token, refresh-token]
     resourceNames: [local-keyring]
     zones: [dev]
     executionRefs: [Host/host-system]
-    operationClasses: [acquire-token, refresh-token]
+    sessionVerbs: []
 ```
 
 The effective operation set is the intersection of `spec.allowedOperations` and
-the Role `operationClasses`.
+the Role's exact `subresources`, further narrowed by `consumerRef`, scope, and
+structural Provider/component checks. Empty, wildcard, unknown, or mismatched
+subresources deny; there is no alternate Credential-operation Role field or
+shorthand operation alias.
 
 ### 10.2 Secret isolation invariants
 

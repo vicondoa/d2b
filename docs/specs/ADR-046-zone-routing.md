@@ -1684,7 +1684,10 @@ At each intermediate hop, d2b-bus:
 
 1. Verifies the inbound ComponentSession's `AuthenticatedSubjectContext`.
 2. Evaluates local RBAC for the forwarded target verb with the immutable
-   ResourceType/service, resource name, and target Zone.
+   ResourceType/service and target Zone. Named methods retain one exact resource
+   name. Nameless `List`/`Watch` retain an exact non-empty authorized
+   `resourceNames` set and bounded filters whose possible results are a subset
+   of that set.
 3. Separately evaluates local RBAC for the `relay` session verb against the
    authenticated inbound Zone transport subject, governing ZoneLink, exact
    target bounds, and route-selected next hop.
@@ -1694,7 +1697,8 @@ At each intermediate hop, d2b-bus:
 6. Opens the allocator-bound ComponentSession represented by the next child
    Zone's local uplink.
 7. Re-serializes the request with the decremented hop counter; preserves
-   the original operation/idempotency/correlation/trace IDs unchanged.
+   the named target or nameless selector, all filters/pagination/watch cursor,
+   and the original operation/idempotency/correlation/trace IDs unchanged.
 8. Returns the child response to the inbound caller.
 
 Relay is a distinct RBAC verb. Intermediate Zones may deny relay without
@@ -1728,10 +1732,12 @@ child's own revision cursors:
    revision token.
 3. If the ZoneLink session disconnects, parent route-session state records the
    last seen child revision; no parent-store ZoneLink row is created.
-4. On reconnect, the parent re-issues `Watch(afterRevision=<last-seen>)`.
+4. On reconnect, the parent re-issues `Watch` with the identical ResourceType,
+   authorized name set, and filters plus `afterRevision=<last-seen>`.
 5. If the child reports `revision-expired` (cursor too old), the parent
-   re-issues `List` to obtain a fresh snapshot, then re-opens `Watch`
-   after the snapshot revision.
+   re-issues `List` with that identical selector/filter set to obtain a fresh
+   snapshot, then re-opens `Watch` with those same filters after the snapshot
+   revision.
 
 The parent may not merge child revisions with its own Zone revision
 namespace. Parent-local watchers for child resources must be driven
@@ -1748,15 +1754,20 @@ forwarding; the caller must split it.
 
 ## Runtime service calls over ZoneLink
 
-Runtime service calls (ComponentSession connect/invoke/open-stream) may
+Runtime service calls (ComponentSession connect/invoke/open-stream and the
+exact diagnostic methods authorized by `audit-export` or `support-bundle`) may
 be forwarded through a ZoneLink if:
 
 - the target service is declared in a child Zone Provider's service
   descriptor;
 - the call's `purpose` class is `remote-zone`;
 - RBAC at each forwarding hop grants both `relay` for the authenticated
-  adjacent-Zone subject and the target session verb (`connect`, `invoke`, or
-  `open-stream`) for the exact service/method/stream;
+  adjacent-Zone subject and the target session verb (`connect`, `invoke`,
+  `open-stream`, `audit-export`, or `support-bundle`) for the exact
+  service/method/stream. The diagnostic verbs remain bound only to
+  `d2b.audit.v3.AuditService/Export` and
+  `d2b.support.v3.SupportService/GenerateBundle` and grant no resource
+  authority;
 - the hop count does not exceed the fixed protocol limit of 16.
 
 The forwarded session carries:
@@ -2088,8 +2099,8 @@ RBAC at each hop:
 ```
 K0:  subject=User/alice verb=get resourceType=Process zone=K2
      -> K0 Role admits the target operation before route selection
-K1:  subject=Zone/k0 verbs=[relay,get] resourceType=Process
-     name=web-server zone=K2
+K1:  subject=Zone/k0 sessionVerbs=[relay] verbs=[get] resourceType=Process
+     resourceNames=[web-server] zone=K2
      -> K1 RoleBinding independently allows one-hop forwarding and target get
 K2:  subject=Zone/k1 verb=get resourceType=Process name=web-server
      -> K2 Role allows the authenticated adjacent Zone to get Process/web-server
@@ -2111,14 +2122,18 @@ K1 (Guest/workvm, cloud-hypervisor VM)
 A watch from K0 on K1 Processes:
 
 ```
-1. K0 ResourceClient: Watch(Process, zone=K1, afterRevision=none)
+1. K0 ResourceClient: Watch(Process,
+      resourceNames=[wayland-proxy,shell-session], zone=K1,
+      afterRevision=none)
 2. K0 d2b-bus: route to K1 via the allocation represented by K1's
    ZoneLink/k1-uplink
-3. K1: List snapshot → revision R1; Watch(afterRevision=R1)
+3. K1: List with the identical resourceNames filter → revision R1;
+   Watch with that same filter and afterRevision=R1
 4. K1 streams events to K0 named-stream (credit-bounded)
 5. Disconnect: K0 records lastRevision=R1
-6. Reconnect: K0 re-opens Watch(afterRevision=R1)
-7. K1 delivers events after R1 or returns revision-expired → K0 relists
+6. Reconnect: K0 re-opens Watch with the identical filter and afterRevision=R1
+7. K1 delivers matching events after R1 or returns revision-expired → K0
+   relists with the identical filter
 ```
 
 ## Audit, OTEL, errors, and security

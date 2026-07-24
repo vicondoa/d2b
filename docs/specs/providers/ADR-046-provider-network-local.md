@@ -1832,7 +1832,7 @@ spec:
       zones: [dev]
       # Scoped: only Guests with ownerRef resolving to a Network resource
     - resourceTypes: [Volume]
-      verbs: [get, list, watch, create, update-spec, delete, write-content]
+      verbs: [get, list, watch, create, update-spec, delete]
       zones: [dev]
       # Scoped: only Volumes with ownerRef resolving to a Network resource
     - resourceTypes: [Process]
@@ -1855,6 +1855,8 @@ spec:
   roleRef: Role/network-local-controller
   subjects:
     - Provider/network-local
+  externalPrincipalSelector: null
+  scopeNarrowing: null
 ```
 
 The controller holds **no** broker role and **no** `network-admin` capability.
@@ -1870,7 +1872,7 @@ All host-kernel effects go through the injected `NetworkEffectPort`.
 | `update-status` | `Network` | `Provider/network-local` | sole status owner |
 | `create,update-spec` | `Guest` | `Provider/network-local` | scoped to ownerRef=Network |
 | `create,update-spec` | `Volume` | `Provider/network-local` | creates per-Network config Volume resource objects only; volume-local reconciles; network-local does NOT implement Volume ResourceType |
-| `write-content` | `Volume` | `Provider/network-local` | config content writes via Volume service |
+| `update-spec` | `Volume` | `Provider/network-local` | declared config content changes use the canonical Volume spec/update path; there is no `write-content` verb |
 | `create,update-spec` | `Process` | `Provider/network-local` | agent + dnsmasq + mDNS processes |
 
 ---

@@ -2082,12 +2082,12 @@ dependencySelectors:
   - resourceType: User
     resolveFrom: AudioBinding.spec.guestUsers
 allowedResourceVerbs:
-  - { type: audio.d2bus.org.AudioService, specProviderRef: Provider/audio-pipewire, verbs: [get, list, watch, updateStatus, updateFinalizers] }
-  - { type: audio.d2bus.org.AudioBinding, specProviderRef: Provider/audio-pipewire, verbs: [get, list, watch, updateStatus, updateFinalizers] }
+  - { type: audio.d2bus.org.AudioService, specProviderRef: Provider/audio-pipewire, verbs: [get, list, watch, update-status, update-finalizers] }
+  - { type: audio.d2bus.org.AudioBinding, specProviderRef: Provider/audio-pipewire, verbs: [get, list, watch, update-status, update-finalizers] }
   - { type: ResourceImport, verbs: [get, watch] }
-  - { type: Process, verbs: [get, list, watch, create, updateSpec, delete] }
-  - { type: Endpoint, verbs: [get, list, watch, create, updateSpec, delete] }
-  - { type: Guest, verbs: [get, watch, updateSpec] }
+  - { type: Process, verbs: [get, list, watch, create, update-spec, delete] }
+  - { type: Endpoint, verbs: [get, list, watch, create, update-spec, delete] }
+  - { type: Guest, verbs: [get, watch, update-spec] }
 reconcileConcurrency: 8
 maxPendingResources: 512
 observePolicy: on-status-change

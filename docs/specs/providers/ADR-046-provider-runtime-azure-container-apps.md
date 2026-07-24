@@ -864,13 +864,25 @@ spec:
   rules:
     - resourceTypes: [Guest]
       verbs: [get, list, watch, update-spec, update-status, delete]
-      providerRef: Provider/runtime-azure-container-apps
+      subresources: []
+      resourceNames: []
+      zones: [<zone>]
+      executionRefs: [Guest/<aca-gateway-name>]
+      sessionVerbs: []
     - resourceTypes: [Credential]
-      verbs: [get, update-status]
-      providerRef: Provider/credential-managed-identity
+      verbs: [get, use-credential]
+      subresources: [acquire-token, refresh-token, revoke-token, inspect-metadata]
+      resourceNames: [<configured-credential-name>]
+      zones: [<zone>]
+      executionRefs: [Guest/<aca-gateway-name>]
+      sessionVerbs: []
     - resourceTypes: [Endpoint]
       verbs: [get, create, update-spec, update-status, delete]
-      providerRef: Provider/runtime-azure-container-apps
+      subresources: []
+      resourceNames: []
+      zones: [<zone>]
+      executionRefs: [Guest/<aca-gateway-name>]
+      sessionVerbs: []
 ```
 
 ```yaml
@@ -883,11 +895,15 @@ metadata:
 spec:
   roleRef: Role/aca-controller-role
   subjects:
-    - kind: process
-      componentRef: aca-controller
-      providerRef: Provider/runtime-azure-container-apps
-      executionRef: Guest/<aca-gateway-name>    # inside gateway Guest; no Host subject permitted
+    - Process/aca-controller
+  externalPrincipalSelector: null
+  scopeNarrowing: null
 ```
+
+The Process subject resolves to the signed `aca-controller` component generation
+inside `Guest/<aca-gateway-name>`; structural admission rejects a same-name Host
+Process. The Credential rule grants no status write and is effective only at the
+intersection of the exact `allowedOperations` and Role subresources.
 
 ### 11.2 Deployment service authority
 

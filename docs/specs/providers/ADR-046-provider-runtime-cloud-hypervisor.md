@@ -1147,7 +1147,7 @@ store handle, no ambient route table.
 | `update-spec` | Process | Drift repair |
 | `update-status` | Guest | Status write |
 | `delete` | Process | Finalizer-safe teardown |
-| `clear-finalizer` | Guest | After finalize completes |
+| `update-finalizers` | Guest | Clear the controller-owned finalizer after finalize completes |
 
 ### 14.2 Named streams
 
@@ -1182,7 +1182,7 @@ The controller process must hold a Role binding granting:
 ```yaml
 rules:
   - resourceTypes: [Guest]
-    verbs: [get, list, watch, update-status, clear-finalizer]
+    verbs: [get, list, watch, update-status, update-finalizers]
   - resourceTypes: [Process]
     verbs: [get, list, watch, create, update-spec, delete]
   - resourceTypes: [Device, Network, Volume]

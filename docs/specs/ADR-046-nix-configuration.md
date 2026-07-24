@@ -222,9 +222,9 @@ field merely because of the name. Each value must be individually classified.
 | Current `Capability` value | Current purpose | v3 target |
 | --- | --- | --- |
 | `Lifecycle` | Workload create/start/stop/inspect | Implicit grant from `Role` binding with `Host`/`Guest` verbs |
-| `Exec` | Command execution (admin-only) | Role verb `exec` on `Process` or `EphemeralProcess` |
-| `Pty` | Interactive pseudo-terminal | Role verb on `Process`/`EphemeralProcess`; exact verb name per resource-api/authz foundation spec |
-| `Logs` | Durable execution logs with cursors | Role verb on `EphemeralProcess`; exact verb name per resource-api/authz foundation spec |
+| `Exec` | Command execution (admin-only) | Exact service/method selector under session verb `invoke`; there is no `exec` resource verb |
+| `Pty` | Interactive pseudo-terminal | Exact terminal service/method or stream selector under session verbs `invoke`, `open-stream`, and, only for local FD transfer, `attach` |
+| `Logs` | Durable execution logs with cursors | Exact log service/stream selector under session verbs `invoke`/`open-stream`; no resource-verb alias |
 | `FileCopy` | Bounded file copy | Not in initial verb set; reimplemented as Volume view copy op if needed |
 | `PortForward` | One stream per connection | Not in initial verb set |
 | `PersistentShell` | Named shell operations | Service capability of `Provider/shell-terminal` |
@@ -238,7 +238,7 @@ field merely because of the name. Each value must be individually classified.
 | `Hotplug` | Device hotplug | Typed Provider descriptor capability field; absent means fail closed; no Nix option |
 | `EphemeralSessions` | Provider-managed ephemeral sessions | Provider descriptor capability field; not a Role verb |
 | `ProviderManagedIsolation` | Non-host-owned isolation boundary | Typed Provider descriptor capability field; absent means fail closed; no Nix option |
-| `ConfiguredLaunch` | Execute a configured launcher item | Role verb on `EphemeralProcess` or `Process`; exact verb name per resource-api/authz foundation spec |
+| `ConfiguredLaunch` | Execute a configured launcher item | Exact configured-launch service/method selector under session verb `invoke`; no resource-verb alias |
 
 The verb set for `Role.rules[*].verbs` is owned by the resource-api and authz
 foundation spec. The compiler validates that every declared verb is in the
@@ -246,7 +246,7 @@ closed set published by that spec; any verb not in that set is rejected at eval
 time. Core-reserved verbs (verbs bound to internal controller identity and not
 grantable to operator principals) cannot be declared in Nix RoleBindings; the
 compiler rejects them with a structured eval error. Cross-reference:
-`ADR-046-resource-api-and-authz`.
+`ADR-046-resource-api-and-authorization`.
 
 `Capability::Snapshots`, `Hotplug`, and `ProviderManagedIsolation` are retained
 as typed Provider descriptor capability fields, declared in the Provider's
@@ -1538,8 +1538,7 @@ d2b.zones.dev.resources.process-operator-binding = {
       "Provider/system-systemd"
       "Provider/system-minijail"
     ];
-    expiresAt = null;
-    narrowing  = null;
+    scopeNarrowing = null;
   };
 };
 ```
@@ -1560,10 +1559,16 @@ Eval assertions:
   input.
 - Verbs must be from the closed set published by the resource-api and authz
   foundation spec; the compiler rejects any verb not in that set at eval time.
+- Resource `verbs` uses the exact closed set `get`, `list`, `watch`, `create`,
+  `update-spec`, `update-status`, `update-metadata`, `update-finalizers`,
+  `delete`, `use-credential`, and `admin-credential`.
 - `sessionVerbs` uses the separate closed set `connect`, `invoke`,
-  `open-stream`, `relay`, `attach`, `cancel`, `observe`. `relay` is valid only
-  in `sessionVerbs`; generated option help describes it as one-hop
-  ZoneLink-scoped forwarding, not resource or lifecycle authority.
+  `open-stream`, `relay`, `attach`, `cancel`, `observe`, `audit-export`, and
+  `support-bundle`. `relay`, `audit-export`, and `support-bundle` are valid only
+  in `sessionVerbs`; generated option help describes relay as one-hop
+  ZoneLink-scoped forwarding and binds the two diagnostic verbs only to
+  `d2b.audit.v3.AuditService/Export` and
+  `d2b.support.v3.SupportService/GenerateBundle`, with no resource authority.
 - A relay-bearing Role/RoleBinding is rejected before bundle activation unless
   it has exact Zone/resource/name bounds and core-generated ZoneLink provenance,
   or durable explicit local-admin policy permits that exact bounded grant.

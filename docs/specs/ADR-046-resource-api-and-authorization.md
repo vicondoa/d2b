@@ -316,7 +316,7 @@ executionRef/domain/userRef scope
 Provider/controller generation
 ```
 
-Resource verbs:
+Resource verbs are the exact closed set:
 
 - get;
 - list;
@@ -326,25 +326,42 @@ Resource verbs:
 - update-status;
 - update-metadata;
 - update-finalizers;
-- delete.
+- delete;
+- use-credential; and
+- admin-credential.
+
+`use-credential` is valid only for `Credential` rules with one or more exact
+operation subresources from the Credential contract. `admin-credential` is
+valid only for `Credential` rules with exact `create`, `update-spec`, or
+`delete` subresources and is supplemental to the matching ordinary CRUD verb;
+it grants no CRUD action by itself.
 
 Runtime/session verbs are the exact closed set `connect`, `invoke`,
-`open-stream`, `relay`, `attach`, `cancel`, and `observe`. They are mapped
-through the same engine but are not resource mutations. `relay` permits only an
-already-authenticated ZoneLink/transport subject to forward an already-admitted
-invocation or stream to one route-selected next hop. It grants no resource CRUD,
-identity mapping, capability widening, attachment, credential, or local
-lifecycle authority.
+`open-stream`, `relay`, `attach`, `cancel`, `observe`, `audit-export`, and
+`support-bundle`. They are mapped through the same engine but are not resource
+mutations. `audit-export` binds only
+`d2b.audit.v3.AuditService/Export`; `support-bundle` binds only
+`d2b.support.v3.SupportService/GenerateBundle`. Both are admin-only,
+session-only grants and imply no `get`, `list`, or other resource authority.
+`relay` permits only an already-authenticated ZoneLink/transport subject to
+forward an already-admitted invocation or stream to one route-selected next
+hop. It grants no resource CRUD, identity mapping, capability widening,
+attachment, credential, or local lifecycle authority.
 
 Every forwarding hop evaluates two independent permissions: `relay` for the
 authenticated adjacent-Zone transport subject and the forwarded operation's
-target verb under the exact local Role/RoleBinding scope. The final target
-evaluates the target verb again. Neither permission implies the other; a missing
-grant or unavailable policy state fails closed. Relay-bearing Roles/Bindings
-are core-generated and ZoneLink-scoped by default. Admission rejects wildcard,
-self-asserted, Provider-authored, or ordinary operator-authored relay grants
-unless an already-authorized local administrator explicitly permits the exact
-bounded grant through durable admin policy.
+target verb under the exact local Role/RoleBinding scope. Named methods carry
+one immutable resource name. Nameless `List` and `Watch` carry no synthetic
+name: their exact ResourceType, non-empty authorized `resourceNames` allowlist,
+and bounded filters are evaluated as a set, and every hop preserves those
+filters byte-for-byte. A filter that could select a name outside the local
+intersection is denied rather than widened. The final target evaluates the
+same target verb and selector again. Neither permission implies the other; a
+missing grant or unavailable policy state fails closed. Relay-bearing
+Roles/Bindings are core-generated and ZoneLink-scoped by default. Admission
+rejects wildcard, self-asserted, Provider-authored, or ordinary
+operator-authored relay grants unless an already-authorized local administrator
+explicitly permits the exact bounded grant through durable admin policy.
 
 Native RBAC allow is necessary but not sufficient. Core structural checks also
 enforce:

@@ -469,9 +469,10 @@ ad hoc service-method verbs:
 | `use-credential` | Consumer subject authorized via consumerRef | Invoke an admitted credential operation under the exact `allowedOperations` value used as the Role subresource |
 | `admin-credential` | Authorized operator/configuration controller | Supplement ordinary Credential CRUD under the exact matching `create`, `update-spec`, or `delete` subresource; it grants no CRUD action by itself |
 
-Credential Roles use the existing `subresources` rule field. They do not add an
-`operationClasses` field. A rule granting either Credential-specific verb MUST
-name exact, non-empty Credential subresources. A consumer Role rule is:
+Credential Roles use the existing `subresources` rule field. No alternate
+Credential-operation Role field exists. A rule granting either
+Credential-specific verb MUST name exact, non-empty Credential subresources. A
+consumer Role rule is:
 
 ```yaml
 rules:
@@ -489,6 +490,13 @@ A separate deployer Role rule is:
 ```yaml
 rules:
   - resourceTypes: [Credential]
+    verbs: [create, update-spec, delete]
+    subresources: []
+    resourceNames: [work-entra]
+    zones: [dev]
+    executionRefs: []
+    sessionVerbs: []
+  - resourceTypes: [Credential]
     verbs: [admin-credential]
     subresources: [create, update-spec, delete]
     resourceNames: [work-entra]
@@ -505,7 +513,7 @@ The closed admission mapping is:
 | `RefreshToken` | `use-credential` | `refresh-token` |
 | `RevokeToken`, `CancelLogin` | `use-credential` | `revoke-token` |
 | `SignChallenge` | `use-credential` | `sign-challenge` |
-| `Status`, `InspectMetadata`, `ObserveLogin` | `use-credential` | `inspect-metadata` |
+| `InspectMetadata`, `ObserveLogin` | `use-credential` | `inspect-metadata` |
 | Resource create | `admin-credential` in addition to ordinary `create` | `create` |
 | Resource spec update | `admin-credential` in addition to ordinary `update-spec` | `update-spec` |
 | Resource delete | `admin-credential` in addition to ordinary `delete` | `delete` |
@@ -548,15 +556,14 @@ Route key example:
 
 | Method | Required exact operation class | Required Role permission | Outer DTO fields | Token bytes |
 | --- | --- | --- | --- | --- |
-| `Status` | `inspect-metadata` | `use-credential/inspect-metadata` | `CredentialStatusResponse`: leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs, placementBinding | none |
 | `AcquireToken` | `acquire-token` | `use-credential/acquire-token` | `AcquireTokenResponse`: leaseHandle, sourceVersion, rotationGeneration, expiresAtUnixMs | raw token bytes in a dedicated sensitive ComponentSession record (see §Credential-delivery endpoint contract) |
 | `RefreshToken` | `refresh-token` | `use-credential/refresh-token` | `RefreshTokenResponse`: leaseHandle, sourceVersion, rotationGeneration, new expiresAtUnixMs | raw token bytes in a dedicated sensitive ComponentSession record |
 | `RevokeToken` | `revoke-token` | `use-credential/revoke-token` | `RevokeTokenResponse`: closed revocation result (Revoked or AlreadyRevoked), revokedAtUnixMs | none |
 | `SignChallenge` | `sign-challenge` | `use-credential/sign-challenge` | `SignChallengeResponse`: outcome code | signature bytes in a dedicated sensitive ComponentSession record (same channel as token delivery) |
 | `InspectMetadata` | `inspect-metadata` | `use-credential/inspect-metadata` | `InspectMetadataResponse`: leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs | none |
 
-The `Status`, `RevokeToken`, and `InspectMetadata` response DTOs are non-secret:
-they carry only opaque identifiers, outcome codes, and timestamps. `AcquireToken`,
+The `RevokeToken` and `InspectMetadata` response DTOs are non-secret: they carry
+only opaque identifiers, outcome codes, and timestamps. `AcquireToken`,
 `RefreshToken`, and `SignChallenge` additionally deliver secret bytes in a
 dedicated sensitive ComponentSession record (see §Credential-delivery endpoint
 contract). Every method:
@@ -685,8 +692,8 @@ or stores the records.
 
 ## Noise session binding for credential-bound calls
 
-Non-secret credential operations (`Status`, `RevokeToken`, `InspectMetadata`)
-traverse the standard ComponentSession/d2b-bus stack defined in
+Non-secret credential operations (`RevokeToken`, `InspectMetadata`) traverse
+the standard ComponentSession/d2b-bus stack defined in
 `ADR-046-componentsession-and-bus`:
 
 1. The consumer process authenticates to d2b-bus using a local
@@ -898,7 +905,7 @@ Audit records for Credential operations:
 | `RefreshToken` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/refresh-token` decision, `rotationGeneration`, outcome code, idempotency key digest |
 | `RevokeToken` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/revoke-token` decision, `rotationGeneration`, revocation result code |
 | `SignChallenge` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/sign-challenge` decision, outcome code (no signature bytes) |
-| `Status`, `InspectMetadata`, `ObserveLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/inspect-metadata` decision, bounded outcome code |
+| `InspectMetadata`, `ObserveLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/inspect-metadata` decision, bounded outcome code |
 | `BeginLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/acquire-token` decision, bounded outcome code (no challenge/UI bytes) |
 | `CancelLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/revoke-token` decision, bounded outcome code |
 | Rotation | Zone, `resource_name_digest`, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
@@ -1992,10 +1999,10 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-contracts/proto/v2/provider_credential.proto` method names |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/proto/v3/credential.proto`; `packages/d2b-credential-service/src/{service.rs, client.rs, server.rs}` |
-| Detailed design | Define `d2b.credential.v3` protobuf service with methods: `Status`, `AcquireToken`, `RefreshToken`, `RevokeToken`, `SignChallenge`, `InspectMetadata`; each request carries `credential_ref`, `operation_class`, `operation_id`, `idempotency_key`, `requested_expiry_unix_ms`, `deadline_unix_ms`; map every method to the same exact operation class in `spec.allowedOperations` and the existing Role `subresources` field (`acquire-token`, `refresh-token`, `revoke-token`, `sign-challenge`, or `inspect-metadata`) under the canonical `use-credential` resource verb; map administrative lifecycle to matching `admin-credential` subresources `create`, `update-spec`, and `delete`, supplemental to ordinary CRUD, never to a new Role field or method-name alias; `Status`, `RevokeToken`, and `InspectMetadata` responses carry only non-secret metadata (leaseHandle digest, rotationGeneration, sourceVersion, expiresAtUnixMs, state, outcome code); `AcquireToken`, `RefreshToken`, and `SignChallenge` responses additionally include a `delivery_session_params` field carrying the binding contract fields required to establish the end-to-end credential-delivery ComponentSession (see §Credential-delivery endpoint contract); the token bytes themselves travel in the separate Noise-encrypted delivery session, never in the outer DTO; strict unknown-field rejection; bounded message sizes; all record wrappers for delivery sessions must be zeroizing types |
+| Detailed design | Define `d2b.credential.v3` protobuf service with exactly five operation methods: `AcquireToken`, `RefreshToken`, `RevokeToken`, `SignChallenge`, and `InspectMetadata`; map those methods one-to-one to the same exact operation class in `spec.allowedOperations` and the existing Role `subresources` field (`acquire-token`, `refresh-token`, `revoke-token`, `sign-challenge`, or `inspect-metadata`) under the canonical `use-credential` resource verb; derive the operation class from the method rather than accepting a caller-selected operation-class field; each request carries `credential_ref`, `operation_id`, `idempotency_key`, `requested_expiry_unix_ms`, `deadline_unix_ms`; map administrative lifecycle to matching `admin-credential` subresources `create`, `update-spec`, and `delete`, supplemental to ordinary CRUD, never to a new Role field or method-name alias; `RevokeToken` and `InspectMetadata` responses carry only non-secret metadata (leaseHandle digest, rotationGeneration, sourceVersion, expiresAtUnixMs, state, outcome code); `AcquireToken`, `RefreshToken`, and `SignChallenge` responses additionally include a `delivery_session_params` field carrying the binding contract fields required to establish the end-to-end credential-delivery ComponentSession (see §Credential-delivery endpoint contract); the token bytes themselves travel in the separate Noise-encrypted delivery session, never in the outer DTO; strict unknown-field rejection; bounded message sizes; all record wrappers for delivery sessions must be zeroizing types |
 | Integration | d2b-bus routes `d2b.credential.v3` service to the exact credential provider Process identified by `Credential.spec.providerRef`; before dispatch RBAC requires the exact operation class in both the `use-credential` Role `subresources` and `spec.allowedOperations`; for `AcquireToken`/`RefreshToken`/`SignChallenge`, bus additionally authorizes the credential-delivery endpoint route and forwards opaque Noise-encrypted delivery records without terminating or buffering them; bus never stores or inspects delivery record plaintext |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Protocol golden vectors for each method; Role matrix for the five exact allowed-operation subresources under `use-credential` and exact `create`, `update-spec`, and `delete` subresources under `admin-credential`; prove admin permission is supplemental to ordinary CRUD; deny empty/wildcard/unknown/mismatched subresources and any `operationClasses`/method-name-alias input before Provider dispatch; malformed/oversize rejection; `leaseHandle` opacity tests (secret-canary must not appear in outer DTO or delivery routing metadata); locked/unavailable/denied/expired state tests; delivery session binding contract round-trip; zeroizing record type unit tests; delivery channel never materialized in non-delivery method tests |
+| Validation | Protocol golden vectors for each method; Role matrix for the five exact allowed-operation subresources under `use-credential` and exact `create`, `update-spec`, and `delete` subresources under `admin-credential`; prove admin permission is supplemental to ordinary CRUD; deny empty/wildcard/unknown/mismatched subresources, alternate Credential-operation Role fields, and method-name aliases before Provider dispatch; malformed/oversize rejection; `leaseHandle` opacity tests (secret-canary must not appear in outer DTO or delivery routing metadata); locked/unavailable/denied/expired state tests; delivery session binding contract round-trip; zeroizing record type unit tests; delivery channel never materialized in non-delivery method tests |
 | Removal proof | Old v2 `CredentialProviderService` proto removed only after all v3 callers migrate |
 
 ### ADR046-credential-003

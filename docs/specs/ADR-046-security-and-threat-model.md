@@ -510,9 +510,14 @@ self-asserted role": a component cannot claim `Admin`, a different
 principal, or a wider capability merely by writing it into a request.
 
 **Closed verb sets.** Resource verbs: `get, list, watch, create, update-spec,
-update-status, update-metadata, update-finalizers, delete`. Session verbs:
-`connect, invoke, open-stream, relay, attach, cancel, observe`. All verb tokens
-outside this closed set are rejected with `role-unknown-verb-rejected`
+update-status, update-metadata, update-finalizers, delete, use-credential,
+admin-credential`. Session verbs: `connect, invoke, open-stream, relay, attach,
+cancel, observe, audit-export, support-bundle`. Credential use/admin grants
+require their exact canonical subresources. The two diagnostic session verbs
+bind only `d2b.audit.v3.AuditService/Export` and
+`d2b.support.v3.SupportService/GenerateBundle` and imply no resource
+authority. All verb tokens outside these closed sets are rejected with
+`role-unknown-verb-rejected`
 (RZC lines 3422-3430, adapted from `verb_requires_admin()` in the baseline
 `d2bd/src/admission.rs`).
 
@@ -528,12 +533,15 @@ explicitly permits the exact bounded grant through durable admin policy.
 **Per-hop RBAC.** For every intermediate Zone hop in a ZoneLink chain, the
 forwarding d2b-bus performs two independent local checks before forwarding:
 `relay` for the authenticated adjacent-Zone transport subject and the immutable
-target verb for the invocation/stream. The final target checks the target verb
-again. A Zone never grants authority beyond its own Role/RoleBinding
-evaluation; missing relay, missing target authority, or unavailable policy
-state fails closed. This closes both the historical "one relay hop is
-authorized, therefore every downstream hop is trusted" gap and the converse
-"relay implies target authority" gap.
+target verb for the invocation/stream. Named methods retain one immutable
+resource name. Nameless `List`/`Watch` retain the exact non-empty authorized
+name set and bounded filters; every hop rejects a selector that could widen the
+set and forwards the filters byte-for-byte. The final target checks the same
+target verb and selector again. A Zone never grants authority beyond its own
+Role/RoleBinding evaluation; missing relay, missing target authority, or
+unavailable policy state fails closed. This closes both the historical "one
+relay hop is authorized, therefore every downstream hop is trusted" gap and
+the converse "relay implies target authority" gap.
 
 **Wildcard restriction.** Explicit wildcard (`resourceNames: ["*"]`) is
 permitted only for core-controller-generated Roles. Operator-authored or
@@ -571,9 +579,10 @@ enforces exact-match recipient identity, never a class or wildcard match:
   requesting session's authenticated subject matches the Credential's
   `consumerRef` exactly; a mismatch closes the session with
   `authorization-denied` (`ADR-046-resources-credential` lines 378-383,
-  480-491). `operationClasses` on `CredentialSpec` further narrows the
-  allowed operation set per consumer; a request outside that set is rejected
-  the same way.
+  480-491). Effective permission is the intersection of the exact
+  `Credential.spec.allowedOperations` value and the exact Role `subresources`
+  value under `use-credential`, further narrowed by consumer/scope/structural
+  checks; a request outside that intersection is rejected the same way.
 - **externalPrincipalSelector.** Bounded at 512 bytes canonical JSON and
   restricted to opaque enrollment digests — it may not contain credential
   bytes, so an external-principal RoleBinding cannot be used to smuggle
@@ -1327,9 +1336,12 @@ token bytes, URLs, UUIDs, provider diagnostics, host paths, or connection
 strings (lines 681-683).
 
 **RBAC.** `use-credential` is required and checked by d2b-bus before
-forwarding delivery; `operationClasses` on `CredentialSpec` narrows the
-allowed operation set per consumer; `admin-credential` is required to
-create/delete a Credential resource, operator-only (lines 318-336).
+forwarding delivery. Each service method maps to exactly one canonical
+allowed-operation value and requires that same exact value in both
+`Credential.spec.allowedOperations` and Role `subresources`.
+`admin-credential` is supplemental to ordinary Credential CRUD and accepts
+only matching `create`, `update-spec`, or `delete` subresources; there is no
+coarse `admin`, `identity-reset`, `observe`, or `revoke` alias.
 
 ## Content secrecy: clipboard, terminal, CTAP, notification
 
@@ -1426,8 +1438,10 @@ digests (ZR line 2098).
 
 **Segment lifecycle.** Rotation at 64 MiB or UTC midnight, whichever comes
 first; 30-day default retention; export requires the admin-only
-`audit-export` verb; hash-chain breaks are reported inline in the export
-stream, never silently skipped (line 1846).
+`audit-export` session verb bound exactly to
+`d2b.audit.v3.AuditService/Export`, with no implied Zone resource read;
+hash-chain breaks are reported inline in the export stream, never silently
+skipped (line 1846).
 
 **`observability-otel` is never a bootstrap dependency and never reads
 audit.** Zone startup does not wait for `observability-otel`; unavailability
@@ -1583,19 +1597,24 @@ targeted.
 `argv`, or PIDs in output; includes an audit hash-chain integrity check
 (`ADR-046-telemetry-audit-and-support`, `ADR046-doctor-001`).
 
-**`d2b zone support-bundle`.** No spec bytes and no `metadata.name` in the
-bundle; metadata and status only. When a Provider is quarantined, the bundle
-reports `bundle_completeness: "partial"` rather than silently omitting the
-gap or blocking entirely (`ADR046-doctor-002`). This is the concrete tool an
-operator or a coordinated-disclosure responder uses to gather evidence
+**`d2b zone support-bundle`.** The command requires the admin-only
+`support-bundle` session verb bound exactly to
+`d2b.support.v3.SupportService/GenerateBundle`; that grant supplies no
+resource `get` or `list` authority. No spec bytes and no `metadata.name` appear
+in the bundle; metadata and status only. When a Provider is quarantined, the
+bundle reports `bundle_completeness: "partial"` rather than silently omitting
+the gap or blocking entirely (`ADR046-doctor-002`). This is the concrete tool
+an operator or a coordinated-disclosure responder uses to gather evidence
 without themselves becoming a redaction bypass — it is bound by exactly the
 same audit/status redaction rules as every other read path in
 [Audit vs. OTEL](#audit-vs-otel-redaction-cardinality-durability).
 
-**`d2b zone audit export`.** Admin-only (`audit-export` verb); hash-chain
-breaks are reported inline in the export stream rather than silently
-truncating history; output carries no old field names (`realm`/`node`/
-`workload_id`) and no path/`argv` content (`ADR046-audit-004`).
+**`d2b zone audit export`.** Admin-only (`audit-export` session verb, exact
+`d2b.audit.v3.AuditService/Export` binding, no resource-authority widening);
+hash-chain breaks are reported inline in the export stream rather than
+silently truncating history; output carries no old field names
+(`realm`/`node`/`workload_id`) and no path/`argv` content
+(`ADR046-audit-004`).
 
 **Coordination with disclosure policy.** `SECURITY.md`'s GitHub Security
 Advisory channel, response-time targets (7-day acknowledgment, 30-day

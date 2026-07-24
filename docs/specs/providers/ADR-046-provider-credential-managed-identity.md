@@ -420,8 +420,8 @@ and the runtime schema check.
 The `d2b.credential.v3` protobuf/ttrpc service methods are dispatched across
 two processes depending on whether IMDS access is required:
 
-- **`managed-identity-controller`** serves `Status` and (optionally)
-  `InspectMetadata` from stored resource-store state only. It holds no
+- **`managed-identity-controller`** optionally serves `InspectMetadata` from
+  stored resource-store state only. It holds no
   `ManagedIdentityCredentialClient`, makes no IMDS calls, and never terminates
   a credential-delivery session.
 - **`managed-identity-agent`** (one per Credential/consumerRef binding) serves
@@ -431,24 +431,24 @@ two processes depending on whether IMDS access is required:
   The agent is spawned and owned by the controller; its process is co-located
   at `Credential.spec.scope.executionRef`.
 
-d2b-bus routes each method to the correct endpoint based on the declared
-`operationClass` of the request: `inspect-metadata` requests for `Status` go
-to the controller; `acquire-token`, `refresh-token`, `revoke-token`, and live
-`inspect-metadata` go to the agent.
+d2b-bus derives the exact operation class from the method and routes it to the
+correct endpoint: stored `InspectMetadata` goes to the controller;
+`AcquireToken`, `RefreshToken`, `RevokeToken`, and live `InspectMetadata` go to
+the agent. No request carries a caller-selected operation-class field.
 
 ### Method table
 
-| Method | Served by | Operation class | Outer DTO fields | Sensitive output |
-| --- | --- | --- | --- | --- |
-| `Status` | **controller** | `inspect-metadata` | `CredentialStatusResponse`: `leaseState`, `rotationGeneration`, `sourceVersion`, `expiresAtUnixMs`, `placementBinding` | None |
-| `AcquireToken` | **agent** | `acquire-token` | `AcquireTokenResponse`: `leaseHandle`, `sourceVersion`, `rotationGeneration`, `expiresAtUnixMs` | Raw token bytes in dedicated `Noise_KK` delivery session (see §Credential-delivery endpoint contract) |
-| `RefreshToken` | **agent** | `refresh-token` | `RefreshTokenResponse`: `leaseHandle`, `sourceVersion`, `rotationGeneration`, new `expiresAtUnixMs` | Raw token bytes in dedicated `Noise_KK` delivery session |
-| `RevokeToken` | **agent** | `revoke-token` | `RevokeTokenResponse`: closed revocation result (`Revoked` or `AlreadyRevoked`), `revokedAtUnixMs` | None |
-| `InspectMetadata` | **agent** (live) / **controller** (stored) | `inspect-metadata` | `InspectMetadataResponse`: `leaseState`, `rotationGeneration`, `sourceVersion`, `expiresAtUnixMs` | None |
+| Method | Served by | Exact operation/Role subresource | Required Role permission | Outer DTO fields | Sensitive output |
+| --- | --- | --- | --- | --- | --- |
+| `AcquireToken` | **agent** | `acquire-token` | `use-credential/acquire-token` | `AcquireTokenResponse`: `leaseHandle`, `sourceVersion`, `rotationGeneration`, `expiresAtUnixMs` | Raw token bytes in dedicated `Noise_KK` delivery session (see §Credential-delivery endpoint contract) |
+| `RefreshToken` | **agent** | `refresh-token` | `use-credential/refresh-token` | `RefreshTokenResponse`: `leaseHandle`, `sourceVersion`, `rotationGeneration`, new `expiresAtUnixMs` | Raw token bytes in dedicated `Noise_KK` delivery session |
+| `RevokeToken` | **agent** | `revoke-token` | `use-credential/revoke-token` | `RevokeTokenResponse`: closed revocation result (`Revoked` or `AlreadyRevoked`), `revokedAtUnixMs` | None |
+| `SignChallenge` | admission only | `sign-challenge` | `use-credential/sign-challenge` | `credential-schema-invalid` because this Provider does not declare the operation | None |
+| `InspectMetadata` | **agent** (live) / **controller** (stored) | `inspect-metadata` | `use-credential/inspect-metadata` | `InspectMetadataResponse`: `leaseState`, `rotationGeneration`, `sourceVersion`, `expiresAtUnixMs` | None |
 
-`SignChallenge` is not implemented. Any request carrying `operation_class =
-sign-challenge` returns `credential-schema-invalid` immediately, before any
-IMDS interaction, and closes the request.
+`SignChallenge` is not implemented. A `SignChallenge` call returns
+`credential-schema-invalid` immediately, before any IMDS interaction, and
+closes the request.
 
 Every method:
 
@@ -456,8 +456,9 @@ Every method:
   subject** (established by the ComponentSession from SO_PEERCRED or the
   enrolled Noise_KK static key — see §ExactSdkConsumer authentication below)
   does not match `spec.consumerRef` when set, with `credential-consumer-mismatch`;
-- rejects an operation class not in `spec.allowedOperations` with
-  `credential-operation-denied`;
+- rejects before Provider dispatch unless the method's one exact operation is
+  present in both `spec.allowedOperations` and the Role `subresources` under
+  `use-credential`, with `credential-operation-denied`;
 - returns a stable closed error code rather than IMDS response content or
   provider-internal diagnostics;
 - carries operation/idempotency/correlation IDs from the d2b-bus context;
@@ -666,7 +667,8 @@ The `managed-identity-controller` process:
   when the Credential spec is admitted and its dependencies are ready (not
   after Credential `phase=Ready`, which depends on agent readiness); tears it
   down on Credential deletion;
-- serves only `Status` (from resource-store state) over `d2b.credential.v3`;
+- may serve `InspectMetadata` from resource-store state over
+  `d2b.credential.v3`;
 - monitors agent Process health via `ownerChildTrigger` watch; sets
   `ProviderUnavailable=True` on sustained agent Process failure.
 
@@ -1026,14 +1028,16 @@ Credential RBAC model defined in `ADR-046-resources-credential`.
 | `get` | Any authorized subject | Read Credential metadata/spec/status; no secret bytes present |
 | `list` | Any authorized subject | List managed-identity Credentials |
 | `watch` | Any authorized subject; `managed-identity-controller` | Watch Credential events (controller watches all; consumers watch own) |
-| `create` | `activation-nixos` controller | Create Credential resource from bundle |
-| `update-spec` | `activation-nixos` controller | Replace Credential spec |
+| `create` plus `admin-credential/create` | `activation-nixos` controller | Create Credential resource from bundle; neither permission implies the other |
+| `update-spec` plus `admin-credential/update-spec` | `activation-nixos` controller | Replace Credential spec; neither permission implies the other |
 | `update-status` | `managed-identity-controller` only | Update Credential status subresource |
 | `update-finalizers` | `managed-identity-controller`, `consumerRef` controller | Add/remove owned finalizers |
-| `delete` | `activation-nixos` controller | Request Credential deletion |
-| `use-credential` | Consumer subject authorized via `consumerRef`; dispatched by agent | Invoke `d2b.credential.v3` token-delivery methods |
-| `spawn-agent` | `managed-identity-controller` | Create/delete agent Process resources owned by Credential (controller-internal; not RBAC-grantable to consumers) |
-| `get-credential` | `managed-identity-agent` | Agent reads own Credential resource to obtain config and lease state at start-up |
+| `delete` plus `admin-credential/delete` | `activation-nixos` controller | Request Credential deletion; neither permission implies the other |
+| `use-credential` | Consumer subject authorized via `consumerRef`; dispatched by agent | Invoke one admitted `d2b.credential.v3` method under its exact allowed-operation subresource |
+
+Agent Process creation/deletion uses ordinary `Process` `create`/`delete`
+authority plus structural ownership checks. Reading the bound Credential uses
+ordinary `Credential` `get`; `spawn-agent` and `get-credential` are not verbs.
 
 ### `use-credential` Role rule shape
 
@@ -1041,16 +1045,18 @@ Credential RBAC model defined in `ADR-046-resources-credential`.
 rules:
   - resourceTypes: [Credential]
     verbs: [use-credential]
+    subresources: [acquire-token, refresh-token]
     resourceNames: [aca-mi-relay]
     zones: [dev]
     executionRefs: [Guest/aca-sandbox]
-    operationClasses: [acquire-token, refresh-token]
+    sessionVerbs: []
 ```
 
 The effective operation set is the intersection of the Credential resource's
-`spec.allowedOperations` and the Role rule's `operationClasses`. An empty
-`operationClasses` in the rule means no additional restriction beyond the
-resource spec.
+`spec.allowedOperations` and the Role rule's exact `subresources`, further
+narrowed by `consumerRef`, scope, and structural Provider/component checks.
+Empty, wildcard, unknown, and mismatched subresources deny; there is no
+alternate Credential-operation Role field or shorthand operation alias.
 
 ### Consumer descriptor requirement
 
@@ -2004,7 +2010,7 @@ audit record field set conformance, delivery session binding contract, RBAC
 | Credential `Delete`: controller sends graceful-stop to agent; agent drains in-flight requests and revokes leases; controller issues delete on agent Process resource; controller observes agent Process deletion watch event (no persisted `phase=Deleted` row for agent Process); controller clears `provider-revoke` finalizer; Core atomically writes event-only Deleted revision and removes Credential row/index; audit subsystem appends closure record with exactly-once dedup — finalizer cleared before Core deletion, Core deletion before audit, all verified in order | Graceful teardown; finalizer-then-Core-deletion-then-audit ordering |
 | Audit exactly-once: simulate Core Deleted revision committed with no corresponding audit record; audit subsystem on recovery appends exactly once using dedup key bound to committed revision; controller does not re-emit; no duplicate in audit log | Audit subsystem exactly-once / no controller re-emit |
 | Agent Process `ownerRef` matches Credential UID: controller watch filter correctly associates agent Process events with the owning Credential | ownerRef watch correctness |
-| Controller `Status` method: returns stored `leaseState` without calling `FakeClient`; agent `FakeClient` call count unchanged | Controller-side Status |
+| Controller `InspectMetadata` path: returns stored `leaseState` without calling `FakeClient`; agent `FakeClient` call count unchanged | Controller-side metadata inspection |
 | Agent Process spec has `networkUsage.allowEgress=false`; agent receives `ManagedIdentityCredentialClient` via effect port (no direct network calls in agent binary) | Effect-port injection; no ambient egress |
 | Agent Process template: all required canonical fields present (processClass, template, namespaceClasses `[mount,pid,ipc]`, capabilityClasses `[]`, seccompClass `strict`, startRoot `false`, noNewPrivileges `true`, environmentClass `minimal`, readOnlyRoot `true`, budget nested cpu.request/cpu.limit/memory.request/memory.limit/pids.limit/fds.limit, no inline endpoint fields, owned credential-service Endpoint resource, readiness class `provider-defined`/initialDelay/timeout/failureThreshold/successThreshold, telemetry metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); all excluded fields absent (principalRef, profileRef, endpoint.kind, Process config, telemetry.componentRef, readiness.probe/timeoutMs, network.allowedEffects, budget.class, telemetry.class); agent `networkUsage: {networkRef:null,ports:[],allowEgress:false}` | Canonical template shape |
 | Controller binary (`controller/main.rs`) constructed with no `ManagedIdentityCredentialClient` import; `FakeClient` inaccessible from controller entry point | Controller secret-free invariant |
