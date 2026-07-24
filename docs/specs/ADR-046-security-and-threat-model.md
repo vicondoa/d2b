@@ -115,7 +115,8 @@ Nix build/eval (offline, hermetic)
             -> privileged broker (sole privileged executor; allocator leases)
               -> Host kernel / Guest VMM / cloud control plane
         -> ComponentSession/d2b-bus (Noise NN/KK/IKpsk2; RBAC per hop)
-          -> ZoneLink (parent Zone <-> child Zone; carriage-only, no FD/path/credential)
+          -> child-local ZoneLink (parent keeps sealed topology/route state only;
+                                   carriage-only, no FD/path/credential)
             -> Gateway Guest (relay/cloud credential custody; never the Host)
 ```
 
@@ -195,8 +196,9 @@ authorization grant.
   quarantine (INV-NET-009); pidfd/InvocationID re-verification on controller
   restart catches an impersonating re-attach.
 - **Recovery:** Guest quarantine (`Degraded`, no broad kill); Volume/Network/
-  Device detach through normal finalizer teardown; ZoneLink revocation if the
-  Guest was itself hosting a child Zone gateway.
+  Device detach through normal finalizer teardown; parent allocator route
+  revocation plus child-local ZoneLink session teardown if the Guest was itself
+  hosting a child Zone gateway. The parent never deletes a child-store resource.
 
 ### AC3: Compromised Host or local same-UID malicious process
 
@@ -236,9 +238,10 @@ input.
   (ZR lines 554-580); route advertisement replay window and signature check
   (ZR lines 1835-1895); malformed/exhausted hop count rejected at the
   source bus (ZR lines 1880-1895).
-- **Recovery:** ZoneLink revocation sets the capability ceiling to empty,
-  withdraws routes, and closes existing streams with `zone-link-revoked`;
-  already-committed child-Zone operations are not rolled back (ZR lines
+- **Recovery:** parent allocator revocation sets the admitted capability ceiling
+  to empty and withdraws its private route projection; the child-local ZoneLink
+  handler then closes existing streams with `zone-link-revoked`.
+  Already-committed child-Zone operations are not rolled back (ZR lines
   1835-1895).
 
 ### AC5: Forged or tampered Nix artifact / configuration bundle
@@ -575,11 +578,14 @@ closes both.
 
 ## ZoneLink: no FD/resource grants, transport carriage-only
 
-Every resource belongs to exactly one Zone (D016). A parent Zone represents a
-child with a local `ZoneLink/<name>` resource and accesses the child's
-resources only through the child's own Zone API — a parent never mounts or
-mirrors the child store, and ordinary resource references never cross Zones
-(D017).
+Every resource belongs to exactly one Zone (D016). Each non-root child stores
+and reconciles its own self-matching `ZoneLink/<name>` uplink. The compiler-only
+`{ childZone, parentZone }` topology selects the parent allocator; that parent
+keeps only sealed allocation/topology state and authenticated route/projection
+status. It has no reciprocal ZoneLink row or ZoneLink handler. A parent accesses
+child resources only through the child's own Zone API over the authenticated
+route — it never mounts or mirrors the child store, and ordinary resource
+references never cross Zones (D017).
 
 **Structural, not policy, enforcement.** No FD, credential, or host path is
 forwarded across a ZoneLink. This is enforced as a **structural
@@ -605,9 +611,10 @@ misconfigured away (ZR lines 1779-1801):
 
 **Transport carriage-only.** Transport Providers (`transport-unix`,
 `transport-vsock`, `transport-azure-relay`) never own ZoneLink state (D081).
-The core ZoneLink handler alone reads/writes/finalizes `ZoneLink` and owns
-Noise/session/reconnect/route/idempotency/intent state; it calls typed
-`OpenTransport`/`CloseTransport`/`ObserveTransport` on the installed
+The child Zone's core ZoneLink handler alone reads/writes/finalizes its local
+`ZoneLink` and owns Noise/session/reconnect/route/idempotency/intent state; the
+parent has only its allocator and route-engine state. The child handler calls
+typed `OpenTransport`/`CloseTransport`/`ObserveTransport` on the installed
 Transport Provider, which returns only opaque `OwnedTransport`/byte-stream
 handles and observations. A Transport Provider crate does not call the raw
 transport syscalls itself (e.g. `transport-vsock` does not depend on
@@ -758,10 +765,19 @@ Network/Device Providers themselves.
 | --- | --- | --- | --- |
 | Process | `MinijailProcessEffectPort` | `Provider/system-minijail` controller + `d2b-priv-broker` `SpawnRunner` | Compile-time dependency audit: the Provider crate imports no `d2b.broker.v3` service/client/DTO (`ADR-046-provider-system-minijail.md` lines 1621-1628) |
 | Process (systemd) | `SystemdProcessEffectPort` | `Provider/system-systemd` controller via D-Bus transient unit API | Controller never connects to the systemd D-Bus socket directly and never calls `systemctl` as a subprocess |
-| Volume | `VolumeEffectPort` | `Provider/volume-local` controller + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
-| Network | `NetworkEffectPort` | `Provider/network-local` controller + broker `CreateBridge`/`CreatePersistentTap`/`SetBridgePortFlags`/`ApplyNftables`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
+| Volume | `VolumeEffectPort` | `Provider/volume-local` controller + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir`; key rotation is requested only through `VolumeEffectPort::rotate_sealing_key` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
+| Network | `NetworkEffectPort` | `Provider/network-local` controller + broker `CreatePersistentTap`/`DeletePersistentTap`/`SetBridgePortFlags`/`ApplyNftables`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
+| Device (USBIP) | `UsbipEffectPort` | Core adapter + broker `UsbipBindFirewallRule { action: Ensure \| Remove }` for both acquisition and release | Network-local never owns USBIP TCP/3240 exposure; there is no separate release operation |
 | Device (vsock) | `VsockEffectPort` | Zone runtime `LiveVsockEffectPort` | `tokio-vsock` is not a dependency of `transport-vsock` (INV-VSOCK-004) |
 | Cloud (ARM/ACA) | `AzureEffectPort` | The cloud runtime Provider's own controller, confined to the gateway Guest | All calls non-blocking; `AzureOperationHandle` is opaque, max 256 bytes |
+
+These names are the planned closed ADR 0046 broker-operation contract even
+where the baseline has no corresponding variant yet. In particular,
+`RotateSealingKey` is the sole broker effect behind
+`VolumeEffectPort::rotate_sealing_key`; `DeletePersistentTap` is a new
+idempotent peer to `CreatePersistentTap`; and USBIP release dispatches the
+existing `UsbipBindFirewallRule` with closed `action: Remove`, not a renamed or
+second release variant. `action: Ensure` is the only acquisition form.
 
 The broker remains the sole privileged executor and independent audit owner
 (`ADR-046-provider-model-and-packaging`, D077). It re-derives every
@@ -1817,8 +1833,9 @@ time rejection, not an operational recommendation.
 - A Transport Provider calling raw transport syscalls itself (`AF_VSOCK`,
   raw `socket(2)`, etc.) instead of going through the core effect adapter
   (§10).
-- A Transport Provider owning ZoneLink state directly instead of returning
-  opaque handles to the core ZoneLink handler (§10, D081).
+- A Transport Provider or parent Zone owning child-local ZoneLink state
+  directly instead of the child core handler owning the resource and receiving
+  opaque transport handles (§10, D081).
 
 **Telemetry and audit.**
 
@@ -2173,7 +2190,7 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None |
 | Reuse action | adapt |
 | Destination | `tests/integration/containers/malicious-child-zone.rs` |
-| Detailed design | Container-based penetration test running a real parent Zone and a deliberately malicious child Zone container that attempts, over a real ZoneLink: FD smuggling, credential-shaped byte injection, cross-Zone `ownerRef` forgery, capability-ceiling widening claims, and route-advertisement replay. Every attempt must be rejected by the parent with the specific typed error named in §10, and none may reach the parent's resource store, Credential state, or Host substrate Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Container-based penetration test running a real parent Zone and a deliberately malicious child Zone container. Before attack injection, assert the one ZoneLink row/handler exists only in the child store/runtime and the parent has only sealed `{ childZone, parentZone }` topology plus authenticated allocator/route projection state. The child then attempts, over that link: FD smuggling, credential-shaped byte injection, cross-Zone `ownerRef` forgery, capability-ceiling widening claims, and route-advertisement replay. Every attempt must be rejected by the parent with the specific typed error named in §10, and none may create a parent ZoneLink row or reach the parent's resource store, Credential state, or Host substrate Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `make test-integration` (requires podman, per `AGENTS.md` "Local Layer 1 + container integration") |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Container integration test; acceptance is zero successful attacks across all five attempted vectors |

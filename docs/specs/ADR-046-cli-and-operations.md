@@ -53,12 +53,12 @@ the "target:" annotation.
 
 | Current baseline symbol | Package | Target name |
 | --- | --- | --- |
-| `RealmId`, `RealmPath`, `TargetName` | `d2b-realm-core/src/ids.rs`, `realm.rs`, `target.rs` | `Zone/<name>` ResourceRef; multi-level path → `ZoneLink` hierarchy |
-| `RealmControllerPlacement`, `EntrypointMode` | `d2b-realm-core/src/realm.rs` | Zone runtime placement/mode (ZoneLink `mode` field) |
-| `RealmEntrypointDocument`, `RealmEntrypointConfig` | `packages/d2b/src/lib.rs:5163` | Nix-generated static `realm-entrypoints.json`; target: Zone self resource + ZoneLink resources in redb store |
-| `RealmPolicyOutputV1 { realm, mode, gateway_vm, gateway_target, gateway_state, cross_realm_policy, credential_boundary }` | `d2b-contracts/src/cli_output.rs:345` | ZoneLink resource fields; `gateway_vm` → ZoneLink `gatewayGuestRef`; `mode` → ZoneLink `placement` |
-| `RealmListOutputV1 { realms: Vec<RealmPolicyOutputV1> }` | `d2b-contracts/src/cli_output.rs:285` | Target: `d2b zone list` response listing `ZoneLink` resources |
-| `RealmInspectOutputV1 { realm: RealmPolicyOutputV1 }` | `d2b-contracts/src/cli_output.rs:292` | Target: `d2b zone get <name>` response |
+| `RealmId`, `RealmPath`, `TargetName` | `d2b-realm-core/src/ids.rs`, `realm.rs`, `target.rs` | `Zone/<name>` addressing; ancestry comes from sealed compiler-only `{ childZone, parentZone }` topology and authenticated route projections |
+| `RealmControllerPlacement`, `EntrypointMode` | `d2b-realm-core/src/realm.rs` | Private Zone runtime bootstrap placement plus compiler-only parent topology; transport state remains in the child's local ZoneLink |
+| `RealmEntrypointDocument`, `RealmEntrypointConfig` | `packages/d2b/src/lib.rs:5163` | Static `realm-entrypoints.json` retires; target is the read-only topology projection over sealed `{ childZone, parentZone }` rows and authenticated route state |
+| `RealmPolicyOutputV1 { realm, mode, gateway_vm, gateway_target, gateway_state, cross_realm_policy, credential_boundary }` | `d2b-contracts/src/cli_output.rs:345` | Retired; successor rows expose compiler topology plus authenticated route/projection status, never child-local ZoneLink spec or status |
+| `RealmListOutputV1 { realms: Vec<RealmPolicyOutputV1> }` | `d2b-contracts/src/cli_output.rs:285` | Target: `d2b zone list` topology-projection response |
+| `RealmInspectOutputV1 { realm: RealmPolicyOutputV1 }` | `d2b-contracts/src/cli_output.rs:292` | Target: `d2b zone get <name>` topology/route projection response |
 | `WorkloadId`, `WorkloadTarget` (`= RealmTarget`) | `d2b-realm-core/src/ids.rs`, `d2b-core/src/workload_identity.rs` | `Guest/<name>` ResourceRef for VM/sandbox/cloud/remote; `Host/<name>` for unsafe-local (NEVER `Guest`) |
 | `WorkloadProviderKind::LocalVm` | `d2b-realm-core/src/workload.rs:16` | `Guest` under `Provider/runtime-cloud-hypervisor` |
 | `WorkloadProviderKind::QemuMedia` | `d2b-realm-core/src/workload.rs:19` | `Guest` under `Provider/runtime-qemu-media` |
@@ -70,7 +70,7 @@ the "target:" annotation.
 | `VmStatus { vm: String, lifecycle: VmLifecycle, … }` | `d2b-contracts/src/public_wire.rs:2530` | Guest resource status |
 | `VmLifecycleState::Stopped/Starting/Booted/Running/Stopping/Restarting/Failed/Unknown` | `d2b-contracts/src/public_wire.rs:2605` | Guest resource `phase`; target phases are `Pending\|Ready\|Succeeded\|Degraded\|Failed\|Deleted\|Unknown`; `Starting`/`Stopping`/`Restarting` map to conditions/reasons on `Pending`/`Degraded`, not separate phases |
 | `VmTargetRoute::Local { vm }` | `packages/d2b/src/lib.rs:5577` | `Guest/<vm>` ResourceRef in the current Zone |
-| `VmTargetRoute::Gateway { realm, gateway_vm }` | `packages/d2b/src/lib.rs:5578` | Cross-Zone via `ZoneLink/<realm>` ComponentSession; `gateway_vm` = `Guest/<gateway_vm>` |
+| `VmTargetRoute::Gateway { realm, gateway_vm }` | `packages/d2b/src/lib.rs:5578` | Cross-Zone through `ZoneRouteEngine` using sealed topology and an authenticated admitted route; no parent-local ZoneLink lookup |
 | `ProcessRole::Virtiofsd` | `d2b-core/src/processes.rs:199` | `Process` under volume-virtiofs Provider |
 | `ProcessRole::Swtpm` | `d2b-core/src/processes.rs:203` | `Process` under device-tpm Provider |
 | `ProcessRole::CloudHypervisorRunner` | `d2b-core/src/processes.rs:213` | `Process` under runtime-cloud-hypervisor Provider |
@@ -1678,11 +1678,11 @@ top-level `d2b --help` output. Each fetch is bounded by the per-Provider
 invocation only. No disk cache or cross-invocation cache is maintained. Startup
 latency for non-provider commands is zero.
 
-## `d2b zone` — Zone resource commands
+## `d2b zone` — Zone topology and self-resource commands
 
 ```
 d2b zone get [<name>]           # omitting name fetches the current Zone self resource
-d2b zone list                   # local ZoneLink resources (child Zones)
+d2b zone list                   # compiler topology plus authenticated route/projection status
 d2b zone status [<name>] [--watch] [--deadline <duration>]
 ```
 
@@ -1703,7 +1703,35 @@ have `mode: host-resident|gateway-backed` and optional `gateway` VM name.
 `packages/d2b-contracts/src/cli_output.rs:345`).
 
 Evidence class: `implemented-and-reachable` for realm list/inspect (static file read);
-`ADR-only` for Zone/ZoneLink resource API (live daemon query replacing static file).
+`ADR-only` for the Zone self-resource API and Zone topology/route projection
+(live daemon query replacing the static file).
+
+**Command algorithms and output boundary:**
+
+1. `d2b zone list` invokes the local `ZoneService` topology-projection method.
+   The service starts from the sealed, compiler-only sorted
+   `{ childZone, parentZone }` rows and joins only route/projection status
+   derived from currently authenticated, admitted advertisements. The result is
+   sorted by `(parentZone, childZone)`.
+2. `d2b zone get` with no name, or with the current Zone name, fetches only the
+   current Zone's cardinality-one self resource. For another declared Zone, it
+   resolves the exact topology row and returns its authenticated route/projection
+   inspection; when the route is current, the service may augment that
+   inspection with an authenticated call to the target Zone's self resource.
+   Missing, withdrawn, stale, or unauthenticated route state is reported as
+   unavailable and is never replaced by static guesses.
+3. `d2b zone status --watch` watches the current Zone self resource for the
+   current Zone and the topology/route projection for any child or descendant.
+   Reconnect resumes from the projection revision; it never opens a watch on a
+   parent-store ZoneLink row.
+
+The generated CLI DTOs and golden output fixtures contain the topology
+`childZone`/`parentZone` pair and bounded authenticated route/projection status.
+They contain no ZoneLink resource name, UID, spec, status, Provider ref,
+fingerprint, transport setting, or parent-side link handle. A child's one
+ZoneLink remains in that child's store and is reconciled by that child's
+core-controller; a parent stores only sealed topology/allocation state and
+authenticated route projections.
 
 **Replacement/deletion:** `d2b realm enter` and `d2b realm run` are replaced by
 `d2b guest start <gateway-guest>` plus `d2b exec run <gateway-guest> -- <cmd>`.
@@ -2472,7 +2500,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-cli-006` |
-| Dependency/owner | ADR046-cli-001; CLI crate owner |
+| Dependency/owner | ADR046-cli-001, ADR046-routing-012, ADR046-routing-016; CLI crate owner |
 | Current source | None (no completion exists in v3 baseline) |
 | Reuse source | Optional: clap_complete crate (version to be pinned); no main-branch source |
 | Reuse action | adapt |
@@ -2522,13 +2550,13 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-009` |
 | Dependency/owner | ADR046-cli-001; CLI crate owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_realm_list` (reads static `realm-entrypoints.json` via `realm_policy_rows_raw()`), `cmd_realm_inspect`, `cmd_realm_enter` (→ `realm_gateway_exec_args` → `cmd_vm_exec` with `-it bash -l`), `cmd_realm_run` (→ `cmd_vm_exec` with caller argv); wire output types: `RealmListOutputV1 { realms: Vec<RealmPolicyOutputV1> }`, `RealmInspectOutputV1 { realm: RealmPolicyOutputV1 }` from `packages/d2b-contracts/src/cli_output.rs:285,292,345`; `RealmPolicyOutputV1` fields: `realm` (= `RealmId`), `mode`, `gateway_vm`, `gateway_target`, `gateway_state`, `cross_realm_policy`, `credential_boundary`; `target_routing.rs`: `Route::Local { vm }`, `Route::Gateway { gateway, target }`, `resolve_access_route()`, `VmTargetRoute`; `d2b-realm-router::RealmEntrypointTable` |
-| Reuse source | main `a1cc0b2d` — reference only (no copy): `packages/d2b-realm-router/src/service_v2.rs` `RealmServiceServer`, `RealmServiceProcess`, `RealmMethod::Inspect`, `RealmMethod::ResolveRoute` — server-side multi-realm routing; this is the ADR 0045 multi-Zone topology and is **excluded** from v3 CLI as a direct reuse source; `packages/d2b-realm-router/src/remote_node.rs` `RemoteNodeRegistration`, `RemoteNodeEntry` — constellation remote routing; also excluded; note: `packages/d2b-client/src/daemon_service.rs` `DaemonClient::list_workloads()` and `DaemonMethod::ListRealms` are the closest live list-call patterns, but their zone/workload scoping uses `RealmPath`/`RealmId` types that are ADR 0045-specific; adapt `ConnectedClient::invoke()` with a v3 Zone List request type instead; no main symbols are copied unchanged for cli-009; the zone resource API type design is an ADR-only deliverable pending Zone resource spec |
+| Reuse source | main `a1cc0b2d` — reference only (no copy): `packages/d2b-realm-router/src/service_v2.rs` `RealmServiceServer`, `RealmServiceProcess`, `RealmMethod::Inspect`, `RealmMethod::ResolveRoute` — server-side multi-realm routing; this is the ADR 0045 multi-Zone topology and is **excluded** from v3 CLI as a direct reuse source; `packages/d2b-realm-router/src/remote_node.rs` `RemoteNodeRegistration`, `RemoteNodeEntry` — constellation remote routing; also excluded; note: `packages/d2b-client/src/daemon_service.rs` `DaemonClient::list_workloads()` and `DaemonMethod::ListRealms` are the closest live list-call patterns, but their zone/workload scoping uses `RealmPath`/`RealmId` types that are ADR 0045-specific; adapt `ConnectedClient::invoke()` with the v3 `ZoneService` topology-projection request instead; no main symbols are copied unchanged for cli-009; the projection type is an ADR-only deliverable owned by zone routing |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/zone.rs` (`d2b zone get/list/status`) |
-| Detailed design | `d2b zone get [<name>]` fetches Zone self resource via `ConnectedClient::invoke`; `d2b zone list` lists ZoneLink resources. v2 commands (`d2b realm list/inspect/enter/run`) are deleted at 3.0; no dispatch wiring. Excluded ADR 0045: `RealmServiceServer`/`RealmServiceProcess` multi-realm service; `RemoteNodeRegistration` constellation routing; `TargetInput::Realm`; `RealmMethod::ResolveRoute`/`AuthorizeShortcut`/`RevokeShortcut`. |
-| Integration | ZoneContext → Zone resource Get/List via `ConnectedClient::invoke` |
+| Detailed design | `d2b zone get [<name>]` fetches the current Zone self resource only for the local name; another declared name is inspected through the read-only Zone topology projection. `d2b zone list` lists sorted compiler-only `{ childZone, parentZone }` rows joined with authenticated route/projection status. `d2b zone status --watch` watches the corresponding projection revision. None of these commands lists or gets a parent-local ZoneLink: the sole ZoneLink resource and handler are child-local, while the parent owns only sealed allocator topology and authenticated route state. Generated DTO/golden tests reject ZoneLink names/spec/status/provider refs/fingerprints/transport settings in parent-side output. v2 commands (`d2b realm list/inspect/enter/run`) are deleted at 3.0; no dispatch wiring. Excluded ADR 0045: `RealmServiceServer`/`RealmServiceProcess` multi-realm service; `RemoteNodeRegistration` constellation routing; `TargetInput::Realm`; `RealmMethod::ResolveRoute`/`AuthorizeShortcut`/`RevokeShortcut`. |
+| Integration | ZoneContext → local Zone self-resource Get or `ZoneService` topology/route projection via `ConnectedClient::invoke` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Zone get/list tests; confirm v2 `cmd_realm_*` paths are absent |
+| Validation | Zone self-get plus topology list/get/status/watch tests; disconnected and stale authenticated-route projections; golden output contains `{ childZone, parentZone }` and route/projection status but no ZoneLink fields; parent store has no ZoneLink row or watch; confirm v2 `cmd_realm_*` paths are absent |
 | Removal proof | `cmd_realm_*` and `target_routing.rs` removed only after zone routes pass equivalence tests |
 
 ### ADR046-cli-010
