@@ -1552,32 +1552,44 @@ Providers produce a visible warning but do not block CLI startup.
 Custom commands are rendered as:
 
 ```
-d2b <provider-name> <verb> [args...]
+d2b <top-level-subcommand-name> <verb> [args...]
 ```
 
-or, for Providers whose top-level name matches a built-in command name, as:
+The declared top-level subcommand name is the command name; the Provider
+resource name is not part of the invocation. For example, `audio-pipewire` may
+declare `audio`, rendered as `d2b audio status`, and `display-wayland` may
+declare `display`, rendered as `d2b display list`.
 
-```
-d2b provider run <name> <verb> [args...]
-```
+**Canonical built-in command registry:** The implementation maintains exactly
+one registry of built-in top-level command names. Parser construction, help,
+completion, and Provider projection binding all consume that registry; no
+callsite keeps a separate reserved-name list. The registry is:
 
-**Built-in name collision rule:** A Provider-projected command name that
-collides with a built-in top-level verb is always rejected at Provider
-install/bind time. Providers cannot shadow `get`, `list`, `watch`,
-`create`, `update-spec`, `delete`, `status`, `host`, `guest`, `process`,
-`exec`, `shell`, `volume`, `network`, `device`, `user`, `credential`,
-`provider`, `zone`, `activation`, `audit`, `op`, `auth`, or `complete`.
+`get`, `list`, `watch`, `create`, `update-spec`, `delete`, `status`, `upgrade`,
+`reconcile`, `host`, `guest`, `process`, `exec`, `shell`, `volume`, `network`,
+`device`, `endpoint`, `export`, `import`, `resource`, `user`, `credential`,
+`provider`, `zone`, `quota`, `emergency-policy`, `activation`, `audit`, `op`,
+`auth`, `complete`, and `migrate-check`.
 
-**Retained built-in Provider commands:** The following current v3 Provider-
-specific verbs are retained as first-class built-in commands because they have
-stable existing tests and wire contracts:
+Adding or removing a built-in command updates this registry; projection binding
+therefore inherits the change without a second reserved-name edit.
 
-| Retained built-in | Provider | Successor |
+**Single collision authority:** Provider install/bind time is the only
+authority for projected top-level name collisions. Binding rejects a declared
+name found in the canonical built-in registry or already bound by another
+Provider. The CLI never resolves a collision at dispatch time and exposes no
+collision-specific fallback command.
+
+**Migrated Provider commands:** The following current v3 Provider-specific
+commands retain their operator-facing names through declared CLI projections;
+the serial console instead moves to the built-in `guest` command:
+
+| Current v3 command | Owner | Successor |
 | --- | --- | --- |
-| `d2b audio status/mic/speaker/off` | `audio-pipewire` | Retained via Provider CLI projection |
-| `d2b clipboard arm` | `clipboard-wayland` | Retained via Provider CLI projection |
+| `d2b audio status/mic/speaker/off` | `audio-pipewire` | `d2b audio status/mic/speaker/off` via the declared `audio` projection |
+| `d2b clipboard arm` | `clipboard-wayland` | `d2b clipboard arm` via the declared `clipboard` projection |
 | `d2b console <name>` | Guest serial console | `d2b guest console <name>` |
-| `d2b vm display list/close` | `display-wayland` | Retained via Provider CLI projection |
+| `d2b vm display list/close` | `display-wayland` | `d2b display list/close` via the declared `display` projection |
 
 **Current v3 source (audio):** `cmd_audio` at `packages/d2b/src/lib.rs`; `AudioArgs`,
 `AudioCommand`. Evidence class: `implemented-and-reachable`.
@@ -1588,7 +1600,7 @@ class: `implemented-and-reachable`.
 **Provider projection loading:** Provider CLI projections are loaded lazily on
 demand. A projection is fetched from the Provider's InspectSchema endpoint the
 first time that Provider's projected subcommand is invoked or included in
-`--help` output for `d2b provider`. Each fetch is bounded by the per-Provider
+top-level `d2b --help` output. Each fetch is bounded by the per-Provider
 2-second deadline. The result is cached for the duration of the current CLI
 invocation only. No disk cache or cross-invocation cache is maintained. Startup
 latency for non-provider commands is zero.
@@ -1898,8 +1910,8 @@ class: `ADR-only`.
 ## v2 command surface removed at 3.0 clean break
 
 All v2 aliases and predecessor commands are deleted at the d2b 3.0 clean break.
-There are no executable aliases in 3.0. A `d2b migrate-check` diagnostic
-command may explain replacements, but it does not dispatch to v2 behavior.
+There are no executable aliases in 3.0. The `d2b migrate-check` diagnostic
+command explains replacements, but it does not dispatch to v2 behavior.
 The table below records each removed command and its v3 successor for
 documentation and test-removal tracking only.
 
@@ -1930,7 +1942,7 @@ documentation and test-removal tracking only.
 | `d2b migrate` | `d2b activation migrate` |
 | `d2b config sync/diff/approve/reject/status` | `d2b activation config sync/...` |
 | `d2b console <name>` | `d2b guest console <name>` |
-| `d2b vm display list/close` | `d2b provider run display-wayland display list/close` |
+| `d2b vm display list/close` | `d2b display list/close` |
 
 ## Async operation lifecycle, status watch, and cancel
 
@@ -2228,7 +2240,7 @@ The following table maps every current v3 CLI verb to its v3 status.
 | `d2b vm exec <vm> logs <id>` | Deleted at 3.0 | `d2b exec logs` | same | reachable |
 | `d2b vm exec <vm> status <id>` | Deleted at 3.0 | `d2b exec status` | same | reachable |
 | `d2b vm exec <vm> kill <id>` | Deleted at 3.0 | `d2b exec kill` | same | reachable |
-| `d2b vm display list/close` | Provider-projected | `audio-pipewire`/`display-wayland` projection | `cmd_vm_display` @ lib.rs | reachable |
+| `d2b vm display list/close` | Provider-projected | `d2b display list/close` (`display` projection declared by `display-wayland`) | `cmd_vm_display` @ lib.rs | reachable |
 | `d2b shell <target> [attach]` | Deleted at 3.0 | `d2b shell open <executionRef>` | `cmd_shell` @ lib.rs:1788 | reachable |
 | `d2b shell <target> list` | Deleted at 3.0 | `d2b shell list` | same | reachable |
 | `d2b shell <target> detach` | Deleted at 3.0 | `d2b shell detach` | same | reachable |
@@ -2241,7 +2253,7 @@ The following table maps every current v3 CLI verb to its v3 status.
 | `d2b usb security-key cancel` | Deleted at 3.0 | `d2b device security-key cancel` | `cmd_usb_sk_cancel` | reachable |
 | `d2b usb security-key test <vm>` | Deleted at 3.0 | `d2b device security-key test` | `cmd_usb_sk_test` | reachable |
 | `d2b console <vm>` | Deleted at 3.0 | `d2b guest console <name>` | `cmd_console` | reachable |
-| `d2b audio status/mic/speaker/off` | Provider-projected | `audio-pipewire` projection | `cmd_audio` @ lib.rs | reachable |
+| `d2b audio status/mic/speaker/off` | Provider-projected | `d2b audio status/mic/speaker/off` (`audio` projection declared by `audio-pipewire`) | `cmd_audio` @ lib.rs | reachable |
 | `d2b audit` | **Retained** | `d2b audit` | `cmd_audit` @ lib.rs | reachable |
 | `d2b host check` | **Retained** | `d2b host check` | `cmd_host_check` @ lib.rs:4271 | reachable |
 | `d2b host prepare` | **Retained** | `d2b host prepare` | `cmd_host_prepare` @ lib.rs:4468 | reachable |
@@ -2271,7 +2283,7 @@ The following table maps every current v3 CLI verb to its v3 status.
 | `d2b gc` | Deleted at 3.0 | `d2b activation gc` | `cmd_gc` | reachable |
 | `d2b migrate` | Deleted at 3.0 | `d2b activation migrate` | `cmd_migrate` | reachable |
 | `d2b config sync/diff/approve/reject/status` | Deleted at 3.0 | `d2b activation config *` | `ConfigCommand` @ lib.rs:2705 | reachable |
-| `d2b clipboard arm` | Provider-projected | `clipboard-wayland` projection | `cmd_clipboard_arm` @ lib.rs | reachable |
+| `d2b clipboard arm` | Provider-projected | `d2b clipboard arm` (`clipboard` projection declared by `clipboard-wayland`) | `cmd_clipboard_arm` @ lib.rs | reachable |
 | `d2b clipboard picker` | **Deleted** (was already deprecated) | *(none)* | deprecated notice @ lib.rs:2424 | reachable |
 
 ### Removal notes
@@ -2377,10 +2389,10 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-provider/src/rpc.rs` `RpcProviderProxy` — adapt: the CLI uses the inverse side (client calling provider via `ConnectedClient::invoke`); `RpcCall`, `RpcPayload`, `RpcResponse`, `RpcOperation` define the typed call shape for dynamic provider commands; (2) `packages/d2b-contracts/src/generated_v2_services/provider_runtime.rs`, `provider_display.rs`, `provider_audio.rs`, `provider_infrastructure.rs` — adapt: the generated service method types show what CLI projection verbs can be mapped to typed service calls; use as shape reference for the first audio/clipboard/display migration; (3) `packages/d2b-provider-toolkit/src/conformance.rs` `check_provider_conformance`, `check_descriptor_conformance` — copy-then-adapt into CLI-side projection conformance validation (bounds: 64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); (4) `packages/d2b-provider-toolkit/src/server.rs` `GeneratedProviderServiceServer::generated_services()` — server-side only; use as reference for what CLI InspectSchema receives; excluded ADR 0045 assumptions: `ProviderRegistry`/`ProviderAgentAdapter` are server-side and not used in CLI; `RpcProviderProxy` internal `AuthenticatedProviderRpc` pattern is server-side; tests to adapt: `conformance.rs:every_axis_passes_identical_in_process_and_rpc_conformance`, `generated_server_dispatches_closed_methods_over_authenticated_session` |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/provider.rs` (`d2b provider list/get/status/inspect`; dynamic projection loading) |
-| Detailed design | `d2b provider list/get/status/inspect`; InspectSchema call returns dynamic projection descriptor using `ConnectedClient::invoke` with generated provider service types; projection bounds enforcement (64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); built-in name collision guard; audio/clipboard/display as first providers to migrate their projections |
+| Detailed design | `d2b provider list/get/status/inspect`; InspectSchema call returns dynamic projection descriptor using `ConnectedClient::invoke` with generated provider service types; projection bounds enforcement (64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); define the single canonical built-in command registry consumed by parser/help/completion and Provider projection binding; make bind-time rejection the sole authority for built-in and Provider/Provider top-level-name collisions, with no dispatch fallback; render projected commands from their declared top-level subcommand names; audio/clipboard/display are the first providers to migrate their projections |
 | Integration | ZoneContext → Provider resource + InspectSchema via `ConnectedClient::invoke` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Projection size/name/collision/timeout bounds tests; audio/clipboard/display projection conformance tests; completion script safety tests; adapted `conformance.rs` tests |
+| Validation | Projection size/name/timeout bounds tests; registry-completeness test asserting exact equality with all built-in parser commands; bind-time built-in and Provider/Provider collision rejection tests; negative test proving no collision fallback dispatch exists; audio/clipboard/display projection conformance tests asserting `d2b audio ...`, `d2b clipboard ...`, and `d2b display ...` rendering; completion script safety tests; adapted `conformance.rs` tests |
 | Removal proof | Built-in `cmd_audio`/`cmd_clipboard_arm`/`cmd_vm_display` removed only after Provider projection paths pass equivalence tests |
 
 ### ADR046-cli-006
