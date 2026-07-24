@@ -10,7 +10,7 @@
 | Main reuse | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` |
 | Normative | Yes |
 | Owners | `packages/d2b-provider-runtime-azure-container-apps/` |
-| Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-componentsession-and-bus`, `ADR-046-zone-routing`, `ADR-046-provider-state`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
+| Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-componentsession-and-bus`, `ADR-046-provider-state`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
 | Supersedes | `packages/d2b-provider-aca/` (`AcaWorkloadProvider`, `GuestControlEndpointProvider`), `AcaRelayTransportConfig`, direct vsock guest-control path |
 
 ---
@@ -23,13 +23,21 @@
 | ResourceRef | `Provider/runtime-azure-container-apps` |
 | Implementation ID | `azure-container-apps` |
 | Crate | `packages/d2b-provider-runtime-azure-container-apps/` |
-| Implements | `Guest` ResourceType |
+| Implements | `Guest` ResourceType; standard semantic `Endpoint` resources for Provider services |
 | Domain | `system` only |
 | Placement | System-domain Processes inside the dedicated gateway Guest |
 
-The Provider owns exactly one ResourceType: `Guest`. Two component Processes — controller and deployment service — run as system-domain Process resources **inside a dedicated gateway Guest** (`spec.config.gatewayExecutionRef`), never on the local physical Host. This is required by ADR-032: realm/cloud credentials, remote node state, and cloud-plane I/O belong inside a per-realm gateway guest VM, never in host processes, the broker, the host bundle, or host-readable storage.
+The Provider's primary ResourceType is `Guest`. It also implements the standard
+`Endpoint` base schema for its deployment service and per-Guest sandbox-agent
+service; it defines no ACA-specific Endpoint ResourceType. Two component
+Processes — controller and deployment service — run as system-domain Process
+resources **inside a dedicated gateway Guest**
+(`spec.config.gatewayExecutionRef`), never on the local physical Host. This is
+required by ADR-032: realm/cloud credentials, remote node state, and cloud-plane
+I/O belong inside a per-realm gateway guest VM, never in host processes, the
+broker, the host bundle, or host-readable storage.
 
-The Host holds only the opaque ZoneLink transport binding to the gateway Guest (standard `runtime-cloud-hypervisor` or equivalent relationship). The Host has no Process resources from this Provider, no Credential resources scoped to the ACA environment, no Azure management HTTP sockets, and no co-located `AcaControl` implementation. There is no Host-fallback mode.
+The Host participates only in the ordinary local-VM realization of the gateway Guest (`runtime-cloud-hypervisor` or equivalent). The Host has no Process resources from this Provider, no Credential resources scoped to the ACA environment, no Azure management HTTP sockets, no remote-sandbox Endpoint, and no co-located `AcaControl` implementation. There is no Host-fallback mode.
 
 All interaction with Azure Container Apps APIs crosses the injected async effect port (`AcaControl`) and the injected credential lease client (`AcaCredentialLeaseClient`), both running inside the gateway Guest. Neither interface is reachable via ambient environment variable, SDK default chain, or fallback discovery.
 
@@ -40,7 +48,16 @@ All interaction with Azure Container Apps APIs crosses the injected async effect
 A `Guest` resource backed by `Provider/runtime-azure-container-apps` represents a **remote cloud sandbox**. This Provider operates a **two-tier Guest model**:
 
 - **Tier 1 — gateway Guest** (`spec.config.gatewayExecutionRef`): A Zone-local Guest VM (backed by `Provider/runtime-cloud-hypervisor` or equivalent) that runs the ACA controller and deployment service Processes. This is the credential and cloud-control boundary. Azure credentials, Azure HTTP sockets, the `AcaControl` implementation, and the `AcaCredentialLeaseClient` all live exclusively inside this gateway Guest.
-- **Tier 2 — managed ACA sandbox** (the `Guest` resources this Provider reconciles): Remote Azure Container Apps sandboxes. The controller, running inside the gateway Guest, manages the lifecycle of these remote sandboxes via the injected `AcaControl` port and reaches them over the `Provider/transport-azure-relay` ZoneLink.
+- **Tier 2 — managed ACA sandbox** (the `Guest` resources this Provider reconciles): Remote Azure Container Apps sandboxes. The controller, running inside the gateway Guest, manages the lifecycle of these remote sandboxes via the injected `AcaControl` port. It reaches each sandbox agent by resolving that Guest's Provider-owned semantic `Endpoint` to an opaque byte-stream capability from `Provider/transport-azure-relay`, then establishes the authenticated ACA Provider service/session over that capability.
+
+A managed ACA sandbox does **not** run a d2b Zone runtime and therefore is not
+a Zone. Its `Guest` resource remains in the same owning Zone as the gateway
+Guest. The remote connection creates no child Zone, cross-Zone ResourceRef,
+ZoneLink resource, ZoneLink route/status/cursor, or ZoneLink authority. A future
+ACA image that runs a real d2b Zone runtime would be a distinct, explicitly
+configured child-Zone mode with its own Zone lifecycle; that mode is out of
+scope for this Provider version and is never inferred from the presence of an
+ACA sandbox agent.
 
 A managed ACA sandbox `Guest` differs from a local VM Guest in the following fixed ways:
 
@@ -48,9 +65,9 @@ A managed ACA sandbox `Guest` differs from a local VM Guest in the following fix
 | --- | --- | --- |
 | Execution substrate | Cloud Hypervisor or QEMU process on Host | Azure Container Apps sandbox in a remote ACA environment |
 | `spec.systemArtifactId` | NixOS system closure artifact ID | `null` — no Nix-built system; image is declared via `spec.provider.settings.configuredImageId` or `spec.provider.settings.configuredDiskId` |
-| Bootstrap process | VMM Process + virtiofsd on Host | None on Host; bootstrap is the ACA sandbox reaching the gateway Guest via `Provider/transport-azure-relay` ZoneLink |
+| Bootstrap process | VMM Process + virtiofsd on Host | None on Host; bootstrap is the sandbox agent opening an authenticated Provider session to the gateway Guest through its semantic Endpoint |
 | `spec.allowedDomains` | `[system, user]` typical | `[system]` — no local PAM user manager; user domain processes inside the sandbox are not d2b Process resources |
-| Attachment types | virtiofs Volume, local Network bridge | ZoneLink only; no local virtiofsd, no Host-local bridge attachment |
+| Attachment types | virtiofs Volume, local Network bridge | Provider-owned semantic Endpoint resolved to opaque transport carriage; no ZoneLink, local virtiofsd, or Host-local bridge attachment |
 | Controller location | VMM controller runs on Host | Controller runs inside gateway Guest; Host has no Process from this Provider |
 | `status.resource.bootstrapReady` | Set after VMM + guest-control vsock reach Ready | Set after the enrolled Noise KK ComponentSession from the gateway Guest to the ACA sandbox becomes established and the sandbox passes the Provider's authenticated health check |
 | `status.provider.details.guestIdentityDigest` | Provider-specific bounded digest | SHA-256 hex of `(sandboxId_bytes \|\| providerGeneration_be64 \|\| configFingerprint_bytes)` — not the ACA resource ID string |
@@ -102,8 +119,8 @@ config:
   # Network reference — required for deployment service egress (all ACA API calls)
   networkRef: "Network/aca-gateway-egress"  # optional; null disables egress in deployment service
 
-  # ZoneLink transport alias (must match a declared ZoneLink dependency alias in the Zone config)
-  zoneLinkAlias: "aca-relay"
+  # Provider transport-capability alias; resolves carriage, never a ZoneLink resource
+  sandboxTransportAlias: "aca-relay"
 ```
 
 ### Field constraints
@@ -126,6 +143,7 @@ config:
 | `readiness.intervalMs` | u32 | No | 1..10000; default 5000 |
 | `completedOperationCapacity` | usize | No | 1..1024; default 512 |
 | `networkRef` | ResourceRef | No | Resolves `Network/<name>` in same Zone; passed to deployment service `networkUsage.networkRef`; null = no egress (deployment service `allowEgress: false`) |
+| `sandboxTransportAlias` | string | Yes | Bounded Provider-manifest dependency alias resolving a transport Provider with opaque byte-stream carriage; not a ResourceRef and must not resolve or refer to a ZoneLink |
 
 No field may carry a subscription key, SAS token, client secret, certificate bytes, connection string, or any value that functions as an authentication secret. Fields `tenantId`, `clientId`, `subscriptionId`, `environmentId`, and `resourceGroupId` are opaque plain identifiers, not credentials.
 
@@ -222,7 +240,10 @@ When the authorized consumer Process (the ACA deployment service credential-cons
 - Initiator and responder are fully enrolled Provider/component identities with registered KK static public keys. For Entra, the prologue also binds `identityGuestRef`, `loginEndpointRef`, and the observed Endpoint generation.
 - Profile is `Noise_KK_25519_ChaChaPoly_SHA256`; NN and IKpsk2 are forbidden for this channel.
 - The Noise prologue binds: Credential ResourceRef/UID/generation, consumer Provider/component generations, audience token (non-secret opaque string), route, schema fingerprint, limits, expiry/deadline, and authorization revisions.
-- d2b-bus ZoneLink intermediaries (between the gateway Guest and the managed ACA sandbox) authorize route establishment but forward opaque Noise-encrypted records for the outer guest-to-sandbox session; credential token KK records are never terminated by the Host or bus.
+- Transport-carriage intermediaries between the gateway Guest and the managed
+  ACA sandbox forward opaque Noise-encrypted records for the Provider session;
+  they receive no ACA semantic authority, and credential token KK records are
+  never terminated by the Host, transport Provider, or bus.
 - Token payload has a strict small bound (`MAX_TOKEN_PAYLOAD_BYTES = 8192`), zeroizing buffers, redacted Debug, replay-safe sequence counter, no logging, no audit, no metrics, and immediate close with zeroize after delivery.
 - Ambiguous delivery is never treated as success and is not automatically replayed outside the credential method's explicit idempotency contract.
 
@@ -250,6 +271,30 @@ The completed-operation ledger records the opaque `OperationBinding` — not the
 
 Both components run as system-domain Process resources **inside the dedicated gateway Guest** (`spec.config.gatewayExecutionRef`). The framework `ProviderDeployment` creates these two static component Processes; neither declares a Provider state Volume (bounded non-secret operational state lives in `Guest.status`/the core Operation ledger, D087). The ACA controller never creates its own peer Processes and never writes Provider resource status directly. No component runs on the local Host. No component runs inside the managed ACA sandbox.
 
+The remote sandbox agent is part of the ACA image, not a d2b `Process` and not
+a Zone controller. The complete process/resource graph is:
+
+```text
+owning Zone
+├── Guest/aca-gateway
+│   ├── Process/aca-controller
+│   └── Process/aca-deployment-service
+├── Guest/<aca-sandbox>                 (remote realization; still in owning Zone)
+│   └── Endpoint/<guest>-sandbox-agent  (semantic control Endpoint)
+└── Provider/transport-azure-relay      (carriage capability only)
+
+Process/aca-controller
+  → Endpoint/<guest>-sandbox-agent
+  → authorized opaque OwnedTransport/byte stream
+  → Noise KK ComponentSession
+  → d2b.aca.v3.sandbox-agent service in the remote ACA sandbox
+```
+
+No node in this graph is a child Zone or ZoneLink. The ACA Provider owns the
+Endpoint implementation and session semantics; the Endpoint is a lifecycle
+child of the ACA-backed `Guest`, while the transport Provider owns only the
+opaque carriage capability.
+
 ### 6.2 Controller component descriptor
 
 ```yaml
@@ -263,7 +308,7 @@ allowedDomains: [system]
 cardinality: one-per-zone
 requiredDependencies:
   - alias: credential        # resolves Provider/credential-managed-identity or credential-entra
-  - alias: zone-link         # resolves Provider/transport-azure-relay
+  - alias: aca-relay         # resolves Provider/transport-azure-relay carriage capability, not ZoneLink
 optionalDependencies: []
 stateNamespaces: []          # no Provider state Volume; sandbox binding/adoption metadata lives in Guest.status; operation/requeue in the core Operation ledger (D087)
 process:
@@ -475,17 +520,61 @@ spec:
   lifecyclePolicy: recycle-with-producer
 ```
 
+For every ACA-backed Guest, the controller also creates one stable semantic
+Endpoint after the sandbox exists and before bootstrap can become ready:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: <guest-name>-sandbox-agent
+  zone: <owning-zone>
+  ownerRef: Guest/<guest-name>
+spec:
+  providerRef: Provider/runtime-azure-container-apps
+  producerRef: Guest/<guest-name>
+  endpointClass: control
+  transport: opaque-carriage
+  purpose: aca-sandbox-agent
+  serviceFingerprint: runtime-azure-container-apps.d2bus.org/sandbox-agent/v1
+  locality: cross-domain
+  visibility: provider-internal
+  attachmentPolicy: launch-ticket-only
+  consumerPolicy: [Provider/runtime-azure-container-apps]
+  lifecyclePolicy: recycle-with-producer
+```
+
+`metadata.ownerRef` makes the Endpoint a child of the ACA-backed Guest for
+child-first deletion. `spec.providerRef` makes the ACA Provider the semantic
+Endpoint implementation/controller. `producerRef` does not assert that the
+sandbox is a Zone; it identifies the Guest realization that produces the
+service. The controller creates, observes, updates, and finalizes this Endpoint.
+Thus “Provider-owned” means semantic implementation, authority, and reconcile
+ownership; `ownerRef: Guest/<guest-name>` is the separate lifecycle edge. Nix
+does not author a second remote-resource object.
+
 ### Endpoint resources (D092)
 
 `Provider/runtime-azure-container-apps` declares conformance to the standard
-`Endpoint` base schema. Stable controller/deployment service endpoints are
-owned `Endpoint` resources with `ownerRef` and `producerRef`; consumers use
-`Endpoint/<name>` ResourceRefs. No raw Unix path, relay URL, fd, credential, or
-cloud endpoint appears in resource spec/status or CLI output. Resolution occurs
-only through authorized EffectPort/LaunchTicket flows, and unauthorized resolve
-fails `endpoint-resolve-denied`. A producer restart bumps `endpointGeneration`
-and delivers the normal `dependency-changed` trigger. Per-session ACA relay and
-transport handles are internal and are not Endpoint resources.
+`Endpoint` base schema. The stable controller/deployment service Endpoint and
+each per-Guest sandbox-agent Endpoint are owned `Endpoint` resources with
+`ownerRef` and `producerRef`; consumers use same-Zone `Endpoint/<name>`
+ResourceRefs. No raw Unix path, relay URL, fd, credential, cloud endpoint, or
+cross-Zone reference appears in resource spec/status or CLI output. Resolution
+occurs only through authorized EffectPort/LaunchTicket flows, and unauthorized
+resolve fails `endpoint-resolve-denied`. A producer or sandbox-agent restart
+bumps `endpointGeneration` and delivers the normal `dependency-changed`
+trigger. Per-session relay and `OwnedTransport` handles are internal and are
+not Endpoint resources.
+
+The sandbox-agent Endpoint has only standard Endpoint status:
+`readiness`, `observedProducerGeneration`, `observedResourceGeneration`,
+`endpointGeneration`, `connectionAvailability`, `leaseAvailability`,
+`capability`, `locality`, `transport`, and bounded conditions. It has no route
+phase, route intent, peer Zone, reconnect cursor, receive/send cursor, or
+authority field. The ACA Provider's Operation ledger and current authenticated
+session generation drive reconciliation; Endpoint status remains observation,
+never authority.
 
 ### Retained opaque handles
 
@@ -699,12 +788,20 @@ The `RuntimeAdopt` method reconciles a Guest resource that was created with a pr
 3. If exactly one candidate matches by binding: record the observed
    `AcaSandboxRecord` binding digest in `Guest.status.provider.details`
    (bounded, non-secret, reverified), transition sandbox lifecycle to observed
-   state, set `status.resource.bootstrapReady = false` until the enrolled
-   ComponentSession is re-established.
+   state, ensure the same-Zone `<guest-name>-sandbox-agent` Endpoint has the
+   expected Guest owner/producer and Provider generation, set
+   `status.resource.bootstrapReady = false`, resolve a fresh opaque transport
+   capability, and re-establish the enrolled ComponentSession.
 4. If zero candidates match: the controller proceeds with fresh `RuntimeEnsure`.
 5. If multiple candidates match: set `Guest.status.phase = Degraded` with `reason: ambiguous-adoption`, emit a `critical`-severity bounded audit record (`AuditEventKind::GuestAdoptionAmbiguous`), and requeue. Do not proceed with any candidate.
 
-Adoption is driven on every controller restart before any `RuntimeEnsure` is attempted.
+Adoption is driven on every controller restart before any `RuntimeEnsure` is
+attempted. No transport handle survives restart: the controller re-resolves the
+Endpoint, obtains a new launch ticket and `OwnedTransport`, authenticates a new
+Noise KK session, and bumps Endpoint generation when the observed agent
+generation changed. It never reads, reconstructs, or accepts a ZoneLink
+status/route/reconnect cursor, and no ZoneLink authority can authorize
+adoption.
 
 ---
 
@@ -727,6 +824,20 @@ All methods:
 - are RBAC-authorized before dispatch; unauthorized calls return `ErrorCode::PermissionDenied` without leaking state;
 - are delivered via d2b-bus `ComponentSession`; no direct Unix path, socket, or fd is exposed;
 - produce no log lines, trace spans, or metric events containing sandbox IDs, Azure resource identifiers, or lease handles.
+
+The separate provider-private `d2b.aca.v3.sandbox-agent` service is produced by
+each ACA-backed Guest's semantic Endpoint. It exposes only `AgentHealth`,
+`AgentDrain`, and `AgentSessionClose`; it cannot mutate Zone resources or call
+Azure management APIs. The gateway controller resolves the Endpoint and opens
+one authenticated ComponentSession over the returned opaque transport
+capability. Every request carries a monotonic deadline and cancellation token;
+cancel is propagated to the in-flight service call. Named streams and records
+use negotiated byte/record windows and bounded queues, so exhausted credits
+apply backpressure rather than unbounded buffering. Deadline expiry,
+cancellation, generation change, authentication failure, or queue saturation
+closes the session with a stable bounded outcome. No request or response
+contains a ZoneRef, ZoneLinkRef, route cursor, transport locator, or transport
+authority.
 
 ---
 
@@ -753,9 +864,9 @@ spec:
     - resourceTypes: [Credential]
       verbs: [get, update-status]
       providerRef: Provider/credential-managed-identity
-    - resourceTypes: [ZoneLink]
-      verbs: [get]
-      resourceNames: ["<zone-link-name>"]
+    - resourceTypes: [Endpoint]
+      verbs: [get, create, update-spec, update-status, delete]
+      providerRef: Provider/runtime-azure-container-apps
 ```
 
 ```yaml
@@ -782,42 +893,60 @@ The `aca-deployment-service` component may only invoke methods on the `d2b.aca.v
 
 ## 12 Transport dependencies
 
-### 12.1 ZoneLink placement and requirements
+### 12.1 Semantic Endpoint and transport capabilities
 
-The ZoneLink connecting to managed ACA sandboxes originates from the **gateway Guest** (`spec.config.gatewayExecutionRef`), not from the Host. The Host has no ZoneLink for this Provider and no direct path to Azure Container Apps APIs. This is the correct layering for ADR-032 compliance: the azure relay transport credential and relay connection state live inside the gateway Guest, not on the Host.
+The managed ACA sandbox is not a Zone. The gateway-to-sandbox connection is
+therefore represented by the same-Zone semantic
+`Endpoint/<guest-name>-sandbox-agent` from §7, not by a ZoneLink. The Guest
+resource, Endpoint, controller Processes, Role, and Provider all remain in the
+owning Zone. There is no child-Zone ResourceRef, route edge, reciprocal resource
+row, or remote Zone store.
 
-A `Provider/runtime-azure-container-apps`-backed Guest uses a `ZoneLink` resource to connect the gateway Guest runtime to the remote ACA sandbox. The ZoneLink:
+At session establishment the ACA controller:
 
-- is declared by the operator via Nix, scoped to the Zone;
-- references `Provider/transport-azure-relay` as its `transportProviderRef`;
-- carries the enrolled KK static public key fingerprint of the ACA sandbox agent component;
-- requires the `aca-relay` dependency alias declared in the Provider manifest to resolve this ZoneLink at runtime inside the gateway Guest.
-- its `relayCredentialRef` must resolve to a Credential resource whose `scope.executionRef` matches `config.gatewayExecutionRef`.
+1. authorizes and resolves the Endpoint through its private LaunchTicket flow;
+2. resolves `config.sandboxTransportAlias` to a transport Provider capability;
+3. calls the transport Provider's typed `OpenTransport`, receiving only an
+   opaque `OwnedTransport` byte-stream handle;
+4. runs the ACA Provider's enrollment/authentication and ComponentSession
+   protocol over that handle; and
+5. closes the session and calls `CloseTransport` on drain, cancellation,
+   generation change, or finalization.
 
-```yaml
-apiVersion: resources.d2bus.org/v3
-type: ZoneLink
-metadata:
-  name: aca-relay-link
-  zone: <zone>
-spec:
-  transportProviderRef: Provider/transport-azure-relay
-  childStaticKeyFingerprint: "sha256:<64-hex-chars>"
-  childZoneName: null      # ACA-backed zones are leaf zones; no further child Zone hierarchy
-  relayNamespace: "d2b-relay"
-  relayHybridConnection: "aca-<zone-name>"
-  transportSettings:
-    relayCredentialRef: "Credential/aca-managed-identity"
-```
+`Provider/transport-azure-relay` owns carriage only. Its relay credential and
+private connection configuration are scoped to the gateway Guest and remain in
+that transport Provider's configuration/credential boundary. It cannot read or
+write ACA Guest or Endpoint status, authenticate the ACA service principal,
+interpret service records, retain ACA session cursors, or grant semantic
+authority. The ACA Provider owns Endpoint reconciliation, authenticated session
+generation, deadlines, cancellation, bounded record/stream windows, and
+backpressure.
+
+Configuration that supplies `zoneLinkAlias`, a ZoneLink ResourceRef,
+`childZoneName`, Zone route intent, or ZoneLink cursor/authority state for an
+ordinary ACA sandbox is rejected with
+`InvalidConfiguration(aca-sandbox-is-not-zone)`. A future explicit child-Zone
+mode requires a sandbox image with a real d2b Zone runtime and a separate
+Provider/schema version; it is out of scope here.
 
 ### 12.2 Noise profiles for remote sessions
 
 All ComponentSession connections between the gateway Guest's ACA controller and the ACA sandbox agent use `Noise_KK_25519_ChaChaPoly_SHA256`:
 
-- Both static public keys are known before handshake: the local Provider/controller key from the gateway Guest's KK registry; the ACA sandbox agent key from `spec.childStaticKeyFingerprint`.
-- No NN session is permitted for cross-ZoneLink channels.
+- Both static public keys are known before handshake: the local
+  Provider/controller key from the gateway Guest's KK registry and the ACA
+  sandbox agent key enrolled for the exact Guest UID and Endpoint generation.
+- No NN session is permitted for the sandbox-agent service.
 - Bootstrap IKpsk2 is used only for first enrollment of a newly created sandbox; the PSK is bound to the `GuestProvision` operation ID, the sandbox UID, and a bounded expiry; it is consumed exactly once.
 - Replay, expiry, wrong operation/subject/purpose: fail closed.
+- The KK prologue binds the owning Zone UID, Guest UID/generation, Endpoint UID/
+  generation, Provider generation, service fingerprint, transport-capability
+  class, negotiated limits, deadline, and authorization revision. It binds no
+  child Zone or route.
+- ComponentSession enforces monotonic deadlines, explicit cancellation, bounded
+  record and named-stream windows, credit-based backpressure, and bounded
+  queues. A peer that exceeds negotiated credits or ignores cancellation is
+  closed fail-closed.
 
 ### 12.3 No Host-level Azure transport from this Provider
 
@@ -826,13 +955,17 @@ The Host holds **no** process, credential, socket, or transport binding for Azur
 - No Host Process with `providerRef: Provider/runtime-azure-container-apps`
 - No Host-scoped Credential (`scope.executionRef: Host/*`) for this Provider
 - No Azure management HTTPS socket opened on the Host by this Provider
-- No ZoneLink connecting the Host directly to the managed ACA sandbox through this Provider
+- No Host-owned remote-sandbox Endpoint or transport capability
+- No ZoneLink for an ordinary managed ACA sandbox; such a resource is rejected
 
 The controller (`aca-controller`) Process, running inside the gateway Guest, holds no Azure management SDK HTTP client, no HTTPS socket to `management.azure.com`, and no direct path to ACA APIs in the Host network namespace. All Azure API calls are mediated by the co-located `AcaControl` implementation (which is instantiated by the Provider supervisor ticket inside the gateway Guest, not by the controller itself). The controller's only outbound IPC surfaces are:
 
-- d2b-bus ComponentSession to credential and ZoneLink transport Providers (both inside the gateway Guest);
+- d2b-bus ComponentSession to credential Providers and typed
+  `OpenTransport`/`CloseTransport`/`ObserveTransport` capability calls to the
+  transport Provider (all inside the gateway Guest);
 - d2b-bus ComponentSession to the `aca-deployment-service` (also inside the gateway Guest);
-- Volume read/write via kernel filesystem operations inside the gateway Guest.
+- the authenticated `d2b.aca.v3.sandbox-agent` ComponentSession resolved
+  through the semantic Endpoint.
 
 ---
 
@@ -887,6 +1020,16 @@ priority lane inside the same per-resource single-flight.
 | `status.resource.activeProcessCount` | Integer count of non-terminal Process resources targeting this Guest | — |
 | Condition messages | Bounded stable reason codes (max 256 chars); no dynamic data | Token values, ARM IDs, sandbox hostnames, internal error messages |
 
+The sandbox-agent connection is observed only on its Endpoint through the
+standard fields listed in §7. `Guest.status.resource.bootstrapReady` becomes
+true only when the Endpoint is Ready, its current generation has an
+authenticated KK ComponentSession, and `AgentHealth` succeeds. Guest status
+does not duplicate Endpoint generation or connection availability.
+`Guest.status.provider.details` and Endpoint status expressly contain no
+ZoneLink phase, route/peer Zone, send/receive/reconnect cursor, route intent,
+transport handle, or authority. Unknown fields are rejected by the signed
+schemas.
+
 ### 13.2 Error codes (stable, bounded)
 
 `AcaControlErrorKind` maps to stable Provider error codes:
@@ -931,7 +1074,12 @@ The finalization path follows the cleanup normalization from the resource store 
 
 3. **Post-commit audit append**: After the store transaction commits successfully, the controller appends `ResourceMutation { event: "deleted", trigger: "config-cleanup", zone: <zone_uid>, resource_uid: <guest_uid> }` to the Zone audit log using a dedup/exactly-once recovery key `(resource_uid, "deleted", generation)`. If the append fails, the controller retries using the recovery key; the record is appended exactly once even if the controller restarts after the store commit.
 
-4. **Revocation before finalization**: All active Credential leases are revoked, the ACA sandbox is stopped and the ACA resource deleted via `AcaControl.delete_sandbox`, the enrolled KK ComponentSession is closed, and the ZoneLink transport is released — all before the final store transaction.
+4. **Revocation before finalization**: All active Credential leases are
+   revoked, the ACA sandbox is stopped and the ACA resource deleted via
+   `AcaControl.delete_sandbox`, the enrolled KK ComponentSession is closed, its
+   opaque `OwnedTransport` is released, and the Provider-owned semantic Endpoint
+   is finalized child-first — all before the final store transaction. There is
+   no ZoneLink finalizer or ZoneLink state to release.
 
 5. **Generation retention**: Audit revision records use count-based retention (default 3, range 1..16). No TTL-based retention. The count applies to the resource's audit revision trail, not to the ACA resource history.
 
@@ -960,7 +1108,12 @@ Spans emitted by the controller carry only:
 - `d2b.operation` = stable operation name
 - `d2b.outcome` = `success|failure|cancelled`
 
-No span carries the Azure sandbox ID, ARM resource path, management hostname, subscription scope, or credential-adjacent value. Trace context (`traceparent`/`tracestate`) is propagated over the ZoneLink ComponentSession channel as opaque bytes; it does not carry identity material.
+No span carries the Azure sandbox ID, ARM resource path, management hostname,
+subscription scope, or credential-adjacent value. Trace context
+(`traceparent`/`tracestate`) is propagated over the authenticated ACA Provider
+ComponentSession as opaque bytes; it does not carry identity material. No
+transport locator, Endpoint name, session generation, cursor, or authority is
+an attribute.
 
 ---
 
@@ -1048,7 +1201,7 @@ d2b.zones.my-zone.resources = {
           intervalMs = 5000;
         };
         completedOperationCapacity = 512;
-        zoneLinkAlias = "aca-relay";
+        sandboxTransportAlias = "aca-relay";
       };
     };
   };
@@ -1084,27 +1237,28 @@ d2b.zones.my-zone.resources = {
 };
 ```
 
-### 15.4 ZoneLink resource
+### 15.4 Transport capability and Endpoint ownership
 
-The ZoneLink is declared in the Zone that contains the gateway Guest. The relay credential must be scoped to the gateway Guest (matching `gatewayExecutionRef`). The ZoneLink connects the gateway Guest to the managed ACA sandboxes — it is NOT a Host-to-sandbox link.
+Nix declares the installed `Provider/transport-azure-relay` dependency and its
+gateway-Guest-scoped private configuration through that transport Provider's
+own schema. `sandboxTransportAlias = "aca-relay"` selects its opaque
+`OpenTransport`/`CloseTransport`/`ObserveTransport` capability from the signed
+ACA Provider manifest. It does not name a resource and cannot resolve to a
+ZoneLink.
 
-```nix
-d2b.zones.my-zone.resources = {
-  aca-relay-link = {
-    type = "ZoneLink";
-    spec = {
-      transportProviderRef = "Provider/transport-azure-relay";
-      childStaticKeyFingerprint = "sha256:<64-hex-chars>";
-      transportSettings = {
-        relayNamespace = "d2b-relay";
-        relayHybridConnection = "aca-my-zone";
-        # Relay credential must also have scope.executionRef = "Guest/aca-gateway"
-        relayCredentialRef = "Credential/aca-managed-identity";
-      };
-    };
-  };
-};
-```
+Nix does **not** declare one connection resource per sandbox. After an
+ACA-backed Guest is committed, the ACA controller creates
+`Endpoint/<guest-name>-sandbox-agent` in the Guest's owning Zone with
+`ownerRef` and `producerRef` both naming that Guest and `providerRef` naming
+this Provider. The resource-store dependency graph therefore remains
+Zone-local and gives deletion the required Endpoint-before-Guest order.
+
+Any ACA Nix option or resource fragment containing `zoneLinkAlias`,
+`zoneLinkRef`, `childZoneName`, route intent, or ZoneLink cursor/authority
+fields fails evaluation with an `aca-sandbox-is-not-zone` assertion. There is
+no compatibility translation to `sandboxTransportAlias`. Explicit child-Zone
+mode for a future image that runs a real Zone runtime requires a separate
+schema and is not emitted by this module.
 
 ### 15.5 Guest resource
 
@@ -1171,7 +1325,15 @@ The Nix compiler enforces at eval time:
 - exactly one of `configuredDiskId` or `configuredImageId` is set in `spec.provider.settings`;
 - `diskName` is present when `configuredImageId` is set;
 - all `spec.provider.settings` string IDs match the `^[a-z][a-z0-9-]*$` pattern and respect length bounds;
-- `config.zoneLinkAlias` is declared in the Provider manifest's dependency aliases.
+- `config.sandboxTransportAlias` is declared in the Provider manifest's
+  dependency aliases and resolves a transport carriage capability, not a
+  resource;
+- no ordinary ACA-backed Guest declares or references a ZoneLink, child Zone,
+  cross-Zone ResourceRef, route intent, route cursor, or ZoneLink authority;
+- generated Endpoint templates use `providerRef =
+  "Provider/runtime-azure-container-apps"`, same-Zone Guest owner/producer
+  refs, `transport = "opaque-carriage"`, and contain no relay locator or
+  credential.
 
 No Host-scoped Credential (`scope.executionRef` matching `Host/*`) is accepted for `controlCredentialRef` or `pullCredentialRef`. The assertion fires at eval time with a descriptive message that names the offending credential resource and the required `gatewayExecutionRef`.
 
@@ -1189,6 +1351,9 @@ Provider Pending
   → no Provider state Volume is created (bounded non-secret operational state lives in Guest.status/the core Operation ledger, D087)
   → Provider Ready
   → Guest resources reconciled by aca-controller (running inside gateway Guest)
+  → controller creates each Provider-owned sandbox-agent Endpoint in the same Zone
+  → Endpoint resolution returns opaque transport capability
+  → Noise KK Provider session + AgentHealth make Guest bootstrapReady
 ```
 
 The Host is not involved in any of these steps beyond its standard hypervisor relationship to the gateway Guest. If the gateway Guest transitions to `Degraded` or `Stopped`, the Provider transitions to `Degraded` with `reason: gateway-guest-unavailable`. There is no fallback to running any controller Process on the Host.
@@ -1201,7 +1366,11 @@ A Provider generation change (new package digest, config update, or credential r
 2. All active Credential leases are revoked (per `revocation.onProviderGeneration = immediate`).
 3. ProviderDeployment replaces controller and deployment-service Processes under the new generation.
 4. The operation ledger is retained across generation changes; entries bound to old generation IDs remain valid for their remaining TTL but are not returned to callers on new-generation operations.
-5. All Guest resources receive a reconcile hint; each adopts or re-provisions under the new generation.
+5. All Guest and owned sandbox-agent Endpoint resources receive a reconcile
+   hint; each Guest adopts or re-provisions under the new generation.
+6. Existing Provider sessions drain, old opaque transport handles close, each
+   Endpoint generation advances, and the controller resolves and authenticates
+   a fresh session. No route or ZoneLink cursor is migrated.
 
 ### 16.3 State schema migration
 
@@ -1218,7 +1387,10 @@ migration infrastructure.
 The current `AcaWorkloadProvider` / `GuestControlEndpointProvider` implementation uses the v2 `WorkloadProvider` / `GuestControlEndpointProvider` traits and direct vsock guest-control. These traits have no compatibility window in d2b 3.0:
 
 - The old vsock guest-control path is inert at d2b 3.0 cutover.
-- `AcaRelayTransportConfig` is adapted into `ZoneLink` transport settings.
+- `AcaRelayTransportConfig` is split: relay-private configuration moves under
+  `Provider/transport-azure-relay`, while this Provider retains only the
+  `sandboxTransportAlias` capability selection. No ZoneLink settings are
+  produced.
 - The provider agent binary (`d2b-gateway-runtime/src/provider_agent.rs`) serves as reuse source for the deployment service component; the ACA-specific `aca_workload.rs` is excluded (see §17).
 
 ### 16.5 Removal gate
@@ -1227,7 +1399,10 @@ The current `AcaWorkloadProvider` / `GuestControlEndpointProvider` implementatio
 
 - `Provider/runtime-azure-container-apps` passes the full controller conformance suite;
 - all test coverage from the old `d2b-provider-aca/src/tests.rs` is ported to `d2b-provider-runtime-azure-container-apps/tests/`;
-- the migration map removal proof for `ADR046-aca-001` through `ADR046-aca-006` is complete.
+- the migration map removal proof for `ADR046-aca-001` through `ADR046-aca-006` is complete;
+- no ACA Nix emitter, schema, controller, status adapter, adoption path,
+  finalizer, fixture, or test constructs or consumes ZoneLink state for an
+  ordinary managed sandbox; the replacement Endpoint/session tests are green.
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
@@ -1247,7 +1422,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Source | Current location | Evidence class | Disposition | v3 Destination |
 | --- | --- | --- | --- | --- |
 | `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | `packages/d2b-provider-aca/src/lib.rs` | production-reachable | REPLACE | `d2b-provider-runtime-azure-container-apps/src/controller.rs` — new async `Guest` reconcile loop; vsock path retired |
-| `AcaRelayTransportConfig` | `packages/d2b-provider-aca/src/lib.rs` (relay transport config) | production-reachable | ADAPT | ZoneLink transport settings under Provider config §15.4 |
+| `AcaRelayTransportConfig` | `packages/d2b-provider-aca/src/lib.rs` (relay transport config) | production-reachable | ADAPT | Relay-private fields move to `Provider/transport-azure-relay`; ACA retains only `sandboxTransportAlias` and its semantic Endpoint/session contract (§§12, 15.4) |
 | `AcaControl` trait (9 methods) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs` (shared provider-effects module; no new crate); no direct provider implementation dependency from core; adapt `OperationBinding` to v3 `ProviderOperationContext` contract |
 | `AcaCredentialLeaseClient` trait | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs`; adapt `CredentialLease` to v3 Credential resource model; provider crate remains one package |
 | `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `spec.provider.settings` schema fields; all bounds constants preserved |
@@ -1256,15 +1431,20 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Lease cleanup job/executor pattern | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN | Retain `LeaseCleanupJob`/`LeaseCleanupExecutor`/`TracingLeaseCleanupObserver` verbatim; target tracing key unchanged |
 | Retry/backoff (`AcaControlErrorKind` + `RetryClass`) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN | Retain all error kind/diagnostic variants and `MAX_ACA_RETRY_AFTER_MS` |
 | Provider agent process entry point | `packages/d2b-gateway-runtime/src/provider_agent.rs` (main) | production-reachable at main | COPY/ADAPT (partial) | Adapt `ProviderAgentProcess`/`run_registered`/`run` as deployment service binary skeleton; exclude `aca_workload.rs` |
-| `AzureRelayTransportProvider` | `packages/d2b-provider-relay/src/lib.rs` (v3 baseline) | production-reachable | REPLACE | Moved to `Provider/transport-azure-relay`; ACA-specific relay config becomes ZoneLink `transportSettings` |
+| `AzureRelayTransportProvider` | `packages/d2b-provider-relay/src/lib.rs` (v3 baseline) | production-reachable | REPLACE | Moved to `Provider/transport-azure-relay` as carriage-only capability; ACA Provider owns semantic Endpoint and authenticated service/session |
 | v3 `d2b-provider-aca/src/tests.rs` | `packages/d2b-provider-aca/src/tests.rs` | test-only | EXTRACT+PORT | Port all test coverage to `packages/d2b-provider-runtime-azure-container-apps/tests/` |
 
 **Excluded from reuse:**
 
 - `packages/d2b-gateway-runtime/src/aca_workload.rs` — ACA-specific workload lifecycle using the main ACA Provider V2 registration path; not compatible with v3 resource model.
-- `packages/d2b-daemon-access/src/relay.rs` (main) — relay credential format changed; v3 uses `d2b-provider-relay` ZoneLink format.
+- `packages/d2b-daemon-access/src/relay.rs` (main) — relay credential format and
+  ownership changed; v3 transport carriage is supplied by
+  `Provider/transport-azure-relay` and ACA semantics remain in this Provider.
 - `packages/d2b-gateway/` orchestrator — uses main's Zone model; excluded.
-- Any main code that references `GUEST_SESSION_CREDENTIAL_*` handshake constants or `EndpointRole::GuestBootstrap`/`GuestDirect` — these are ADR45 guest bootstrap paths; v3 guest enrollment uses the ZoneLink resource model.
+- Any main code that references `GUEST_SESSION_CREDENTIAL_*` handshake constants
+  or `EndpointRole::GuestBootstrap`/`GuestDirect` — these are ADR45 guest
+  bootstrap paths; v3 ACA enrollment uses the owned semantic Endpoint and
+  authenticated Provider service/session.
 
 ---
 
@@ -1278,10 +1458,10 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-aca/src/lib.rs`: `AcaWorkloadProvider`, 2841 lines production-reachable; `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs`: `AzureContainerAppsRuntimeProvider`, 2796 lines (test-only at v3 baseline) |
 | Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
-| Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`. Operation ledger persisted to Volume inside gateway Guest. Credential lease acquire/revoke per call. Noise KK enrollment via ZoneLink (from gateway Guest to managed ACA sandbox). `providerPhase` and `guestIdentityDigest` in `status.provider.details`; no raw endpoint/path in any status field. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (old) + ADAPT (main types/traits). |
+| Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`; operation/requeue truth remains in the core Operation ledger and no Provider state Volume is created. Credential lease acquire/revoke per call. The controller creates a same-Zone Provider-owned semantic sandbox-agent Endpoint (`ownerRef` remains the Guest lifecycle edge), resolves opaque transport carriage, and performs Noise KK enrollment for the ACA Provider service/session. `providerPhase` and `guestIdentityDigest` stay in `status.provider.details`; Endpoint readiness/generation/availability stay only in Endpoint status; no raw endpoint/path, cross-Zone ref, route cursor, transport handle, or authority appears in status. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. The managed sandbox remains a Guest in the owning Zone and is not a Zone. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (old) + ADAPT (main types/traits). |
 | Integration | Zone ResourceClient → ProviderDeployment → Process launch inside gateway Guest → d2b-bus → deployment service |
 | Data migration | Full d2b 3.0 reset; no v2 provider state compatibility |
-| Validation | Controller conformance suite; adoption/ambiguity tests; deadline/cancellation matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template`, canonical `sandbox`/`budget`/`networkUsage`/`endpoints`/`readiness`/`restartPolicy` fields, `mounts` with `required: true`, `providerRef: Provider/system-minijail`); ProviderDeployment creates both Processes (controller never self-spawns); no raw endpoint/path in Guest status |
+| Validation | Controller conformance suite; adoption/ambiguity tests; Endpoint create/adopt/finalize and generation tests; deadline/cancellation/backpressure matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template`, canonical `sandbox`/`budget`/`networkUsage`/`endpoints`/`readiness`/`restartPolicy` fields, `mounts` with `required: true`, `providerRef: Provider/system-minijail`); ProviderDeployment creates both Processes (controller never self-spawns); no raw endpoint/path or ZoneLink status/cursor/authority in Guest or Endpoint status |
 | Removal proof | `packages/d2b-provider-aca/` removed only after conformance suite green |
 
 ### ADR046-aca-007
@@ -1292,10 +1472,10 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | n/a — new requirement (gateway Guest placement) |
 | Reuse action | create |
 | Destination | `nixos-modules/` (gateway Guest declaration, Process template wiring, Credential scope assertion); eval-time validation module |
-| Detailed design | Nix eval-time assertions for: (a) `gatewayExecutionRef` resolves to a `Guest` resource, not `Host/*`; (b) Credential `scope.executionRef` matches `gatewayExecutionRef`; (c) all Process templates emitted for this Provider have `executionRef` equal to `gatewayExecutionRef`. No `User` resource or `users.users.*` declarations required — component principals are framework-assigned and not OS accounts. Gateway Guest NixOS closure includes only the two ACA component binaries (§15.6). Assertion error messages name the offending resource and the required `gatewayExecutionRef`. |
+| Detailed design | Nix eval-time assertions for: (a) `gatewayExecutionRef` resolves to a `Guest` resource, not `Host/*`; (b) Credential `scope.executionRef` matches `gatewayExecutionRef`; (c) all Process templates emitted for this Provider have `executionRef` equal to `gatewayExecutionRef`; (d) `sandboxTransportAlias` resolves the signed carriage capability; and (e) an ordinary ACA sandbox cannot declare/reference ZoneLink, child-Zone, route-cursor, or ZoneLink-authority fields. The controller, not Nix, creates each same-Zone Provider-owned sandbox-agent Endpoint with the Guest as lifecycle `ownerRef`. No `User` resource or `users.users.*` declarations required — component principals are framework-assigned and not OS accounts. Gateway Guest NixOS closure includes only the two ACA component binaries (§15.6). Assertion error messages name the offending resource and the required `gatewayExecutionRef`; Zone-shaped ACA config fails `aca-sandbox-is-not-zone`. |
 | Integration | Nix eval gate; `d2b.zones.*.resources` validation pass; consumer flake usage example |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Nix eval assertion tests (wrong `executionRef` → assertion fires; correct setup → passes); §15.7 assertion coverage tests |
+| Validation | Nix eval assertion tests (wrong `executionRef` → assertion fires; correct setup → passes; ACA ZoneLink/child-Zone fields → `aca-sandbox-is-not-zone`); Endpoint template ownership/shape and §15.7 assertion coverage tests |
 | Removal proof | n/a — ongoing eval-time constraint |
 
 ### ADR046-aca-002
@@ -1330,15 +1510,15 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-session-001; ZoneLink transport owner |
+| Dependency/owner | ADR046-session-001; ACA Endpoint/session and transport-capability integration owner |
 | Current source | `packages/d2b-provider-relay/src/lib.rs`: `AzureRelayTransportProvider`; `packages/d2b-provider-aca/src/lib.rs`: `AcaRelayTransportConfig` |
 | Reuse action | replace |
-| Destination | ZoneLink resource `spec.transportSettings` (§15.4); `Provider/transport-azure-relay` dossier (separate) |
-| Detailed design | `AcaRelayTransportConfig` fields mapped to `transportSettings.relayNamespace`, `.relayHybridConnection`, `.relayCredentialRef`. KK enrollment replaces ZoneLink transport. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (both); ADAPT config fields to ZoneLink transport settings. |
-| Integration | ZoneLink controller resolves transport Provider; ACA controller establishes enrolled KK ComponentSession over relay transport after `GuestProvision` |
+| Destination | ACA sandbox-agent Endpoint/session controller (§§7, 12); `Provider/transport-azure-relay` private configuration and carriage dossier (separate) |
+| Detailed design | Split `AcaRelayTransportConfig`: relay-private namespace/connection/credential fields move behind `Provider/transport-azure-relay`; this Provider retains only `sandboxTransportAlias`. The ACA controller creates the Provider-owned semantic Endpoint (with the Guest lifecycle edge), resolves an opaque `OwnedTransport`, and owns KK enrollment, authenticated `d2b.aca.v3.sandbox-agent` service/session generation, deadlines, cancel, bounded queues, credits/backpressure, reconcile, adoption, and finalization. The ordinary managed sandbox is explicitly not a Zone; no cross-Zone ResourceRef or ZoneLink status/cursor/authority is accepted or emitted. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (both); ADAPT relay fields only into the carriage Provider's private config. |
+| Integration | ACA controller resolves the semantic Endpoint and transport Provider capability, then establishes the enrolled KK ComponentSession after `GuestProvision`; transport Provider supplies carriage only |
 | Data migration | No relay session compatibility; re-enroll on first `RuntimeAdopt` |
-| Validation | ZoneLink enrollment tests; relay unavailability tests; KK re-enrollment after sandbox restart |
-| Removal proof | `packages/d2b-provider-relay/` removed after `transport-azure-relay` Provider conformance |
+| Validation | Endpoint ownership/resolution tests; relay unavailability tests; KK re-enrollment after sandbox/controller restart; deadline/cancel/credit-backpressure tests; schema/status tests reject ZoneLink refs, phase, cursors, and authority |
+| Removal proof | `packages/d2b-provider-relay/` removed after `transport-azure-relay` Provider conformance; no ACA schema, Nix emitter, controller, status adapter, fixture, or test retains an ordinary-sandbox ZoneLink path |
 
 ### ADR046-aca-005
 
@@ -1348,10 +1528,10 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main): `AcaRuntimeConfig`, `AcaSandboxProfile`, `AcaResourceBinding`, `AcaWorkloadQuery` — test-only at v3 baseline |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` |
-| Detailed design | Replace `RealmId`/`WorkloadId` with v3 `Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query. The provider declares **no** Provider state Volume: bounded, non-secret sandbox binding/adoption metadata lives in `Guest.status` (latest bounded observed handle digests) and in-flight operation/requeue truth lives in the core Operation ledger (D087). Neither Process mounts a state Volume; there is no `sandbox-state`/`service-state` Volume, no `User/d2b-aca-controller`/`User/d2b-aca-deployment-service` state-layout principal, and no empty identity-only Volume. On restart the controller re-derives observed binding from `Guest.status`, the core Operation ledger, and an external `find_sandboxes` query, treating status as observation, never authority. Host never holds cloud binding, admission, PSK, or operation state. Primary reuse disposition: `adapt`. Preserved source-plan detail: RETAIN+ADAPT. |
-| Integration | No Provider state Volume is created before Processes start; the controller writes its bounded observed binding/adoption metadata to `Guest.status` on material change and reads in-flight operation state from the core Operation ledger adapter |
+| Detailed design | Replace `RealmId`/`WorkloadId` with v3 owning-`Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query but never names a child Zone. The provider declares **no** Provider state Volume: bounded, non-secret sandbox binding/adoption metadata lives in `Guest.status` (latest bounded observed handle digests) and in-flight operation/requeue truth lives in the core Operation ledger (D087). Neither Process mounts a state Volume; there is no `sandbox-state`/`service-state` Volume, no `User/d2b-aca-controller`/`User/d2b-aca-deployment-service` state-layout principal, and no empty identity-only Volume. On restart the controller re-derives observed binding from `Guest.status`, the core Operation ledger, and an external `find_sandboxes` query, ensures the Provider-owned Endpoint, resolves fresh transport carriage, and authenticates a fresh Provider session, treating all status as observation and never authority. Host never holds cloud binding, admission, PSK, operation, Endpoint, or session state. Primary reuse disposition: `adapt`. Preserved source-plan detail: RETAIN+ADAPT. |
+| Integration | No Provider state Volume is created before Processes start; the controller writes bounded observed binding/adoption metadata to `Guest.status`, writes only standard Endpoint observations to Endpoint status, reads in-flight operation state from the core Operation ledger adapter, and retains no transport or ZoneLink cursor across restart |
 | Data migration | None — no state Volume at v3 `1.0` |
-| Validation | Controller/service declare empty `stateNamespaces`; no `sandbox-state`/`service-state` Volume created; neither Process mounts a state Volume; `Guest.status` binding/adoption fields are bounded, non-secret, and carry no credential/endpoint/poll-URL bytes; restart re-derivation from status/core ledger/external `find_sandboxes` without a Volume; core Operation ledger adapter integration test |
+| Validation | Controller/service declare empty `stateNamespaces`; no `sandbox-state`/`service-state` Volume created; neither Process mounts a state Volume; `Guest.status` binding/adoption fields and standard Endpoint status are bounded, non-secret, and carry no credential/endpoint/poll-URL/ZoneLink cursor or authority bytes; restart re-derivation from status/core ledger/external `find_sandboxes`, Endpoint ensure, and fresh KK session without a Volume; core Operation ledger adapter integration test |
 | Removal proof | Old in-memory-only operation ledger removed after core Operation ledger adapter passes; `operation-ledger` stateNamespace absent from component descriptor |
 
 ### ADR046-aca-006
@@ -1362,10 +1542,10 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Current source | `nixos-modules/options-realms-workloads.nix`: `kind = "ProviderManaged"` → ACA; `packages/d2b-provider-aca/src/lib.rs`: tracing fields |
 | Reuse action | replace |
 | Destination | `nixos-modules/` (generated Guest resource options); `packages/d2b-provider-runtime-azure-container-apps/src/{audit,metrics}.rs` |
-| Detailed design | Eval-time assertions for ACA-specific invariants (§15.6). Closed OTEL label set (§13.4). Audit event schema (§13.3). Tracing target constant `d2b_provider_runtime_azure_container_apps::credential_lease_cleanup` retained. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (Nix emitter) + ADAPT (metric/audit shapes). |
+| Detailed design | Eval-time assertions for ACA-specific invariants (§15.7), including rejection of ZoneLink/child-Zone fields for an ordinary sandbox and exact same-Zone sandbox-agent Endpoint template ownership. Closed OTEL label set (§13.4). Audit event schema (§13.3). Tracing target constant `d2b_provider_runtime_azure_container_apps::credential_lease_cleanup` retained. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (Nix emitter) + ADAPT (metric/audit shapes). |
 | Integration | Nix eval gate; `observability-otel` Provider OTEL pipeline |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Label cardinality policy test; audit commit-before-complete test; Nix assertion eval tests |
+| Validation | Label cardinality policy test; audit commit-before-complete test; Nix assertion eval tests; generated resource scan proves no ACA sandbox ZoneLink is emitted |
 | Removal proof | Old Nix `ProviderManaged` workload options retired after Guest resource Nix emitter parity |
 
 ---
@@ -1410,7 +1590,7 @@ Every test in `tests/` must:
 - compile and run with `cargo test -p d2b-provider-runtime-azure-container-apps` in a standard CI environment without network access, Azure credentials, or running Azure services;
 - use only injected `AcaControl` and `AcaCredentialLeaseClient` mock implementations; no real SDK adapter is linked;
 - be safe to run in parallel (`#[tokio::test]` with no shared mutable global state);
-- not write to any path outside the test's temporary directory (injected as a fake Volume `main`-view dirfd);
+- not write to any path outside the test's injected fixture directory;
 - pass the `no_secret_bytes_in_any_public_surface` assertion for every public struct's `Debug` output.
 
 ### 19.3 Integration README
@@ -1431,6 +1611,15 @@ The controller must pass the toolkit's black-box conformance suite (`d2b-provide
 - `Guest` ResourceType spec validation (invalid cpuMillis, missing disk source, user domain rejection);
 - reconcile/observe/finalize happy path;
 - adoption (match, no-match, ambiguous);
+- same-Zone sandbox-agent Endpoint create/observe/adopt/generation/finalize,
+  including Guest child-first deletion and fresh capability resolution after
+  controller or agent restart;
+- authenticated `d2b.aca.v3.sandbox-agent` Noise KK service/session with
+  monotonic deadlines, cancel propagation, bounded queues, stream/record
+  credits, and backpressure;
+- ordinary ACA sandboxes remain Guests in their owning Zone: ZoneLink refs,
+  child-Zone fields, route/peer status, cursors, intent, and authority are
+  rejected and never emitted;
 - credential lease acquire/revoke around each method;
 - status field redaction (guestIdentityDigest contains no raw sandbox ID string);
 - error code stability under all `AcaControlErrorKind` variants;
@@ -1445,8 +1634,18 @@ The `integration/mock_azure/` module implements an in-process HTTP server that r
 - `rate_limit_after: Option<u32>` — returns 429 with `retry-after-ms` header after N calls;
 - `ambiguous_candidates: bool` — `find_sandboxes` returns multiple matches;
 - `lifecycle_sequence: Vec<AcaSandboxLifecycle>` — mock advances through states on successive reads.
+- `agent_generation: u64` — advances the semantic Endpoint/session generation
+  without creating a Zone or route.
 
 The mock verifies that:
 
 - no call to the mock server carries a raw credential byte in any header or body (the `AcaControl` implementation under test must redact all credential material before the HTTP call);
-- all sandbox IDs in API responses are treated as opaque and are never echoed into resource status or audit records.
+- all sandbox IDs in API responses are treated as opaque and are never echoed into resource status or audit records;
+- transport fakes expose only opaque byte-stream capabilities and cannot grant
+  ACA service authority;
+- restart/adoption discards old capabilities, resolves the Provider-owned
+  Endpoint again, and authenticates a fresh KK session without reading any
+  ZoneLink cursor or status;
+- schema, Nix, status, audit, and removal scans contain no live ZoneLink path
+  for an ordinary ACA sandbox; only the explicit rejection and out-of-scope
+  future child-Zone distinction are permitted.
