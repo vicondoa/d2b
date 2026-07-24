@@ -4,9 +4,9 @@
 name: {{ workflow_name }}
 on:
   pull_request:
-    branches: [main]
+    branches: [main, v3]
   push:
-    branches: [main]
+    branches: [main, v3]
 
 permissions:
   contents: read

@@ -18,7 +18,7 @@ deprecations ship one minor release before removal.
   and closing specs plus a 27-Provider dossier catalog) indexed by
   `docs/specs/README.md` and `docs/specs/providers/README.md` and bound by the
   generated `ADR-046-spec-set.json` and `ADR-046-work-items.json` manifests.
-  It specifies Zone-local resources over the 17 standard ResourceTypes
+  It specifies Zone-local resources over the 19 standard ResourceTypes
   (including `Endpoint`), independently packaged multi-process Providers
   selected by `{ artifactId, config }`, an asynchronous embedded redb resource
   plane with owner-driven reconciliation and commit-gated expedited reconcile,
@@ -30,6 +30,11 @@ deprecations ship one minor release before removal.
   together with the security/threat-model, reset/cutover, feasibility,
   validation and delivery, and streamline contracts. Everything remains
   Proposed; no crates, services, controllers, or Providers are created.
+
+### Changed
+
+- Enabled the required Layer-1, eval-shell, and Entra example PR gates for
+  changes targeting the `v3` branch as well as `main`.
 
 ## [1.4.1] - 2026-07-12
 
