@@ -1123,9 +1123,10 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
    resource/service requests.
 3. Every non-`Zone` resource receives a delete request in reverse dependency
    order under normal finalizer protocol (Guests/Processes first, then their
-   owning Providers, then Volumes, then Networks/Devices/Credentials, then
-   ResourceImport projections, ResourceImport/ResourceExport rows, ZoneLinks,
-   then Role/RoleBinding/Quota/EmergencyPolicy).
+   owning Providers, then Volumes, then Networks/Devices/Credentials, with
+   authored qualified States removed/retargeted before their import-owned
+   projection Services, then ResourceImport/ResourceExport rows, ZoneLinks, and
+   finally Role/RoleBinding/Quota/EmergencyPolicy).
 4. After every other resource is deleted, `core.zone-drain` is cleared and a
    final transaction emits the Zone's own `phase=Deleted` event and closes
    the store.
@@ -1205,17 +1206,26 @@ All reset scopes tear down cross-Zone sharing child-first:
 1. `ResourceExport` reset stops new advertisements, revokes every active lease
    through the Provider export adapter, waits for bounded revoke/deadline
    completion, and then drops the advertisement before the export row is
-   deleted.
-2. `ResourceImport` reset stops local projection consumers first, releases the
-   remote lease over the local `ZoneLink`, deletes the core-owned local
-   projection (`ownerRef: ResourceImport/<name>`), and only then deletes the
-   import row.
-3. ZoneLink loss during reset is treated as revoke/degrade, not as retained
+   deleted. It never deletes the owner Service or its local backing.
+2. `ResourceImport` reset marks its same-qualified-type projection Service
+   draining/revoked and refuses new sessions. Matching State controllers stop
+   their owned Process/Endpoint children.
+3. State is operator/Nix-owned, never import-owned. A scoped reset that includes
+   the State deletes it normally; a narrower import reset waits with
+   `StateReferencesRemain` until each State is explicitly deleted or retargeted.
+   The import controller never auto-deletes State.
+4. After no State references remain, the import releases the remote lease,
+   deletes only the core-owned projection Service
+   (`ownerRef: ResourceImport/<name>`) and remaining provider-owned children,
+   then deletes the import row.
+5. ZoneLink loss during reset is treated as revoke/degrade, not as retained
    authority. Reconnect after a reset must revalidate generation and schema
-   fingerprint before any new lease is admitted.
-4. Full factory reset removes all export/import state, active lease state,
-   advertisements, and local projections. No cross-Zone authority, capability
-   grant, stream credit, or import session generation survives a reset.
+   plus factory fingerprint before any new lease is admitted.
+6. Full factory reset removes export/import rows, authored States in scope,
+   projection Services, internal leases/sessions/streams, and advertisements.
+   No cross-Zone authority, capability grant, stream credit, or import session
+   generation survives. Owner Service backing follows its own explicit reset
+   disposition; no backing is silently wiped.
 
 ### Comparison table
 
@@ -1224,7 +1234,7 @@ All reset scopes tear down cross-Zone sharing child-first:
 | Scope | Entire Zone (all resources) | One Provider + its ProviderStateSet | One Guest + its children |
 | Authentication | OS-level (uid=0/local `d2b` group), never remote/d2b-bus | Normal resource API RBAC | Normal resource API RBAC |
 | Durable Volume default | Preserved (relocated out of Zone) unless `--destroy-durable-volumes` | Detached/Unclaimed unless `--destroy-volumes` | Detached/Unclaimed unless `--destroy-volumes` |
-| ResourceExport/ResourceImport | Revoke all leases, drop advertisements, delete imports and projections child-first | Exports/imports owned by the Provider revoke/degrade; dependents lose only the lease/projection | Imports/projections owned by the Guest delete child-first; sibling exports unaffected |
+| ResourceExport/ResourceImport | Revoke leases; remove authored States in scope, then projection Services/imports/exports; preserve backing by explicit disposition | Revoke affected Service exports/imports; wait for States to delete/retarget; never cascade State or backing | Guest-targeted States and owned children delete first; imports wait on any remaining States; sibling exports unaffected |
 | Re-entry after reset | Compiled bootstrap authorization | Normal Provider install | Normal Guest declaration |
 | Effect on siblings | None (other Zones on the host, if any, are unaffected) | Dependents degrade; not deleted | None |
 

@@ -487,6 +487,37 @@ ResourceImport added by D096). Provider-specific
 semantic ResourceTypes may extend the set through signed schemas/API bindings.
 They use this same envelope/status/ownership contract.
 
+### Qualified Service/State pairs for cross-Zone capabilities (D096)
+
+`Service` and `State` are semantic suffixes for **qualified Provider
+ResourceTypes**, not additional standard ResourceTypes. Every Provider capability
+that is exportable across a Zone boundary declares exactly one qualified
+`*Service` type and its matching qualified `*State` type in that Provider's
+signed descriptor and dossier. Exact type names and schemas are Provider-owned;
+the cross-cutting contract fixes their roles:
+
+- the owner-Zone `*Service` is the one real authority. Its Provider schema may
+  reference only same-Zone backing `Device`, `Endpoint`, or qualified backend
+  resources allowed by the signed projection factory;
+- `ResourceExport.resourceRef` MUST reference that owner `*Service`. A
+  `Device`, `Endpoint`, `*State`, or other backing is never an export target;
+- one `ResourceImport` causes core to create exactly one same-qualified-type
+  projection `*Service` in the consumer Zone with
+  `metadata.ownerRef: ResourceImport/<name>`. Core never projects a `Device`,
+  `Endpoint`, or `*State`;
+- an operator or Nix configuration authors one or more same-Zone matching
+  `*State` resources. Each references the local `serviceRef` and an allowed
+  consuming `Guest`, `User`, or `Zone` target ref. The Provider controller owns
+  any resulting `Process` and `Endpoint` children;
+- the import controller never creates, owns, or deletes `*State`. Session,
+  stream, ceremony, transfer, and lease records that churn per connection stay
+  internal opaque records under the owning controller.
+
+Consequently the standard catalog remains exactly 19 types. A qualified
+`*Service`/`*State` pair is admitted only when its installed Provider supplies
+matching signed projection-factory metadata; absence or any type/schema/
+fingerprint mismatch fails closed.
+
 ## Entity promotion test and opaque-ID classification (D092)
 
 A stable managed identity MUST be a proper ResourceType (not an opaque `*Id`/
@@ -535,7 +566,7 @@ effects are rejected before they happen.
 | `authorityKey` | opaque class | Canonical opaque key **class** (a digest input); never a raw path/serial/address; internal and non-authorizing (never a locator or authz principal) |
 | `cardinality` | enum + bound | `exactly-one\|zero-or-one\|bounded-many` (with numeric bound for bounded-many) |
 | `arbitration` | enum | `exclusive\|shared\|multiplexed\|partitioned` |
-| `authorityRef` | ResourceRef | The single authority Resource / owner service Process that opens the backing |
+| `authorityRef` | ResourceRef | The single authority Resource; for D096 this is the qualified owner `*Service`, whose controller owns the backing-opening Process/Endpoint children |
 | `duplicateConflict` | error class | Typed, deterministic conflict returned to a second claimant |
 | `ownerProof` | opaque | Adoption/restart owner proof by process/resource identity |
 | `updateStrategy` | object | Drain-then-recycle policy (D091) |
@@ -556,9 +587,9 @@ Zone claiming the same physical backing is a `duplicateConflict`. `authorityKey`
 is internal; the stable authority itself is the existing typed Resource
 (`Device`/`Network`/`Provider`/`Endpoint`/`Host`/`Guest`/`User`/`Zone`/…). One
 authority service opens/owns the physical/singleton backing; consumers get local
-refs/projections/leases/streams, and cross-Zone sharing is only via D096
-ResourceExport/ResourceImport (a shared/multiplexed backing still has exactly one
-authority owner; no duplicate direct opens).
+Service projections/leases/streams, and cross-Zone sharing is only via D096
+ResourceExport/ResourceImport targeting the qualified owner Service (a shared/
+multiplexed backing still has exactly one authority owner; no duplicate opens).
 
 **Status/spec base.** The universal status base exposes bounded provider-neutral
 authority state — `available`, current holder count, queue depth, arbitration,
@@ -594,10 +625,10 @@ means cross-Zone sharing via D096.
 | `EphemeralProcess` | host/guest | bounded-many | partitioned | forbidden |
 | `Volume` | zone | zero-or-one writer authority | exclusive-write / shared-read | forbidden (state stays local) |
 | `Network` | zone | exactly-one net-VM DHCP/DNS/NAT authority per Network | exclusive | forbidden |
-| `Device` | physical-device | zero-or-one per physical backing | exclusive (full/DRM/TPM/key/USB) or shared (render-node) | explicit-export (D096) |
+| `Device` | physical-device | zero-or-one per physical backing | exclusive (full/DRM/TPM/key/USB) or shared (render-node) | forbidden as a direct target; an approved Provider `*Service` may mediate it (D096) |
 | `User` | user/seat | exactly-one per user | exclusive | forbidden |
 | `Credential` | zone | zero-or-one | exclusive | forbidden (D093 default) |
-| `Endpoint` | scope of producer | zero-or-one per stable listener/port | exclusive (fixed listener) | explicit-export (D096) |
+| `Endpoint` | scope of producer | zero-or-one per stable listener/port | exclusive (fixed listener) | forbidden as a direct target; an approved Provider `*Service` may mediate it (D096) |
 | `ResourceExport` | owner Zone | zero-or-one per exported backing | per exported arbitration | n/a (is the export) |
 | `ResourceImport` | consumer Zone | bounded-many consumers | per lease | n/a (is the import) |
 
@@ -610,6 +641,12 @@ portal, clipboard, notification sink, PipeWire mediator, Secret Service,
 systemd-user manager, Entra login authority, shell supervisor, SigNoz ingest,
 cloud subscription control) carry their qualified `AuthorityDescriptor` in the
 owning Provider dossier.
+
+Qualified Provider `*Service` types carry the `explicit-export` descriptor when
+approved. Their matching `*State` types are always non-exportable. The initial
+approved families are audio, security-key, observability, and policy-gated
+USBIP; every other Provider family remains non-exportable unless a later
+reviewed dossier and signed projection factory add it.
 
 ## Folded implementation detail
 

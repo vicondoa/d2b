@@ -179,10 +179,39 @@ ordinary `Create`/`Get`/`List`/`Watch`/`UpdateSpec`/`UpdateStatus`/`Delete`/
 `Upgrade` verbs plus Role/RoleBinding authorization. Cross-Zone advertisement
 and import are still per-hop: native RBAC, the export's consumer-Zone policy,
 the ZoneLink relationship, and the export capability ceiling must all allow the
-operation. Core admission rejects any cross-Zone `ResourceRef` in either type:
-an export may reference only local `resourceRef`/`endpointRef`, and an import
-may reference only a local `zoneLinkRef` plus bounded `exportKey`. Admission also
-rejects `requestedCapabilities` that exceed the export's capability ceiling.
+operation.
+
+For every exportable capability, the installed Provider descriptor supplies a
+signed projection factory binding the exact qualified `*Service` and `*State`
+types, allowed owner-Service backing ref types, allowed State target ref types,
+the strict projection-Service schema/fingerprint, and an aggregate factory
+fingerprint. Admission fails closed when the metadata is absent, unsigned, or
+mismatched.
+
+Core enforces all of these rules before advertisement, lease creation, or local
+projection:
+
+1. `ResourceExport.resourceRef` resolves in the export Zone to the owner
+   qualified `*Service` declared by the factory. A Device, Endpoint, State, or
+   any other resource is rejected, even if it is a Service backing.
+2. `ResourceImport` contains only a local `zoneLinkRef`, bounded `exportKey`,
+   expected qualified Service type, and expected projection/factory
+   fingerprints; it contains no remote Ref.
+3. The advertised, expected, and locally installed factory values match exactly,
+   and `requestedCapabilities` is within the export ceiling.
+4. Core creates exactly one same-qualified-type local projection Service with
+   `ownerRef: ResourceImport/<name>`. It never creates a Device, Endpoint, or
+   State projection.
+5. An authored matching State is admitted only in the same Zone, with
+   `serviceRef` targeting that Service and its consuming `Guest`, `User`, or
+   `Zone` target type allowed by the factory. State is non-exportable and cannot
+   claim remote authority.
+
+RoleBindings separately authorize export/import mutation, Service use, State
+creation, and target use. Possessing a local projection-Service Ref does not
+grant access to its remote authority or stream; the current lease/capability
+check remains mandatory. Leases, ceremonies, sessions, and streams are internal
+records rather than API resources.
 
 ### Authority index admission (D097)
 

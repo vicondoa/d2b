@@ -47,8 +47,8 @@ authored or independently duplicated in the resource row:
 - CLI projection;
 - events/telemetry/state contracts;
 - per bound ResourceType, the exact base spec and base status schema version/fingerprint the `ResourceApiBinding` implements, and the signed **standard capability matrix** of supported/unsupported optional base capabilities (D089);
-- optional signed export/import adapter capabilities (`ExportAdapter`/
-  `ImportAdapter`) for ResourceTypes the Provider owns (D096);
+- signed export/import adapter capabilities and one projection factory for each
+  capability the Provider marks cross-Zone exportable (D096);
 - registered `spec.provider` extension schemas (D089): per owned or bound ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `spec.provider.settings` object the Provider accepts;
 - registered `status.provider` extension schemas (D088): per owned or written ResourceType, the qualified `schemaId`, `schemaVersion`, and signed strict JSON Schema for the `status.provider.details` object the Provider may write;
 - component placement templates;
@@ -81,14 +81,38 @@ implementations of a ResourceType are promoted to the ResourceType base
 § Status). The `spec.provider` and `status.provider` schemas align for the same
 Provider.
 
-**Export/import adapters (D096).** A Provider descriptor MAY advertise a signed
-`ExportAdapter` and/or `ImportAdapter` capability for a ResourceType it owns. The
-adapter still satisfies D089 base conformance for the exported/imported type and
-performs only semantic admission, arbitration, and bounded observation. Core owns
-`ResourceExport`/`ResourceImport` routing, base lifecycle, local projection
-ownership, and layered status writes. D096 does not require a new Provider; it
-adds optional adapter capabilities to the Provider that already owns the
-resource semantics.
+**Export/import adapters and projection factories (D096).** A Provider that
+marks a capability cross-Zone exportable MUST advertise signed `ExportAdapter`,
+`ImportAdapter`, and `ProjectionFactory` metadata. Each factory is immutable
+within a Provider artifact and binds:
+
+| Field | Contract |
+| --- | --- |
+| `serviceType` | One qualified Provider `*Service` ResourceType; this is both the owner authority type and the consumer projection type |
+| `stateType` | One qualified Provider `*State` ResourceType consumed locally |
+| `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified backend types the owner Service may reference |
+| `allowedStateTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` that a State may target |
+| `projectionSchema` | Signed, strict, deny-unknown schema for the projection Service; it contains no raw locator, path, credential, secret, FD, or bytes |
+| `projectionSchemaFingerprint` | SHA-256 of that canonical schema |
+| `factoryFingerprint` | SHA-256 binding all fields above plus adapter identity/version |
+
+The owner `*Service` is the one real authority and references its local backing.
+`ResourceExport.resourceRef` MUST target that Service, never a `Device`,
+`Endpoint`, or `*State`. An import creates exactly one same-qualified-type local
+projection Service (`ownerRef: ResourceImport/<name>`). It never creates a
+Device, Endpoint, or State. Operators/Nix author matching local State resources
+that reference `serviceRef` plus an allowed consuming target; the Provider's
+State controller creates owned Process/Endpoint children. High-churn leases,
+sessions, ceremonies, transfers, and streams remain internal records.
+
+The adapters perform only semantic admission, arbitration, projection
+materialization, and bounded observation. Core owns `ResourceExport`/
+`ResourceImport` routing, base lifecycle, projection-Service ownership, and
+layered status writes. Provider install, Nix build, and API admission all fail
+closed if a required factory is absent, its signature is invalid, the Service/
+State pair or allowed refs do not match, or either fingerprint differs from the
+advertisement/import expectation. `Service` and `State` remain qualified
+Provider types and do not enlarge the 19-type standard catalog.
 
 **Authority descriptors (D097).** For every scarce or singleton backing it owns
 (a physical device, singleton external service, per-Zone/Host/user/seat service,
@@ -100,6 +124,8 @@ declare a signed `AuthorityDescriptor` on the owning typed Resource:
 strategy, `exportability` (`forbidden`/`explicit-export`, cross-Zone only via
 D096), and a quota/fairness policy (see
 [`ADR-046-resource-object-model` §Authority and cardinality](ADR-046-resource-object-model.md)).
+Backing Device/Endpoint/backend descriptors remain `forbidden`; only an
+approved qualified owner `*Service` descriptor may carry `explicit-export`.
 The descriptor is not a new opaque public ID and adds no new ResourceType unless
 an audit proves no existing type can own the lifecycle. Core rejects a
 conflicting authority Resource/Process against its authority index before any
@@ -440,6 +466,11 @@ Every Provider dossier specifies:
 - dependencies/permission claims;
 - pidfd/wait/reap where Process Provider;
 - telemetry/audit/doctor/support;
+- for each cross-Zone exportable capability, the exact qualified `*Service` and
+  `*State` names, signed projection-factory metadata, allowed Service backing
+  refs, allowed State target refs, schema/fingerprints, adapter behavior,
+  arbitration, finalizers, and update/status propagation; or an explicit
+  `exportability: forbidden`;
 - failure/upgrade/migration;
 - exact v3 source→future destination work items and tests, each naming the
   old test selector/file with a keep/adapt/move/delete disposition and removal
@@ -525,6 +556,23 @@ byte-stream handle and observations; it holds no ZoneLink state itself.
 
 Cross-resource composition is ordinary controller behavior. There is no
 special orchestrator Provider.
+
+### D096 exportability classification
+
+Cross-Zone export is deny-by-default. The initial classification is:
+
+| Provider | D096 classification | Required shape |
+| --- | --- | --- |
+| `audio-pipewire` | exportable | Dossier-owned qualified audio `*Service`/`*State` pair; owner Service mediates local PipeWire Device/Endpoint/backend |
+| `device-security-key` | exportable | Dossier-owned qualified security-key `*Service`/`*State` pair; one owner Service retains physical-device authority and serializes ceremonies |
+| `observability-otel` | exportable | Dossier-owned qualified observability `*Service`/`*State` pair; one owner Service retains ingest authority and enforces redaction/cardinality/backpressure |
+| `device-usbip` | policy-gated exportable | Dossier-owned qualified USBIP `*Service`/`*State` pair; factory is usable only when Provider, Zone, export, and device policy all opt in |
+| every other frozen initial Provider | forbidden | No export/import adapter or projection factory may be registered |
+
+Approval applies to the qualified Service only. A matching State, its backing
+Device/Endpoint, Credentials, and internal session/stream records are never
+export targets. Exact type names belong to the Provider dossiers; this
+cross-cutting table does not create or rename them.
 
 ## Current-code fit
 

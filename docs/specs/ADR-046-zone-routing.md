@@ -1472,16 +1472,17 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
 - **Advertisement.** The owner Zone's core export/import controller advertises a
   `ResourceExport` to the exact `consumerZonePolicy` selector over the existing
   authenticated advertisement envelope, carrying only the bounded `exportKey`,
-  `exportedType`, `baseSchemaFingerprint`, the closed operation set, arbitration,
-  and the capability ceiling — never the local `resourceRef`/`endpointRef`, a
-  path, an address, or bytes. Withdrawal and renewal reuse the withdrawal/renewal
+  qualified Service type, signed projection-schema and factory fingerprints, the
+  closed operation set, arbitration, and capability ceiling — never the local
+  owner-Service `resourceRef`, its Device/Endpoint/backend refs, a path, address,
+  secret, or bytes. Withdrawal and renewal reuse the withdrawal/renewal
   machinery; export removal or ceiling narrowing issues a new generation.
 - **Import matching.** The consumer Zone's `ResourceImport` names only its local
   `zoneLinkRef` plus `exportKey`; core matches `exportKey` +
-  `expectedBaseSchemaFingerprint` against the advertisement. A mismatch,
-  unauthorized Zone, or absent advertisement fails closed. This preserves the
-  "No cross-Zone resource references" invariant: neither side holds a Ref into
-  the other Zone.
+  `expectedServiceType` + the projection-schema/factory fingerprints against the
+  advertisement and local installed Provider factory. Missing metadata, a
+  mismatch, unauthorized Zone, or absent advertisement fails closed. This
+  preserves the "No cross-Zone resource references" invariant.
 - **Capability/RBAC ceiling.** Every hop applies the ceiling-propagation and
   RBAC-narrowing rules; `requestedCapabilities` is clamped to the export
   capability ceiling and to the ZoneLink allocation. No import can exceed the
@@ -1491,20 +1492,28 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
   generation, credits/backpressure, cancel, deadline, and idempotency;
   intermediate controllers see ciphertext. The "No FD, credential, or host path
   forwarding" invariant holds — no device FD, socket, or token crosses a Zone.
-- **Projection and lifecycle.** Core owns one local typed projection per import
-  (`ownerRef: ResourceImport/<name>`). Link failure, revocation, or export
-  withdrawal revokes leases and degrades the projection through the existing
-  link-failure/revocation paths; reconnect revalidates the remote generation and
-  fingerprint before rebinding, so no stale authority survives. D091 currency
-  propagates remote → import → projection/owners.
+- **Projection and lifecycle.** The export target is always the qualified owner
+  `*Service`, never a Device, Endpoint, or `*State`. Core owns exactly one
+  same-qualified-type local projection Service per import
+  (`ownerRef: ResourceImport/<name>`). Operator/Nix-authored same-Zone States
+  reference that Service and a consuming Guest/User/Zone; their Provider
+  controller owns Process/Endpoint children. Import never creates or exports a
+  State. Link failure, revocation, or withdrawal degrades the projection Service;
+  reconnect revalidates the remote generation and both fingerprints. D091
+  currency propagates owner Service → export → import → projection Service →
+  State → children.
 - **Single authority (D097).** The exported backing has exactly one authority
   owner in the owner Zone (its signed `AuthorityDescriptor`, tracked in that
   Zone's core authority index). Cross-Zone import never creates a second
-  authority or a duplicate open in the consumer Zone — the import binds a local
-  projection/lease that routes back to the single owner. `exportability` in the
-  descriptor gates whether a backing may be shared cross-Zone at all
+  authority or duplicate open in the consumer Zone — the projection Service is
+  an explicitly non-authoritative route to the owner. `exportability` and signed
+  projection-factory presence gate whether a Service may be shared at all
   (`forbidden` authorities such as the audit chain, broker, and resource store
   are never advertised over a ZoneLink).
+
+High-churn leases, sessions, ceremonies, transfers, named streams, and stream
+handles remain controller/session-internal records; routing never promotes them
+to resources or advertises them.
 
 ## Nearest-common-ancestor (NCA) algorithm
 

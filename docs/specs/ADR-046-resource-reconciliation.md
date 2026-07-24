@@ -269,13 +269,27 @@ Propagation to ancestors is acyclic, depth/budget bounded, and coalesced.
 
 ### ResourceImport projection ownership (D096)
 
-A `ResourceImport` owns exactly one local typed projection resource through
-`metadata.ownerRef: ResourceImport/<name>`. Core and the selected import adapter
-keep projection readiness synchronized with the import lease state; ordinary
-consumers depend on the projection, not the import object. `ResourceExport`
-removal or ZoneLink loss revokes the lease, marks the import degraded/revoked,
-and triggers the D091 dependency-aware planner so the projection and its owners
-degrade or upgrade in topological order rather than observing stale authority.
+A `ResourceImport` owns exactly one local projection **Service** through
+`metadata.ownerRef: ResourceImport/<name>`. Its ResourceType is the same
+qualified Provider `*Service` type as the remote owner Service, as bound by the
+signed projection factory. Core rejects a missing/mismatched factory and never
+projects a Device, Endpoint, or `*State`.
+
+Operator/Nix-authored matching same-Zone `*State` resources reference the
+projection's `serviceRef` and an allowed consuming Guest/User/Zone. They are not
+owned by the import. Their Provider controller creates and reconciles owned
+Process/Endpoint children. The import controller never creates, exports, or
+deletes State; per-session leases/streams remain internal records.
+
+Status and D091 update currency propagate owner Service → export → import →
+projection Service → State → owned children. `ResourceExport` removal or
+ZoneLink loss revokes the lease and marks the projection Service degraded/
+revoked; State controllers then stop children in topological order. Import
+finalization marks the projection draining, rejects new sessions, and waits for
+all referencing States to be deleted or retargeted. It then releases the remote
+lease, deletes the projection Service and remaining provider-owned children, and
+clears its own finalizer. `StateReferencesRemain` is visible pending cleanup;
+there is no implicit State cascade.
 
 ### Authority adoption, quarantine, and drain-recycle (D097)
 

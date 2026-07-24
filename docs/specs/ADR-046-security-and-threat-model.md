@@ -38,6 +38,7 @@ assigns it to the owning spec's future implementation surface through a
 8. [d2b-bus routing, RBAC, and authorization](#d2b-bus-routing-rbac-and-authorization)
 9. [Exact recipient confidentiality](#exact-recipient-confidentiality)
 10. [ZoneLink: no FD/resource grants, transport carriage-only](#zonelink-no-fdresource-grants-transport-carriage-only)
+- [Cross-Zone Service projection security](#cross-zone-service-projection-security)
 11. [Gateway Guest custody](#gateway-guest-custody)
 12. [Injected EffectPort boundary and the privileged broker](#injected-effectport-boundary-and-the-privileged-broker)
 13. [Prohibited Provider discovery/ambient authority](#prohibited-provider-discoveryambient-authority)
@@ -632,6 +633,44 @@ in the core `LiveVsockEffectPort` adapter, INV-VSOCK-004).
   (`maxHops` default 8, max 16); a malformed hop count that claims more hops
   than physically arrived is `malformed-hop-count`, and counter exhaustion is
   `hop-limit-exceeded` (ZR lines 1880-1895).
+
+## Cross-Zone Service projection security
+
+D096 shares capability, not backing authority. Every approved exportable
+Provider declares a signed projection factory that binds one qualified
+`*Service` type, one qualified `*State` type, allowed same-Zone owner-Service
+backing ref types, allowed State target ref types, and a strict projection
+schema/fingerprint plus aggregate factory fingerprint. Missing, unsigned,
+downgraded, or mismatched metadata fails closed before advertisement, lease, or
+projection creation.
+
+The security boundary is structural:
+
+- `ResourceExport.resourceRef` targets only the owner Service. Exporting a
+  Device, Endpoint, State, Credential, or backend directly is rejected.
+- An import creates exactly one same-qualified-type, non-authoritative local
+  projection Service. It cannot open the remote backing or claim remote
+  authority and never becomes a Device/Endpoint projection.
+- State is same-Zone operator/Nix intent. It references `serviceRef` and one
+  factory-allowed consuming Guest/User/Zone. The import controller cannot create,
+  export, mutate as authority, or delete State.
+- A forged State cannot spoof remote authority: State status is written only by
+  the registered Provider controller; service availability comes only from the
+  authenticated import lease and verified factory/generation; RoleBinding checks
+  independently authorize State and target use.
+- Projection specs/status/advertisements/CLI graphs contain no backing refs,
+  FDs, credentials, secrets, raw paths/locators, payload bytes, or remote refs.
+  High-churn session, stream, ceremony, transfer, and lease handles remain
+  internal and are never resources or authority evidence.
+- Revocation first prevents new sessions and degrades the projection Service.
+  State controllers stop owned Process/Endpoint children. Import finalization
+  waits for operator-owned States to be deleted/retargeted and never cascades
+  them, preventing a controller from erasing policy intent.
+
+The initial allowlist is audio, security-key, and observability; USBIP requires
+Provider, Zone, export, and physical-device policy opt-in. All other Providers
+remain non-exportable. Approval applies only to the qualified Service; the
+matching State and all backing resources remain non-exportable.
 
 ## Gateway Guest custody
 
@@ -1590,8 +1629,8 @@ section with the full control description.
 | `User` | Numeric UID/GID leaking into authorization decisions or public surface | `User/<name>` typed refs only; `mappingClass: process-principal-root` never exposes numeric UID/GID publicly | §15 |
 | `Credential` | Secret bytes reaching resource store/audit/telemetry, or a non-enrolled consumer reading a token | Zero-secret invariant; Noise KK-only sensitive delivery; exact `consumerRef` match | §9/§19 |
 | `Endpoint` | A stable endpoint leaking a raw locator (path/address/CID/port/fd/credential) into spec/status/CLI, or an unauthorized consumer resolving it to a live transport/FD | No raw locator in spec/status (closed transport/locality classes only); Core/ProviderSupervisor resolves via EffectPort/LaunchTicket under authorization; unauthorized resolve denied with a typed error (D092) | §D092 |
-| `ResourceExport` | A consumer Zone reaching the physical device/sink directly, an export leaking the local `resourceRef`/`endpointRef` or raw bytes/path/token cross-Zone, or an unauthorized Zone admitted as a consumer | Single Provider authority holds the only device/sink open; export advertises only bounded `exportKey`/type/fingerprint/capability-ceiling (no local Ref, path, or bytes); per-hop RBAC + capability ceiling; consumerZonePolicy restricts to opted-in child Zones; leases revoked on delete/ZoneLink loss (D096) | §D096 |
-| `ResourceImport` | A stale binding surviving export revocation, a schema/generation mismatch binding wrong authority, or a cross-Zone Ref/FD leaking into the consumer | Import names only local `zoneLinkRef`+`exportKey` (no remote Ref); reconnect revalidates remote generation+fingerprint before rebinding; bytes only over bounded encrypted named streams (ciphertext to intermediaries); no FD/resource grant crosses a Zone; local projection degrades on revocation (D096) | §D096 |
+| `ResourceExport` | Direct Device/Endpoint/State export, backing/secret/path leakage, unsigned factory substitution, or unauthorized Zone admission | `resourceRef` must be the factory-bound owner Service; signed Service/State/ref/schema/factory binding; only bounded key/type/fingerprints/capability ceiling advertised; per-hop RBAC; revoke on delete/link loss | Cross-Zone Service projection security |
+| `ResourceImport` | Stale/wrong-type projection, a local State spoofing remote authority, auto-created policy intent, or cross-Zone Ref/FD leakage | Exact factory/type/schema/generation match; exactly one non-authoritative same-type projection Service; State separately authored/status-owner checked; no auto-State; encrypted bounded streams; projection degrades on revoke | Cross-Zone Service projection security |
 
 ## Per-Provider-family threat matrix
 
@@ -1648,6 +1687,12 @@ time rejection, not an operational recommendation.
   (§11).
 - Cross-Zone credential minting — no parent-minted token delivered to a
   child Zone (§11).
+- Exporting a Device, Endpoint, State, Credential, or backend directly; creating
+  any import projection other than the factory-bound same-qualified-type
+  Service; auto-creating/deleting State; or accepting a missing/mismatched signed
+  projection factory.
+- Treating an authored State, projection status, session/stream handle, or
+  imported Service Ref as proof of remote authority.
 
 **Process and sandbox.**
 
