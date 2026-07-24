@@ -1039,10 +1039,13 @@ d2b.zones.work.resources.entra-login = {
     transport    = "vsock";                        # closed class only; no CID/path
     purpose      = "entra-login-token";
     locality     = "guest-local";
-    visibility   = "zone";
+    visibility   = "provider";
     consumerPolicy = {
-      allowedSubjects = [ "Provider/credential-entra" ];
-      allowedOperations = [ "resolve" ];
+      allowedSubjects = [
+        "Provider/credential-entra"
+        "Provider/runtime-azure-container-apps"
+      ];
+      allowedOperations = [ "resolve" "attach" "observe" ];
     };
   };
 };
@@ -1064,9 +1067,14 @@ d2b.zones.work.resources.work-entra = {
 Build/eval validation asserts: `identityGuestRef`, `loginEndpointRef`,
 `consumerRef`, and `scope.executionRef` are all the same Zone; the `Endpoint`
 `purpose`/schema and `providerRef` match the credential-entra login-service
-contract; the Endpoint is Guest-placed (Host placement is rejected); the
-Credential scope and consumer placement are consistent; and no store path or
-token appears in any emitted spec.
+contract; the Endpoint is Guest-placed (Host placement is rejected), uses
+`visibility = "provider"` (`"zone"` is rejected), and has an exact
+`consumerPolicy` whose `allowedSubjects` contains both
+`Provider/credential-entra` and the Credential's exact `consumerRef`
+(`Provider/runtime-azure-container-apps`) and whose `allowedOperations` is
+exactly `resolve`, `attach`, and `observe`; the Credential scope and consumer
+placement are consistent; and no store path or token appears in any emitted
+spec.
 
 ### Package closures into Guests
 
@@ -1471,14 +1479,15 @@ d2b.zones.dev.resources.work-entra = {
   type = "Credential";
   spec = {
     providerRef       = "Provider/credential-entra";
+    identityGuestRef  = "Guest/entra-identity";
+    loginEndpointRef  = "Endpoint/entra-login";
     scope             = {
-      executionRef  = "Guest/work-vm";   # optional Host or Guest placement restriction
-      domainFilter  = "user";            # optional: system | user
-      userRef       = "User/alice";      # required when domainFilter=user
+      executionRef  = "Guest/aca-gateway"; # optional Host or Guest placement restriction
+      domainFilter  = "system";            # optional: system | user
     };
     audience          = "azure-resource-manager";  # Provider-validated opaque audience token; no secrets
-    consumerRef       = "Provider/display-wayland"; # optional; restricts acquiring Provider
-    allowedOperations = [ "acquire-token" "refresh-token" "revoke-token" ];
+    consumerRef       = "Provider/runtime-azure-container-apps";
+    allowedOperations = [ "acquire-token" "refresh-token" "revoke-token" "inspect-metadata" ];
     rotation          = {
       policy              = "proactive";
       proactiveWindowMs   = 300000;
@@ -1501,14 +1510,14 @@ d2b.zones.dev.resources.work-entra = {
 
 Credential spec fields mirror the `Credential` ResourceTypeSchema exactly:
 `providerRef`, `scope.{executionRef,domainFilter,userRef}`, `audience`,
-`consumerRef`, `allowedOperations`, `rotation`, `expiry`, `revocation`, and
-optional canonical `spec.provider` extension (`spec.provider.settings` is
-permitted when the Provider schema declares it; validated against signed
-Provider schema; no secret bytes). No invented fields (`credentialType`,
-`ownerRef`, `domain`). The emitted spec never contains key material, token
-bytes, or PEM. Current `identity_config.rs` values that carry credential bytes
-are forbidden from the emitted spec; they remain inside the Provider's external
-secret service.
+`consumerRef`, `allowedOperations`, `rotation`, `expiry`, `revocation`,
+conditional `identityGuestRef`/`loginEndpointRef`, and optional canonical
+`spec.provider` extension (`spec.provider.settings` is permitted when the
+Provider schema declares it; validated against signed Provider schema; no
+secret bytes). No invented fields (`credentialType`, `ownerRef`, `domain`).
+The emitted spec never contains key material, token bytes, or PEM. Current
+`identity_config.rs` values that carry credential bytes are forbidden from the
+emitted spec; they remain inside the Provider's external secret service.
 
 ## Role and RoleBinding
 
@@ -2498,11 +2507,11 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | `nixos-modules/realm-workloads-launcher-v2-json.nix` (`RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary`; live); `nixos-modules/realm-identity-config-json.nix` (`RealmIdentityConfigJson`; live, read by d2bd from `/etc/d2b/realm-identity.json`); `packages/d2b-core/src/realm_workloads_launcher.rs`; `packages/d2b-realm-core/src/identity_config.rs` |
 | Reuse action | adapt |
 | Destination | Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/processes.json`; `Provider/credential-entra` Credential resource; `realm-identity.json` RETAINED during migration |
-| Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `scope`, `audience`, `allowedOperations`, canonical `spec.provider` extension where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
+| Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `identityGuestRef`, `loginEndpointRef`, `scope`, `audience`, `consumerRef`, `allowedOperations`, canonical `spec.provider` extension where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
 | Integration | Provider/display-wayland, Provider/shell-terminal, and Provider/credential-entra consume Process/Credential resources; `d2bd` continues reading `realm-identity.json` until the Credential reader lands. |
 | Data migration | Launcher and identity config are re-emitted as v3 resources; full d2b 3.0 reset; no v2 launcher/identity state import. |
-| Validation | Launcher metadata shape regression; no-secret assertion vectors |
-| Tests | `tests/unit/nix/cases/zones-launcher-metadata.nix`; no-secret vectors |
+| Validation | Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint `visibility = "provider"` (and rejects `"zone"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve`, `attach`, and `observe` operations; no-secret assertion vectors |
+| Tests | `tests/unit/nix/cases/zones-launcher-metadata.nix`; `tests/unit/nix/cases/zones-credential-entra.nix` covers both required subjects, provider visibility, zone-visibility rejection, and exact Endpoint operations; no-secret vectors |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `realm-workloads-launcher-v2-json.nix`/`realm-identity-config-json.nix` and `/etc/d2b/realm-workloads-launcher-v2.json`/`realm-identity.json` removed ONLY after display/credential Providers read resource configs |
 
