@@ -285,7 +285,7 @@ already-diverged branch rather than through a rebase onto a reconciled
 foundation commit, later Nix-authoring-alignment sweeps (`827e874f`/`6bcb60b3`
 "align Nix authoring contracts") had to re-touch files the corrective commits
 had already changed, which is exactly the shape of an avoidable cherry-pick/
-rebase conflict this spec's [ADR046-streamline-010](#adr046-streamline-010--stale-baseparent-reconcile-helper)
+rebase conflict this spec's [ADR046-streamline-010](#adr046-streamline-010--stale-basecurrent-parent-reconcile-helper)
 targets.
 
 ### F12 — Manual global `rg`-shaped scans instead of generated lints
@@ -368,11 +368,11 @@ computed mechanically, not estimated.
 | --- | --- | --- | --- |
 | Correction rounds | Count of commits matching `fix\|correct\|realign\|harmonize` (case-insensitive) reachable from any `adr0046-*` branch, divided by total commits in the same set | `git log --all --oneline --grep=... -i \| wc -l` over `git rev-list --all --count` restricted to `adr0046-*` refs | 768 / 2,478 ≈ 31% (see F11) |
 | Schema violations | Count of fenced-YAML/JSON blocks under `docs/specs/**` failing [ADR046-streamline-003](#adr046-streamline-003--markdown-fenced-yamljson-extractor-and-schema-validator) validation, per commit | `xtask spec-schema-check --format json` violation count | Not measured before this tool exists (F14); target 0 at every commit once adopted |
-| Conflict count | Count of `git rebase`/`git town sync` conflict hunks reported by [ADR046-streamline-010](#adr046-streamline-010--stale-baseparent-reconcile-helper) per dossier restack | Reconcile-helper JSON report `conflicts[]` length | Not measured before this tool exists; F1/F11 show at least 5 dossier branches diverged from a foundation point superseded by 6+ later foundation commits |
+| Conflict count | Count of `git rebase`/`git town sync` conflict hunks reported by [ADR046-streamline-010](#adr046-streamline-010--stale-basecurrent-parent-reconcile-helper) per dossier restack | Reconcile-helper JSON report `conflicts[]` length | Not measured before this tool exists; F1/F11 show at least 5 dossier branches diverged from a foundation point superseded by 6+ later foundation commits |
 | Handoff completeness | Fraction of integrator-merged commits whose commit trailer references a [ADR046-streamline-011](#adr046-streamline-011--agent-handoff-manifest) manifest with non-empty `assigned_files`, `commit_sha`, `test_result`, and `base_sha` | Task-DB↔git import report | 0% before adoption (F10: the two identical-diff commit pairs carry no such trailer) |
 | Ready/launched ratio | Count of todo-tracked scopes with all dependencies `done` ("ready"), divided by count of scopes with an open worktree/branch ("launched"), per [ADR046-streamline-013](#adr046-streamline-013--anti-serialization-readylaunchedblocker-report) | Anti-serialization report | Not measured before this tool exists |
 | Time-to-green | Wall-clock time from a dossier branch's first commit to its `xtask spec-schema-check` + cross-spec lint passing with zero violations | Task-DB timestamps + lint pass timestamp | Not measured before this tool exists; F1/F11 imply multiple hours-to-days of re-derivation per affected dossier |
-| Disk usage | Aggregate size of `packages/target/` and stale worktrees reported by [ADR046-streamline-018](#adr046-streamline-018--worktreediskclosetarget-cleanup-reporting), never auto-deleted | `du -sh` per reported path, summed | Not measured before this tool exists |
+| Disk usage | Aggregate size of `packages/target/` and stale worktrees reported by [ADR046-streamline-018](#adr046-streamline-018--worktreedisktarget-cleanup-reporting), never auto-deleted | `du -sh` per reported path, summed | Not measured before this tool exists |
 
 ## Permanent methodology after Accepted
 
