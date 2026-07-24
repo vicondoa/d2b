@@ -368,7 +368,7 @@ transcript/session generation digest, route, and fixed outcome.
 | Current source | v3 `d2b-realm-router/src/{session,secure_session,mux_session,lifecycle}.rs`, guest auth/transport |
 | Reuse source | main `a1cc0b2d`: `d2b-contracts/src/v2_component_session.rs`, `d2b-session/src/{handshake,bootstrap,record,engine,scheduler,streams,lifecycle,transport}.rs`, Noise/component tests/vectors |
 | Reuse action | copy and adapt |
-| Destination | `packages/d2b-contracts/src/v3_component_session.rs`, `packages/d2b-session/` |
+| Destination | `packages/d2b-contracts/src/v3/component_session.rs`, `packages/d2b-session/` |
 | Detailed design | Reversion canonical offer/records; retain NN/KK/IKpsk2; add canonical subject/authorization context hooks |
 | Integration | d2b-bus, resource/controller/Provider services |
 | Data migration | No v2 session compatibility; reconnect on v3 |

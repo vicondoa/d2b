@@ -7,9 +7,10 @@
 > [`ADR-046-work-items.json`](ADR-046-work-items.json), and the 8-wave topology
 > in [`ADR-046-validation-and-delivery.md` §3](ADR-046-validation-and-delivery.md).
 > They are **not** among the 55 `ADR-046-spec-set.json` members and do not change
-> that count (decision **D095**). Regenerate with
-> `cargo run -p xtask -- implementation-graph` after regenerating the two
-> manifests; a drift gate runs the generator and `git diff --exit-code`.
+> that count (decision **D095**; refreshed after **D096** and **D097** and all
+> work-item changes). Regenerate with `cargo run -p xtask -- implementation-graph`
+> (**ADR046-streamline-024**) after regenerating the two manifests; a drift gate
+> runs the generator and `git diff --exit-code`.
 
 The graph maps every one of the 55 member specs and every work item exactly once
 to a dependency-ordered launch wave (`W0`–`W7`) and a file-disjoint parallel
@@ -25,9 +26,9 @@ consumers, never a reason to serialize a whole wave.
 | --- | --- |
 | Waves | 8 |
 | Spec nodes | 55 |
-| Work-item nodes | 526 |
-| Total nodes | 581 |
-| Edges | 1528 |
+| Work-item nodes | 536 |
+| Total nodes | 591 |
+| Edges | 1551 |
 | Max topological rank | 19 |
 
 ## Waves (W0–W7)
@@ -39,14 +40,16 @@ consumers, never a reason to serialize a whole wave.
 | W2 | primitive-resource-composition, zone-routing | 2 | 19 | W2-composition-and-routing |
 | W3 | provider-model-and-packaging | 1 | 3 | W3-provider-contract |
 | W4 | components-processes-and-sandbox, core-controllers, provider-state, resources-credential, resources-network | 5 | 32 | W4-parallel-specs |
-| W5 | cli-and-operations, nix-configuration, resources-device, resources-host-guest-process-user, resources-volume, resources-zone-control, telemetry-audit-and-support | 7 | 135 | W5-parallel-specs |
-| W6 | provider-activation-nixos, provider-audio-pipewire, provider-clipboard-wayland, provider-credential-entra, provider-credential-managed-identity, provider-credential-secret-service, provider-device-gpu, provider-device-security-key, provider-device-tpm, provider-device-usbip, provider-display-wayland, provider-network-local, provider-notification-desktop, provider-observability-otel, provider-runtime-azure-container-apps, provider-runtime-azure-virtual-machine, provider-runtime-cloud-hypervisor, provider-runtime-qemu-media, provider-shell-terminal, provider-system-core, provider-system-minijail, provider-system-systemd, provider-transport-azure-relay, provider-transport-unix, provider-transport-vsock, provider-volume-local, provider-volume-virtiofs | 27 | 250 | W6-credentials, W6-interaction, W6-storage-network-device, W6-system-host-guest, W6-transport-observability-activation |
-| W7 | feasibility-and-spikes, reset-and-cutover, security-and-threat-model, streamline, validation-and-delivery | 5 | 71 | W7-closing |
+| W5 | cli-and-operations, nix-configuration, resources-device, resources-host-guest-process-user, resources-volume, resources-zone-control, telemetry-audit-and-support | 7 | 140 | W5-parallel-specs |
+| W6 | provider-activation-nixos, provider-audio-pipewire, provider-clipboard-wayland, provider-credential-entra, provider-credential-managed-identity, provider-credential-secret-service, provider-device-gpu, provider-device-security-key, provider-device-tpm, provider-device-usbip, provider-display-wayland, provider-network-local, provider-notification-desktop, provider-observability-otel, provider-runtime-azure-container-apps, provider-runtime-azure-virtual-machine, provider-runtime-cloud-hypervisor, provider-runtime-qemu-media, provider-shell-terminal, provider-system-core, provider-system-minijail, provider-system-systemd, provider-transport-azure-relay, provider-transport-unix, provider-transport-vsock, provider-volume-local, provider-volume-virtiofs | 27 | 254 | W6-credentials, W6-interaction, W6-storage-network-device, W6-system-host-guest, W6-transport-observability-activation |
+| W7 | feasibility-and-spikes, reset-and-cutover, security-and-threat-model, streamline, validation-and-delivery | 5 | 72 | W7-closing |
 
 Within a wave, spec nodes in the same non-chain parallel group are file-disjoint
-and launch concurrently. Work items of a spec form the `wi:<specId>` track;
-work items of different specs in the same wave are file-disjoint and concurrent.
-The full cross-wave `spec-depends-on` edges and all `work-item-depends-on`
+and launch concurrently. Work items of a spec form the `wi:<specId>` track; the
+`wi:core-config-hub` track groups the work items that contend on
+`d2b-core-controller/src/{configuration,cleanup}.rs` (they build on the
+`ADR046-core-001` prep and do not clobber that file), while unrelated files stay
+parallel. The full cross-wave `spec-depends-on` and all `work-item-depends-on`
 edges live in the JSON; the Mermaid view below shows waves, their specs, and the
 intra-wave prep-barrier edges only.
 
@@ -144,11 +147,8 @@ flowchart LR
 ```
 
 Solid `W0 --> ... --> W7` shows wave launch order. Dotted `prep`/`file-order`
-edges are the only same-wave ordering constraints (`shared-contract` /
-`file-overlap-order`): the serial W0 foundation chain, the W7 closing chain, and
-the two documented W6 provider file-overlaps
-(`volume-local` → `volume-virtiofs`, `network-local` → `device-usbip`). Every
-other same-wave spec pair is fully parallel.
+edges are the only same-wave spec ordering constraints. Work-item-level
+`file-overlap-order` prep edges (e.g. the core-config-hub) are in the JSON.
 
 ## Shared prep and file-overlap barriers
 
@@ -170,12 +170,19 @@ other same-wave spec pair is fully parallel.
 | `security-and-threat-model` | `validation-and-delivery` | shared-contract |
 | `streamline` | `validation-and-delivery` | shared-contract |
 
-## Parallel groups
+Work-item `file-overlap-order` prep edges (core-config-hub):
 
-Every node carries a `parallelGroup`. Groups whose members carry no
-inter-member ordering edge are fully concurrent; the W0 foundation and W7
-closing chains are serial prep chains; the W6 provider families are concurrent
-except the two file-overlap orderings above.
+| Consumer work item | Prep | Type |
+| --- | --- | --- |
+| `ADR046-device-007` | `ADR046-core-001` | file-overlap-order |
+| `ADR046-exec-013` | `ADR046-core-001` | file-overlap-order |
+| `ADR046-exec-015` | `ADR046-core-001` | file-overlap-order |
+| `ADR046-network-008` | `ADR046-core-001` | file-overlap-order |
+| `ADR046-telem-011` | `ADR046-core-001` | file-overlap-order |
+| `ADR046-zone-control-016` | `ADR046-core-001` | file-overlap-order |
+| `ADR046-zone-control-021` | `ADR046-core-001` | file-overlap-order |
+
+## Parallel groups
 
 | Parallel group | Wave | #Nodes |
 | --- | --- | --- |
@@ -195,26 +202,26 @@ except the two file-overlap orderings above.
 | `wi:ADR-046-cli-and-operations` | W5 | 13 |
 | `wi:ADR-046-components-processes-and-sandbox` | W4 | 2 |
 | `wi:ADR-046-componentsession-and-bus` | W1 | 3 |
-| `wi:ADR-046-core-controllers` | W4 | 2 |
+| `wi:ADR-046-core-controllers` | W4 | 1 |
 | `wi:ADR-046-decision-register` | W0 | 1 |
 | `wi:ADR-046-feasibility-and-spikes` | W7 | 11 |
 | `wi:ADR-046-nix-configuration` | W5 | 34 |
 | `wi:ADR-046-primitive-resource-composition` | W2 | 3 |
 | `wi:ADR-046-provider-activation-nixos` | W6 | 7 |
-| `wi:ADR-046-provider-audio-pipewire` | W6 | 11 |
+| `wi:ADR-046-provider-audio-pipewire` | W6 | 13 |
 | `wi:ADR-046-provider-clipboard-wayland` | W6 | 12 |
 | `wi:ADR-046-provider-credential-entra` | W6 | 1 |
 | `wi:ADR-046-provider-credential-managed-identity` | W6 | 5 |
 | `wi:ADR-046-provider-credential-secret-service` | W6 | 6 |
 | `wi:ADR-046-provider-device-gpu` | W6 | 9 |
-| `wi:ADR-046-provider-device-security-key` | W6 | 34 |
+| `wi:ADR-046-provider-device-security-key` | W6 | 35 |
 | `wi:ADR-046-provider-device-tpm` | W6 | 13 |
 | `wi:ADR-046-provider-device-usbip` | W6 | 9 |
 | `wi:ADR-046-provider-display-wayland` | W6 | 4 |
 | `wi:ADR-046-provider-model-and-packaging` | W3 | 3 |
 | `wi:ADR-046-provider-network-local` | W6 | 19 |
 | `wi:ADR-046-provider-notification-desktop` | W6 | 6 |
-| `wi:ADR-046-provider-observability-otel` | W6 | 5 |
+| `wi:ADR-046-provider-observability-otel` | W6 | 6 |
 | `wi:ADR-046-provider-runtime-azure-container-apps` | W6 | 7 |
 | `wi:ADR-046-provider-runtime-azure-virtual-machine` | W6 | 9 |
 | `wi:ADR-046-provider-runtime-cloud-hypervisor` | W6 | 7 |
@@ -234,17 +241,18 @@ except the two file-overlap orderings above.
 | `wi:ADR-046-resource-reconciliation` | W1 | 3 |
 | `wi:ADR-046-resource-store-redb` | W0 | 3 |
 | `wi:ADR-046-resources-credential` | W4 | 8 |
-| `wi:ADR-046-resources-device` | W5 | 8 |
-| `wi:ADR-046-resources-host-guest-process-user` | W5 | 23 |
-| `wi:ADR-046-resources-network` | W4 | 8 |
+| `wi:ADR-046-resources-device` | W5 | 7 |
+| `wi:ADR-046-resources-host-guest-process-user` | W5 | 22 |
+| `wi:ADR-046-resources-network` | W4 | 7 |
 | `wi:ADR-046-resources-volume` | W5 | 6 |
-| `wi:ADR-046-resources-zone-control` | W5 | 24 |
+| `wi:ADR-046-resources-zone-control` | W5 | 26 |
 | `wi:ADR-046-security-and-threat-model` | W7 | 18 |
-| `wi:ADR-046-streamline` | W7 | 23 |
-| `wi:ADR-046-telemetry-audit-and-support` | W5 | 27 |
+| `wi:ADR-046-streamline` | W7 | 24 |
+| `wi:ADR-046-telemetry-audit-and-support` | W5 | 26 |
 | `wi:ADR-046-terminology-and-identities` | W0 | 2 |
 | `wi:ADR-046-validation-and-delivery` | W7 | 8 |
 | `wi:ADR-046-zone-routing` | W2 | 16 |
+| `wi:core-config-hub` | W4 | 8 |
 
 ## Critical path (longest dependency chain)
 
@@ -269,27 +277,40 @@ except the two file-overlap orderings above.
 19. `ADR046-reset-010`
 20. `ADR046-reset-011`
 
+## Regeneration findings (D095/D096/D097)
+
+- **Refreshed after D096/D097 and all work-item changes** — this graph is
+  regenerated from the current manifests (55 member specs, 536 work items) and
+  MUST NOT be overwritten with the old 55/518 counts.
+- **Core config hub** — work items touching
+  `d2b-core-controller/src/{configuration,cleanup}.rs` are grouped as
+  `wi:core-config-hub` with `file-overlap-order` prep edges to `ADR046-core-001`;
+  unrelated files stay parallel (no whole-wave serialization).
+- **W1 canonical path** — `v3_component_session.rs` is reconciled to the
+  canonical `packages/d2b-contracts/src/v3/component_session.rs` (matching the
+  `v3/*.rs` contract convention).
+- **Security-key W-N/W-R/W-X prose** — the security-key dossier's work-item
+  `dependencyOwner` prose contains mutual (bidirectional) co-development
+  references (e.g. `W-N03`↔`W-N04`, `W-R05`↔`W-X06`). The graph intentionally
+  does **not** encode `W-*` work-item-depends-on edges, so it never relies on
+  lexicographic cycle breaking; the added `W-N22`→`W-N21` edge is acyclic. The
+  remaining mutual references are a **retained finding** for the security-key
+  downstream scope to resolve semantically in the dossier.
+- **Duplicate-generator finding (retained)** — the spec-set manifest and the
+  test-runtime ledger each have their own emitter today;
+  **ADR046-streamline-024** reconciles them and this graph generator into a
+  single canonical `xtask` path.
+
 ## Ready-wave algorithm
 
 A node is **ready to launch** when every id in its `prerequisites` is `done`.
 Query `ADR-046-implementation-graph.json` directly (see
-[`ADR-046-validation-and-delivery.md` §3.5.1](ADR-046-validation-and-delivery.md)
-for the authoritative form):
+[`ADR-046-validation-and-delivery.md` §3.5.1](ADR-046-validation-and-delivery.md)):
 
 ```bash
-# ready nodes: no unfinished prerequisite ($DONE is a JSON array of done ids)
 jq --argjson done "$DONE" '
   .nodes[] | select((.prerequisites - $done) | length == 0)
   | {id, kind, wave, parallelGroup, topologicalRank}
-' docs/specs/ADR-046-implementation-graph.json
-
-# ready and not-yet-launched, grouped by file-disjoint parallelGroup so every
-# concurrently-launchable track is visible at once (anti-serialization check)
-jq --argjson done "$DONE" --argjson launched "$LAUNCHED" '
-  [ .nodes[] | select((.prerequisites - $done) | length == 0)
-    | select([.id] - $launched | length == 1) ]
-  | group_by(.parallelGroup)
-  | map({parallelGroup: .[0].parallelGroup, wave: .[0].wave, ready: [.[].id]})
 ' docs/specs/ADR-046-implementation-graph.json
 ```
 
@@ -301,4 +322,5 @@ anti-serialization violation (see `ADR046-streamline-013`).
 - Canonical machine-readable graph: [`ADR-046-implementation-graph.json`](ADR-046-implementation-graph.json)
 - Wave topology and artifact contract: [`ADR-046-validation-and-delivery.md` §3](ADR-046-validation-and-delivery.md)
 - Decision: **D095** in [`ADR-046-decision-register.md`](ADR-046-decision-register.md)
+- Generator work item: **ADR046-streamline-024**
 - Member index: [`README.md`](README.md)
