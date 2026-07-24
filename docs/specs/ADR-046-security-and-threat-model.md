@@ -759,7 +759,7 @@ Network/Device Providers themselves.
 | Process | `MinijailProcessEffectPort` | `Provider/system-minijail` controller + `d2b-priv-broker` `SpawnRunner` | Compile-time dependency audit: the Provider crate imports no `d2b.broker.v3` service/client/DTO (`ADR-046-provider-system-minijail.md` lines 1621-1628) |
 | Process (systemd) | `SystemdProcessEffectPort` | `Provider/system-systemd` controller via D-Bus transient unit API | Controller never connects to the systemd D-Bus socket directly and never calls `systemctl` as a subprocess |
 | Volume | `VolumeEffectPort` | `Provider/volume-local` controller + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
-| Network | `NetworkEffectPort` | `Provider/network-local` controller + broker `CreateBridge`/`DeclareTap`/`ApplyNftables`/`ApplySysctls` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
+| Network | `NetworkEffectPort` | `Provider/network-local` controller + broker `CreateBridge`/`CreatePersistentTap`/`SetBridgePortFlags`/`ApplyNftables`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
 | Device (vsock) | `VsockEffectPort` | Zone runtime `LiveVsockEffectPort` | `tokio-vsock` is not a dependency of `transport-vsock` (INV-VSOCK-004) |
 | Cloud (ARM/ACA) | `AzureEffectPort` | The cloud runtime Provider's own controller, confined to the gateway Guest | All calls non-blocking; `AzureOperationHandle` is opaque, max 256 bytes |
 
@@ -916,7 +916,7 @@ privileged executor (`ADR-046-provider-system-minijail.md` §7.4,
 - Pidfd identity for adoption additionally requires live launch evidence via
   `/proc/<pid>/fdinfo`, a same-kernel-object check, and a double-read race
   guard on `/proc/self/fdinfo/<fd>` (`pidfd-double-read-race-guard-detects-pid-reuse`,
-  `ADR-046-resources-zone-control.md` lines 3553-3559).
+  [ADR046-zone-control-012](ADR-046-resources-zone-control.md#adr046-zone-control-012)).
 
 **Credit/quota.** `LaunchTicket` issuance is bounded per Zone (max 64
 concurrent in-flight `LaunchTicket`s for `system-minijail`,
