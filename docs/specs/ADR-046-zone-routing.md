@@ -1520,13 +1520,14 @@ High-churn leases, sessions, ceremonies, transfers, named streams, and stream
 handles remain controller/session-internal records; routing never promotes them
 to resources or advertises them.
 
-The frozen routeable pairs are
-`audio.d2bus.org.AudioService/AudioBinding`,
-`security-key.d2bus.org.SecurityKeyService/SecurityKeyBinding`,
-`telemetry.d2bus.org.TelemetryService/TelemetryBinding`, and the policy-gated
-`usb.d2bus.org.UsbService/UsbBinding`. PipeWire, CTAPHID, OTEL, and USBIP are
-implementation details and never route keys, base fields, conditions, errors,
-or advertised status.
+The frozen routeable pairs are `audio.d2bus.org.AudioService` +
+`audio.d2bus.org.AudioBinding`, `security-key.d2bus.org.SecurityKeyService` +
+`security-key.d2bus.org.SecurityKeyBinding`,
+`telemetry.d2bus.org.TelemetryService` +
+`telemetry.d2bus.org.TelemetryBinding`, and the policy-gated
+`usb.d2bus.org.UsbService` + `usb.d2bus.org.UsbBinding`. PipeWire, CTAPHID,
+OTEL, and USBIP are implementation details and never route keys, base fields,
+conditions, errors, or advertised status.
 
 ## Nearest-common-ancestor (NCA) algorithm
 

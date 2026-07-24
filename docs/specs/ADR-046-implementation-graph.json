@@ -2,12 +2,12 @@
   "adr": "0046",
   "artifactKind": "d2b-adr-implementation-graph",
   "counts": {
-    "edges": 1551,
+    "edges": 1670,
     "maxTopologicalRank": 19,
-    "nodes": 591,
+    "nodes": 593,
     "specNodes": 55,
     "waves": 8,
-    "workItemNodes": 536
+    "workItemNodes": 538
   },
   "criticalPath": [
     "ADR-046-decision-register",
@@ -641,11 +641,6 @@
     },
     {
       "from": "ADR-046-provider-device-usbip",
-      "to": "ADR-046-provider-network-local",
-      "type": "file-overlap-order"
-    },
-    {
-      "from": "ADR-046-provider-device-usbip",
       "to": "ADR-046-provider-state",
       "type": "spec-depends-on"
     },
@@ -671,7 +666,17 @@
     },
     {
       "from": "ADR-046-provider-device-usbip",
+      "to": "ADR-046-resources-zone-control",
+      "type": "spec-depends-on"
+    },
+    {
+      "from": "ADR-046-provider-device-usbip",
       "to": "ADR-046-telemetry-audit-and-support",
+      "type": "spec-depends-on"
+    },
+    {
+      "from": "ADR-046-provider-device-usbip",
+      "to": "ADR-046-zone-routing",
       "type": "spec-depends-on"
     },
     {
@@ -1558,11 +1563,6 @@
       "from": "ADR-046-provider-volume-virtiofs",
       "to": "ADR-046-provider-state",
       "type": "spec-depends-on"
-    },
-    {
-      "from": "ADR-046-provider-volume-virtiofs",
-      "to": "ADR-046-provider-volume-local",
-      "type": "file-overlap-order"
     },
     {
       "from": "ADR-046-provider-volume-virtiofs",
@@ -2750,6 +2750,11 @@
       "type": "implements-spec"
     },
     {
+      "from": "ADR046-audio-005",
+      "to": "ADR046-provider-004",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-audio-006",
       "to": "ADR-046-provider-audio-pipewire",
       "type": "implements-spec"
@@ -2840,6 +2845,16 @@
       "type": "implements-spec"
     },
     {
+      "from": "ADR046-audio-012",
+      "to": "ADR046-zone-control-019",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-audio-012",
+      "to": "ADR046-zone-control-020",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-audio-013",
       "to": "ADR-046-provider-audio-pipewire",
       "type": "implements-spec"
@@ -2855,6 +2870,11 @@
       "type": "work-item-depends-on"
     },
     {
+      "from": "ADR046-audio-013",
+      "to": "ADR046-zone-control-019",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-audio-014",
       "to": "ADR-046-provider-audio-pipewire",
       "type": "implements-spec"
@@ -2862,6 +2882,11 @@
     {
       "from": "ADR046-audio-014",
       "to": "ADR046-audio-013",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-audio-014",
+      "to": "ADR046-zone-control-019",
       "type": "work-item-depends-on"
     },
     {
@@ -3856,6 +3881,11 @@
     },
     {
       "from": "ADR046-device-007",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-device-007",
       "to": "ADR046-device-006",
       "type": "work-item-depends-on"
     },
@@ -4166,6 +4196,11 @@
     },
     {
       "from": "ADR046-exec-013",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-exec-013",
       "to": "ADR046-exec-008",
       "type": "work-item-depends-on"
     },
@@ -4193,6 +4228,11 @@
       "from": "ADR046-exec-015",
       "to": "ADR046-core-001",
       "type": "file-overlap-order"
+    },
+    {
+      "from": "ADR046-exec-015",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
     },
     {
       "from": "ADR046-exec-015",
@@ -4603,6 +4643,11 @@
       "from": "ADR046-network-008",
       "to": "ADR046-core-001",
       "type": "file-overlap-order"
+    },
+    {
+      "from": "ADR046-network-008",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
     },
     {
       "from": "ADR046-network-008",
@@ -5035,6 +5080,26 @@
       "type": "work-item-depends-on"
     },
     {
+      "from": "ADR046-nix-031",
+      "to": "ADR-046-nix-configuration",
+      "type": "implements-spec"
+    },
+    {
+      "from": "ADR046-nix-031",
+      "to": "ADR046-provider-004",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-nix-031",
+      "to": "ADR046-zone-control-019",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-nix-031",
+      "to": "ADR046-zone-control-020",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-nl-001",
       "to": "ADR-046-provider-network-local",
       "type": "implements-spec"
@@ -5206,6 +5271,11 @@
     },
     {
       "from": "ADR046-otel-002",
+      "to": "ADR046-provider-004",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-otel-002",
       "to": "ADR046-telem-001",
       "type": "work-item-depends-on"
     },
@@ -5245,6 +5315,16 @@
       "type": "implements-spec"
     },
     {
+      "from": "ADR046-otel-005",
+      "to": "ADR046-zone-control-019",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-otel-005",
+      "to": "ADR046-zone-control-020",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-otel-006",
       "to": "ADR-046-provider-observability-otel",
       "type": "implements-spec"
@@ -5252,6 +5332,16 @@
     {
       "from": "ADR046-otel-006",
       "to": "ADR046-otel-005",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-otel-006",
+      "to": "ADR046-zone-control-019",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-otel-006",
+      "to": "ADR046-zone-control-020",
       "type": "work-item-depends-on"
     },
     {
@@ -5303,6 +5393,16 @@
       "from": "ADR046-provider-003",
       "to": "ADR-046-provider-model-and-packaging",
       "type": "implements-spec"
+    },
+    {
+      "from": "ADR046-provider-004",
+      "to": "ADR-046-provider-model-and-packaging",
+      "type": "implements-spec"
+    },
+    {
+      "from": "ADR046-provider-004",
+      "to": "ADR046-provider-001",
+      "type": "work-item-depends-on"
     },
     {
       "from": "ADR046-provider-agent-001",
@@ -6686,6 +6786,11 @@
     },
     {
       "from": "ADR046-telem-011",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-telem-011",
       "to": "ADR046-store-001",
       "type": "work-item-depends-on"
     },
@@ -6833,6 +6938,11 @@
       "from": "ADR046-usbip-003",
       "to": "ADR-046-provider-device-usbip",
       "type": "implements-spec"
+    },
+    {
+      "from": "ADR046-usbip-003",
+      "to": "ADR046-provider-004",
+      "type": "work-item-depends-on"
     },
     {
       "from": "ADR046-usbip-003",
@@ -7475,6 +7585,11 @@
       "type": "file-overlap-order"
     },
     {
+      "from": "ADR046-zone-control-016",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-zone-control-017",
       "to": "ADR-046-resources-zone-control",
       "type": "implements-spec"
@@ -7503,6 +7618,11 @@
       "from": "ADR046-zone-control-021",
       "to": "ADR046-core-001",
       "type": "file-overlap-order"
+    },
+    {
+      "from": "ADR046-zone-control-021",
+      "to": "ADR046-core-001",
+      "type": "work-item-depends-on"
     },
     {
       "from": "ADR046-zone-control-022",
@@ -7535,9 +7655,69 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N02",
+      "to": "W-N06",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N02",
+      "to": "W-N09",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N02",
+      "to": "W-N18",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N02",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N02",
+      "to": "W-N20",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N03",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-N04",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-N05",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-N07",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-N09",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-N11",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-R01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N03",
+      "to": "W-R02",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N04",
@@ -7545,9 +7725,29 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N04",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N04",
+      "to": "W-R01",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N05",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N05",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N05",
+      "to": "W-R01",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N06",
@@ -7555,9 +7755,24 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N06",
+      "to": "W-N18",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N07",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N07",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N07",
+      "to": "W-R05",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N08",
@@ -7565,9 +7780,34 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N08",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N08",
+      "to": "W-R07",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N09",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N09",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N09",
+      "to": "W-N08",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N09",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N10",
@@ -7575,9 +7815,54 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N10",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N10",
+      "to": "W-N07",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N10",
+      "to": "W-N09",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N10",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N10",
+      "to": "W-N20",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N10",
+      "to": "W-R05",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N11",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N11",
+      "to": "W-N06",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N11",
+      "to": "W-R04",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N11",
+      "to": "W-R05",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N12",
@@ -7585,9 +7870,34 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N12",
+      "to": "W-N10",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N12",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N13",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N13",
+      "to": "W-N09",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N13",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N13",
+      "to": "W-R03",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N14",
@@ -7595,9 +7905,29 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N14",
+      "to": "W-N02",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N14",
+      "to": "W-N11",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N15",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N15",
+      "to": "W-N02",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N15",
+      "to": "W-N03",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N16",
@@ -7605,9 +7935,54 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N16",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N16",
+      "to": "W-N15",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N16",
+      "to": "W-N17",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N16",
+      "to": "W-N22",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N17",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N17",
+      "to": "W-N03",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N17",
+      "to": "W-N07",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N17",
+      "to": "W-N09",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N17",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N17",
+      "to": "W-R03",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N18",
@@ -7615,9 +7990,29 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N18",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N19",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N19",
+      "to": "ADR046-provider-004",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N19",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N19",
+      "to": "W-R05",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N20",
@@ -7625,9 +8020,44 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N20",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N20",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-N21",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N21",
+      "to": "ADR046-zone-control-019",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N21",
+      "to": "ADR046-zone-control-020",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N21",
+      "to": "W-N17",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N21",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N21",
+      "to": "W-N22",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N22",
@@ -7635,9 +8065,44 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-N22",
+      "to": "W-N11",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N22",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N22",
+      "to": "W-R01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N22",
+      "to": "W-R02",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N22",
+      "to": "W-R03",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N22",
+      "to": "W-R04",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-R01",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-R01",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-R02",
@@ -7645,9 +8110,24 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-R02",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-R02",
+      "to": "W-R01",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-R03",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-R03",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-R04",
@@ -7655,9 +8135,24 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-R04",
+      "to": "W-N06",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-R05",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-R05",
+      "to": "ADR046-provider-004",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-R05",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-R06",
@@ -7665,9 +8160,24 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-R06",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-R06",
+      "to": "W-R05",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-R07",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-R07",
+      "to": "W-N01",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-X01",
@@ -7675,9 +8185,39 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-X01",
+      "to": "W-N03",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X01",
+      "to": "W-N04",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X01",
+      "to": "W-N05",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X01",
+      "to": "W-R01",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X01",
+      "to": "W-R02",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-X02",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-X02",
+      "to": "W-X01",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-X03",
@@ -7685,9 +8225,34 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-X03",
+      "to": "W-N13",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X03",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X03",
+      "to": "W-R03",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-X04",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-X04",
+      "to": "W-R06",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X04",
+      "to": "W-R07",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-X05",
@@ -7695,9 +8260,39 @@
       "type": "implements-spec"
     },
     {
+      "from": "W-X05",
+      "to": "W-N08",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X05",
+      "to": "W-N09",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "W-X06",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-X06",
+      "to": "W-N11",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X06",
+      "to": "W-N13",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X06",
+      "to": "W-N19",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-X06",
+      "to": "W-R05",
+      "type": "work-item-depends-on"
     },
     {
       "from": "WI-001",
@@ -8368,7 +8963,9 @@
         "ADR-046-resource-reconciliation",
         "ADR-046-resources-device",
         "ADR-046-resources-network",
-        "ADR-046-telemetry-audit-and-support"
+        "ADR-046-resources-zone-control",
+        "ADR-046-telemetry-audit-and-support",
+        "ADR-046-zone-routing"
       ],
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR-046-provider-device-usbip",
@@ -8380,16 +8977,17 @@
         "ADR-046-componentsession-and-bus",
         "ADR-046-nix-configuration",
         "ADR-046-provider-model-and-packaging",
-        "ADR-046-provider-network-local",
         "ADR-046-provider-state",
         "ADR-046-resource-api-and-authorization",
         "ADR-046-resource-reconciliation",
         "ADR-046-resources-device",
         "ADR-046-resources-network",
-        "ADR-046-telemetry-audit-and-support"
+        "ADR-046-resources-zone-control",
+        "ADR-046-telemetry-audit-and-support",
+        "ADR-046-zone-routing"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 11,
+      "topologicalRank": 10,
       "wave": "W6"
     },
     {
@@ -9088,7 +9686,6 @@
         "ADR-046-nix-configuration",
         "ADR-046-provider-model-and-packaging",
         "ADR-046-provider-state",
-        "ADR-046-provider-volume-local",
         "ADR-046-resource-api-and-authorization",
         "ADR-046-resource-reconciliation",
         "ADR-046-resources-host-guest-process-user",
@@ -9096,7 +9693,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 11,
+      "topologicalRank": 10,
       "wave": "W6"
     },
     {
@@ -9558,7 +10155,7 @@
         "ADR-046-zone-routing"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 12,
+      "topologicalRank": 11,
       "wave": "W7"
     },
     {
@@ -9772,7 +10369,7 @@
         "ADR-046-zone-routing"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -10137,7 +10734,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-audio-pipewire/src/audio_state.rs`; re-exported from crate root"
+        "`packages/d2b-provider-audio-pipewire/src/audio_policy.rs`; re-exported from crate root"
       ],
       "entryContracts": [
         "ADR-046-provider-audio-pipewire"
@@ -10199,7 +10796,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-audio-pipewire/src/resource_type.rs`; `packages/d2b-provider-audio-pipewire/src/admission.rs`"
+        "`packages/d2b-provider-audio-pipewire/src/{resource_type,admission,provider_extension}.rs` (strict implementation extensions and binding only; common base lives under ADR046-provider-004)"
       ],
       "entryContracts": [
         "ADR-046-provider-audio-pipewire"
@@ -10207,10 +10804,11 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-audio-005",
       "kind": "work-item",
-      "owner": "Core resource-api foundation; `d2b-provider-audio-pipewire` crate",
+      "owner": "ADR046-provider-004 common audio Service/Binding base; Core resource-api foundation; `d2b-provider-audio-pipewire` crate",
       "parallelGroup": "wi:ADR-046-provider-audio-pipewire",
       "prerequisites": [
-        "ADR-046-provider-audio-pipewire"
+        "ADR-046-provider-audio-pipewire",
+        "ADR046-provider-004"
       ],
       "specId": "ADR-046-provider-audio-pipewire",
       "topologicalRank": 11,
@@ -10219,7 +10817,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-audio-pipewire/src/controller/audio_state.rs`"
+        "`packages/d2b-provider-audio-pipewire/src/controller/audio_service.rs`; `src/controller/audio_binding.rs`"
       ],
       "entryContracts": [
         "ADR-046-provider-audio-pipewire"
@@ -10227,7 +10825,7 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-audio-006",
       "kind": "work-item",
-      "owner": "Depends on `ADR046-audio-001` through `ADR046-audio-005`; system Process Provider; AudioMediator service (`ADR046-audio-007`); GuestAudioAgent component (`ADR046-audio-011`); core reconciliation framework; no Provider state Volume is declared under D087",
+      "owner": "Depends on `ADR046-audio-001` through `ADR046-audio-005`; core ResourceImport controller; system Process Provider; AudioMediator (`ADR046-audio-007`); GuestAudioAgent (`ADR046-audio-011`); no Provider state Volume under D087",
       "parallelGroup": "wi:ADR-046-provider-audio-pipewire",
       "prerequisites": [
         "ADR-046-provider-audio-pipewire",
@@ -10361,7 +10959,9 @@
       "owner": "ADR046-zone-control-019, ADR046-zone-control-020; audio Provider owner",
       "parallelGroup": "wi:ADR-046-provider-audio-pipewire",
       "prerequisites": [
-        "ADR-046-provider-audio-pipewire"
+        "ADR-046-provider-audio-pipewire",
+        "ADR046-zone-control-019",
+        "ADR046-zone-control-020"
       ],
       "specId": "ADR-046-provider-audio-pipewire",
       "topologicalRank": 11,
@@ -10370,7 +10970,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-audio-pipewire/src/authority.rs` (speaker mixer + mic arbiter); `AuthorityDescriptor` on the `AudioState`/authority `Endpoint`"
+        "`packages/d2b-provider-audio-pipewire/src/authority.rs` (speaker mixer + mic arbiter); `AuthorityDescriptor` on owner `AudioService`"
       ],
       "entryContracts": [
         "ADR-046-provider-audio-pipewire"
@@ -10378,12 +10978,13 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-audio-013",
       "kind": "work-item",
-      "owner": "ADR046-audio-001, ADR046-audio-004, ADR046-zone-control-019; audio Provider owner",
+      "owner": "Depends on `ADR046-audio-001`, `ADR046-audio-004`, `ADR046-zone-control-019`; audio Provider owner",
       "parallelGroup": "wi:ADR-046-provider-audio-pipewire",
       "prerequisites": [
         "ADR-046-provider-audio-pipewire",
         "ADR046-audio-001",
-        "ADR046-audio-004"
+        "ADR046-audio-004",
+        "ADR046-zone-control-019"
       ],
       "specId": "ADR-046-provider-audio-pipewire",
       "topologicalRank": 13,
@@ -10400,11 +11001,12 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-audio-014",
       "kind": "work-item",
-      "owner": "ADR046-audio-013, ADR046-zone-control-019; audio Provider owner",
+      "owner": "Depends on `ADR046-audio-013`, `ADR046-zone-control-019`; audio Provider owner",
       "parallelGroup": "wi:ADR-046-provider-audio-pipewire",
       "prerequisites": [
         "ADR-046-provider-audio-pipewire",
-        "ADR046-audio-013"
+        "ADR046-audio-013",
+        "ADR046-zone-control-019"
       ],
       "specId": "ADR-046-provider-audio-pipewire",
       "topologicalRank": 14,
@@ -11500,7 +12102,7 @@
       "id": "ADR046-core-001",
       "kind": "work-item",
       "owner": "W0/W1a; core-controller owner",
-      "parallelGroup": "wi:core-config-hub",
+      "parallelGroup": "wi:ADR-046-core-controllers",
       "prerequisites": [
         "ADR-046-core-controllers"
       ],
@@ -11982,7 +12584,7 @@
         "ADR-046-validation-and-delivery"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W7"
     },
     {
@@ -12002,7 +12604,7 @@
         "ADR-046-validation-and-delivery"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W7"
     },
     {
@@ -12023,7 +12625,7 @@
         "ADR046-delivery-002"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W7"
     },
     {
@@ -12044,7 +12646,7 @@
         "ADR046-delivery-002"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W7"
     },
     {
@@ -12066,7 +12668,7 @@
         "ADR046-delivery-003"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 16,
+      "topologicalRank": 15,
       "wave": "W7"
     },
     {
@@ -12089,7 +12691,7 @@
         "ADR046-delivery-005"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 17,
+      "topologicalRank": 16,
       "wave": "W7"
     },
     {
@@ -12109,7 +12711,7 @@
         "ADR-046-validation-and-delivery"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W7"
     },
     {
@@ -12130,7 +12732,7 @@
         "ADR046-streamline-001"
       ],
       "specId": "ADR-046-validation-and-delivery",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W7"
     },
     {
@@ -13409,7 +14011,7 @@
         "ADR046-delivery-007"
       ],
       "specId": "ADR-046-feasibility-and-spikes",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W7"
     },
     {
@@ -14666,6 +15268,29 @@
     {
       "blockers": [],
       "destinations": [
+        "`nixos-modules/resources-sharing.nix`; `nixos-modules/assertions.nix`; `tests/unit/nix/cases/resource-sharing.nix`"
+      ],
+      "entryContracts": [
+        "ADR-046-nix-configuration"
+      ],
+      "exitGate": "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id": "ADR046-nix-031",
+      "kind": "work-item",
+      "owner": "ADR046-provider-004, ADR046-zone-control-019, ADR046-zone-control-020; Nix resource compiler owner",
+      "parallelGroup": "wi:ADR-046-nix-configuration",
+      "prerequisites": [
+        "ADR-046-nix-configuration",
+        "ADR046-provider-004",
+        "ADR046-zone-control-019",
+        "ADR046-zone-control-020"
+      ],
+      "specId": "ADR-046-nix-configuration",
+      "topologicalRank": 11,
+      "wave": "W5"
+    },
+    {
+      "blockers": [],
+      "destinations": [
         "`d2b-contracts` trait plus `d2b-core` core adapter; maps to broker wire operations and audit emission."
       ],
       "entryContracts": [
@@ -14999,7 +15624,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-observability-otel/src/forwarder_bin.rs`; `packages/d2b-provider-observability-otel/src/controller.rs` (readiness/phase logic)"
+        "`packages/d2b-provider-observability-otel/src/{forwarder_bin,controller,binding}.rs`"
       ],
       "entryContracts": [
         "ADR-046-provider-observability-otel"
@@ -15020,7 +15645,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-observability-otel/src/collector_bin.rs`; `packages/d2b-provider-observability-otel/src/emitter_socket.rs`; `packages/d2b-provider-observability-otel/src/exporter.rs`; `packages/d2b-provider-observability-otel/src/controller.rs` (forwarder management only); updated `nixos-modules/components/observability/{host,stack}.nix`"
+        "`packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,exporter,controller,service,binding}.rs`; updated Nix observability modules"
       ],
       "entryContracts": [
         "ADR-046-provider-observability-otel"
@@ -15028,12 +15653,13 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-otel-002",
       "kind": "work-item",
-      "owner": "ADR046-otel-001 + ADR046-telem-001 + ADR046-provider-001 (Provider toolkit) + a transport Provider (`ADR-046-provider-transport-unix`); W2; observability owner",
+      "owner": "ADR046-otel-001 + ADR046-telem-001 + ADR046-provider-001 (Provider toolkit) + ADR046-provider-004 (common telemetry Service/Binding base) + resource/Endpoint/Volume contracts; W2; observability owner",
       "parallelGroup": "wi:ADR-046-provider-observability-otel",
       "prerequisites": [
         "ADR-046-provider-observability-otel",
         "ADR046-otel-001",
         "ADR046-provider-001",
+        "ADR046-provider-004",
         "ADR046-telem-001"
       ],
       "specId": "ADR-046-provider-observability-otel",
@@ -15098,7 +15724,9 @@
       "owner": "ADR046-zone-control-019, ADR046-zone-control-020; observability Provider owner",
       "parallelGroup": "wi:ADR-046-provider-observability-otel",
       "prerequisites": [
-        "ADR-046-provider-observability-otel"
+        "ADR-046-provider-observability-otel",
+        "ADR046-zone-control-019",
+        "ADR046-zone-control-020"
       ],
       "specId": "ADR-046-provider-observability-otel",
       "topologicalRank": 11,
@@ -15107,7 +15735,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-observability-otel/src/{authority,sink,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` ingest `Endpoint`"
+        "`packages/d2b-provider-observability-otel/src/{authority,service,binding,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` `TelemetryService`"
       ],
       "entryContracts": [
         "ADR-046-provider-observability-otel"
@@ -15119,7 +15747,9 @@
       "parallelGroup": "wi:ADR-046-provider-observability-otel",
       "prerequisites": [
         "ADR-046-provider-observability-otel",
-        "ADR046-otel-005"
+        "ADR046-otel-005",
+        "ADR046-zone-control-019",
+        "ADR046-zone-control-020"
       ],
       "specId": "ADR-046-provider-observability-otel",
       "topologicalRank": 12,
@@ -15304,6 +15934,27 @@
       ],
       "specId": "ADR-046-provider-model-and-packaging",
       "topologicalRank": 8,
+      "wave": "W3"
+    },
+    {
+      "blockers": [],
+      "destinations": [
+        "`packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs`; generated schema artifacts for the eight exact qualified ResourceTypes"
+      ],
+      "entryContracts": [
+        "ADR-046-provider-model-and-packaging"
+      ],
+      "exitGate": "ADR046-W3 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id": "ADR046-provider-004",
+      "kind": "work-item",
+      "owner": "ADR046-provider-001; shared semantic Service/Binding contract owner",
+      "parallelGroup": "wi:ADR-046-provider-model-and-packaging",
+      "prerequisites": [
+        "ADR-046-provider-model-and-packaging",
+        "ADR046-provider-001"
+      ],
+      "specId": "ADR-046-provider-model-and-packaging",
+      "topologicalRank": 9,
       "wave": "W3"
     },
     {
@@ -16612,7 +17263,7 @@
         "ADR046-telem-008"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16634,7 +17285,7 @@
         "ADR046-session-001"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16654,7 +17305,7 @@
         "ADR-046-security-and-threat-model"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16676,7 +17327,7 @@
         "ADR046-routing-005"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16696,7 +17347,7 @@
         "ADR-046-security-and-threat-model"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16763,7 +17414,7 @@
         "ADR046-exec-002"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16784,7 +17435,7 @@
         "ADR046-pstate-003"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16806,7 +17457,7 @@
         "ADR046-credential-007"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16848,7 +17499,7 @@
         "ADR046-audit-002"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16869,7 +17520,7 @@
         "ADR046-session-001"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16912,7 +17563,7 @@
         "ADR046-audit-001"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16932,7 +17583,7 @@
         "ADR-046-security-and-threat-model"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16953,7 +17604,7 @@
         "ADR046-routing-004"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -16973,7 +17624,7 @@
         "ADR-046-security-and-threat-model"
       ],
       "specId": "ADR-046-security-and-threat-model",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W7"
     },
     {
@@ -17561,7 +18212,7 @@
       "exitGate": "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-streamline-011",
       "kind": "work-item",
-      "owner": "None — no prerequisite work item; owned by this spec",
+      "owner": "No prerequisite; `packages/xtask` schema/validator owner",
       "parallelGroup": "wi:ADR-046-streamline",
       "prerequisites": [
         "ADR-046-streamline"
@@ -17689,7 +18340,7 @@
       "exitGate": "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-streamline-017",
       "kind": "work-item",
-      "owner": "None — no prerequisite work item; owned by this spec",
+      "owner": "No prerequisite; `docs/specs` evidence-command documentation owner",
       "parallelGroup": "wi:ADR-046-streamline",
       "prerequisites": [
         "ADR-046-streamline"
@@ -17800,7 +18451,7 @@
         "ADR046-delivery-007"
       ],
       "specId": "ADR-046-streamline",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W7"
     },
     {
@@ -17822,7 +18473,7 @@
         "ADR046-streamline-022"
       ],
       "specId": "ADR-046-streamline",
-      "topologicalRank": 16,
+      "topologicalRank": 15,
       "wave": "W7"
     },
     {
@@ -18532,7 +19183,7 @@
         "ADR-046-provider-device-usbip"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 12,
+      "topologicalRank": 11,
       "wave": "W6"
     },
     {
@@ -18553,7 +19204,7 @@
         "ADR046-usbip-001"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
@@ -18567,20 +19218,21 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-usbip-003",
       "kind": "work-item",
-      "owner": "ADR046-usbip-001; Provider model crate structure; device-usbip provider owner",
+      "owner": "ADR046-usbip-001, ADR046-provider-004; Provider model crate structure; device-usbip provider owner",
       "parallelGroup": "wi:ADR-046-provider-device-usbip",
       "prerequisites": [
         "ADR-046-provider-device-usbip",
+        "ADR046-provider-004",
         "ADR046-usbip-001"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "packages/d2b-provider-device-usbip/src/controller.rs and packages/d2b-provider-device-usbip/src/reconcile.rs"
+        "packages/d2b-provider-device-usbip/src/{controller,reconcile,export_import}.rs"
       ],
       "entryContracts": [
         "ADR-046-provider-device-usbip"
@@ -18596,7 +19248,7 @@
         "ADR046-usbip-003"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -18617,7 +19269,7 @@
         "ADR046-usbip-003"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -18631,20 +19283,20 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-usbip-006",
       "kind": "work-item",
-      "owner": "ADR046-usbip-003; Device status extension schema owner",
+      "owner": "ADR046-usbip-003; Device provider details plus `UsbService` and `UsbBinding` base/provider status schema owner",
       "parallelGroup": "wi:ADR-046-provider-device-usbip",
       "prerequisites": [
         "ADR-046-provider-device-usbip",
         "ADR046-usbip-003"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "packages/d2b-provider-device-usbip/integration/"
+        "packages/d2b-provider-device-usbip/{src,tests,integration/README.md}; tests/host-integration/usbip-service.nix; tests/host-integration/hardware/usbip-service.sh"
       ],
       "entryContracts": [
         "ADR-046-provider-device-usbip"
@@ -18660,7 +19312,7 @@
         "ADR046-usbip-005"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -18681,7 +19333,7 @@
         "ADR046-usbip-003"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -18703,7 +19355,7 @@
         "ADR046-usbip-008"
       ],
       "specId": "ADR-046-provider-device-usbip",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -19300,7 +19952,7 @@
         "ADR046-volume-001"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 12,
+      "topologicalRank": 11,
       "wave": "W6"
     },
     {
@@ -19322,7 +19974,7 @@
         "ADR046-vvfs-001"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
@@ -19345,7 +19997,7 @@
         "ADR046-vvfs-002"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 14,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -19366,7 +20018,7 @@
         "ADR046-vvfs-003"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 15,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -19389,7 +20041,7 @@
         "ADR046-vvfs-004"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 16,
+      "topologicalRank": 15,
       "wave": "W6"
     },
     {
@@ -19411,7 +20063,7 @@
         "ADR046-vvfs-001"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 13,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
@@ -19432,7 +20084,7 @@
         "ADR046-volume-001"
       ],
       "specId": "ADR-046-provider-volume-virtiofs",
-      "topologicalRank": 12,
+      "topologicalRank": 11,
       "wave": "W6"
     },
     {
@@ -19838,7 +20490,7 @@
       "exitGate": "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-zone-control-019",
       "kind": "work-item",
-      "owner": "ADR046-zone-control-001; ADR046-zonelink owner; `d2b-core-controller` + `d2b-contracts` owners",
+      "owner": "ADR046-zone-control-001, ADR046-provider-004; ADR046-zonelink owner; `d2b-core-controller` + `d2b-contracts` owners",
       "parallelGroup": "wi:ADR-046-resources-zone-control",
       "prerequisites": [
         "ADR-046-resources-zone-control"
@@ -19850,7 +20502,7 @@
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-core-controller/src/export_import_projection.rs` (local typed projection lifecycle owned by `ResourceImport`)"
+        "`packages/d2b-core-controller/src/export_import_projection.rs` (local qualified Service projection lifecycle owned by `ResourceImport`)"
       ],
       "entryContracts": [
         "ADR-046-resources-zone-control"
@@ -19980,13 +20632,18 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N02",
       "kind": "work-item",
-      "owner": "Device controller owner for `Provider/device-security-key`; depends on W-N01 crate layout, W-N06 probe port, W-N09 templates, W-N18 effect port, and ADR-046-resource-reconciliation.",
+      "owner": "Provider controller owner; depends on W-N06 probe, W-N09 templates, W-N18 effect port, W-N19 Service/Binding contracts, W-N20 status contract, and ADR-046-resource-reconciliation.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N06",
+        "W-N09",
+        "W-N18",
+        "W-N19",
+        "W-N20"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 15,
       "wave": "W6"
     },
     {
@@ -20000,13 +20657,20 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N03",
       "kind": "work-item",
-      "owner": "Relay Process owner for `Provider/device-security-key`; depends on W-R01/W-R02/W-N04/W-N05/W-N07/W-N17.",
+      "owner": "Authority Service relay owner; depends on W-R01, W-R02, W-N04, W-N05, W-N07, W-N09, and W-N11.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N04",
+        "W-N05",
+        "W-N07",
+        "W-N09",
+        "W-N11",
+        "W-R01",
+        "W-R02"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 16,
       "wave": "W6"
     },
     {
@@ -20020,13 +20684,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N04",
       "kind": "work-item",
-      "owner": "Relay session-state owner; depends on W-R01 and W-N03.",
+      "owner": "Relay ceremony-session foundation owner; depends on W-R01 and W-N01.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-R01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20040,13 +20706,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N05",
       "kind": "work-item",
-      "owner": "Relay CID-translation owner; depends on W-R01 and W-N03.",
+      "owner": "Relay CID-translation foundation owner; depends on W-R01 and W-N01.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-R01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20063,10 +20731,11 @@
       "owner": "Probe/effect-port and activation owner; depends on W-N18 effect port and Core private bundle device table support.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N18"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20080,13 +20749,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N07",
       "kind": "work-item",
-      "owner": "ComponentSession/security descriptor owner; depends on ADR-046-componentsession-and-bus, W-N03 relay, W-N17 transport-vsock, and W-N18 effect-port redaction types.",
+      "owner": "ComponentSession/security descriptor contract owner; depends on W-N01, W-R05, and ADR-046-componentsession-and-bus.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-R05"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20100,13 +20771,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N08",
       "kind": "work-item",
-      "owner": "Sandbox/minijail owner; depends on W-N09 Process templates and ADR-046-components-processes-and-sandbox.",
+      "owner": "Sandbox/minijail foundation owner; depends on W-N01, W-R07, and ADR-046-components-processes-and-sandbox.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-R07"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20120,13 +20793,16 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N09",
       "kind": "work-item",
-      "owner": "Provider descriptor/process-template owner; depends on W-N01 crate, W-N08 sandbox profiles, W-N17 Endpoint transport, and W-N19 virtual frontend Device.",
+      "owner": "Provider process/Endpoint-template owner; depends on W-N01, W-N08, and W-N19 Service/Binding ownership contracts.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-N08",
+        "W-N19"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -20140,13 +20816,19 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N10",
       "kind": "work-item",
-      "owner": "Provider package descriptor owner; depends on W-N01 crate, W-N09 templates, W-N20 state contract, and ADR-046-provider-model-and-packaging.",
+      "owner": "Provider package descriptor owner; depends on W-N01, W-R05, W-N07, W-N09, W-N19, W-N20, and ADR-046-provider-model-and-packaging.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-N07",
+        "W-N09",
+        "W-N19",
+        "W-N20",
+        "W-R05"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 15,
       "wave": "W6"
     },
     {
@@ -20163,16 +20845,19 @@
       "owner": "Core LaunchTicket/broker owner; depends on W-R04, W-R05, W-N06, and ADR-046-resources-device.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N06",
+        "W-R04",
+        "W-R05"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 15,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "`nixos-modules/` v3 resource compiler/eval assertions for `Provider/device-security-key` Device resources"
+        "`nixos-modules/` resource compiler/eval assertions for physical Device, authority Service, ResourceExport/Import, and consumer Binding"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20180,13 +20865,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N12",
       "kind": "work-item",
-      "owner": "Nix resource compiler owner; depends on W-N10 provider descriptor/config schema and ADR-046-nix-configuration.",
+      "owner": "Nix resource compiler owner; depends on W-N10, W-N19, and ADR-046-nix-configuration.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N10",
+        "W-N19"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 16,
       "wave": "W6"
     },
     {
@@ -20200,19 +20887,22 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N13",
       "kind": "work-item",
-      "owner": "Guest Nix module migration owner; depends on W-N03 frontend Process, W-N09 Process templates, and W-N19 virtual frontend Device.",
+      "owner": "Guest Nix migration owner; depends on W-R03, W-N09, and W-N19 Binding-owned frontend contract.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N09",
+        "W-N19",
+        "W-R03"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 15,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "Core audit emission for `device-grant` and Device controller audit emission for `device-session`/lease lifecycle events"
+        "Core `device-grant` audit and Provider controller Service/Binding ceremony lifecycle audit"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20220,13 +20910,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N14",
       "kind": "work-item",
-      "owner": "Audit owner for Core device-grant and Device controller lifecycle; depends on W-N02 controller, W-N11 DeviceGrant open, and ADR-046-telemetry-audit-and-support.",
+      "owner": "Audit owner for Core device-grant and Service/Binding lifecycle; depends on W-N02, W-N11, and ADR-046-telemetry-audit-and-support.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N02",
+        "W-N11"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 16,
       "wave": "W6"
     },
     {
@@ -20243,10 +20935,12 @@
       "owner": "Observability owner; depends on W-N03 relay, W-N02 controller, and ADR-046-telemetry-audit-and-support.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N02",
+        "W-N03"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 17,
       "wave": "W6"
     },
     {
@@ -20260,19 +20954,23 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N16",
       "kind": "work-item",
-      "owner": "Provider documentation owner; depends on W-N01 through W-N15 and W-N17 through W-N20 for complete crate behavior.",
+      "owner": "Provider documentation owner; depends on W-N01 through W-N15 and W-N17 through W-N22 for complete behavior.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-N15",
+        "W-N17",
+        "W-N22"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 18,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "`Provider/transport-vsock` Endpoint resolution and LaunchTicket attachment integration for security-key relay/frontend"
+        "Authority/projection Service Endpoint and Binding private Endpoint resolution, including transport-vsock and ZoneLink encrypted streams"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20280,13 +20978,18 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N17",
       "kind": "work-item",
-      "owner": "transport-vsock/ComponentSession integration owner; depends on W-N03 relay, W-N07 descriptor validation, and ADR-046-componentsession-and-bus.",
+      "owner": "Endpoint/ComponentSession integration owner; depends on W-R03, W-N03, W-N07, W-N09, W-N19, and ADR-046-componentsession-and-bus.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N03",
+        "W-N07",
+        "W-N09",
+        "W-N19",
+        "W-R03"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 17,
       "wave": "W6"
     },
     {
@@ -20300,19 +21003,20 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N18",
       "kind": "work-item",
-      "owner": "`d2b-contracts` neutral effect-port owner and Core adapter owner; depends on ADR-046-resources-device and W-N06 probe behavior.",
+      "owner": "`d2b-contracts` neutral effect-port foundation owner; depends on W-N01 and ADR-046-resources-device.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "Device controller virtual `Device/<device-name>-frontend` lifecycle and Core frontend LaunchTicket UHID DeviceGrant resolution"
+        "`packages/d2b-provider-device-security-key/src/{resource_type,provider_extension,admission}.rs`; controller contracts; system-core Guest UHID authority-subresource DeviceGrant (common base lives under ADR046-provider-004)"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20320,13 +21024,16 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N19",
       "kind": "work-item",
-      "owner": "Virtual frontend Device lifecycle owner; depends on W-N02 controller, W-N03 frontend/relay, W-N11 DeviceGrant, and ADR-046-resources-device.",
+      "owner": "Device-security-key Service/Binding implementation owner; depends on ADR046-provider-004, W-N01, W-R05, resource object/Device/D096/D097 contracts.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "ADR046-provider-004",
+        "W-N01",
+        "W-R05"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20340,13 +21047,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N20",
       "kind": "work-item",
-      "owner": "Provider state/status owner; depends on ADR-046-provider-state, W-N10 descriptor, and W-N09 Process templates.",
+      "owner": "Provider state/status contract owner; depends on W-N01, W-N19, and ADR-046-provider-state.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-N19"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -20360,19 +21069,24 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N21",
       "kind": "work-item",
-      "owner": "ADR046-zone-control-019, ADR046-zone-control-020; security-key relay/session owner",
+      "owner": "Cross-Zone adapter owner; depends on W-N17, W-N19, W-N22, ADR046-zone-control-019, and ADR046-zone-control-020.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "ADR046-zone-control-019",
+        "ADR046-zone-control-020",
+        "W-N17",
+        "W-N19",
+        "W-N22"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 18,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "`packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs`; `AuthorityDescriptor` on the relay `Endpoint`/`Device`"
+        "`packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs`; D097 `AuthorityDescriptor` on authority SecurityKeyService"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20380,13 +21094,19 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N22",
       "kind": "work-item",
-      "owner": "W-N21, ADR046-zone-control-019, ADR046-zone-control-020; security-key relay/session owner",
+      "owner": "D097 authority foundation owner; depends on W-R01, W-R02, W-R03, W-R04, W-N11, W-N19, and the D097 authority contract.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N11",
+        "W-N19",
+        "W-R01",
+        "W-R02",
+        "W-R03",
+        "W-R04"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 16,
       "wave": "W6"
     },
     {
@@ -20400,19 +21120,20 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-R01",
       "kind": "work-item",
-      "owner": "ADR-046 provider-device-security-key session/relay owner; depends on ADR-046-components-processes-and-sandbox, ADR-046-componentsession-and-bus, and W-N03/W-N04/W-N05 relay/session/CID implementation.",
+      "owner": "ADR-046 provider-device-security-key session/relay owner; depends on W-N01 and the ComponentSession/Process contracts.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "Move to `packages/d2b-provider-device-security-key/src/relay.rs`; replace daemon-internal Unix socket proxy with vsock framing"
+        "Move to `packages/d2b-provider-device-security-key/src/relay.rs`; replace daemon-internal Unix socket proxy with ComponentSession over the owned Service Endpoint"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20420,13 +21141,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-R02",
       "kind": "work-item",
-      "owner": "ADR-046 provider-device-security-key relay owner; depends on W-N03 relay Process, W-N07 descriptor validation, and W-N17 transport-vsock integration.",
+      "owner": "ADR-046 provider-device-security-key relay extraction owner; depends on W-N01, W-R01, and the frozen ComponentSession/Endpoint contracts.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-R01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20440,13 +21163,14 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-R03",
       "kind": "work-item",
-      "owner": "ADR-046 provider-device-security-key frontend owner; depends on W-N03 relay service, W-N07 ComponentSession validation, W-N13 guest Nix migration gate, W-N17 transport-vsock, and W-N19 virtual frontend Device lifecycle.",
+      "owner": "ADR-046 provider-device-security-key frontend extraction owner; depends on W-N01 and frozen Process/ComponentSession contracts.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
@@ -20460,13 +21184,14 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-R04",
       "kind": "work-item",
-      "owner": "Core LaunchTicket/privileged broker device-grant owner; depends on ADR-046-resources-device, W-N06 probe/device-token population, and W-N11 broker op update.",
+      "owner": "Core LaunchTicket/privileged broker reuse owner; depends on ADR-046-resources-device and W-N06 probe/device-token population.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N06"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -20480,13 +21205,15 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-R05",
       "kind": "work-item",
-      "owner": "`d2b-contracts` security-key DTO owner; depends on ADR-046-resource-object-model, ADR-046-resources-device, W-N10 provider descriptor, and W-X06 udev-op removal.",
+      "owner": "`d2b-contracts` security-key ceremony/effect DTO owner; depends on ADR046-provider-004, ADR-046-resource-object-model, ADR-046-resources-device, and W-N01.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "ADR046-provider-004",
+        "W-N01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
@@ -20503,10 +21230,12 @@
       "owner": "Provider crate test owner; depends on W-R05 v3 DTOs and W-N01 provider crate layout.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01",
+        "W-R05"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 13,
       "wave": "W6"
     },
     {
@@ -20520,13 +21249,14 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-R07",
       "kind": "work-item",
-      "owner": "Provider crate test/minijail owner; depends on W-N08 minijail profiles, W-N09 Process templates, and W-N01 provider crate layout.",
+      "owner": "Provider crate test/minijail adaptation owner; depends on W-N01 and the frozen Process sandbox contract.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 12,
       "wave": "W6"
     },
     {
@@ -20543,10 +21273,15 @@
       "owner": "Provider-device-security-key removal owner; depends on W-R01, W-R02, W-N03, W-N04, and W-N05 successor relay/session coverage.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N03",
+        "W-N04",
+        "W-N05",
+        "W-R01",
+        "W-R02"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 17,
       "wave": "W6"
     },
     {
@@ -20563,16 +21298,17 @@
       "owner": "d2bd integration removal owner; depends on W-X01.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-X01"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 18,
       "wave": "W6"
     },
     {
       "blockers": [],
       "destinations": [
-        "Removed from guest Nix module; successor frontend lifecycle is the v3 Process resource `device-<uid-short>-sk-frontend` managed by Process Provider"
+        "Removed from guest Nix module; successor is Binding-owned `Process/binding-<uid-short>-sk-frontend`"
       ],
       "entryContracts": [
         "ADR-046-provider-device-security-key"
@@ -20580,13 +21316,16 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-X03",
       "kind": "work-item",
-      "owner": "Guest Nix module removal owner; depends on W-N13 migration gate and W-N03/W-N19 frontend Process/UHID DeviceGrant.",
+      "owner": "Guest Nix module removal owner; depends on W-N13, W-R03, and W-N19 Binding frontend/UHID contract.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N13",
+        "W-N19",
+        "W-R03"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 16,
       "wave": "W6"
     },
     {
@@ -20603,10 +21342,12 @@
       "owner": "Test-suite migration/removal owner; depends on W-R06 and W-R07 provider-crate successor tests.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-R06",
+        "W-R07"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 14,
       "wave": "W6"
     },
     {
@@ -20623,10 +21364,12 @@
       "owner": "Core ProcessRole removal owner; depends on W-N09 Process resources, W-N08 sandbox templates, and system-minijail/system-systemd conformance.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N08",
+        "W-N09"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 15,
       "wave": "W6"
     },
     {
@@ -20640,13 +21383,17 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-X06",
       "kind": "work-item",
-      "owner": "Broker/contracts/Nix removal owner; depends on W-R05, W-N11, W-N13, and W-N19 UHID DeviceGrant replacement.",
+      "owner": "Broker/contracts/Nix removal owner; depends on W-R05, W-N11, W-N13, and W-N19 Guest-substrate UHID replacement.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
-        "ADR-046-provider-device-security-key"
+        "ADR-046-provider-device-security-key",
+        "W-N11",
+        "W-N13",
+        "W-N19",
+        "W-R05"
       ],
       "specId": "ADR-046-provider-device-security-key",
-      "topologicalRank": 11,
+      "topologicalRank": 16,
       "wave": "W6"
     },
     {
@@ -21074,7 +21821,7 @@
       ],
       "specCount": 1,
       "wave": "W3",
-      "workItemCount": 3
+      "workItemCount": 4
     },
     {
       "parallelGroups": [
@@ -21104,7 +21851,7 @@
       ],
       "specCount": 7,
       "wave": "W5",
-      "workItemCount": 140
+      "workItemCount": 141
     },
     {
       "parallelGroups": [

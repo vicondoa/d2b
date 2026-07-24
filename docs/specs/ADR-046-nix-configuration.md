@@ -861,7 +861,7 @@ schema validation rather than lowering to Binding.
 # Local-root owner Zone: the semantic type is implementation-independent; the
 # selected Provider validates backingRefs against its signed factory.
 d2b.zones.local-root.resources.host-audio = {
-  type = "audio.d2bus.org/AudioService";
+  type = "audio.d2bus.org.AudioService";
   spec = {
     providerRef = "Provider/audio-pipewire";
     backingRefs = [ "Device/host-mic" "Endpoint/audio-local" ];
@@ -873,8 +873,8 @@ d2b.zones.local-root.resources.mic-export = {
   type = "ResourceExport";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    resourceRef = "audio.d2bus.org/AudioService/host-audio";
-    serviceType = "audio.d2bus.org/AudioService";
+    resourceRef = "audio.d2bus.org.AudioService/host-audio";
+    serviceType = "audio.d2bus.org.AudioService";
     projectionSchemaFingerprint = "sha256:...";
     factoryFingerprint = "sha256:...";
     operations = [ "capture" ];
@@ -897,7 +897,7 @@ d2b.zones.work.resources.mic-import = {
     providerRef = "Provider/audio-pipewire";
     zoneLinkRef = "ZoneLink/work-uplink";
     exportKey = "host/mic-export";
-    expectedServiceType = "audio.d2bus.org/AudioService";
+    expectedServiceType = "audio.d2bus.org.AudioService";
     expectedProjectionSchemaFingerprint = "sha256:...";
     expectedFactoryFingerprint = "sha256:...";
     projectionName = "host-audio";
@@ -910,10 +910,10 @@ d2b.zones.work.resources.mic-import = {
 
 # Authored local consumption Binding. The import controller never creates it.
 d2b.zones.work.resources.work-mic = {
-  type = "audio.d2bus.org/AudioBinding";
+  type = "audio.d2bus.org.AudioBinding";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    serviceRef = "audio.d2bus.org/AudioService/host-audio";
+    serviceRef = "audio.d2bus.org.AudioService/host-audio";
     targetRef = "Guest/workstation";
     mode = "capture";
   };
@@ -940,9 +940,11 @@ but PipeWire and all other implementation/protocol details stay out of the
 base behavior, status, fingerprints, and generated semantic ResourceType names;
 `providerRef` is the sole opaque implementation selector. The other frozen
 pairs follow the same rule:
-`security-key.d2bus.org.SecurityKeyService/SecurityKeyBinding`,
-`telemetry.d2bus.org.TelemetryService/TelemetryBinding`, and
-`usb.d2bus.org.UsbService/UsbBinding`.
+`security-key.d2bus.org.SecurityKeyService` +
+`security-key.d2bus.org.SecurityKeyBinding`,
+`telemetry.d2bus.org.TelemetryService` +
+`telemetry.d2bus.org.TelemetryBinding`, and `usb.d2bus.org.UsbService` +
+`usb.d2bus.org.UsbBinding`.
 
 **Authority descriptors (D097).** A resource that owns a scarce or singleton
 backing carries its signed `AuthorityDescriptor` (schema in
@@ -2723,6 +2725,20 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Selected behavior | `ProviderAgentAdapter` is the descriptor-bound validation gate between a ComponentSession and a provider instance; `GeneratedProviderServiceServer` is the agent-side ttrpc dispatch engine; conformance kit provides a reference test harness for every Provider implementation; `register_exact_instances` is the canonical pattern for building a test registry from static descriptors |
 | v3 destination | `packages/d2b-provider-toolkit/src/` (adapt in place); conformance tests in `packages/d2b-provider-toolkit/tests/conformance.rs` must pass unchanged after the ADR45 exclusions are adapted |
 | ADR45 exclusions | `ProviderAgentAdapter::new()` hard-checks `peer_role == EndpointRole::ProviderAgent` (tag 7) and `service == ServicePackage::ProviderV2` (tag 4) — update the Rust enum variant names if the owning spec renames them per ADR-046-componentsession-and-bus; wire tag values 7 and 4 must not change. `v2_identity::{RealmId, WorkloadId}` appear in test context imports — adapt `RealmId` → `ZoneId`, `WorkloadId` → `ResourceName` on copy |
+
+### ADR046-nix-031
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ADR046-provider-004, ADR046-zone-control-019, ADR046-zone-control-020; Nix resource compiler owner |
+| Current source | None — D096/D098 semantic Service/Binding authoring and projection factories are net-new in v3 |
+| Reuse action | net-new |
+| Destination | `nixos-modules/resources-sharing.nix`; `nixos-modules/assertions.nix`; `tests/unit/nix/cases/resource-sharing.nix` |
+| Detailed design | Compile the eight exact D098 semantic Service/Binding types plus `ResourceExport`/`ResourceImport` without a second vocabulary. Nix authors authority Services and consumer Bindings, never projection Services; Binding requires same-Zone `serviceRef` and allowed target, while all observed realization remains absent from spec. Core receives a stable projection name/factory fingerprint and creates exactly one same-type Service. Reject Device/Endpoint/Binding export/projection, implementation-qualified/former `*State` aliases, implementation detail in base schemas, cross-Zone refs, and USB export without every policy opt-in. |
+| Integration | The per-Zone generation uses ADR046-provider-004 common schema fingerprints and ADR046-zone-control-019/020 factory metadata; the four initial Provider modules contribute only strict Provider extensions and implementation config. |
+| Data migration | Full d2b 3.0 reset; old audio/USB/security-key/observability options lower to new authority Service plus authored Binding only where the owning dossier explicitly preserves migration, and no old public type alias survives |
+| Validation | Fast Nix eval/build tests cover all four exact pairs, common base schema discovery, canonical minimal base without `spec.provider`, stable lowering across repeated evaluations, same-Zone refs/targets, strict Provider extension placement, Service-only export, exactly-one core projection metadata, no auto-Binding, status-field rejection in spec, USB/security-key Host-global conflict, and rejection of all forbidden names/aliases. |
+| Removal proof | Provider-local duplicate Nix base schemas and old direct Device/Endpoint/`*State` projection emitters are removed after the shared emitter and all four dossier migration tests pass. |
 
 ### ADR046-bus-009
 

@@ -2001,8 +2001,8 @@ d2b.zones.local-root.resources.mic-export = {
   type = "ResourceExport";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    resourceRef = "audio.d2bus.org/AudioService/host-audio";
-    serviceType = "audio.d2bus.org/AudioService";
+    resourceRef = "audio.d2bus.org.AudioService/host-audio";
+    serviceType = "audio.d2bus.org.AudioService";
     projectionSchemaFingerprint = "sha256:...";
     factoryFingerprint = "sha256:...";
     operations = [ "capture" ];
@@ -2019,7 +2019,7 @@ d2b.zones.work.resources.mic-import = {
     providerRef = "Provider/audio-pipewire";
     zoneLinkRef = "ZoneLink/work-uplink";
     exportKey = "host/mic-export";
-    expectedServiceType = "audio.d2bus.org/AudioService";
+    expectedServiceType = "audio.d2bus.org.AudioService";
     expectedProjectionSchemaFingerprint = "sha256:...";
     expectedFactoryFingerprint = "sha256:...";
     projectionName = "host-audio";
@@ -2030,10 +2030,10 @@ d2b.zones.work.resources.mic-import = {
 # Operator-authored local consumption Binding. The import controller never
 # creates this resource; its controller owns the resulting Process/Endpoint.
 d2b.zones.work.resources.work-mic = {
-  type = "audio.d2bus.org/AudioBinding";
+  type = "audio.d2bus.org.AudioBinding";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    serviceRef = "audio.d2bus.org/AudioService/host-audio";
+    serviceRef = "audio.d2bus.org.AudioService/host-audio";
     targetRef = "Guest/workstation";
     mode = "capture";
   };
@@ -4414,13 +4414,13 @@ Evidence class for all: `main-reuse-source`.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-zone-control-019` |
-| Dependency/owner | ADR046-zone-control-001; ADR046-zonelink owner; `d2b-core-controller` + `d2b-contracts` owners |
+| Dependency/owner | ADR046-zone-control-001, ADR046-provider-004; ADR046-zonelink owner; `d2b-core-controller` + `d2b-contracts` owners |
 | Current source | None — net-new ADR 0046 cross-Zone sharing model (D096); no pre-ADR45 baseline equivalent |
 | Reuse source | ZoneLink reconcile/handler scaffolding (§3); `packages/d2b-session/src/streams.rs` `NamedStream` credit/backpressure (bounded encrypted stream carriage) |
 | Reuse action | net-new (extend ZoneLink controller) |
 | Destination | `packages/d2b-contracts/src/v3/{resource_export,resource_import}.rs` (base schemas); `packages/d2b-core-controller/src/export_import.rs` (core ZoneLink export/import routing controller); shared adapter trait in `packages/d2b-provider/src/share_adapter.rs` (`ExportAdapter`/`ImportAdapter` signed-capability traits) |
 | Detailed design | Implement the `ResourceExport` and `ResourceImport` standard ResourceTypes per §8A plus signed Provider `ProjectionFactory` metadata binding qualified Service type, qualified Binding type, allowed owner-Service backing refs, allowed Binding target refs, projection schema/fingerprint, and aggregate factory fingerprint. Admission accepts only an owner Service as `ResourceExport.resourceRef`; matches export/import/local-factory type and fingerprints; and creates exactly one same-qualified-type projection Service (`ownerRef: ResourceImport/<name>`). It never projects Device/Endpoint/Binding and never creates Binding. Binding spec is desired consumer intent only; observations belong only in status. No cross-Zone Ref, FD, secret, path, locator, or resource grant crosses a Zone; payload bytes use bounded encrypted named streams and high-churn sessions/streams remain internal. Export removal/ZoneLink loss revokes leases and degrades the projection Service; reconnect revalidates generation and both fingerprints. D091 currency propagates Service → export → import → projection Service → authored Binding → children. |
-| Integration | Zone store/redb (ADR046-store-001); ZoneLink reconcile (§3); ComponentSession bounded encrypted named streams; signed projection factories/adapters for audio-pipewire, device-security-key, observability-otel, and policy-gated device-usbip; CLI graph rendering |
+| Integration | Zone store/redb (ADR046-store-001); shared D098 semantic base catalog (ADR046-provider-004); ZoneLink reconcile (§3); ComponentSession bounded encrypted named streams; signed projection factories/adapters for audio-pipewire, device-security-key, observability-otel, and policy-gated device-usbip; CLI graph rendering |
 | Data migration | None — full d2b 3.0 reset; no prior cross-Zone sharing state |
 | Validation | §8A.7: fast hermetic factory absent/mismatch/tamper, Service-only export target, exactly-one same-type projection Service, no Device/Endpoint/Binding projection, no auto-Binding, intent-only spec/status-only observations, backing/target allowlists, finalizer/update propagation, Provider classification, canonical Nix stability, quotas/reconnect/revoke, and no FD/secret/path tests; slower real encrypted-stream integration for audio/security-key/observability/policy-gated USBIP |
 | Removal proof | Not applicable (new surface) |

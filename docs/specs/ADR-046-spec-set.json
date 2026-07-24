@@ -20,7 +20,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline)",
-      "sha256": "940282a60e2ff2c365a5b2f48d8788162c9e372e537d42811aba142227eea8a6"
+      "sha256": "323c64cdd788f5a60c349df5eeebfebe5468825f7e47ccecaf41227be40b4e9a"
     },
     {
       "specId": "ADR-046-components-processes-and-sandbox",
@@ -77,7 +77,7 @@
       "version": 1,
       "dependsOn": [],
       "supersedes": null,
-      "sha256": "fdf213fd46852875ffcd15d6c810d15ab05f3f678cb1097a93055cb33002451f"
+      "sha256": "85fe66e3e8bc61b2fab44dae01ed63262545feb2b4519233b70cfbd4a8863b1a"
     },
     {
       "specId": "ADR-046-feasibility-and-spikes",
@@ -102,7 +102,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": null,
-      "sha256": "fdd53b5b6b5ec7acb1df4b1a7858929ca95f365819bd2338b6971141ffa0269a"
+      "sha256": "30cf7f6222b7a8f997291cb09d9b77d305dbd96d755e0fa7ee1c4d9b9c879a30"
     },
     {
       "specId": "ADR-046-nix-configuration",
@@ -117,7 +117,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
-      "sha256": "d59fa1f2dfa1ba14d99bd04e4793c049631ed6a8f7d272d648ebb127e84cdbec"
+      "sha256": "c879425bc0b5845e13cad70db5c2c79f8c3ca48be11a517f8ca07178467cda17"
     },
     {
       "specId": "ADR-046-primitive-resource-composition",
@@ -156,7 +156,7 @@
       "specId": "ADR-046-provider-audio-pipewire",
       "path": "docs/specs/providers/ADR-046-provider-audio-pipewire.md",
       "status": "Proposed",
-      "version": 6,
+      "version": 9,
       "dependsOn": [
         "ADR-046-components-processes-and-sandbox",
         "ADR-046-componentsession-and-bus",
@@ -172,7 +172,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "supersedes": "`nixos-modules/components/audio/host.nix`, `nixos-modules/components/audio/guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs`",
-      "sha256": "da31882124e3642c5c4339e8b13dd475dd4b1497b884a941ddd042d99ac5c632"
+      "sha256": "568e2a9ef8717d6954e80512ecd2d6a9f199ebc41cf92d361fb56b5bbbbe552d"
     },
     {
       "specId": "ADR-046-provider-clipboard-wayland",
@@ -265,7 +265,7 @@
       "specId": "ADR-046-provider-device-security-key",
       "path": "docs/specs/providers/ADR-046-provider-device-security-key.md",
       "status": "Proposed",
-      "version": 5,
+      "version": 6,
       "dependsOn": [
         "ADR-046-components-processes-and-sandbox",
         "ADR-046-componentsession-and-bus",
@@ -280,7 +280,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "supersedes": "`ProcessRole::SecurityKeyFrontend` daemon-internal accept loop (`packages/d2bd/src/security_key.rs`), `nixos-modules/components/security-key-guest.nix` untracked guest `d2b-sk-frontend.service` unit",
-      "sha256": "52a694d4a5b0e636f721c2947dea73f3de655352d72801aadfdea784a53a0d57"
+      "sha256": "01a2fc74bba37ba8c8a6a67a38f38a3ed629f3c1b0e215c9b7b2e1a57df9f88f"
     },
     {
       "specId": "ADR-046-provider-device-tpm",
@@ -304,7 +304,7 @@
       "specId": "ADR-046-provider-device-usbip",
       "path": "docs/specs/providers/ADR-046-provider-device-usbip.md",
       "status": "Proposed",
-      "version": 3,
+      "version": 6,
       "dependsOn": [
         "ADR-046-components-processes-and-sandbox",
         "ADR-046-componentsession-and-bus",
@@ -315,10 +315,12 @@
         "ADR-046-resource-reconciliation",
         "ADR-046-resources-device",
         "ADR-046-resources-network",
-        "ADR-046-telemetry-audit-and-support"
+        "ADR-046-resources-zone-control",
+        "ADR-046-telemetry-audit-and-support",
+        "ADR-046-zone-routing"
       ],
       "supersedes": "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
-      "sha256": "40a163efa11285b45de802823aa1136af7b520543e2efdcfc9d3910c7e0ee1b1"
+      "sha256": "71494d0465b44ae1673177794013d65f8706a36115f9078e9fbb645c0857050e"
     },
     {
       "specId": "ADR-046-provider-display-wayland",
@@ -352,7 +354,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "supersedes": "Current direct Provider construction/composition",
-      "sha256": "6d97506ccd2cf45584776f815fd87800f163b71e09af290a17cb7cfafd184bf6"
+      "sha256": "3d1c8147c45803fabd97a13986278a2ddd0955ae088ac902502d6c02e7f9e5fd"
     },
     {
       "specId": "ADR-046-provider-network-local",
@@ -394,7 +396,7 @@
       "specId": "ADR-046-provider-observability-otel",
       "path": "docs/specs/providers/ADR-046-provider-observability-otel.md",
       "status": "Proposed",
-      "version": 1,
+      "version": 3,
       "dependsOn": [
         "ADR-046-components-processes-and-sandbox",
         "ADR-046-componentsession-and-bus",
@@ -410,7 +412,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "`ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
-      "sha256": "be90698b5b536b0ff4e638fab2392fda76c2a0b75155e4216b0cde60101d18a5"
+      "sha256": "b69c6fa76a49e43be8aa775755328585da028a121ea42dced61546c46c877e7d"
     },
     {
       "specId": "ADR-046-provider-runtime-azure-container-apps",
@@ -723,7 +725,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "[ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) \"Migration decision\" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` \"v2 command surface removed at 3.0 clean break\": it served the one-time v1→v2 storage layout cutover only and has no v3 successor)",
-      "sha256": "4a22abccf6d4327e25d71f2072a65769a22a2d27c3e4847841cec2a5eff06b29"
+      "sha256": "58e49d8e7dcb5fc7c3e1231c2092aa2317fb63e432005907bd3d480cb14f4e8d"
     },
     {
       "specId": "ADR-046-resource-api-and-authorization",
@@ -736,7 +738,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": null,
-      "sha256": "0c5b8aae465e40722a8d72b13c96b1c4c2d604d77dacc7e8388042d53729eb31"
+      "sha256": "94bfc5dfbdbe3a5cde98094238f45ae639a8c537ca9483137c92d1c7dd76a5d0"
     },
     {
       "specId": "ADR-046-resource-object-model",
@@ -748,7 +750,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": null,
-      "sha256": "c0b961cd5ccbe26d047ccd73861104027f8a53406fe7ae642a20741c3b5c031d"
+      "sha256": "d4cce7023bb8510f244a01b2a534a19fef29e947999aebbfec9e19fdf7ab3549"
     },
     {
       "specId": "ADR-046-resource-reconciliation",
@@ -761,7 +763,7 @@
         "ADR-046-resource-store-redb"
       ],
       "supersedes": null,
-      "sha256": "50466df5c46c93333771dce50b400c2648875ed451ec25b62e177fdb573461ab"
+      "sha256": "a806edffe487e4f24bebb77bffbff816ead6d99a83ab8be2a2745ea9cb8a8396"
     },
     {
       "specId": "ADR-046-resource-store-redb",
@@ -825,7 +827,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
-      "sha256": "32a9a4a679bcd2161b1b87bc0be8b4648a778f0436b1c486336fe19b5973c77c"
+      "sha256": "acb558794203b40d60e540a4117b56ed28249f53c13b99f578fc4dd13f24e7af"
     },
     {
       "specId": "ADR-046-resources-network",
@@ -873,7 +875,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": null,
-      "sha256": "bd15c60083781360dd8a057420606b21e66b3b9453f390dbe5124e64bc922e51"
+      "sha256": "e3ac0c46daad713c9f0eb1f8043668ccae78803d9405340f148106aceb4e1e24"
     },
     {
       "specId": "ADR-046-security-and-threat-model",
@@ -933,7 +935,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "None. This spec is a new cross-cutting synthesis. `SECURITY.md` and `docs/explanation/design.md` remain the disclosure policy and pre-v3 (v1/v2) threat model for the protected `v3` baseline and are not superseded; historical main-branch ADR 0045 (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, \"d2b 2.0 provider and transport framework\") and ADR 0032/0034 remain non-ancestry reuse sources whose useful invariants this spec adapts under D001/D041",
-      "sha256": "a9edfe131521c1f347524619ad0e4c23c0d823bbf3fb44fab24cf5144a7e6ae7"
+      "sha256": "ffa1eb2d5f230ef4720eb70ae686113308694029cfe400a4282dc0a1b5e7016a"
     },
     {
       "specId": "ADR-046-streamline",
@@ -1044,7 +1046,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
-      "sha256": "9aa516d41a4299e51e10e60df1ff38886b5be6f04961064f6b59ba81b3db5f3a"
+      "sha256": "a966db69164292affaac13ba9a6a7af8c40fc31a0a517144625d01e6e4bfa088"
     },
     {
       "specId": "ADR-046-zone-routing",
@@ -1059,7 +1061,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + capability ceiling)",
-      "sha256": "f7ec341712173cf2008d210d2a3b272e515cdde89e5e1c81d94bd2964551cd61"
+      "sha256": "eb29ac800362bd79e881d5c56daeeacc9ea3eaeef328d71b5f667c9cc1ef12e6"
     }
   ]
 }

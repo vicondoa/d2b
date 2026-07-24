@@ -1396,8 +1396,8 @@ count, and `status.update` currency — no remote Ref or raw locator.
 
 ```text
 ResourceImport/mic-import
-└─ audio.d2bus.org/AudioService/host-audio  [projection, ownerRef=ResourceImport/mic-import]
-   └─ audio.d2bus.org/AudioBinding/work-mic [authored, targetRef=Guest/workstation]
+└─ audio.d2bus.org.AudioService/host-audio  [projection, ownerRef=ResourceImport/mic-import]
+   └─ audio.d2bus.org.AudioBinding/work-mic [authored, targetRef=Guest/workstation]
       ├─ Process/<owned>
       └─ Endpoint/<owned>
 ```

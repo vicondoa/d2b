@@ -191,12 +191,16 @@ re-derives launch order or parallelism from this prose. Per D095:
   `ADR-046-spec-set.json.members[].dependsOn`; waves derive from §3.1–§3.4;
   work-item mapping and `work-item-depends-on` derive from
   `ADR-046-work-items.json`; the W6 `file-overlap-order` edges derive from §3.3.
-- **Generation.** `cargo run -p xtask -- implementation-graph`
-  (`ADR046-streamline-001`) reads the two manifests plus this section and writes
-  both files deterministically (sorted keys, no timestamps, no host paths). A
-  `tests/unit/gates/` drift gate runs the generator and `git diff --exit-code`.
-  Regenerate the graph after any spec or work-item edit, always **after**
-  `ADR-046-spec-set.json` and `ADR-046-work-items.json` are regenerated.
+- **Generation.** This Proposed documentation set has no implemented repository
+  generator yet. Until `ADR046-streamline-001` (and the duplicate-generator
+  reconciliation in `ADR046-streamline-024`) lands, the integrator regenerates
+  the artifacts deterministically from the exact Markdown bytes with a
+  disposable untracked script, validates the bytes, and removes that script.
+  The future `cargo run -p xtask -- implementation-graph` command will read the
+  two manifests plus this section, write sorted output with no timestamps or
+  host paths, and run under a drift gate. Regenerate the graph after any spec or
+  work-item edit, always **after** `ADR-046-spec-set.json` and
+  `ADR-046-work-items.json` are regenerated.
 - **Validation.** Every one of the 55 spec nodes and every work item appears
   exactly once; all edge endpoints resolve to a declared node; the graph is
   acyclic; waves are monotonic (every edge's dependency resolves to an earlier
@@ -779,12 +783,13 @@ Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
 - opt-in required on both sides; unauthorized Zone and capability/fingerprint
   mismatches reject;
 - exact frozen type/Provider mapping:
-  `audio.d2bus.org.AudioService/AudioBinding` with `audio-pipewire`,
-  `security-key.d2bus.org.SecurityKeyService/SecurityKeyBinding` with
-  `device-security-key`,
-  `telemetry.d2bus.org.TelemetryService/TelemetryBinding` with
-  `observability-otel`, and policy-gated
-  `usb.d2bus.org.UsbService/UsbBinding` with `device-usbip`;
+  `audio.d2bus.org.AudioService` + `audio.d2bus.org.AudioBinding` with
+  `audio-pipewire`, `security-key.d2bus.org.SecurityKeyService` +
+  `security-key.d2bus.org.SecurityKeyBinding` with `device-security-key`,
+  `telemetry.d2bus.org.TelemetryService` +
+  `telemetry.d2bus.org.TelemetryBinding` with `observability-otel`, and
+  policy-gated `usb.d2bus.org.UsbService` + `usb.d2bus.org.UsbBinding` with
+  `device-usbip`;
 - canonical minimal Service/Binding base admission succeeds without
   `spec.provider`; export/import preserves semantic type across independently
   selected conformant implementations, while mismatched semantic factories and

@@ -89,6 +89,28 @@ minimal base without `spec.provider`. PipeWire, OTEL, USBIP, CTAPHID, package,
 binary, and adapter details never enter the semantic base; `providerRef` remains
 the sole opaque implementation selector.
 
+**Common semantic contract catalog (D098).** The canonical base DTOs and schemas
+are owned by the shared contract catalog, not by any initial implementation
+crate. They are discoverable before a Provider package is selected:
+
+| Family | Service ResourceType | Binding ResourceType | Shared contract module |
+| --- | --- | --- | --- |
+| audio | `audio.d2bus.org.AudioService` | `audio.d2bus.org.AudioBinding` | `d2b-contracts::v3::semantic_services::audio` |
+| security key | `security-key.d2bus.org.SecurityKeyService` | `security-key.d2bus.org.SecurityKeyBinding` | `d2b-contracts::v3::semantic_services::security_key` |
+| telemetry | `telemetry.d2bus.org.TelemetryService` | `telemetry.d2bus.org.TelemetryBinding` | `d2b-contracts::v3::semantic_services::telemetry` |
+| USB | `usb.d2bus.org.UsbService` | `usb.d2bus.org.UsbBinding` | `d2b-contracts::v3::semantic_services::usb` |
+
+For each catalog ResourceType `<namespace>.<Type>`, its common schema IDs are
+`<namespace>/<Type>/spec` and `<namespace>/<Type>/status`. This slash form is a
+schema identity only; the API ResourceType remains the exact dot-qualified name
+in the table, and a ResourceRef appends `/<name>` to that ResourceType.
+
+Each module exports the strict base spec/status DTOs, schema IDs, versions,
+fingerprints, minimal valid fixtures, and projection-factory type binding. Every
+Provider implementation binds those exact fingerprints and adds only its own
+strict extension schemas. It cannot copy, fork, weaken, or privately redefine
+the base. There are no implementation-qualified or former `*State` aliases.
+
 **Export/import adapters and projection factories (D096).** A Provider that
 marks a capability cross-Zone exportable MUST advertise signed `ExportAdapter`,
 `ImportAdapter`, and `ProjectionFactory` metadata. Each factory is immutable
@@ -647,3 +669,17 @@ cannot alias, rename, or vendor-qualify the base types.
 | Data migration | Current roles converted under reset |
 | Validation | Shared conformance and host/user/non-Host tests |
 | Removal proof | Current role launch paths removed after parity |
+
+### ADR046-provider-004
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ADR046-provider-001; shared semantic Service/Binding contract owner |
+| Current source | None — D098 common semantic Service/Binding bases are net-new ADR 0046 contracts |
+| Reuse action | net-new |
+| Destination | `packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs`; generated schema artifacts for the eight exact qualified ResourceTypes |
+| Detailed design | Define one shared strict base spec/status DTO and schema contract for each frozen D098 Service/Binding pair, including exact semantic type/schema IDs, versions, fingerprints, minimal valid base fixtures without `spec.provider`, authority/projection Service union, same-Zone Binding `serviceRef`/target rules, status-only observations, and projection-factory type binding. Register no implementation-qualified or former `*State` alias. |
+| Integration | Provider manifests and ResourceApiBindings consume the common catalog fingerprint; ADR046-zone-control-019/020 use the same factory metadata to admit an owner Service and core-create one same-type projection Service; the four initial Provider dossiers supply only strict implementation extensions/controllers. |
+| Data migration | Full d2b 3.0 reset; no prior public Service/Binding names or aliases are imported |
+| Validation | Shared contract tests cover exact names, strict serde/schema round trips, common base discoverability without any Provider package, canonical minimal base acceptance without `spec.provider`, same-Zone refs/targets, owner/projection discrimination, status-only observations, no Device/Endpoint/Binding projection, implementation-detail rejection, fingerprint stability, and rejection of every implementation-qualified/former `*State` alias. Each initial and fake alternate Provider must pass the identical base conformance fixture. |
+| Removal proof | Any Provider-local duplicate base DTO/schema is removed before that Provider is registered; only strict Provider extension DTOs remain implementation-owned. |

@@ -1269,7 +1269,8 @@ status:
   leaseAvailability: lease-required
 ```
 
-This projection Endpoint is only the local front door to the import adapter.
+This projection-Service-owned local Endpoint is only the front door to the
+import adapter; it is an ordinary Endpoint child, never an import projection.
 Its producer binds a ComponentSession named stream internally; it contains no
 remote Ref or locator and never opens PipeWire.
 
@@ -2544,15 +2545,15 @@ remote lease are released.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-audio-005` |
-| Dependency/owner | Core resource-api foundation; `d2b-provider-audio-pipewire` crate |
+| Dependency/owner | ADR046-provider-004 common audio Service/Binding base; Core resource-api foundation; `d2b-provider-audio-pipewire` crate |
 | Current source | None (ADR-only); structured after `d2b-contracts/src/public_wire.rs` audio types |
 | Reuse source | `public_wire.rs` `AudioChannel`, `AudioEnforcementPosture`, `AudioErrorKind`, `AudioProviderKind`, `AudioSetApplied`; `AudioProviderKind` is removal evidence, not a base-status field |
 | Reuse action | `adapt` provider-neutral closed enums; remove `AudioProviderKind` from base status; `ADR-only` for schema/admission |
-| Destination | `packages/d2b-provider-audio-pipewire/src/resource_type.rs`; `packages/d2b-provider-audio-pipewire/src/admission.rs` |
-| Detailed design | Define strict D089 Layer-2 base schemas and D088 typed status for `audio.d2bus.org.AudioService` and `audio.d2bus.org.AudioBinding`. AudioService validates immutable `serviceRole`, same-Zone local Endpoint refs, owner-only D097 AuthorityDescriptor, projection-only `ownerRef: ResourceImport/<name>`, and core-only projection creation. AudioBinding validates Guest ownership, required immutable same-Zone `serviceRef`, grants/levels/users, and forbids authority/export/projection semantics. Both use strict signed Layer-3 provider envelopes; PipeWire fields are rejected from base spec/status. Export `AudioService.json` and `AudioBinding.json` under the neutral contract identity; register no provider-qualified or AudioState identifier and no serde/schema alias. |
+| Destination | `packages/d2b-provider-audio-pipewire/src/{resource_type,admission,provider_extension}.rs` (strict implementation extensions and binding only; common base lives under ADR046-provider-004) |
+| Detailed design | Bind the shared D098 `audio.d2bus.org.AudioService` and `audio.d2bus.org.AudioBinding` base schema versions/fingerprints from ADR046-provider-004 and define only strict audio-pipewire Provider extensions/admission. AudioService validates immutable `serviceRole`, same-Zone local Endpoint refs, owner-only D097 AuthorityDescriptor, projection-only `ownerRef: ResourceImport/<name>`, and core-only projection creation. AudioBinding validates Guest ownership, required immutable same-Zone `serviceRef`, grants/levels/users, and forbids authority/export/projection semantics. PipeWire fields are rejected from base spec/status. Register no provider-qualified or AudioState identifier and no serde/schema alias. |
 | Integration | `Provider/audio-pipewire` signs and publishes implementation support for both neutral qualified ResourceTypeSchemas and strict provider-envelope schemas. Core import controller may create/delete only projection AudioService; ordinary resource API admission handles owner Services and AudioBindings. |
 | Data migration | Full d2b 3.0 reset; owner Services and per-Guest AudioBindings are authored as new v3 resources; projection Services are core-generated from ResourceImport. |
-| Validation | `tests/resource_type.rs`: neutral qualified-name registration; both schema/status round-trips; clean-break rejection of provider-qualified names, every AudioState spelling, and all aliases; foreign-provider selection; strict base/provider unknown-field matrices; PipeWire fields only in strict provider envelopes/config; Service role/AuthorityDescriptor/ownerRef/Endpoint-locality rules; core-only projection admission; AudioBinding required same-Zone serviceRef and Guest owner; immutable refs; out-of-range levels/users; explicit tests that AudioBinding cannot be exported or projected; JSON schema drift for both types |
+| Validation | `tests/resource_type.rs`: consume the ADR046-provider-004 common fixtures/fingerprints; canonical minimal base without `spec.provider`; neutral qualified-name registration; both schema/status round-trips; clean-break rejection of provider-qualified names, every AudioState spelling, and all aliases; fake alternate-provider base conformance; strict base/provider unknown-field matrices; PipeWire fields only in strict provider envelopes/config; Service role/AuthorityDescriptor/ownerRef/Endpoint-locality rules; core-only projection admission; AudioBinding required same-Zone serviceRef and Guest owner; immutable refs; out-of-range levels/users; explicit tests that AudioBinding cannot be exported or projected |
 | Removal proof | None — both ResourceTypes are net-new |
 
 ### ADR046-audio-006: Implement deterministic AudioService and AudioBinding handlers
@@ -2629,7 +2630,7 @@ remote lease are released.
 | Reuse source | Same; adapt redaction pattern |
 | Reuse action | `adapt` |
 | Destination | `packages/d2b-provider-audio-pipewire/src/telemetry.rs` |
-| Detailed design | Emit closed-label Service and Binding metrics plus post-commit audit. Service events distinguish only `owner|projection` and closed outcomes; they omit authority keys, import/export keys, remote identity, stream/session ids, and endpoints. Enforcement metrics cover owner-local and projection-routed calls without exposing route identity. ProcessEffect audit remains Process Provider-owned. |
+| Detailed design | Emit closed-label Service and Binding metrics plus post-commit audit. Service events distinguish only `owner\|projection` and closed outcomes; they omit authority keys, import/export keys, remote identity, stream/session ids, and endpoints. Enforcement metrics cover owner-local and projection-routed calls without exposing route identity. ProcessEffect audit remains Process Provider-owned. |
 | Integration | Audio controller and mediator call telemetry/audit emitters after commit or enforcement; d2b-telemetry exporter and policy_observability consume the resulting records. |
 | Data migration | No telemetry/audit data migration; v3 emits new closed-label OTEL/audit records after cutover and old audio_dispatch audit sites are removed. |
 | Validation | `tests/audio_telemetry.rs`: Service/Binding event separation, redaction, post-commit ordering, label cardinality, forbidden authority/import/stream/path fields, no ProcessEffect duplication |

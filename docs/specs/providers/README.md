@@ -61,7 +61,9 @@ Stable managed endpoints are `Endpoint` resources (D092), not inline
 `ProcessSpec` fields: producers reference them by `Endpoint/<name>` and consumers
 resolve them through EffectPort/LaunchTicket only. Per-session/high-churn handles
 stay internal. Vendor ResourceTypes and Provider spec/status extensions are
-qualified on `d2bus.org` (D080), e.g. `audio-pipewire.d2bus.org.AudioState`.
+qualified on `d2bus.org` (D080). The frozen semantic Service/Binding families use
+provider-neutral namespaces; implementation namespaces identify only strict
+Provider extensions.
 
 ## Provider catalog (27)
 
@@ -72,19 +74,19 @@ Providers carry ZoneLink sessions and own no Zone ResourceType.
 | Provider resource | Owned / exported ResourceTypes | Main components (role / placement) | Dossier |
 | --- | --- | --- | --- |
 | `Provider/activation-nixos` | qualified `activation-nixos.d2bus.org.NixosGeneration` | controller + activation EphemeralProcess dispatch (Host, system) | [activation-nixos](ADR-046-provider-activation-nixos.md) |
-| `Provider/audio-pipewire` | qualified `audio-pipewire.d2bus.org.AudioState` | controller + dedicated audio worker Processes (Host/Guest) | [audio-pipewire](ADR-046-provider-audio-pipewire.md) |
+| `Provider/audio-pipewire` | `audio.d2bus.org.AudioService`, `audio.d2bus.org.AudioBinding` | controller + dedicated audio worker Processes (Host/Guest) | [audio-pipewire](ADR-046-provider-audio-pipewire.md) |
 | `Provider/clipboard-wayland` | service-only (qualified `clipboard-wayland.*`; no standard type) | `clipboard-controller` (system-minijail, system), `clipd-host` (system-systemd, user), picker `EphemeralProcess` | [clipboard-wayland](ADR-046-provider-clipboard-wayland.md) |
 | `Provider/credential-entra` | `Credential` | Guest-resident adapter to an Entrablau identity Guest `Endpoint`; controller + agent (login/token/TPM state in Guest, CLI login, no Host ambient auth) | [credential-entra](ADR-046-provider-credential-entra.md) |
 | `Provider/credential-managed-identity` | `Credential` | controller + managed-identity agent Process | [credential-managed-identity](ADR-046-provider-credential-managed-identity.md) |
 | `Provider/credential-secret-service` | `Credential` | controller + Secret Service agent Process (user domain) | [credential-secret-service](ADR-046-provider-credential-secret-service.md) |
 | `Provider/device-gpu` | `Device` (GPU) + owned cross-domain `Endpoint` | controller/arbitration (Host, system) | [device-gpu](ADR-046-provider-device-gpu.md) |
-| `Provider/device-security-key` | `Device` (hidraw) | controller + CTAPHID relay Process + guest frontend Process (Guest, user) | [device-security-key](ADR-046-provider-device-security-key.md) |
+| `Provider/device-security-key` | `Device` (hidraw), `security-key.d2bus.org.SecurityKeyService`, `security-key.d2bus.org.SecurityKeyBinding` | controller + CTAPHID relay Process + guest frontend Process (Guest, user) | [device-security-key](ADR-046-provider-device-security-key.md) |
 | `Provider/device-tpm` | `Device` + owned TPM `Endpoint` | controller + swtpm Process + mandatory flush `EphemeralProcess` | [device-tpm](ADR-046-provider-device-tpm.md) |
-| `Provider/device-usbip` | `Device` | controller + per-busid attach Process | [device-usbip](ADR-046-provider-device-usbip.md) |
+| `Provider/device-usbip` | `Device`, `usb.d2bus.org.UsbService`, `usb.d2bus.org.UsbBinding` | initial generic USB implementation; controller + per-Binding attachment Process | [device-usbip](ADR-046-provider-device-usbip.md) |
 | `Provider/display-wayland` | qualified `display-wayland.d2bus.org.WaylandPolicy`, `WaylandSession` | controller + Wayland filter-proxy Process | [display-wayland](ADR-046-provider-display-wayland.md) |
 | `Provider/network-local` | `Network` | controller + agent/dnsmasq/mDNS Processes (net-VM Guest) | [network-local](ADR-046-provider-network-local.md) |
 | `Provider/notification-desktop` | service-only (exports no ResourceType) | host desktop notification sink Processes | [notification-desktop](ADR-046-provider-notification-desktop.md) |
-| `Provider/observability-otel` | service-only (no ResourceType) | OTEL collector Processes | [observability-otel](ADR-046-provider-observability-otel.md) |
+| `Provider/observability-otel` | `telemetry.d2bus.org.TelemetryService`, `telemetry.d2bus.org.TelemetryBinding` | OTEL collector Processes | [observability-otel](ADR-046-provider-observability-otel.md) |
 | `Provider/runtime-azure-container-apps` | `Guest` | controller + gateway Guest guest-control | [runtime-azure-container-apps](ADR-046-provider-runtime-azure-container-apps.md) |
 | `Provider/runtime-azure-virtual-machine` | `Guest` | controller (cloud full-host) | [runtime-azure-virtual-machine](ADR-046-provider-runtime-azure-virtual-machine.md) |
 | `Provider/runtime-cloud-hypervisor` | `Guest` | controller + Cloud Hypervisor VMM Process (Host) | [runtime-cloud-hypervisor](ADR-046-provider-runtime-cloud-hypervisor.md) |

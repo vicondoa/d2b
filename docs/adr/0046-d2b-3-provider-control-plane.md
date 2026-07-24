@@ -120,10 +120,16 @@ resources referenced by `Endpoint/<name>` refs; `ProcessSpec` no longer carries
 an inline `endpoints` field, and per-session/high-churn handles
 (pidfd, fd index, named-stream id, transport byte-stream handle) stay internal.
 A general promotion test (D092) decides ResourceType vs opaque handle for every
-entity. `ResourceExport`/`ResourceImport` (D096) let scarce singleton resources
-(one mic/speaker, one security key, one SigNoz ingest) serve multiple Zones
-through a single Provider authority, with no cross-Zone ResourceRef and no direct
-device open by consumers.
+entity. `ResourceExport`/`ResourceImport` (D096/D098) share only a qualified semantic
+owner Service across Zones. The frozen provider-neutral pairs are
+`audio.d2bus.org.AudioService` + `audio.d2bus.org.AudioBinding`,
+`security-key.d2bus.org.SecurityKeyService` +
+`security-key.d2bus.org.SecurityKeyBinding`,
+`telemetry.d2bus.org.TelemetryService` +
+`telemetry.d2bus.org.TelemetryBinding`, and `usb.d2bus.org.UsbService` +
+`usb.d2bus.org.UsbBinding`. Core creates one same-type projection Service per
+import; Nix/operators author Bindings, and Provider controllers realize their
+Process/Endpoint children. Device, Endpoint, and Binding are never projections.
 
 Every ResourceType is **layered**: a Provider implements the ResourceType
 **base spec plus a strict provider extension** (**D089**), and status is the

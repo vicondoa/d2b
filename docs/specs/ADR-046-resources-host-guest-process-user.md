@@ -141,7 +141,7 @@ dossier, refined by evidence; owner/cardinality named here):
 | Compositor/session FD authority | seat | `exactly-one` per Host×User×session | core/user-agent session authority | forbidden |
 | Clipboard host (`clipd-host`) | user | `exactly-one` per `User`; picker global-or-seat arbitration | clipboard Provider | policy-gated (default-denied) |
 | Notification sink | user-session | `exactly-one` per User session | notification Provider | policy-gated (default-denied) |
-| Audio authority (mediator) | seat/user | `exactly-one` per compositor user; **one `AudioState` per Guest** | audio Provider | explicit-export (D096) |
+| Audio authority (mediator) | seat/user | `exactly-one` per compositor user; **one `audio.d2bus.org.AudioBinding` per Guest** | audio Provider | explicit-export through the owner `audio.d2bus.org.AudioService` only (D096/D098) |
 | systemd user manager | user | `exactly-one` per `User` × (`Host` or `Guest`) | `Provider/system-systemd` | forbidden |
 | Entrablau login authority | guest | `exactly-one` per identity Guest/tenant | credential-entra (in the identity Guest) | forbidden (D093) |
 | Secret Service / keyring | user-session | `exactly-one` per User session | credential-secret-service | forbidden |
@@ -168,7 +168,7 @@ tuple); anything beyond the declared limit is rejected.
 authority and lease bound to that Guest across display, audio, notification,
 credential, and shell in one dependency-aware cascade (D091): the session FD
 authority and each dependent desktop authority are drained/recycled, their
-`Endpoint`s revoked, and any `AudioState`/projection/lease degraded — no stale
+`Endpoint`s revoked, and any `AudioBinding`/projection-Service/lease degraded — no stale
 compositor/PipeWire/session-bus FD survives a Guest stop.
 
 **Cross-Zone exportability (reconciled with D096).** Any prior claim of "no

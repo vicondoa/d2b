@@ -16,11 +16,14 @@
 
 ## Purpose
 
-This dossier specifies `Provider/device-usbip`, the d2b 3.0 Provider that owns
-USB/IP (USBIP) device inventory, arbitration, busid probe/claim, host-side
-kernel bind, singleton backend and per-Network relay lifecycle, firewall
-carve-out, per-Guest attachment state, policy-gated cross-Zone service
-propagation, and operator CLI for the `d2b device usb` surface.
+This dossier specifies `Provider/device-usbip`, the initial implementation of
+the generic D098 USB Service/Binding family. This Provider owns USB/IP (USBIP)
+device inventory, arbitration, busid probe/claim, host-side kernel bind,
+singleton backend and per-Network relay lifecycle, firewall carve-out,
+per-Guest attachment state, policy-gated cross-Zone service propagation, and
+operator CLI for the `d2b device usb` surface. Future Providers may implement
+the same `usb.d2bus.org.UsbService` and `usb.d2bus.org.UsbBinding` base
+contracts without USBIP.
 
 `Provider/device-usbip` is one of the four frozen Device Providers in the
 `ADR-046-resources-device` catalog. It replaces:
@@ -1561,14 +1564,14 @@ type to the trait caller. Add unit tests for same-Zone gate and anti-spoof logic
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-usbip-001; Provider model crate structure; device-usbip provider owner |
+| Dependency/owner | ADR046-usbip-001, ADR046-provider-004; Provider model crate structure; device-usbip provider owner |
 | Current source | None — net-new Provider crate; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new crate skeleton with contract reuse |
 | Destination | packages/d2b-provider-device-usbip/ |
-| Detailed design | Create the required crate layout; implement the provider-neutral `UsbService`/`UsbBinding` base contract plus strict USBIP provider extensions; sign/register extension schemas and advertise explicit export only for authority `UsbService` resources implemented by this Provider; implement validation.rs and compile-checked EffectPort injection. Declare the controller user/User resource in Nix activation. |
+| Detailed design | Create the required crate layout; bind the shared D098 `UsbService`/`UsbBinding` base versions/fingerprints from ADR046-provider-004 and implement only strict USBIP Provider extensions; sign/register extension schemas and advertise explicit export only for authority `UsbService` resources implemented by this Provider; implement validation.rs and compile-checked EffectPort injection. Declare the controller user/User resource in Nix activation. |
 | Integration | Workspace manifests, Provider artifact catalog, Nix module, and ProviderDeployment consume the crate and component descriptor. |
 | Data migration | None — docs/tooling only; no runtime state |
-| Validation | make test-policy passes; Cargo.toml has no d2b-priv-broker dependency; fast schema/manifest tests prove Service-only exportability, Binding non-exportability, projection ownerRef/field restrictions, strict refs, and trait injection. |
+| Validation | make test-policy passes; Cargo.toml has no d2b-priv-broker dependency; fast schema/manifest tests consume the common fixtures, accept canonical minimal base without `spec.provider`, prove a fake direct-local Provider can implement the same base, and cover Service-only exportability, Binding non-exportability, projection ownerRef/field restrictions, strict refs, and trait injection. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 Create the crate with the layout in § Crate layout. Implement `lib.rs`, `validation.rs`
