@@ -1166,27 +1166,70 @@ are claimed. No `Provider (self) status` write is claimed; core writes status.
 
 ---
 
-## Cross-Zone telemetry ingest sharing (D096)
+## Observability authority and cross-Zone sharing (D096/D097)
 
-There is one observability Zone (`sys-obs`) whose SigNoz **ingest authority** is
-the sole owner of the ingest connection. It exports a telemetry-ingest
-`Endpoint` via a `ResourceExport`; every other Zone declares a `ResourceImport`
-that binds its local `ZoneLink` + `exportKey` to a local observability
-route/projection resource. This is a many-to-one `multiplexed` share: many
-producer Zones, one ingest authority, with per-Zone quotas, backpressure, schema
-enforcement, redaction, and cardinality caps applied by the authority.
+**One SigNoz ingest authority (D097).** The observability Zone (`sys-obs`) is the
+single ingest authority: it owns the native SigNoz + ClickHouse + ClickHouse
+Keeper + SigNoz OTel Collector stack (`nixos-modules/components/observability/
+stack.nix`; no container runtime), with the storage/query backend bound to
+**loopback** only (ClickHouse 9000/8123, Keeper 2181, etc.). It declares a D097
+`AuthorityDescriptor` with `authorityScope: external-service`, an **opaque**
+`authorityKey` class (the `sys-obs` ingest identity — never a raw address/port),
+`cardinality: exactly-one`, and `arbitration: multiplexed`. Core's authority
+index rejects a second ingest authority with `duplicateConflict`; restart adopts
+by `ownerProof`; ambiguity quarantines. This is a **many-to-one** share: many
+producer Zones, one ingest authority.
 
-- Telemetry bytes flow only over the bounded encrypted named stream
-  (per-import session generation, credits/backpressure, cancel, deadline);
-  intermediaries see ciphertext. No ingest FD/socket crosses a Zone.
-- Authoritative **audit** stays Zone-local. Exporting audit copies requires a
-  separate, explicit `ResourceExport` and transfers no authority — the local
-  Zone remains the system of record.
-- The otel Provider's signed export/import adapter performs schema/redaction/
-  cardinality/quota enforcement; core owns `ResourceExport`/`ResourceImport`
-  routing and base lifecycle. Export removal or ZoneLink loss revokes leases and
-  degrades the local route projection; reconnect revalidates generation/
-  fingerprint.
+**Preserved reusable behavior** (grounded in
+`nixos-modules/components/observability/{stack,host,guest}.nix`,
+`nixos-modules/{index,observability-vm}.nix`,
+`packages/d2b-host/src/{otel_host_bridge_argv,vsock_relay_argv}.rs`,
+`packages/d2bd/src/otel_host_bridge_readiness.rs`): distinct **per-source** vsock
+ingress (the bridge uses pre-opened vsock fds only and the broker rejects any
+bundle intent whose source VM ≠ obs VM); trusted **source-identity upsert** of
+`vm.name`/`vm.env`/`vm.role`/`source` OTEL resource attributes; the loopback
+backend; edge collector **retry/queue** (`sending_queue.enabled`,
+`retry_on_failure.enabled`); bounded metric/cardinality caps and the closed
+attribute **allow-list** redaction; and audit separation by **positive
+allow-list projection only** (e.g. `source: store-sync-audit`).
+
+**Cross-Zone sharing (D096).** The owner Zone declares a `ResourceExport`
+referencing only the local ingest `Endpoint` (`exportability: explicit-export`,
+`arbitration: multiplexed`). Every producer Zone declares a `ResourceImport`
+binding its local `ZoneLink` + `exportKey` to a **local typed telemetry
+`Endpoint`/route projection**; ordinary producers send to that local projection
+Ref. The transport moves from the fixed per-source vsock ingress to typed
+`Endpoint`/ComponentSession routes: telemetry flows over **per-import bounded
+encrypted named streams** with **exact per-import identity, quota, credit, and
+backpressure** (per-import session generation, deadline, cancel); intermediaries
+see ciphertext; no ingest FD/socket crosses a Zone. The authority still applies
+per-import schema enforcement, redaction, and cardinality caps. Export removal or
+ZoneLink loss revokes the import lease and degrades the local route projection;
+reconnect revalidates generation/fingerprint; a D091 upgrade drains producers
+before recycling the ingest authority.
+
+**No audit-authority transfer.** Authoritative **audit** stays Zone-local — the
+local Zone remains the system of record. Exporting audit *copies* requires a
+separate, explicit `ResourceExport` and transfers **no** authority; the positive
+allow-list projection is the only path and no import can promote a copy to
+authority.
+
+**No legacy shortcuts.** The bridge/forwarder use D077 EffectPort/LaunchTicket
+pre-opened fds (no ambient socket creation, no direct broker path), observed
+state is D087 status-first, ingest/route endpoints are D092 `Endpoint`s, and
+cross-Zone routing is D096.
+
+**Explicit gaps (conservative; refined by evidence before final commit).** These
+are recorded as gaps in the current baseline and are NOT claimed as implemented:
+
+- **No concrete `ObservabilitySinkProvider`** exists yet; the export/import
+  adapter and typed sink are net-new work grounded in the current bridge/stack.
+- **Retention/sampling options are not actually wired** in the current baseline;
+  the dossier's retention/sampling knobs are target design, gated behind the
+  sink Provider work item, not existing behavior.
+- **No formal runner `sd_notify` readiness** exists; readiness today is
+  `packages/d2bd/src/otel_host_bridge_readiness.rs` probing, and a formal
+  notify-ready runner contract is target work.
 
 ## Nix configuration
 
@@ -1760,6 +1803,22 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None — full d2b 3.0 reset |
 | Validation | One SigNoz ingest with many producer Zones under quota/backpressure; schema/redaction/cardinality enforced; audit remains Zone-local unless separately exported; reconnect revalidation and revocation degrade the route projection; no ingest FD/socket crosses a Zone (fake-stream hermetic + real-stream integration) |
 | Removal proof | Not applicable |
+
+### ADR046-otel-006: ObservabilitySinkProvider authority and per-import typed telemetry Endpoints (D096/D097)
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-otel-006` |
+| Dependency/owner | ADR046-otel-005, ADR046-zone-control-019, ADR046-zone-control-020; observability Provider owner |
+| Current source | `nixos-modules/components/observability/{stack,host,guest}.nix` (SigNoz/ClickHouse/Keeper loopback authority, per-source vsock ingress, source-identity `upsert`, `sending_queue`/`retry_on_failure`, allow-list projection); `nixos-modules/{index,observability-vm}.nix`; `packages/d2b-host/src/{otel_host_bridge_argv,vsock_relay_argv}.rs` (pre-opened vsock fds; broker rejects source VM ≠ obs VM); `packages/d2bd/src/otel_host_bridge_readiness.rs` |
+| Reuse source | Same baseline stack/bridge/readiness symbols; `packages/d2b-provider/src/share_adapter.rs` traits |
+| Reuse action | net-new (`ObservabilitySinkProvider` + typed telemetry `Endpoint` projections; concrete sink is a documented current gap) |
+| Destination | `packages/d2b-provider-observability-otel/src/{authority,sink,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` ingest `Endpoint` |
+| Detailed design | Implement the single D097 SigNoz ingest authority (`authorityScope: external-service`, opaque `authorityKey`, `cardinality: exactly-one`, `arbitration: multiplexed`) that owns the loopback SigNoz/ClickHouse/Keeper backend; core's authority index rejects a duplicate with `duplicateConflict`; restart adopts by `ownerProof`. Each producer Zone gets a **local typed telemetry `Endpoint`/route projection**; the transport moves from the fixed per-source vsock ingress to typed `Endpoint`/ComponentSession routes with **exact per-import identity, quota, credit, and backpressure**. Preserve source-identity `upsert`, edge retry/queue, bounded metric/cardinality caps, and the closed attribute allow-list redaction. Audit stays Zone-local (no audit-authority transfer; audit copies only via a separate explicit export). No new `ProcessRole`, no direct broker path, no state file: pre-opened fds via D077 EffectPort/LaunchTicket, observed state D087 status-first. **Documented current gaps addressed here, not assumed present:** the concrete `ObservabilitySinkProvider` is net-new; retention/sampling options must be wired by this item (currently unwired); a formal runner `sd_notify` readiness contract replaces the current `otel_host_bridge_readiness.rs` probe. |
+| Integration | Ingest authority + export (ADR046-otel-005); core export/import controller and projection lifecycle (ADR046-zone-control-019/020); ComponentSession per-import encrypted streams; d2b-telemetry closed-label metrics |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | Fast successor tests **reuse** the existing observability nix-unit cases (`tests/unit/nix/cases/observability.nix` + `examples-with-observability.nix`) and the Rust policy tests (source-identity upsert, allow-list projection, cardinality/redaction, retry/queue) rather than duplicating them; integration proves one SigNoz ingest with many producer Zones under per-import quota/credit/backpressure and cross-Zone routing; audit stays Zone-local. Old shell gates are retired (not duplicated) once the nix-unit/Rust successors are green. |
+| Removal proof | Legacy fixed per-source vsock ingress path and superseded shell observability gates are removed only after the typed-`Endpoint`/ComponentSession successor and the reused nix-unit/Rust suites pass; no old/new duplicate suites run indefinitely. |
 
 ---
 

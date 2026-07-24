@@ -3770,6 +3770,21 @@
       "removalProof": "Not applicable (new surface)"
     },
     {
+      "workItemId": "ADR046-otel-006",
+      "specId": "ADR-046-provider-observability-otel",
+      "specPath": "docs/specs/providers/ADR-046-provider-observability-otel.md",
+      "dependencyOwner": "ADR046-otel-005, ADR046-zone-control-019, ADR046-zone-control-020; observability Provider owner",
+      "currentSource": "`nixos-modules/components/observability/{stack,host,guest}.nix` (SigNoz/ClickHouse/Keeper loopback authority, per-source vsock ingress, source-identity `upsert`, `sending_queue`/`retry_on_failure`, allow-list projection); `nixos-modules/{index,observability-vm}.nix`; `packages/d2b-host/src/{otel_host_bridge_argv,vsock_relay_argv}.rs` (pre-opened vsock fds; broker rejects source VM ≠ obs VM); `packages/d2bd/src/otel_host_bridge_readiness.rs`",
+      "reuseSource": "Same baseline stack/bridge/readiness symbols; `packages/d2b-provider/src/share_adapter.rs` traits",
+      "reuseAction": "net-new (`ObservabilitySinkProvider` + typed telemetry `Endpoint` projections; concrete sink is a documented current gap)",
+      "destination": "`packages/d2b-provider-observability-otel/src/{authority,sink,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` ingest `Endpoint`",
+      "detailedDesign": "Implement the single D097 SigNoz ingest authority (`authorityScope: external-service`, opaque `authorityKey`, `cardinality: exactly-one`, `arbitration: multiplexed`) that owns the loopback SigNoz/ClickHouse/Keeper backend; core's authority index rejects a duplicate with `duplicateConflict`; restart adopts by `ownerProof`. Each producer Zone gets a local typed telemetry `Endpoint`/route projection; the transport moves from the fixed per-source vsock ingress to typed `Endpoint`/ComponentSession routes with exact per-import identity, quota, credit, and backpressure. Preserve source-identity `upsert`, edge retry/queue, bounded metric/cardinality caps, and the closed attribute allow-list redaction. Audit stays Zone-local (no audit-authority transfer; audit copies only via a separate explicit export). No new `ProcessRole`, no direct broker path, no state file: pre-opened fds via D077 EffectPort/LaunchTicket, observed state D087 status-first. Documented current gaps addressed here, not assumed present: the concrete `ObservabilitySinkProvider` is net-new; retention/sampling options must be wired by this item (currently unwired); a formal runner `sd_notify` readiness contract replaces the current `otel_host_bridge_readiness.rs` probe.",
+      "integration": "Ingest authority + export (ADR046-otel-005); core export/import controller and projection lifecycle (ADR046-zone-control-019/020); ComponentSession per-import encrypted streams; d2b-telemetry closed-label metrics",
+      "dataMigration": "None — full d2b 3.0 reset",
+      "validation": "Fast successor tests reuse the existing observability nix-unit cases (`tests/unit/nix/cases/observability.nix` + `examples-with-observability.nix`) and the Rust policy tests (source-identity upsert, allow-list projection, cardinality/redaction, retry/queue) rather than duplicating them; integration proves one SigNoz ingest with many producer Zones under per-import quota/credit/backpressure and cross-Zone routing; audit stays Zone-local. Old shell gates are retired (not duplicated) once the nix-unit/Rust successors are green.",
+      "removalProof": "Legacy fixed per-source vsock ingress path and superseded shell observability gates are removed only after the typed-`Endpoint`/ComponentSession successor and the reused nix-unit/Rust suites pass; no old/new duplicate suites run indefinitely."
+    },
+    {
       "workItemId": "ADR046-pkg-001",
       "specId": "ADR-046-resources-zone-control",
       "specPath": "docs/specs/ADR-046-resources-zone-control.md",
