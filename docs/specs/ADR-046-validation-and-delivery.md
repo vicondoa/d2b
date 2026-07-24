@@ -763,33 +763,34 @@ Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
 (real bounded encrypted streams) tests cover, per
 [`ADR-046-resources-zone-control.md` §8A.7](ADR-046-resources-zone-control.md):
 
-- signed projection factory binds qualified Service type, State type, allowed
-  owner-Service backing refs, allowed State target refs, projection schema/
+- signed projection factory binds qualified Service type, Binding type, allowed
+  owner-Service backing refs, allowed Binding target refs, projection schema/
   fingerprint, and factory fingerprint; absent/unsigned/tampered/mismatched
   metadata fails closed at Provider install, Nix build, and API admission;
 - `ResourceExport.resourceRef` accepts only the owner Service; Device, Endpoint,
-  State, Credential, backend, and cross-Zone targets reject;
+  Binding, Credential, backend, and cross-Zone targets reject;
 - one import creates exactly one same-qualified-type projection Service with
-  `ownerRef: ResourceImport/<name>`; it creates no Device/Endpoint/State;
-- one or more separately authored same-Zone States reference that Service plus
-  an allowed Guest/User/Zone and own Process/Endpoint children; import never
-  exports, auto-creates, or auto-deletes State;
+  `ownerRef: ResourceImport/<name>`; it creates no Device/Endpoint/Binding;
+- one or more separately authored same-Zone Bindings reference that Service plus
+  an allowed Guest/User/Zone and own Process/Endpoint children; Binding spec is
+  desired consumer intent only and observations appear only in status; import
+  never exports, auto-creates, or auto-deletes Binding;
 - opt-in required on both sides; unauthorized Zone and capability/fingerprint
   mismatches reject;
 - quota/fairness/deadline enforcement; reconnect revalidation and revocation
   degrade the projection Service; D091 update propagation owner Service →
-  export → import → projection Service → State → children; finalizer waits
-  visibly for States to be deleted/retargeted;
+  export → import → projection Service → Binding → children; finalizer waits
+  visibly for Bindings to be deleted/retargeted;
 - audio: speaker mix with per-Zone volume/quota and microphone
   exclusivity/consent/fair-queue; security-key: CTAP serialization with one
   exclusive per-device lease/deadline/cancel; observability: one SigNoz ingest
   with many producer Zones under quota/backpressure/redaction/cardinality;
   USBIP: all Provider/Zone/export/device policy gates required;
 - only those four Provider families are admitted (USBIP policy-gated); all other
-  Providers and every State are non-exportable;
+  Providers and every Binding are non-exportable;
 - Nix canonical resources and projection names are inspectable/byte-stable even
   when transparent sugar lowers to them; CLI renders import → projection
-  Service → State → owned Process/Endpoint without hidden nodes;
+  Service → Binding → owned Process/Endpoint without hidden nodes;
 - **no FD, secret, Credential, backing/remote Ref, raw path/locator, device/
   socket handle, token, or payload bytes crosses a Zone or appears in status/
   CLI/audit**. High-churn sessions/streams stay internal; intermediaries see

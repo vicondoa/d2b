@@ -1493,15 +1493,16 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
   intermediate controllers see ciphertext. The "No FD, credential, or host path
   forwarding" invariant holds — no device FD, socket, or token crosses a Zone.
 - **Projection and lifecycle.** The export target is always the qualified owner
-  `*Service`, never a Device, Endpoint, or `*State`. Core owns exactly one
+  `*Service`, never a Device, Endpoint, or `*Binding`. Core owns exactly one
   same-qualified-type local projection Service per import
-  (`ownerRef: ResourceImport/<name>`). Operator/Nix-authored same-Zone States
+  (`ownerRef: ResourceImport/<name>`). Operator/Nix-authored same-Zone Bindings
   reference that Service and a consuming Guest/User/Zone; their Provider
-  controller owns Process/Endpoint children. Import never creates or exports a
-  State. Link failure, revocation, or withdrawal degrades the projection Service;
+  controller owns Process/Endpoint children. Binding spec is desired intent
+  only; all observations belong in status. Import never creates or exports a
+  Binding. Link failure, revocation, or withdrawal degrades the projection Service;
   reconnect revalidates the remote generation and both fingerprints. D091
   currency propagates owner Service → export → import → projection Service →
-  State → children.
+  Binding → children.
 - **Single authority (D097).** The exported backing has exactly one authority
   owner in the owner Zone (its signed `AuthorityDescriptor`, tracked in that
   Zone's core authority index). Cross-Zone import never creates a second

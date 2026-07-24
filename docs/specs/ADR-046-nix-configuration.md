@@ -842,17 +842,19 @@ not redefine the types: `type = "ResourceExport"` and `type = "ResourceImport"`
 emit the exact `ADR-046-resources-zone-control` §8A base fields plus the strict
 `spec.provider` extension when declared by the Provider schema. They bring the
 standard ResourceType catalog to 19 entries; `Endpoint` remains standard.
-Qualified Provider `*Service` and `*State` types are not standard types.
+Qualified Provider `*Service` and `*Binding` types are not standard types.
 
-The Provider's signed projection factory binds the exact Service/State pair,
-allowed owner-Service backing refs, allowed State target refs, projection
+The Provider's signed projection factory binds the exact Service/Binding pair,
+allowed owner-Service backing refs, allowed Binding target refs, projection
 schema/fingerprint, and factory fingerprint. Build admission fails closed when
 that metadata is missing or mismatched. `ResourceExport.resourceRef` MUST name
-the local owner Service; Device, Endpoint, and State targets are rejected.
+the local owner Service; Device, Endpoint, and Binding targets are rejected.
 `ResourceImport` may reference only local `providerRef` and `zoneLinkRef`; its
 `exportKey` is bounded and never a remote ResourceRef. It deterministically
 creates one same-qualified-type local projection Service with the configured
-stable name. Nix/operator authors the matching local State separately.
+stable name. Nix/operator authors the matching local Binding separately.
+There is no `*State` or metadata-key compatibility alias; those spellings fail
+schema validation rather than lowering to Binding.
 
 ```nix
 # Local-root owner Zone: the audio dossier owns these qualified names and
@@ -905,9 +907,9 @@ d2b.zones.work.resources.mic-import = {
   };
 };
 
-# Authored local consumption State. The import controller never creates it.
+# Authored local consumption Binding. The import controller never creates it.
 d2b.zones.work.resources.work-mic = {
-  type = "audio-pipewire.d2bus.org/AudioState";
+  type = "audio-pipewire.d2bus.org/AudioBinding";
   spec = {
     providerRef = "Provider/audio-pipewire";
     serviceRef = "audio-pipewire.d2bus.org/AudioService/host-audio";
@@ -917,16 +919,18 @@ d2b.zones.work.resources.work-mic = {
 };
 ```
 
-The canonical compiled resources, including the core-created projection Service
+The Binding spec above is desired consumer intent only; observed realization
+belongs only in its `status`. The canonical compiled resources, including the
+core-created projection Service
 identity, have stable inspectable names. Provider-specific transparent sugar MAY
 lower to this shape, but its generated ResourceExport, ResourceImport, projection
-Service name, and State MUST be byte-stable across equivalent evaluations and
+Service name, and Binding MUST be byte-stable across equivalent evaluations and
 visible in `d2b config render`, `d2b resource list`, and the canonical bundle.
-Sugar may not hide, merge, or auto-create a State at runtime.
+Sugar may not hide, merge, or auto-create a Binding at runtime.
 
-Ordinary State resources reference the local projection Service
+Ordinary Binding resources reference the local projection Service
 (`metadata.ownerRef: ResourceImport/<name>`), never the ResourceImport itself.
-The State controller owns any Process/Endpoint children. High-churn
+The Binding controller owns any Process/Endpoint children. High-churn
 sessions/streams are internal and are not emitted as Nix resources.
 
 **Authority descriptors (D097).** A resource that owns a scarce or singleton
@@ -1504,9 +1508,9 @@ All ref validation runs at Nix eval time:
 | `subjects` entries | Each entry is a canonical `<ResourceType>/<name>` ref string resolving to a declared resource of the stated type in the same Zone; type must be in the closed subject set |
 | `transportProviderRef` resolution | The named Provider is declared in `d2b.zones.<z>.resources` with `type = "Provider"`; required on every ZoneLink; no default |
 | `childZoneName` check | The named child Zone is declared in `d2b.zones`; plain Zone name, not a ResourceRef |
-| `ResourceExport` Service-only ref | `providerRef` and `resourceRef` resolve locally; `resourceRef` has the factory's qualified `*Service` type; Device/Endpoint/State/backing and cross-Zone targets reject |
+| `ResourceExport` Service-only ref | `providerRef` and `resourceRef` resolve locally; `resourceRef` has the factory's qualified `*Service` type; Device/Endpoint/Binding/backing and cross-Zone targets reject |
 | `ResourceImport` local route/factory | `providerRef` and `zoneLinkRef` resolve locally; `exportKey` is bounded/not a Ref; expected Service type and projection/factory fingerprints match the signed export and local factory |
-| Qualified State refs | `serviceRef` resolves to the same-Zone matching Service; target ref resolves to a factory-allowed same-Zone Guest/User/Zone; State is non-exportable |
+| Qualified Binding refs | `serviceRef` resolves to the same-Zone matching Service; target ref resolves to a factory-allowed same-Zone Guest/User/Zone; Binding spec is intent-only, observations are status-only, and Binding is non-exportable |
 | `artifactId` / `systemArtifactId` format | Plain bounded string `^[a-z][a-z0-9-]*$`; not a `<Type>/<name>` ResourceRef; no `*Ref` suffix |
 | `catalogEntryId` check | The named entry exists in `d2b.providerCatalog`; resolved to its `artifactId` |
 
@@ -1634,10 +1638,10 @@ succeeds. The drift gate `make test-drift` enforces `xtask gen-schemas` +
 | Export/import/local Provider `serviceType`, `projectionSchemaFingerprint`, and `factoryFingerprint` match exactly; signed factory is present | Build |
 | `ResourceImport` consumer Zone authorized by `ResourceExport.consumerZonePolicy` | Eval/Build |
 | `ResourceImport.requestedCapabilities` is a subset of the export `operations` and capability ceiling | Eval/Build |
-| `ResourceExport.resourceRef` names only the factory-bound owner `*Service`; Device/Endpoint/State/Credential/backing refs reject | Eval/Build |
-| Owner Service backing refs and authored State target ref belong to the factory allowlists | Eval/Build |
+| `ResourceExport.resourceRef` names only the factory-bound owner `*Service`; Device/Endpoint/Binding/Credential/backing refs reject | Eval/Build |
+| Owner Service backing refs and authored Binding target ref belong to the factory allowlists | Eval/Build |
 | Audio/security-key/observability factories allowed; USBIP additionally passes policy; every other Provider export rejects | Build |
-| Transparent sugar lowers to byte-stable inspectable canonical export/import/State resources and a stable projection-Service name | Build/Drift |
+| Transparent sugar lowers to byte-stable inspectable canonical export/import/Binding resources and a stable projection-Service name | Build/Drift |
 
 A structured eval error identifies the exact NixOS option path and rejected
 value for every rule violation.

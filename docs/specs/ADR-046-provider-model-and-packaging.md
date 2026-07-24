@@ -89,30 +89,35 @@ within a Provider artifact and binds:
 | Field | Contract |
 | --- | --- |
 | `serviceType` | One qualified Provider `*Service` ResourceType; this is both the owner authority type and the consumer projection type |
-| `stateType` | One qualified Provider `*State` ResourceType consumed locally |
+| `bindingType` | One qualified Provider `*Binding` ResourceType expressing local consumer intent |
 | `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified backend types the owner Service may reference |
-| `allowedStateTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` that a State may target |
+| `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` that a Binding may target |
 | `projectionSchema` | Signed, strict, deny-unknown schema for the projection Service; it contains no raw locator, path, credential, secret, FD, or bytes |
 | `projectionSchemaFingerprint` | SHA-256 of that canonical schema |
 | `factoryFingerprint` | SHA-256 binding all fields above plus adapter identity/version |
 
 The owner `*Service` is the one real authority and references its local backing.
 `ResourceExport.resourceRef` MUST target that Service, never a `Device`,
-`Endpoint`, or `*State`. An import creates exactly one same-qualified-type local
+`Endpoint`, or `*Binding`. An import creates exactly one same-qualified-type local
 projection Service (`ownerRef: ResourceImport/<name>`). It never creates a
-Device, Endpoint, or State. Operators/Nix author matching local State resources
-that reference `serviceRef` plus an allowed consuming target; the Provider's
-State controller creates owned Process/Endpoint children. High-churn leases,
-sessions, ceremonies, transfers, and streams remain internal records.
+Device, Endpoint, or Binding. Operators/Nix author matching local Binding
+resources that reference `serviceRef` plus an allowed consuming target. Binding
+spec is desired intent only; all observations are written only to `status`. The
+Provider's Binding controller creates owned Process/Endpoint children.
+High-churn leases, sessions, ceremonies, transfers, and streams remain internal
+records.
 
 The adapters perform only semantic admission, arbitration, projection
 materialization, and bounded observation. Core owns `ResourceExport`/
 `ResourceImport` routing, base lifecycle, projection-Service ownership, and
 layered status writes. Provider install, Nix build, and API admission all fail
 closed if a required factory is absent, its signature is invalid, the Service/
-State pair or allowed refs do not match, or either fingerprint differs from the
-advertisement/import expectation. `Service` and `State` remain qualified
-Provider types and do not enlarge the 19-type standard catalog.
+Binding pair or allowed refs do not match, or either fingerprint differs from
+the advertisement/import expectation. `Service` and `Binding` remain qualified
+Provider types and do not enlarge the 19-type standard catalog. The strict
+descriptor accepts only `bindingType` and `allowedBindingTargetRefTypes`; the
+former `stateType`/`allowedStateTargetRefTypes` spellings and qualified `*State`
+types are not aliases and are rejected.
 
 **Authority descriptors (D097).** For every scarce or singleton backing it owns
 (a physical device, singleton external service, per-Zone/Host/user/seat service,
@@ -467,8 +472,8 @@ Every Provider dossier specifies:
 - pidfd/wait/reap where Process Provider;
 - telemetry/audit/doctor/support;
 - for each cross-Zone exportable capability, the exact qualified `*Service` and
-  `*State` names, signed projection-factory metadata, allowed Service backing
-  refs, allowed State target refs, schema/fingerprints, adapter behavior,
+  `*Binding` names, signed projection-factory metadata, allowed Service backing
+  refs, allowed Binding target refs, schema/fingerprints, adapter behavior,
   arbitration, finalizers, and update/status propagation; or an explicit
   `exportability: forbidden`;
 - failure/upgrade/migration;
@@ -563,13 +568,13 @@ Cross-Zone export is deny-by-default. The initial classification is:
 
 | Provider | D096 classification | Required shape |
 | --- | --- | --- |
-| `audio-pipewire` | exportable | Dossier-owned qualified audio `*Service`/`*State` pair; owner Service mediates local PipeWire Device/Endpoint/backend |
-| `device-security-key` | exportable | Dossier-owned qualified security-key `*Service`/`*State` pair; one owner Service retains physical-device authority and serializes ceremonies |
-| `observability-otel` | exportable | Dossier-owned qualified observability `*Service`/`*State` pair; one owner Service retains ingest authority and enforces redaction/cardinality/backpressure |
-| `device-usbip` | policy-gated exportable | Dossier-owned qualified USBIP `*Service`/`*State` pair; factory is usable only when Provider, Zone, export, and device policy all opt in |
+| `audio-pipewire` | exportable | Dossier-owned qualified audio `*Service`/`*Binding` pair; owner Service mediates local PipeWire Device/Endpoint/backend |
+| `device-security-key` | exportable | Dossier-owned qualified security-key `*Service`/`*Binding` pair; one owner Service retains physical-device authority and serializes ceremonies |
+| `observability-otel` | exportable | Dossier-owned qualified observability `*Service`/`*Binding` pair; one owner Service retains ingest authority and enforces redaction/cardinality/backpressure |
+| `device-usbip` | policy-gated exportable | Dossier-owned qualified USBIP `*Service`/`*Binding` pair; factory is usable only when Provider, Zone, export, and device policy all opt in |
 | every other frozen initial Provider | forbidden | No export/import adapter or projection factory may be registered |
 
-Approval applies to the qualified Service only. A matching State, its backing
+Approval applies to the qualified Service only. A matching Binding, its backing
 Device/Endpoint, Credentials, and internal session/stream records are never
 export targets. Exact type names belong to the Provider dossiers; this
 cross-cutting table does not create or rename them.

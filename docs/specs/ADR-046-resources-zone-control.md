@@ -1778,14 +1778,14 @@ three-layer status like every other standard type.
 ### 8A.1 General model
 
 - Every exportable capability has a Provider-dossier-owned qualified
-  `*Service` ResourceType and matching qualified `*State` ResourceType. These
+  `*Service` ResourceType and matching qualified `*Binding` ResourceType. These
   are Provider types, not additions to the 19 standard ResourceTypes.
 - The owner-Zone `*Service` is the one real authority. Its same-Zone spec
   references the local `Device`, `Endpoint`, or qualified backend allowed by
   the Provider's signed projection factory. No consumer Zone opens that backing.
 - There is **no cross-Zone `ResourceRef`**. The owner Zone declares
   `ResourceExport/<name>` whose `resourceRef` targets only the local owner
-  `*Service`. It never targets a `Device`, `Endpoint`, or `*State`. The consumer
+  `*Service`. It never targets a `Device`, `Endpoint`, or `*Binding`. The consumer
   Zone declares `ResourceImport/<name>` that references only its local
   `zoneLinkRef` plus a bounded remote `exportKey` and signed fingerprints.
 - The core ZoneLink **export/import controller** (this spec, `d2b-core-controller`)
@@ -1795,11 +1795,12 @@ three-layer status like every other standard type.
 - Core creates exactly one local projection **Service** per import. It has the
   same qualified `*Service` type as the owner Service and
   `metadata.ownerRef: ResourceImport/<name>`. Core never creates a Device,
-  Endpoint, or State projection.
-- Operator/Nix configuration authors one or more same-Zone matching `*State`
-  resources. Each State references the projection's `serviceRef` plus a
+  Endpoint, or Binding projection.
+- Operator/Nix configuration authors one or more same-Zone matching `*Binding`
+  resources. Each Binding references the projection's `serviceRef` plus a
   consuming `Guest`, `User`, or `Zone` allowed by the signed factory. Its
-  Provider controller creates owned `Process`/`Endpoint` children. State is
+  spec is desired consumer intent only; all observations belong in `status`.
+  Its Provider controller creates owned `Process`/`Endpoint` children. Binding is
   never exported and never auto-created, owned, or deleted by the import
   controller.
 - Sharing is **opt-in on both sides**, over the **same parent/child Zone
@@ -1812,7 +1813,7 @@ three-layer status like every other standard type.
 - Export removal or ZoneLink loss revokes outstanding leases and degrades the
   local projection Service; reconnect revalidates the remote generation and both
   fingerprints so no stale authority survives. D091 update currency propagates
-  owner Service → export → import → projection Service → authored State → owned
+  owner Service → export → import → projection Service → authored Binding → owned
   children. Per D092, leases, sessions, ceremonies, transfers, named streams,
   and stream handles stay internal/high-churn.
 
@@ -1824,9 +1825,9 @@ descriptor:
 | Field | Contract |
 | --- | --- |
 | `serviceType` | Exact qualified `*Service` type used by owner and projection |
-| `stateType` | Exact qualified `*State` type permitted to consume that Service |
+| `bindingType` | Exact qualified `*Binding` type permitted to consume that Service |
 | `allowedBackingRefTypes` | Closed same-Zone types the owner Service may reference (`Device`, `Endpoint`, or qualified backend types) |
-| `allowedStateTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` |
+| `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` |
 | `projectionSchema` | Strict deny-unknown local projection-Service schema; no FD, secret, raw path/locator, credential, or payload bytes |
 | `projectionSchemaFingerprint` | SHA-256 of the canonical projection schema |
 | `factoryFingerprint` | SHA-256 binding all fields above and adapter identity/version |
@@ -1847,7 +1848,7 @@ adapter owns semantic admission and per-consumer arbitration.
 | Field | Type | Required | Default | Bounds/notes |
 | --- | --- | --- | --- | --- |
 | `providerRef` | ResourceRef | yes | — | `Provider/<name>` — the local authority Provider that mediates the resource |
-| `resourceRef` | ResourceRef | yes | — | **Local qualified owner `*Service` only**; a Device, Endpoint, State, or other backing is rejected |
+| `resourceRef` | ResourceRef | yes | — | **Local qualified owner `*Service` only**; a Device, Endpoint, Binding, or other backing is rejected |
 | `serviceType` | string | yes | — | Exact qualified type of `resourceRef`; must equal the factory `serviceType` |
 | `projectionSchemaFingerprint` | string | yes | — | Must equal the signed factory fingerprint for the projection Service schema |
 | `factoryFingerprint` | string | yes | — | Must equal the installed signed projection factory |
@@ -1913,7 +1914,7 @@ Ref, FD, path, or token appears anywhere.
 remote `exportGeneration` and verified factory/projection fingerprints, local
 projection-Service Ref, lease state/count, session generation digest, and
 `status.update` currency. Degraded and revoked states propagate to the
-projection Service, every State that references it, and their children. No raw
+projection Service, every Binding that references it, and their children. No raw
 locator, backing ref, or bytes.
 
 #### 8A.3.3 Projection ownership, conditions, finalizer
@@ -1922,23 +1923,23 @@ Core creates one `expectedServiceType` projection
 (`ownerRef: ResourceImport/<name>`) through the local Provider's import adapter
 and keeps its readiness synchronized with the lease. Closed conditions:
 `ExportReachable`, `FactoryMatched`, `SchemaMatched`, `Bound`,
-`ProjectionReady`, `StateReferencesRemain`, `Degraded`.
+`ProjectionReady`, `BindingReferencesRemain`, `Degraded`.
 
 On revoke/link loss, core first marks the projection Service draining/revoked
-and refuses new sessions. State controllers observe that dependency change,
+and refuses new sessions. Binding controllers observe that dependency change,
 stop their owned Process/Endpoint children, and report degraded status; the
-State rows remain because they are operator-owned. On import deletion, the
-finalizer waits until all referencing States are deleted or retargeted, then
+Binding rows remain because they are operator-owned. On import deletion, the
+finalizer waits until all referencing Bindings are deleted or retargeted, then
 releases the remote lease, deletes the projection Service and its remaining
 provider-owned children, and clears only the import finalizer. It never deletes
-or synthesizes a State. A remaining State produces visible pending cleanup,
+or synthesizes a Binding. A remaining Binding produces visible pending cleanup,
 not an implicit cascade. Reconnect revalidates generation and both fingerprints
 before rebinding.
 
 ### 8A.4 Reconcile (core routing + provider adapter)
 
 1. Core validates opt-in on both sides; resolves `resourceRef` to a same-Zone
-   qualified owner Service; rejects Device/Endpoint/State targets; validates
+   qualified owner Service; rejects Device/Endpoint/Binding targets; validates
    local `zoneLinkRef`; and rejects every cross-Zone Ref.
 2. Core advertises the export over the ZoneLink to the exact `consumerZonePolicy`
    selector. The advertisement carries only export key, Service type, factory
@@ -1949,9 +1950,10 @@ before rebinding.
    quota, fairness, consent), issues an internal lease, and the import adapter
    builds/updates exactly one local projection Service. Bytes flow only over a
    bounded encrypted named stream.
-5. Separately authored States reconcile against that Service and own their
+5. Separately authored Bindings reconcile against that Service and own their
    Process/Endpoint children. D091 currency propagates owner Service → export →
-   import → projection Service → State → children.
+   import → projection Service → Binding → children. Desired intent stays in
+   Binding spec; observed realization stays only in status.
 
 ### 8A.5 Non-exportable defaults
 
@@ -1963,7 +1965,7 @@ The initial exportable Provider families are `audio-pipewire`,
 `device-security-key`, and `observability-otel`; `device-usbip` is exportable
 only when its Provider, Zone, ResourceExport, and physical-device policy all opt
 in. Every other frozen Provider remains non-exportable. Exact qualified
-Service/State names belong to each Provider dossier. A matching State is always
+Service/Binding names belong to each Provider dossier. A matching Binding is always
 non-exportable even when its Service is approved.
 
 ### 8A.6 Nix authoring example
@@ -2010,10 +2012,10 @@ d2b.zones.work.resources.mic-import = {
   };
 };
 
-# Operator-authored local consumption State. The import controller never
+# Operator-authored local consumption Binding. The import controller never
 # creates this resource; its controller owns the resulting Process/Endpoint.
 d2b.zones.work.resources.work-mic = {
-  type = "audio-pipewire.d2bus.org/AudioState";
+  type = "audio-pipewire.d2bus.org/AudioBinding";
   spec = {
     providerRef = "Provider/audio-pipewire";
     serviceRef = "audio-pipewire.d2bus.org/AudioService/host-audio";
@@ -2025,18 +2027,19 @@ d2b.zones.work.resources.work-mic = {
 
 Both examples serialize to the canonical ResourceEnvelope with only local refs;
 the resource compiler rejects a non-Service export target, cross-Zone Ref,
-factory/schema mismatch, unauthorized consumer Zone, disallowed backing or State
+factory/schema mismatch, unauthorized consumer Zone, disallowed backing or Binding
 target ref, or capability outside the export ceiling. Optional Nix sugar may
 lower to these resources only when the canonical ResourceExport,
-ResourceImport, projection-Service name, and State are stable and inspectable.
+ResourceImport, projection-Service name, and Binding are stable and inspectable.
 
 ### 8A.7 Conformance and tests
 
 Fast hermetic tests (fake ZoneLink/stream/clock/factory) MUST cover: signed
 factory absent/mismatch/tamper fail-closed; only an owner Service is exportable;
-exactly one same-type projection Service; no Device/Endpoint/State projection;
-State is neither exported nor auto-created; backing/target allowlists; stable
-canonical Nix lowering; finalizer waiting on authored States; update propagation;
+exactly one same-type projection Service; no Device/Endpoint/Binding projection;
+Binding is neither exported nor auto-created; Binding spec is intent-only and
+observations are status-only; backing/target allowlists; stable canonical Nix
+lowering; finalizer waiting on authored Bindings; update propagation;
 classification (audio/security-key/observability approved, USBIP policy-gated,
 all others forbidden); quota/fairness/deadline/reconnect/revocation; and no
 FD/secret/path/raw locator. Slower integration tests use real bounded encrypted
@@ -2096,7 +2099,7 @@ Provider resources/backings are `exportability: forbidden`. D096
 factory-bound qualified owner Service may carry `explicit-export`. The initial
 approved Provider families are audio, security-key, observability, and
 policy-gated USBIP; all others remain forbidden. Their Devices, Endpoints,
-States, Credentials, secrets, and backend resources remain non-exportable. A
+Bindings, Credentials, secrets, and backend resources remain non-exportable. A
 Zone needing another Zone's telemetry exports the observability owner Service,
 which transfers capability/data but never audit-chain/store authority.
 
@@ -2106,7 +2109,7 @@ share lifecycle owner referenced by D092, which owns its `Endpoint`) is a
 (the cross-Zone sharing declaration). They are never conflated: a virtiofs
 `Export` is a local Volume-share owner; a `ResourceExport` is the cross-Zone
 bridge. A virtiofs share or its Endpoint is not directly exportable; a future
-reviewed Provider would need a qualified Service/State pair and signed
+reviewed Provider would need a qualified Service/Binding pair and signed
 projection factory, and `ResourceExport` would target only that Service.
 
 ### 8B.2 D097 core-audit migration findings
@@ -2207,7 +2210,7 @@ Providers.
 **D096 exportability of hardware.** GPU, KVM, physical/emulated TPM, host Nix
 store, store-view writer, and macvtap/NIC `parentInterface` require an FD or
 local-kernel authority and are **non-exportable** (`forbidden`). **USBIP capability is policy-gated exportable** only through the
-factory-bound qualified USBIP Service/State pair and typed CTAPHID-free USBIP
+factory-bound qualified USBIP Service/Binding pair and typed CTAPHID-free USBIP
 protocol. The physical Device and fixed listener Endpoint remain non-exportable.
 This supersedes any stale direct-hardware export claim.
 
@@ -4399,10 +4402,10 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | ZoneLink reconcile/handler scaffolding (§3); `packages/d2b-session/src/streams.rs` `NamedStream` credit/backpressure (bounded encrypted stream carriage) |
 | Reuse action | net-new (extend ZoneLink controller) |
 | Destination | `packages/d2b-contracts/src/v3/{resource_export,resource_import}.rs` (base schemas); `packages/d2b-core-controller/src/export_import.rs` (core ZoneLink export/import routing controller); shared adapter trait in `packages/d2b-provider/src/share_adapter.rs` (`ExportAdapter`/`ImportAdapter` signed-capability traits) |
-| Detailed design | Implement the `ResourceExport` and `ResourceImport` standard ResourceTypes per §8A plus signed Provider `ProjectionFactory` metadata binding qualified Service type, qualified State type, allowed owner-Service backing refs, allowed State target refs, projection schema/fingerprint, and aggregate factory fingerprint. Admission accepts only an owner Service as `ResourceExport.resourceRef`; matches export/import/local-factory type and fingerprints; and creates exactly one same-qualified-type projection Service (`ownerRef: ResourceImport/<name>`). It never projects Device/Endpoint/State and never creates State. No cross-Zone Ref, FD, secret, path, locator, or resource grant crosses a Zone; payload bytes use bounded encrypted named streams and high-churn sessions/streams remain internal. Export removal/ZoneLink loss revokes leases and degrades the projection Service; reconnect revalidates generation and both fingerprints. D091 currency propagates Service → export → import → projection Service → authored State → children. |
+| Detailed design | Implement the `ResourceExport` and `ResourceImport` standard ResourceTypes per §8A plus signed Provider `ProjectionFactory` metadata binding qualified Service type, qualified Binding type, allowed owner-Service backing refs, allowed Binding target refs, projection schema/fingerprint, and aggregate factory fingerprint. Admission accepts only an owner Service as `ResourceExport.resourceRef`; matches export/import/local-factory type and fingerprints; and creates exactly one same-qualified-type projection Service (`ownerRef: ResourceImport/<name>`). It never projects Device/Endpoint/Binding and never creates Binding. Binding spec is desired consumer intent only; observations belong only in status. No cross-Zone Ref, FD, secret, path, locator, or resource grant crosses a Zone; payload bytes use bounded encrypted named streams and high-churn sessions/streams remain internal. Export removal/ZoneLink loss revokes leases and degrades the projection Service; reconnect revalidates generation and both fingerprints. D091 currency propagates Service → export → import → projection Service → authored Binding → children. |
 | Integration | Zone store/redb (ADR046-store-001); ZoneLink reconcile (§3); ComponentSession bounded encrypted named streams; signed projection factories/adapters for audio-pipewire, device-security-key, observability-otel, and policy-gated device-usbip; CLI graph rendering |
 | Data migration | None — full d2b 3.0 reset; no prior cross-Zone sharing state |
-| Validation | §8A.7: fast hermetic factory absent/mismatch/tamper, Service-only export target, exactly-one same-type projection Service, no Device/Endpoint/State projection, no auto-State, backing/target allowlists, finalizer/update propagation, Provider classification, canonical Nix stability, quotas/reconnect/revoke, and no FD/secret/path tests; slower real encrypted-stream integration for audio/security-key/observability/policy-gated USBIP |
+| Validation | §8A.7: fast hermetic factory absent/mismatch/tamper, Service-only export target, exactly-one same-type projection Service, no Device/Endpoint/Binding projection, no auto-Binding, intent-only spec/status-only observations, backing/target allowlists, finalizer/update propagation, Provider classification, canonical Nix stability, quotas/reconnect/revoke, and no FD/secret/path tests; slower real encrypted-stream integration for audio/security-key/observability/policy-gated USBIP |
 | Removal proof | Not applicable (new surface) |
 
 ### ADR046-zone-control-020
@@ -4415,10 +4418,10 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None from main; projection ownership reuses the core owner/child reconcile machinery (§11) |
 | Reuse action | net-new |
 | Destination | `packages/d2b-core-controller/src/export_import_projection.rs` (local qualified Service projection lifecycle owned by `ResourceImport`) |
-| Detailed design | Core creates exactly one same-qualified-type projection Service per `ResourceImport` and keeps it synchronized with the remote Service lease. Operators/Nix separately author same-Zone matching State resources with `serviceRef` plus an allowed Guest/User/Zone target; State controllers own Process/Endpoint children. On revoke, mark the projection draining/revoked and let State controllers stop children. On delete, wait for States to be deleted/retargeted (`StateReferencesRemain`), release the lease, delete only the projection Service/provider-owned children, then clear the import finalizer. Never create/delete State or project Device/Endpoint. |
+| Detailed design | Core creates exactly one same-qualified-type projection Service per `ResourceImport` and keeps it synchronized with the remote Service lease. Operators/Nix separately author same-Zone matching Binding resources with `serviceRef` plus an allowed Guest/User/Zone target; Binding specs hold desired intent only and Binding controllers write observations only to status while owning Process/Endpoint children. On revoke, mark the projection draining/revoked and let Binding controllers stop children. On delete, wait for Bindings to be deleted/retargeted (`BindingReferencesRemain`), release the lease, delete only the projection Service/provider-owned children, then clear the import finalizer. Never create/delete Binding or project Device/Endpoint. |
 | Integration | ADR046-zone-control-019 controller; owner/dependency reconcile (§11, ADR046-reconcile-*); local semantic Provider import adapter |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Exactly one same-type Service projection owned by import; no Device/Endpoint/State projection; State never auto-created/deleted; State target allowlist; owned Process/Endpoint child cleanup; pending finalizer while State refs remain; reconnect only after generation/factory/schema revalidation; hermetic fake-adapter + real-stream integration tiers |
+| Validation | Exactly one same-type Service projection owned by import; no Device/Endpoint/Binding projection; Binding never auto-created/deleted; Binding target allowlist; intent-only spec/status-only observations; owned Process/Endpoint child cleanup; pending finalizer while Binding refs remain; reconnect only after generation/factory/schema revalidation; hermetic fake-adapter + real-stream integration tiers |
 | Removal proof | Not applicable (new surface) |
 
 ### ADR046-zone-control-021

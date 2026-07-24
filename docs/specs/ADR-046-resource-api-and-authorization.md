@@ -182,17 +182,18 @@ the ZoneLink relationship, and the export capability ceiling must all allow the
 operation.
 
 For every exportable capability, the installed Provider descriptor supplies a
-signed projection factory binding the exact qualified `*Service` and `*State`
-types, allowed owner-Service backing ref types, allowed State target ref types,
+signed projection factory binding the exact qualified `*Service` and `*Binding`
+types, allowed owner-Service backing ref types, allowed Binding target ref types,
 the strict projection-Service schema/fingerprint, and an aggregate factory
 fingerprint. Admission fails closed when the metadata is absent, unsigned, or
-mismatched.
+mismatched. `*State`, `stateType`, and `allowedStateTargetRefTypes` are not
+compatibility aliases; strict schema admission rejects them.
 
 Core enforces all of these rules before advertisement, lease creation, or local
 projection:
 
 1. `ResourceExport.resourceRef` resolves in the export Zone to the owner
-   qualified `*Service` declared by the factory. A Device, Endpoint, State, or
+   qualified `*Service` declared by the factory. A Device, Endpoint, Binding, or
    any other resource is rejected, even if it is a Service backing.
 2. `ResourceImport` contains only a local `zoneLinkRef`, bounded `exportKey`,
    expected qualified Service type, and expected projection/factory
@@ -201,13 +202,14 @@ projection:
    and `requestedCapabilities` is within the export ceiling.
 4. Core creates exactly one same-qualified-type local projection Service with
    `ownerRef: ResourceImport/<name>`. It never creates a Device, Endpoint, or
-   State projection.
-5. An authored matching State is admitted only in the same Zone, with
+   Binding projection.
+5. An authored matching Binding is admitted only in the same Zone, with
    `serviceRef` targeting that Service and its consuming `Guest`, `User`, or
-   `Zone` target type allowed by the factory. State is non-exportable and cannot
-   claim remote authority.
+   `Zone` target type allowed by the factory. Binding spec contains desired
+   intent only; observed realization is written only to status. Binding is
+   non-exportable and cannot claim remote authority.
 
-RoleBindings separately authorize export/import mutation, Service use, State
+RoleBindings separately authorize export/import mutation, Service use, Binding
 creation, and target use. Possessing a local projection-Service Ref does not
 grant access to its remote authority or stream; the current lease/capability
 check remains mandatory. Leases, ceremonies, sessions, and streams are internal

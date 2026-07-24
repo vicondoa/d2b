@@ -273,23 +273,24 @@ A `ResourceImport` owns exactly one local projection **Service** through
 `metadata.ownerRef: ResourceImport/<name>`. Its ResourceType is the same
 qualified Provider `*Service` type as the remote owner Service, as bound by the
 signed projection factory. Core rejects a missing/mismatched factory and never
-projects a Device, Endpoint, or `*State`.
+projects a Device, Endpoint, or `*Binding`.
 
-Operator/Nix-authored matching same-Zone `*State` resources reference the
+Operator/Nix-authored matching same-Zone `*Binding` resources reference the
 projection's `serviceRef` and an allowed consuming Guest/User/Zone. They are not
-owned by the import. Their Provider controller creates and reconciles owned
-Process/Endpoint children. The import controller never creates, exports, or
-deletes State; per-session leases/streams remain internal records.
+owned by the import. Binding spec contains desired consumer intent only; all
+observations belong in status. Their Provider controller creates and reconciles
+owned Process/Endpoint children. The import controller never creates, exports,
+or deletes Binding; per-session leases/streams remain internal records.
 
 Status and D091 update currency propagate owner Service → export → import →
-projection Service → State → owned children. `ResourceExport` removal or
+projection Service → Binding → owned children. `ResourceExport` removal or
 ZoneLink loss revokes the lease and marks the projection Service degraded/
-revoked; State controllers then stop children in topological order. Import
+revoked; Binding controllers then stop children in topological order. Import
 finalization marks the projection draining, rejects new sessions, and waits for
-all referencing States to be deleted or retargeted. It then releases the remote
+all referencing Bindings to be deleted or retargeted. It then releases the remote
 lease, deletes the projection Service and remaining provider-owned children, and
-clears its own finalizer. `StateReferencesRemain` is visible pending cleanup;
-there is no implicit State cascade.
+clears its own finalizer. `BindingReferencesRemain` is visible pending cleanup;
+there is no implicit Binding cascade.
 
 ### Authority adoption, quarantine, and drain-recycle (D097)
 

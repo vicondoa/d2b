@@ -487,12 +487,12 @@ ResourceImport added by D096). Provider-specific
 semantic ResourceTypes may extend the set through signed schemas/API bindings.
 They use this same envelope/status/ownership contract.
 
-### Qualified Service/State pairs for cross-Zone capabilities (D096)
+### Qualified Service/Binding pairs for cross-Zone capabilities (D096)
 
-`Service` and `State` are semantic suffixes for **qualified Provider
+`Service` and `Binding` are semantic suffixes for **qualified Provider
 ResourceTypes**, not additional standard ResourceTypes. Every Provider capability
 that is exportable across a Zone boundary declares exactly one qualified
-`*Service` type and its matching qualified `*State` type in that Provider's
+`*Service` type and its matching qualified `*Binding` type in that Provider's
 signed descriptor and dossier. Exact type names and schemas are Provider-owned;
 the cross-cutting contract fixes their roles:
 
@@ -500,23 +500,27 @@ the cross-cutting contract fixes their roles:
   reference only same-Zone backing `Device`, `Endpoint`, or qualified backend
   resources allowed by the signed projection factory;
 - `ResourceExport.resourceRef` MUST reference that owner `*Service`. A
-  `Device`, `Endpoint`, `*State`, or other backing is never an export target;
+  `Device`, `Endpoint`, `*Binding`, or other backing is never an export target;
 - one `ResourceImport` causes core to create exactly one same-qualified-type
   projection `*Service` in the consumer Zone with
   `metadata.ownerRef: ResourceImport/<name>`. Core never projects a `Device`,
-  `Endpoint`, or `*State`;
+  `Endpoint`, or `*Binding`;
 - an operator or Nix configuration authors one or more same-Zone matching
-  `*State` resources. Each references the local `serviceRef` and an allowed
-  consuming `Guest`, `User`, or `Zone` target ref. The Provider controller owns
-  any resulting `Process` and `Endpoint` children;
-- the import controller never creates, owns, or deletes `*State`. Session,
+  `*Binding` resources. A Binding is desired consumer intent only: it references
+  the local `serviceRef` and an allowed consuming `Guest`, `User`, or `Zone`
+  target ref. All observations belong only in resource `status`. The Provider
+  controller owns any resulting `Process` and `Endpoint` children;
+- the import controller never creates, owns, or deletes `*Binding`. Session,
   stream, ceremony, transfer, and lease records that churn per connection stay
   internal opaque records under the owning controller.
 
 Consequently the standard catalog remains exactly 19 types. A qualified
-`*Service`/`*State` pair is admitted only when its installed Provider supplies
+`*Service`/`*Binding` pair is admitted only when its installed Provider supplies
 matching signed projection-factory metadata; absence or any type/schema/
-fingerprint mismatch fails closed.
+fingerprint mismatch fails closed. There is no `*State` compatibility spelling
+or alias: a Provider type ending in `State` does not satisfy this pattern, and
+the obsolete `stateType`/`allowedStateTargetRefTypes` metadata keys are unknown
+fields rejected by strict admission.
 
 ## Entity promotion test and opaque-ID classification (D092)
 
@@ -643,7 +647,7 @@ cloud subscription control) carry their qualified `AuthorityDescriptor` in the
 owning Provider dossier.
 
 Qualified Provider `*Service` types carry the `explicit-export` descriptor when
-approved. Their matching `*State` types are always non-exportable. The initial
+approved. Their matching `*Binding` types are always non-exportable. The initial
 approved families are audio, security-key, observability, and policy-gated
 USBIP; every other Provider family remains non-exportable unless a later
 reviewed dossier and signed projection factory add it.
