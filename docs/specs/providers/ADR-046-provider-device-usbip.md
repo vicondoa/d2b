@@ -5,10 +5,10 @@
 | Spec ID | `ADR-046-provider-device-usbip` |
 | Parent | ADR 0046 |
 | Status | Proposed |
-| Version | 4 |
+| Version | 5 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owners | `d2b-provider-device-usbip` crate, USBIP Service/State controller contracts, Nix USBIP resource emitter |
+| Owners | `d2b-provider-device-usbip` crate, USBIP Service/Binding controller contracts, Nix USBIP resource emitter |
 | Depends on | `ADR-046-resources-device`, `ADR-046-resources-network`, `ADR-046-resources-zone-control`, `ADR-046-zone-routing`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging`, `ADR-046-resource-reconciliation`, `ADR-046-telemetry-audit-and-support`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-resource-api-and-authorization`, `ADR-046-provider-state` |
 | Supersedes | `nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline |
 
@@ -74,7 +74,7 @@ The `d2b-provider-device-usbip` crate depends **only** on:
 | Crate | Purpose |
 | --- | --- |
 | `d2b-contracts` | busid validation/redaction, EffectPort types, signed D096 export/import adapter contracts, D097 authority descriptors |
-| `d2b-provider-toolkit` | `ReconcileContext`, `ResourceClient`, `ResourceMutationBatch`, Service/State schema helpers, `phase_*` helpers, generic conformance |
+| `d2b-provider-toolkit` | `ReconcileContext`, `ResourceClient`, `ResourceMutationBatch`, Service/Binding schema helpers, `phase_*` helpers, generic conformance |
 
 The Provider crate **must not** import `d2b-priv-broker`, `d2bd`, `d2b-host`,
 `d2b-realm-core`, Zone-store internals, or another Provider's implementation.
@@ -89,7 +89,7 @@ appear in the Provider's public types or internal reconcile logic.
 | --- | --- | --- | --- |
 | `Device` | Owner-Zone physical USB inventory and busid identity | forbidden | `exclusive` physical claim |
 | `device-usbip.d2bus.org.UsbipService` | Stable USBIP authority or imported local projection | `explicit-export` for authority mode only | physical `exclusive`; relay `multiplexed` |
-| `device-usbip.d2bus.org.UsbipState` | Per-consuming-Guest attachment intent and status | forbidden | one active State per Service |
+| `device-usbip.d2bus.org.UsbipBinding` | Per-consuming-Guest attachment intent; observation lives in resource `status` | forbidden | one active Binding per Service |
 
 ---
 
@@ -165,7 +165,7 @@ spec:
 The provider settings object is empty. The physical `Device` owns only
 inventory, presence, and anti-spoof state; its common claim observation reflects
 the Service authority holder. It carries no Guest, Network, relay, export, or
-attachment policy. Those fields belong to the qualified Service/State pair
+attachment policy. Those fields belong to the qualified Service/Binding pair
 below.
 
 Bus-class `usb` is the only accepted value for `busClass` in a `device-usbip`
@@ -173,13 +173,14 @@ Device. Any other value fails spec admission with `unsupported-bus-class`.
 
 ---
 
-## USBIP Service/State resource split (D096/D097)
+## USBIP Service/Binding resource split (D096/D097)
 
-`device-usbip` uses a Provider-qualified Service/State pair. The Service is the
+`device-usbip` uses a Provider-qualified Service/Binding pair. The Service is the
 stable authority boundary and the only USBIP semantic resource that may be
-exported. The State is one consuming Guest's desired attachment and observed
-realization. A physical `Device`, an `Endpoint`, or a `UsbipState` is never an
-export target.
+exported. The Binding is one consuming Guest's desired attachment; every
+observation belongs in that Binding resource's `status`. A physical `Device`,
+an `Endpoint`, or a `UsbipBinding` is never an export target. No compatibility
+alias exists.
 
 The frozen D096 catalog classifies USBIP as policy-gated
 `explicit-export`; the existing exclusive-busid, typed-relay, and encrypted
@@ -205,7 +206,7 @@ spec:
   deviceRef: Device/work-token
   relayEndpointRef: Endpoint/work-net-usbip-relay
   arbitration: exclusive
-  maxActiveStates: 1
+  maxActiveBindings: 1
   authority:
     authorityScope: physical-device
     authorityKeyClass: physical-usb-selector
@@ -277,18 +278,18 @@ spec:
   providerRef: Provider/device-usbip
   mode: projection
   arbitration: exclusive
-  maxActiveStates: 1
+  maxActiveBindings: 1
   sourceSchemaFingerprint: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 
 `mode` is a strict closed union. Projection mode forbids `deviceRef`,
 `relayEndpointRef`, physical-selector/placement fields, and any host-effect
 authority. Core creates exactly this one Service projection and does not project
-a Device, Endpoint, or State. The
+a Device, Endpoint, or Binding. The
 projection does not own, discover, open, bind, withhold, or load a module for
 local physical USB. Its `ownerRef` must be exactly the creating
 `ResourceImport`; deleting or degrading that import revokes its lease and
-degrades every dependent `UsbipState`.
+degrades every dependent `UsbipBinding`.
 
 ### Signed D096 projection factory
 
@@ -297,9 +298,9 @@ The Provider descriptor carries exactly one signed factory:
 | Field | USBIP value |
 | --- | --- |
 | `serviceType` | `device-usbip.d2bus.org.UsbipService` |
-| `stateType` | `device-usbip.d2bus.org.UsbipState` |
+| `bindingType` | `device-usbip.d2bus.org.UsbipBinding` |
 | `allowedBackingRefTypes` | `Device`, `Endpoint` |
-| `allowedStateTargetRefTypes` | `Guest` |
+| `allowedBindingTargetRefTypes` | `Guest` |
 | `projectionSchema` | strict projection-mode Service schema above; no backing refs or raw locator/path/credential/fd/bytes |
 | `projectionSchemaFingerprint` | SHA-256 of canonical committed projection schema |
 | `factoryFingerprint` | SHA-256 binding these fields and signed ExportAdapter/ImportAdapter identity/version |
@@ -310,14 +311,14 @@ semantic admission, exclusive arbitration, projection materialization, and
 bounded observation only; core owns Export/Import routing, projection
 ownership, base lifecycle, and layered status.
 
-### Per-Guest `UsbipState`
+### Per-Guest `UsbipBinding`
 
 Each consuming Guest has one
-`device-usbip.d2bus.org.UsbipState` attachment intent:
+`device-usbip.d2bus.org.UsbipBinding` attachment intent:
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
-type: device-usbip.d2bus.org.UsbipState
+type: device-usbip.d2bus.org.UsbipBinding
 metadata:
   name: corp-vm-work-token
   zone: dev
@@ -334,7 +335,7 @@ spec:
 
 `serviceRef`, `guestRef`, and `networkRef` are same-Zone references.
 `metadata.ownerRef` must equal `guestRef`, so Guest deletion cascades through
-the State's children.
+the Binding's children.
 `serviceRef` may name an owner authority Service or an imported projection.
 For an authority Service, `networkRef` must match the Service relay Endpoint's
 Network; for a projection it selects the same-Zone Guest-proxy Network admitted
@@ -342,7 +343,7 @@ by the import adapter. `desiredAttachment` is
 `attached|detached`; `claimMode` is `declared|explicit`; priority is a bounded
 unsigned admission hint and never overrides fair exclusive arbitration.
 
-The State owns the complete per-consumer realization:
+The Binding owns the complete per-consumer realization:
 
 - the Guest-local USBIP proxy `Process`;
 - its private, exact-Guest `Endpoint` child;
@@ -356,9 +357,9 @@ authenticated encrypted named stream. It never opens the physical Device.
 Attach/detach commands remain internal EffectPort operations, not
 `EphemeralProcess` resources.
 
-Only one State may hold the Service's exclusive physical claim. A second State
+Only one Binding may hold the Service's exclusive physical claim. A second Binding
 is queued fairly and reports `Pending`; it never causes a second busid bind,
-module load, listener, or physical open. State deletion drains the proxy,
+module load, listener, or physical open. Binding deletion drains the proxy,
 detaches the Guest, releases the Service lease, and then clears the finalizer.
 
 ### ResourceExport/ResourceImport contract
@@ -386,24 +387,24 @@ spec:
 ```
 
 `resourceRef` MUST target an authority-mode `UsbipService`. Admission rejects a
-`Device`, `Endpoint`, `UsbipState`, projection-mode Service, or an internal
+`Device`, `Endpoint`, `UsbipBinding`, projection-mode Service, or an internal
 session/transfer handle as the export target. The Service's own
 `relayEndpointRef` is the typed transport front door; ResourceExport neither
 targets nor duplicates that Endpoint. The Provider capability manifest
 advertises only
 `device-usbip.d2bus.org.UsbipService` as `explicit-export`;
-`Device`, `Endpoint`, and `UsbipState` are `forbidden`.
+`Device`, `Endpoint`, and `UsbipBinding` are `forbidden`.
 
 Across a ZoneLink, USBIP control requests and data frames use per-import
 bounded, credit-controlled, cancellable named ComponentSession streams under
-enrolled Noise_KK. The exact authority service and exact State proxy terminate
+enrolled Noise_KK. The exact authority service and exact Binding proxy terminate
 the encryption; intermediate controllers see ciphertext. Per-import session
 generation, deadline, idempotency, and revocation are mandatory. No fd, device
 grant, busid/sysfs path, bind address, socket path, or credential crosses a
 Zone. Session, lease, transfer, and stream handles remain internal high-churn
 objects and are never ResourceTypes. Export deletion, import deletion, ZoneLink
 loss, generation mismatch, or fingerprint mismatch cancels the stream,
-detaches the Guest, and degrades the local Service projection and State.
+detaches the Guest, and degrades the local Service projection and Binding.
 
 ---
 
@@ -491,7 +492,7 @@ The controller reconciles three closed worker classes:
 | --- | --- | --- | --- |
 | `usbip-host-<host-uid-short>-backend` | exactly one per Host; Provider-owned Host authority | one provider-internal host-local backend Endpoint | no externally reachable listener; all busids register with this backend |
 | `usbip-net-<network-uid-short>-relay` | exactly one per Network; Provider-owned relay authority | `Endpoint/<network>-usbip-relay` | binds only that Network's uplink on TCP 3240 and multiplexes all admitted Services |
-| `usbip-state-<state-uid-short>-proxy` | one per attached `UsbipState`; State-owned | `Endpoint/<state>-usbip-private` | runs for the exact Guest and exposes only Guest-private loopback TCP 3240 |
+| `usbip-binding-<binding-uid-short>-proxy` | one per attached `UsbipBinding`; Binding-owned | `Endpoint/<binding>-usbip-private` | runs for the exact Guest and exposes only Guest-private loopback TCP 3240 |
 
 Every Process uses `Provider/system-minijail`, a signed template
 (`usbip-daemon`, `usbip-relay`, or `usbip-guest-proxy`), semantic sandbox
@@ -499,7 +500,7 @@ classes, bounded CPU/memory/pid/fd budgets, provider-defined readiness,
 `adopt-on-restart`, and bounded drain. No Process spec contains argv, an
 executable or socket path, a busid, an IP address, an interface name, or an fd.
 The Host backend and per-Network relay are shared authorities, not per-Device
-workers. The State proxy is the only per-consumer long-lived worker.
+workers. The Binding proxy is the only per-consumer long-lived worker.
 
 The Network relay Endpoint has:
 
@@ -524,12 +525,12 @@ spec:
   lifecyclePolicy: recycle-with-producer
 ```
 
-The per-State private Endpoint has `ownerRef:
-device-usbip.d2bus.org.UsbipState/<name>`, names the State-owned Guest proxy as
+The per-Binding private Endpoint has `ownerRef:
+device-usbip.d2bus.org.UsbipBinding/<name>`, names the Binding-owned Guest proxy as
 `producerRef`, uses purpose `device-usbip.d2bus.org/guest-attachment`, is
 `guest-local`, and permits only the exact `guestRef`. Neither Endpoint is an
 export target. Producer restart increments `endpointGeneration`; dependent
-Services or States reconnect through fresh authorized LaunchTickets.
+Services or Bindings reconnect through fresh authorized LaunchTickets.
 
 ## Endpoint resources (D092)
 
@@ -544,7 +545,7 @@ observe `dependency-changed` and reconnect through a fresh authorized ticket.
 
 ## Retained opaque handles (D092 promotion test)
 
-- pidfds for backend/relay/State-proxy supervision stay process-local because they are
+- pidfds for backend/relay/Binding-proxy supervision stay process-local because they are
   restart-time identity handles, not stable managed endpoint identities.
 - LaunchTicket fd indexes and inherited listener fds stay opaque; they are
   per-launch attachment slots resolved under authorization.
@@ -560,22 +561,22 @@ observe `dependency-changed` and reconnect through a fresh authorized ticket.
 
 Guest-local USBIP effects (`vhci_hcd` module load, `usbip attach`, `usbip
 detach`) go through a **guest-side `UsbipGuestEffectPort`** adapter injected
-into the controller when the State's `guestRef` supervisor is addressed. The
+into the controller when the Binding's `guestRef` supervisor is addressed. The
 Guest supervisor (e.g., `Provider/runtime-cloud-hypervisor`) owns this
 adapter and exposes it to the controller through the reconcile framework's
 per-Guest effect channel.
 
-The controller calls `guest_effect.attach(state_uid)` or
-`guest_effect.detach(state_uid)` semantically. The Guest supervisor
+The controller calls `guest_effect.attach(binding_uid)` or
+`guest_effect.detach(binding_uid)` semantically. The Guest supervisor
 adapter privately:
 
 1. Locates the Guest-side `usbip` binary from the signed bundle.
-2. Resolves the State-owned private Endpoint and issues the attach/detach
+2. Resolves the Binding-owned private Endpoint and issues the attach/detach
    command via its privileged guest-control channel.
 3. Returns a typed `UsbipGuestEffectError` to the controller.
 
 A one-shot guest-side command is neither a long-lived worker nor an
-EphemeralProcess resource. The State-owned Guest proxy is a normal long-lived
+EphemeralProcess resource. The Binding-owned Guest proxy is a normal long-lived
 Process; the attach/detach command itself is not a second Process resource.
 The guest-side `vhci_hcd` kernel module is wired at Guest build time via
 `nixos-modules/components/usbip.nix`.
@@ -613,14 +614,14 @@ use std::fmt;
 /// to prevent byte arrays from leaking into logs or error output.
 pub struct DeviceUid([u8; 32]);
 pub struct NetworkUid([u8; 32]);
-pub struct UsbipStateUid([u8; 32]);
+pub struct UsbipBindingUid([u8; 32]);
 /// Zeroized on drop; Debug is redacted.
 pub struct LeaseToken([u8; 32]);
 pub struct FirewallToken([u8; 16]);
 
 impl fmt::Debug for DeviceUid    { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "DeviceUid(<redacted>)") } }
 impl fmt::Debug for NetworkUid   { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "NetworkUid(<redacted>)") } }
-impl fmt::Debug for UsbipStateUid{ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "UsbipStateUid(<redacted>)") } }
+impl fmt::Debug for UsbipBindingUid{ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "UsbipBindingUid(<redacted>)") } }
 impl fmt::Debug for LeaseToken   { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "LeaseToken(<redacted>)") } }
 impl fmt::Debug for FirewallToken{ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "FirewallToken(<redacted>)") } }
 
@@ -755,16 +756,16 @@ pub trait UsbipEffectPort: Send + Sync {
     ) -> Result<(), UsbipEffectError>;
 }
 
-/// Guest-side effect port injected by the Guest supervisor when a UsbipState
+/// Guest-side effect port injected by the Guest supervisor when a UsbipBinding
 /// is associated with a specific Guest. The controller calls semantic
 /// methods; the adapter issues commands through the Guest supervisor's
 /// privileged guest-control channel.
 #[async_trait]
 pub trait UsbipGuestEffectPort: Send + Sync {
-    /// Resolve the private Endpoint and trigger `usbip attach` in the State's Guest.
-    async fn attach(&self, state_uid: &UsbipStateUid) -> Result<(), UsbipEffectError>;
-    /// Trigger `usbip detach` inside the State's Guest.
-    async fn detach(&self, state_uid: &UsbipStateUid) -> Result<(), UsbipEffectError>;
+    /// Resolve the private Endpoint and trigger `usbip attach` in the Binding's Guest.
+    async fn attach(&self, binding_uid: &UsbipBindingUid) -> Result<(), UsbipEffectError>;
+    /// Trigger `usbip detach` inside the Binding's Guest.
+    async fn detach(&self, binding_uid: &UsbipBindingUid) -> Result<(), UsbipEffectError>;
 }
 ```
 
@@ -813,34 +814,34 @@ host-module/backend → physical-lock → withhold → network-firewall/relay
 | Bind busid | `bind_busid(device_uid, token)` | requires backend and relay Ready |
 | Service Ready | commit Service authority status | no Guest is attached yet |
 
-An attached State then reconciles:
+An attached Binding then reconciles:
 
 | Step | Action |
 | --- | --- | --- |
 | Acquire Service slot | fair exclusive admission; imported Services also acquire a D096 lease |
-| Create proxy/Endpoint | State-owned Guest proxy Process and private Endpoint become Ready |
-| Attach Guest | `UsbipGuestEffectPort::attach(state_uid)` targets the private Endpoint |
-| Commit status | State becomes Ready with the exact observed Service/Endpoint generations |
+| Create proxy/Endpoint | Binding-owned Guest proxy Process and private Endpoint become Ready |
+| Attach Guest | `UsbipGuestEffectPort::attach(binding_uid)` targets the private Endpoint |
+| Commit status | Binding becomes Ready with the exact observed Service/Endpoint generations |
 
-State teardown is Guest detach → private Endpoint/proxy deletion → Service slot
-release. Service deletion first drains all States and exports/imports, then
+Binding teardown is Guest detach → private Endpoint/proxy deletion → Service slot
+release. Service deletion first drains all Bindings and exports/imports, then
 unbinds the busid, releases firewall/relay references, releases withhold and
 physical lock, and finally releases Host backend/module references. Shared Host
 or Network authorities remain while another Service references them.
 
 Every step is idempotent. Completed authority steps live in Service status;
-completed attachment steps live in State status. Physical Device status never
+completed attachment steps live in Binding status. Physical Device status never
 stores a Guest attachment state.
 
 ---
 
-## Typed Device, Service, and State status
+## Typed Device, Service, and Binding status
 
 Per D088, ResourceType-common Device observation lives in
 `status.resource`: the provider-neutral claim/arbitration/presence base that is
 identical across Device implementations. Its USBIP extension contains only
 physical presence, probe outcome, and opaque selector digest. Service status
-contains authority/projection observations. State status contains per-Guest
+contains authority/projection observations. Binding status contains per-Guest
 attachment observations. Every extension is strict, signed, bounded to 32 KiB,
 unknown-field-denied, and never duplicates common status fields.
 
@@ -858,7 +859,7 @@ status:
       completedSteps: [host-backend, physical-lock, withhold, network-relay, bind]
       backendProcessRef: Process/usbip-host-b3a7f1d2c591-backend
       relayEndpointRef: Endpoint/work-net-usbip-relay
-      activeStateRefs: []
+      activeBindingRefs: []
       queueDepth: 0
       arbitration: exclusive
       hostModuleAuthority: ready
@@ -868,7 +869,7 @@ status:
 
 Projection Service status instead reports import availability, source
 generation/fingerprint observation, lease availability, and internal route
-readiness; all physical/Endpoint fields are absent. State status reports
+readiness; all physical/Endpoint fields are absent. Binding status reports
 `desiredAttachment`, `attachmentPhase`
 (`detached|waiting|proxy-starting|attaching|attached|detaching|failed|unknown`),
 `serviceRef`, observed Service/relay generations, private proxy/Endpoint refs,
@@ -880,15 +881,15 @@ identifier, or transfer bytes.
 
 | Phase | Meaning |
 | --- | --- |
-| `Pending` | Service authority/projection or State attachment is reconciling or fairly queued |
-| `Ready` | Service is available, or State proxy/Endpoint and Guest attachment are Ready |
+| `Pending` | Service authority/projection or Binding attachment is reconciling or fairly queued |
+| `Ready` | Service is available, or Binding proxy/Endpoint and Guest attachment are Ready |
 | `Degraded` | Previously Ready dependency, authority, import, stream, proxy, or attachment is unavailable |
 | `Failed` | Terminal failure; manual intervention required |
 | `Unknown` | Controller unreachable or crashed; last known status stale |
 
 **Currency and upgrade (D091).** The controller implements `assess_update`,
 `plan_upgrade`, and `execute_upgrade` for Service authority/projection and
-State attachment realizations and populates only universal `status.update` with
+Binding attachment realizations and populates only universal `status.update` with
 `state: Current|UpdateAvailable|UpgradeRequired|Upgrading|Blocked|Unknown`,
 `reasons` from `CoreGenerationChanged`, `ProviderGenerationChanged`,
 `ArtifactChanged`, `ImageOrSystemGenerationChanged`, `SpecChanged`,
@@ -900,9 +901,9 @@ disruptive default; auto non-disruptive), while the Core Operation ledger owns
 upgrade operation, idempotency, and progress. Disruptive attach changes return
 `UpgradeRequired` rather than applying in place; the planner recycles the attach
 realization, drains/restarts dependent Processes and Guests, and preserves
-Device and Service identity. A Service upgrade drains dependent States before
+Device and Service identity. A Service upgrade drains dependent Bindings before
 recycling the authority; an imported source update propagates import →
-projection Service → State. Non-disruptive changes reconcile normally.
+projection Service → Binding. Non-disruptive changes reconcile normally.
 
 ---
 
@@ -911,31 +912,31 @@ projection Service → State. Non-disruptive changes reconcile normally.
 ### `claimMode: declared`
 
 The controller automatically acquires the Service slot, creates the
-State-owned Guest proxy/private Endpoint, and invokes
+Binding-owned Guest proxy/private Endpoint, and invokes
 `UsbipGuestEffectPort::attach` when `desiredAttachment: attached` and the
 Service, Guest, and local Network are Ready.
 
 Claim source: `UsbipClaimSource::Declared { device_uid, network_uid }` —
-tracked in the State's bounded status; never exposed to the Guest.
+tracked in the Binding's bounded status; never exposed to the Guest.
 
 ### `claimMode: explicit`
 
-The authority Service may become Ready, but the State pauses before Service
+The authority Service may become Ready, but the Binding pauses before Service
 slot acquisition until an operator invokes `d2b device usb attach
-<state-name>`. `AttachState` then creates the State-owned proxy/private
-Endpoint and calls `guest_effect.attach(state_uid)`. The attach command is an
-internal EffectPort operation; the proxy is the State-owned long-lived Process.
+<binding-name>`. `AttachBinding` then creates the Binding-owned proxy/private
+Endpoint and calls `guest_effect.attach(binding_uid)`. The attach command is an
+internal EffectPort operation; the proxy is the Binding-owned long-lived Process.
 
 Claim source: `UsbipClaimSource::Explicit` — tracked in
-the State's bounded status.
+the Binding's bounded status.
 
 ---
 
 ## Exclusivity and cardinality
 
-- `arbitration: exclusive` and `maxActiveStates: 1` are enforced by the
+- `arbitration: exclusive` and `maxActiveBindings: 1` are enforced by the
   Service authority, including imported consumers.
-- A pending second State waits in a bounded fair queue until the first releases
+- A pending second Binding waits in a bounded fair queue until the first releases
   its lease; it never creates a second physical bind.
 - The authority index enforces one physical-busid owner across configuration
   and API-created resources before an external effect.
@@ -968,7 +969,7 @@ The controller's async reconcile loop follows
                 ▼
 ┌─────────────────────────────────────────────────┐
 │  Per-resource reconcile task                     │
-│  1. Read fresh Service/State + dependencies       │
+│  1. Read fresh Service/Binding + dependencies     │
 │  2. Compute desired step delta                   │
 │  3. Execute EffectPort steps (await each)        │
 │  4. Create/delete child Process resources        │
@@ -977,7 +978,7 @@ The controller's async reconcile loop follows
 ```
 
 **The watch receiver loop MUST continue reading and dispatching during steps 3
-and 4.** Independent Services and States run concurrently under bounded
+and 4.** Independent Services and Bindings run concurrently under bounded
 semaphores; per-Service single-flight serializes authority/attachment
 arbitration. The receiver never blocks waiting for an effect step.
 
@@ -993,12 +994,12 @@ and `statusPersistence: pending|committed`; effect idempotency keys derive from
 using a bounded priority lane.
 
 On restart, the controller:
-1. Lists all authority/projection Services and States it owns and reads their
+1. Lists all authority/projection Services and Bindings it owns and reads their
    referenced Device, Host, Network, Guest, import, and Endpoint dependencies.
 2. Reads completed authority steps from Service status and attachment steps
-   from State status.
+   from Binding status.
 3. Skips completed steps idempotently.
-4. Adopts exact Host backend, Network relay, and State proxy Processes using
+4. Adopts exact Host backend, Network relay, and Binding proxy Processes using
    their authority owner proofs (`adoptionPolicy: adopt-on-restart`).
 5. Quarantines ambiguous authority, otherwise resumes from the earliest
    non-completed step.
@@ -1009,7 +1010,7 @@ On restart, the controller:
 
 The controller uses `ResourceClient` dependency watches (read-only) on the
 Network identified by each authority Service's relay Endpoint producer and on
-each State `networkRef`. It never contacts the Network controller directly; it
+each Binding `networkRef`. It never contacts the Network controller directly; it
 observes Network status changes via the watch.
 
 The `ResourceClient` dependency watch is the **only** channel for Network
@@ -1017,7 +1018,7 @@ information. No broker connection for Network data; no route table access;
 no direct NetworkManager/nftables query.
 
 Fields read from Network status by the controller (read-only, via ResourceClient watch):
-- `status.phase` — gates Network relay and State proxy creation until Ready
+- `status.phase` — gates Network relay and Binding proxy creation until Ready
 
 The adapter privately reads additional Network status fields (such as the host
 uplink IP) through its own trusted channel when constructing the shared relay
@@ -1037,24 +1038,24 @@ rules.
 
 The controller adds `device-usbip.d2bus.org/service-finalizer` to an authority
 Service after its first host effect and
-`device-usbip.d2bus.org/state-finalizer` to a State after acquiring its Service
+`device-usbip.d2bus.org/binding-finalizer` to a Binding after acquiring its Service
 slot. A projection Service's lifecycle is owned by its `ResourceImport`. No
 finalizer is added before an effect or lease exists.
 
 Teardown on deletion request:
 1. Controller detects `deletionTimestamp` set.
-2. For a State, detaches the Guest, drains/deletes its private Endpoint/proxy,
+2. For a Binding, detaches the Guest, drains/deletes its private Endpoint/proxy,
    and releases the Service/import lease.
-3. For an authority Service, drains dependent States and exports, unbinds its
+3. For an authority Service, drains dependent Bindings and exports, unbinds its
    busid, releases its relay/firewall/backend references, withhold, and physical
    lease; shared authorities remain until their last reference is gone.
-4. Marks teardown progress in the deleting Service or State status; restart is
+4. Marks teardown progress in the deleting Service or Binding status; restart is
    idempotent.
 5. Clears the finalizer only after all teardown steps succeed.
 6. Core commits the finalizer removal; the resource is garbage-collected.
 
 If a teardown step fails terminally, the controller sets `phase: Degraded` and
-the typed Service/State `teardownBlocked: true`, emits a structured event, and
+the typed Service/Binding `teardownBlocked: true`, emits a structured event, and
 requeues under exponential backoff.
 
 ---
@@ -1074,9 +1075,9 @@ ProviderStateSet(zone, "device-usbip") =
 
 `Provider/device-usbip` declares **no** Provider state Volume; its
 `ProviderStateSet` is empty. The controller has no durable payload state beyond
-Device/Service/State resource status, owned Process/Endpoint resources, and the
+Device/Service/Binding resource status, owned Process/Endpoint resources, and the
 core Operation ledger. Bounded non-secret authority state lives in Service
-status; per-Guest attach/detach state lives in `UsbipState` status; common
+status; per-Guest attach/detach state lives in `UsbipBinding` status; common
 Device presence/probe state stays in Device `status.resource` (D087/D088).
 Sessions, transfers, leases, and stream handles remain internal and are not
 persisted as resources.
@@ -1088,7 +1089,7 @@ the storage-need test and declares no state namespace, no state Volume, no
 state-view mount, and no dedicated state-layout `User/<name>` principal. There
 is no empty identity-only Volume.
 
-The backend, relay, and State proxy workers likewise hold no state Volume;
+The backend, relay, and Binding proxy workers likewise hold no state Volume;
 stateless workers receive no dirfd. The stable identity of an adopted Process is
 re-derived after restart from its declared cgroup leaf and a fresh pidfd, not
 from any persisted snapshot.
@@ -1132,7 +1133,7 @@ The controller emits OTEL spans for its own reconcile operations:
 | Span name | Attributes |
 | --- | --- |
 | `device-usbip.service.reconcile` | `zone`, `service.name_digest`, `mode`, `phase`, `trigger_reason` |
-| `device-usbip.state.reconcile` | `zone`, `state.name_digest`, `phase`, `trigger_reason` |
+| `device-usbip.binding.reconcile` | `zone`, `binding.name_digest`, `phase`, `trigger_reason` |
 | `device-usbip.effect.ensure_kernel_module` | `outcome`, `error_class` |
 | `device-usbip.effect.acquire_lease` | `outcome`, `error_class` |
 | `device-usbip.effect.withhold_device` | `outcome`, `error_class` |
@@ -1142,7 +1143,7 @@ The controller emits OTEL spans for its own reconcile operations:
 | `device-usbip.effect.unbind_busid` | `outcome`, `error_class` |
 | `device-usbip.process.backend_start` | `outcome`, `error_class` |
 | `device-usbip.process.relay_start` | `outcome`, `error_class` |
-| `device-usbip.process.state_proxy_start` | `outcome`, `error_class` |
+| `device-usbip.process.binding_proxy_start` | `outcome`, `error_class` |
 
 Attributes must never carry raw busids, lock paths, nftables text, binary
 paths, Endpoint addresses, import/export keys, session/transfer identifiers, or
@@ -1158,11 +1159,11 @@ The controller registers these typed d2b-bus methods:
 
 | Method | Authority | Description |
 | --- | --- | --- |
-| `AttachState` | Admin | Trigger Service-slot acquisition, proxy creation, and Guest attach for an explicit `UsbipState`; progress is reflected in State status. |
-| `DetachState` | Admin | Detach the Guest and release only that State realization; returns immediately. |
+| `AttachBinding` | Admin | Trigger Service-slot acquisition, proxy creation, and Guest attach for an explicit `UsbipBinding`; progress is reflected in Binding status. |
+| `DetachBinding` | Admin | Detach the Guest and release only that Binding realization; returns immediately. |
 | `ProbeDevice` | Admin | Re-run physical probe; update `status.provider.details.usbip.lastProbeResult`. Returns synchronously. |
 | `GetServiceStatus` | Admin, StatusReader | Return the bounded authority/projection status. |
-| `GetStateStatus` | Admin, StatusReader | Return bounded attachment status. |
+| `GetBindingStatus` | Admin, StatusReader | Return bounded attachment status. |
 | `ListServices` | Admin, StatusReader | Return local Service refs and logical name digests only. |
 
 No bus method returns or accepts a raw busid, lock path, or broker wire type.
@@ -1177,8 +1178,8 @@ no resource or general bus API.
 | --- | --- | --- | --- | --- |
 | `device-reader` | Device | `get`, `list`, `watch`, `update/status` | Zone-scoped referenced physical Devices | device-usbip controller Process identity |
 | `usbip-service-manager` | `device-usbip.d2bus.org.UsbipService` | `get`, `list`, `watch`, `update/status`, `patch/finalizers` | Zone-scoped owned Services/projections | controller identity |
-| `usbip-state-manager` | `device-usbip.d2bus.org.UsbipState` | all lifecycle/status/finalizer verbs | Zone-scoped owned States | controller identity |
-| `process-endpoint-owner` | Process, Endpoint | lifecycle verbs | exact Provider/Service/State-owned component identities | controller identity |
+| `usbip-binding-manager` | `device-usbip.d2bus.org.UsbipBinding` | all lifecycle/status/finalizer verbs | Zone-scoped owned Bindings | controller identity |
+| `process-endpoint-owner` | Process, Endpoint | lifecycle verbs | exact Provider/Service/Binding-owned component identities | controller identity |
 | `dependency-reader` | Host, Guest, Network, ResourceExport, ResourceImport | `get`, `list`, `watch` | exact same-Zone referenced resources | controller identity |
 
 There is no direct broker channel in the RBAC table. The controller communicates
@@ -1229,7 +1230,7 @@ different local Zone without D096 export/import:
 - The firewall carve-out allows only the Zone A bridge.
 - A wrong-Zone firewall request is rejected before any effect.
 - Cross-Zone consumers terminate only the encrypted import stream at their
-  local projection/State proxy; they receive no direct firewall opening.
+  local projection/Binding proxy; they receive no direct firewall opening.
 
 The wrong-Zone case in `tests/host-integration/usbip-service.nix` MUST pass in
 the required host-integration gate.
@@ -1265,7 +1266,7 @@ The adapter enforces that:
 ### Relay and private proxy bind addresses
 
 The shared relay binds to the per-Zone Network uplink IP only (not `0.0.0.0`).
-The State-owned Guest proxy binds only Guest loopback. The
+The Binding-owned Guest proxy binds only Guest loopback. The
 adapter derives this address from Network status through its own trusted
 channel; the controller never reads or passes an IP address. Endpoint resources
 declare only stable semantic fields; the adapter resolves actual bind addresses
@@ -1307,7 +1308,7 @@ d2b.zones.work.resources.work-token-usbip = {
     deviceRef = "Device/corp-vm-usb";
     relayEndpointRef = "Endpoint/work-net-usbip-relay";
     arbitration = "exclusive";
-    maxActiveStates = 1;
+    maxActiveBindings = 1;
     authority = {
       authorityScope = "physical-device";
       authorityKeyClass = "physical-usb-selector";
@@ -1330,7 +1331,7 @@ d2b.zones.work.resources.work-token-usbip = {
 };
 
 d2b.zones.work.resources.corp-vm-work-token = {
-  type = "device-usbip.d2bus.org.UsbipState";
+  type = "device-usbip.d2bus.org.UsbipBinding";
   metadata.ownerRef = "Guest/corp-vm";
   spec = {
     providerRef = "Provider/device-usbip";
@@ -1358,7 +1359,7 @@ d2b.zones.work.providers.device-usbip = {
 ### Cross-Zone authoring
 
 ```nix
-# Owner Zone. resourceRef is always UsbipService, never Device/Endpoint/State.
+# Owner Zone. resourceRef is always UsbipService, never Device/Endpoint/Binding.
 d2b.zones.work.resources.work-token-export = {
   type = "ResourceExport";
   spec = {
@@ -1400,8 +1401,8 @@ d2b.zones.dev.resources.work-token-import = {
 
 # Core creates UsbipService/work-token-usbip with
 # ownerRef=ResourceImport/work-token-import. The operator authors a dev-Zone
-# UsbipState with Guest/dev-vm and Network/dev-net refs; the import controller
-# never creates that State.
+# UsbipBinding with Guest/dev-vm and Network/dev-net refs; the import controller
+# never creates that Binding.
 ```
 
 ### Guest-side module wiring (unchanged from v3 baseline)
@@ -1414,7 +1415,7 @@ d2b.zones.dev.resources.work-token-import = {
 
 The old `d2b.vms.<vm>.usbip.yubikey = true` option is removed at the v3 reset
 boundary. The new expression is Device + authority/projection Service +
-per-Guest State, with explicit ResourceExport/ResourceImport only when crossing
+per-Guest Binding, with explicit ResourceExport/ResourceImport only when crossing
 a Zone.
 
 ### Eval-time assertions
@@ -1427,10 +1428,10 @@ message = "USBIP device label '<label>' also declared as security-key in zone '<
 # controllerExecutionRef must resolve to a Host in the same zone
 assert isValidHostRef cfg.providers.device-usbip.config.controllerExecutionRef;
 
-# Service Device/Endpoint refs and State Service/Guest/Network refs
+# Service Device/Endpoint refs and Binding Service/Guest/Network refs
 # must all resolve in the resource's Zone.
 assert sameZoneRefs usbipService;
-assert sameZoneRefs usbipState;
+assert sameZoneRefs usbipBinding;
 
 # Only an authority UsbipService is exportable.
 assert export.resourceRef.type == "device-usbip.d2bus.org.UsbipService";
@@ -1447,9 +1448,9 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | `invalid-vendor-id` | `Failed` | no | `vendorId` not exactly 4 ASCII hex digits |
 | `invalid-product-id` | `Failed` | no | `productId` not exactly 4 ASCII hex digits |
 | `invalid-selector-label` | `Failed` | no | Label violates ResourceName grammar |
-| `network-ref-not-found` | `Degraded` | yes | State `networkRef` or the authority relay Endpoint's Network does not resolve |
+| `network-ref-not-found` | `Degraded` | yes | Binding `networkRef` or the authority relay Endpoint's Network does not resolve |
 | `network-not-ready` | `Pending` | yes | Network dependency not yet Ready |
-| `wrong-zone` | `Degraded` | no | A Service/State reference resolves outside its Zone |
+| `wrong-zone` | `Degraded` | no | A Service/Binding reference resolves outside its Zone |
 | `kernel-module-load-failed` | `Degraded` | yes | `ensure_kernel_module` returned error |
 | `device-not-present` | `Degraded` | yes | Physical device absent from sysfs |
 | `anti-spoof-failed` | `Failed` | no | Vendor/product/serial mismatch |
@@ -1460,7 +1461,7 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | `backend-start-failed` | `Degraded` | yes | Host backend authority failed to become Ready |
 | `bind-failed` | `Degraded` | yes | `bind_busid` returned error |
 | `relay-start-failed` | `Degraded` | yes | per-Network TCP 3240 relay failed to become Ready |
-| `state-proxy-start-failed` | `Degraded` | yes | State-owned Guest proxy/private Endpoint failed |
+| `binding-proxy-start-failed` | `Degraded` | yes | Binding-owned Guest proxy/private Endpoint failed |
 | `usbip-physical-device-authority-conflict` | `Failed` | no | A second Service attempted to own the same physical selector |
 | `usbip-host-module-authority-conflict` | `Failed` | no | A second Host module/backend authority was proposed |
 | `usbip-network-relay-authority-conflict` | `Failed` | no | A second TCP 3240 listener was proposed for one Network |
@@ -1469,7 +1470,7 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | `stream-generation-mismatch` | `Degraded` | yes | Encrypted import stream generation/fingerprint is stale |
 | `teardown-blocked` | `Degraded` | yes | One or more teardown steps failed |
 | `mutual-exclusion-conflict` | `Failed` | no | Same label used for security-key in same Zone |
-| `claim-arbitration-conflict` | `Pending` | yes | Second State waits fairly for the exclusive Service slot |
+| `claim-arbitration-conflict` | `Pending` | yes | Second Binding waits fairly for the exclusive Service slot |
 
 ---
 
@@ -1479,7 +1480,7 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | --- | --- | --- |
 | `packages/d2b-contracts/src/usbip.rs` — `validate_bus_id`, `SYSFS_BUS_ID_MAX`, `UsbipClaimSource`, `sanitize_usb_hex_id` | Copy unchanged into `d2b-contracts`; reference from Provider crate | These are contracts, not broker internals; safe to reference |
 | `packages/d2bd/src/usbip_state_machine.rs` — `CANONICAL_STEPS`, `UsbipBusidStep`, step ordering | Adapt step ordering into `src/reconcile.rs` EffectPort model; remove all broker-call sites | Step semantics and idempotency invariants preserved |
-| `packages/d2bd/src/usbip_reconcile_state.rs` — desired/carrier/bind/proxy state enums | Split into typed Service authority and per-Guest State status | Restart-safe reconcile model preserved without putting attachment state on Device |
+| `packages/d2bd/src/usbip_reconcile_state.rs` — desired/carrier/bind/proxy state enums | Split into typed Service authority and per-Guest Binding status | Restart-safe reconcile model preserved without putting attachment state on Device |
 | `packages/d2b-host/src/usbip_argv.rs` — argv generators | Remain in `d2b-host`; called by the core adapter only | Provider crate has no compile dependency on `d2b-host` |
 | `packages/d2b-priv-broker/src/ops/usbip_firewall.rs` — `bind_firewall_rule`, audit structs | Adapter-internal only; Provider crate never imports this | Audit structs are broker-internal; `UsbipBindFirewallRuleAudit` never visible to Provider |
 | `packages/d2b-priv-broker/src/ops/usbip_host.rs` — `withhold_device` impl | Adapter-internal | Same as above |
@@ -1500,14 +1501,14 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new trait definition |
 | Destination | packages/d2b-contracts/src/usbip_effect_port.rs |
-| Detailed design | Define UsbipEffectPort and UsbipGuestEffectPort in d2b-contracts with DeviceUid, NetworkUid, UsbipStateUid, LeaseToken, FirewallToken, KernelModuleClass, DeviceProbeResult, and UsbipEffectError; export traits/types only with no implementation; keep attach/detach State-addressed and all fd/path/busid values private. |
+| Detailed design | Define UsbipEffectPort and UsbipGuestEffectPort in d2b-contracts with DeviceUid, NetworkUid, UsbipBindingUid, LeaseToken, FirewallToken, KernelModuleClass, DeviceProbeResult, and UsbipEffectError; export traits/types only with no implementation; keep attach/detach Binding-addressed and all fd/path/busid values private. |
 | Integration | Provider/device-usbip controller depends on this trait for injected semantic effects; the framework core adapter implements it in ADR046-usbip-002. |
 | Data migration | None — docs/tooling only; no runtime state |
 | Validation | d2b-contracts tests for trait object safety, redacted Debug behavior, method signatures, and no implementation leakage. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 Define the `UsbipEffectPort` async trait with the method set in § UsbipEffectPort.
-Define `DeviceUid`, `NetworkUid`, `UsbipStateUid`, `LeaseToken`,
+Define `DeviceUid`, `NetworkUid`, `UsbipBindingUid`, `LeaseToken`,
 `FirewallToken`, `KernelModuleClass`, `DeviceProbeResult`, and
 `UsbipEffectError`. Export from `d2b-contracts`. No implementation
 in `d2b-contracts`; trait only. Add conformance tests in `d2b-contracts/tests/usbip_effect_port.rs`.
@@ -1524,7 +1525,7 @@ in `d2b-contracts`; trait only. Add conformance tests in `d2b-contracts/tests/us
 | Destination | packages/d2b-core/src/device_usbip_adapter.rs |
 | Detailed design | Implement UsbipEffectPort in the core adapter: signed-bundle busid lookup, same-Zone validation, exclusive OFD claim, broker firewall/sysfs effects, anti-spoof probe, one shared Host module/backend authority, one reference-counted TCP 3240 relay authority per Network, D097 authority-index preflight/adoption, and post-effect audit; never expose raw busid, path, fd, bind address, nftables body, audit structs, or broker wire types. |
 | Integration | Reconcile framework injects the adapter into Provider/device-usbip; D097 authority index gates effects; adapter calls privileged broker and d2b-host argv helpers behind the semantic trait. |
-| Data migration | Full d2b 3.0 reset; adapter resumes from Service/State status and authority owner proofs rather than daemon-coupled snapshots |
+| Data migration | Full d2b 3.0 reset; adapter resumes from Service/Binding status and authority owner proofs rather than daemon-coupled snapshots |
 | Validation | Fast packages/d2b-core/tests/device_usbip_adapter.rs covers same-Zone gate, three authority classes/conflicts, one-module/one-relay reuse, anti-spoof, redaction, broker mapping, and no busid/path/fd exposure. |
 | Removal proof | Old daemon-coupled adapter call sites are removed by ADR046-usbip-009 after Provider wiring and adapter tests pass. |
 
@@ -1544,10 +1545,10 @@ type to the trait caller. Add unit tests for same-Zone gate and anti-spoof logic
 | Current source | None — net-new Provider crate; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new crate skeleton with contract reuse |
 | Destination | packages/d2b-provider-device-usbip/ |
-| Detailed design | Create the required crate layout; implement strict schemas for Device extension, authority/projection UsbipService closed union, and UsbipState; sign/register all schemas and advertise explicit export only for authority UsbipService; implement validation.rs and compile-checked EffectPort injection. Declare the controller user/User resource in Nix activation. |
+| Detailed design | Create the required crate layout; implement strict schemas for Device extension, authority/projection UsbipService closed union, and UsbipBinding; sign/register all schemas and advertise explicit export only for authority UsbipService; implement validation.rs and compile-checked EffectPort injection. Declare the controller user/User resource in Nix activation. |
 | Integration | Workspace manifests, Provider artifact catalog, Nix module, and ProviderDeployment consume the crate and component descriptor. |
 | Data migration | None — docs/tooling only; no runtime state |
-| Validation | make test-policy passes; Cargo.toml has no d2b-priv-broker dependency; fast schema/manifest tests prove Service-only exportability, State non-exportability, projection ownerRef/field restrictions, strict refs, and trait injection. |
+| Validation | make test-policy passes; Cargo.toml has no d2b-priv-broker dependency; fast schema/manifest tests prove Service-only exportability, Binding non-exportability, projection ownerRef/field restrictions, strict refs, and trait injection. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 Create the crate with the layout in § Crate layout. Implement `lib.rs`, `validation.rs`
@@ -1564,7 +1565,7 @@ of this Provider.
 
 ---
 
-### ADR046-usbip-004: Service/State controller and D096 adapters
+### ADR046-usbip-004: Service/Binding controller and D096 adapters
 
 | Field | Value |
 | --- | --- |
@@ -1572,21 +1573,21 @@ of this Provider.
 | Current source | packages/d2bd/src/usbip_state_machine.rs and packages/d2bd/src/usbip_reconcile_state.rs |
 | Reuse action | extract and adapt step machine into Provider reconcile loop |
 | Destination | packages/d2b-provider-device-usbip/src/{controller,reconcile,export_import}.rs |
-| Detailed design | Reconcile authority/projection UsbipService and per-Guest UsbipState, consuming UsbipEffectPort, D097 authority index, and signed D096 ExportAdapter/ImportAdapter. Enforce same-Zone refs; ResourceExport authority-Service-only target; ResourceImport-owned projection with no physical fields/effects; exclusive fair State admission; encrypted bounded named-stream control/data; Service/State finalizers; restart adoption; declared/explicit modes; no session/transfer resources. |
+| Detailed design | Reconcile authority/projection UsbipService and per-Guest UsbipBinding, consuming UsbipEffectPort, D097 authority index, and signed D096 ExportAdapter/ImportAdapter. Enforce same-Zone refs; ResourceExport authority-Service-only target; ResourceImport-owned projection with no physical fields/effects; exclusive fair Binding admission; encrypted bounded named-stream control/data; Service/Binding finalizers; restart adoption; declared/explicit modes; no session/transfer resources. |
 | Integration | Controller watches Device/Host/Network/Guest/Endpoint/Export/Import dependencies, calls injected EffectPorts, commits ResourceMutationBatch updates, coordinates children from ADR046-usbip-005, and delegates only semantic export/import admission to the Provider adapter while core owns D096 routing/lifecycle. |
 | Data migration | Full d2b 3.0 reset; no direct import of d2bd usbip_reconcile_state snapshots |
-| Validation | Fast tests/controller_state_machine.rs, service_state_schema.rs, export_import.rs, authority_conflict.rs, async_loop.rs, finalizer.rs, and wrong_zone.rs cover authority/projection/State lifecycle, Service-only export, encrypted fake streams, no physical projection effect, exclusivity, restart, and WrongZone degradation. |
+| Validation | Fast tests/controller_state_machine.rs, service_binding_schema.rs, export_import.rs, authority_conflict.rs, async_loop.rs, finalizer.rs, and wrong_zone.rs cover authority/projection/Binding lifecycle, Service-only export, encrypted fake streams, no physical projection effect, exclusivity, restart, and WrongZone degradation. |
 | Removal proof | packages/d2bd/src/usbip_state_machine.rs and usbip_reconcile_state.rs are deleted by ADR046-usbip-009 once Provider parity tests pass. |
 
-Implement the Service authority/projection and State attachment step machines.
-Map legacy desired/carrier/bind/proxy observations to Service/State status,
+Implement the Service authority/projection and Binding attachment step machines.
+Map legacy desired/carrier/bind/proxy observations to Service/Binding status,
 never Device attachment status. Implement finalizers, restart step skipping,
-non-blocking watch dispatch, fair exclusive State admission, declared/explicit
+non-blocking watch dispatch, fair exclusive Binding admission, declared/explicit
 mode, and D096 export/import stream revocation.
 
 Tests required:
 - `tests/controller_state_machine.rs`: full bring-up / teardown with a `FakeUsbipEffectPort`
-- `tests/async_loop.rs`: receiver dispatches Service/State B while A awaits an effect
+- `tests/async_loop.rs`: receiver dispatches Service/Binding B while A awaits an effect
 - `tests/finalizer.rs`: finalizer add/clear through partial progress
 - `tests/wrong_zone.rs`: WrongZone error → Degraded phase + correct error class
 
@@ -1598,17 +1599,17 @@ Tests required:
 | --- | --- |
 | Dependency/owner | ADR046-usbip-003; Process ResourceType schema; device-usbip process lifecycle owner |
 | Current source | None — net-new Process resources; templates derive from the Provider package descriptor |
-| Reuse action | adapt into singleton Host backend, per-Network relay, and per-State Guest proxy management |
+| Reuse action | adapt into singleton Host backend, per-Network relay, and per-Binding Guest proxy management |
 | Destination | packages/d2b-provider-device-usbip/src/reconcile.rs |
-| Detailed design | Create/adopt exactly one Host backend Process authority, exactly one Network relay Process/Endpoint authority bound to TCP 3240, and one State-owned Guest proxy/private Endpoint per attached State. Use canonical system-minijail specs, signed templates, bounded budgets/readiness/restart, no argv/path/address/fd fields; attach/detach remains a one-shot EffectPort operation, not a second Process. |
-| Integration | Service controller registers physical busids with shared backend/relay; State controller creates its Guest proxy/private Endpoint; Process controller launches workers; UsbipGuestEffectPort attaches to the private Endpoint. |
+| Detailed design | Create/adopt exactly one Host backend Process authority, exactly one Network relay Process/Endpoint authority bound to TCP 3240, and one Binding-owned Guest proxy/private Endpoint per attached Binding. Use canonical system-minijail specs, signed templates, bounded budgets/readiness/restart, no argv/path/address/fd fields; attach/detach remains a one-shot EffectPort operation, not a second Process. |
+| Integration | Service controller registers physical busids with shared backend/relay; Binding controller creates its Guest proxy/private Endpoint; Process controller launches workers; UsbipGuestEffectPort attaches to the private Endpoint. |
 | Data migration | Full d2b 3.0 reset; old per-env runners become Host/Network authorities and per-Device port-3240 workers are forbidden |
-| Validation | Fast Process/Endpoint shape tests prove one backend per Host, one multiplexed TCP 3240 Endpoint per Network, State ownership/private Guest policy, no per-Device listener, no raw address/argv/path/fd, and readiness before bind/attach. |
+| Validation | Fast Process/Endpoint shape tests prove one backend per Host, one multiplexed TCP 3240 Endpoint per Network, Binding ownership/private Guest policy, no per-Device listener, no raw address/argv/path/fd, and readiness before bind/attach. |
 | Removal proof | Old per-env usbipd autostart and ProcessRole::Usbip paths are removed by ADR046-usbip-009 after Process resource lifecycle tests pass. |
 
 Implement the three worker classes in § Worker Process resources using
 `ResourceMutationBatch`. Confirm that two Services on one Host/Network reuse
-the same backend and relay Endpoint, while two Guest States receive distinct
+the same backend and relay Endpoint, while two Guest Bindings receive distinct
 private proxies/Endpoints. Attach/detach remains an EffectPort call.
 
 ---
@@ -1617,18 +1618,18 @@ private proxies/Endpoints. Attach/detach remains an EffectPort call.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-usbip-003; Device, UsbipService, and UsbipState status schema owner |
+| Dependency/owner | ADR046-usbip-003; Device, UsbipService, and UsbipBinding status schema owner |
 | Current source | packages/d2bd/src/usbip_reconcile_state.rs state fields |
 | Reuse action | adapt state fields to typed status.provider.details |
 | Destination | packages/d2b-provider-device-usbip/src/status.rs |
-| Detailed design | Define separate bounded typed physical Device, authority/projection Service, and per-Guest State status extensions. Service reports authority availability, shared backend/relay generations, exclusive holder/queue counts, or import generation/fingerprint; State reports attachment phase and owned proxy/private Endpoint. No raw busid, path, fd, address, session/transfer ID, remote identity, or payload appears. |
-| Integration | Controller writes each extension atomically with its resource's common status; dependency/update propagation is Device/Export → Service/projection → State. |
+| Detailed design | Define separate bounded typed physical Device, authority/projection Service, and per-Guest Binding status extensions. Service reports authority availability, shared backend/relay generations, exclusive holder/queue counts, or import generation/fingerprint; Binding reports attachment phase and owned proxy/private Endpoint. No raw busid, path, fd, address, session/transfer ID, remote identity, or payload appears. |
+| Integration | Controller writes each extension atomically with its resource's common status; dependency/update propagation is Device/Export → Service/projection → Binding. |
 | Data migration | Full d2b 3.0 reset; current d2bd reconcile state is not imported |
 | Validation | Fast tests/status_serde.rs covers all three strict schemas, mode-dependent omissions, bounded counts/refs, unknown-field denial, and a deny corpus for busid/path/fd/address/session/transfer/payload fields. |
 | Removal proof | Old d2bd USBIP reconcile-state structs are removed by ADR046-usbip-009 after status extension coverage passes. |
 
 Define `UsbipDeviceStatus`, `UsbipServiceStatus::{Authority,Projection}`, and
-`UsbipStateStatus`; keep the mode union strict and path-free. Tests:
+`UsbipBindingStatus`; keep the mode union strict and path-free. Tests:
 `tests/status_serde.rs`.
 
 ---
@@ -1641,7 +1642,7 @@ Define `UsbipDeviceStatus`, `UsbipServiceStatus::{Authority,Projection}`, and
 | Current source | packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs plus new integration scenarios |
 | Reuse action | adapt existing network-scoping assertion and add new scenarios |
 | Destination | packages/d2b-provider-device-usbip/{src,tests,integration/README.md}; tests/host-integration/usbip-service.nix; tests/host-integration/hardware/usbip-service.sh |
-| Detailed design | Put Service/State schema, authority, arbitration, export/import, encrypted fake-stream, and process-shape coverage in fast Layer-1 Rust tests. Reserve runNixOSTest for real Linux usbip_host/vhci_hcd, usbipd, namespaces/nftables, TCP 3240, and Guest checks; reserve the hardware script for an approved physical device. Use existing Make gates only. |
+| Detailed design | Put Service/Binding schema, authority, arbitration, export/import, encrypted fake-stream, and process-shape coverage in fast Layer-1 Rust tests. Reserve runNixOSTest for real Linux usbip_host/vhci_hcd, usbipd, namespaces/nftables, TCP 3240, and Guest checks; reserve the hardware script for an approved physical device. Use existing Make gates only. |
 | Integration | Layer-2 lanes exercise actual kernel/backend/relay/Guest/device paths and do not duplicate pure controller/schema cases. Cross-Zone protocol logic remains hermetic with fake peers; the runNixOSTest only proves its real-system integration. |
 | Data migration | None — docs/tooling only; no runtime state |
 | Validation | `make test-host-integration` runs the non-hardware real-kernel case on a capable host; `make test-hardware` runs the explicit manual device case. No Layer-1 test opens a device, loads a module, creates a namespace, or listens on a socket. |
@@ -1651,8 +1652,8 @@ Required tests:
 
 | Path | Scenario | Gate |
 | --- | --- | --- |
-| `tests/host-integration/usbip-service.nix` | Real modules, one Host backend, multiplexed Network TCP 3240 Endpoint, firewall/wrong-Zone denial, Guest State proxy/attach/revocation with fake USB backend | `make test-host-integration` |
-| `tests/host-integration/hardware/usbip-service.sh` | Approved physical USB device, exclusive busid, second-State fairness, USBIP/security-key conflict, data/detach, no fd/path crossing | `make test-hardware`; manual only |
+| `tests/host-integration/usbip-service.nix` | Real modules, one Host backend, multiplexed Network TCP 3240 Endpoint, firewall/wrong-Zone denial, Guest Binding proxy/attach/revocation with fake USB backend | `make test-host-integration` |
+| `tests/host-integration/hardware/usbip-service.sh` | Approved physical USB device, exclusive busid, second-Binding fairness, USBIP/security-key conflict, data/detach, no fd/path crossing | `make test-hardware`; manual only |
 
 `packages/d2b-provider-device-usbip/integration/README.md` must document:
 - how to run each scenario locally through its existing integration/hardware gate;
@@ -1671,15 +1672,15 @@ Required tests:
 | Current source | nixos-modules/components/usbip.nix guest wiring and new Zone resource declarations |
 | Reuse action | adapt guest module, remove host-side option surface, and extend eval assertions |
 | Destination | nixos-modules/components/usbip.nix, nixos-modules/options-zones.nix, nixos-modules/assertions.nix |
-| Detailed design | Add Provider config; remove the old per-VM option; emit strict Device, authority UsbipService, per-Guest UsbipState, and optional ResourceExport/ResourceImport authoring shapes; imported projection Services remain core-created. Assert same-Zone refs, projection ownerRef/forbidden physical fields, Service-only export target, one Host backend/Network relay, USBIP/security-key physical-selector exclusion, and retain guest vhci_hcd/tools. |
-| Integration | Nix compiler emits Device/Service/State and explicit D096 resources consumed by core/Provider; guest runtime supplies proxy/attach tools; generated schemas and fingerprints remain canonical. |
-| Data migration | Full d2b 3.0 reset; operators reauthor old per-VM options as Device + authority/projection Service + per-Guest State |
+| Detailed design | Add Provider config; remove the old per-VM option; emit strict Device, authority UsbipService, per-Guest UsbipBinding, and optional ResourceExport/ResourceImport authoring shapes; imported projection Services remain core-created. Assert same-Zone refs, projection ownerRef/forbidden physical fields, Service-only export target, one Host backend/Network relay, USBIP/security-key physical-selector exclusion, and retain guest vhci_hcd/tools. |
+| Integration | Nix compiler emits Device/Service/Binding and explicit D096 resources consumed by core/Provider; guest runtime supplies proxy/attach tools; generated schemas and fingerprints remain canonical. |
+| Data migration | Full d2b 3.0 reset; operators reauthor old per-VM options as Device + authority/projection Service + per-Guest Binding |
 | Validation | Fast tests/unit/nix/cases/usbip-*.nix cover schema shape, all reference/owner/export/conflict assertions, 3240 singleton/multiplex metadata, old-option removal, and guest module retention. |
 | Removal proof | d2b.vms.<vm>.usbip.yubikey and host-side USBIP module paths are removed at reset once Zone resource emitter coverage passes. |
 
 - Add `d2b.zones.<zone>.providers.device-usbip.config.controllerExecutionRef` option.
 - Remove `d2b.vms.<vm>.usbip.yubikey` at v3 reset; add deprecation warning until removal.
-- Add Zone resource shapes for Device, authority UsbipService, UsbipState, and
+- Add Zone resource shapes for Device, authority UsbipService, UsbipBinding, and
   optional ResourceExport/ResourceImport; projection Services are core-owned.
 - Add eval assertions for same-Zone refs, Service-only export, projection
   restrictions, one Host/Network authority, and USBIP/security-key exclusion.
@@ -1697,7 +1698,7 @@ Required tests:
 | Reuse action | delete after Provider replacement reaches parity |
 | Destination | packages/d2bd/src/, nixos-modules/network.nix, packages/d2b-core/src/processes.rs |
 | Detailed design | Remove daemon-coupled USBIP after Provider tests and integration tests pass: delete per-env autostart, state machine, and reconcile state modules after migration; remove USBIP firewall block from network.nix; remove ProcessRole::Usbip; run Layer-1 gates and confirm no d2bd or network.nix references remain outside the adapter and contracts. |
-| Integration | Provider/device-usbip, core D096/D097 adapters, Nix Device/Service/State emitter, shared authority workers, and State-owned children are the sole USBIP lifecycle path after deletion. |
+| Integration | Provider/device-usbip, core D096/D097 adapters, Nix Device/Service/Binding emitter, shared authority workers, and Binding-owned children are the sole USBIP lifecycle path after deletion. |
 | Data migration | Full d2b 3.0 reset; no daemon-coupled USBIP runtime state import |
 | Validation | make test-unit and make test-flake plus grep or contract checks for removed symbols and no residual d2bd/network.nix USBIP lifecycle references. |
 | Removal proof | usbipd_perenv_autostart.rs, usbip_state_machine.rs, usbip_reconcile_state.rs, network.nix USBIP firewall block, and ProcessRole::Usbip are deleted after parity. |
@@ -1737,19 +1738,19 @@ with a capped case count and declared higher per-test budget.
 
 | File | Coverage |
 | --- | --- |
-| `service_state_schema.rs` | Strict authority/projection UsbipService union and UsbipState schema; same-Zone refs; imported projection ownerRef and physical-field denial; Service-only explicit export; Device/Endpoint/State export denial |
-| `controller_state_machine.rs` | Authority and State sequences with fake ports; shared Host backend/Network relay; State-owned proxy/private Endpoint; declared/explicit attach; restart and reverse teardown |
+| `service_binding_schema.rs` | Strict authority/projection UsbipService union and UsbipBinding schema; same-Zone refs; imported projection ownerRef and physical-field denial; Service-only explicit export; Device/Endpoint/Binding export denial |
+| `controller_state_machine.rs` | Authority and Binding sequences with fake ports; shared Host backend/Network relay; Binding-owned proxy/private Endpoint; declared/explicit attach; restart and reverse teardown |
 | `authority_conflict.rs` | Exclusive physical selector, one Host module/backend, one TCP 3240 relay per Network, multiplex reuse, deterministic duplicate conflicts, USBIP/security-key exclusion |
 | `export_import.rs` | ResourceExport targets authority Service only; ResourceImport creates ownerRef projection; encrypted bounded fake control/data streams; generation/fingerprint/revocation; no fd/path/busid; sessions/transfers remain internal |
 | `effect_port_contract.rs` | `UsbipEffectPort` and `UsbipGuestEffectPort` trait object safety; all method signatures callable from Provider crate; no import of broker types or `d2b-priv-broker`; `TransientDetail` Debug output is `<redacted>` |
-| `conformance.rs` | Device/UsbipService/UsbipState ResourceTypeSchema round-trip, signed fingerprints, deny_unknown_fields, and Provider capability advertisement |
+| `conformance.rs` | Device/UsbipService/UsbipBinding ResourceTypeSchema round-trip, signed fingerprints, deny_unknown_fields, and Provider capability advertisement |
 | `state_volume.rs` | Controller Volume schema conformance: `stateSchema: {}`, layout `ownerRef: User/<name>` (not ComponentPrincipal), `sensitivityClass: private`, single `state` view; no cross-component Volume; dirfd delivery to controller only |
-| `status_serde.rs` | Separate Device, authority/projection Service, and State status; bounded refs/counts; deny busid/path/fd/address/session/transfer/payload fields |
+| `status_serde.rs` | Separate Device, authority/projection Service, and Binding status; bounded refs/counts; deny busid/path/fd/address/session/transfer/payload fields |
 | `validation_corpus.rs` | Bus-id max length (31 chars); metachar rejection; leading-zero segment rejection; vendor/product id exactly 4 hex digits; `busClass != usb` → `unsupported-bus-class` |
-| `mutual_exclusion.rs` | USBIP + security-key same physical selector conflicts; second State queues fairly and causes no second bind/open |
-| `wrong_zone.rs` | Every Service/State ref is same-Zone; cross-Zone use requires D096 import; wrong-Zone firewall causes Service degradation and no effect |
-| `finalizer.rs` | Service/State finalizers start only after effect/lease and clear only after child/lease teardown; restart resumes partial teardown |
-| `async_loop.rs` | Independent Service/State dispatch remains concurrent while per-Service single-flight preserves arbitration |
+| `mutual_exclusion.rs` | USBIP + security-key same physical selector conflicts; second Binding queues fairly and causes no second bind/open |
+| `wrong_zone.rs` | Every Service/Binding ref is same-Zone; cross-Zone use requires D096 import; wrong-Zone firewall causes Service degradation and no effect |
+| `finalizer.rs` | Service/Binding finalizers start only after effect/lease and clear only after child/lease teardown; restart resumes partial teardown |
+| `async_loop.rs` | Independent Service/Binding dispatch remains concurrent while per-Service single-flight preserves arbitration |
 
 All rows above are Layer-1 Rust tests in the crate's `src/` or `tests/`; they
 use fake EffectPorts/streams/authority indexes and perform no module load,
@@ -1759,8 +1760,8 @@ network bind, namespace operation, process spawn, or device open.
 
 | Path | Scenario | Gate |
 | --- | --- | --- |
-| `tests/host-integration/usbip-service.nix` | Real NixOS boot, `usbip_host`/`vhci_hcd`, one Host backend, one Network TCP 3240 relay multiplexing two fake USB backends, firewall/wrong-Zone denial, State proxy/attach/revocation | `make test-host-integration`; capable host |
-| `tests/host-integration/hardware/usbip-service.sh` | Approved physical USB device: exclusive busid claim, attach/data/detach, second State fairness, USBIP/security-key conflict, and no fd/path crossing | `make test-hardware`; manual hardware only |
+| `tests/host-integration/usbip-service.nix` | Real NixOS boot, `usbip_host`/`vhci_hcd`, one Host backend, one Network TCP 3240 relay multiplexing two fake USB backends, firewall/wrong-Zone denial, Binding proxy/attach/revocation | `make test-host-integration`; capable host |
+| `tests/host-integration/hardware/usbip-service.sh` | Approved physical USB device: exclusive busid claim, attach/data/detach, second Binding fairness, USBIP/security-key conflict, and no fd/path crossing | `make test-hardware`; manual hardware only |
 
 `packages/d2b-provider-device-usbip/integration/README.md` indexes these Layer-2
 scenarios, their existing Make targets, required privileges/KVM/modules, and
@@ -1773,7 +1774,7 @@ claim of hardware coverage.
 ## Removal sequence
 
 When `Provider/device-usbip` is fully deployed and every USBIP Device has an
-authority Service plus per-Guest States/projections as needed:
+authority Service plus per-Guest Bindings/projections as needed:
 
 1. Remove `d2b.vms.<vm>.usbip.yubikey` Nix option (deprecated at reset; removed
    now).
