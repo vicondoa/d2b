@@ -10,6 +10,11 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Changed
+
+- Enabled the required Layer-1, eval-shell, and Entra example PR gates for
+  changes targeting the `v3` branch as well as `main`.
+
 ## [1.4.1] - 2026-07-12
 
 ### Added
