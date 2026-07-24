@@ -165,20 +165,18 @@ ZoneLink handler exists.
 | ResourceTypes owned | None |
 | ResourceTypes consumed | `Host` (executionRef target); `Provider/system-minijail` (Process Provider); `Volume` (view only: component mounts its ProviderDeployment-created Volume view; `Provider/transport-unix` does not own, reconcile, or create Volume resources) |
 
-**D089 desired-spec shape.** This transport Provider owns no ResourceType; core
-reconciles the `ZoneLink` base `spec.*` fields, including `spec.providerRef`.
-The only selected-Provider desired payload is the usually-empty
-`ZoneLink.spec.provider = { schemaId, schemaVersion, settings }` envelope, whose
-`settings` object mirrors `status.provider.details`, is registered/signed in the
-Provider manifest, deny-unknown, bounded, versioned/digested, validated against
-`spec.providerRef` at Nix build and API admission, and cannot shadow base
-fields. Shared fields are promoted to the ResourceType base. The Provider
-implements the exact base spec/status schema version/fingerprint, accepts the
-canonical minimal base Spec, passes base conformance, and rejects an
-unsupported optional base capability only through its signed capability matrix plus
-provider-neutral `unsupported-capability`.
-`spec.provider` aligns with `status.provider`. The `Provider` resource itself
-keeps the D075 `spec.{artifactId, config}` exception.
+**D089 desired-spec shape.** This transport Provider owns no ResourceType; child
+core reconciles the exact canonical ZoneLink base fields:
+`childZoneName`, `transportProviderRef`, `transportSettings`,
+`transportCredentials`, `disabled`, and `limits`. Unix-specific desired input
+is carried only by `spec.transportSettings`, whose deny-unknown schema is
+registered and signed by the Provider selected through
+`spec.transportProviderRef`. Unix uses an empty
+`spec.transportCredentials` list. No desired-state provider envelope or schema
+metadata appears in ZoneLink spec.
+`status.provider` remains the D088 implementation-observation layer and does not
+mirror desired spec. The `Provider` resource itself keeps the D075
+`spec.{artifactId, config}` exception.
 
 ---
 
@@ -257,10 +255,11 @@ is no empty identity-only Volume.
 
 ---
 
-## ZoneLink `spec.provider.settings` schema
+## ZoneLink `spec.transportSettings` schema
 
-The `settings` object inside `ZoneLink.spec.provider` is validated at build
-time against the transport Provider's signed settings schema. For
+`ZoneLink.spec.transportSettings` is validated at build time against the
+settings schema signed by the Provider selected through
+`spec.transportProviderRef`. For
 `Provider/transport-unix` this schema is committed at:
 
 ```
@@ -273,7 +272,7 @@ docs/reference/schemas/v3/providers/transport-unix.transport-binding.json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "UnixTransportSettings",
-  "description": "ZoneLink spec.provider.settings for Provider/transport-unix. Normally empty ({}). The ZoneLink contract prohibits FD/resource grants across Zone boundaries; FD attachment (SCM_RIGHTS) is therefore not a configurable field here. Child core always opens ZoneLink transports with attachments_enabled=false. The selected parent allocator pre-binds the edge, retains its endpoint only as sealed route state, and injects the child endpoint through sealed bootstrap; child core supplies that endpoint locally to the same-Zone Provider's OpenTransport portal. No parent resource, cross-Zone FD transfer, path, or credential is needed here.",
+  "description": "ZoneLink spec.transportSettings for Provider/transport-unix. Normally empty ({}). The ZoneLink contract prohibits FD/resource grants across Zone boundaries; FD attachment (SCM_RIGHTS) is therefore not configurable here. Child core always opens ZoneLink transports with attachments_enabled=false. The selected parent allocator pre-binds the edge, retains its endpoint only as sealed route state, and injects the child endpoint through sealed bootstrap; child core supplies that endpoint locally to the same-Zone Provider's OpenTransport portal. No parent resource, cross-Zone FD transfer, path, or credential is needed here.",
   "type": "object",
   "properties": {
     "socketKind": {
@@ -304,9 +303,9 @@ glance. Runtime validation also enforces the schema independently of the build s
 
 ### Rules
 
-- `spec.provider.settings: {}` is the normal and recommended value. `socketKind`
+- `spec.transportSettings: {}` is the normal and recommended value. `socketKind`
   is optional and defaults to `"seqpacket"`.
-- **`attachmentsEnabled` is not a ZoneLink `spec.provider.settings` field.** The
+- **`attachmentsEnabled` is not a ZoneLink `spec.transportSettings` field.** The
   ZoneLink contract prohibits FD and resource grants across Zone boundaries —
   even for same-kernel parent/child links. Child core always opens ZoneLink
   transports with `attachments_enabled=false`; a cross-Zone SCM_RIGHTS attempt
@@ -402,7 +401,7 @@ the connecting process's uid/gid/pid. The transport verifies
 `ucred.uid == expected_uid && ucred.gid == expected_gid` on the first data
 packet; mismatch closes the connection without response.
 
-The socket path itself never appears in `spec.provider.settings`; the path is
+The socket path itself never appears in `spec.transportSettings`; the path is
 encoded in the allocator-issued FD and never surfaced in the ResourceSpec.
 
 ### `InheritedSocketpair`
@@ -719,6 +718,11 @@ The transport-unix service process exposes three typed portal methods. All
 methods are invoked by the child Zone's core ZoneLink controller via d2b-bus
 over a same-Zone ComponentSession authenticated to the service's enrolled
 `portal` endpoint. No other caller may invoke these methods (see RBAC section).
+For a ZoneLink call, child core first resolves `spec.transportProviderRef`,
+validates `spec.transportSettings`, requires `spec.transportCredentials = []`,
+checks `spec.disabled`, enforces `spec.limits`, and derives `socket_kind` from
+the validated settings. The service never receives a ZoneLink spec or legacy
+provider envelope.
 
 ### `OpenTransport`
 
@@ -872,9 +876,9 @@ from OS-enforced SO_PEERCRED, not a peer-supplied long-term key.
 `Noise_KK_25519_ChaChaPoly_SHA256` is used for all ZoneLink ComponentSessions:
 
 - Both static public keys are known before handshake.
-- The child Zone's enrolled static key is pinned in
-  `ZoneLink.spec.childStaticKeyFingerprint` and verified by the child Zone's
-  core ZoneLink controller after the handshake — not by this Provider.
+- The child Zone's enrolled static identity is pinned in sealed
+  enrollment/bootstrap state and verified by the child Zone's core ZoneLink
+  controller after the handshake — not by this Provider.
 - Unix seqpacket or stream carries the handshake bytes; the transport is
   unaware of the Noise content.
 - SO_PEERCRED is still verified by `PeerIdentityPolicy`; for KK sessions its
@@ -1038,9 +1042,9 @@ The following values are **never** logged, audited, or emitted as metric labels:
 
 | Invariant | Enforcement point |
 | --- | --- |
-| No socket path in `spec.provider.settings` | JSON Schema + eval-time assertion |
-| No credential bytes in `spec.provider.settings` | JSON Schema + build-time validation |
-| `attachmentsEnabled` not a ZoneLink `spec.provider.settings` field | JSON Schema (`additionalProperties:false` + `not/anyOf`) |
+| No socket path in `spec.transportSettings` | JSON Schema + eval-time assertion |
+| No credential bytes in `spec.transportSettings` | JSON Schema + build-time validation |
+| `attachmentsEnabled` not a ZoneLink `spec.transportSettings` field | JSON Schema (`additionalProperties:false` + `not/anyOf`) |
 | `additionalProperties: false` rejects all unknown keys | JSON Schema |
 | ZoneLink transports always have `attachments_enabled=false` | Child Zone's core ZoneLink controller (structural, pre-call); `admission.rs::validate_route_class` (belt-and-suspenders) |
 | `route_class=zone-link` + `attachments_enabled=true` → `attachment-policy-conflict` | `portal.rs::open_transport` step 3 |
@@ -1131,7 +1135,7 @@ never reused.
 | Code | Stable tag | Meaning |
 | --- | --- | --- |
 | `socket-kind-mismatch` | 1 | `getsockopt(SO_TYPE)` on the received FD does not match the declared `socketKind` |
-| `attachment-policy-conflict` | 2 | `route_class=zone-link` with `attachments_enabled=true` (cross-Zone FD grants are prohibited by the ZoneLink contract); or `socketKind=stream` with `attachments_enabled=true`; or `attachmentsEnabled` field present in ZoneLink `spec.provider.settings` (rejected structurally before Provider) |
+| `attachment-policy-conflict` | 2 | `route_class=zone-link` with `attachments_enabled=true` (cross-Zone FD grants are prohibited by the ZoneLink contract); or `socketKind=stream` with `attachments_enabled=true`; or `attachmentsEnabled` field present in ZoneLink `spec.transportSettings` (rejected structurally before Provider) |
 | `open-transport-bad-attachment` | 3 | `OpenTransport` request has no FD attachment or carries more than one FD |
 | `invalid-socket-fd` | 4 | Received FD is not a valid `AF_UNIX` socket (wrong address family or type) |
 | `cloexec-set-failed` | 5 | `fcntl(F_SETFD, FD_CLOEXEC)` failed; FD closed |
@@ -1142,7 +1146,7 @@ never reused.
 | `pidfd-liveness-check-failed` | 10 | `PidfdIdentityPolicy` rejected the received pidfd (process reuse, fdinfo mismatch, kcmp failure) |
 | `handle-table-full` | 11 | `MAX_OPEN_TRANSPORTS=256` open transport handles already active |
 | `unknown-handle` | 12 | `CloseTransport` or `ObserveTransport` supplied an unrecognized or already-closed `transport_handle`; idempotent for `CloseTransport` |
-| `transport-settings-schema-violation` | 13 | `spec.provider.settings` violates the JSON Schema at runtime (belt-and-suspenders; build/eval guards should precede this) |
+| `transport-settings-schema-violation` | 13 | `spec.transportSettings` violates the JSON Schema at runtime (belt-and-suspenders; build/eval guards should precede this) |
 
 Retriable: `handle-table-full` (after delay; core may retry after a prior
 transport is closed). All others are non-retriable from the Provider's perspective;
@@ -1277,19 +1281,17 @@ The `ZoneLink` spec is authored in the standard resource syntax:
 d2b.zones.k1.resources.k1-uplink = {
   type = "ZoneLink";
   spec = {
-    childZoneName             = "k1";
-    providerRef               = "Provider/transport-unix";
-    provider = {
-      schemaId      = "transport-unix.d2bus.org/ZoneLink/spec";
-      schemaVersion = "1.0";
-      settings      = {};   # allocator/core-issued FD; attachments forbidden on ZoneLink
+    childZoneName        = "k1";
+    transportProviderRef = "Provider/transport-unix";
+    transportSettings    = {};   # child bootstrap endpoint; no ZoneLink attachments
+    transportCredentials = [];
+    disabled = false;
+    limits = {
+      maxPendingIntents    = 256;
+      maxActiveStreams     = 32;
+      reconnectMaxAttempts = 10;
+      reconnectWindowSecs  = 300;
     };
-    childStaticKeyFingerprint = "a3f1e2d4c5b6a7f890e1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b2a3";
-    capabilityCeiling = {
-      resourceTypes = [ "Network" "Process" ];
-      verbs         = [ "create" "get" "list" "update-spec" "watch" ];
-    };
-    # All remaining fields use schema defaults
   };
 };
 
@@ -1307,23 +1309,22 @@ d2b.zones.k3.resources.transport-unix = {
 d2b.zones.k3.resources.k3-uplink = {
   type = "ZoneLink";
   spec = {
-    childZoneName             = "k3";
-    providerRef               = "Provider/transport-unix";
-    provider = {
-      schemaId      = "transport-unix.d2bus.org/ZoneLink/spec";
-      schemaVersion = "1.0";
-      settings      = { socketKind = "stream"; };
-    };
-    childStaticKeyFingerprint = "b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5";
-    capabilityCeiling = {
-      resourceTypes = [ "Process" ];
-      verbs         = [ "get" "list" "watch" ];
+    childZoneName        = "k3";
+    transportProviderRef = "Provider/transport-unix";
+    transportSettings    = { socketKind = "stream"; };
+    transportCredentials = [];
+    disabled = false;
+    limits = {
+      maxPendingIntents    = 256;
+      maxActiveStreams     = 32;
+      reconnectMaxAttempts = 10;
+      reconnectWindowSecs  = 300;
     };
   };
 };
 ```
 
-### Canonical emitted `ZoneLink` JSON with default `spec.provider.settings`
+### Canonical emitted `ZoneLink` JSON with default `spec.transportSettings`
 
 ```json
 {
@@ -1332,26 +1333,18 @@ d2b.zones.k3.resources.k3-uplink = {
   "metadata": { "name": "k1-uplink", "zone": "k1" },
   "spec": {
     "childZoneName": "k1",
-    "providerRef": "Provider/transport-unix",
-    "provider": {
-      "schemaId": "transport-unix.d2bus.org/ZoneLink/spec",
-      "schemaVersion": "1.0",
-      "settings": {
-        "socketKind": "seqpacket"
-      }
+    "transportProviderRef": "Provider/transport-unix",
+    "transportSettings": {
+      "socketKind": "seqpacket"
     },
-    "childStaticKeyFingerprint": "a3f1e2d4c5b6a7f890e1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b2a3",
-    "capabilityCeiling": {
-      "executionRefs": [],
-      "resourceTypes": ["Network", "Process"],
-      "verbs": ["create", "get", "list", "update-spec", "watch"],
-      "zones": []
-    },
-    "reconnectPolicy": { "initialDelaySeconds": 1, "jitterFactor": 0.25, "maxDelaySeconds": 60 },
-    "localIntentPolicy": "queue",
-    "maxHops": 8,
-    "maxQueuedIntents": 256,
-    "routeRenewalSeconds": 300
+    "transportCredentials": [],
+    "disabled": false,
+    "limits": {
+      "maxPendingIntents": 256,
+      "maxActiveStreams": 32,
+      "reconnectMaxAttempts": 10,
+      "reconnectWindowSecs": 300
+    }
   }
 }
 ```
@@ -1371,8 +1364,8 @@ These supplement generated per-field option type checks and live in
 | Assertion | Error message |
 | --- | --- |
 | ZoneLink and selected Provider are declared in the same child Zone; `spec.childZoneName` equals that Zone; compiler-only `parentZone` resolves to the allocator owner; no reciprocal parent resource is emitted | `zones.<zone>: transport-unix ZoneLink and Provider must be child-local with a self-matching childZoneName` |
-| `spec.provider.settings` must not contain `attachmentsEnabled` | `zones.<zone>.resources.<name>: spec.provider.settings.attachmentsEnabled is not a valid ZoneLink transport field; FD attachment across Zone boundaries is prohibited` |
-| `spec.provider.settings` contains no top-level key `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: spec.provider.settings must not contain host paths, socket paths, or secret material` |
+| `spec.transportSettings` must not contain `attachmentsEnabled` | `zones.<zone>.resources.<name>: spec.transportSettings.attachmentsEnabled is not a valid ZoneLink transport field; FD attachment across Zone boundaries is prohibited` |
+| `spec.transportSettings` contains no top-level key `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: spec.transportSettings must not contain host paths, socket paths, or secret material` |
 
 These are belt-and-suspenders: the JSON Schema `additionalProperties: false` and
 the `not/anyOf` block already reject these keys. The eval assertion catches them
@@ -1383,21 +1376,26 @@ rationale.
 
 The `xtask gen-zone-resources` step adds for `Provider/transport-unix` links:
 
-1. Validate `spec.provider.settings` against `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`.
-2. Reject `attachmentsEnabled` as a ZoneLink `spec.provider.settings` key (structurally covered by additionalProperties:false, and explicitly named in `not/anyOf`).
+1. Resolve `spec.transportProviderRef` to the same-Zone Provider and validate
+   `spec.transportSettings` against
+   `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`.
+2. Reject `attachmentsEnabled` as a ZoneLink `spec.transportSettings` key
+   (structurally covered by `additionalProperties:false`, and explicitly named
+   in `not/anyOf`).
 
 ### Eval and build tests
 
 | Test ID | Kind | What it proves |
 | --- | --- | --- |
 | `nix-unit: transport-unix-child-local-topology` | nix-unit eval | Provider and ZoneLink are in K1, `childZoneName = "k1"`, `k1.parentZone = "local-root"` selects only the allocator, and no local-root reciprocal resource is emitted |
-| `nix-unit: transport-unix-empty-settings` | nix-unit eval | `spec.provider.settings = {}` passes all assertions |
-| `nix-unit: transport-unix-socket-path-rejected` | nix-unit eval | `spec.provider.settings.socketPath = "/run/..."` rejected at eval |
-| `nix-unit: transport-unix-attachments-enabled-rejected` | nix-unit eval | `spec.provider.settings.attachmentsEnabled = false` rejected as unknown field at eval |
+| `nix-unit: transport-unix-exact-zonelink-spec` | nix-unit eval | Emitted spec has exactly `childZoneName`, `transportProviderRef`, `transportSettings`, `transportCredentials`, `disabled`, and `limits`; legacy provider/fingerprint/capability fields are rejected |
+| `nix-unit: transport-unix-empty-settings` | nix-unit eval | `spec.transportSettings = {}` passes all assertions |
+| `nix-unit: transport-unix-socket-path-rejected` | nix-unit eval | `spec.transportSettings.socketPath = "/run/..."` rejected at eval |
+| `nix-unit: transport-unix-attachments-enabled-rejected` | nix-unit eval | `spec.transportSettings.attachmentsEnabled = false` rejected as unknown field at eval |
 | `nix-unit: transport-unix-stream-variant` | nix-unit eval | `socketKind = "stream"` accepted; no other field needed |
 | `drift: transport-unix-transport-binding-schema` | `make test-drift` | `xtask gen-zone-schemas && git diff --exit-code` for transport binding schema |
-| `build: transport-unix-unknown-field-rejected` | flake check | Unknown key in `spec.provider.settings` fails build |
-| `build: transport-unix-attachments-enabled-is-unknown-field` | flake check | `attachmentsEnabled` field in ZoneLink `spec.provider.settings` fails build (not in schema) |
+| `build: transport-unix-unknown-field-rejected` | flake check | Unknown key in `spec.transportSettings` fails build |
+| `build: transport-unix-attachments-enabled-is-unknown-field` | flake check | `attachmentsEnabled` field in ZoneLink `spec.transportSettings` fails build (not in schema) |
 
 ### Fast hermetic execution and test placement (D094)
 
@@ -1440,7 +1438,7 @@ Old and new suites never run in parallel indefinitely.
 | OpenTransport/CloseTransport/ObserveTransport service API | none | `ADR-only` | new |
 | Service Process resource with full sandbox/budget/endpoints spec | none in v3 baseline | `ADR-only` | new |
 | ProviderStateSet | ownerRef=Provider/transport-unix Volume query | `ADR-only` | Empty — `Provider/transport-unix` declares no Provider state Volume; its bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
-| ZoneLink `spec.provider.settings` schema | none | `ADR-only` | new in this spec |
+| ZoneLink `spec.transportSettings` schema | none | `ADR-only` | new in this spec |
 | FD pre-bind pattern (broker FD pre-binding) | `d2b-priv-broker/src/ops/{swtpm_dir,spawn_runner}.rs` (v3 baseline) | `implemented-and-reachable` | selected parent allocator adapts the pattern, retains its peer endpoint as sealed route state, and injects only the child endpoint through sealed bootstrap; the child-local Provider is a passive recipient and no FD crosses the ZoneLink |
 | Route advertisement / RouteTreeEngine | `d2b-realm-core/src/route_engine.rs` (v3 baseline) | `implemented-but-unwired` | child core owns local ZoneLink session/cursor state; selected parent allocator owns only sealed route state; not in this Provider |
 | ZoneLink controller (reconcile/status/finalizer/routes) | none in v3 baseline | `ADR-only` | owned by the child Zone's core-controller (ADR-046-core-controllers); no parent-side handler and not in this Provider |
@@ -1603,11 +1601,11 @@ Old and new suites never run in parallel indefinitely.
 | Current source | `nixos-modules/options-realms.nix` realm options (v3 baseline); `nixos-modules/assertions.nix` |
 | Reuse source | None; new schema file |
 | Reuse action | create |
-| Destination | `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`; `nixos-modules/assertions.nix` (assertion additions); generated `nixos-modules/generated/options-zones-ZoneLink.nix` provider-settings submodule |
-| Detailed design | Commit the JSON Schema; run `xtask gen-zone-schemas` and `xtask gen-zone-nix-options` to regenerate committed files; add assertions for stream+attachments conflict and sensitive key names; reuse the common topology assertions to require the ZoneLink and selected Provider in the same child Zone, self-matching `childZoneName`, compiler-only non-root `parentZone`, and no reciprocal parent resource; `xtask gen-zone-resources` adds provider-specific settings validation step |
-| Integration | Build emitter validates `spec.provider.settings` against schema before computing `generationId`; the topology compiler seals child→parent allocator selection separately and emits only the child-local Provider/ZoneLink resources; drift gate enforces sync |
+| Destination | `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`; `nixos-modules/assertions.nix` (assertion additions); generated `nixos-modules/generated/options-zones-ZoneLink.nix` `transportSettings` submodule |
+| Detailed design | Commit the JSON Schema; run `xtask gen-zone-schemas` and `xtask gen-zone-nix-options` to regenerate committed files; generate the exact six-field ZoneLink base; reject legacy provider envelopes and allocator-private fingerprint/capability fields; add assertions for stream+attachments conflict and sensitive key names; require an empty `transportCredentials` list; reuse the common topology assertions to require the ZoneLink and selected Provider in the same child Zone, self-matching `childZoneName`, compiler-only non-root `parentZone`, and no reciprocal parent resource; `xtask gen-zone-resources` adds Provider-selected `transportSettings` validation |
+| Integration | Build emitter resolves `spec.transportProviderRef`, validates `spec.transportSettings` against that Provider's schema, and validates the empty `spec.transportCredentials` list before computing `generationId`; the topology compiler seals child→parent allocator selection separately and emits only the child-local Provider/ZoneLink resources; drift gate enforces sync |
 | Data migration | `d2b.realms.*` Nix options superseded by `d2b.zones.*`; no compatibility bridge (v3 reset) |
-| Validation | All eval/build tests in the Nix section, including `transport-unix-child-local-topology` and a generated-bundle assertion that the parent store has no reciprocal Provider/ZoneLink row |
+| Validation | All eval/build tests in the Nix section, including `transport-unix-exact-zonelink-spec`, `transport-unix-child-local-topology`, legacy-field rejection, empty-credential enforcement, and a generated-bundle assertion that the parent store has no reciprocal Provider/ZoneLink row |
 | Removal proof | `nixos-modules/options-realms.nix` realm wiring retired after Zone resource bundle activation replaces it |
 
 ---
