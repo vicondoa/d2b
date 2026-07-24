@@ -71,7 +71,7 @@ The v3 target name appears in parentheses or an explicit mapping.
 | Reconciled ResourceType | `Volume` — exported as volume-local's primary ResourceType; reconciles physical state (layout, ACL, quota, identity marker) for all assigned Volumes; operators create/delete ordinary Volumes via Resource API; **core ProviderDeployment** creates/deletes component state Volumes before/after component Processes; volume-local never issues Volume create/delete API calls; component Processes consume their required view only |
 | Source kinds | `local-path`, `block-image`, `tmpfs` |
 | Controller component | `volume-local-controller`; `Process` under `Host/host-system`, `domain: system`; `controllerExecutionRef: Host/host-system` |
-| Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage` (all via injected `VolumeEffectPort`; no direct broker connection) |
+| Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage`, `RotateSealingKey` (all via injected `VolumeEffectPort`; no direct broker connection) |
 | Permissions | No special host-path permission; all host path resolution in core/broker adapter; broker ops not called directly from Provider process |
 | ProviderStateSet | Optional query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; **empty** — volume-local declares no state Volume of its own (its bounded non-secret operational state lives in `status`/the core Operation ledger, D087). Volume-local is the **sole reconciler** for all assigned Volumes carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' *declared* state Volumes; Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes other Providers' declared state Volume instances before/after their component Processes; a declared component state Volume is created only when its payload passes the storage-need test; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing; no empty identity-only Volume |
 | Finalizers | `volume-local/layout` |
@@ -880,12 +880,66 @@ pub struct SourcePolicyId(pub(crate) String);
 pub struct LayoutEntryId(pub(crate) String);
 pub struct UserId(pub(crate) String);     // resolves from User/<name> resource
 pub struct ViewId(pub(crate) String);     // bounded view name; max 63 chars
+pub struct SealingPolicyId(pub(crate) String);
 
 impl fmt::Debug for VolumeId      { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("VolumeId([redacted])") } }
 impl fmt::Debug for SourcePolicyId{ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("SourcePolicyId([redacted])") } }
 impl fmt::Debug for LayoutEntryId { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("LayoutEntryId([redacted])") } }
 impl fmt::Debug for UserId        { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("UserId([redacted])") } }
 impl fmt::Debug for ViewId        { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("ViewId([redacted])") } }
+impl fmt::Debug for SealingPolicyId { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("SealingPolicyId([redacted])") } }
+
+/// Closed, deny-unknown request. OperationId is the opaque identifier from the
+/// committed Resource operation; none of these fields contains key bytes,
+/// credential bytes, a host path, or a broker-resolved key handle.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RotateSealingKeyRequest {
+    pub volume: VolumeId,
+    pub policy: SealingPolicyId,
+    pub expected_volume_generation: u64,
+    pub expected_resource_revision: u64,
+    pub expected_current_key_generation: u64,
+    pub target_key_generation: u64,
+    pub operation_id: OperationId,
+}
+
+pub enum RotateSealingKeyDisposition {
+    Rotated,
+    AlreadyCommitted,
+    RecoveredCommitted,
+}
+
+/// Returned only after the target generation is active, the previous
+/// generation is retired, and the success audit record is durable.
+pub struct RotateSealingKeyResult {
+    pub disposition: RotateSealingKeyDisposition,
+    pub volume_generation: u64,
+    pub active_key_generation: u64,
+}
+
+pub enum RotationPrecondition {
+    VolumeGeneration,
+    ResourceRevision,
+    PolicyBinding,
+    CurrentKeyGeneration,
+    TargetKeyGeneration,
+}
+
+/// All variants have bounded, path-free wire encodings and redacted Debug.
+pub enum RotateSealingKeyError {
+    Unauthorized,
+    PreconditionFailed { precondition: RotationPrecondition },
+    TargetKeyUnavailable { retry_after_ms: Option<u64> },
+    TargetKeyRevoked,
+    RotationConflict,
+    IdempotencyConflict,
+    IntegrityViolation,
+    ResourceExhausted,
+    BackendUnavailable,
+    DeadlineExceeded,
+    CommitPendingAudit,
+}
 
 /// Opaque mount authorization handle. Contains no OwnedFd visible to the
 /// Provider. Core routes the anchored FD directly from the EffectPort adapter
@@ -947,6 +1001,11 @@ pub trait VolumeEffectPort: Send + Sync + 'static {
     async fn run_store_sync(&self, vol: VolumeId,
         generation: u64) -> Result<StoreSyncOutcome, EffectError>;
 
+    /// Atomically rewrap all sealed StateEnvelopes from the expected key
+    /// generation to the target generation through the closed broker operation.
+    async fn rotate_sealing_key(&self, request: RotateSealingKeyRequest)
+        -> Result<RotateSealingKeyResult, RotateSealingKeyError>;
+
     /// Request a VolumeMountToken for delivery to a Process supervisor.
     /// Returns an opaque authorization handle; the anchored FD is routed
     /// directly by core from the adapter to the target ProviderSupervisor
@@ -977,7 +1036,11 @@ The core/broker adapter implementing this trait:
    target ProviderSupervisor out-of-band; the FD is never returned to the
    Provider process. The `VolumeMountToken` returned to the controller is an
    opaque authorization/correlation handle only.
-7. Emits path-free audit records naming only the Volume UID, entry type, and
+7. Maps `rotate_sealing_key` one-to-one to the planned closed broker operation
+   `RotateSealingKey`. The adapter and broker independently resolve and authorize
+   the opaque `VolumeId` and `SealingPolicyId`; neither wire carries key bytes,
+   credential bytes, key handles, or paths.
+8. Emits path-free audit records naming only the Volume UID, entry type, and
    action class; audit is broker/core-owned and is never atomic with any redb
    write.
 
@@ -995,6 +1058,7 @@ UID. Every path is derived by the adapter from opaque IDs via the private bundle
 | `StoreSyncComplete` | Complete a hardlink farm sync cycle; acquire OFD lock, build farm, release | Volume UID, generation number |
 | `MountTmpfs` | Mount or unmount a tmpfs at the Volume root with quota limits | Volume UID, action: `mount` \| `umount` |
 | `ProvisionBlockImage` | Create or verify an image file at declared size | Volume UID, action: `create` \| `verify` |
+| `RotateSealingKey` | Atomically rewrap sealed envelopes through the one-to-one planned closed broker operation `RotateSealingKey`; request contains only opaque Volume/policy IDs and committed generation/precondition fields | Volume UID, policy ID digest, from/to generation, operation ID digest, result class |
 | `OpenVolumeMountToken` | Open a Volume-root FD and route it directly to the target ProviderSupervisor; return opaque `VolumeMountToken` handle (no FD in Provider) | Volume UID, view ID, access class |
 | `AnchorMarkerRoot` | Ensure the `volume-local-markers/` root exists and is correctly owned | action class |
 | `WriteVolumeMarker` | Write the identity marker for a Volume (called at first provision) | Volume UID |
@@ -1398,28 +1462,152 @@ true` requires a `sealingCredentialRef`:
 sealingCredentialRef: Credential/example-provider-state-key
 ```
 
-The referenced Credential must be `Ready` before the Volume is provisioned. The
-controller:
+The referenced Credential must be `Ready` before the Volume is provisioned.
+The controller observes only Credential identity, readiness, and generation. It
+never reads a Credential lease or obtains envelope-key material. The admitted
+Volume binds `sealingCredentialRef` to an opaque `SealingPolicyId`; the trusted
+core/broker adapter resolves that policy and performs initial wrapping. Raw keys
+remain inside the Credential authority and closed broker operation.
 
-1. Reads the Credential lease to obtain envelope encryption key material.
-2. Wraps each `StateEnvelope` under the envelope key before writing.
-3. Never stores raw key material on disk.
-4. Sets `sealingStatus: sealed` in Volume status.
+### Canonical sealing-key rotation
 
-Key rotation on Credential generation change:
+Credential generation advance and a sealing-policy change both use only
+`VolumeEffectPort::rotate_sealing_key(RotateSealingKeyRequest)`. There is no
+direct Credential-lease read, filesystem rewrite, generic broker call, or
+Provider-owned `volume-sealing-rotation-worker` fallback.
 
-1. Controller detects `Credential.status.observedGeneration` advance.
-2. Sets `sealingStatus: rotation-pending`.
-3. Sends `RotateSealingKey` effect op to `VolumeEffectPort`; the adapter re-encrypts layout data under the new key material inside a bounded blocking thread pool call.
-4. On effect op success: sets `sealingStatus: sealed`.
-5. On effect op failure: sets `sealingStatus: rotation-failed`; Volume remains readable
-   under old key until operator resolves.
+The request fields and preconditions are exact:
 
-No `volume-sealing-rotation-worker` EphemeralProcess is created; the key
-rotation is handled synchronously in the core/broker adapter via `VolumeEffectPort`.
+- `volume` must resolve to the admitted Volume UID, still assigned to
+  `Provider/volume-local` in the caller's Zone.
+- `policy` must be the `SealingPolicyId` bound to the Volume's admitted
+  `sealingCredentialRef`; a caller cannot substitute another policy.
+- `expected_volume_generation` must match the desired-object generation that
+  caused reconcile. `expected_resource_revision` must be the new revision
+  returned by the committed status-first mutation described below.
+- `expected_current_key_generation` must match the authenticated sealing marker
+  currently active on disk. `target_key_generation` must be greater, `Ready`,
+  permitted by the policy, and not revoked.
+- `operation_id` must be the one in the corresponding
+  `CommittedRevisionProof`. It is opaque and persisted by the core Operation
+  ledger, not invented by the Provider.
 
-No raw credential bytes, key material, or KDF parameters enter Volume status,
-audit records, OTEL spans, or log output at any cardinality.
+Before any external effect, the controller commits, with expected revision, a
+status update containing `sealingStatus: rotation-pending`,
+`sealingKeyGeneration: <from>`, and
+`sealingRotation: { fromGeneration, toGeneration }`, plus a
+`SealingReady=False/rotation-pending` condition at the Volume generation. Only
+the proof for that committed status revision permits the adapter call. A status
+conflict causes re-read and re-plan without an effect. This status-first rule
+applies equally to normal reconcile and `execute_upgrade`.
+
+The adapter authorizes the controller ComponentSession principal for the closed
+`volume.rotate-sealing-key` capability, checks same-Zone ownership and
+`providerRef`, verifies the committed revision proof, and then maps the method
+one-to-one to the planned closed broker operation `RotateSealingKey`. The broker
+independently repeats the capability, Volume/policy binding, generation, and
+revision checks against its signed private policy table. The broker request
+contains only opaque `VolumeId`, opaque `SealingPolicyId`, generation/revision
+preconditions, opaque `operation_id`, and the derived idempotency key. No key
+bytes, Credential bytes, KDF parameters, host paths, relative paths, key
+handles, or caller-selected file descriptors cross either boundary.
+
+The idempotency key is:
+
+```text
+SHA-256(
+  "d2b.volume.rotate-sealing-key.v1" ||
+  volume-uid || sealing-policy-id ||
+  expected-volume-generation || expected-resource-revision ||
+  expected-current-key-generation || target-key-generation ||
+  operation-id
+)
+```
+
+Fields use their canonical length-prefixed wire encodings. Core derives the key;
+the adapter and broker recompute it. Reusing a key with different request bytes
+is `IdempotencyConflict`. A retry of byte-identical request fields returns
+`AlreadyCommitted` or `RecoveredCommitted` without another rewrite or duplicate
+success audit. A distinct in-flight request for the same Volume is
+`RotationConflict`; rotation is single-flight per Volume.
+
+Result dispositions have one meaning:
+
+| Disposition | Meaning |
+| --- | --- |
+| `Rotated` | This call performed and committed the fresh rotation |
+| `AlreadyCommitted` | The broker dedup record already proved the same request, retired prior generation, and durable success audit |
+| `RecoveredCommitted` | Crash recovery proved/switched the target, completed retirement and the missing durable audit, if any |
+
+All three return the matching Volume generation and active target key
+generation; no partial or merely staged state returns success.
+
+The broker uses an anchored, fsync'd rotation journal keyed by the idempotency
+key and a staged sealing generation:
+
+1. `Prepared`: authorize and lease the expected and target policy generations;
+   persist only their opaque policy/generation references and request digest.
+2. `Staged`: rewrap every sealed `StateEnvelope` into an anchored staging
+   generation, verify every authentication tag, then fsync files and directory.
+3. `Committed`: atomically switch authenticated sealing metadata to the target
+   generation and fsync its parent. Readers see either the complete old
+   generation or the complete target generation, never a mixed generation.
+4. `Audited`: append and durably commit the exactly-once broker success audit,
+   then retire the previous generation's staged data and complete the journal.
+
+No journal contains key material or paths. A crash before the metadata switch
+discards or resumes staging while the old generation remains authoritative. A
+crash after the switch is roll-forward only: startup verifies the authenticated
+target marker, completes the missing success audit under the same idempotency
+key, retires the old generation, and returns `RecoveredCommitted`. The broker
+never switches back to the old generation. If the audit sink is unavailable
+after the data commit, it returns retryable `CommitPendingAudit`; the controller
+keeps `rotation-pending` and retries the identical request until recovery and
+audit complete.
+
+`Rotated`, `AlreadyCommitted`, and `RecoveredCommitted` results are returned
+only when the requested Volume generation still matches, the target generation
+is active, the prior generation is retired, and the success audit is durable.
+The controller then atomically writes `sealingStatus: sealed`, advances
+`sealingKeyGeneration`, clears `sealingRotation`, and sets
+`SealingReady=True/rotation-complete`. A generation/revision/policy
+precondition error causes re-read/re-plan and leaves the status pending until
+the new plan is committed. `TargetKeyUnavailable`, `ResourceExhausted`,
+`BackendUnavailable`, `DeadlineExceeded`, and `CommitPendingAudit` are retryable
+with the identical request and bounded exponential backoff with full jitter
+(250 ms initial, 30 s cap). `Unauthorized`, `TargetKeyRevoked`,
+`RotationConflict`, `IdempotencyConflict`, and `IntegrityViolation` are not
+blindly retried; the controller records `rotation-failed` and a bounded,
+path-free reason. Revocation or a new committed Resource generation requires a
+new plan and operation ID.
+
+| Typed error | Retry semantics | Controller/status action |
+| --- | --- | --- |
+| `Unauthorized` | Never retry automatically | `rotation-failed`; require policy/authorization correction |
+| `PreconditionFailed` | Do not retry the same request | Re-read; commit a new plan or clear a stale pending plan |
+| `TargetKeyUnavailable` | Retry identical request after hint/backoff | Keep `rotation-pending` |
+| `TargetKeyRevoked` | Never retry that target | `rotation-failed`; require a newer admitted target |
+| `RotationConflict` | Do not race or replace in-flight work | `rotation-failed`; re-read broker/resource state |
+| `IdempotencyConflict` | Never retry | `rotation-failed`; integrity/operator investigation |
+| `IntegrityViolation` | Never retry or auto-repair | Volume `Failed`; preserve evidence |
+| `ResourceExhausted` | Retry identical request with backoff | Keep `rotation-pending` |
+| `BackendUnavailable` | Retry identical request with backoff | Keep `rotation-pending` |
+| `DeadlineExceeded` | Commit outcome is unknown; retry identical request | Keep `rotation-pending` |
+| `CommitPendingAudit` | Data is committed; retry identical request until audit completes | Keep `rotation-pending`; do not report success |
+
+On controller or daemon restart, the startup relist finds
+`rotation-pending`, obtains the original operation ID/request fingerprint from
+the core Operation ledger, and retries the identical typed request before any
+new rotation plan. If status says `sealed` but the broker reports a different
+active generation, reconcile sets `SealingReady=False/sealing-generation-drift`
+and fails closed rather than issuing an implicit rewrite.
+
+The controller emits path-free start/failure/commit lifecycle audit events. The
+broker emits one durable `RotateSealingKey` success record containing only
+Volume UID, policy ID digest, from/to generations, operation ID digest,
+idempotency-key digest, and result class. No raw credential bytes, key material,
+KDF parameters, data counts/sizes, paths, or content enter status, audit, OTEL,
+errors, `Debug`, or logs at any cardinality.
 
 ---
 
@@ -1605,6 +1793,14 @@ Volume reconciliation follows `ADR-046-resource-reconciliation`:
 6. On attachment create, volume-virtiofs receives `owned-resource-changed` from
    the Volume.
 
+Credential watches join the same per-Volume single-flight. An observed sealing
+generation advance first commits the `rotation-pending` status transition, then
+calls the typed `rotate_sealing_key` method with the resulting committed proof.
+Restart, timeout, cancellation, and retry reuse the operation ID/request
+fingerprint from the core Operation ledger. Reconcile never obtains keys or
+performs a direct rewrite, and it never starts a newer rotation while an older
+status-first operation is pending.
+
 Owner triggers: every Volume spec/status/finalizer mutation produces an
 `owned-resource-changed` hint for the Volume's `ownerRef` (typically a Guest).
 
@@ -1744,6 +1940,16 @@ only the controller `Process`, and `Replace` of a Volume row is allowed only
 with explicit ownership/state transfer. No raw host path or secret enters
 `status.update`.
 
+A Credential or sealing-policy generation change is a non-disruptive,
+state-preserving upgrade step, but not an in-place implicit rewrite:
+`plan_upgrade` records the expected current/target sealing generations and
+`execute_upgrade` commits `rotation-pending` status before invoking the same
+typed `VolumeEffectPort::rotate_sealing_key` operation used by reconcile. An
+upgrade completes only after its result and durable broker audit are reflected
+in `sealed` status. Restart resumes the original idempotency key; a changed
+Resource generation causes re-plan rather than reuse under different
+preconditions.
+
 D090 expedited `waitForReconcile` on `Create`/`UpdateSpec`/`Delete` performs no
 external effect, finalizer change, or status mutation until Core supplies
 `CommittedRevisionProof {resourceUid,generation,revision,operationId}`. The
@@ -1770,6 +1976,10 @@ status:
       status: "True"
       reason: all-attachments-ready
       observedGeneration: 1
+    - type: SealingReady
+      status: "True"
+      reason: rotation-complete
+      observedGeneration: 1
   resource:
     layoutPhase: Ready    # Pending | Ready | Degraded | Failed
     layoutConditions: []  # per-entry: EntryMissing | EntryDrift | EntryQuarantined | InvariantViolated | ForeignAclViolation
@@ -1777,6 +1987,8 @@ status:
     stateSchemaPhase: current
     markerStatus: verified
     sealingStatus: sealed
+    sealingKeyGeneration: 2
+    sealingRotation: null
     quotaUsage: { usedBytes: 0, inodeCount: 0 }
   provider:
     providerRef: Provider/volume-local
@@ -1800,7 +2012,9 @@ carry raw host paths, secret bytes, or unbounded records.
 | `stateSchemaPhase` | `current`, `migration-required`, `migrating`, `migration-committed`, `migration-failed` | Blocks pre-launch Processes when not `current` |
 | `installedSchemaVersion` | semver string or null | Version on disk at last verified marker read |
 | `markerStatus` | `verified`, `missing`, `replaced`, `tampered`, `unknown` | Non-`verified` blocks pre-launch Processes |
-| `sealingStatus` | `none`, `sealed`, `rotation-pending`, `rotation-failed` | |
+| `sealingStatus` | `none`, `sealed`, `rotation-pending`, `rotation-failed` | The committed status-first gate for `rotate_sealing_key`; `rotation-pending` is durable before any effect |
+| `sealingKeyGeneration` | integer or null | Last broker-confirmed active generation; never inferred only from Credential status |
+| `sealingRotation` | `{ fromGeneration, toGeneration }` or null | Safe restart/reconcile projection; operation ID and idempotency key remain only in the core Operation ledger |
 | `quotaUsage` | `{ usedBytes: N, inodeCount: N }` or null | Polled at max 60 s intervals |
 | `lastMigrationAt` | RFC 3339 UTC timestamp or null | |
 | `snapshots` | `SnapshotRecord[]` | Bounded list; each record: `id` (opaque), `createdAt`, `schemaVersion`, `sizeBytes`, `trigger`, `phase` |
@@ -1827,6 +2041,15 @@ carry raw host paths, secret bytes, or unbounded records.
 | `entry-quarantined` | Adoption ambiguity | Degraded |
 | `volume-local/layout` finalizer timeout | Controller exceeded `maxFinalizerDurationSeconds` | Degraded/finalizer-timeout |
 | `marker-tampered` | Marker HMAC validation failed | Failed |
+| `sealing-rotation-unauthorized` | Caller lacks the closed `volume.rotate-sealing-key` capability or Volume/policy binding | rotation-failed |
+| `sealing-rotation-precondition` | Volume generation, Resource revision, policy binding, or active/target key generation no longer matches | rotation-pending; re-read/re-plan |
+| `sealing-target-unavailable` | Target policy generation is not yet available | rotation-pending; retry same request |
+| `sealing-target-revoked` | Target policy generation is revoked | rotation-failed |
+| `sealing-rotation-conflict` | A distinct rotation is already in flight for the Volume | rotation-failed |
+| `sealing-idempotency-conflict` | One idempotency key is presented with different canonical request bytes | rotation-failed |
+| `sealing-integrity-violation` | Existing envelope, marker, staging generation, or journal fails authentication | Failed |
+| `sealing-rotation-retryable` | Resource exhaustion, backend unavailability, or deadline before known commit | rotation-pending; retry same request |
+| `sealing-audit-pending` | Target committed but durable success audit is not yet confirmed | rotation-pending; retry same request |
 
 All error messages are bounded (512 bytes), UTF-8/control-character validated,
 and must not contain host paths, secret content, process data, or terminal bytes.
@@ -1850,8 +2073,9 @@ and must not contain host paths, secret content, process data, or terminal bytes
 | `volume-relocation-committed` | Relocation complete | zone, volume-ref, to-execution-ref |
 | `volume-incident-hold-set` | `IncidentHold` condition added | zone, volume-ref, actor-digest |
 | `volume-incident-hold-cleared` | `IncidentHold` condition removed | zone, volume-ref, actor-digest |
-| `volume-sealing-rotation-start` | Credential rotation triggered | zone, volume-ref |
-| `volume-sealing-rotation-committed` | Credential rotation complete | zone, volume-ref |
+| `volume-sealing-rotation-start` | Status-first rotation-pending transition committed | zone, volume-ref, from-generation, to-generation, operation-id-digest |
+| `volume-sealing-rotation-failed` | Typed rotation returns a terminal error | zone, volume-ref, from-generation, to-generation, bounded-reason |
+| `volume-sealing-rotation-committed` | Typed result and broker success audit confirmed | zone, volume-ref, from-generation, to-generation, result-class |
 | `volume-destroyed` | Volume fully destroyed | zone, volume-ref, schemaId |
 | `volume-marker-check` | Marker verification result | zone, volume-ref, result-class |
 | `volume-quota-exceeded` | Write rejected due to quota | zone, volume-ref |
@@ -1861,6 +2085,7 @@ and must not contain host paths, secret content, process data, or terminal bytes
 | `RepairLayoutEntry` (broker) | Entry repaired | Volume UID, entry type, repair action class |
 | `CleanupLayoutEntry` (broker) | Entry removed | Volume UID, entry type, cleanup trigger |
 | `StoreSyncComplete` (broker) | Store sync complete | Volume UID, generation number |
+| `RotateSealingKey` (broker) | Rotation committed/recovered and success audit made durable | Volume UID, policy ID digest, from/to generation, operation ID digest, idempotency-key digest, result-class |
 
 ### Excluded from all audit records
 
@@ -2144,7 +2369,7 @@ Required modules:
 | `src/marker.rs` | Identity marker write/verify/check; HMAC generation and validation; fail-closed detection |
 | `src/quota.rs` | Quota enforcement; `statfs` polling; write-reject gate |
 | `src/migration.rs` | Pre-launch and online migration dispatch; staging Volume lifecycle; cross-component prepare/commit/rollback |
-| `src/sealing.rs` | Envelope encryption on write; `sealingStatus` transitions; `RotateSealingKey` effect op dispatch; no EphemeralProcess worker |
+| `src/sealing.rs` | Status-first sealing state machine; constructs canonical `RotateSealingKeyRequest`; dispatches only `VolumeEffectPort::rotate_sealing_key`; classifies typed result/errors and retry; no key lease, direct rewrite, generic broker call, or EphemeralProcess worker |
 | `src/snapshot.rs` | Snapshot EphemeralProcess dispatch; `.snapshots/` subtree; `snapshotPolicy` enforcement |
 | `src/relocation.rs` | Relocation EphemeralProcess dispatch; source finalizer; anchored copy; commit/failure handling |
 | `src/store_view.rs` | Store-view Volume specifics: hardlink farm layout, private-NS sync, generation meta, gcroots, `sync.lock` |
@@ -2185,7 +2410,7 @@ Required test files and minimum coverage:
 | `tests/view_rights.rs` | Mount with rights subset of View: admitted; mount with extra right: `volume-view-rights-exceeded`; `read-write` access on `read-only` View: rejected; single-writer constraint: second `read-write` rejected |
 | `tests/state.rs` | Ported `d2b-state/tests/state.rs` scenarios under v3 StateEnvelope: atomic write, fsync ordering, crash between rename steps, OFD lock acquire/release, quarantine record, generation bound, state-envelope digest |
 | `tests/migration_unit.rs` | Pre-launch migration dispatch; staging Volume create/destroy; EphemeralProcess succeeded → commit; EphemeralProcess failed → rollback; N-Volume cross-component prepare/commit/rollback protocol; roll-forward on restart detection |
-| `tests/sealing_unit.rs` | Seal on write; read sealed payload; rotation state machine via `RotateSealingKey` effect op: `rotation-pending` → op success → `sealed`; op failure → `rotation-failed`; no raw key in any output; no EphemeralProcess dispatch |
+| `tests/sealing_unit.rs` | Initial seal/read without exposing a key lease; status CAS commits `rotation-pending` before the first effect; exact request fields and generation/revision/policy preconditions; operation ID comes from committed proof; deterministic idempotency vector; byte-identical timeout/restart retry; duplicate success → `AlreadyCommitted`; recovered commit → `RecoveredCommitted`; changed bytes under one key → `IdempotencyConflict`; concurrent different rotation → `RotationConflict`; retryable/terminal error table; new generation re-plan; success → `sealed`; integrity failure → Failed; no key/path/handle in DTO, status, error, Debug, log, audit, or OTEL; no direct rewrite/generic broker/EphemeralProcess dispatch |
 | `tests/snapshot_unit.rs` | `snapshotPolicy` enforcement; retention count; retention TTL; `triggerOnMigration` auto-snapshot; snapshot EphemeralProcess dispatch; list in Volume status |
 | `tests/relocation_unit.rs` | Finalizer set; EphemeralProcess created; commit: source deleted; failure: source retained; state machine round-trip |
 | `tests/audit_unit.rs` | Golden audit record for each event kind; no paths in any record; no credential material; structural OTEL label-policy check with exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys |
@@ -2209,7 +2434,7 @@ Required files:
 | `integration/swtpm_marker.rs` | Real broker-maintained marker: provision, restart verify, inject `st_ino` mismatch → Failed; remove marker → Failed; marker HMAC tampered → Failed; ancestor traverse ACL applied to real inode |
 | `integration/block_image.rs` | Block-image lifecycle: create raw image at size, verify `fallocate` when `preallocate: true`, FD transfer to fake Guest runtime process, cleanup removes image file |
 | `integration/migration.rs` | Real Host crash-injection at each migration step (OS-level `SIGKILL` between `rename` steps); roll-forward on restart; N-Volume cross-component coordination with real staging Volume; staging orphan GC after Provider removal |
-| `integration/sealing.rs` | Real Credential lease flow: seal on write, read sealed payload, key rotation via `RotateSealingKey` effect op with live Credential Provider, `rotation-failed` on revoked credential |
+| `integration/sealing.rs` | Live Credential authority plus real adapter and planned closed broker `RotateSealingKey`: Provider never receives a lease; same-Zone capability/policy authorization and denials; crash injection at Prepared, Staged, metadata switch, audit append, and retirement; old-or-target atomic visibility; roll-forward recovery; exactly-once success audit; revoked/unavailable target behavior; controller restart resumes pending operation with identical idempotency key; precondition drift re-plans; request/broker journal/audit contain no key bytes or paths |
 | `integration/snapshot.rs` | Real Host filesystem snapshot byte-equality verification; retention expiry removes snapshot directory; pre-migration auto-snapshot with interrupted migration; snapshot list in status |
 | `integration/relocation.rs` | Real Host-to-Host anchored file copy; crash at copy midpoint → source preserved; successful relocation → source deleted; virtiofsd source re-point after relocation (via volume-virtiofs stub) |
 | `integration/domain_isolation.rs` | Cross-process domain-isolation rejection: two fake Processes in different domains attempt same Volume mount; `volume-domain-mismatch` returned |
@@ -2291,11 +2516,11 @@ Documents:
 | Depends on | `ADR046-pstate-001` (VolumeStateSchema/PersistenceClass/SensitivityClass/StateEnvelope in `d2b-contracts/src/v3/volume_state.rs`) |
 | Current source | `d2b-core/src/storage.rs` (`StoragePathSpec`, `StoragePathKind`, policy enums); `d2b-core/src/sync.rs` (`SyncJson`, `LockSpec`) |
 | Reuse action | adapt |
-| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId` each with custom redacted Debug, and `VolumeMountToken` opaque handle with custom redacted Debug) |
-| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage` Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId`/`SealingPolicyId` each with custom redacted Debug, `VolumeMountToken`, and canonical `RotateSealingKeyRequest`/`Result`/`Error` types) |
+| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage`; deny-unknown sealing-rotation request contains only opaque Volume/policy/operation IDs and generation/revision preconditions, with no key bytes/path/handle Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Volume spec and status structs; Provider descriptor component stateNamespace; Nix resource compiler schema validation |
 | Data migration | Full v3 reset; no row-level import |
-| Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract |
+| Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract; sealing-rotation request deny-unknown/round-trip and redacted-Debug tests; compile-time trait conformance includes `rotate_sealing_key` |
 | Removal proof | `d2b-core/src/storage.rs` StoragePathSpec/policy enums removed only after all Provider descriptor consumers are on v3 Volume spec |
 
 ### ADR046-vl-002 — Crate scaffold and filesystem primitives
@@ -2382,11 +2607,11 @@ Documents:
 | Dependency/owner | ADR046-vl-002; ADR046-vl-003; ADR046-pstate-004 through ADR046-pstate-006 |
 | Current source | `d2b-state/src/atomic.rs` (main); no existing migration/snapshot infrastructure in v3 |
 | Reuse action | adapt |
-| Destination | `src/{migration,snapshot}.rs`; `tests/{migration_unit,snapshot_unit}.rs`; `integration/{migration,snapshot}.rs` |
-| Detailed design | Schema migration (see §Schema migration) via `volume-migration-worker` EphemeralProcess; Snapshot create/list/expire (see §Snapshots) via `volume-snapshot-worker` EphemeralProcess; controller reports `stateSchemaPhase` and `snapshots` in Volume status. Sealing lifecycle (`sealingStatus`, key-shred) is a core/framework concern dispatched through `VolumeEffectPort` semantic ops, not a Provider-owned EphemeralProcess worker. |
-| Integration | Controller's reconcile handler dispatches EphemeralProcess via d2b-bus `ResourceClient`; volume-local reports `stateSchemaPhase`, `snapshots` in Volume status |
+| Destination | `src/{migration,snapshot,sealing}.rs`; `tests/{migration_unit,snapshot_unit,sealing_unit}.rs`; `integration/{migration,snapshot,sealing}.rs` |
+| Detailed design | Schema migration (see §Schema migration) via `volume-migration-worker` EphemeralProcess; Snapshot create/list/expire (see §Snapshots) via `volume-snapshot-worker` EphemeralProcess; controller reports `stateSchemaPhase` and `snapshots` in Volume status. Sealing lifecycle uses the status-first `rotation-pending` transition and only canonical `VolumeEffectPort::rotate_sealing_key`; it persists/resumes the core Operation-ledger fingerprint, classifies exact typed errors, and has no key lease, direct rewrite, generic broker call, or Provider-owned EphemeralProcess worker. |
+| Integration | Controller's reconcile handler dispatches migration/snapshot EphemeralProcess via d2b-bus `ResourceClient`; sealing reconcile/upgrade commits status before effect and maps typed results to `sealed`/`rotation-failed`; volume-local reports state schema, snapshots, and safe sealing generations in Volume status |
 | Data migration | None (new protocol) |
-| Validation | All `tests/migration_unit.rs`, `tests/snapshot_unit.rs`, `integration/migration.rs`, `integration/snapshot.rs` scenarios |
+| Validation | All `tests/migration_unit.rs`, `tests/snapshot_unit.rs`, `tests/sealing_unit.rs`, `integration/migration.rs`, `integration/snapshot.rs`, and `integration/sealing.rs` scenarios, including restart/idempotency and status-before-effect assertions |
 | Removal proof | Not applicable (new) |
 
 ### ADR046-vl-008 — Relocation, retention, incident hold, unclaimed GC, destruction
@@ -2413,10 +2638,10 @@ Documents:
 | Current source | `d2b-state/src/audit.rs` (main `6faa5256`); OTEL cardinality model from `d2b-provider-observability-local/src/` (main `a1cc0b2d`) |
 | Reuse action | adapt |
 | Destination | `src/audit.rs`; `src/otel.rs`; `src/error.rs`; `tests/audit_unit.rs`; `integration/audit.rs` |
-| Detailed design | Event types and Zone audit emission per §Audit events; OTEL metric definitions per §OTEL metrics with closed semantic labels and no Zone/resource-name-derived dimensions; Zone identity remains in `d2b.zone` resource attributes; error catalog per §Error catalog; no-path invariant enforced in all outputs |
+| Detailed design | Event types and Zone audit emission per §Audit events, including controller rotation start/failure/commit and exactly-once broker `RotateSealingKey` success; OTEL metric definitions per §OTEL metrics with closed semantic labels and no Zone/resource-name-derived dimensions; Zone identity remains in `d2b.zone` resource attributes; error catalog per §Error catalog; no-path/no-key invariant enforced in all outputs |
 | Integration | Every lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/audit_unit.rs` golden records and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus resource-name canary absence; `tests/error_messages.rs` bounded messages; `integration/audit.rs` live stream |
+| Validation | `tests/audit_unit.rs` golden records and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus resource-name canary absence; rotation audit exact-once/digest-only vectors; `tests/error_messages.rs` bounded messages; `integration/audit.rs` live stream |
 | Removal proof | Not applicable |
 
 ### ADR046-vl-010 — Nix configuration and resource compiler integration
@@ -2458,11 +2683,11 @@ Documents:
 | Depends on | `ADR046-pstate-003`; `ADR-046-provider-model-and-packaging` (generic effect-port injection contract) |
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract,swtpm_dir,store_sync,store_view_posture}.rs`; `d2b-host/src/hardlink_farm.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner); implements the `VolumeEffectPort` trait defined in `d2b-contracts` |
-| Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; emits path-free audit records for each op (audit is never atomic with redb write); injected into controller via Zone runtime ComponentSession; blocking filesystem calls run in bounded blocking-thread pool Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into adapter. |
+| Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner), implementing the `VolumeEffectPort` trait defined in `d2b-contracts`; planned `d2b-priv-broker/src/ops/rotate_sealing_key.rs` closed operation |
+| Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; authorizes `volume.rotate-sealing-key`, verifies committed proof, recomputes the canonical idempotency key, and maps `rotate_sealing_key` one-to-one to the closed broker `RotateSealingKey` operation. Broker independently resolves opaque `VolumeId`/`SealingPolicyId`, checks policy/generation/preconditions, performs journaled atomic rewrap and roll-forward recovery, and durably emits exactly one success audit before returning. Neither boundary accepts key bytes, credential bytes, key handles, or paths. Other blocking filesystem calls run in the bounded blocking-thread pool Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into adapter. |
 | Integration | Zone runtime creates adapter with required FD table and bundle reference at provider startup; passes `Arc<dyn VolumeEffectPort>` to controller via ComponentSession bootstrap |
 | Data migration | None (adapter replaces direct broker-op call sites) |
-| Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; no path in any output; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter does not expose raw paths to Provider crate; `integration/provision.rs` exercises full adapter path |
+| Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; rotation authorization, policy binding, all generation/revision preconditions, canonical idempotency vectors, byte-identical duplicate/retry, different-payload conflict, typed retry classification, and no key/path/handle in wire/Debug/error/audit; broker crash injection at every journal boundary with old-or-target visibility, roll-forward, and exactly-once success audit; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter exposes neither raw paths nor broker implementation to Provider crate; `integration/{provision,sealing}.rs` exercise full adapter paths |
 | Removal proof | Baseline broker op handlers (`state_dir.rs`, `storage_contract.rs`, `swtpm_dir.rs`, `store_sync.rs`, `store_view_posture.rs`) retired only after Volume controller parity is confirmed and all callers are on the adapter |
 
 ### ADR046-vl-013 — No bootstrap-state exception (status-first controller start)
@@ -2549,6 +2774,15 @@ Documents:
     fully derivable from spec/status/core ledger/external observation fails with
     `component-state-not-justified`. There is no empty identity-only state
     Volume.
+
+13. **Sealing rotation is one closed, status-first effect**: the Provider commits
+    `rotation-pending` before calling only
+    `VolumeEffectPort::rotate_sealing_key`; the adapter maps it one-to-one to the
+    closed broker `RotateSealingKey` operation. Both boundaries authorize and
+    verify the opaque Volume/policy binding and committed preconditions. Key
+    bytes, Credential leases, handles, and paths never cross those boundaries;
+    crash recovery is roll-forward, retries reuse the canonical idempotency key,
+    and success requires a durable exactly-once broker audit.
 
 ---
 
