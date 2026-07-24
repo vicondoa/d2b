@@ -5,10 +5,10 @@
 | Spec ID | `ADR-046-provider-audio-pipewire` |
 | Parent | ADR 0046 |
 | Status | Proposed |
-| Version | 6 |
+| Version | 7 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owners | `d2b-provider-audio-pipewire` crate, `AudioState` controller, `AudioMediator` service component |
+| Owners | `d2b-provider-audio-pipewire` crate, `AudioService` and `AudioState` controllers, `AudioMediator` service component |
 | Depends on | `ADR-046-resource-object-model`, `ADR-046-primitive-resource-composition`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-resources-volume`, `ADR-046-provider-state`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resources-host-guest-process-user` |
 | Supersedes | `nixos-modules/components/audio/host.nix`, `nixos-modules/components/audio/guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs` |
 
@@ -18,8 +18,11 @@ This spec exhaustively defines the `audio-pipewire` Provider for d2b 3.0. It
 covers:
 
 - Provider identity, crate layout, and package boundary;
-- the `audio-pipewire.d2bus.org.AudioState` ResourceType: schema, status, lifecycle,
-  validation;
+- the two qualified ResourceTypes:
+  `audio-pipewire.d2bus.org.AudioService` for owner authority and imported local
+  service projections, and `audio-pipewire.d2bus.org.AudioState` for per-Guest
+  consumer intent/state;
+- both ResourceType schemas, three-layer status, lifecycle, and validation;
 - the `runtime-audio` manifest dependency alias: runtime capability discovery
   without implementation-ID branches in the spec;
 - the host worker Process (vhost-user-sound) and its exact execution schema;
@@ -35,7 +38,12 @@ covers:
 - process principal model: dedicated worker principals are core Process
   principals from the bounded pool — not runtime-created User resources;
 - static components (controller, AudioMediator) created by core
-  ProviderDeployment; controller creates only AudioState-owned Process children;
+  ProviderDeployment; the Provider controller reconciles AudioService and
+  AudioState, while the AudioState handler creates only its owned Process and
+  private Endpoint children;
+- D096 export/import composition in which only an owner AudioService is
+  exported and core creates exactly one projection AudioService per
+  ResourceImport; AudioState is never exported or generated as a projection;
 - RBAC, security invariants, and zero-broker-op controller boundary;
 - async reconciliation, restart adoption, and status transitions;
 - error codes and Degraded-state model;
@@ -44,9 +52,12 @@ covers:
 - implementation work items with exact source, destination, and tests;
 - required crate layout (`src/`, `tests/`, `integration/`, `README.md`).
 
-Audio is an **interaction Provider**, not a device Provider. It creates and
-reconciles one `audio-pipewire.d2bus.org.AudioState` resource and one `Process` (vhost-user-sound
-worker) per Guest that opts in.
+Audio is an **interaction Provider**, not a device Provider. An owner Zone has
+one real `audio-pipewire.d2bus.org.AudioService` authority for its PipeWire
+backing. A consumer Zone has one core-owned projection AudioService per
+`ResourceImport`. Every opted-in Guest has its own
+`audio-pipewire.d2bus.org.AudioState` intent/state and vhost-user-sound worker;
+that AudioState references a same-Zone AudioService through `spec.serviceRef`.
 
 **Controller boundary**: the `audio-state-controller` creates, updates, and
 deletes `Process` resources exclusively through the resource API. It never
@@ -69,9 +80,11 @@ or sealed command handle is required.
 
 **Static components**: the controller binary and the AudioMediator service
 binary are created as Process resources by core ProviderDeployment when
-`Provider/audio-pipewire` is activated. The `audio-state-controller` creates
-only AudioState-owned child Process resources (worker, GuestAudioAgent
-instances); it does not bootstrap its own companion processes.
+`Provider/audio-pipewire` is activated. The controller binary registers
+deterministic AudioService and AudioState handlers. The AudioState handler
+creates only AudioState-owned child Process resources (worker,
+GuestAudioAgent instances) and private Endpoints; it does not bootstrap its
+own companion processes.
 
 ## Terminology mapping (baseline → v3)
 
@@ -80,10 +93,10 @@ explicitly stated at each design boundary.
 
 | Baseline name / location | v3 ADR 0046 target | Evidence class |
 | --- | --- | --- |
-| `AudioPolicyState` (`d2b-core/src/audio_policy.rs:130`) | `AudioState` spec (the `mic`/`speaker`/`speakerLevel`/`micGain` fields migrate to `AudioState.spec.grants`) | `implemented-and-reachable` |
+| `AudioPolicyState` (`d2b-core/src/audio_policy.rs:130`) | Per-Guest `AudioState` spec (the `mic`/`speaker`/`speakerLevel`/`micGain` fields migrate to `AudioState.spec.grants`; service ownership is separate in `AudioService`) | `implemented-and-reachable` |
 | `AudioGrant::On/Off` (`audio_policy.rs:98`) | `AudioState.spec.grants.mic`/`speaker: "on"\|"off"` | `implemented-and-reachable` |
 | `LevelPercent` (`audio_policy.rs:26`) | `AudioState.spec.grants.speakerLevel`/`micGain: 0..=100` | `implemented-and-reachable` |
-| `parse_audio_state` / `to_v2_bytes` (`audio_policy.rs:282,215`) | Used only for baseline v1/v2 state-file migration on first activation; `AudioState.spec` is the durable desired authority in v3; no state file maintained after migration completes | `implemented-and-reachable` |
+| `parse_audio_state` / `to_v2_bytes` (`audio_policy.rs:282,215`) | Used only for baseline v1/v2 state-file migration on first activation; `AudioState.spec.grants` is durable per-Guest intent in v3 and `serviceRef` selects the backing Service; no state file maintained after migration completes | `implemented-and-reachable` |
 | `AudioArgvInput` / `generate_audio_argv` (`d2b-host/src/audio_argv.rs:47,101`) | signed component template for `vhost-user-sound-worker`; argv shape is a template projection, not a live Process spec field | `implemented-and-reachable` |
 | per-VM binary copy path `/run/d2b/vms/<vm>/d2b-<vm>` (`audio_argv.rs:97`) | LaunchTicket verifier enforces the path shape against the component template; not exposed in the Process resource spec | `implemented-and-reachable` |
 | `RunnerRole::Audio` (`d2b-contracts/src/broker_wire.rs:1524`) | `Process` resource with `spec.template: "vhost-user-sound-worker"`; launch owned by system Process Provider | `implemented-and-reachable` |
@@ -92,10 +105,10 @@ explicitly stated at each design boundary.
 | `WPCTL_PATH` / `PW_DUMP_PATH` env keys (`audio_host_controller.rs:103`) | superseded; AudioMediator uses libpipewire registry introspection and direct API calls; no wpctl binary or pw-dump subprocess | `implemented-and-reachable` |
 | `PIPEWIRE_RUNTIME_DIR` env key (`audio_host_controller.rs:105`) | not a Process spec field; AudioMediator receives a declared pre-opened PipeWire portal FD from the user supervisor/display portal — it does not open the socket from the ambient runtime environment | `implemented-and-reachable` |
 | `access(2)` credential posture check (`audio_host_controller.rs:134`) | replaced by AudioMediator readiness check; AudioMediator reports `PipeWireSessionUnavailable` when the portal FD cannot be acquired from the user supervisor | `implemented-and-reachable` |
-| `ofd_lock` / `acquire_audio_state_lock` (`audio_dispatch.rs:73,125`) | superseded; `AudioState.spec` is the durable desired authority; no state file is maintained; OFD lock is removed | `implemented-and-reachable` |
+| `ofd_lock` / `acquire_audio_state_lock` (`audio_dispatch.rs:73,125`) | superseded; `AudioState.spec` is durable per-Guest intent and AudioService owns backing authority; no state file is maintained; OFD lock is removed | `implemented-and-reachable` |
 | `write_audio_state_unlocked` atomic rename (`audio_dispatch.rs:221`) | superseded; no state file; grants are authoritative in `AudioState.spec` | `implemented-and-reachable` |
 | `AudioHostEnforcementKind` / `AudioGuestEnforcementKind` (`provider_capabilities.rs:21,39`) | superseded; enforcement capability is discovered at runtime via the `runtime-audio` manifest dependency alias; no implementation-ID branch in `AudioState.spec` | `implemented-and-reachable` |
-| `AudioProviderCapability` capability row (`provider_capabilities.rs:54`) | inline component descriptor field; not a separate ResourceType | `implemented-and-reachable` |
+| `AudioProviderCapability` capability row (`provider_capabilities.rs:54`) | inline component descriptor field behind the `AudioService` implementation; not a third ResourceType | `implemented-and-reachable` |
 | `AudioOp` / `AudioOpResponse` (`public_wire.rs:1934,2025`) | v3: `AudioState` spec mutations (`UpdateSpec`) via the resource API; no separate op wire | `implemented-and-reachable` |
 | `AudioVmState` / `AudioChannelState` (`public_wire.rs:1955,1943`) | `AudioState.status.channels` inline status | `implemented-and-reachable` |
 | `AudioEnforcementPosture` (`public_wire.rs:1848`) | `AudioState.status.enforcementPosture` | `implemented-and-reachable` |
@@ -108,14 +121,14 @@ explicitly stated at each design boundary.
 | `d2b.site.audio.inputTargetNode` (`host.nix:253`) | `Provider/audio-pipewire.spec.config.captureAlias` — bounded named alias (`^[a-z][a-z0-9-]*$`) resolved privately by AudioMediator via libpipewire registry; not a PipeWire node ID or socket path | `generated-or-eval-contract` |
 | `vhost-device-sound v0.3.0` (`pkgs/vhost-device-sound/default.nix`) | `spec.artifactId` in `Provider/audio-pipewire` pointing to Nix artifact catalog entry | `implemented-and-reachable` |
 | `microvm.extraArgsScript` CH audio injection (`guest.nix:112`) | `Guest.spec.audioExtension` arguments derived from the runtime-audio capability reported by the Guest's Runtime Provider; values such as `virtio_id` and `queue_sizes` are not spec fields | `implemented-and-reachable` |
-| `/var/lib/d2b/vms/<vm>/state/audio-state.json` (`host.nix:341`) | superseded; `audio-pipewire.d2bus.org.AudioState.spec` is the durable desired authority; no per-Guest state file in v3 | `implemented-and-reachable` |
+| `/var/lib/d2b/vms/<vm>/state/audio-state.json` (`host.nix:341`) | superseded; per-Guest grants live in `audio-pipewire.d2bus.org.AudioState.spec`, while physical authority lives in `AudioService`; no per-Guest state file in v3 | `implemented-and-reachable` |
 | `/run/d2b/locks/audio-<vm>.lock` (`host.nix:366`) | superseded; OFD lock and state file are removed in v3 | `implemented-and-reachable` |
 | `d2b-<vm>-snd` system user (`audio_argv.rs:140`) | superseded; dedicated worker principals are core Process principals from the bounded pool allocated by the Process Provider; not runtime-created `User` resources managed by the audio controller | `implemented-and-reachable` |
 | `d2b.guestControl.wpctlPath` (`guest.nix:139`) | superseded; AudioMediator uses libpipewire API directly; no operator-visible wpctlPath option in v3 | `generated-or-eval-contract` |
 | `d2b.audio.users` guest option (`guest.nix:92`) | `AudioState.spec.guestUsers` list of `User/<name>` ResourceRefs; Nix/compiler sets `spec.groups: ["audio"]` on each referenced guest `User` resource at compile time; runtime API-created AudioState verifies `User.status.groupMembershipVerified` before sidecar start; no runtime `extraGroups` mutation | `generated-or-eval-contract` |
 | `minijail-profiles.nix` audio role block / `seccompPolicyRef = "w1-audio"` | `Process.spec.sandbox.seccompClass: audio-pipewire-worker` | `implemented-and-reachable` |
 | `minijail_audio_usbip.rs` Layer-1 contract tests | retained and extended in `d2b-provider-audio-pipewire/tests/` | `implemented-and-reachable` |
-| `d2b audio status/set-volume/mute` CLI ops (`packages/d2b/src/`) | v3: `d2b resource update audio-pipewire.d2bus.org.AudioState/<name>` or a provider-specific `d2b audio` projection | `implemented-and-reachable` |
+| `d2b audio status/set-volume/mute` CLI ops (`packages/d2b/src/`) | v3: `d2b resource update audio-pipewire.d2bus.org.AudioState/<name>` or a provider-specific `d2b audio` view | `implemented-and-reachable` |
 
 ## Resolved design decisions
 
@@ -126,21 +139,23 @@ All design decisions are resolved in this revision.
 | DRAUDIO-001 | Separate `AudioState` ResourceType or extend `Device`? | `audio-pipewire.d2bus.org.AudioState` is an independent ResourceType. Audio is an interaction Provider; it does not model a Device inventory/arbitration/claim lifecycle. |
 | DRAUDIO-002 | Per-Guest `AudioState` or Zone-global? | Per-Guest. Each Guest has independent grants, levels, and enforcement posture. |
 | DRAUDIO-003 | Where does the vhost-user-sound socket path live? | Controller-generated private implementation detail. Never appears in `AudioState.spec`, `AudioState.status`, API responses, audit records, OTEL attributes, or any broker configuration. |
-| DRAUDIO-004 | How does the controller enforce PipeWire stream routing after a grant change? | The `audio-state-controller` calls the AudioMediator `SetGrant`/`SetLevel` ComponentSession service over d2b-bus. The AudioMediator applies changes directly via libpipewire API (`pw_node_set_param`, `pw_stream_set_control`) on the worker's live PipeWire node. `AudioState.spec` is the durable authority; no prior state-file write is required. No EphemeralProcess, wpctl binary, or node ID is involved. |
+| DRAUDIO-004 | How does the controller enforce PipeWire stream routing after a grant change? | The AudioState controller calls the same-Zone AudioService selected by `serviceRef`. An owner Service dispatches to its local AudioMediator; a projection Service routes over its ResourceImport encrypted stream to the remote owner. Only the owner AudioMediator applies libpipewire changes. `AudioState.spec` is durable per-Guest intent; no state file is required. |
 | DRAUDIO-005 | How is the `application.name = "d2b-<guest>"` PipeWire stream identity established? | The component template for `vhost-user-sound-worker` is a signed LaunchTicket projection that sets the per-Guest binary copy path as argv[0]. `libpipewire`'s `init_prgname()` reads `/proc/self/exe`. This is a template projection; it does not appear in the live Process resource spec. |
 | DRAUDIO-006 | WirePlumber stream rules: resource spec or host Nix config? | Host Nix config. The operator capture target is stored as `Provider/audio-pipewire.spec.config.captureAlias` — a bounded named alias (`^[a-z][a-z0-9-]*$`, ≤64 chars). The AudioMediator resolves it to the actual PipeWire node object via libpipewire registry introspection at runtime, privately. The alias never appears in ResourceSpec/status or public API surfaces. |
 | DRAUDIO-007 | Guest PipeWire stack: resource spec or Nix guest config? | Guest Nix config. The in-guest virtio-snd module, PipeWire stack, WirePlumber virtio-snd profile, and diagnostic packages are Nix guest module concerns. |
-| DRAUDIO-009 | Mic direction: null-target sentinel vs explicit routing? | WirePlumber stream rules in `client.conf.d/90-d2b` set initial stream-creation properties. Live grant changes are applied by the AudioMediator via libpipewire API calls on the worker's active PipeWire node. No worker restart required. `AudioState.spec` is the durable authority; no state file is written before or after enforcement. |
+| DRAUDIO-009 | Mic direction: null-target sentinel vs explicit routing? | WirePlumber stream rules in `client.conf.d/90-d2b` set initial stream-creation properties. Live changes reach the owner AudioMediator through the referenced AudioService (local or projection route) and use libpipewire. No worker restart or state file is required. |
 | DRAUDIO-011 | How does the vhost-user-sound worker access PipeWire without ambient socket exposure? | A same-UID user-session `AudioMediator` receives a declared pre-opened PipeWire portal FD from the user supervisor/display portal (not from the ambient runtime environment). The controller requests an operation-scoped typed attachment transfer; d2b-bus/ProviderSupervisor routes the FD directly mediator→worker LaunchTicket without the Process Provider knowing audio and without the controller handling FDs. No socket path, SetSocketAcl, or `PIPEWIRE_RUNTIME_DIR` env entry appears in any resource spec, status, broker config, or public surface. |
 | DRAUDIO-012 | Audio user group membership: resource spec or Nix guest config? | `AudioState.spec.guestUsers` is a list of `User/<name>` ResourceRefs. For Nix/compiler-declared resources, the Nix module sets `spec.groups: ["audio"]` on each referenced guest `User` resource at compile time. For API-created `AudioState`, the operator sets `spec.groups` on the User resources; the controller verifies `User.status.groupMembershipVerified` before starting the sidecar and fails closed if not confirmed. The controller never mutates `User.spec.groups` at runtime. |
-| DRAUDIO-013 | Who owns process launch, wait, reap, and pidfd? | `Provider/system-minijail` or `Provider/system-systemd` exclusively. The `audio-state-controller` creates and updates `Process` resource specs only. It never calls `SpawnRunner`, `OpenPidfd`, or adopts pidfds. ProcessEffect audit belongs to the Process Provider. |
+| DRAUDIO-013 | Who owns process launch, wait, reap, and pidfd? | `Provider/system-minijail` or `Provider/system-systemd` exclusively. The AudioState controller creates Process and private Endpoint resource specs only. It never calls `SpawnRunner`, `OpenPidfd`, or adopts pidfds. ProcessEffect audit belongs to the Process Provider. |
 | DRAUDIO-014 | Provider root configuration key? | `Provider.spec.config` (not `rootConfig`). The canonical Provider spec shape is `{artifactId; config}`. |
-| DRAUDIO-015 | wpctl EphemeralProcess vs AudioMediator service? | wpctl EphemeralProcess is removed entirely. The AudioMediator exposes a `SetGrant`/`SetLevel` ComponentSession service; the controller calls it to apply enforcement. The AudioMediator uses the libpipewire API directly. No EphemeralProcess, no wpctl binary, no node ID in any resource spec or bus message. |
+| DRAUDIO-015 | wpctl EphemeralProcess vs AudioMediator service? | wpctl EphemeralProcess is removed. AudioState calls its AudioService. Owner Service dispatches to the local AudioMediator; projection Service routes to the remote owner. Only the owner mediator uses libpipewire. No EphemeralProcess, wpctl, or node ID enters any external surface. |
 | DRAUDIO-016 | Guest-side enforcement: guestd wpctl path vs typed guest service? | guestd's wpctl dispatch path is superseded. A `GuestAudioAgent` Process running in the Guest under the guest workload user's UID exposes a typed `AudioSet` ComponentSession service over vsock. The `audio-state-controller` calls this service via libpipewire API. No wpctl binary or command path. The `d2b.guestControl.wpctlPath` Nix option is removed from v3. |
 | DRAUDIO-017 | How does audio discover the Guest's audio frontend without an `audioFrontend.kind` spec field? | The Provider manifest declares a `runtime-audio` dependency alias bound to the Guest's Runtime Provider. At activation the Runtime Provider advertises typed `AudioCapability` records (e.g., `VhostUserSound { virtio_id, queue_sizes, enforcement_posture }`) via the capability protocol. The controller reads these records via the dependency alias. No implementation-ID branch appears in `AudioState.spec`; `Guest.spec.audioExtension` arguments are derived from the capability. If the runtime advertises no audio capability, sidecar is not deployed. |
 | DRAUDIO-018 | Dedicated worker principals: controller-created User resources or core Process principals? | Core Process principals from the bounded pool allocated per provider by the Process Provider. The audio controller does not create `User` resources for worker execution identity. Human guest `User/<name>` references in `guestUsers` are observed from system-core, never created or modified by the audio controller. |
-| DRAUDIO-019 | Who creates the static AudioMediator and controller Process resources? | Core ProviderDeployment creates them when `Provider/audio-pipewire` is activated. The `audio-state-controller` creates only AudioState-owned children (worker Processes, GuestAudioAgent Processes). The `allowedResourceVerbs` for the controller does not include `Volume` or `User`. |
+| DRAUDIO-019 | Who creates the static AudioMediator and controller Process resources? | Core ProviderDeployment creates them when `Provider/audio-pipewire` is activated. The AudioState handler creates only State-owned workers, GuestAudioAgents, and private Endpoints. The controller has no `Volume` or `User` verbs. |
 | DRAUDIO-020 | How is the PipeWire FD routed from AudioMediator to worker without controller or Process Provider involvement? | The controller declares an operation-scoped typed attachment transfer when creating the worker Process resource. d2b-bus/ProviderSupervisor resolves the AudioMediator's active portal FD and delivers it in the worker's LaunchTicket. The Process Provider (system-minijail) receives and inherits the FD without knowing it is audio-specific. The controller never holds or transfers FDs directly. |
+| DRAUDIO-021 | Which resource owns the physical audio authority and which resource is imported? | `audio-pipewire.d2bus.org.AudioService`. The owner-Zone Service holds the D097 AuthorityDescriptor and references only same-Zone implementation Endpoints. `ResourceExport.resourceRef` and `exportedType` identify that Service. Core creates exactly one local projection AudioService per ResourceImport with `metadata.ownerRef: ResourceImport/<name>`. AudioState never holds the AuthorityDescriptor, is never exported, and is never an import projection. |
+| DRAUDIO-022 | How does a Guest select local or imported audio backing? | Every per-Guest AudioState has a required same-Zone `spec.serviceRef` to an AudioService plus its existing Guest ownership, grants, levels, and users. Owner Services use the local AudioMediator/PipeWire backing. Projection Services route encrypted named streams to the remote owner Service and are forbidden from opening PipeWire. |
 
 ## Provider identity
 
@@ -154,28 +169,41 @@ Provider/audio-pipewire
   one user-session service binary (`audio-pipewire-mediator`), one worker
   template (`vhost-user-sound-worker`), one guest agent template
   (`guest-audio-agent`), one manifest dependency alias (`runtime-audio`), and
-  one exported ResourceType (`audio-pipewire.d2bus.org.AudioState`)
+  two qualified ResourceTypes (`audio-pipewire.d2bus.org.AudioService` and
+  `audio-pipewire.d2bus.org.AudioState`)
 - **Depends on**: public neutral contracts/toolkit crates only; no `d2bd`,
   `d2b-priv-broker`, Zone-store, or other Provider internals
+
+### Provider resource catalog
+
+| Qualified ResourceType | Cardinality/scope | Authority/export/import semantics | Controller |
+| --- | --- | --- | --- |
+| `audio-pipewire.d2bus.org.AudioService` | One real owner authority Service per owner Zone/physical backing; one projection Service per ResourceImport | Owner alone carries D097 AuthorityDescriptor and is the ResourceExport target. Core alone creates/deletes the projection with `ownerRef: ResourceImport/<name>`. Projection routes to the remote owner and never opens PipeWire. | AudioService handler reconciles owner/projection semantics and Service-owned local Endpoints |
+| `audio-pipewire.d2bus.org.AudioState` | Exactly one per opted-in Guest | Per-Guest grants/levels/users with required same-Zone `serviceRef`; never carries authority, is never exported, and is never an import projection | AudioState handler creates the worker, GuestAudioAgents, and private Endpoints |
+
+Standard `Process`, `Endpoint`, `ResourceExport`, and `ResourceImport`
+resources are composed as children/dependencies; they are not additional
+Provider-qualified ResourceTypes.
 
 ### Controller components
 
 | Component | Binary | Class | Domain | Scope |
 | --- | --- | --- | --- | --- |
-| `audio-state-controller` | `audio-pipewire-controller` | controller | system | Watches `audio-pipewire.d2bus.org.AudioState`; creates/updates/deletes AudioState-owned Process resources only; calls AudioMediator `SetGrant`/`SetLevel` service; never touches pidfds, broker spawn, Volume, or User resources; `Provider/audio-pipewire` declares no Provider state Volume under D087 |
+| `audio-service-controller` | `audio-pipewire-controller` | controller handler | system | Watches `audio-pipewire.d2bus.org.AudioService`; claims/observes an owner Service's D097 authority and local implementation Endpoints, or binds a projection Service to its ResourceImport encrypted-stream route; a projection never opens PipeWire |
+| `audio-state-controller` | `audio-pipewire-controller` | controller handler | system | Watches `audio-pipewire.d2bus.org.AudioState`; resolves its same-Zone `serviceRef`; creates/updates/deletes AudioState-owned worker, GuestAudioAgent, and private Endpoint resources; calls the selected AudioService; never touches pidfds, broker spawn, Volume, or User resources; `Provider/audio-pipewire` declares no Provider state Volume under D087 |
 | `audio-mediator` | `audio-pipewire-mediator` | service | user | Same-UID user-session component; receives declared pre-opened PipeWire portal FD from user supervisor; ProviderSupervisor routes FD to worker LaunchTicket; exposes `SetGrant`/`SetLevel` service; applies enforcement via libpipewire API |
 
 The controller runs as a Process in the system domain under the Host. The
 mediator runs as a Process in the user domain under the compositor user's UID.
-**Both are static components created by core ProviderDeployment** when
+**The controller Process and mediator are static components created by core ProviderDeployment** when
 `Provider/audio-pipewire` is activated; the controller does not bootstrap
 them. Neither component receives a Zone store handle or a broker socket.
 
-**Process lifecycle boundary**: the `audio-state-controller` creates `Process`
-resources via the resource API and watches `Process.status` changes delivered
-by the Process Provider. It never calls `SpawnRunner`, `OpenPidfd`, `SIGTERM`,
-or any pidfd operation. Those belong exclusively to `Provider/system-minijail`
-or `Provider/system-systemd`.
+**Process lifecycle boundary**: the AudioState handler creates `Process`
+resources and private `Endpoint` resources through the resource API and watches
+their status. It never calls `SpawnRunner`, `OpenPidfd`, `SIGTERM`, or any pidfd
+operation. Those effects belong exclusively to `Provider/system-minijail` or
+`Provider/system-systemd`.
 
 **Execution schema boundary**: the live Process resource spec contains no
 `executableRef`, `argv`, `env`, or inherited-FD endpoint records. Those are
@@ -207,9 +235,209 @@ capability fields are the only dispatch surface.
 
 | Template name | Class | Domain | Role |
 | --- | --- | --- | --- |
-| `vhost-user-sound-worker` | worker | system | Per-Guest vhost-device-sound sidecar; long-lived; system-domain under `Provider/system-minijail`; receives PipeWire FD from AudioMediator via component-descriptor attachment; no user session needed |
+| `vhost-user-sound-worker` | worker | system | Per-Guest vhost-device-sound sidecar; long-lived; system-domain under `Provider/system-minijail`; uses its AudioState's resolved AudioService backend: an owner Service supplies the local AudioMediator attachment, while a projection Service supplies a local encrypted-stream route and never a PipeWire FD |
+
+## `AudioService` ResourceType
+
+`audio-pipewire.d2bus.org.AudioService` is the service/authority boundary. It
+has exactly two roles:
+
+- **owner**: one real Service in the owner Zone holds the D097
+  `AuthorityDescriptor`, arbitrates the physical microphone/speaker backing,
+  and references only same-Zone implementation Endpoints;
+- **projection**: core creates exactly one local Service per `ResourceImport`
+  in a consumer Zone with `metadata.ownerRef: ResourceImport/<name>`. It routes
+  through that import's lease and bounded encrypted named streams to the remote
+  owner Service. It never opens PipeWire and contains no remote ResourceRef,
+  FD, socket, or path.
+
+An AudioService is not per Guest. Per-Guest policy is always an AudioState that
+references a same-Zone AudioService.
+
+### Owner Service example
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: audio-pipewire.d2bus.org.AudioService
+metadata:
+  name: host-audio
+  zone: host
+  ownerRef: Provider/audio-pipewire
+  uid: <store-generated>
+  generation: 1
+  revision: <opaque>
+  finalizers:
+    - audio-pipewire.d2bus.org/service-released
+spec:
+  providerRef: Provider/audio-pipewire
+  serviceRole: owner
+  implementationEndpointRefs:
+    - Endpoint/audio-pipewire-authority
+  operations: [playback, capture]
+  authority:
+    authorityScope: physical-device
+    authorityClass: audio-pipewire
+    authorityKey: host-default-audio
+    cardinality: zero-or-one
+    arbitration:
+      speaker: multiplexed
+      microphone: exclusive
+    exportability: explicit-export
+status:
+  observedGeneration: 1
+  phase: Ready
+  conditions:
+    - type: AuthorityClaimed
+      status: "True"
+      reason: owner-proof-verified
+    - type: ServiceReady
+      status: "True"
+      reason: local-endpoint-ready
+  resource:
+    serviceRole: owner
+    availability: ready
+    routeState: local
+    implementationEndpointRefs:
+      - Endpoint/audio-pipewire-authority
+    activeConsumerCount: 1
+  outcome:
+    code: ok
+    message: null
+    retryable: false
+```
+
+`authority.authorityKey` is a bounded opaque key, not a PipeWire node name,
+path, serial, address, or credential. Every
+`implementationEndpointRefs` entry must resolve in the Service's Zone and be
+owned by this Service or by its static Provider component. The owner Service
+cannot reference a ResourceImport, projection Service, or cross-Zone resource.
+
+### Core-generated projection Service example
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: audio-pipewire.d2bus.org.AudioService
+metadata:
+  name: host-audio-projection
+  zone: work
+  ownerRef: ResourceImport/host-audio
+  uid: <store-generated>
+  generation: 1
+  revision: <opaque>
+  finalizers:
+    - audio-pipewire.d2bus.org/service-released
+spec:
+  providerRef: Provider/audio-pipewire
+  serviceRole: projection
+  implementationEndpointRefs:
+    - Endpoint/host-audio-import-route
+  operations: [playback, capture]
+status:
+  observedGeneration: 1
+  phase: Ready
+  conditions:
+    - type: ImportBound
+      status: "True"
+      reason: encrypted-stream-session-ready
+    - type: ServiceReady
+      status: "True"
+      reason: projection-route-ready
+  resource:
+    serviceRole: projection
+    availability: ready
+    routeState: bound
+    implementationEndpointRefs:
+      - Endpoint/host-audio-import-route
+    activeConsumerCount: 1
+  outcome:
+    code: ok
+    message: null
+    retryable: false
+```
+
+The projection carries no `authority` field. Its routing authority is the
+local ownerRef chain
+`AudioService -> ResourceImport -> ZoneLink/exportKey/lease`; no field names a
+remote Service. Core is the only creator/deleter of projection AudioServices.
+The audio Provider reconciles their semantic status and local route Endpoint.
+
+### `AudioService.spec` fields
+
+Per D089, the typed desired spec is Layer 2 and any implementation extension
+uses only `spec.provider = { schemaId, schemaVersion, settings }`. The strict
+base schema is:
+
+| Field | Type | Required | Default | Bounds | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `providerRef` | ResourceRef | yes | — | `Provider/audio-pipewire` | Same-Zone Provider; immutable |
+| `serviceRole` | enum | yes | — | `owner\|projection` | Immutable; must agree with ownerRef rules |
+| `implementationEndpointRefs` | list[ResourceRef] | yes | — | 1..=4 local `Endpoint/<name>` refs | Owner: only local PipeWire authority implementation Endpoints; projection: only local encrypted-stream route Endpoints |
+| `operations` | list[enum] | yes | — | unique subset of `playback\|capture` | Closed service capability set |
+| `authority` | AuthorityDescriptor | role-dependent | — | D097 schema | Required only for `owner`; forbidden for `projection` |
+
+Admission requires an owner Service to have
+`metadata.ownerRef: Provider/audio-pipewire`, a valid D097 descriptor with
+`authorityScope: physical-device`, `authorityClass: audio-pipewire`,
+`cardinality: zero-or-one`, and `exportability: explicit-export|forbidden`.
+Admission requires a projection Service to have
+`metadata.ownerRef: ResourceImport/<name>` and forbids `authority`. Core
+supplies the projection spec from the matched import; operator/API creation or
+mutation of a projection is rejected with `ProjectionCoreOwned`.
+
+Every Endpoint ref is same-Zone. Unknown fields, a cross-Zone or non-Endpoint
+ref, an owner descriptor on a projection, a missing owner descriptor, or a
+role/ownerRef mismatch fail admission. No schema layer permits a PipeWire
+locator, FD, remote Ref, audio byte, lease handle, or named-stream key.
+
+### `AudioService.status` fields and conditions
+
+Per D088, universal fields remain at `status.*`; the following typed fields
+are `status.resource`. Optional `status.provider` follows the same strict,
+signed, bounded Layer 3 envelope as AudioState. All layers are written
+atomically.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `serviceRole` | enum | Observed `owner\|projection` |
+| `availability` | enum | `pending\|ready\|degraded\|revoked` |
+| `routeState` | enum | Owner: `local`; projection: `pending\|bound\|degraded\|revoked` |
+| `implementationEndpointRefs` | list[ResourceRef] | Ready same-Zone Endpoints, bounded to the spec set |
+| `activeConsumerCount` | uint | Bounded aggregate count; no consumer names |
+
+Universal `status.outcome.code` is a closed enum: `ok`,
+`AuthorityConflict`, `EndpointNotReady`, `ImportNotBound`, `ImportRevoked`,
+`PipeWireSessionUnavailable`, or `ProviderMisconfigured`. Message and
+retryability remain universal, bounded, and redacted.
+
+Closed conditions:
+
+| Type | Applies to | Meaning |
+| --- | --- | --- |
+| `AuthorityClaimed` | owner | D097 authority index accepted and ownerProof verified |
+| `PipeWireBackingReady` | owner | AudioMediator owns the local PipeWire backing |
+| `ImportBound` | projection | ResourceImport lease and encrypted named streams are current |
+| `ProjectionRouteReady` | projection | Same-Zone route Endpoint is Ready; no PipeWire open occurred |
+| `ServiceReady` | both | Required local implementation Endpoints and role semantics are Ready |
+| `ServiceDegraded` | both | Authority, endpoint, import, or route observation is degraded |
+| `Revoked` | projection | Import/export lease was revoked; consumers must degrade |
+
+An owner is `Ready` only when authority and local Endpoint observations are
+ready. A projection is `Ready` only when its import is bound and its local
+encrypted-stream route is ready. Link loss or export revocation marks the
+projection `Degraded`/`revoked`; it never falls back to opening local PipeWire.
+D091 currency propagates remote Service -> ResourceImport -> projection
+AudioService -> referencing AudioStates. Disruptive Service upgrades drain
+AudioStates and named streams before recycle; non-disruptive updates preserve
+the service role and ownerRef chain.
 
 ## `AudioState` ResourceType
+
+`audio-pipewire.d2bus.org.AudioState` is always per-Guest consumer
+intent/state. Its `metadata.ownerRef` is the Guest, and its required
+`spec.serviceRef` selects one same-Zone AudioService. It carries grants,
+levels, guest users, and the observed realization for that Guest. It never
+holds a D097 AuthorityDescriptor, is never the `resourceRef`/`exportedType` of
+a ResourceExport, and is never generated as a ResourceImport projection.
 
 ### Envelope example
 
@@ -230,6 +458,7 @@ metadata:
   updatedAt: 2026-07-22T00:01:00Z
 spec:
   providerRef: Provider/audio-pipewire
+  serviceRef: audio-pipewire.d2bus.org.AudioService/host-audio
   grants:
     mic: "off"
     speaker: "on"
@@ -250,23 +479,25 @@ status:
       reason: virtio-snd-attached
     - type: GrantsEnforced
       status: "True"
-      reason: mediator-applied
-    - type: MediatorReady
+      reason: service-applied
+    - type: ServiceReady
       status: "True"
-      reason: pipewire-portal-open
+      reason: referenced-audio-service-ready
   lastReconciledAt: 2026-07-22T00:01:01Z
-  channels:
-    speaker:
-      grant: "on"
-      level: 75
-      liveEnforced: true
-    mic:
-      grant: "off"
-      gain: null
-      liveEnforced: true
-  enforcementPosture: HostAndGuest
-  lastSetApplied: HostAndGuest
-  sidecarRef: Process/corp-vm-audio-sidecar
+  resource:
+    channels:
+      speaker:
+        grant: "on"
+        level: 75
+        liveEnforced: true
+      mic:
+        grant: "off"
+        gain: null
+        liveEnforced: true
+    enforcementPosture: HostAndGuest
+    lastSetApplied: HostAndGuest
+    observedServiceRef: audio-pipewire.d2bus.org.AudioService/host-audio
+    sidecarRef: Process/corp-vm-audio-sidecar
   outcome:
     code: ok
     exitCode: null
@@ -292,6 +523,7 @@ with `status.provider`.
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `providerRef` | ResourceRef | yes | — | `Provider/audio-pipewire` | Must resolve to the installed Provider; immutable after creation |
+| `serviceRef` | ResourceRef | yes | — | same-Zone `audio-pipewire.d2bus.org.AudioService/<name>` | Immutable; owner or projection Service; must be Ready before realization |
 | `grants.mic` | enum | yes | — | `"on"` \| `"off"` | Microphone grant |
 | `grants.speaker` | enum | yes | — | `"on"` \| `"off"` | Speaker grant |
 | `grants.speakerLevel` | uint \| null | no | `null` | `0..=100` | Speaker volume percent; null = system default |
@@ -307,10 +539,11 @@ dependency alias" above).
 Schema validation is strict: unknown fields are rejected at resource API
 admission time. Level and gain values are validated in `[0,100]`; null
 sentinels are preserved and serialized as JSON `null`, never as absent fields.
-`providerRef` is immutable after creation; a mutation attempt returns
-`FieldImmutable`. Each `guestUsers` entry is validated as a syntactically
-correct `User/<name>` ResourceRef; referential existence is validated at
-runtime.
+`providerRef` and `serviceRef` are immutable after creation; a mutation attempt
+returns `FieldImmutable`. `serviceRef` must be a syntactically valid qualified
+AudioService Ref in the same Zone and may not point to ResourceImport directly.
+Each `guestUsers` entry is validated as a syntactically correct
+`User/<name>` ResourceRef; referential existence is validated at runtime.
 
 ### `AudioState.status` fields
 
@@ -327,7 +560,8 @@ writes all present layers atomically in one status mutation.
 
 D091 currency and upgrade: the audio-pipewire controller implements
 `assess_update`, `plan_upgrade`, and `execute_upgrade` for its qualified
-ResourceTypes and semantic audio sessions. A `ProviderGenerationChanged`,
+ResourceTypes and semantic audio sessions. AudioService currency propagates to
+every AudioState that references it. A `ProviderGenerationChanged`,
 `ArtifactChanged`, `DependencyChanged`, or `SpecChanged` reason populates
 universal `status.update` with
 `UpdateAvailable` or `UpgradeRequired`; disruptive changes MUST return
@@ -356,15 +590,16 @@ single-flight priority lane.
 | --- | --- | --- |
 | `phase` | enum | Common framework phase: `Pending\|Ready\|Degraded\|Failed\|Unknown`. `Deleted` exists only as a revision-log event, not a live resource phase. Audio-specific detail is in `conditions` and `outcome.code`. |
 | `conditions` | list | See condition types below |
-| `channels.speaker.grant` | `"on"\|"off"` | Last observed speaker grant |
-| `channels.speaker.level` | uint \| null | Last observed speaker level |
-| `channels.speaker.liveEnforced` | bool | True when confirmed by successful AudioMediator `SetGrant`/`SetLevel` service call this reconcile |
-| `channels.mic.grant` | `"on"\|"off"` | Last observed mic grant |
-| `channels.mic.gain` | uint \| null | Last observed mic gain |
-| `channels.mic.liveEnforced` | bool | True when confirmed via AudioMediator service this reconcile |
-| `enforcementPosture` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|None` |
-| `lastSetApplied` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|OfflineOnly` |
-| `sidecarRef` | ResourceRef \| null | Reference to the owned `Process` resource |
+| `resource.channels.speaker.grant` | `"on"\|"off"` | Last observed speaker grant |
+| `resource.channels.speaker.level` | uint \| null | Last observed speaker level |
+| `resource.channels.speaker.liveEnforced` | bool | True when confirmed by successful call through the referenced AudioService this reconcile |
+| `resource.channels.mic.grant` | `"on"\|"off"` | Last observed mic grant |
+| `resource.channels.mic.gain` | uint \| null | Last observed mic gain |
+| `resource.channels.mic.liveEnforced` | bool | True when confirmed through the referenced AudioService this reconcile |
+| `resource.enforcementPosture` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|None` |
+| `resource.lastSetApplied` | enum | `HostAndGuest\|HostOnly\|GuestOnly\|OfflineOnly` |
+| `resource.observedServiceRef` | ResourceRef | Last resolved same-Zone AudioService; must equal `spec.serviceRef` |
+| `resource.sidecarRef` | ResourceRef \| null | Reference to the owned `Process` resource |
 | `outcome.code` | string | Closed enum; see error codes |
 | `outcome.exitCode` | int \| null | Worker exit code when phase is Failed |
 | `outcome.message` | string \| null | Bounded ≤256 chars; redacted: no paths, credentials, or VM-identifying details |
@@ -383,7 +618,8 @@ post-commit, after the revision event is durable.
 | `GuestAttached` | The virtio-snd argument is present in the Guest command-line extension (derived from runtime-audio capability) |
 | `GrantsEnforced` | Last `SetGrant`/`SetLevel` service calls completed with `liveEnforced: true` on all active channels |
 | `GrantEnforcementFailed` | AudioMediator `SetGrant`/`SetLevel` service returned an error |
-| `MediatorReady` | AudioMediator service Process is Ready and holds an open PipeWire portal FD |
+| `ServiceReady` | Referenced owner/projection AudioService is Ready and current |
+| `ServiceUnavailable` | Referenced AudioService is absent, degraded, revoked, cross-Zone, or stale |
 | `MicNullTargeted` | Mic stream is routed to `-1` (blocked) via PipeWire node property |
 | `SpeakerNullTargeted` | Speaker stream is routed to `-1` (blocked) |
 | `PipeWireSessionUnavailable` | AudioMediator cannot acquire a PipeWire portal FD; user supervisor may not have one ready |
@@ -396,9 +632,9 @@ post-commit, after the revision event is durable.
 
 | Phase | Meaning |
 | --- | --- |
-| `Pending` | `audio-pipewire.d2bus.org.AudioState` committed; sidecar Process not yet Ready, or Guest not yet Running, or runtime-audio capability not yet advertised |
-| `Ready` | Sidecar running, Guest attached, last grants enforced, MediatorReady |
-| `Degraded` | Sidecar running but enforcement failed; or Guest temporarily absent; or AudioMediator transiently unavailable |
+| `Pending` | `audio-pipewire.d2bus.org.AudioState` committed; referenced AudioService or sidecar Process not yet Ready, or Guest not yet Running, or runtime-audio capability not yet advertised |
+| `Ready` | Referenced AudioService Ready, sidecar running, Guest attached, and last grants enforced |
+| `Degraded` | Referenced AudioService degraded/revoked, sidecar running but enforcement failed, Guest temporarily absent, or required local mediator/route unavailable |
 | `Failed` | Sidecar Process exited unrecoverably; or runtime audio capability permanently absent |
 | `Unknown` | Controller cannot currently observe Process or Guest status |
 
@@ -407,18 +643,23 @@ post-commit, after the revision event is durable.
 ### Architecture
 
 The host worker is a long-lived `vhost-user-sound` sidecar
-(`vhost-device-sound --backend pipewire`). It connects to the host
-compositor's PipeWire session using a **pre-opened connected PipeWire FD**
+(`vhost-device-sound` with the backend selected by the referenced
+AudioService). For an owner AudioService it connects to the owner Zone's
+compositor PipeWire session using a **pre-opened connected PipeWire FD**
 received via the operation-scoped typed attachment transfer routed by
-d2b-bus/ProviderSupervisor from the AudioMediator (see AudioMediator section).
+d2b-bus/ProviderSupervisor from the AudioMediator. For a projection
+AudioService it connects only to the projection's same-Zone route Endpoint;
+audio frames then use the ResourceImport's bounded encrypted named streams.
+The projection worker never opens PipeWire and never receives a PipeWire FD.
 It exposes a `vhost-user` server as an owned `Endpoint` resource. The backing
 Unix socket locator is a controller-private sealed LaunchTicket value. The owning Guest attaches it via the
 `Guest.spec.audioExtension` arguments derived from the `runtime-audio`
 capability (e.g., `--generic-vhost-user socket=<sealed_path>,virtio_id=25,...`
 for Cloud Hypervisor). No `audioFrontend` spec field is involved.
 
-One worker Process per Guest. The `audio-state-controller` creates and owns
-the Process resource. The system Process Provider (`Provider/system-minijail`)
+One worker Process per AudioState/Guest. The `audio-state-controller` creates
+and owns the Process and its private Endpoint resources after resolving
+`spec.serviceRef`. The system Process Provider (`Provider/system-minijail`)
 launches, supervises, and reaps the worker and owns all ProcessEffect audit
 records. The worker's execution principal is a core Process principal from the
 bounded pool — not a controller-created `User` resource.
@@ -480,16 +721,18 @@ spec:
   compiled `vhost-user-sound-worker` template. The live Process resource spec
   stored in the Zone store contains no executable path, argument list, or
   environment.
-- **No `inherited-fd` endpoint in the Process spec** — the PipeWire FD
-  attachment from the AudioMediator is declared in the component descriptor
-  (the private signed template), not the live resource spec. d2b-bus/
-  ProviderSupervisor routes the FD from the AudioMediator to the worker
-  LaunchTicket at launch time, without the Process Provider knowing audio and
-  without the controller handling FDs.
+- **No `inherited-fd` endpoint in the Process spec** — for an owner Service,
+  the PipeWire FD attachment from the AudioMediator is declared in the
+  component descriptor (the private signed template), not the live resource
+  spec. For a projection Service, the template instead resolves the local
+  projection route Endpoint and no PipeWire FD exists. d2b-bus/
+  ProviderSupervisor performs either authorized local attachment without the
+  Process Provider knowing audio and without the controller handling FDs.
 - **No `mounts` block in the live Process spec** — the worker receives its
   configuration via the sealed component descriptor and the operation-scoped FD
-  transfer. `AudioState.spec` is the durable desired authority for grants/levels;
-  no application state file is written. The worker declares no Provider state
+  transfer. `AudioState.spec` is the durable desired intent for grants/levels,
+  and its AudioService is the backing authority/route; no application state
+  file is written. The worker declares no Provider state
   Volume; bounded non-secret observations are stored in `AudioState.status`, the
   Provider status subresource where applicable, and the core Operation ledger.
 - `domain: system` — the worker runs in the system domain. The execution
@@ -497,8 +740,9 @@ spec:
   Process Provider; it is not a controller-created `User` resource and does not
   appear in the live Process spec. No `userRef` field is set.
 - `sandbox.namespaceClasses: [mount, pid, ipc, uts]` — network namespace is
-  **not** in this list because the worker receives the PipeWire FD as an
-  inherited descriptor from the component descriptor attachment.
+  **not** in this list. An owner worker receives the PipeWire FD as an inherited
+  descriptor; a projection worker receives only an authorized same-Zone route
+  attachment and the Provider's stream component owns encrypted carriage.
 - `sandbox.capabilityClasses: []` — zero host capabilities; load-bearing
   invariant; see security section.
 - `sandbox.seccompClass: audio-pipewire-worker` — the Process Provider
@@ -506,10 +750,11 @@ spec:
   Maps to the `w1-audio` seccomp policy in the baseline minijail profile table.
 - `sandbox.startRoot: false` — the Process Provider must not elevate to root
   before exec.
-- `Endpoint/corp-vm-audio-vhost-user` is the owned service identity for the
-  vhost-user server. The Process Provider creates the backing Unix socket before
-  exec and seals its locator into the LaunchTicket; the locator never appears in
-  resource spec or status.
+- `Endpoint/corp-vm-audio-vhost-user` is the AudioState-owned private service
+  identity for the vhost-user server. The AudioState controller creates the
+  Endpoint resource; the Process Provider creates the backing Unix socket
+  before exec and seals its locator into the LaunchTicket. The locator never
+  appears in resource spec or status.
 - `budget` uses the canonical nested `cpu`/`memory`/`pids`/`fds` shape.
   `pids` and `fds` use the `{limit: N}` object form (not a bare scalar).
 - `restartPolicy.class: on-failure` — canonical class name.
@@ -545,8 +790,10 @@ the Guest spec.
 
 ### Purpose and identity
 
-The `AudioMediator` is a same-UID user-session `Process` resource that runs
-under the compositor user's UID. Its responsibilities are:
+The `AudioMediator` is the owner AudioService's same-UID user-session
+implementation `Process`; it runs under the compositor user's UID. A
+projection AudioService never starts or calls a local AudioMediator. The
+mediator's responsibilities are:
 
 1. **Receive a declared pre-opened PipeWire portal FD** from the user
    supervisor/display portal. The AudioMediator does not open the PipeWire
@@ -561,8 +808,9 @@ under the compositor user's UID. Its responsibilities are:
 3. Resolve a bounded `captureAlias` label to the actual PipeWire node object
    via libpipewire registry introspection at runtime (privately, never
    exported).
-4. Expose a `SetGrant`/`SetLevel` typed ComponentSession service over d2b-bus.
-   When the controller calls `SetGrant(channel, value)` or
+4. Expose the owner AudioService's `SetGrant`/`SetLevel` typed ComponentSession
+   service over d2b-bus. When a same-Zone AudioState or an authorized remote
+   projection route calls `SetGrant(channel, value)` or
    `SetLevel(channel, value)`, the AudioMediator applies the change directly via
    libpipewire API (`pw_node_set_param`, `pw_stream_set_control`) on the
    worker's live PipeWire node.
@@ -626,10 +874,10 @@ readiness mechanism (ComponentSession endpoint accepting connections).
 
 ### FD routing via ProviderSupervisor
 
-The controller declares an **operation-scoped typed attachment transfer** on
-the worker Process resource at creation time. The transfer descriptor names
-the AudioMediator as the FD source and the worker as the FD destination,
-without specifying audio details:
+For an AudioState that references an owner Service, the controller declares an
+**operation-scoped typed attachment transfer** on the worker Process resource
+at creation time. The transfer descriptor names the AudioMediator as the FD
+source and the worker as the FD destination, without specifying audio details:
 
 ```text
 attachmentTransfer:
@@ -659,11 +907,18 @@ This transfer is a component-descriptor declaration, not a Process resource
 spec field. No socket path, runtime directory path, or user identifier appears
 in the Process resource spec or any API response.
 
+For an AudioState that references a projection Service, this transfer is
+absent. The worker resolves only the projection's local route Endpoint, and the
+AudioService controller binds that Endpoint to the ResourceImport's encrypted
+named streams. No FD is forwarded across a Zone.
+
 ### `SetGrant` and `SetLevel` service
 
 The AudioMediator exposes a `SetGrant`/`SetLevel` typed ComponentSession service
-on `Endpoint/audio-pipewire-service`. The controller calls this service for
-every grant or level change on the cloud-hypervisor path.
+on the owner Service's `Endpoint/audio-pipewire-authority`. A same-Zone
+AudioState controller reaches it through its owner `serviceRef`; a consumer
+Zone reaches it through the projection Service's encrypted route. No
+AudioState references this Endpoint directly.
 
 Service interface (conceptual):
 
@@ -683,8 +938,8 @@ The AudioMediator applies the change via:
   set by the component template's initial stream configuration.
 
 No node ID, PipeWire object path, wpctl binary, or any external process is
-involved. The service call is synchronous within the AudioMediator; the
-controller receives the result before updating `AudioState.status`.
+involved. The service call is synchronous within the AudioMediator; the caller
+receives the result before updating `AudioState.status`.
 
 No node ID, node path, or PipeWire runtime directory path appears in any
 service request, response, d2b-bus message, audit record, or log entry.
@@ -835,9 +1090,12 @@ Like all Process resources, this spec contains no `executableRef`, `argv`, or
 ## Endpoint resources (D092)
 
 `Provider/audio-pipewire` declares standard `Endpoint` base-schema conformance.
-Stable vhost-user, AudioMediator, and GuestAudioAgent services are owned
-`Endpoint` resources with `producerRef`; they are not inline `Process.spec`
-fields. Consumers use `Endpoint/<name>` references. No raw socket path,
+Owner/projection AudioService implementation routes and every AudioState's
+vhost-user and GuestAudioAgent services are owned `Endpoint` resources with
+`producerRef`; they are not inline `Process.spec` fields. The AudioService
+controller creates Service-owned implementation/route Endpoints; the
+AudioState controller creates State-owned private vhost-user and guest-agent
+Endpoints. Consumers use `Endpoint/<name>` references. No raw socket path,
 PipeWire node path, CID, port, fd number, credential, level value, or content
 byte appears in Endpoint spec, Endpoint status, CLI output, audit, or telemetry.
 Resolution occurs only through an authorized EffectPort/LaunchTicket;
@@ -879,9 +1137,9 @@ status:
 apiVersion: resources.d2bus.org/v3
 type: Endpoint
 metadata:
-  name: audio-pipewire-service
-  zone: dev
-  ownerRef: Provider/audio-pipewire
+  name: audio-pipewire-authority
+  zone: host
+  ownerRef: audio-pipewire.d2bus.org.AudioService/host-audio
 spec:
   providerRef: Provider/audio-pipewire
   producerRef: Process/audio-pipewire-mediator
@@ -902,6 +1160,38 @@ status:
   connectionAvailability: available
   leaseAvailability: lease-required
 ```
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Endpoint
+metadata:
+  name: host-audio-import-route
+  zone: work
+  ownerRef: audio-pipewire.d2bus.org.AudioService/host-audio-projection
+spec:
+  providerRef: Provider/audio-pipewire
+  producerRef: Process/audio-pipewire-controller
+  endpointClass: service
+  transport: unix
+  purpose: audio-pipewire.d2bus.org/import-route
+  serviceFingerprint: audio-pipewire.d2bus.org/AudioServiceRoute.v3
+  locality: zone-local
+  visibility: authorized-consumers
+  attachmentPolicy: component-session
+  consumerPolicy: same-zone-authorized
+  lifecyclePolicy: recycle-with-producer
+status:
+  readiness: Ready
+  observedProducerGeneration: 1
+  observedResourceGeneration: 1
+  endpointGeneration: 1
+  connectionAvailability: available
+  leaseAvailability: lease-required
+```
+
+This projection Endpoint is only the local front door to the import adapter.
+Its producer binds a ComponentSession named stream internally; it contains no
+remote Ref or locator and never opens PipeWire.
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -949,23 +1239,28 @@ status:
 For Guests with an active audio capability (advertised via `runtime-audio`),
 the enforcement sequence for a grant/level change is:
 
-1. Controller calls AudioMediator `SetGrant`/`SetLevel` service (via d2b-bus,
-   Unix transport) for the changed host-side channels. AudioMediator applies
-   changes via libpipewire API on the worker's live PipeWire node. Returns
-   `Ok` or typed error. (`AudioState.spec` is the durable authority; no prior
-   state-file write is required.)
-2. Controller calls `AudioSet` service on every active `GuestAudioAgent`
+1. Controller resolves the AudioState's same-Zone `serviceRef` and requires
+   `ServiceReady`.
+2. For an owner Service, it calls the Service's AudioMediator
+   `SetGrant`/`SetLevel` Endpoint via local d2b-bus. For a projection Service,
+   it calls the local projection route, which carries the operation over the
+   ResourceImport's bounded encrypted named stream to the remote owner
+   Service. Only the remote owner AudioMediator applies libpipewire changes;
+   the projection never opens PipeWire. The call returns `Ok` or a typed error.
+   (`AudioState.spec` is durable per-Guest intent; no state-file write is
+   required.)
+3. Controller calls `AudioSet` service on every active `GuestAudioAgent`
    Process (one per `guestUsers` entry, identified by ownerRef component
    identity index) in parallel, via d2b-bus, vsock transport. Collects all
    results.
-3. Both host and guest results are aggregated; `AudioState.status.channels`,
+4. Service and guest results are aggregated; `AudioState.status.channels`,
    `enforcementPosture`, and `lastSetApplied` are updated in a single
    `UpdateStatus` batch committed post-reconcile.
-4. Audit event `audio-state.grant-changed` is emitted after the status commit
+5. Audit event `audio-state.grant-changed` is emitted after the status commit
    is durable (post-commit audit).
-5. If the `SetGrant`/`SetLevel` service call fails: `GrantEnforcementFailed`
+6. If the Service call fails: `GrantEnforcementFailed`
    condition is set; phase becomes `Degraded`.
-6. If any `GuestAudioAgent.AudioSet` call fails: `GuestEnforcementFailed`
+7. If any `GuestAudioAgent.AudioSet` call fails: `GuestEnforcementFailed`
    condition is set for that agent (keyed by opaque digest); if all fail,
    `enforcementPosture` is set to `HostOnly`; phase becomes `Degraded`.
 
@@ -978,6 +1273,7 @@ PipeWire socket path. No socket path, runtime directory path, or
 `PIPEWIRE_RUNTIME_DIR` value appears in:
 
 - `AudioState.spec` or `AudioState.status`;
+- `AudioService.spec` or `AudioService.status`;
 - any resource API response;
 - any broker configuration or operation;
 - any OTEL attribute or audit record;
@@ -1025,10 +1321,12 @@ virtio-snd ALSA card. Guest module concern; not a host rule.
 ### Stream rule update on grant change
 
 When `AudioState.spec.grants` changes, the controller:
-1. Calls AudioMediator `SetGrant`/`SetLevel` service for the changed channels.
-   AudioMediator applies changes via libpipewire API directly — no Process
-   restart or UpdateSpec needed for grant changes. `AudioState.spec` is the
-   durable authority; no state file is written.
+1. Calls the referenced AudioService for the changed channels. An owner
+   Service dispatches to its local AudioMediator; a projection Service routes
+   the request to the remote owner over its encrypted named stream. Only the
+   owner AudioMediator applies libpipewire changes. No Process restart or
+   UpdateSpec is needed for grant changes. `AudioState.spec` is durable
+   per-Guest intent; no state file is written.
 2. Calls `GuestAudioAgent.AudioSet` service (vsock transport) for the guest side.
 3. Updates `AudioState.status` in a single post-reconcile commit.
 
@@ -1053,10 +1351,10 @@ ProviderStateSet(zone, "audio-pipewire") = {}
 
 The audio components fail the storage-need test for a durable Provider state
 Volume: their operational state is bounded, non-secret, and derivable from
-`AudioState.spec`, `AudioState.status`, component `Process.status`, the core
-Operation ledger, and external PipeWire/guest observation after restart. The
-`AudioState` ResourceType remains the Provider-owned resource model; it is not a
-Provider state Volume.
+`AudioService`/`AudioState` spec and status, component `Process.status`, the
+core Operation ledger, ResourceImport lease state, and external
+PipeWire/guest observation after restart. The two qualified ResourceTypes are
+the Provider-owned resource model; neither is a Provider state Volume.
 
 No component declares a state namespace, state-layout `User/<name>` principal,
 identity marker, migration worker, or Provider state mount. The
@@ -1079,10 +1377,11 @@ There is no bootstrap state-Volume mechanism; the previous bootstrap exception
 
 **Baseline migration note**: the one-time v1/v2 `audio-state.json` migration (if
 a legacy file is found on the host during Provider installation) reads it with
-`parse_audio_state`, writes the parsed grants to `AudioState.spec` via
-`UpdateSpec`, and removes the legacy file. This runs in the Provider activation
-pathway before any component Process enters Ready. It is not a Volume lifecycle
-contract and uses no ProviderStateSet Volume.
+`parse_audio_state`, requires the explicitly configured same-Zone owner
+AudioService, writes the parsed grants plus that `serviceRef` to AudioState via
+the resource API, and removes the legacy file. Missing or ambiguous Service
+selection fails closed. This runs before any component Process enters Ready; it
+is not a Volume lifecycle contract and uses no ProviderStateSet Volume.
 
 ## Identities, principals, and OS accounts
 
@@ -1139,15 +1438,19 @@ The worker core Process principal:
 
 | Role name | Verbs | ResourceTypes | Notes |
 | --- | --- | --- | --- |
-| `audio-pipewire:view-status` | `get`, `list`, `watch` | `audio-pipewire.d2bus.org.AudioState` | Read-only status viewer |
+| `audio-pipewire:view-status` | `get`, `list`, `watch` | `audio-pipewire.d2bus.org.AudioService`, `audio-pipewire.d2bus.org.AudioState` | Read-only Service and per-Guest state viewer |
 | `audio-pipewire:manage-grants` | `get`, `list`, `watch`, `updateSpec` | `audio-pipewire.d2bus.org.AudioState` | May update `spec.grants` and `spec.guestUsers` only; intended CLI role |
-| `audio-pipewire:admin` | `get`, `list`, `watch`, `create`, `updateSpec`, `delete` | `audio-pipewire.d2bus.org.AudioState` | Full lifecycle |
-| `audio-pipewire:controller` | all verbs including `updateStatus`, `updateFinalizers` | `audio-pipewire.d2bus.org.AudioState`, `Process` (owned by this Provider) | Controller identity only; never held by operators |
+| `audio-pipewire:admin` | `get`, `list`, `watch`, `create`, `updateSpec`, `delete` | owner `audio-pipewire.d2bus.org.AudioService`; `audio-pipewire.d2bus.org.AudioState` | Full owner-Service and State lifecycle; cannot create/mutate projection Services |
+| `audio-pipewire:controller` | `get`, `list`, `watch`, `updateStatus`, `updateFinalizers`; child lifecycle verbs | `audio-pipewire.d2bus.org.AudioService`, `audio-pipewire.d2bus.org.AudioState`, owned `Process` and `Endpoint` children | Provider controller identity only; cannot create/delete projection AudioService |
+| `system-core:resource-import-controller` | `get`, `create`, `delete` | projection `audio-pipewire.d2bus.org.AudioService` only | Creates/deletes the exact local projection named by ResourceImport; cannot create AudioState or owner Service, update grants, or claim PipeWire authority |
 
 ### Spec field authorization
 
 | Field | Required role |
 | --- | --- |
+| `AudioService.serviceRole=owner`, `implementationEndpointRefs`, `operations`, `authority` | `audio-pipewire:admin`; immutable role/authority identity after creation |
+| `AudioService.serviceRole=projection` and projection fields | core ResourceImport controller only; operator and Provider controller mutation denied |
+| `AudioState.serviceRef` | `audio-pipewire:admin`; immutable after creation and same-Zone only |
 | `grants.*` | `audio-pipewire:manage-grants` or higher |
 | `guestUsers` | `audio-pipewire:admin` |
 | `suspendOnGuestAbsent` | `audio-pipewire:admin` |
@@ -1157,7 +1460,9 @@ The worker core Process principal:
 
 The `audio-state-controller` requests **zero** broker operations. It
 communicates exclusively through the resource API (create/update/delete
-`Process` resources and read their status). The Process Provider handles all
+owned `Process`/private `Endpoint` resources and read their status). The
+AudioService handler likewise uses resource/ComponentSession APIs for its
+local Endpoints and authority/route observations. The Process Provider handles all
 broker-mediated process lifecycle effects. No `SetSocketAcl`, `ChownSocket`,
 `SpawnRunner`, `OpenPidfd`, `StoreViewFarm`, `SwtpmDir`, or
 `UsbipBindFirewallRule` operation is requested by the audio-pipewire Provider.
@@ -1179,11 +1484,12 @@ test coverage and is subject to panel review.
    `audio_worker_no_controller_created_user`.
 
 2. **No ambient PipeWire socket exposure.** No PipeWire socket path, runtime
-   directory path, or `PIPEWIRE_RUNTIME_DIR` value appears in `AudioState.spec`,
-   `AudioState.status`, any Process resource spec, any API response, OTEL
-   attribute, audit record, log message, or broker configuration. Tests:
-   `AudioState` and `Process` schema round-trip tests assert the absence of any
-   socket-path-shaped string in every serialized form.
+   directory path, or `PIPEWIRE_RUNTIME_DIR` value appears in
+   `AudioService.spec`, `AudioService.status`, `AudioState.spec`,
+   `AudioState.status`, any Process/Endpoint resource spec, any API response,
+   OTEL attribute, audit record, log message, or broker configuration. Tests:
+   Service, State, Process, and Endpoint schema round-trip tests assert the
+   absence of any socket-path-shaped string in every serialized form.
 
 3. **No SetSocketAcl or ambient ACL grant.** No broker `SetSocketAcl` or
    equivalent socket-ACL operation is issued. The AudioMediator's PipeWire
@@ -1203,8 +1509,8 @@ test coverage and is subject to panel review.
    rejection matrix (Nix store path, current-system symlink, wrong-guest copy,
    empty binary, empty VM name).
 
-6. **No direct process lifecycle.** The audio-state-controller creates and
-   updates Process resource specs only. It never calls `SpawnRunner`,
+6. **No direct process lifecycle.** The AudioState controller creates and
+   updates owned Process and private Endpoint resource specs only. It never calls `SpawnRunner`,
    `OpenPidfd`, issues a LaunchTicket, or adopts a pidfd. It creates no
    `Volume` or `User` resources. Tests: controller conformance test asserts the
    audio-state-controller's allowed resource API verb set.
@@ -1239,6 +1545,24 @@ test coverage and is subject to panel review.
     verbs; ProviderDeployment integration validates that no state Volume or
     state mount is created and that bounded operational state is status-first.
 
+12. **Service/State separation and core-owned projections.** Only
+    `audio-pipewire.d2bus.org.AudioService` may carry the audio D097 authority
+    or be named by ResourceExport/ResourceImport projection fields.
+    AudioState always has `ownerRef: Guest/<name>` plus a same-Zone
+    `serviceRef`; it is never exported or generated by the import controller.
+    Core creates/deletes only projection AudioService resources, and the
+    Provider rejects operator-created projections. Tests:
+    `service_state_separation`, `core_projection_only_audio_service`, and
+    `audio_state_never_exportable`.
+
+13. **Projection ownerRef chain and no local PipeWire open.** Every projection
+    AudioService has `ownerRef: ResourceImport/<name>`, no AuthorityDescriptor,
+    and only same-Zone route Endpoint refs. Its implementation can bind only
+    the import's encrypted named streams and is denied the AudioMediator portal
+    attachment/PipeWire-open capability. Tests:
+    `projection_ownerref_chain`, `projection_forbids_authority`, and
+    `projection_never_opens_pipewire`.
+
 ## Lifecycle, restart, and adoption
 
 ### Install sequence
@@ -1247,43 +1571,78 @@ test coverage and is subject to panel review.
 2. Core ProviderDeployment creates the `audio-state-controller` Process (system
    domain) and the `audio-mediator` Process (user domain) as static components;
    no Provider state Volume or state mount is created.
-3. Both register watch plans for their respective resources.
-4. `audio-pipewire.d2bus.org.AudioState` resources created by Nix or the API become Ready
-   through the reconcile loop.
+3. The controller Process registers the AudioService and AudioState watch
+   plans. An owner Zone creates its one real owner AudioService; consumer Zones
+   receive projection AudioServices only from the core ResourceImport
+   controller.
+4. `audio-pipewire.d2bus.org.AudioState` resources created by Nix or the API
+   resolve their required same-Zone AudioService and become Ready through the
+   reconcile loop.
+
+### Service lifecycle and import projection
+
+1. An operator/Nix creates the owner AudioService with its D097 descriptor and
+   local implementation Endpoint refs. The AudioService controller claims the
+   authority index entry, verifies ownerProof, and reconciles only local
+   AudioMediator/PipeWire semantics.
+2. A ResourceExport in that owner Zone references the owner AudioService and
+   its local authority Endpoint. AudioState is not exported.
+3. In a consumer Zone, a ResourceImport matches that exported AudioService.
+   The **core import controller** creates exactly one projection AudioService
+   named by `projectionName`, with
+   `ownerRef: ResourceImport/<name>`. It does not create AudioState, Process,
+   Endpoint, worker, GuestAudioAgent, or PipeWire state.
+4. The AudioService controller observes the ResourceImport and reconciles the
+   projection's local route Endpoint and encrypted named-stream binding. It
+   never opens PipeWire in the consumer Zone.
+5. On import deletion/revocation, core first drives referencing AudioStates
+   degraded and waits for their child cleanup, releases the remote lease, then
+   deletes only the projection AudioService and clears the import finalizer.
 
 ### Per-Guest enable sequence
 
-1. Operator (or Nix compilation) creates `audio-pipewire.d2bus.org.AudioState/corp-vm-audio`.
-2. `audio-state-controller` queries the `runtime-audio` dependency alias for
+1. Operator (or Nix compilation) creates
+   `audio-pipewire.d2bus.org.AudioState/corp-vm-audio` with
+   `ownerRef: Guest/corp-vm` and a same-Zone `spec.serviceRef`.
+2. `audio-state-controller` resolves that AudioService and requires
+   `ServiceReady`. An absent/degraded/revoked Service sets
+   `ServiceUnavailable`; no worker opens PipeWire as fallback.
+3. `audio-state-controller` queries the `runtime-audio` dependency alias for
    the Guest's runtime capability. If no audio capability is advertised, sets
    `RuntimeCapabilityUnavailable`; Pending.
-3. Controller checks AudioMediator Process status (`MediatorReady` condition).
-4. Controller checks each `spec.guestUsers` User ref status for
+4. For an owner Service, controller checks its AudioMediator Endpoint; for a
+   projection Service, it checks the local import-route Endpoint. The
+   projection path has no PipeWire portal FD.
+5. Controller checks each `spec.guestUsers` User ref status for
    `GroupsVerified: True` (audio group membership). If any fails, sets
    `GuestUserAudioGroupMissing`; Degraded.
-5. Determine sidecar desired state: if both grants are `"off"` or no runtime
+6. Determine sidecar desired state: if both grants are `"off"` or no runtime
    capability → desired: stopped. Else → desired: running.
-6. Controller creates `Process/corp-vm-audio-sidecar` with template
-   `vhost-user-sound-worker` and the operation-scoped attachment transfer
-   declaration. The `Process` resource enters `Pending`.
-7. d2b-bus/ProviderSupervisor resolves the AudioMediator portal FD and routes
-   it to the worker's LaunchTicket. The audio controller is not involved.
-8. System Process Provider (system-minijail) launches the worker with the FD.
+7. Controller creates `Process/corp-vm-audio-sidecar`, its private vhost-user
+   Endpoint, each GuestAudioAgent Process, and each private guest-agent
+   Endpoint. For an owner Service the template includes the operation-scoped
+   AudioMediator attachment; for a projection it includes only the same-Zone
+   route attachment.
+8. On an owner path, d2b-bus/ProviderSupervisor resolves the AudioMediator
+   portal FD and routes it to the worker's LaunchTicket. On a projection path,
+   no PipeWire FD exists or is transferred.
+9. System Process Provider (system-minijail) launches the worker.
    The vhost-user endpoint becomes ready; Process Provider sets
    `Process.status.phase = Ready`.
-9. Controller watches `Process.status`; on `Ready`, sets `SidecarRunning: True`.
-10. Controller mutates `Guest.spec.audioExtension` with the runtime-capability-
+10. Controller watches `Process.status`; on `Ready`, sets `SidecarRunning: True`.
+11. Controller mutates `Guest.spec.audioExtension` with the runtime-capability-
     derived arguments.
-11. On next Guest start, the runtime attaches the virtio-snd device; `GuestAttached`
+12. On next Guest start, the runtime attaches the virtio-snd device; `GuestAttached`
     becomes `True`; `AudioState.status.phase` transitions to `Ready`.
 
 ### Restart and adoption
 
 A Zone runtime restart is a continuation event (ADR 0034). The audio
-controller does not hold pidfds; it observes Process status through the
-resource API. The Process Provider re-adopts the worker's process identity
-after restart. The controller resumes watching `Process.status` and
-reconverges `AudioState.status` accordingly.
+controller does not hold pidfds; it observes Process/Endpoint status through
+the resource API. The Process Provider re-adopts worker identity. The
+AudioService handler revalidates the D097 ownerProof or the projection's import
+lease/generation without opening a second backing; the AudioState handler then
+reconverges status from its serviceRef and children.
 
 If the worker exited between restarts (Process.status.phase Failed or
 Unknown), the controller detects this on its first reconcile post-restart
@@ -1304,7 +1663,7 @@ repeats.
    a. Issues `Process.spec` mutation setting desired phase to `Stopped`.
    b. Waits for `Process.status.phase` to reach a terminal phase (system
       Process Provider performs graceful stop: SIGTERM → 10s → SIGKILL).
-   c. Issues `Process Delete` via resource API.
+   c. Issues owned private `Endpoint` and `Process` Deletes via resource API.
    d. Removes `--generic-vhost-user` (or equivalent) from `Guest.spec.audioExtension`.
    e. Removes `audio-pipewire.d2bus.org/sidecar-stopped` finalizer.
 3. After all finalizers are removed: resource is deleted from the store;
@@ -1320,11 +1679,17 @@ repeats.
 | Code | Phase | Retryable | Meaning |
 | --- | --- | --- | --- |
 | `ok` | `Ready` | false | All conditions satisfied |
+| `ServiceNotReady` | `Pending` | true | Referenced owner/projection AudioService not yet Ready |
+| `ServiceUnavailable` | `Degraded` | true | Referenced AudioService absent, degraded, revoked, stale, or cross-Zone |
+| `AuthorityConflict` | `Failed` | false | Owner Service D097 authority claim conflicts with an incumbent |
+| `EndpointNotReady` | `Pending` | true | Required same-Zone Service or State-owned private Endpoint not Ready |
+| `ImportNotBound` | `Pending` | true | Projection Service's owning ResourceImport has no current lease |
+| `ImportRevoked` | `Degraded` | true | Projection Service's import/export lease was revoked |
+| `ProjectionPipeWireDenied` | `Failed` | false | Projection attempted a forbidden AudioMediator/PipeWire open |
 | `SidecarNotReady` | `Pending` | true | Process not yet Ready per Process Provider |
 | `GuestAbsent` | `Degraded` | true | Guest not Running; sidecar suspended |
 | `GrantEnforcementFailed` | `Degraded` | true | AudioMediator `SetGrant`/`SetLevel` service returned error |
 | `PipeWireSessionUnavailable` | `Degraded` | true | AudioMediator cannot acquire PipeWire portal FD from user supervisor; retries |
-| `MediatorUnavailable` | `Degraded` | true | AudioMediator Process not Ready; retries |
 | `GuestAudioAgentUnavailable` | `Degraded` | true | One or more GuestAudioAgent Processes not Ready; retries |
 | `GuestEnforcementFailed` | `Degraded` | false | GuestAudioAgent `AudioSet` service returned error |
 | `GuestUserAudioGroupMissing` | `Degraded` | false | One or more `guestUsers` lack confirmed `audio` group; operator must set `User.spec.groups` and rebuild guest |
@@ -1349,9 +1714,13 @@ values, PipeWire node IDs, or PipeWire runtime directory paths.
 
 | Event kind | Trigger | Redacted |
 | --- | --- | --- |
+| `audio-service.created` | Owner or core-generated projection AudioService committed | role and operation set only; no authority key, endpoint locator, import key, or remote identity |
+| `audio-service.authority-claimed` | Owner Service D097 claim committed | authority class and outcome only; no opaque key value or PipeWire identity |
+| `audio-service.projection-bound` | Projection Service observes a current ResourceImport lease | outcome only; no ZoneLink/export key, session generation, or stream identifier |
+| `audio-service.degraded` | Owner authority or projection route becomes unavailable/revoked | closed reason only |
 | `audio-state.created` | `AudioState` resource committed to store | `spec.grants.*` direction values included; no paths; no levels |
 | `audio-state.grant-changed` | `spec.grants` `UpdateSpec` committed and durable | direction (`"on"`/`"off"`) changes included; `speakerLevel`/`micGain` values **omitted**; no node IDs |
-| `audio-state.enforcement-applied` | AudioMediator `SetGrant`/`SetLevel` service call returned `Ok` | result: `Applied\|Degraded` per channel; no node ID, no level value |
+| `audio-state.enforcement-applied` | Referenced AudioService call returned `Ok` | result: `Applied\|Degraded` per channel; no route, node ID, or level value |
 | `audio-state.sidecar-started` | `Process.status.phase` transitions to `Ready` (observed by controller) | no socket path, no providerKind |
 | `audio-state.sidecar-stopped` | `Process.status.phase` transitions to a terminal phase | includes `outcome.exitCode` relayed from Process status; no socket path |
 | `audio-state.deleted` | post-commit after `phase=Deleted` revision event is durable | — |
@@ -1390,10 +1759,11 @@ runtime capability implementation IDs are not metric labels.
 
 | Metric name | Type | Description |
 | --- | --- | --- |
-| `d2b_audio_pipewire_states_total` | gauge | Current count of `AudioState` resources by `outcome` |
+| `d2b_audio_pipewire_services_total` | gauge | Current count of owner/projection AudioServices by `outcome` |
+| `d2b_audio_pipewire_states_total` | gauge | Current count of per-Guest AudioState resources by `outcome` |
 | `d2b_audio_pipewire_sidecars_running` | gauge | Count of worker Processes in Ready phase |
-| `d2b_audio_pipewire_enforcement_attempts_total` | counter | AudioMediator `SetGrant`/`SetLevel` service call attempts by `channel`, `outcome` |
-| `d2b_audio_pipewire_enforcement_latency_seconds` | histogram | AudioMediator service call completion latency by `channel` |
+| `d2b_audio_pipewire_enforcement_attempts_total` | counter | AudioService enforcement attempts by `channel`, `outcome` |
+| `d2b_audio_pipewire_enforcement_latency_seconds` | histogram | AudioService call completion latency by `channel` |
 | `d2b_audio_pipewire_sidecar_restarts_total` | counter | Worker Process restart count (observed from Process.status) |
 | `d2b_audio_pipewire_grant_changes_total` | counter | `spec.grants` mutations by `channel` |
 | `d2b_audio_pipewire_mediator_fd_handoffs_total` | counter | PipeWire FD handoffs completed by AudioMediator by `outcome` |
@@ -1408,7 +1778,7 @@ Controller spans carry:
 - `d2b.zone`: Zone name
 - `d2b.provider`: `audio-pipewire`
 - `d2b.component`: `audio-state-controller` or `audio-mediator`
-- `d2b.resource.type`: `AudioState` or `Process`
+- `d2b.resource.type`: `AudioService`, `AudioState`, `Process`, or `Endpoint`
 - `d2b.resource.generation`: current `metadata.generation`
 - `d2b.outcome`: outcome code
 
@@ -1421,11 +1791,25 @@ values, gain values, or guest workload usernames.
 
 ```yaml
 watchSelectors:
+  - resourceType: audio-pipewire.d2bus.org.AudioService
+    verbs: [spec, status, deletion]
+  - resourceType: ResourceImport
+    ownerOfType: audio-pipewire.d2bus.org.AudioService
+    verbs: [spec, status, deletion]
+  - resourceType: Endpoint
+    ownerRefType: audio-pipewire.d2bus.org.AudioService
+    verbs: [status]
   - resourceType: audio-pipewire.d2bus.org.AudioState
     verbs: [spec, status, deletion]
   - resourceType: Process
     ownerRefType: audio-pipewire.d2bus.org.AudioState
     verbs: [status]
+  - resourceType: Endpoint
+    ownerRefType: audio-pipewire.d2bus.org.AudioState
+    verbs: [status]
+  - resourceType: audio-pipewire.d2bus.org.AudioService
+    dependencyRefIn: AudioState.spec.serviceRef
+    verbs: [spec, status, deletion]
   - resourceType: Guest
     verbs: [status]
     ownerTrigger: true
@@ -1436,29 +1820,48 @@ watchSelectors:
     dependencyRefIn: AudioState.spec.guestUsers
     verbs: [status]
 dependencySelectors:
+  - resourceType: ResourceImport
+    resolveFrom: AudioService.metadata.ownerRef
+  - resourceType: Endpoint
+    resolveFrom: AudioService.spec.implementationEndpointRefs
+  - resourceType: audio-pipewire.d2bus.org.AudioService
+    resolveFrom: AudioState.spec.serviceRef
   - resourceType: Guest
     resolveFrom: AudioState.metadata.ownerRef
   - resourceType: User
     resolveFrom: AudioState.spec.guestUsers
 allowedResourceVerbs:
-  - { type: audio-pipewire.d2bus.org.AudioState, verbs: [get, list, watch, create, updateSpec, updateStatus, updateFinalizers, delete] }
+  - { type: audio-pipewire.d2bus.org.AudioService, verbs: [get, list, watch, updateStatus, updateFinalizers] }
+  - { type: audio-pipewire.d2bus.org.AudioState, verbs: [get, list, watch, updateStatus, updateFinalizers] }
+  - { type: ResourceImport, verbs: [get, watch] }
   - { type: Process, verbs: [get, list, watch, create, updateSpec, delete] }
+  - { type: Endpoint, verbs: [get, list, watch, create, updateSpec, delete] }
+  - { type: Guest, verbs: [get, watch, updateSpec] }
 reconcileConcurrency: 8
 maxPendingResources: 512
 observePolicy: on-status-change
 resyncPeriod: "5m"
 finalizers:
+  - audio-pipewire.d2bus.org/service-released
   - audio-pipewire.d2bus.org/sidecar-stopped
 deadlines:
   reconcile: "30s"
   finalize: "120s"
   observe: "10s"
 retryClasses:
+  - code: ServiceNotReady
+    backoff: exponential-bounded-30s
+  - code: ImportNotBound
+    backoff: exponential-bounded-30s
+  - code: EndpointNotReady
+    backoff: exponential-bounded-30s
+  - code: AuthorityConflict
+    policy: no-retry
+  - code: ProjectionPipeWireDenied
+    policy: no-retry
   - code: SidecarNotReady
     backoff: exponential-bounded-30s
   - code: PipeWireSessionUnavailable
-    backoff: exponential-bounded-30s
-  - code: MediatorUnavailable
     backoff: exponential-bounded-30s
   - code: GuestAudioAgentUnavailable
     backoff: exponential-bounded-30s
@@ -1472,141 +1875,285 @@ retryClasses:
 
 `EphemeralProcess` is absent from `allowedResourceVerbs`. The controller
 cannot create EphemeralProcess resources. `SpawnRunner`, `OpenPidfd`, and all
-broker operations are also absent. `Volume` and `User` are absent: the
-audio-state-controller never creates, updates, or deletes Volume or User
-resources. The ProviderStateSet is empty under D087, so core ProviderDeployment
-creates no Provider state Volume and the component consumes no state view
-`dirfd`.
+broker operations are also absent. `Volume` and `User` are absent. `Endpoint`
+verbs are limited to Service-owned local implementation/route Endpoints and
+AudioState-owned private endpoints. The Provider has no `create`/`delete` verb
+for AudioService: operators/Nix own owner-Service lifecycle and the **core
+ResourceImport controller** owns projection-Service creation/deletion. Core's
+projection authority is constrained to
+`serviceRole: projection`, `ownerRef: ResourceImport/<name>` and cannot create
+AudioState. The ProviderStateSet is empty under D087, so core
+ProviderDeployment creates no Provider state Volume and the component consumes
+no state view `dirfd`.
+
+### Reconcile flow (per `AudioService`)
+
+```text
+reconcile(AudioService):
+  1. Load Service spec/status and classify immutable serviceRole.
+  2. If owner:
+       a. Require ownerRef Provider/audio-pipewire and a valid D097
+          AuthorityDescriptor.
+       b. Resolve only same-Zone implementationEndpointRefs.
+       c. Claim/revalidate the authority index by ownerProof; on duplicate,
+          set AuthorityConflict and perform no PipeWire open.
+       d. Observe the local AudioMediator/PipeWire backing and Endpoint status.
+  3. If projection:
+       a. Require ownerRef ResourceImport/<name>; reject any authority field.
+       b. Resolve that same-Zone import and require bound/current generation
+          and schema fingerprint.
+       c. Create/update only the Service-owned local route Endpoint and bind it
+          to the import's bounded encrypted named streams.
+       d. Deny any AudioMediator portal attachment or PipeWire open.
+  4. Atomically write layered Service status and D091 currency.
+  5. On delete, drain referencing AudioStates and Service Endpoints, release
+     owner authority or projection route, then clear service-released.
+```
 
 ### Reconcile flow (per `AudioState`)
 
 ```text
 reconcile(AudioState):
   1. Load AudioState spec/status from store (MVCC snapshot).
-  2. Resolve ownerRef Guest; check Guest.status.phase.
-  3. If suspendOnGuestAbsent && Guest not Running:
+  2. Resolve ownerRef Guest and same-Zone spec.serviceRef AudioService.
+     Reject ResourceImport refs and cross-Zone Services. If Service is not
+     Ready/current, set ServiceUnavailable and create no worker fallback.
+  3. Check Guest.status.phase.
+  4. If suspendOnGuestAbsent && Guest not Running:
        → issue Process.spec update (desired: stopped) if Process exists;
          set GuestAbsent condition; Degraded.
-  4. Query runtime-audio dependency alias for the Guest's AudioCapability.
+  5. Query runtime-audio dependency alias for the Guest's AudioCapability.
      If no audio capability advertised: set RuntimeCapabilityUnavailable; Pending; retry.
-  5. For each ref in spec.guestUsers: verify User.status.groupMembershipVerified == true
+  6. For each ref in spec.guestUsers: verify User.status.groupMembershipVerified == true
      for the "audio" group. If any not verified: set GuestUserAudioGroupMissing;
      Degraded; no-retry (operator action required).
-  6. Check AudioMediator Process status via component identity index.
-     On not Ready: set MediatorUnavailable; Degraded; retry.
-  7. Determine sidecar desired state.
+  7. Resolve Service backend:
+       owner → require local AudioMediator Endpoint;
+       projection → require local import-route Endpoint and no PipeWire FD.
+  8. Determine sidecar desired state.
      If both grants "off" → desired: stopped; remove Guest.spec.audioExtension.
      Else → desired: running.
-  8. If desired: running:
+  9. If desired: running:
       a. Create Process/<name>-audio-sidecar if absent (CREATE resource API).
-      b. For each ref in spec.guestUsers:
+      b. Create its private vhost-user Endpoint if absent.
+      c. For each ref in spec.guestUsers:
          - Compute opaque digest of AudioState.metadata.uid + User.<name>.metadata.uid.
          - Create Process/ag-<digest> if absent (CREATE resource API), with
           ownerRef: audio-pipewire.d2bus.org.AudioState/<name> and userRef: <guestUser ref>.
+         - Create its private AudioSet Endpoint if absent.
          - Locate each existing GuestAudioAgent Process via ownerRef component
           identity index, not label selector.
-      c. If sidecar Process.status.phase != Ready: set SidecarNotReady; retry.
-      d. For each GuestAudioAgent Process (ownerRef identity index): if phase != Ready,
+      d. If sidecar Process/status or private Endpoint is not Ready: retry.
+      e. For each GuestAudioAgent Process/Endpoint: if not Ready,
          set GuestAudioAgentUnavailable (keyed by digest); Degraded; retry.
-  9. If desired: stopped:
+  10. If desired: stopped:
       a. If sidecar Process exists and not terminal: issue Process UpdateSpec
          (desired phase: stopped). Process Provider performs graceful stop.
-      b. For each GuestAudioAgent Process (ownerRef identity index): if not terminal,
+      b. Delete/stop private Endpoints and, for each GuestAudioAgent Process
+         (ownerRef identity index), if not terminal,
          issue UpdateSpec (desired phase: stopped).
       c. Set GuestAbsent/SidecarStopped; wait for terminal phase.
-  10. Enforce grants (if sidecar and all GuestAudioAgent Processes are Ready and grants changed):
-      a. Call AudioMediator SetGrant/SetLevel service (d2b-bus, Unix transport)
-         for each changed channel. Receive Ok or typed error.
+  11. Enforce grants (if Service, sidecar, and all agents/Endpoints are Ready):
+      a. Call the resolved AudioService for each changed channel. Owner
+         dispatches locally to AudioMediator; projection routes over the
+         import's encrypted named stream. Receive Ok or typed error.
       b. Call AudioSet service on ALL GuestAudioAgent Processes in parallel
          (d2b-bus, vsock transport). Collect all results.
       c. Aggregate results: if any agent fails, set GuestEnforcementFailed
          (keyed by agent digest); if all fail, enforcementPosture = HostOnly.
          Update status.channels and enforcementPosture.
-  11. Update Guest.spec.audioExtension if needed (derived from AudioCapability record).
-  12. Commit UpdateStatus batch (post-reconcile; single commit).
-  13. Emit post-commit audit event if grants changed.
+  12. Update Guest.spec.audioExtension if needed (derived from AudioCapability record).
+  13. Commit UpdateStatus batch (post-reconcile; single commit).
+  14. Emit post-commit audit event if grants changed.
 ```
 
-All steps are asynchronous. Steps 4–11 run concurrently for independent
-`AudioState` resources. Each task holds its own optimistic revision
-precondition; a conflict causes a retry.
+All steps are asynchronous. Service and State queues use stable UID ordering;
+steps for independent resources run concurrently, and an AudioService event
+enqueues every AudioState indexed by `spec.serviceRef`.
+Each task holds its own optimistic revision precondition; a conflict causes a
+retry.
 
 ## Audio authority and cross-Zone sharing (D096/D097)
 
-**One audio authority service (D097).** Exactly one `audio-pipewire` authority
-service per owner Zone holds the real PipeWire connection to the physical
-microphone and speakers and is the single arbiter of every consumer. It is
-grounded in the current host controller
-(`packages/d2bd/src/audio_host_controller.rs`: the dyn-safe `HostAudioController`
-trait, `PipeWireHostController::{from_audio_node,find_audio_node}`, with
-`QemuAudioController`/`FakeHostController` as the QEMU and test doubles) and the
-argv generator (`packages/d2b-host/src/audio_argv.rs`: `AudioBackend`,
-`AudioArgvInput`, `generate_audio_argv`, and the
-`tests/golden/runner-shape/audio-argv-minimal.txt` golden). The authority
-declares a D097 `AuthorityDescriptor` with `authorityScope: physical-device`, an
-**opaque** `authorityKey` class (never a raw PipeWire node name/path/serial),
-`cardinality: zero-or-one` per physical backing, and split-path `arbitration`:
+### Resource graphs and ownership
 
-- **Speaker: `multiplexed`.** The authority runs a speaker **mixer**: every
-  consumer Zone/Guest is a mixed stream with a per-Zone volume/quota. Levels are
-  the current `packages/d2b-core/src/audio_policy.rs` `LevelPercent`/`AudioGrant`
-  applied through `HostAudioController` node/grant/level operations; no consumer
-  opens the physical sink.
-- **Microphone: explicit `exclusive` OR approved `multiplexed` capture.** A
-  mic **arbiter** enforces one active capturer by default (exclusive) and admits
-  approved concurrent capture only with consent, priority, and a **fair queue**;
-  a second unapproved capturer is denied, never a second device open.
+The two qualified ResourceTypes have non-overlapping jobs. The owner-Zone graph
+is:
 
-Core's authority index rejects a second audio authority for the same
+```text
+Provider/audio-pipewire
+├── Process/audio-pipewire-mediator                 (static implementation)
+└── audio-pipewire.d2bus.org.AudioService/host-audio (real authority)
+    ├── AuthorityDescriptor                         (D097 physical backing)
+    └── Endpoint/audio-pipewire-authority            (same-Zone only)
+
+ResourceExport/host-audio
+├── resourceRef  -> AudioService/host-audio
+└── endpointRef  -> Endpoint/audio-pipewire-authority
+
+Guest/corp-vm
+└── AudioState/corp-vm-audio
+    ├── serviceRef -> AudioService/host-audio
+    ├── Process/corp-vm-audio-sidecar
+    ├── Endpoint/corp-vm-audio-vhost-user            (private)
+    ├── Process/ag-<digest>
+    └── Endpoint/ag-<digest>-audio-set                (private)
+```
+
+The consumer-Zone graph is:
+
+```text
+ResourceImport/host-audio
+└── AudioService/host-audio-projection                (core-created projection)
+    ├── ownerRef -> ResourceImport/host-audio
+    └── Endpoint/host-audio-import-route              (same-Zone route)
+
+Guest/work-vm
+└── AudioState/work-vm-audio
+    ├── serviceRef -> AudioService/host-audio-projection
+    ├── Process/work-vm-audio-sidecar
+    └── private vhost-user/GuestAudioAgent Endpoints
+
+projection route == bounded encrypted named streams == owner Service
+```
+
+AudioState remains per Guest in both graphs. It is not exported, imported, or
+core-generated. The only core-generated semantic projection is AudioService.
+
+### Owner authority Service (D097)
+
+Exactly one owner `audio-pipewire.d2bus.org.AudioService` per owner Zone holds
+the real PipeWire connection to the physical microphone and speakers and is the
+single arbiter of every local or imported consumer. It is grounded in the
+current host controller (`packages/d2bd/src/audio_host_controller.rs`: the
+dyn-safe `HostAudioController` trait,
+`PipeWireHostController::{from_audio_node,find_audio_node}`, with
+`QemuAudioController`/`FakeHostController` as test doubles) and argv generator
+(`packages/d2b-host/src/audio_argv.rs`: `AudioBackend`, `AudioArgvInput`, and
+`generate_audio_argv`).
+
+The owner Service alone declares the D097 `AuthorityDescriptor` with
+`authorityScope: physical-device`, opaque `authorityKey`, `cardinality:
+zero-or-one`, and split arbitration:
+
+- **Speaker: `multiplexed`.** The authority runs one mixer. Every consumer
+  AudioState receives a mixed stream with its admitted per-Zone quota and
+  per-Guest level. No consumer opens the physical sink.
+- **Microphone: `exclusive` or approved `multiplexed`.** The mic arbiter admits
+  one active capturer by default and approved concurrent capture only with
+  consent, priority, and a fair queue. An unapproved second capturer is denied,
+  never served by a second device open.
+
+Core's authority index rejects a second owner AudioService for the same
 `(Zone, physical-device, opaqueKeyDigest)` with `duplicateConflict` before any
-open; restart adopts the exact authority by `ownerProof` (the authority owner
-Process identity), and ambiguity quarantines.
+open. Restart adopts the exact Service by ownerProof; ambiguity quarantines.
+AudioState carries no AuthorityDescriptor and cannot claim this index.
 
-**Cross-Zone sharing (D096).** No PipeWire FD or socket crosses a Zone. The owner
-Zone declares a `ResourceExport` referencing only the local audio authority
-`Endpoint` and the exported `audio-pipewire.d2bus.org.AudioState` type
-(`exportability: explicit-export`). Each child Zone declares a `ResourceImport`
-binding its local `ZoneLink` + `exportKey` to a local `AudioState`/proxy
-**projection** resource; ordinary consumers use that projection Ref. Audio frames
-flow over **per-import bounded encrypted named streams** — grounded in
-`packages/d2b-realm-core/src/stream.rs`
-(`StreamKind::{AudioPlayback,AudioCapture}` → `Capability::{AudioPlayback,
-AudioCapture}`, `StreamAuthz`, and the one-stream/two-`StreamChannel`
-split-direction rule) and `packages/d2b-realm-core/src/mux.rs` credit-based flow
-(a sender spends only receiver-granted credit) — with a per-import session
-generation, cancel, deadline, and backpressure; intermediaries see ciphertext.
-The Provider's signed export/import adapter performs mix/consent/arbitration and
-builds the projection; **core** owns `ResourceExport`/`ResourceImport` routing,
-base lifecycle, and layered status. Export removal or ZoneLink loss revokes
-leases and degrades the local `AudioState` projection; reconnect revalidates
-generation/fingerprint; a D091 upgrade drains consumers before recycling the
-authority.
+### ResourceExport and ResourceImport (D096)
 
-**Guest control is concurrent.** Guest audio operations
-(`packages/d2bd/src/guest_control_bridge.rs`: `audio_set_authenticated`/
-`audio_status_authenticated`, `GuestAudioSetRequest`/`GuestAudioStatus`,
-`AudioChannel`/`AudioSetKind`) are issued to all active guests concurrently; the
-authority aggregates per-guest results and never serializes one slow guest behind
-another.
+The owner Zone exports the **owner AudioService**, not AudioState:
 
-**Selected invariants.**
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: ResourceExport
+metadata:
+  name: host-audio
+  zone: host
+spec:
+  providerRef: Provider/audio-pipewire
+  resourceRef: audio-pipewire.d2bus.org.AudioService/host-audio
+  endpointRef: Endpoint/audio-pipewire-authority
+  exportedType: audio-pipewire.d2bus.org.AudioService
+  baseSchemaFingerprint: sha256:<audio-service-base-schema>
+  operations: [playback, capture]
+  arbitration: multiplexed
+  quota:
+    maxConsumers: 16
+    fairness: weighted
+    leaseDeadlineMs: 30000
+  consumerZonePolicy:
+    zones: [Zone/work]
+    capabilityCeiling: [playback, capture]
+  visibility: named-zones
+```
 
-- **vhost-device-sound v0.3.0** is required (`pkgs/vhost-device-sound/`,
-  `nixos-modules/components/audio/host.nix`); nixpkgs v0.2.0 has the known
+The consumer Zone imports a local projection AudioService:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: ResourceImport
+metadata:
+  name: host-audio
+  zone: work
+spec:
+  providerRef: Provider/audio-pipewire
+  zoneLinkRef: ZoneLink/work-uplink
+  exportKey: host/host-audio
+  expectedType: audio-pipewire.d2bus.org.AudioService
+  expectedBaseSchemaFingerprint: sha256:<audio-service-base-schema>
+  projectionName: host-audio-projection
+  projectionType: audio-pipewire.d2bus.org.AudioService
+  requestedCapabilities: [playback, capture]
+  requestedQuota:
+    leaseDeadlineMs: 30000
+  disconnectPolicy:
+    mode: degrade
+```
+
+Core owns ResourceExport/ResourceImport routing and base lifecycle. On a bound
+import, core creates only
+`audio-pipewire.d2bus.org.AudioService/host-audio-projection` with
+`metadata.ownerRef: ResourceImport/host-audio`; it never creates AudioState,
+workers, guest agents, or private Endpoints. The Provider import adapter
+reconciles the projection's local route semantics. An operator then declares a
+normal per-Guest AudioState whose `serviceRef` names that projection.
+
+No PipeWire FD, socket, path, authority handle, or ResourceRef crosses a Zone.
+Audio frames and service operations flow only over per-import bounded encrypted
+named streams, grounded in `packages/d2b-realm-core/src/stream.rs`
+(`StreamKind::{AudioPlayback,AudioCapture}` and split-direction
+`StreamChannel`) and `packages/d2b-realm-core/src/mux.rs` credit-based flow.
+Each import has its own session generation, authorization, credits/backpressure,
+cancel, deadline, and idempotency. Intermediaries see ciphertext.
+
+### Deterministic controller ownership
+
+| Controller | Creates/deletes | Reconciles | Must never do |
+| --- | --- | --- | --- |
+| Core ResourceImport controller | Exactly one projection AudioService per ResourceImport | Import lease, projection ownerRef/lifecycle, D091 propagation | Create AudioState, Process, Endpoint, GuestAudioAgent, or open PipeWire |
+| AudioService controller | Service-owned local implementation/route Endpoints only | Owner AuthorityDescriptor, mixer/mic arbiter, owner endpoint; or projection import/stream route | Create/delete projection Service, put authority on a projection, open PipeWire for a projection |
+| AudioState controller | Per-State vhost-user worker, GuestAudioAgent Processes, and private Endpoints | Guest ownership, same-Zone serviceRef, grants/levels, guest frontend and status | Export/project AudioState, claim physical authority, follow a cross-Zone Ref, handle FDs directly |
+
+Export removal or ZoneLink loss revokes leases and marks the projection Service
+`Degraded`/`revoked`; its referencing AudioStates degrade through the serviceRef
+index. Reconnect revalidates generation and fingerprint before binding. D091
+currency is ordered remote owner Service -> ResourceImport -> projection
+Service -> AudioState -> owned realization. A disruptive owner upgrade drains
+consumers and named streams before recycling authority; no stale projection
+continues.
+
+Guest AudioSet calls remain concurrent across all active GuestAudioAgent
+Processes. The authority aggregates per-guest results and never serializes one
+slow Guest behind another.
+
+### Selected invariants
+
+- **vhost-device-sound v0.3.0** is required; nixpkgs v0.2.0 has the known
   PipeWire-backend format-negotiation bug and MUST NOT be used.
-- **No `monitor.rules`.** WirePlumber split-direction enforcement MUST NOT use
-  `monitor.rules` (the wrong section, which broke host audio output per
-  `host.nix`); use a `client.conf.d`/stream-rules or scripts approach only.
-- **Volume/gain redaction.** `LevelPercent` speaker level and mic gain, and any
-  raw node identity, are redacted from audit records, OTEL labels, and logs;
-  status carries only bounded provider-neutral state.
+- **No `monitor.rules`.** WirePlumber split-direction enforcement uses
+  `client.conf.d` stream rules or scripts, never the section that broke host
+  audio output.
+- **Volume/gain redaction.** Speaker level, mic gain, authority key, raw node
+  identity, import keys, and stream/session identifiers are redacted from audit,
+  OTEL labels, and logs; status remains bounded and provider-neutral.
 - **Encrypted credit streams.** All cross-Zone audio bytes use the bounded
-  encrypted credit streams above; no plaintext, FD, or socket crosses a Zone.
-
-**No legacy shortcuts.** The audio authority adds **no** new `ProcessRole`, no
-direct broker path, and no per-VM state file. Privileged effects go through the
-D077 EffectPort/LaunchTicket, observed state is D087 status-first, and cross-Zone
-sharing is only D096 ResourceExport/ResourceImport/Endpoint.
+  encrypted credit streams above; no plaintext, FD, socket, path, or authority
+  grant crosses a Zone.
+- **No legacy shortcuts.** The two-ResourceType model adds no new ProcessRole,
+  direct broker path, per-VM state file, or ambient PipeWire access. Effects use
+  D077 EffectPort/LaunchTicket, observations are D087 status-first, schemas and
+  status retain D088/D089 three-layer shape, and cross-Zone sharing is only
+  D096 ResourceExport/ResourceImport/Endpoint.
 
 ## Nix authoring and configuration
 
@@ -1614,11 +2161,34 @@ sharing is only D096 ResourceExport/ResourceImport/Endpoint.
 
 ```nix
 d2b.zones.dev.resources = {
+  host-audio = {
+    type = "audio-pipewire.d2bus.org.AudioService";
+    metadata.ownerRef = "Provider/audio-pipewire";
+    spec = {
+      providerRef = "Provider/audio-pipewire";
+      serviceRole = "owner";
+      implementationEndpointRefs = [ "Endpoint/audio-pipewire-authority" ];
+      operations = [ "playback" "capture" ];
+      authority = {
+        authorityScope = "physical-device";
+        authorityClass = "audio-pipewire";
+        authorityKey = "host-default-audio";
+        cardinality = "zero-or-one";
+        arbitration = {
+          speaker = "multiplexed";
+          microphone = "exclusive";
+        };
+        exportability = "explicit-export";
+      };
+    };
+  };
+
   corp-vm-audio = {
     type = "audio-pipewire.d2bus.org.AudioState";
     metadata.ownerRef = "Guest/corp-vm";
     spec = {
       providerRef = "Provider/audio-pipewire";
+      serviceRef = "audio-pipewire.d2bus.org.AudioService/host-audio";
       grants = {
         mic = "off";
         speaker = "on";
@@ -1626,6 +2196,45 @@ d2b.zones.dev.resources = {
         micGain = null;
       };
       guestUsers = [ "User/alice" ];  # Nix/compiler sets spec.groups=["audio"] on User/alice
+      suspendOnGuestAbsent = true;
+    };
+  };
+};
+```
+
+A consumer Zone declares ResourceImport plus a normal per-Guest AudioState. It
+does not author the projection Service; core generates it:
+
+```nix
+d2b.zones.work.resources = {
+  host-audio-import = {
+    type = "ResourceImport";
+    spec = {
+      providerRef = "Provider/audio-pipewire";
+      zoneLinkRef = "ZoneLink/work-uplink";
+      exportKey = "host/host-audio";
+      expectedType = "audio-pipewire.d2bus.org.AudioService";
+      expectedBaseSchemaFingerprint = "sha256:<audio-service-base-schema>";
+      projectionName = "host-audio-projection";
+      projectionType = "audio-pipewire.d2bus.org.AudioService";
+      requestedCapabilities = [ "playback" "capture" ];
+    };
+  };
+
+  work-vm-audio = {
+    type = "audio-pipewire.d2bus.org.AudioState";
+    metadata.ownerRef = "Guest/work-vm";
+    spec = {
+      providerRef = "Provider/audio-pipewire";
+      serviceRef =
+        "audio-pipewire.d2bus.org.AudioService/host-audio-projection";
+      grants = {
+        mic = "off";
+        speaker = "on";
+        speakerLevel = 75;
+        micGain = null;
+      };
+      guestUsers = [ "User/alice" ];
       suspendOnGuestAbsent = true;
     };
   };
@@ -1653,10 +2262,20 @@ d2b.zones.dev.resources.audio-pipewire = {
 
 ### Nix validation
 
-Nix eval-time validation of `audio-pipewire.d2bus.org.AudioState` resources checks:
+Nix eval-time validation checks the two qualified ResourceTypes:
 
+- owner `AudioService` has `metadata.ownerRef: Provider/audio-pipewire`, a
+  D097 AuthorityDescriptor, and only same-Zone Endpoint refs;
+- projection `AudioService` has
+  `metadata.ownerRef: ResourceImport/<name>`, no AuthorityDescriptor, and only
+  same-Zone route Endpoint refs; a projection may only be compiler materialized
+  by core from a matching ResourceImport;
+- ResourceExport/ResourceImport audio types and projectionType are
+  `audio-pipewire.d2bus.org.AudioService`, never AudioState;
 - `spec.providerRef` resolves to an installed `Provider/audio-pipewire` in the
   same Zone; evaluation fails with a descriptive error if absent;
+- `AudioState.spec.serviceRef` resolves to an owner or projection AudioService
+  in the same Zone and never to ResourceImport directly;
 - `spec.grants.speakerLevel` is `null` or an integer in `[0,100]`;
 - `spec.grants.micGain` is `null` or an integer in `[0,100]`;
 - `spec.guestUsers` contains ≤16 entries, each a valid `User/<name>` ResourceRef
@@ -1665,7 +2284,9 @@ Nix eval-time validation of `audio-pipewire.d2bus.org.AudioState` resources chec
   resource; for API-created resources, the controller verifies
   `User.status.groupMembershipVerified` and fails closed;
 - `metadata.ownerRef` resolves to an existing `Guest/<name>` in the same Zone;
-- no two `AudioState` resources share the same `metadata.ownerRef`.
+- no two `AudioState` resources share the same Guest `metadata.ownerRef`;
+- no AudioState contains `authority`, has `ownerRef: ResourceImport/<name>`, or
+  is selected as an exported/projection type.
 
 The Nix module also validates that:
 - `Provider/audio-pipewire.spec.config.captureAlias`, when non-null, matches
@@ -1688,6 +2309,7 @@ The Nix module also validates that:
   },
   "spec": {
     "providerRef": "Provider/audio-pipewire",
+    "serviceRef": "audio-pipewire.d2bus.org.AudioService/host-audio",
     "grants": {
       "mic": "off",
       "speaker": "on",
@@ -1715,14 +2337,21 @@ When an `AudioState` resource is removed from the Nix configuration:
    the guest user's `spec.groups` audio entry is removed (Nix/compiler removes
    the declaration; system-core reconciles).
 
+When an owner AudioService is removed, its finalizer first drains referencing
+AudioStates and exports, releases the authority and local implementation
+Endpoints, then removes the Service. A projection AudioService is never removed
+directly from Nix: deleting/revoking its ResourceImport drives the core
+child-first sequence and core deletes that projection after consumers and the
+remote lease are released.
+
 ## Current-code fit
 
 | Item | Value |
 | --- | --- |
 | Current anchor | `nixos-modules/components/audio/host.nix`, `guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs` |
-| Evidence class | Mixed; `audio_policy.rs` / `audio_argv.rs` are `implemented-and-reachable`; v3 Provider/`audio-pipewire.d2bus.org.AudioState`/AudioMediator wiring is `ADR-only` |
+| Evidence class | Mixed; `audio_policy.rs` / `audio_argv.rs` are `implemented-and-reachable`; v3 Provider/two-ResourceType AudioService+AudioState/AudioMediator wiring is `ADR-only` |
 | Behavior retained | Per-VM mic/speaker grants, `LevelPercent` 0..=100, component-template argv shape, PipeWire `client.conf.d/` stream rule placement, WirePlumber virtio-snd profile, zero host capabilities |
-| Required delta | Entire `audio-pipewire.d2bus.org.AudioState` ResourceType, `audio-state-controller`, `AudioMediator` service component with `SetGrant`/`SetLevel` service, `GuestAudioAgent` Process component with libpipewire `AudioSet` service, runtime-audio capability query and alias binding, Guest spec audioExtension mutation derived from AudioCapability record, libpipewire enforcement API on both host and guest sides, OTEL metric/audit shape, RBAC roles, Nix v3 resource authoring with `User/<name>` ResourceRefs, `spec.config` Provider shape |
+| Required delta | Qualified `AudioService` owner/projection ResourceType plus per-Guest `AudioState` ResourceType with required same-Zone `serviceRef`; deterministic Service and State handlers; core-created projection-Service contract; owner `AudioMediator` with `SetGrant`/`SetLevel`; GuestAudioAgent and private Endpoints; runtime-audio alias; encrypted import streams; D097 authority/mixer/mic arbitration; three-layer status and D091 propagation; RBAC/watch plans; Nix authoring and tests |
 | Reuse path | `d2b-core/src/audio_policy.rs` → copy-unchanged into `src/audio_state.rs` (one-time activation migration from v1/v2 on-disk format only; no ongoing state file); `audio_argv.rs` → adapt into component template (not live Process spec); WirePlumber stream rule Nix logic → port to Provider Nix module |
 | Replacement/deletion | `audio_dispatch.rs`, `audio_host_controller.rs` retired after `audio-state-controller` passes e2e parity; `host.nix`, `guest.nix` retired after v3 Nix module deployed; `d2b-core/src/audio_policy.rs` may remain as re-export shim |
 | Feasibility proof | Minijail contract tests in `d2b-contract-tests/tests/minijail_audio_usbip.rs`; ComponentSession FD-attachment protocol from ADR-046-componentsession-and-bus; libpipewire `pw_node_set_param` API confirmed in upstream PipeWire 1.x |
@@ -1741,8 +2370,8 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse action | `copy-unchanged` (no daemon imports; pure DTO library) |
 | Destination | `packages/d2b-provider-audio-pipewire/src/audio_state.rs`; re-exported from crate root |
 | Detailed design | `LevelPercent`, `AudioGrant`, `AudioPolicyState`, `parse_audio_state`, `to_v2_bytes`, `AudioPolicyError` copy unchanged. `AudioPolicyState` is the canonical in-memory representation of `AudioState.spec.grants`. `parse_audio_state`/`to_v2_bytes` are used only once during first-activation migration from a prior v1/v2 on-disk file; there is no ongoing state file in v3. |
-| Integration | `audio-state-controller` uses `parse_audio_state` only during first-activation one-time migration of prior on-disk state to `AudioState.spec.grants`. |
-| Data migration | v1 and v2 on-disk formats parsed once on first activation; migrated values written to `AudioState.spec.grants` via resource API; prior file removed after successful migration. |
+| Integration | First-activation migration uses `parse_audio_state` and writes grants only into a per-Guest AudioState that also names the explicitly configured same-Zone owner AudioService. |
+| Data migration | Parse v1/v2 once; require exactly one configured owner Service; write grants plus `serviceRef`; fail closed on missing/ambiguous Service; remove prior file only after successful commit. |
 | Validation | `tests/audio_state.rs`: all existing tests from `d2b-core/tests/audio_policy.rs` plus schema-round-trip and resource-spec JSON serialization tests |
 | Removal proof | `d2b-core/src/audio_policy.rs` deleted when no `d2bd` caller references it; confirmed by `cargo check --no-default-features`. |
 
@@ -1772,13 +2401,13 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same baseline paths |
 | Reuse action | `adapt` — enforcement logic becomes a libpipewire API implementation behind the `SetGrant`/`SetLevel` ComponentSession service |
 | Destination | `packages/d2b-provider-audio-pipewire/src/mediator/enforcement.rs` |
-| Detailed design | `SetGrant(channel, value)`: maps `"off"` to `pw_node_set_param(SPA_PARAM_Props, mute=true, target.object=-1)` on the worker's node; maps `"on"` to `mute=false` and removes routing override. `SetLevel(channel, valuePercent)`: maps to `pw_node_set_param(SPA_PARAM_Props, volume=valuePercent/100.0)`. `captureAlias` resolution: iterates the PipeWire global registry to find the node with matching `node.nick` or `node.name`. All resolution is private to the mediator; resolved node IDs never appear in any external surface. `QemuAudioController` becomes a no-op: the controller writes the state file only; `enforcementPosture = HostOnly`. `FakeAudioMediator` is a test double behind `#[cfg(test)]`. No wpctl binary, no EphemeralProcess, no node ID in any spec or bus message. |
-| Integration | `audio-state-controller` calls `SetGrant`/`SetLevel` service on the AudioMediator via d2b-bus in reconcile step 10. |
+| Detailed design | Owner AudioService only: `SetGrant(channel, value)` maps `"off"` to `pw_node_set_param(SPA_PARAM_Props, mute=true, target.object=-1)` on the worker's node and `"on"` to `mute=false`; `SetLevel` maps to a bounded volume. `captureAlias` resolves privately through the registry. A projection AudioService routes the operation to the remote owner over its import stream and is denied any local mediator/PipeWire open. `FakeAudioMediator` is the hermetic test double. No state file, wpctl, EphemeralProcess, or node ID in any external surface. |
+| Integration | AudioState controller calls its resolved AudioService. Owner Service dispatches locally to AudioMediator; projection Service dispatches over the encrypted import route to the remote owner. |
 | Data migration | No state migration; mediator applies current AudioState grants and levels from resource state during reconcile, replacing host-controller direct writes. |
-| Validation | `tests/mediator.rs` and `tests/enforcement.rs`: SetGrant/SetLevel service round-trip; Qemu offline path; no-node-id-in-bus-message assertion; PipeWireSessionUnavailable path; captureAlias registry resolution |
+| Validation | `tests/mediator.rs` and `tests/enforcement.rs`: owner-Service SetGrant/SetLevel round-trip; projection routing with fake streams; projection-PipeWire-open denial; no-node-id-in-bus-message; PipeWireSessionUnavailable; captureAlias registry resolution |
 | Removal proof | `d2bd/src/audio_host_controller.rs` retired after `d2bd` audio dispatch path is replaced. |
 
-### ADR046-audio-005: Implement `AudioState` ResourceType schema and resource API admission
+### ADR046-audio-005: Implement `AudioService` and `AudioState` schemas and admission
 
 | Field | Value |
 | --- | --- |
@@ -1788,26 +2417,26 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | `public_wire.rs` `AudioChannel`, `AudioEnforcementPosture`, `AudioErrorKind`, `AudioProviderKind`, `AudioSetApplied` — copy-unchanged as closed enum definitions |
 | Reuse action | `copy-unchanged` for closed enums; `ADR-only` for schema/admission |
 | Destination | `packages/d2b-provider-audio-pipewire/src/resource_type.rs`; `packages/d2b-provider-audio-pipewire/src/admission.rs` |
-| Detailed design | `audio-pipewire.d2bus.org.AudioState.spec` struct with serde + schemars; strict `deny_unknown_fields`; `guestUsers` ≤16, each a `User/<name>` ResourceRef where `<name>` matches `[a-z][a-z0-9_-]*` ≤32 chars; `speakerLevel`/`micGain` in `[0,100]` or null; `providerRef` format check and immutability enforcement. Audio frontend configuration is derived at reconcile time from the `runtime-audio` capability record, not stored in the spec. JSON schema exported to `docs/reference/schemas/v3/AudioState.json` (tracked by `make test-drift`). |
-| Integration | Provider signs and exports the `audio-pipewire.d2bus.org.AudioState` ResourceTypeSchema during package build. Core validates `AudioState` specs on every `Create`/`UpdateSpec` call. |
-| Data migration | Full d2b 3.0 reset; no v2 resource-state import. AudioState specs are authored or generated as new v3 ResourceType data. |
-| Validation | `tests/resource_type.rs`: schema round-trip; admission rejection matrix (unknown fields, out-of-range level, excess guestUsers, bad name, invalid ResourceRef format, immutable providerRef mutation, forbidden audioFrontend field); JSON schema drift test |
-| Removal proof | None — net-new ResourceType; no prior owner to remove |
+| Detailed design | Define both strict D089 Layer-2 schemas and D088 typed status. AudioService validates immutable `serviceRole`, same-Zone local Endpoint refs, owner-only D097 AuthorityDescriptor, projection-only `ownerRef: ResourceImport/<name>`, and core-only projection creation. AudioState validates Guest ownership, required immutable same-Zone `serviceRef`, grants/levels/users, and forbids authority/export/projection semantics. Both use strict signed Layer-3 provider envelopes. Export `AudioService.json` and `AudioState.json`; track both with drift tests. |
+| Integration | Provider signs and publishes both qualified ResourceTypeSchemas. Core import controller may create/delete only projection AudioService; ordinary resource API admission handles owner Services and AudioStates. |
+| Data migration | Full d2b 3.0 reset; owner Services and per-Guest AudioStates are authored as new v3 resources; projection Services are core-generated from ResourceImport. |
+| Validation | `tests/resource_type.rs`: both schema/status round-trips; strict unknown-field matrix; Service role/AuthorityDescriptor/ownerRef/Endpoint-locality rules; core-only projection admission; AudioState required same-Zone serviceRef and Guest owner; immutable refs; out-of-range levels/users; explicit tests that AudioState cannot be exported or projected; JSON schema drift for both types |
+| Removal proof | None — both ResourceTypes are net-new |
 
-### ADR046-audio-006: Implement `audio-state-controller`
+### ADR046-audio-006: Implement deterministic AudioService and AudioState handlers
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-audio-006` |
-| Dependency/owner | Depends on `ADR046-audio-001` through `ADR046-audio-005`; system Process Provider; AudioMediator service (`ADR046-audio-007`); GuestAudioAgent component (`ADR046-audio-011`); core reconciliation framework; no Provider state Volume is declared under D087 |
+| Dependency/owner | Depends on `ADR046-audio-001` through `ADR046-audio-005`; core ResourceImport controller; system Process Provider; AudioMediator (`ADR046-audio-007`); GuestAudioAgent (`ADR046-audio-011`); no Provider state Volume under D087 |
 | Current source | `packages/d2bd/src/audio_dispatch.rs` lines 250–end (dispatch ordering reference) |
 | Reuse source | None directly; reconcile flow is new async controller |
 | Reuse action | `adapt` — dispatch logic is the reference for step ordering only |
-| Destination | `packages/d2b-provider-audio-pipewire/src/controller/audio_state.rs` |
-| Detailed design | Single async reconcile loop for `audio-pipewire.d2bus.org.AudioState` resource events. Watch plan for `audio-pipewire.d2bus.org.AudioState`, `Process` (sidecar+GuestAudioAgent owned, via ownerRef component identity index), `Guest` (dependency), AudioMediator `Process` (component identity), `User` (guestUsers dependency, via dependencyRefIn). Never issues SpawnRunner, OpenPidfd, any pidfd, EphemeralProcess, or Volume/User resource operation. ProviderStateSet is empty under D087; the controller consumes no state view `dirfd`. Queries `runtime-audio` capability alias on each reconcile. Calls AudioMediator `SetGrant`/`SetLevel` service and `GuestAudioAgent.AudioSet` service via d2b-bus for grant changes. Verifies `User.status.groupMembershipVerified` for each guestUser before sidecar start; fails closed on missing audio group. Batch `UpdateStatus` as a single post-reconcile commit. Post-commit audit event emission. No direct filesystem access. No runtime `User.spec.groups` mutation. |
+| Destination | `packages/d2b-provider-audio-pipewire/src/controller/audio_service.rs`; `src/controller/audio_state.rs` |
+| Detailed design | One controller binary registers deterministic Service and State handlers. Service handler watches AudioService, its ResourceImport owner and local Endpoints; owner semantics claim/revalidate D097 and local mediator, projection semantics bind only encrypted import streams and deny PipeWire. It cannot create/delete projection Service. State handler watches AudioState, same-Zone serviceRef, Guest/User, owned Process, and private Endpoints; creates the vhost-user worker, GuestAudioAgents, and private Endpoints, then calls the resolved Service and guest agents. A Service event enqueues serviceRef-indexed States. Neither handler uses broker/pidfd/EphemeralProcess/Volume/User operations or direct filesystem access. |
 | Integration | Registered with Zone core as a controller under `Provider/audio-pipewire`. |
 | Data migration | v1/v2 audio policy file migration is handled by ADR046-audio-001 before reconcile; the controller keeps no Provider state Volume and imports no additional runtime state. |
-| Validation | `tests/audio_state_controller.rs`: reconcile state machine matrix (enable, grant change, guest absent, mediator unavailable, guest-audio-agent unavailable, guest-user-audio-group-missing, sidecar crash loop, deletion sequence, runtime-capability-unavailable); no-EphemeralProcess-created assertion; no-broker-op assertion; no-pidfd-op assertion; no-runtime-groups-mutation assertion; no-Volume-create assertion; no-User-create assertion. ProviderDeployment integration validates that `Provider/audio-pipewire` creates no Provider state Volume or state mount, returns an empty ProviderStateSet, and keeps bounded operational state in status/core Operation ledger with redaction and size-bound conformance. |
+| Validation | Fast hermetic `tests/audio_service_controller.rs`: owner authority, projection ownerRef/import chain, core-only create/delete, projection no-PipeWire-open, revocation and D091 propagation. `tests/audio_state_controller.rs`: required same-Zone serviceRef, owner/projection dispatch, child Process/private Endpoint state machine, grant changes, absence/failures/deletion. Conformance asserts no AudioState export/projection, no broker/pidfd/EphemeralProcess/Volume/User ops. ProviderDeployment integration remains fake-only and validates empty ProviderStateSet. |
 | Removal proof | Supersedes `audio_dispatch.rs`; `d2bd` audio dispatch deleted after e2e parity test confirms |
 
 ### ADR046-audio-007: Implement `AudioMediator` user-session service
@@ -1820,13 +2449,13 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | None; new component |
 | Reuse action | `ADR-only` |
 | Destination | `packages/d2b-provider-audio-pipewire/src/mediator/mod.rs`; `src/bin/audio_pipewire_mediator.rs` |
-| Detailed design | Long-lived user-session Process. Maintains per-Guest map of `{AudioState UID → pw_core* connection, node_handle}`. Opens PipeWire connection naturally (same-UID compositor session). Passes pre-opened `pw_core` FD to worker via component-descriptor attachment on Process Provider launch request. Exposes `SetGrant`/`SetLevel` ComponentSession service through `Endpoint/audio-pipewire-service` (Noise_NN, local purpose, Unix transport, same-UID peer evidence). No EphemeralProcess, no wpctl binary, no node ID in any bus message or resource spec. `captureAlias` resolved via libpipewire registry (`pw_registry_events`). WPCTL_PATH and PW_DUMP_PATH are superseded. |
+| Detailed design | Owner AudioService implementation only. Long-lived user-session Process maintains per-AudioState nodes under the single owner backing, receives the pre-opened local PipeWire portal FD, and exposes `SetGrant`/`SetLevel` through `Endpoint/audio-pipewire-authority`. Projection Services never start/call a local mediator and cannot receive its FD. No EphemeralProcess, wpctl, remote Ref, or node identity in external surfaces. |
 | Integration | Second binary in the `d2b-provider-audio-pipewire` package. Registered as a user-session service under `Provider/audio-pipewire`. |
 | Data migration | No persisted mediator state migration; the service rebuilds its PipeWire node map from the registry on start and consumes current AudioState through controller calls. |
-| Validation | `tests/mediator.rs`: FD handoff; SetGrant/SetLevel service calls; captureAlias registry resolution; node-id-sealed-not-in-bus; session-unavailable path; concurrent guest map isolation; teardown on deletion |
+| Validation | `tests/mediator.rs`: owner-Service FD handoff and calls; captureAlias; node-id sealing; session-unavailable; concurrent Guest isolation; teardown; projection Service cannot resolve mediator Endpoint or portal attachment |
 | Removal proof | Supersedes `d2bd`'s `PipeWireHostController` direct session access; `d2bd` audio host controller deleted after e2e parity |
 
-### ADR046-audio-008: Nix module for v3 `AudioState` resource authoring
+### ADR046-audio-008: Nix module for v3 AudioService/AudioState authoring
 
 | Field | Value |
 | --- | --- |
@@ -1836,10 +2465,10 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same |
 | Reuse action | `replace` |
 | Destination | `nixos-modules/components/audio/v3-resource.nix`; `nixos-modules/components/audio/host-config.nix`; `nixos-modules/components/audio/guest-config.nix` |
-| Detailed design | Provider root config uses `spec.config` (not `rootConfig`). `captureAlias` is a bounded label option matching `^[a-z][a-z0-9-]*$` (≤64 chars), not an `inputTargetNode` raw PipeWire node name. No `d2b.guestControl.wpctlPath` option in v3. `v3-resource.nix` emits `audio-pipewire.d2bus.org.AudioState` resource specs; `guestUsers` is a list of `User/<name>` ResourceRefs; the Nix module sets `spec.groups: ["audio"]` on each referenced guest `User` resource at compile time (no runtime extraGroups mutation). No `audioFrontend`/`virtioId`/`queueSizes` in the spec; frontend configuration is derived from the `runtime-audio` capability at reconcile time. `host-config.nix` contains WirePlumber stream rules (`client.conf.d/90-d2b`) and vhost-device-sound package; no per-VM tmpfiles or state-file paths. `guest-config.nix` contains the in-guest PipeWire stack, virtio-snd kernel module, and GuestAudioAgent Process resource declaration. |
+| Detailed design | `v3-resource.nix` emits owner AudioService and per-Guest AudioState with required same-Zone serviceRef; ResourceExport/Import examples always name AudioService. Projection Services are never authored: core materializes them from ResourceImport. Eval rejects AudioState export/projection, Service role/ownerRef/authority mismatches, cross-Zone Endpoint/service refs, and duplicate owner authority. Existing captureAlias, guestUsers/group injection, runtime-audio derivation, host stream rules, and guest stack remain. |
 | Integration | `nixos-modules/default.nix` imports all three modules. |
-| Data migration | Full d2b 3.0 reset; legacy Nix audio options emit/deprecate to v3 AudioState authoring during config rebuild, with no runtime state import. |
-| Validation | `tests/unit/nix/cases/audio-v3-resource.nix`: resource spec round-trip; `captureAlias` regex validation (`^[a-z][a-z0-9-]*$`); eval-time rejection of duplicate AudioState per Guest; guestUsers as `User/<name>` ResourceRefs; `spec.groups` injection; deprecation warning for legacy options; `spec.config` (not `rootConfig`) shape test; no-wpctlPath-option assertion; no-runtime-extraGroups-mutation assertion; no-audioFrontend-field assertion |
+| Data migration | Full d2b 3.0 reset; legacy Nix audio options emit/deprecate to one owner AudioService plus per-Guest AudioStates that reference it; no projection Service is authored. |
+| Validation | `tests/unit/nix/cases/audio-v3-resource.nix`: owner Service and State round-trip; same-Zone serviceRef; export/import Service type; projection core-only ownerRef chain; AudioState export/projection rejection; authority uniqueness; Endpoint locality; plus existing grants/users/captureAlias/deprecation/no-wpctl/no-audioFrontend assertions |
 | Removal proof | `host.nix` and `guest.nix` kept as compat shims until v3 module deployed on all Zones |
 
 ### ADR046-audio-009: Minijail contract test migration
@@ -1852,7 +2481,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same |
 | Reuse action | `adapt` |
 | Destination | `packages/d2b-provider-audio-pipewire/tests/minijail_contract.rs` (provider-local); retain cross-bundle source greps in `d2b-contract-tests` |
-| Detailed design | Provider-local tests validate: (1) `spec.sandbox.capabilityClasses == []`; (2) `spec.sandbox.seccompClass == "audio-pipewire-worker"`; (3) `spec.sandbox.startRoot == false`; (4) `namespaceClasses` does not include `network`; (5) `spec.domain == "system"` and `spec.userRef` is absent (worker is system-domain; allocator principal is sealed); (6) no `executableRef`/`argv`/`env` fields in the live Process resource spec; (7) no `inherited-fd` endpoint in the live Process resource spec; (8) owned `Endpoint/corp-vm-audio-vhost-user` has `producerRef: Process/corp-vm-audio-sidecar`; (9) no socket path or PipeWire path in any serialized spec or status form; (10) no EphemeralProcess created by the controller. |
+| Detailed design | Retain worker sandbox assertions and add role-sensitive attachment checks: an owner-Service worker may receive only the local AudioMediator attachment; a projection-Service worker receives only its same-Zone route Endpoint and can never receive a PipeWire FD. State-owned private Endpoint ownership/producerRef is explicit. All Service/State/Process/Endpoint serialized forms remain locator-free. |
 | Integration | Provider-local contract tests run in `d2b-provider-audio-pipewire`; retained cross-bundle greps in `d2b-contract-tests` ensure bundle-wide invariants still hold. |
 | Data migration | None — test migration only; no runtime state. |
 | Validation | `cargo test -p d2b-provider-audio-pipewire -- minijail` must pass; existing cross-bundle tests must continue to pass |
@@ -1868,10 +2497,10 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | Same; adapt redaction pattern |
 | Reuse action | `adapt` |
 | Destination | `packages/d2b-provider-audio-pipewire/src/telemetry.rs` |
-| Detailed design | Closed metric label set. Post-commit audit emitter. Span attribute allowlist. Compile-time assertion that no audio metric carries a `guest`, `socket`, `path`, `level`, `gain`, or `node_id` label. `enforcement_attempts_total` and `enforcement_latency_seconds` reflect AudioMediator `SetGrant`/`SetLevel` service calls, not EphemeralProcess. ProcessEffect audit events are emitted by the system Process Provider; the audio telemetry module must not duplicate them. |
+| Detailed design | Emit closed-label Service and State metrics plus post-commit audit. Service events distinguish only `owner|projection` and closed outcomes; they omit authority keys, import/export keys, remote identity, stream/session ids, and endpoints. Enforcement metrics cover owner-local and projection-routed calls without exposing route identity. ProcessEffect audit remains Process Provider-owned. |
 | Integration | Audio controller and mediator call telemetry/audit emitters after commit or enforcement; d2b-telemetry exporter and policy_observability consume the resulting records. |
 | Data migration | No telemetry/audit data migration; v3 emits new closed-label OTEL/audit records after cutover and old audio_dispatch audit sites are removed. |
-| Validation | `tests/audio_telemetry.rs`: redaction conformance; post-commit ordering; label cardinality; forbidden-field absence; no-process-effect audit duplication; no-wpctl-ephemeralprocess metrics |
+| Validation | `tests/audio_telemetry.rs`: Service/State event separation, redaction, post-commit ordering, label cardinality, forbidden authority/import/stream/path fields, no ProcessEffect duplication |
 | Removal proof | `audio_dispatch.rs` audit call sites deleted after cutover |
 
 ### ADR046-audio-011: Implement `GuestAudioAgent` in-guest service component
@@ -1900,10 +2529,10 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse source | audio authority/mediator service (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
 | Reuse action | net-new (implement the signed audio export/import adapter) |
 | Destination | `packages/d2b-provider-audio-pipewire/src/share_adapter.rs` |
-| Detailed design | Implement the signed audio `ExportAdapter`/`ImportAdapter`: the owner-Zone authority mediates the physical mic/speakers, mixes speaker output per consumer Zone with per-Zone volume/quota, and arbitrates microphone as `exclusive` or approved `multiplexed` capture with consent/priority/fair queue. The import adapter builds the local `AudioState`/proxy projection and streams audio frames over the bounded encrypted named stream. No PipeWire FD/socket crosses a Zone; intermediaries see ciphertext. Semantic admission/observation only — core owns routing and base lifecycle. |
+| Detailed design | Implement signed adapters only for exportedType/projectionType `audio-pipewire.d2bus.org.AudioService`. Export adapter admits the owner Service and its local authority Endpoint. Core creates/deletes the projection AudioService with `ownerRef: ResourceImport/<name>`; the import adapter reconciles its semantic route and never creates AudioState or opens PipeWire. Per-Guest AudioStates are ordinary consumer resources with same-Zone serviceRef. No FD/path/socket/remote Ref crosses a Zone. |
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Speaker mix with per-Zone volume/quota; microphone exclusivity and approved multiplexed capture with consent/priority/fair queue; reconnect revalidation and revocation degrade the projection; no PipeWire FD/socket crosses a Zone (fake-stream hermetic + real-stream integration) |
+| Validation | Fast hermetic `tests/share_adapter.rs`: reject AudioState export/projection; accept owner AudioService export; core-only projection creation/deletion; exact ResourceImport -> projection AudioService ownerRef chain; projection never opens PipeWire; reconnect/revocation/D091 propagation with fake streams. Only `integration/real_stream.rs` exercises a real encrypted named stream. |
 | Removal proof | Not applicable (new surface) |
 
 ### ADR046-audio-013: Audio authority service — speaker mixer and mic arbiter (D096/D097)
@@ -1915,11 +2544,11 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Current source | `packages/d2bd/src/audio_host_controller.rs` (`HostAudioController` trait, `PipeWireHostController::{from_audio_node,find_audio_node}`, `QemuAudioController`, `FakeHostController`); `packages/d2b-core/src/audio_policy.rs` (`LevelPercent`, `AudioGrant`, `AudioPolicyState`) |
 | Reuse source | Same baseline controller/policy symbols |
 | Reuse action | `adapt` — the host controller becomes the single authority service; no daemon `Mutex`/state-file wrapping |
-| Destination | `packages/d2b-provider-audio-pipewire/src/authority.rs` (speaker mixer + mic arbiter); `AuthorityDescriptor` on the `AudioState`/authority `Endpoint` |
-| Detailed design | Exactly one audio authority service per owner Zone holds the real PipeWire connection and declares a D097 `AuthorityDescriptor` (`authorityScope: physical-device`, opaque `authorityKey` class, `cardinality: zero-or-one`, split `arbitration`). Speaker path is `multiplexed`: a mixer applies per-consumer `LevelPercent` volume/quota through `HostAudioController` node/grant/level operations. Microphone path is `exclusive` by default or approved `multiplexed` capture through a **mic arbiter** with consent, priority, and a fair queue; a second unapproved capturer is denied (no second device open). Core's authority index rejects a duplicate authority with `duplicateConflict` before any open; restart adopts by `ownerProof`; ambiguity quarantines. Adapts the controller through the D077 EffectPort/LaunchTicket and D087 status — **no** new `ProcessRole`, no direct broker path, no per-VM state file. |
-| Integration | Authority service owns the physical connection and the `Endpoint/audio-pipewire-service`; the export/import adapter (ADR046-audio-012) and `audio-state-controller` (ADR046-audio-006) call it; core authority index (ADR046-zone-control-019) admits exactly one authority. |
+| Destination | `packages/d2b-provider-audio-pipewire/src/authority.rs` (speaker mixer + mic arbiter); `AuthorityDescriptor` on owner `AudioService` |
+| Detailed design | Exactly one owner AudioService holds the real PipeWire connection and D097 AuthorityDescriptor. Projection Services and AudioStates cannot carry it. Speaker mixing and mic exclusivity/approved multiplexing retain quota, consent, priority, and fair queue. Core rejects duplicate owner Services before open and adopts by ownerProof. No new ProcessRole, broker path, or state file. |
+| Integration | Owner AudioService references `Endpoint/audio-pipewire-authority`; same-Zone States and remote projection Services call it. Core authority index admits exactly one owner Service. |
 | Data migration | None — full d2b 3.0 reset; grants are authoritative in `AudioState.spec` (no state file). |
-| Validation | `tests/authority.rs`: single-authority admission + `duplicateConflict` on a second claimant; speaker mix with per-consumer volume/quota; mic exclusivity; approved multiplexed capture with consent/priority/fair-queue ordering; adoption by `ownerProof` and quarantine on ambiguity; drain-then-recycle on D091 upgrade; all with the deterministic fake clock and `FakeHostController` (no real PipeWire). |
+| Validation | Fast hermetic `tests/authority.rs`: AuthorityDescriptor accepted only on owner AudioService; State/projection rejection; duplicate conflict; mix/quota; mic arbitration/fairness; ownerProof adoption; D091 drain/recycle with fake clock/FakeHostController |
 | Removal proof | `audio_host_controller.rs` daemon-side controller deleted after the authority service reaches parity; confirmed by `cargo check`. |
 
 ### ADR046-audio-014: Per-import encrypted audio credit streams (D096)
@@ -1933,9 +2562,9 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Reuse action | `adapt` — audio frames ride the existing ComponentSession named-stream credit machinery |
 | Destination | `packages/d2b-provider-audio-pipewire/src/streams.rs` |
 | Detailed design | Per-import audio frames flow only over bounded encrypted named streams: one stream with two `StreamChannel`s for playback/capture split direction and a single `StreamAuthz` (a consumer never opens two authz contexts to split direction), credit-based backpressure (a sender spends only receiver-granted credit), per-import session generation, cancel, and deadline. `StreamKind::AudioPlayback`/`AudioCapture` require `Capability::AudioPlayback`/`AudioCapture`. No PipeWire FD/socket crosses a Zone; intermediaries see ciphertext. Guest audio calls (`audio_set`/`audio_status`) are issued to all active guests concurrently and results aggregated. Volume/gain (`LevelPercent`) and node identity are redacted from audit/OTEL/logs. |
-| Integration | Authority service (ADR046-audio-013) and export/import adapter (ADR046-audio-012) allocate per-import streams over ComponentSession; core routes encrypted stream records only. |
+| Integration | Owner and projection AudioService adapters allocate per-import streams over ComponentSession; AudioState only consumes the same-Zone Service Ref; core routes encrypted records only. |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | `tests/streams.rs`: split-direction single-authz stream; credit backpressure and blocked-sender release; per-import generation isolation; cancel/deadline; concurrent guest-call aggregation; ciphertext-only intermediary; volume/gain redaction; all with fake streams (fast hermetic) plus a slower real-encrypted-stream integration test. |
+| Validation | Fast hermetic `tests/streams.rs`: projection-Service ownerRef/import binding, split-direction single-authz stream, credits, generation isolation, cancel/deadline, concurrency, ciphertext-only intermediary, redaction. Only `integration/real_stream.rs` runs the slower real encrypted stream. |
 | Removal proof | Not applicable (new surface) |
 
 ## Required crate layout
@@ -1947,12 +2576,19 @@ d2b-provider-audio-pipewire/
     lib.rs
     audio_state.rs          # AudioPolicyState DTOs (ADR046-audio-001)
     argv.rs                 # Component template argv builder (ADR046-audio-002)
-    resource_type.rs        # AudioState spec/status schema + serde (ADR046-audio-005)
+    resource_type/
+      mod.rs
+      audio_service.rs      # AudioService owner/projection schema + status
+      audio_state.rs        # per-Guest AudioState schema + status/serviceRef
     admission.rs            # Resource API admission validation (ADR046-audio-005)
+    authority.rs            # owner-Service D097 mixer/mic arbiter
+    share_adapter.rs        # AudioService export/import semantics
+    streams.rs              # projection encrypted named-stream route
     runtime_capability.rs   # runtime-audio capability query client
     telemetry.rs            # Metrics, post-commit audit, span attributes (ADR046-audio-010)
     controller/
       mod.rs
+      audio_service.rs      # owner/projection Service handler
       audio_state.rs        # audio-state-controller AudioState handler (ADR046-audio-006)
     mediator/
       mod.rs                # AudioMediator service + SetGrant/SetLevel (ADR046-audio-007)
@@ -1967,8 +2603,12 @@ d2b-provider-audio-pipewire/
   tests/
     audio_state.rs          # AudioPolicyState / schema round-trip (ADR046-audio-001)
     argv.rs                 # Component template argv rejection matrix (ADR046-audio-002)
-    resource_type.rs        # Schema admission rejection matrix (ADR046-audio-005)
+    resource_type.rs        # Both schemas/status + Service/State separation
+    audio_service_controller.rs # owner/projection state machine
     audio_state_controller.rs  # AudioState handler state machine (ADR046-audio-006)
+    share_adapter.rs        # ownerRef chain/core-only projection/fake streams
+    authority.rs            # D097 owner-only authority/mixer/mic arbitration
+    streams.rs              # fake encrypted-stream credit semantics
     mediator.rs             # FD handoff + SetGrant/SetLevel + captureAlias (ADR046-audio-007)
     enforcement.rs          # host libpipewire enforcement + offline path (ADR046-audio-004)
     guest_agent.rs          # AudioSet service + guest libpipewire (ADR046-audio-011)
@@ -1979,6 +2619,7 @@ d2b-provider-audio-pipewire/
     audio_e2e.rs            # End-to-end: enable guest, sidecar start, grant change, delete
     grant_enforcement.rs    # AudioMediator SetGrant/SetLevel + libpipewire round-trip
     guest_enforcement.rs    # GuestAudioAgent AudioSet service + libpipewire round-trip
+    real_stream.rs          # only real encrypted named-stream cross-Zone test
   README.md
 ```
 
@@ -2002,6 +2643,24 @@ larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
 per-test budget.
 
+The Service/State split is a mandatory fast hermetic matrix:
+
+- `service_state_separation`: only owner AudioService carries authority or is
+  exportable; AudioState always has Guest owner + same-Zone serviceRef;
+- `projection_ownerref_chain`: ResourceImport owns exactly one projection
+  AudioService, and AudioState references that Service rather than the import;
+- `core_projection_scope`: core creates/deletes only projection AudioService;
+- `projection_no_pipewire`: fake EffectPort proves no portal/PipeWire-open
+  request can be emitted by a projection;
+- `service_currency_propagation`: fake generations prove D091 ordering from
+  remote owner to import, projection Service, and State.
+
+These use fake stores, adapters, clocks, and streams in `tests/*.rs`. No
+Service/State/ownerRef test is moved to integration. The only cross-Zone
+transport case in `integration/` is `real_stream.rs`, which verifies actual
+encrypted named-stream framing/credit behavior; all other stream semantics are
+fast fake-stream tests.
+
 ### `integration/README.md` content requirements
 
 The `integration/README.md` must document:
@@ -2018,14 +2677,19 @@ The `integration/README.md` must document:
    fake GuestAudioAgent service, fake ComponentSession with fake
    `SetGrant`/`SetLevel`/`AudioSet` responses);
 6. What `D2B_FIXTURES_FULL` provides for the minijail contract tests.
+7. How to run `integration/real_stream.rs`, the only real cross-Zone stream
+   test; Service/State separation and ownerRef-chain coverage remain hermetic.
 
 ### `README.md` content requirements
 
 The crate `README.md` must document:
 
 1. Provider identity: `Provider/audio-pipewire`;
-2. Exported ResourceType: `AudioState` (link to spec);
-3. Controller and service components; one controller binary, one host mediator binary, one guest agent binary;
+2. Qualified ResourceTypes: `AudioService` and `AudioState`; only owner
+   AudioService is exportable and only projection AudioService is
+   core-generated for ResourceImport;
+3. Controller and service components; one controller binary with deterministic
+   Service/State handlers, one owner host mediator binary, one guest agent binary;
 4. Worker template: `vhost-user-sound-worker`; guest service template: `guest-audio-agent`;
 5. Nix authoring schema (verbatim example from this spec);
 6. `Provider/audio-pipewire.spec.config` options (`captureAlias`; regex
@@ -2035,7 +2699,9 @@ The crate `README.md` must document:
 8. Security: zero capabilities, no PipeWire socket path in public surfaces,
    AudioMediator receives declared pre-opened portal FD from user supervisor
    (not ambient socket), FD routed via ProviderSupervisor to worker LaunchTicket,
-   AudioState reconcile creates no Volume or User resources (`Provider/audio-pipewire`
+   projection Service never opens PipeWire, AudioState always references a
+   same-Zone Service and is never exported/projected, AudioState reconcile
+   creates no Volume or User resources (`Provider/audio-pipewire`
    declares no Provider state Volume and its ProviderStateSet is empty), no broker
    process lifecycle ops, no EphemeralProcess for enforcement, no wpctl binary
    on host or guest, no runtime User.spec.groups mutation;
