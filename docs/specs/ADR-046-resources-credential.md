@@ -54,6 +54,18 @@ for those surfaces:
 - OTEL spans and metrics never label secret bytes, provider-internal identity,
   or token scope values.
 
+Credential resource identity is non-secret but sensitive, high-cardinality
+metadata. Among observable outputs, the only permitted destination for
+`metadata.name`, the canonical Credential ResourceRef, the Credential UID, or
+any digest derived from one of them is an authorization-controlled, bounded
+Zone audit record. The audit schema below is stricter: it retains only
+`resource_name_digest`, never the raw name, ResourceRef, or UID. Credential
+identity is never copied into status (including `status.update` or
+`status.provider`), errors, logs/Debug output, OTEL Resource attributes, span
+attributes, or metric labels. This restriction does not remove identity from
+the resource envelope or from authenticated internal routing/session bindings
+that require the ResourceRef and UID and are not observable output surfaces.
+
 The injected credential client/port in the Credential Provider process acquires
 the secret from the external service. Token delivery to the authorized consumer
 Provider Process uses the end-to-end Noise channel defined in
@@ -286,6 +298,11 @@ MUST NOT appear in status. Implementation-specific observation belongs only in
 that implementation's `status.provider.details`; shared fields MUST NOT be
 duplicated there.
 
+Credential identity remains in the resource envelope, not in status:
+`metadata.name`, the Credential ResourceRef/UID, `resource_name_digest`, and any
+other value derived from them MUST NOT be copied into the universal status
+base, `status.update`, `status.resource`, or `status.provider.details`.
+
 | Field | Rules |
 | --- | --- |
 | `leaseHandle` | Opaque, bounded (max 256 chars), non-secret handle assigned by the provider process; stable across refreshes within one rotation generation; suitable for d2b-bus method routing; never a token or partial token |
@@ -432,40 +449,64 @@ condition and sets a bounded `requeue-at`.
 
 ## RBAC
 
-The Credential ResourceType adds these standard resource verbs to the native
-RBAC model:
+The Credential ResourceType uses the ordinary resource verbs plus the canonical
+Credential-specific resource verbs `use-credential` and `admin-credential`.
+They are resource verbs in the native Role engine, not `sessionVerbs` and not
+ad hoc service-method verbs:
 
 | Verb | Who | Meaning |
 | --- | --- | --- |
 | `get` | Any authorized subject | Read Credential metadata/spec/status (no secret bytes present) |
 | `list` | Any authorized subject | List Credentials matching filters |
 | `watch` | Any authorized subject | Watch Credential events |
-| `create` | Deployer/system-core configuration controller | Create a new Credential resource |
-| `update-spec` | Deployer/system-core configuration controller | Replace Credential spec |
+| `create` | Deployer/system-core configuration controller | Create a new Credential resource; also requires `admin-credential` on subresource `admin` |
+| `update-spec` | Deployer/system-core configuration controller | Replace Credential spec; also requires `admin-credential` on subresource `admin` |
 | `update-status` | Credential controller only | Update Credential status |
 | `update-finalizers` | Credential controller, consumerRef controller | Add/remove owned finalizers |
-| `delete` | Deployer/system-core configuration controller | Request Credential deletion |
-| `use-credential` | Consumer subject authorized via consumerRef | Invoke credential-bound service methods on `d2b.credential.v3` |
+| `delete` | Deployer/system-core configuration controller | Request Credential deletion; also requires `admin-credential` on subresource `admin` |
+| `use-credential` | Consumer subject authorized via consumerRef | Invoke an admitted credential operation under an exact `acquire-token`, `observe`, or `revoke` subresource |
+| `admin-credential` | Authorized operator/configuration controller | Administer Credential lifecycle or an explicit identity reset under the exact `admin` subresource; it does not imply `create`, `update-spec`, or `delete` by itself |
 
-`use-credential` is a runtime service verb evaluated by d2b-bus when a consumer
-invokes a credential-bound method. It is checked against the same
-Role/RoleBinding engine that governs resource verbs. The Role rule shape:
+Credential Roles use the existing `subresources` rule field. They do not add an
+`operationClasses` field. A rule granting either Credential-specific verb MUST
+name exact, non-empty Credential subresources:
 
 ```yaml
 rules:
   - resourceTypes: [Credential]
     verbs: [use-credential]
+    subresources: [acquire-token, observe]
     resourceNames: [work-entra]
     zones: [dev]
     executionRefs: [Guest/work-vm]
-    operationClasses: [acquire-token, refresh-token]
+    sessionVerbs: []
+  - resourceTypes: [Credential]
+    verbs: [admin-credential]
+    subresources: [admin]
+    resourceNames: [work-entra]
+    zones: [dev]
+    executionRefs: []
+    sessionVerbs: []
 ```
 
-`operationClasses` is a Credential-specific rule extension narrowing which
-operation classes are authorized in the bind. An empty list means no
-operation-class restriction beyond the resource spec's own `allowedOperations`.
-The effective operation set is the intersection of the resource `allowedOperations`
-and the Role `operationClasses`.
+The closed admission mapping is:
+
+| Credential action | Required resource verb | Required Role `subresources` value |
+| --- | --- | --- |
+| `AcquireToken`, `RefreshToken`, `SignChallenge`, `BeginLogin` | `use-credential` | `acquire-token` |
+| `Status`, `InspectMetadata`, `ObserveLogin` | `use-credential` | `observe` |
+| `RevokeToken`, `CancelLogin` | `use-credential` | `revoke` |
+| Resource create/spec update/delete and explicit identity reset | `admin-credential` in addition to the ordinary mutation verb | `admin` |
+
+For each service method, `spec.allowedOperations` remains the independent,
+provider-capability ceiling and is checked for the exact operation class
+(`acquire-token`, `refresh-token`, `revoke-token`, `sign-challenge`, or
+`inspect-metadata`). Effective permission is the intersection of the exact
+verb/subresource Role grant, `spec.allowedOperations`, `consumerRef`, scope, and
+the structural Provider/component checks. An empty/wildcard subresource grant,
+an unknown subresource, `use-credential/admin`, or
+`admin-credential/acquire-token|observe|revoke` fails admission. Method names
+such as `begin-login` are not RBAC verbs.
 
 Status ownership: only the Credential controller's exact registered process
 generation may call `UpdateStatus` on a Credential resource.
@@ -492,14 +533,14 @@ Route key example:
 
 ### Service methods
 
-| Method | Required operation class | Outer DTO fields | Token bytes |
-| --- | --- | --- | --- |
-| `Status` | none (inspect-metadata or RBAC get) | `CredentialStatusResponse`: leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs, placementBinding | none |
-| `AcquireToken` | `acquire-token` | `AcquireTokenResponse`: leaseHandle, sourceVersion, rotationGeneration, expiresAtUnixMs | raw token bytes in a dedicated sensitive ComponentSession record (see §Credential-delivery endpoint contract) |
-| `RefreshToken` | `refresh-token` | `RefreshTokenResponse`: leaseHandle, sourceVersion, rotationGeneration, new expiresAtUnixMs | raw token bytes in a dedicated sensitive ComponentSession record |
-| `RevokeToken` | `revoke-token` | `RevokeTokenResponse`: closed revocation result (Revoked or AlreadyRevoked), revokedAtUnixMs | none |
-| `SignChallenge` | `sign-challenge` | `SignChallengeResponse`: outcome code | signature bytes in a dedicated sensitive ComponentSession record (same channel as token delivery) |
-| `InspectMetadata` | `inspect-metadata` | `InspectMetadataResponse`: leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs | none |
+| Method | Required exact operation class | Required Role permission | Outer DTO fields | Token bytes |
+| --- | --- | --- | --- | --- |
+| `Status` | none | `use-credential/observe` (or ordinary authorized `get` for the base resource projection) | `CredentialStatusResponse`: leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs, placementBinding | none |
+| `AcquireToken` | `acquire-token` | `use-credential/acquire-token` | `AcquireTokenResponse`: leaseHandle, sourceVersion, rotationGeneration, expiresAtUnixMs | raw token bytes in a dedicated sensitive ComponentSession record (see §Credential-delivery endpoint contract) |
+| `RefreshToken` | `refresh-token` | `use-credential/acquire-token` | `RefreshTokenResponse`: leaseHandle, sourceVersion, rotationGeneration, new expiresAtUnixMs | raw token bytes in a dedicated sensitive ComponentSession record |
+| `RevokeToken` | `revoke-token` | `use-credential/revoke` | `RevokeTokenResponse`: closed revocation result (Revoked or AlreadyRevoked), revokedAtUnixMs | none |
+| `SignChallenge` | `sign-challenge` | `use-credential/acquire-token` | `SignChallengeResponse`: outcome code | signature bytes in a dedicated sensitive ComponentSession record (same channel as token delivery) |
+| `InspectMetadata` | `inspect-metadata` | `use-credential/observe` | `InspectMetadataResponse`: leaseState, rotationGeneration, sourceVersion, expiresAtUnixMs | none |
 
 The `Status`, `RevokeToken`, and `InspectMetadata` response DTOs are non-secret:
 they carry only opaque identifiers, outcome codes, and timestamps. `AcquireToken`,
@@ -508,7 +549,9 @@ dedicated sensitive ComponentSession record (see §Credential-delivery endpoint
 contract). Every method:
 
 - rejects a request where the authenticated subject is not the declared
-  `consumerRef` (when consumerRef is set) and RBAC `use-credential` is denied;
+  `consumerRef` (when consumerRef is set);
+- rejects before Provider/Endpoint dispatch unless the Role engine allows the
+  exact resource verb and mapped `subresources` value above;
 - rejects an operation class not in `spec.allowedOperations`;
 - returns a stable closed error code rather than provider-internal diagnostics;
 - carries operation/idempotency/correlation IDs from d2b-bus context;
@@ -611,8 +654,9 @@ full binding before accepting records.
 
 d2b-bus performs the following checks before authorizing the route:
 
-- RBAC `use-credential` for the authenticated consumer Provider subject,
-  Credential ResourceRef, and operation class;
+- RBAC `use-credential` for the authenticated consumer Provider subject and
+  Credential ResourceRef under the exact mapped `acquire-token`, `observe`, or
+  `revoke` Role subresource;
 - `spec.consumerRef` matches the consumer Provider identity from the signed
   component descriptor;
 - `spec.allowedOperations` includes the operation class;
@@ -638,8 +682,9 @@ traverse the standard ComponentSession/d2b-bus stack defined in
    identity evidence mapping the consumer to an exact Zone subject.
 
 2. d2b-bus checks native RBAC `use-credential` for the authenticated subject,
-   target Credential ResourceRef, operation class, and current
-   Role/RoleBinding/Provider revisions.
+   target Credential ResourceRef, exact mapped Role subresource, and current
+   Role/RoleBinding/Provider revisions, then separately checks the exact
+   operation class against `spec.allowedOperations`.
 
 3. For non-secret methods, d2b-bus routes the call to the exact credential
    provider process using an enrolled `Noise_KK_25519_ChaChaPoly_SHA256`
@@ -826,7 +871,8 @@ Stable Credential-specific error codes:
 
 All error messages are bounded (max 240 UTF-8 chars), stripped of control
 characters, and must not contain token bytes, URLs, UUIDs, provider diagnostics,
-host paths, or connection string shapes.
+host paths, connection string shapes, a Credential resource name/ResourceRef/
+UID, or any digest derived from Credential identity.
 
 ## Audit
 
@@ -834,11 +880,14 @@ Audit records for Credential operations:
 
 | Event | Fields retained |
 | --- | --- |
-| Credential resource create/update/delete | Zone, subject digest, `resource_name_digest`, verb, revision result, authorization decision |
-| `AcquireToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RefreshToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RevokeToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, revocation result code |
-| `SignChallenge` | Zone, subject digest, `resource_name_digest`, operation class, outcome code (no signature bytes) |
+| Credential resource create/update/delete | Zone, subject digest, `resource_name_digest`, ordinary mutation verb, `admin-credential/admin` decision, revision result |
+| `AcquireToken` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/acquire-token` decision, `rotationGeneration`, outcome code, idempotency key digest |
+| `RefreshToken` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/acquire-token` decision, `rotationGeneration`, outcome code, idempotency key digest |
+| `RevokeToken` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/revoke` decision, `rotationGeneration`, revocation result code |
+| `SignChallenge` | Zone, subject digest, `resource_name_digest`, operation class, `use-credential/acquire-token` decision, outcome code (no signature bytes) |
+| `Status`, `InspectMetadata`, `ObserveLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/observe` decision, bounded outcome code |
+| `BeginLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/acquire-token` decision, bounded outcome code (no challenge/UI bytes) |
+| `CancelLogin` | Zone, subject digest, `resource_name_digest`, `use-credential/revoke` decision, bounded outcome code |
 | Rotation | Zone, `resource_name_digest`, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
 | Provider generation change revocation | Zone, `resource_name_digest`, policy applied, outcome code |
 
@@ -848,7 +897,9 @@ authorization-controlled Zone audit stream and, for caller-initiated
 operations, after the authorization decision. Raw Credential name, ResourceRef,
 and UID are excluded even from these records. The digest is audit-only and is
 never copied to OTEL Resource attributes, span attributes, metric labels, logs,
-collector diagnostics, or support summaries.
+status, errors, collector diagnostics, or support summaries. Audit schemas cap
+record size and field count; failed/unauthorized requests cannot use audit as an
+identity oracle.
 
 Excluded from all audit records: token bytes, key material, passwords, bearer
 strings, provider-internal diagnostics, host paths, connection strings,
@@ -1508,7 +1559,7 @@ workspace/package policy failure enforced by `make test-policy` (via
 | Path | Contents |
 | --- | --- |
 | `src/` | Provider implementation, controller, service handler, binary entry points, and all colocated unit tests (`#[cfg(test)]` modules within `src/` files). One binary per role declared in the dossier's "Process components" table. |
-| `tests/` | Hermetic Cargo integration tests (`#[test]` in `tests/*.rs`, no external process or container): ResourceType/controller lifecycle, provider conformance (`d2b-provider-toolkit::conformance::check_provider_conformance`), fault injection (locked/unavailable/interaction-required/generation-mismatch/oversize), canary enforcement (secret/endpoint/object-path canaries absent from all output), delivery-session binding, and placement rejection tests. Run with `cargo test -p d2b-provider-credential-<impl>`. |
+| `tests/` | Hermetic Cargo integration tests (`#[test]` in `tests/*.rs`, no external process or container): ResourceType/controller lifecycle, provider conformance (`d2b-provider-toolkit::conformance::check_provider_conformance`), fault injection (locked/unavailable/interaction-required/generation-mismatch/oversize), secret canary enforcement, Credential name/ResourceRef/UID/digest canaries absent from status/errors/logs and every OTEL Resource/span attribute/metric label (with only authorized bounded audit retaining `resource_name_digest`), delivery-session binding, and placement rejection tests. Run with `cargo test -p d2b-provider-credential-<impl>`. |
 | `integration/` | Heavier fixtures and scenarios invoked by existing test orchestration (`make test-integration`, `make test-host-integration`): container-backed Provider service, Host/Guest placement, cross-process d2b-bus routing, provider-system startup/restart/drain, and Nix-generation cleanup/rollback. Files are shell scripts, Nix expressions, or container specs consumed by `tests/integration/containers/` or `tests/host-integration/`; they are NOT run by `cargo test`. |
 | `README.md` | All sections listed in §Provider README required sections below. |
 
@@ -1894,7 +1945,7 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Current anchor | `packages/d2b-realm-provider/src/credential.rs`, `provider.rs`; `packages/d2b-core/src/privileges.rs`, `static_invariants.rs`; `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; `nixos-modules/assertions.nix` |
 | Evidence class | `CredentialProvider` trait with status/enrollment is `implemented-and-reachable`; three-plane opaque refs are `implemented-and-reachable`; `ProviderWorkloadIdentity::ManagedIdentity` in `ProviderGuestdBootstrapContract` is `implemented-and-reachable`; `LauncherMetadataInvariants.no_secrets_or_credentials` is `implemented-and-reachable`; v3 `d2b-userd` (`packages/d2b-userd/`) is a guest exec stub only (`test-only-or-preview`; no credential functionality); Credential ResourceType, lease model, operation classes, typed service methods, controller, reconciliation, and async loop are `ADR-only` |
 | Behavior retained | Zero secret bytes invariant (structurally enforced); `OpaqueAzureRef` charset/length validation; typed capability denial error shape; bounded/redacted error messages; injected-client pattern keeps secret material in the client process |
-| Required delta | Credential ResourceType schema; opaque lease/typed operation service; three Credential Provider crates/controllers; d2b-bus routing; async reconciliation integration; Nix resource declaration/assertion; audit/OTEL |
+| Required delta | Credential ResourceType schema; opaque lease/typed operation service; canonical `use-credential`/`admin-credential` Role admission through exact existing `subresources`; three Credential Provider crates/controllers; d2b-bus routing; async reconciliation integration; Nix resource declaration/assertion; audit/OTEL |
 | Reuse path | Copy/adapt three Credential Provider implementations and their test suites from main as named in each dossier; reuse `OpaqueAzureRef` directly from v3 `d2b-realm-provider/src/credential.rs`; adapt `SecretAccess`/privilege audit shape from `d2b-core/src/privileges.rs` |
 | Replacement/deletion | Old `CredentialProvider` trait removed only after all three v3 Providers have tested replacement controllers; old three-plane types remain in v3 baseline and are not removed until Credential resource integration is live |
 | Feasibility proof | Main proves three Provider implementations; each has fake-client test suites covering acquire/refresh/revoke/inspect, idempotency, locked/unavailable/interaction-required, canary enforcement, generation validation, and lease cardinality limits |
@@ -1912,10 +1963,10 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Reuse source | main `a1cc0b2d`: `d2b-provider-credential-secret-service/src/lib.rs` types: `SecretServiceLeaseRequest`, `SecretServiceLeaseRef`, `SecretServiceLeaseGrant`, `SecretServiceLeaseInspection`, `SecretServiceLeaseRenewal`, `SecretServiceLeaseRevocation`, `SecretServiceLeaseState`; parallel entra/managed-identity types; `CredentialLease`, `CredentialLeaseRequest`, `CredentialLeaseState` from `d2b-contracts/src/v2_provider.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/credential.rs` |
-| Detailed design | Define `CredentialSpec`, `CredentialStatus`, `CredentialLeaseHandle` (opaque bounded newtype), `CredentialRotationPolicy`, `CredentialRevocationPolicy`, `CredentialScope`, `OperationClass` enum, `CredentialLeaseState`, `PlacementBinding`, `CredentialConditionType`, and all serde/validation/redaction helpers; reuse `OpaqueAzureRef` from v3 baseline directly; enforce zero-secret-bytes charset validation on all string fields at construction Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Define `CredentialSpec`, `CredentialStatus`, `CredentialLeaseHandle` (opaque bounded newtype), `CredentialRotationPolicy`, `CredentialRevocationPolicy`, `CredentialScope`, `OperationClass` enum, `CredentialLeaseState`, `PlacementBinding`, `CredentialConditionType`, and all serde/validation/redaction helpers; reuse `OpaqueAzureRef` from v3 baseline directly; enforce zero-secret-bytes charset validation on all string fields at construction; prevent Credential name/ResourceRef/UID or any identity-derived digest from serializing into any status layer or typed error Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Credential controller, Provider dossier schemas, Nix compiler, and resource store all consume one canonical contract |
 | Data migration | Full d2b 3.0 reset; no v2 credential import |
-| Validation | Schema golden vectors; charset/length tests; serde unknown-field rejection; `OpaqueAzureRef` round-trip and secret-shape rejection parity; `leaseHandle` and `sourceVersion` opaque newtype tests; status redaction tests |
+| Validation | Schema golden vectors; charset/length tests; serde unknown-field rejection; `OpaqueAzureRef` round-trip and secret-shape rejection parity; `leaseHandle` and `sourceVersion` opaque newtype tests; status/error redaction tests with Credential name/ResourceRef/UID/digest canaries |
 | Removal proof | Old `CredentialProvider` trait and `CredentialStatus` enum removed only after all v3 Credential Provider controllers consume this contract |
 
 ### ADR046-credential-002
@@ -1928,10 +1979,10 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-contracts/proto/v2/provider_credential.proto` method names |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/proto/v3/credential.proto`; `packages/d2b-credential-service/src/{service.rs, client.rs, server.rs}` |
-| Detailed design | Define `d2b.credential.v3` protobuf service with methods: `Status`, `AcquireToken`, `RefreshToken`, `RevokeToken`, `SignChallenge`, `InspectMetadata`; each request carries `credential_ref`, `operation_class`, `operation_id`, `idempotency_key`, `requested_expiry_unix_ms`, `deadline_unix_ms`; `Status`, `RevokeToken`, and `InspectMetadata` responses carry only non-secret metadata (leaseHandle digest, rotationGeneration, sourceVersion, expiresAtUnixMs, state, outcome code); `AcquireToken`, `RefreshToken`, and `SignChallenge` responses additionally include a `delivery_session_params` field carrying the binding contract fields required to establish the end-to-end credential-delivery ComponentSession (see §Credential-delivery endpoint contract); the token bytes themselves travel in the separate Noise-encrypted delivery session, never in the outer DTO; strict unknown-field rejection; bounded message sizes; all record wrappers for delivery sessions must be zeroizing types |
-| Integration | d2b-bus routes `d2b.credential.v3` service to the exact credential provider Process identified by `Credential.spec.providerRef`; RBAC checks `use-credential` verb before dispatch; for `AcquireToken`/`RefreshToken`/`SignChallenge`, bus additionally authorizes the credential-delivery endpoint route and forwards opaque Noise-encrypted delivery records without terminating or buffering them; bus never stores or inspects delivery record plaintext |
+| Detailed design | Define `d2b.credential.v3` protobuf service with methods: `Status`, `AcquireToken`, `RefreshToken`, `RevokeToken`, `SignChallenge`, `InspectMetadata`; each request carries `credential_ref`, `operation_class`, `operation_id`, `idempotency_key`, `requested_expiry_unix_ms`, `deadline_unix_ms`; map methods to the existing Role `subresources` values (`acquire-token`, `observe`, `revoke`) under the canonical `use-credential` resource verb and map administrative lifecycle to `admin-credential/admin`, never to a new Role field or method-name verb; `Status`, `RevokeToken`, and `InspectMetadata` responses carry only non-secret metadata (leaseHandle digest, rotationGeneration, sourceVersion, expiresAtUnixMs, state, outcome code); `AcquireToken`, `RefreshToken`, and `SignChallenge` responses additionally include a `delivery_session_params` field carrying the binding contract fields required to establish the end-to-end credential-delivery ComponentSession (see §Credential-delivery endpoint contract); the token bytes themselves travel in the separate Noise-encrypted delivery session, never in the outer DTO; strict unknown-field rejection; bounded message sizes; all record wrappers for delivery sessions must be zeroizing types |
+| Integration | d2b-bus routes `d2b.credential.v3` service to the exact credential provider Process identified by `Credential.spec.providerRef`; before dispatch RBAC checks the exact `use-credential` verb and mapped Role `subresources` value, then separately checks `spec.allowedOperations`; for `AcquireToken`/`RefreshToken`/`SignChallenge`, bus additionally authorizes the credential-delivery endpoint route and forwards opaque Noise-encrypted delivery records without terminating or buffering them; bus never stores or inspects delivery record plaintext |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Protocol golden vectors for each method; malformed/oversize rejection; `leaseHandle` opacity tests (secret-canary must not appear in outer DTO or delivery routing metadata); locked/unavailable/denied/expired state tests; delivery session binding contract round-trip; zeroizing record type unit tests; delivery channel never materialized in non-delivery method tests |
+| Validation | Protocol golden vectors for each method; Role matrix for exact `acquire-token`, `observe`, and `revoke` subresources under `use-credential`, plus `admin-credential/admin` admission; deny empty/wildcard/unknown/mismatched subresources and any `operationClasses`/method-name-verb input before Provider dispatch; malformed/oversize rejection; `leaseHandle` opacity tests (secret-canary must not appear in outer DTO or delivery routing metadata); locked/unavailable/denied/expired state tests; delivery session binding contract round-trip; zeroizing record type unit tests; delivery channel never materialized in non-delivery method tests |
 | Removal proof | Old v2 `CredentialProviderService` proto removed only after all v3 callers migrate |
 
 ### ADR046-credential-003
@@ -1960,10 +2011,10 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-entra/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeEntraClient`, `credential_canary`/`endpoint_canary`, interaction-required, colocated-consumer, generation-mismatch tests) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-entra/src/{lib.rs, controller.rs, service.rs, main.rs}`; `packages/d2b-provider-credential-entra/tests/{lifecycle.rs, conformance.rs, faults.rs, canary.rs, delivery.rs, placement.rs}`; `packages/d2b-provider-credential-entra/integration/{container-service.sh, guest-placement.nix, cleanup-rollback.sh}`; `packages/d2b-provider-credential-entra/README.md` (all §Provider README required sections) |
-| Detailed design | Adapt `EntraCredentialProvider` and `EntraCredentialProviderFactory` to v3 service; replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (user-agent, guest-agent only; reject host-system); validate `tenantId` config field using `OpaqueAzureRef::parse` from v3 baseline `d2b-realm-provider/src/credential.rs` (note: current v3 source field is named via `AzureControlPlaneRef`; target field name is `tenantId`); retain `EntraCredentialClient` trait unchanged; map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not denied); enforce `EntraCredentialOwner::ExactConsumer` so only the declared `consumerRef` may acquire Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
+| Detailed design | Adapt `EntraCredentialProvider` and `EntraCredentialProviderFactory` to v3 service; replace v2 `AgentPlacementBinding` with v3 `PlacementBinding` enum (user-agent, guest-agent only; reject host-system); validate `tenantId` config field using `OpaqueAzureRef::parse` from v3 baseline `d2b-realm-provider/src/credential.rs` (note: current v3 source field is named via `AzureControlPlaneRef`; target field name is `tenantId`); retain `EntraCredentialClient` trait unchanged; map `EntraClientError::InteractionRequired` to `credential-provider-unavailable` (not denied); enforce `EntraCredentialOwner::ExactConsumer` so only the declared `consumerRef` may acquire; enforce canonical Credential verb/subresource admission, provider-visible Endpoint plus exact consumer policy, and audit-only Credential identity as frozen in the dedicated Entra dossier Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | User-domain or system-domain Process under Guest; d2b-bus routing; Credential controller |
 | Data migration | Full reset |
-| Validation | **`src/` unit**: `EntraCredentialClient` trait API, `OpaqueAzureRef::parse` on `tenantId`, `EntraCredentialOwner::ExactConsumer` guard, `EntraClientState` transitions. **`tests/` Cargo integration**: `lifecycle.rs` (acquire/refresh/revoke/inspect with `FakeEntraClient`); `conformance.rs` (all conformance arms); `faults.rs` (interaction-required → unavailable, generation-mismatch, colocated-consumer rejection); `canary.rs` (`credential_canary` and `endpoint_canary` absent from every response and delivery record); `delivery.rs` (delivery-session binding, zeroizing, replay-safe); `placement.rs` (host-system placement rejected). **`integration/` fixtures**: `container-service.sh`; `guest-placement.nix` (user-domain and system-domain Process on Guest in runNixOSTest); `cleanup-rollback.sh`. |
+| Validation | **`src/` unit**: `EntraCredentialClient` trait API, `OpaqueAzureRef::parse` on `tenantId`, `EntraCredentialOwner::ExactConsumer` guard, `EntraClientState` transitions. **`tests/` Cargo integration**: `lifecycle.rs` (acquire/refresh/revoke/inspect with `FakeEntraClient`); `conformance.rs` (all conformance arms, canonical Endpoint visibility/consumer policy, and exact Role verb/subresource mapping); `faults.rs` (interaction-required → unavailable, generation-mismatch, colocated-consumer and mismatched Role-subresource rejection); `canary.rs` (secret plus Credential name/ResourceRef/UID/digest canaries absent from status/errors/logs and every OTEL Resource/span attribute/metric label; authorized audit retains only `resource_name_digest`); `delivery.rs` (delivery-session binding, zeroizing, replay-safe); `placement.rs` (host-system placement rejected). **`integration/` fixtures**: `container-service.sh`; `guest-placement.nix` (user-domain and system-domain Process on Guest in runNixOSTest); `cleanup-rollback.sh`. |
 | Removal proof | Same as ADR046-credential-003 |
 
 ### ADR046-credential-005
@@ -1992,10 +2043,10 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-toolkit/src/conformance.rs` (provider conformance pattern); `packages/d2b-provider-toolkit/src/adapter.rs` (controller toolkit pattern) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-<impl>/src/controller.rs`; `packages/d2b-contracts/src/v3/credential_controller.rs` |
-| Detailed design | Implement Credential controller handler conforming to `ADR-046-resource-reconciliation` async loop; implement `reconcile`, `observe`, `finalize`, `drain`, and `health` handlers; implement rotation state machine (proactive/on-expiry/on-demand policies); implement `provider-revoke` finalizer execution with `revocation.onOwnerDelete` policy; implement provider-generation-change detection and revocation; implement `CredentialReady`, `RotationDue`, `ProviderUnavailable`, `LeaseRevoked` condition logic; implement bounded idempotency key derivation (Credential UID + rotationGeneration + operation class, no secret material); implement `observeInterval=30s` health check calling `InspectMetadata`; bounded retry/backpressure with typed `credential-rotation-failed` outcome; enforce `MAX_LOCAL_LEASES=256` per controller provider instance |
+| Detailed design | Implement Credential controller handler conforming to `ADR-046-resource-reconciliation` async loop; implement `reconcile`, `observe`, `finalize`, `drain`, and `health` handlers; implement rotation state machine (proactive/on-expiry/on-demand policies); implement `provider-revoke` finalizer execution with `revocation.onOwnerDelete` policy; implement provider-generation-change detection and revocation; implement `CredentialReady`, `RotationDue`, `ProviderUnavailable`, `LeaseRevoked` condition logic; use controller Roles with exact `acquire-token`, `observe`, and `revoke` subresources under `use-credential` for service calls and structural status/finalizer ownership, never a Credential-specific Role field; implement bounded idempotency key derivation (Credential UID + rotationGeneration + operation class, no secret material); implement `observeInterval=30s` health check calling `InspectMetadata`; bounded retry/backpressure with typed `credential-rotation-failed` outcome; enforce `MAX_LOCAL_LEASES=256` per controller provider instance |
 | Integration | Provider controller Process → d2b-bus → `d2b.credential.v3` service in provider process → injected client/port; status updates through resource API; watch subscription on Credential, Provider, Host/Guest dependency types |
 | Data migration | None; v3 reset |
-| Validation | Controller state-machine golden vectors; rotation-policy matrix (proactive/on-demand/on-expiry × success/locked/unavailable/expired); finalizer execution tests; provider-generation-change revocation tests; idempotency key derivation tests; observe-interval drift detection test; canary tests confirm zero secret bytes in all controller-written status fields |
+| Validation | Controller state-machine golden vectors; rotation-policy matrix (proactive/on-demand/on-expiry × success/locked/unavailable/expired); exact Role-subresource admission matrix; finalizer execution tests; provider-generation-change revocation tests; idempotency key derivation tests; observe-interval drift detection test; canary tests confirm zero secret bytes and no Credential name/ResourceRef/UID/digest in any controller-written status or error |
 | Removal proof | Not applicable (new controller) |
 
 ### ADR046-credential-007
@@ -2008,9 +2059,9 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-resources.nix` (generic schema-derived resource options; not type-specific), `nixos-modules/activation-nixos-cleanup.nix` |
 | Detailed design | **(1) Schema-derived options and eval-time validation**: implement `d2b.zones.<zone>.resources.<name> = { type = "..."; spec = { ... }; }` as a generic attrset option; an optional `metadata` sub-attr may contain `ownerRef` and/or presentation `labels`/`annotations`. Nix option types, defaults, and inline docs for `spec` fields are generated from the committed `ResourceTypeSchema` JSON (`docs/reference/schemas/v3/credential.json`) and the signed Provider schema — no bespoke options module is maintained separately. `metadata.name` derives from the attr key; `metadata.zone` from the Zone attr key; `apiVersion` defaults to `resources.d2bus.org/v3`; `status`/`uid`/`generation`/`revision`/timestamps/`managedBy`/`configurationGeneration` are not authored. Core assigns `metadata.managedBy = "configuration"` and `metadata.configurationGeneration = <N>` to all configuration-managed resources at create/update time; these are never authored in Nix. Eval-time assertions (applied to all entries with `type = "Credential"`): `spec.providerRef` resolves a Provider in the same Zone whose `credentialDomains` includes `spec.scope.domainFilter` and whose `spec.artifactId` (a sibling of `spec.config` on the Provider resource, not inside `spec.config`) resolves an artifact catalog entry of `type = "provider"`; `spec.audience` charset (`^[A-Za-z0-9._:/@-]+$`, max 256); `spec.rotation.proactiveWindowMs < maxLeaseLifetimeMs / 2`; `spec.consumerRef`/`scope.executionRef`/`scope.userRef` resolve declared Zone resources; duplicate `(providerRef, executionRef, userRef, audience)` tuple rejected; `contains_sensitive_shape` on all string fields; Provider-specific placement constraints; `allowedOperations` ⊆ `providerRef.supportedOperations`. **(2) Canonical JSON and bundle emission**: render `spec` attr directly to `spec` object in canonical JSON (no field renames/re-nesting); `metadata` in output contains only derived `name`/`zone` and optionally Nix-authored `ownerRef`/`labels`/`annotations`; `apiVersion` is top-level, not inside `metadata`; `finalizers` is omitted from the Nix-rendered input (core manages finalizers, never accepts them from the bundle); no management labels are emitted by Nix; sort bundle by `(type, name)`; write to `/etc/d2b/zones/<zone>/resource-bundle.json` with digest. **(2b) Artifact catalog emission**: derivation-valued inputs (`d2b.artifacts.<id>`) are compiled separately into an integrity-pinned artifact catalog (`/etc/d2b/zones/<zone>/artifact-catalog.json`) with its own digest header; each entry records `id`, `type`, `sha256`, and bounded closure metadata; store paths are private catalog implementation data absent from the resource bundle, status, audit, and logs; `activation-nixos` verifies both digests before any create/update; missing or wrong-type `artifactId` references fail the NixOS build. **(3) Build-time schema validation**: validate rendered JSON against `docs/reference/schemas/v3/credential.json` and Provider-specific schema; enforce `secretRef` fields use `Credential/<name>` refs; enforce no store paths in any resource bundle or status output; drift gate (`make test-drift`) regenerates schemas with `cargo xtask gen-schemas` and asserts `git diff --exit-code`; Nix options module drift checked in the same gate. **(4) Generation transition and cleanup contract**: activation-nixos controller verifies SHA-256 digest of both resource bundle and artifact catalog, creates/updates desired-set resources, activates without blocking on cleanup, issues async Delete for absent configuration-managed resources (those with `metadata.managedBy = "configuration"`), sets Degraded/Cleanup=True on removed resources; retains up to `retainedConfigurationMax` (default 3, range 1..16) prior bundles; oldest prune when count exceeded; no time-based rollback window. **(5) Configuration-managed vs controller/API isolation**: `managedBy` and `ownerRef` are orthogonal; configuration-managed and API-created resources may each carry an optional same-Zone `ownerRef` and participate in owner cascade. Cleanup checks `metadata.managedBy = "configuration"` before issuing Delete; resources with `metadata.managedBy = "controller"` or `metadata.managedBy = "api"` are never deleted by this path; API-created resources persist until explicit Delete and are never generation-swept. |
-| Integration | `activation-nixos` Provider creates/updates Credential resources from emitted envelopes; Credential controller `provider-revoke` finalizer handles cleanup Deletes; owner controller reconciles children of deleted configuration-managed Credentials |
+| Integration | `activation-nixos` Provider creates/updates Credential resources from emitted envelopes with both the ordinary mutation permission and `admin-credential/admin`; Credential controller `provider-revoke` finalizer handles cleanup Deletes; owner controller reconciles children of deleted configuration-managed Credentials |
 | Data migration | None; v3 reset |
-| Validation | **(eval/build)**: nix-unit golden JSON envelope for each example (spec shape, no management labels in Nix output, sort, digest); assertion-failure tests for secret-shaped audience, mismatched providerRef/domainFilter, proactiveWindow > half maxLifetime, duplicate binding tuple, unresolved refs; artifact catalog: assertion-failure for missing `artifactId`, wrong-type `artifactId`, duplicate catalog ID; bundle + artifact catalog digest round-trip; artifact catalog store-path absence from resource bundle and status; Provider-specific schema cross-check; `make test-drift` schema drift gate. **(runtime integration in `tests/host-integration/`)**: `credential-cleanup-basic` (removed resource reaches Deleted); `credential-cleanup-nonblocking` (activation Ready before cleanup finalizer finishes); `credential-cleanup-pending-status` (Cleanup=True on removed resource, PendingCleanup=True on Provider); `credential-cleanup-stalled` (Degraded stall detection and recovery); `credential-cleanup-controller-children-preserved` (ownerRef children cleaned by Credential controller); `credential-cleanup-no-dynamic-deletion` (controller-created Credential with `managedBy = "controller"` not deleted); `credential-retained-generation-count` (up to retainedConfigurationMax bundles retained; rollback re-creates from retained bundle; oldest pruned when count exceeded); `credential-bundle-digest-mismatch` (tampered bundle aborts activation). |
+| Validation | **(eval/build)**: nix-unit golden JSON envelope for each example (spec shape, no management labels in Nix output, sort, digest); assertion-failure tests for secret-shaped audience, mismatched providerRef/domainFilter, proactiveWindow > half maxLifetime, duplicate binding tuple, unresolved refs; generated activation Role contains `admin-credential` with exact `subresources = [ "admin" ]` and no undeclared Role field; artifact catalog: assertion-failure for missing `artifactId`, wrong-type `artifactId`, duplicate catalog ID; bundle + artifact catalog digest round-trip; artifact catalog store-path absence from resource bundle and status; Provider-specific schema cross-check; `make test-drift` schema drift gate. **(runtime integration in `tests/host-integration/`)**: `credential-cleanup-basic` (removed resource reaches Deleted); `credential-cleanup-nonblocking` (activation Ready before cleanup finalizer finishes); `credential-cleanup-pending-status` (Cleanup=True on removed resource, PendingCleanup=True on Provider); `credential-cleanup-stalled` (Degraded stall detection and recovery); `credential-cleanup-controller-children-preserved` (ownerRef children cleaned by Credential controller); `credential-cleanup-no-dynamic-deletion` (controller-created Credential with `managedBy = "controller"` not deleted); `credential-retained-generation-count` (up to retainedConfigurationMax bundles retained; rollback re-creates from retained bundle; oldest pruned when count exceeded); `credential-bundle-digest-mismatch` (tampered bundle aborts activation). |
 | Removal proof | Not applicable (new module) |
 
 ### ADR046-credential-008
@@ -2022,8 +2073,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Current source | `packages/d2b-core/src/privileges.rs:SecretAccess` (implemented-and-reachable); `d2b-realm-provider/src/error.rs:ProviderDiagnostic`/`contains_sensitive_shape` (implemented-and-reachable); `packages/d2b-contract-tests/tests/policy_observability.rs` (reachable audit policy tests) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-<impl>/src/audit.rs`, `telemetry.rs`; `packages/d2b-contract-tests/tests/credential_audit.rs` |
-| Detailed design | Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest`; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); implement `contains_sensitive_shape` checks in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `"secret-canary"`, `"entra-token-canary"`, `"managed-identity-canary"`, Credential name/ref/UID/digest canaries, and Zone name values never appear in any metric label, span attribute, log line, or status field, and that Credential identity canaries are also absent from OTEL Resource attributes |
+| Detailed design | Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest` after authorization and no identity-bearing record elicited by a denied request; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); implement `contains_sensitive_shape` checks in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `"secret-canary"`, `"entra-token-canary"`, `"managed-identity-canary"`, Credential name/ref/UID/digest canaries, and Zone name values never appear in any metric label, span attribute, log line, status field, error, or collector diagnostic, and that Credential identity canaries are also absent from OTEL Resource attributes |
 | Integration | Credential controller and service handlers emit audit records and telemetry through Zone audit/OTEL paths |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Canary tests across all three Provider crates; authorized audit record field-presence tests require `resource_name_digest` and reject raw Credential name/ResourceRef/UID; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived key; Credential name/ref/UID/digest canaries are absent from every OTEL Resource attribute, span attribute, and metric label; Zone-name canaries are absent from spans and labels while resource-attribute tests preserve the generic collector allowlist including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; complete Credential metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
+| Validation | Canary tests across all three Provider crates; authorized audit record field-presence tests require `resource_name_digest` and reject raw Credential name/ResourceRef/UID, while denied-request tests emit no identity-bearing audit; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived key; Credential name/ref/UID/digest canaries are absent from every status field, error, log/Debug line, collector diagnostic, OTEL Resource attribute, span attribute, and metric label; Zone-name canaries are absent from spans and labels while resource-attribute tests preserve the generic collector allowlist including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; complete Credential metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
 | Removal proof | Not applicable |

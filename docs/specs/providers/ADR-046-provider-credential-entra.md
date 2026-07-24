@@ -218,9 +218,12 @@ spec:
   purpose: credential-entra.d2bus.org/entra-login-token
   serviceFingerprint: credential-entra.d2bus.org/EntrablauLoginTokenService/v1
   locality: guest-local
-  visibility: zone
+  visibility: provider
   attachmentPolicy: component-session
   consumerPolicy:
+    allowedSubjects:
+      - Provider/credential-entra
+      - Provider/runtime-azure-container-apps
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
@@ -236,20 +239,29 @@ TPM paths, credential file paths, access tokens, refresh tokens, or user PII.
 Endpoint resolution returns an authorized launch ticket or fails closed with
 `endpoint-resolve-denied`.
 
+The example deliberately uses the canonical `provider` visibility value.
+`owner` would exclude the exact external consumer Provider, while `zone` would
+make every same-Zone subject a visibility candidate. `consumerPolicy` then
+narrows resolution to the orchestration Provider and the Credential's exact
+consumer Provider; ordinary Role/RoleBinding authorization must also allow
+`resolve`. Admission accepts only `owner|provider|zone`, denies unknown
+visibility aliases, and requires every present `consumerPolicy` dimension to
+match.
+
 ### 4.4 Typed service methods
 
 Service fingerprint: `credential-entra.d2bus.org/EntrablauLoginTokenService/v1`.
 All methods are ComponentSession methods. The interactive byte/UI stream is a
 named stream on the authenticated session, not status text.
 
-| Method | Direction | Secret output? | Purpose |
-| --- | --- | --- | --- |
-| `BeginLogin` | request/reply + named stream | No status secret; UI bytes stay on stream | Start or resume an Entrablau interactive login session inside `identityGuestRef`. Opens optional named stream `credential-entra.d2bus.org/login-ui`. |
-| `ObserveLogin` | request/reply | No | Return bounded non-secret observation for `interactionState`, session generation, deadline, and challenge metadata. |
-| `CancelLogin` | request/reply | No | Cancel a pending login session by generation; idempotent. |
-| `AcquireAccessTokenLease` | request/reply + sensitive KK record | Yes, only in KK record to consumer | Issue an on-demand access-token lease for `audience`/operation; outer reply carries metadata only. |
-| `RevokeAccessTokenLease` | request/reply | No | Revoke a non-secret lease handle or mark it unusable. |
-| `InspectAccessTokenLease` | request/reply | No | Return bounded non-secret lease state. |
+| Method | Required Role permission | Direction | Secret output? | Purpose |
+| --- | --- | --- | --- | --- |
+| `BeginLogin` | `use-credential/acquire-token` | request/reply + named stream | No status secret; UI bytes stay on stream | Start or resume an Entrablau interactive login session inside `identityGuestRef`. Opens optional named stream `credential-entra.d2bus.org/login-ui`. |
+| `ObserveLogin` | `use-credential/observe` | request/reply | No | Return bounded non-secret observation for `interactionState`, session generation, deadline, and challenge metadata. |
+| `CancelLogin` | `use-credential/revoke` | request/reply | No | Cancel a pending login session by generation; idempotent. |
+| `AcquireAccessTokenLease` | `use-credential/acquire-token` | request/reply + sensitive KK record | Yes, only in KK record to consumer | Issue an on-demand access-token lease for `audience`/operation; outer reply carries metadata only. |
+| `RevokeAccessTokenLease` | `use-credential/revoke` | request/reply | No | Revoke a non-secret lease handle or mark it unusable. |
+| `InspectAccessTokenLease` | `use-credential/observe` | request/reply | No | Return bounded non-secret lease state. |
 
 `BeginLogin`, `ObserveLogin`, and `CancelLogin` are the Credential base
 interactive-login operations. The service may conduct browser, device, desktop,
@@ -284,7 +296,8 @@ It never duplicates base status fields.
 ### 5.2 `BeginLogin`
 
 1. The caller must be authorized for the `Credential/<name>` by `consumerRef`,
-   scope, RBAC, and same-Zone ResourceRefs.
+   scope, the exact `use-credential/acquire-token` Role verb/subresource pair,
+   and same-Zone ResourceRefs.
 2. The credential-entra helper opens an authenticated ComponentSession to
    `loginEndpointRef` inside `identityGuestRef`.
 3. `BeginLogin` binds the Credential UID/generation, `identityGuestRef`,
@@ -404,14 +417,20 @@ Credential status may contain only bounded non-secret observations:
 
 | Surface | Allowed | Forbidden |
 | --- | --- | --- |
-| `Credential.status.resource` | interaction state, login session generation, login deadline, bounded challenge metadata, lease state, expiry/issued timestamps | tokens, refresh tokens, device codes, login URLs, cookies, account names, tenant-private IDs, PII |
-| `Credential.status.provider.details` | endpoint generation, identity Guest generation digest, retry counters, closed error/outcome enums, non-authorizing lease handle digests | token bytes, Entra response bodies, MSAL cache entries, filesystem paths, DBus names, browser profile paths |
-| Audit/OTEL/logs | operation class, result code, ResourceRef, generation, digest of route/session binding | token/refresh/cookie/device code bytes, login URL, user PII, cloud response bodies, host paths |
+| `Credential.status.resource` | interaction state, login session generation, login deadline, bounded challenge metadata, lease state, expiry/issued timestamps | Credential name/ResourceRef/UID/identity digest; tokens, refresh tokens, device codes, login URLs, cookies, account names, tenant-private IDs, PII |
+| `Credential.status.provider.details` | Endpoint generation, identity Guest generation digest, retry counters, closed error/outcome enums, non-authorizing lease handle digests | Credential name/ResourceRef/UID/identity digest; token bytes, Entra response bodies, MSAL cache entries, filesystem paths, DBus names, browser profile paths |
+| Authorized bounded Zone audit | operation class, RBAC verb/subresource, result code, generation, and base `resource_name_digest` after authorization | raw Credential name/ResourceRef/UID; token/refresh/cookie/device-code bytes, login URL, user PII, cloud response bodies, host paths |
+| OTEL Resource attributes | only applicable generic collector-allowlisted attributes: `d2b.zone`, `d2b.provider`, `d2b.component`, `service.name`, `service.namespace`, `service.version` | Credential name/ResourceRef/UID/identity digest and every Credential-derived attribute |
+| Span attributes, metric labels, logs/Debug, status, and errors | closed provider/operation/outcome values that do not identify a Credential | Credential name/ResourceRef/UID/identity digest; route/session-binding digests derived from Credential identity; all secret/private values forbidden above |
 
 The zero-secret invariant applies across spec, status, resource store, audit,
 OTEL, logs, debug output, process descriptors, launch tickets, Endpoint spec/status,
 and outer RPC DTOs. Secret bytes are present only inside the Entrablau Guest and,
 for access tokens, inside the end-to-end KK record and exact consumer process.
+Credential identity is a separate observability restriction: it remains in the
+resource envelope and authenticated internal routing/session bindings, but
+among observable outputs only the authorized bounded audit record may contain
+it, and that record uses `resource_name_digest` rather than raw identity.
 
 ---
 
@@ -449,9 +468,13 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
       purpose = "credential-entra.d2bus.org/entra-login-token";
       serviceFingerprint = "credential-entra.d2bus.org/EntrablauLoginTokenService/v1";
       locality = "guest-local";
-      visibility = "zone";
+      visibility = "provider";
       attachmentPolicy = "component-session";
       consumerPolicy = {
+        allowedSubjects = [
+          "Provider/credential-entra"
+          "Provider/runtime-azure-container-apps"
+        ];
         allowedOperations = [ "resolve" ];
       };
       lifecyclePolicy = "recycle-with-producer";
@@ -490,7 +513,11 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
 Eval-time validation rejects missing `identityGuestRef`/`loginEndpointRef`, any
 cross-Zone reference, any Endpoint whose producer is not inside the identity
 Guest, Host-scoped credential placement, an absent `consumerRef`, mismatched
-consumer execution scope, and any string that matches known secret/token shapes.
+consumer execution scope, any Endpoint visibility outside
+`owner|provider|zone`, a `provider`-visible login Endpoint whose
+`consumerPolicy.allowedSubjects` omits either `Provider/credential-entra` or the
+Credential's exact `consumerRef`, and any string that matches known
+secret/token shapes.
 
 ---
 
@@ -521,10 +548,36 @@ credential-entra lifecycle changes.
 | Verb | Who | Purpose |
 | --- | --- | --- |
 | `get`, `list`, `watch` | Authorized readers | Inspect non-secret spec/status. |
+| `create`, `update-spec`, `delete` plus `admin-credential/admin` | Authorized deployer/configuration controller | Administer Credential resource lifecycle; neither permission implies the other. |
 | `update-status` | `Provider/credential-entra` controller only | Write projected interaction/lease observations. |
 | `update-finalizers` | `Provider/credential-entra` controller | Revoke/finalize Credential resources. |
-| `begin-login`, `observe-login`, `cancel-login` | Exact `consumerRef` plus RBAC | Drive Credential base interactive login operations. |
-| `use-credential` | Exact `consumerRef` plus RBAC | Acquire/revoke/inspect access-token leases. |
+| `use-credential/acquire-token` | Exact `consumerRef` plus RBAC | Begin login and acquire/refresh access-token leases permitted by `spec.allowedOperations`. |
+| `use-credential/observe` | Exact `consumerRef` plus RBAC | Observe login or inspect bounded lease/status metadata. |
+| `use-credential/revoke` | Exact `consumerRef` plus RBAC | Cancel login or revoke an access-token lease. |
+| `admin-credential/admin` | Authorized operator/configuration controller | Gate explicit Credential lifecycle and identity-reset administration. |
+
+The value after `/` is an exact entry in the existing Role rule
+`subresources` field. The dossier defines no `operationClasses` Role field and
+no method-name verbs such as `begin-login`. A consumer Role is shaped as:
+
+```yaml
+rules:
+  - resourceTypes: [Credential]
+    verbs: [use-credential]
+    subresources: [acquire-token, observe, revoke]
+    resourceNames: [work-entra]
+    zones: [work]
+    executionRefs: [Guest/aca-gateway]
+    sessionVerbs: []
+```
+
+Service admission authenticates the exact consumer, checks the mapped
+verb/subresource before Endpoint dispatch, then independently checks the exact
+method operation class against `Credential.spec.allowedOperations`. Empty,
+wildcard, unknown, or verb/subresource-mismatched Credential grants fail closed.
+Administrative create/update/delete additionally require an
+`admin-credential` rule with `subresources: [admin]` and the corresponding
+ordinary mutation verb.
 
 ### Stable error codes
 
@@ -544,7 +597,8 @@ credential-entra lifecycle changes.
 
 All error messages are bounded stable text. They do not include login URLs,
 device codes, user identifiers, tenant-private identifiers, HTTP bodies, paths,
-DBus names, tokens, refresh tokens, or cookies.
+DBus names, tokens, refresh tokens, cookies, a Credential name/ResourceRef/UID,
+or any digest derived from Credential identity.
 
 ---
 
@@ -558,7 +612,7 @@ DBus names, tokens, refresh tokens, or cookies.
 | Current source | `d2b-realm-provider/src/credential.rs:OpaqueAzureRef` remains a bounded opaque identifier reuse source only; no Host login/token implementation is retained |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-entra/src/{lib.rs,controller.rs,service.rs,controller_main.rs,agent_main.rs,audit.rs,telemetry.rs}` and corresponding tests/integration docs |
-| Detailed design | Implement secret-free controller/helper; require Credential base `identityGuestRef` and `loginEndpointRef`; resolve dependency alias `entra-login-token`; validate same-Zone Guest placement and exact `consumerRef`; implement typed `EntraTokenLeaseClient` whose production implementation is the Entrablau Endpoint; implement `BeginLogin`/`ObserveLogin`/`CancelLogin` projection to Credential base interaction status; route access-token leases end-to-end from Entrablau service to exact consumer over Noise_KK; keep all refresh/login/TPM state inside the Entrablau Guest; declare no Provider state Volume; reject Host placement and all ambient fallback chains. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt tests/types where non-secret; replace production token acquisition with Entrablau Endpoint client. |
+| Detailed design | Implement secret-free controller/helper; require Credential base `identityGuestRef` and `loginEndpointRef`; resolve dependency alias `entra-login-token`; validate same-Zone Guest placement and exact `consumerRef`; implement typed `EntraTokenLeaseClient` whose production implementation is the Entrablau Endpoint; implement `BeginLogin`/`ObserveLogin`/`CancelLogin` projection to Credential base interaction status; admit service calls only through canonical `use-credential` Role rules with exact `acquire-token`/`observe`/`revoke` subresources and administrative lifecycle only through `admin-credential/admin` plus the ordinary mutation verb, with no Credential-specific Role fields; emit the login Endpoint with canonical `visibility = provider` and an exact `consumerPolicy` for the orchestration Provider and configured consumer; route access-token leases end-to-end from Entrablau service to exact consumer over Noise_KK; keep all refresh/login/TPM state inside the Entrablau Guest; declare no Provider state Volume; reject Host placement and all ambient fallback chains; enforce Credential name/ResourceRef/UID/digest as audit-only observable identity, with only `resource_name_digest` retained in authorized bounded audit and no Credential identity in status/errors/logs/OTEL Resource or span attributes/metric labels. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt tests/types where non-secret; replace production token acquisition with Entrablau Endpoint client. |
 | Integration | Consumer composes `inputs.entrablau.nixosModules.default` into the identity Guest; sibling package declares login/token Process and Endpoint; d2b Credential resource binds `identityGuestRef`, `loginEndpointRef`, and `consumerRef` |
 | Data migration | Full v3 reset of d2b Credential metadata; Entrablau Guest state is preserved unless explicitly destroyed by the sibling-owned reset flow |
 | Validation | See §13 |
@@ -579,10 +633,13 @@ DBus names, tokens, refresh tokens, or cookies.
 | `test_fake_guest_login_restart_reobserve` | Controller/helper restart reconstructs status by observing Entrablau Endpoint; status is observation, not authority. |
 | `test_endpoint_unavailable` | Missing/not Ready `loginEndpointRef` yields `credential-endpoint-unavailable` and no fallback. |
 | `test_endpoint_generation_mismatch` | Stale Endpoint generation invalidates cached sessions and requires reacquire. |
+| `test_endpoint_visibility_consumer_policy` | Login Endpoint accepts only `owner`, `provider`, or `zone`, uses `provider`, and requires exact `consumerPolicy.allowedSubjects` for `Provider/credential-entra` plus the configured `consumerRef`; `zone`, omitted consumer, aliases, and mismatches fail the dossier conformance case. |
 | `test_host_placement_rejected` | Any `Host/*` `identityGuestRef`, `scope.executionRef`, or Host-system placement fails closed. |
 | `test_same_zone_accepted_cross_zone_rejected` | Same-Zone identity/consumer Guest works; any cross-Zone ResourceRef is rejected at eval/admission. |
 | `test_exact_consumer_rbac` | Only the authenticated `consumerRef` process can receive token delivery; other callers fail before Endpoint dispatch. |
+| `test_credential_role_subresource_matrix` | `use-credential` admits only exact `acquire-token`/`observe`/`revoke` mappings; `admin-credential/admin` plus the ordinary mutation verb gates lifecycle; empty/wildcard/unknown/mismatched subresources and method-name verbs fail before Endpoint dispatch. |
 | `test_token_refresh_redaction` | Access token, refresh token, cookies, device codes, login URLs, and MSAL cache canaries are absent from spec/status/audit/OTEL/logs/Debug. |
+| `test_credential_identity_audit_only` | Credential name, canonical ResourceRef, UID, and derived-digest canaries are absent from status, errors, logs/Debug, every OTEL Resource/span attribute, and every metric label; the authorized bounded audit record retains only `resource_name_digest`, and an unauthorized request cannot elicit identity-bearing audit. Generic allowlisted OTEL Resource attributes remain present. |
 | `test_e2e_record_only_delivery` | Raw access token appears only in the Entrablau→consumer Noise_KK record; bus/controller/helper see ciphertext only. |
 | `test_no_ambient_fallbacks` | Production code path never constructs SDK default chains, environment credential sources, DBus/browser/path fallbacks, Host login flows, or direct Entra egress. |
 | `test_nix_composition_identity_guest` | Consumer-composed `inputs.entrablau.nixosModules.default` in the identity Guest declares the expected Process and Endpoint schema without d2b core importing the sibling flake. |
@@ -599,6 +656,9 @@ DBus names, tokens, refresh tokens, or cookies.
   `credential-entra.d2bus.org/entra-login-token` and producer inside
   `identityGuestRef`.
 - `consumerRef` is required and must match the authorized consumer Provider.
+- The login Endpoint uses canonical `visibility = "provider"` and an exact
+  `consumerPolicy.allowedSubjects` containing `Provider/credential-entra` and
+  the configured `consumerRef`.
 - Host placement and cross-Zone ResourceRefs are rejected.
 - No Provider state Volume is emitted for `credential-entra`; Entrablau private
   state remains guest-local under the sibling package.
@@ -638,4 +698,4 @@ Old and new suites never run in parallel indefinitely.
 | Evidence class | Full Entrablau-backed login/token acquisition is ADR-only in this branch; sibling integration is external. |
 | Retained concepts | Bounded opaque identifiers, `ExactConsumer` authorization, redacted Debug/canary discipline, D055/D056 Noise_KK token delivery. |
 | Replaced concepts | No abstract Host-login path, no direct `EntraCredentialClient` production Entra egress, no effect-port proxy through consumer runtime, no Host/user-agent token custody, no ambient fallback chains, and no Provider state Volume for Entra credentials. |
-| Zero-secret invariant | Preserved and strengthened: controller/helper are secret-free; refresh/private login state lives only in the Entrablau identity Guest; access tokens go only to exact consumers over end-to-end KK records. |
+| Zero-secret invariant | Preserved and strengthened: controller/helper are secret-free; refresh/private login state lives only in the Entrablau identity Guest; access tokens go only to exact consumers over end-to-end KK records; Credential identity is observable only as the authorized bounded audit digest and is absent from status/errors/logs and every OTEL/metric identity surface. |
