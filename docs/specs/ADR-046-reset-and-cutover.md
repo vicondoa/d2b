@@ -88,7 +88,7 @@ without an open decision:
 | **Guest reset** | Deletion and re-creation of exactly one `Guest/<name>` resource and its owned children (its runtime Processes, its store-view/TPM Volumes unless explicitly retained). Does not touch the Zone, Providers, or other Guests. |
 | **Cutover checkpoint** | One phase-boundary durable record in the [cutover journal](#crashpower-lossretryidempotency-journals), written with the ADR 0034 atomic-persistence sequence (temp file, `fsync`, rename, parent `fsync`). |
 | **Incident hold (cutover-wide)** | An operator-set hold that blocks every destructive disposition step and the entire [old artifact/unit/schema removal gate](#old-artifactunitschema-removal-gates) sequence, built on the same `IncidentHold` condition semantics `ADR-046-provider-state` defines for a Volume, extended here to apply Zone-wide during a cutover window. |
-| **Gateway Guest** | A Guest whose runtime Provider hosts a nested child Zone (a "gateway guest" in ADR 0032 terms) reachable only through a parent `ZoneLink`. The parent Zone never holds the gateway Guest's Credential, audit, or ZoneLink-internal session state — see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody). |
+| **Gateway Guest** | A Guest whose runtime Provider hosts a nested child Zone (a "gateway guest" in ADR 0032 terms). The child Zone authors and stores its one local uplink `ZoneLink`, whose `spec.childZoneName` matches that child Zone's self-name; the compiler-only `parentZone` setting selects the provisioning allocator. The parent keeps only sealed allocator/route state, with no reciprocal parent-store `ZoneLink` or parent-side `ZoneLink` handler, and never holds the gateway Guest's Credential or audit — see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody). |
 
 Every term above composes with, and does not redefine, the shared vocabulary
 in `ADR-046-terminology-and-identities` (Zone, ResourceRef, Provider, Host,
@@ -498,15 +498,19 @@ node registry, provider configuration, and audit trail live **only** inside
 its dedicated gateway guest VM; the host never holds them
 (`CredentialCustody::None` for host-local vs.
 `CredentialCustody::GatewayGuest` for relay-backed, per
-`d2b-realm-router/src/service_v2.rs`, and `ADR-046-zone-routing` §3's
-`CredentialCustody` evidence). This cutover preserves that boundary exactly,
-translated into ZoneLink terms:
+`d2b-realm-router/src/service_v2.rs`, and `ADR-046-zone-routing`
+"d2b-realm-router/src/service_v2.rs — RealmServiceServer" evidence). This
+cutover preserves that boundary exactly, translated into ZoneLink terms:
 
 1. A pre-cutover gateway-backed realm becomes, post-cutover, a Guest whose
-   runtime Provider hosts a **nested child Zone**, reachable from the parent
-   only through a `ZoneLink/<name>` resource in the parent Zone (per
-   `ADR-046-resources-zone-control` §3 and `ADR-046-terminology-and-identities`
-   "Zone").
+   runtime Provider hosts a **nested child Zone**. That child authors and stores
+   its one local uplink `ZoneLink/<name>`; `spec.childZoneName` must equal the
+   child Zone's self-name. The enclosing child Zone's compiler-only
+   `parentZone` setting selects the provisioning parent allocator, which keeps
+   only sealed allocator/route state and creates no reciprocal parent-store
+   resource or parent-side `ZoneLink` handler (per
+   `ADR-046-resources-zone-control` §3.1/§10.3 and
+   `ADR-046-nix-configuration` "Zone declaration"/"ZoneLink").
 2. The cutover's [inventories](#authoritative-inventories) and [migration/
    disposition matrix](#migrationdisposition-matrix) **never** enumerate the
    gateway guest's internal relay credentials, remote node registry, or
@@ -514,16 +518,18 @@ translated into ZoneLink terms:
    the parent host's perspective — those live inside the gateway Guest's own
    filesystem and are the gateway Guest's own (nested) cutover's
    responsibility when that Guest itself boots a v3 Zone runtime internally.
-   The parent host's cutover only Adopts the parent-visible `ZoneLink`
-   configuration (transport provider selection, `childZoneName`) as ordinary
-   Nix-authored resource configuration — never as migrated credential bytes.
-3. The parent Zone's ZoneLink handler never receives, stores, or logs the
-   child Zone's Credential resources, matching
+   The parent host's cutover Adopts no `ZoneLink` row. It regenerates only the
+   compiler-only `parentZone` topology as sealed allocator/route state; the
+   child Zone's separate cutover authors and reconciles its local `ZoneLink`
+   from ordinary Nix configuration. Neither side treats that configuration as
+   migrated credential bytes.
+3. The parent allocator/route engine owns no `ZoneLink` resource or handler and
+   never receives, stores, or logs the child Zone's Credential resources or raw
+   token bytes, matching
    `ADR-046-componentsession-and-bus` "Sensitive credential delivery": a
    Credential Provider may deliver raw token bytes only over a dedicated KK
-   ComponentSession to an authorized consumer, and intermediaries (including
-   a parent Zone's ZoneLink handler) forward opaque protected records without
-   decrypting them.
+   ComponentSession to an authorized consumer, and d2b-bus/Zone/relay
+   intermediaries forward opaque protected records without decrypting them.
 4. If the gateway Guest itself is being cut over from a pre-ADR-0046
    `d2b-gateway-runtime` process to a nested v3 Zone runtime, that nested
    cutover is a **separate, independent invocation** of this same procedure,
@@ -531,10 +537,13 @@ translated into ZoneLink terms:
    snapshot, checkpoint id, and consent — it is never folded into the parent
    host's single `checkpoint_id` and never shares a cutover journal with the
    parent.
-5. Audit: the parent Zone's audit stream never records a gateway Guest's
-   internal realm audit events; the parent only records its own ZoneLink
-   connect/reconnect/disconnect/route events per
-   `ADR-046-componentsession-and-bus` "Errors and telemetry".
+5. Audit authority remains Zone-local: the child Zone's audit stream records
+   its child-local `ZoneLink` resource/session lifecycle events, while the
+   parent records only allocator/route-engine decisions and effects that the
+   parent authoritatively owns. The parent never records a gateway Guest's
+   internal realm audit events or claims a child `ZoneLink` resource transition
+   (per `ADR-046-zone-routing` "Audit records" and
+   `ADR-046-resources-zone-control` §3.1).
 
 ## ProviderStateSet and state schema migration policy
 
@@ -745,25 +754,34 @@ complete, reproducible install sequence before `apply` runs.
    invocation; a multi-Zone host runs one independent cutover invocation per
    Zone (this spec's `checkpoint_id` is always Zone-scoped, never host-wide
    when a host is declared to run more than one Zone).
-2. Any pre-cutover realm that used `EntrypointMode::GatewayBacked` becomes a
-   `ZoneLink/<name>` resource in the parent Zone, created during Phase 6/7 as
-   ordinary Nix-authored configuration (per [Gateway Guest credential/audit
+2. Any pre-cutover realm that used `EntrypointMode::GatewayBacked` is
+   represented after cutover by one local uplink `ZoneLink/<name>` authored and
+   stored in the nested child Zone during Phase 6/7 of that child's independent
+   invocation (per [Gateway Guest credential/audit
    custody](#gateway-guest-credentialaudit-custody)) — never as migrated
-   session or credential state. The `ZoneLink`'s `transportProviderRef` must
-   name an already-`Ready` Stage C transport Provider (per [Provider
-   install/topological start](#provider-installtopological-start)); a
-   `ZoneLink` whose transport Provider is not yet Ready enters `Degraded`
-   with `ConfigurationCurrent: False` until that Provider reconciles, exactly
-   as `ADR-046-nix-configuration` "Cross-Zone generation ordering" already
-   specifies — Zone A's own activation is never blocked on Zone B/ZoneLink
-   readiness.
+   session or credential state. Its `spec.childZoneName` must equal the child
+   Zone's self-name, and its `transportProviderRef` must name an
+   already-`Ready` Stage C transport Provider in that same child Zone (per
+   [Provider install/topological start](#provider-installtopological-start)).
+   The child Zone's compiler-only `parentZone` selects the provisioning
+   allocator and is sealed into allocator bootstrap state; it is not emitted
+   into `Zone.spec` or a resource bundle. The parent stores only the resulting
+   sealed allocator/route state, never a reciprocal `ZoneLink` row or
+   parent-side handler (per `ADR-046-resources-zone-control` §3.1/§10.3 and
+   `ADR-046-nix-configuration` "Zone declaration"/"ZoneLink"). A child-local
+   `ZoneLink` whose transport Provider is not yet Ready enters `Degraded` with
+   `ConfigurationCurrent: False` until that Provider reconciles, exactly as
+   `ADR-046-nix-configuration` "Cross-Zone generation ordering" specifies; the
+   child Zone's activation is never blocked on the parent Zone's generation or
+   remote-link readiness.
 3. Any pre-cutover realm that used `EntrypointMode::HostResident` becomes an
    ordinary `Guest` (VM/sandbox) or a user-only `Host` (unsafe-local, per
    D042) in the parent Zone — never a `ZoneLink`, because a host-resident
    realm never had a separate resource store to link to.
-4. ZoneLink activation completes when the core `zone link/delegation` handler
-   (`ADR-046-core-controllers` "Zone link/delegation") reports the link
-   `Ready` — verified in [Post-cutover verification](#post-cutover-verification).
+4. ZoneLink activation completes when the **child Zone's** core
+   `zone link/delegation` handler (`ADR-046-resources-zone-control` §11.2)
+   reports its local uplink `Ready` — verified in
+   [Post-cutover verification](#post-cutover-verification).
 
 ## Guest/runtime/network/store view activation
 
@@ -816,7 +834,7 @@ checks, in order, refusing to report success unless every check passes:
 | 3 | Every declared `Guest` reports `status.phase == Ready` (or the operator-accepted subset, if `--allow-degraded-guests <list>` was explicitly passed to `apply`) | Any Guest not `Ready` outside the accepted subset |
 | 4 | Every adopted TPM marker's content digest matches the cutover snapshot's recorded digest | Digest mismatch on any TPM Volume |
 | 5 | Every adopted durable Volume's (disk image, store-view) content digest matches the cutover snapshot's recorded digest | Digest mismatch on any durable Volume |
-| 6 | Every declared `ZoneLink` reports `Ready` or an accepted `Degraded/waiting-on-remote` (per Cross-Zone generation ordering) | `ZoneLink` in any other Degraded/Failed condition |
+| 6 | Every declared child-local `ZoneLink` reports `Ready` or an accepted `Degraded/waiting-on-remote` (per Cross-Zone generation ordering), and no parent Zone store contains a reciprocal row | A child-local `ZoneLink` is in any other Degraded/Failed condition, or a reciprocal parent-store row exists |
 | 7 | Every declared `Network` reports `Ready` | Any Network Degraded/Failed |
 | 8 | No orphaned pre-cutover process remains under any `d2b-<vm>-*`/`d2b.slice` cgroup leaf outside the current Zone's own cgroup partition | Any orphan found |
 | 9 | The new audit chain's first record verifies against the closure record of the old chain (per [Audit chain closure and opening](#audit-chain-closure-and-opening)) | Hash-chain break or missing closure record |
@@ -950,7 +968,7 @@ is no bulk Destroy:
 | Candidate | Gate that must clear before Destroy | Removal proof |
 | --- | --- | --- |
 | `d2bd.service`, `d2bd.socket`, `d2b-priv-broker.service`, `d2b-priv-broker.socket` unit files | New fixed Zone runtime units installed and `verify` check 1 passed at least once since the units were stopped | `tests/host-integration/cutover-unit-retirement.nix` boots with only new units present and passes `d2b host cutover verify` |
-| `/etc/d2b/realm-controllers.json`, `/etc/d2b/realm-identity.json` | Zone self-resource and every `ZoneLink` derived from them report `Ready`/accepted-`Degraded` per `verify` check 6 | `ADR046-nix-008`/`ADR046-nix-009` parity tests pass against the live Zone |
+| `/etc/d2b/realm-controllers.json`, `/etc/d2b/realm-identity.json` | Every Zone self-resource exists, the compiler-only `parentZone` topology is present only in sealed allocator bootstrap state, and every declared child-local `ZoneLink` reports `Ready`/accepted-`Degraded` with no reciprocal parent-store row per `verify` check 6 | `ADR046-nix-008`/`ADR046-nix-009` parity tests pass against the live Zone |
 | `nixos-modules/options-realms*.nix`, `nixos-modules/options-vms.nix` | Every VM/realm declaration has an equivalent `d2b.zones.<zone>.resources.*` declaration that produced a `Ready` Guest/Host in `verify` | `tests/unit/nix/cases/realm-to-zone-parity.nix` |
 | `/var/lib/d2b/vms/<vm>/swtpm/`, `/var/lib/d2b/swtpm-markers/<vm>` (source side of an Adopt) | `verify` check 4 (TPM digest match) passed **and** the destination TPM Volume has survived at least one full Guest restart cycle post-cutover, proving the adopted marker is load-bearing in practice, not merely digest-equal | `integration/swtpm_marker.rs` adapted; `tests/host-integration/tpm-adopt-retirement.nix` |
 | `/var/lib/d2b/vms/<vm>/store/` (source side of an Adopt) | `verify` check 5 (store-view digest match) **and** a live Guest boot successfully mounts the new store-view Volume path | `tests/store_view.rs`; `integration/store_view.rs` |
@@ -1125,8 +1143,8 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
    order under normal finalizer protocol (Guests/Processes first, then their
    owning Providers, then Volumes, then Networks/Devices/Credentials, with
    authored qualified Bindings removed/retargeted before their import-owned
-   projection Services, then ResourceImport/ResourceExport rows, ZoneLinks, and
-   finally Role/RoleBinding/Quota/EmergencyPolicy).
+   projection Services, then ResourceImport/ResourceExport rows, the Zone's
+   child-local ZoneLink, and finally Role/RoleBinding/Quota/EmergencyPolicy).
 4. After every other resource is deleted, `core.zone-drain` is cleared and a
    final transaction emits the Zone's own `phase=Deleted` event and closes
    the store.
@@ -1219,9 +1237,10 @@ All reset scopes tear down cross-Zone sharing child-first:
    deletes only the core-owned projection Service
    (`ownerRef: ResourceImport/<name>`) and remaining provider-owned children,
    then deletes the import row.
-5. ZoneLink loss during reset is treated as revoke/degrade, not as retained
-   authority. Reconnect after a reset must revalidate generation and schema
-   plus factory fingerprint before any new lease is admitted.
+5. Loss of the Zone's child-local ZoneLink during reset is treated as
+   revoke/degrade, not as retained authority. Reconnect after a reset must
+   revalidate generation and schema plus factory fingerprint before any new
+   lease is admitted.
 6. Full factory reset removes export/import rows, authored Bindings in scope,
    projection Services, internal leases/sessions/streams, and advertisements.
    No cross-Zone authority, capability grant, stream credit, or import session
@@ -1534,7 +1553,7 @@ owns the destination.
 | --- | --- | --- | --- | --- |
 | `<keysDir>/<vm>_ed25519{,.pub}` | `nixos-modules/host-keys.nix` | Preserve (framework SSH keys are never regenerated by cutover) | Unchanged; continues to be consumed the same way by Guest boot | N/A — out of ADR 0046 Provider scope per activation-nixos dossier §1.2 ("SSH key lifecycle... belongs to a separate identity Provider") |
 | `<stateDir>/vms/<vm>/host-keys/{host.pub,user-authorized-keys}` | `nixos-modules/host-keys.nix` | Preserve | Unchanged | Same as above |
-| `realm-controllers.json`, `realm-identity.json` | migration-map §"Current-code fit" rows, `implemented-and-reachable`/live | Preserve until every `ZoneLink`/Credential successor is `Ready` (Phase 10 gate), then Destroy | `Zone` self resource + `ZoneLink` bootstrap; Credential `scope`/`audience`/`allowedOperations` fields | `ADR046-nix-008`, `ADR046-nix-009` |
+| `realm-controllers.json`, `realm-identity.json` | migration-map §"Current-code fit" rows, `implemented-and-reachable`/live | Preserve until the compiler-only `parentZone` topology is sealed, every child-local `ZoneLink`/Credential successor is `Ready`, and the no-reciprocal-parent-row check passes (Phase 10 gate), then Destroy | Runtime-created `Zone` self resource + sealed allocator topology + child-local `ZoneLink` transport/route state; Credential `scope`/`audience`/`allowedOperations` fields | `ADR046-nix-008`, `ADR046-nix-009` |
 | Gateway guest realm relay credentials/audit (ADR 0032 `CredentialCustody::GatewayGuest`) | ADR 0032 evidence | **Never enumerated by the parent host's inventory** — see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody) | Nested child Zone's own Credential resources | N/A — parent host cutover has no authority here |
 
 ### Audit and telemetry
@@ -1568,7 +1587,7 @@ Preserve default.
 | Current anchor | ADR 0034 "Migration decision" (planned-downtime storage cutover, preserve list, checkpoint/rollback UX); `packages/d2b/src/lib.rs` `cmd_host_migrate_storage`/`build_storage_migration_plan`/`storage_migration_checkpoint_id` (retired verb, reused shape); `cmd_host_destroy`/`require_explicit_mutation_flag` (dry-run/apply precondition pattern); `packages/d2bd/src/storage_lifecycle.rs`/`ownership_preflight.rs` (bundle-versioned contract checks, legacy-recovery-artifact optionality); `ADR-046-resources-zone-control` §2.6/§9.4 (destructive reset primitive); `ADR-046-provider-state` (migration/incident-hold/unclaimed-GC machinery) |
 | Evidence class | The CLI dry-run planning precedent (`host migrate-storage`, `host destroy`) is `implemented-and-reachable`; the ADR 0034 preserve-list/checkpoint contract is `implemented-and-reachable` as design but its `--apply`/`--rollback` are themselves `test-only-or-preview` (fail closed in the current build); the Zone/Provider/Volume destinations this spec adopts into are `ADR-only` |
 | Behavior retained | Dry-run-before-apply with a printed checkpoint id and exact rollback command; preserve-list-first design (swtpm NVRAM/markers, SSH keys, store-view state/gcroots, disk images, audit/degraded history never silently destroyed); fail-closed hazards enumerated explicitly rather than left implicit; broker-mediated path-safe mutation (no manual chmod/chown/setfacl); atomic persistence sequence (temp file, fsync, rename, parent fsync) for every durable record this spec's own journal/snapshot writes |
-| Required delta | The entire Zone/Provider/redb resource-store bootstrap this spec's Phase 5-8 execute has no current-baseline equivalent at all — ADR 0034's cutover only ever moved a storage *layout*, never replaced the daemon/wire protocol/resource model sitting on top of it; the Full/Provider/Guest reset scopes, the cutover-wide incident hold, and the gateway-custody-aware ZoneLink translation are new |
+| Required delta | The entire Zone/Provider/redb resource-store bootstrap this spec's Phase 5-8 execute has no current-baseline equivalent at all — ADR 0034's cutover only ever moved a storage *layout*, never replaced the daemon/wire protocol/resource model sitting on top of it; the Full/Provider/Guest reset scopes, the cutover-wide incident hold, and the gateway-custody-aware child-local ZoneLink translation are new |
 | Reuse path | Copy the exact `StorageMigrationPlan` JSON shape (renamed fields) for the new `plan`/`apply` JSON envelopes; copy `require_explicit_mutation_flag`'s precondition gate for every new mutating verb; copy `storage_migration_checkpoint_id`'s digest-of-sorted-names pattern extended over every inventory class; copy the ADR 0034 preserve list verbatim as the seed of the [migration/disposition matrix](#migrationdisposition-matrix)'s TPM/keys/disk-image/audit rows; copy `ADR-046-provider-state`'s prepare/stage/commit/rollback/roll-forward algorithm unmodified as every Adopt step's mechanism |
 | Replacement/deletion | `d2b host migrate-storage` is retired with no successor (it served an unrelated v1→v2 cutover); every other current-baseline artifact this spec's matrix names is Preserved until its own [Old artifact/unit/schema removal gate](#old-artifactunitschema-removal-gates) clears — nothing is removed by this spec's own authoring, only by its future implementation work items after their gates clear |
 | Feasibility proof | A disposable end-to-end cutover rehearsal fixture (single-Guest, single-TPM, single-store-view host) proving: preflight snapshot digest reproducibility; drain quiescence detection; Adopt idempotency across an injected crash at every step boundary; Phase 5 redb bootstrap against the rehearsal fixture's adopted Volumes; Provider install topological order determinism; `verify` catching an injected digest mismatch; rollback within the boundary and refusal past it; Full/Provider/Guest reset scope isolation (resetting one does not affect siblings) |
@@ -1739,20 +1758,20 @@ applies here exactly as everywhere else in the repository).
 | Validation | Provider install topological-order determinism test; cycle-rejection test; store-identity mismatch fail-closed test |
 | Removal proof | Not applicable |
 
-### ADR046-reset-006 — Zone/ZoneLink/Guest activation and gateway custody boundary
+### ADR046-reset-006 — Child-local ZoneLink/Guest activation and gateway custody boundary
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-reset-006` |
 | Dependency/owner | ADR046-reset-005; `ADR-046-zone-routing` owner; `ADR-046-resources-zone-control` owner |
-| Current source | ADR 0032 gateway guest custody evidence (`d2b-realm-router/src/service_v2.rs` `CredentialCustody`); `ADR-046-zone-routing` §3 evidence |
+| Current source | ADR 0032 gateway guest custody evidence (`d2b-realm-router/src/service_v2.rs` `CredentialCustody`); frozen target model in `ADR-046-resources-zone-control` §3.1/§10.3 and `ADR-046-nix-configuration` "Zone declaration"/"ZoneLink" |
 | Reuse source | None from main |
 | Reuse action | adapt |
 | Destination | `packages/d2b-cutover/src/{zonelink_cutover,guest_activation}.rs` |
-| Detailed design | Phase 7 ZoneLink translation from `EntrypointMode::GatewayBacked`/`HostResident` per [Zone/ZoneLink cutover](#zonezonelink-cutover); Phase 8 Network→Volume→Device→Guest ordering per [Guest/runtime/network/store view activation](#guestruntimenetworkstore-view-activation); enforcement that the parent inventory never enumerates gateway-guest-internal credential/audit state |
+| Detailed design | Phase 7 translation from `EntrypointMode::GatewayBacked`/`HostResident` per [Zone/ZoneLink cutover](#zonezonelink-cutover): the child authors/stores one local uplink with self-matching `childZoneName`; compiler-only `parentZone` selects the allocator; the parent retains only sealed allocator/route state and owns no reciprocal row or ZoneLink handler. Phase 8 follows Network→Volume→Device→Guest ordering per [Guest/runtime/network/store view activation](#guestruntimenetworkstore-view-activation). The parent inventory never enumerates gateway-guest-internal credential/audit state |
 | Integration | Consumes Providers installed by ADR046-reset-005; hands off to ADR046-reset-007 (verification) |
-| Data migration | None (ZoneLink resources are ordinary Nix-authored configuration, not migrated credential bytes) |
-| Validation | Gateway-custody-boundary test asserting the parent inventory never contains a gateway-guest-internal path; ZoneLink `Degraded/waiting-on-remote` non-blocking test |
+| Data migration | None (the child-local ZoneLink is ordinary Nix-authored configuration, `parentZone` is recompiled into sealed allocator state, and neither is migrated credential material) |
+| Validation | Gateway-custody-boundary test asserting the parent inventory never contains a gateway-guest-internal path; child-local ZoneLink test asserting one uplink, self-matching `childZoneName`, and child-store ownership; compiler test asserting `parentZone` selects the allocator but appears only in sealed bootstrap state; no-reciprocal-parent-row/no-parent-handler test; child-local ZoneLink `Degraded/waiting-on-remote` non-blocking test |
 | Removal proof | Not applicable |
 
 ### ADR046-reset-007 — Verification, doctor, and degraded-ledger integration
