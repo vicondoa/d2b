@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1902,
+    "edges" : 1908,
     "maxTopologicalRank" : 22,
     "nodes" : 598,
     "specNodes" : 55,
@@ -68,13 +68,38 @@
       "type" : "file-overlap-order"
     },
     {
+      "from" : "ADR046-nix-014",
+      "to" : "ADR046-device-006",
+      "type" : "file-overlap-order"
+    },
+    {
       "from" : "ADR046-nix-019",
       "to" : "ADR046-cli-011",
       "type" : "file-overlap-order"
     },
     {
+      "from" : "ADR046-nix-031",
+      "to" : "ADR046-nix-019",
+      "type" : "file-overlap-order"
+    },
+    {
+      "from" : "ADR046-qemu-media-017",
+      "to" : "ADR046-transport-unix-009",
+      "type" : "file-overlap-order"
+    },
+    {
       "from" : "ADR046-telem-011",
       "to" : "ADR046-core-001",
+      "type" : "file-overlap-order"
+    },
+    {
+      "from" : "ADR046-transport-unix-009",
+      "to" : "ADR046-gpu-007",
+      "type" : "file-overlap-order"
+    },
+    {
+      "from" : "ADR046-usbip-008",
+      "to" : "ADR046-qemu-media-017",
       "type" : "file-overlap-order"
     },
     {
@@ -9459,6 +9484,11 @@
     },
     {
       "from" : "ADR046-zone-control-014",
+      "to" : "ADR046-routing-011",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-zone-control-014",
       "to" : "ADR046-zone-control-001",
       "type" : "work-item-depends-on"
     },
@@ -12800,7 +12830,7 @@
         "ADR046-nix-014"
       ],
       "specId" : "ADR-046-cli-and-operations",
-      "topologicalRank" : 13,
+      "topologicalRank" : 14,
       "wave" : "W5"
     },
     {
@@ -15996,11 +16026,12 @@
       "parallelGroup" : "wi:ADR-046-nix-configuration",
       "prerequisites" : [
         "ADR-046-nix-configuration",
+        "ADR046-device-006",
         "ADR046-nix-001",
         "ADR046-nix-002"
       ],
       "specId" : "ADR-046-nix-configuration",
-      "topologicalRank" : 12,
+      "topologicalRank" : 13,
       "wave" : "W5"
     },
     {
@@ -16108,7 +16139,7 @@
         "ADR046-nix-027"
       ],
       "specId" : "ADR-046-nix-configuration",
-      "topologicalRank" : 14,
+      "topologicalRank" : 15,
       "wave" : "W5"
     },
     {
@@ -16362,13 +16393,14 @@
       "parallelGroup" : "wi:ADR-046-nix-configuration",
       "prerequisites" : [
         "ADR-046-nix-configuration",
+        "ADR046-nix-019",
         "ADR046-provider-004",
         "ADR046-zone-control-019",
         "ADR046-zone-control-020",
         "ADR046-zone-control-024"
       ],
       "specId" : "ADR-046-nix-configuration",
-      "topologicalRank" : 14,
+      "topologicalRank" : 16,
       "wave" : "W5"
     },
     {
@@ -18028,10 +18060,11 @@
       "prerequisites" : [
         "ADR-046-provider-runtime-qemu-media",
         "ADR046-qemu-media-002",
-        "ADR046-qemu-media-003"
+        "ADR046-qemu-media-003",
+        "ADR046-transport-unix-009"
       ],
       "specId" : "ADR-046-provider-runtime-qemu-media",
-      "topologicalRank" : 13,
+      "topologicalRank" : 14,
       "wave" : "W6"
     },
     {
@@ -21700,10 +21733,11 @@
       "parallelGroup" : "wi:ADR-046-provider-transport-unix",
       "prerequisites" : [
         "ADR-046-provider-transport-unix",
+        "ADR046-gpu-007",
         "ADR046-transport-unix-001"
       ],
       "specId" : "ADR-046-provider-transport-unix",
-      "topologicalRank" : 12,
+      "topologicalRank" : 13,
       "wave" : "W6"
     },
     {
@@ -21918,11 +21952,12 @@
       "parallelGroup" : "wi:ADR-046-provider-device-usbip",
       "prerequisites" : [
         "ADR-046-provider-device-usbip",
+        "ADR046-qemu-media-017",
         "ADR046-usbip-003",
         "ADR046-zone-control-024"
       ],
       "specId" : "ADR-046-provider-device-usbip",
-      "topologicalRank" : 14,
+      "topologicalRank" : 15,
       "wave" : "W6"
     },
     {
@@ -22995,7 +23030,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`nixos-modules/options-zones.nix`, `nixos-modules/resource-type-validators.nix`"
+        "`nixos-modules/options-zones.nix`, `nixos-modules/generated/resource-types.nix`, `nixos-modules/generated/options-zones-<ResourceType>.nix`, `nixos-modules/resource-type-validators.nix`"
       ],
       "entryContracts" : [
         "ADR-046-resources-zone-control"
@@ -23003,10 +23038,11 @@
       "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-zone-control-014",
       "kind" : "work-item",
-      "owner" : "ADR046-zone-control-001; Nix module owner",
+      "owner" : "ADR046-zone-control-001, ADR046-routing-011; Nix module owner",
       "parallelGroup" : "wi:ADR-046-resources-zone-control",
       "prerequisites" : [
         "ADR-046-resources-zone-control",
+        "ADR046-routing-011",
         "ADR046-zone-control-001"
       ],
       "specId" : "ADR-046-resources-zone-control",

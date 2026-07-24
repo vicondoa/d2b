@@ -13,7 +13,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-cli-and-operations.md",
-      "sha256" : "c5b81aa9ce9638020f6991d4a1d9793f9f51659d1ecd16f720beacb33cb7ea6a",
+      "sha256" : "54cb3d03cf39c5c40475e176f5a9acd306dc550709427ed180cfa7863d5eb615",
       "specId" : "ADR-046-cli-and-operations",
       "status" : "Proposed",
       "supersedes" : "Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline)",
@@ -1014,7 +1014,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "c622e9286f85d882acd7fcada9920f5f3ab447d645810abce37c67dbea3e5988",
+      "sha256" : "6116228dd5f004891aa918bd76015fd202d0fc953e428d09026a883d5834b5bf",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Proposed",
       "supersedes" : null,

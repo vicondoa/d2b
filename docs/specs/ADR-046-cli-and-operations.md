@@ -229,27 +229,68 @@ Field names in `spec` are identical to the schema; there is no second vocabulary
 and no extra nesting. Vendor-qualified types (containing `.`) are admitted when
 a matching schema is installed.
 
-**Minimal multi-resource example:**
+**Minimal schema-valid example:**
 
 ```nix
-# Derivations are declared in d2b.artifacts; ResourceSpecs reference them by id only.
-d2b.artifacts."cloud-hv-pkg" = { package = pkgs.d2b-provider-cloud-hv; type = "provider"; };
+# Derivations are declared globally; ResourceSpecs carry only catalog IDs.
+d2b.artifacts = {
+  provider-runtime-cloud-hypervisor = {
+    package = inputs.d2b-provider-runtime-cloud-hypervisor.packages.${system}.default;
+    type = "provider";
+  };
+  work-vm-system = {
+    package = inputs.nixpkgs.lib.nixosSystem {
+      inherit system;
+      modules = [ ./guests/work-vm.nix ];
+    }.config.system.build.toplevel;
+    type = "nixos-system";
+  };
+};
 
 d2b.zones.local-root = {};
 d2b.zones.main = {
   parentZone = "local-root";
   resources = {
-    "work-vm"        = { type = "Guest";           spec = { providerRef = "Provider/cloud-hv"; executionPolicy = { cores = 4; memoryMiB = 8192; }; networkRefs = [ "Network/default-network" ]; }; };
-    "local-user"     = { type = "Host";            spec.defaultUserRef = "User/alice"; };
-    "default-network" = { type = "Network";        spec = { cidr = "10.100.0.0/24"; gatewayAddress = "10.100.0.1"; }; };
-    "cloud-hv"       = { type = "Provider";        spec.artifactId = "cloud-hv-pkg"; };  # plain id, no derivation in spec
-    "ssh-host-key"   = { type = "Credential";      spec = { credentialType = "ssh-ed25519-host-key"; credentialSource = "systemd-credential:d2b-ssh-key"; }; };
-    "alice"          = { type = "User";            spec = { uid = 1001; homeDir = "/home/alice"; }; };
-    "default-quota"  = { type = "Quota";           spec = { /* quota fields per Quota schema */ }; };
-    "lockdown"       = { type = "EmergencyPolicy"; spec = { /* policy fields per EmergencyPolicy schema */ }; };
+    main-host = {
+      type = "Host";
+      spec.providerRef = "Provider/system-core";
+    };
+    runtime-cloud-hypervisor = {
+      type = "Provider";
+      spec = {
+        artifactId = "provider-runtime-cloud-hypervisor";
+        config.controllerExecutionRef = "Host/main-host";
+      };
+    };
+    work-vm = {
+      type = "Guest";
+      spec = {
+        allowedDomains = [ "system" ];
+        budget = {};
+        defaultDomain = "system";
+        defaultUserRef = null;
+        deviceAttachments = [];
+        networkAttachments = [];
+        providerRef = "Provider/runtime-cloud-hypervisor";
+        provider = {
+          schemaId = "runtime-cloud-hypervisor.d2bus.org/Guest/spec";
+          schemaVersion = "1.0.0";
+          settings = {};
+        };
+        systemArtifactId = "work-vm-system";
+        volumeAttachmentDefaults = [];
+      };
+    };
   };
 };
 ```
+
+`Zone/main`, `Provider/system-core`, and `Provider/system-minijail` are
+runtime-created; none is authored in the resource map. Every authored reference
+resolves: the system Provider owns `Host/main-host`, the installed runtime
+Provider names that Host as its controller execution target, and
+`Guest/work-vm` names both that Provider and a `nixos-system` artifact. The
+compact example omits unrelated types rather than using placeholder fields.
 
 **Evidence class:** `ADR-only` — v3 Nix modules do not exist at baseline
 `b5ddbed6`. Current source: `nixos-modules/options-realms-workloads.nix`,
@@ -258,9 +299,11 @@ d2b.zones.main = {
 
 ### Canonical ResourceSpec JSON shape
 
-Every `d2b get`, `d2b list` element, and `d2b watch` event carries the
-canonical ResourceSpec envelope inside the outer `--json` response. The
-exact shape (all fields always present; null where empty):
+Every `d2b get`, `d2b list` element, and `d2b watch` event carries a canonical
+resource envelope inside the outer `--json` response. The Guest `spec` below is
+a field-for-field mirror of the authored Nix after deterministic defaults;
+the runtime adds store-generated metadata and status. Optional presentation
+metadata and the optional Provider status extension are omitted.
 
 ```json
 {
@@ -278,14 +321,23 @@ exact shape (all fields always present; null where empty):
     "createdAt": "2026-07-22T00:00:00Z",
     "updatedAt": "2026-07-22T10:30:00Z",
     "managedBy": "configuration",
-    "configurationGeneration": 7,
-    "labels": {}
+    "configurationGeneration": 7
   },
   "spec": {
-    "providerRef": "Provider/cloud-hv",
-    "executionPolicy": { "cores": 4, "memoryMiB": 8192 },
-    "networkRefs": ["Network/default-network"],
-    "provider": { "schemaId": "runtime-cloud-hypervisor.d2bus.org/Guest/spec", "schemaVersion": "1.0", "settings": {} }
+    "allowedDomains": ["system"],
+    "budget": {},
+    "defaultDomain": "system",
+    "defaultUserRef": null,
+    "deviceAttachments": [],
+    "networkAttachments": [],
+    "providerRef": "Provider/runtime-cloud-hypervisor",
+    "provider": {
+      "schemaId": "runtime-cloud-hypervisor.d2bus.org/Guest/spec",
+      "schemaVersion": "1.0.0",
+      "settings": {}
+    },
+    "systemArtifactId": "work-vm-system",
+    "volumeAttachmentDefaults": []
   },
   "status": {
     "observedGeneration": 3,
@@ -294,7 +346,25 @@ exact shape (all fields always present; null where empty):
     "lastReconciledAt": "2026-07-22T10:30:05Z",
     "startedAt": "2026-07-22T10:30:05Z",
     "completedAt": null,
-    "outcome": null
+    "outcome": null,
+    "update": {
+      "state": "Current",
+      "reasons": [],
+      "observedGeneration": 3,
+      "targetGeneration": 3,
+      "disruption": "None",
+      "preserveState": true,
+      "operationId": null,
+      "lastAssessedAt": "2026-07-22T10:30:05Z",
+      "owned": { "count": 1, "refs": ["Process/work-vm-vmm"] },
+      "dependencies": { "count": 1, "refs": ["Provider/runtime-cloud-hypervisor"] }
+    },
+    "resource": {
+      "providerPhase": "running",
+      "bootstrapReady": true,
+      "guestIdentityDigest": "8d5f7b1a",
+      "activeProcessCount": 1
+    }
   }
 }
 ```
@@ -2490,7 +2560,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Detailed design | **Nix shape:** `d2b.zones.<zone>.resources` is `attrsOf (submodule { type; optional metadata { ownerRef; labels; annotations }; spec })`. `spec` sub-options per `type` are generated from ResourceTypeSchema and signed Provider schemas; field names remain identical. `metadata.name`/`metadata.zone`/`apiVersion` are derived; status and all core metadata are rejected in input. Vendor-qualified types are admitted only when their schema is installed. **Nix emit:** `bundle-emit.nix` emits `/etc/d2b/zones/<zone>/resource-bundle.json` plus its integrity pin with canonical resource ordering and schema digests. **Core-controller apply:** `configuration.rs` verifies bundle/catalog integrity, applies Create/Update/no-op intents with bounded async concurrency, refreshes `configurationGeneration` for unchanged configuration-managed resources without waking their controller, handles controller/API name collisions per-item without seizing them, and asynchronously deletes only persisted `managedBy=configuration` resources absent from the new configured set. `cleanup.rs` consumes `Deleted` revision watches and maintains `PendingCleanup`; it never force-removes finalizers. **Prior generation retention:** `d2b.zones.<zone>.retainedGenerations`, default 3 and range 1–16, is a compiler setting outside `Zone.spec`; no TTL. Rollback reapplies a retained bundle as a new higher generation. |
 | Integration | Nix build → per-Zone `resource-bundle.json` + global private artifact catalog → `d2b activation switch` → `d2b-core-controller` configuration service → resource API Create/Update/Delete → owner controllers → finalizer cascade → cleanup watcher → Zone status update |
 | Data migration | Full reset from current manifest/processes/realm-entrypoints JSON format; prior Nix-generated artifacts (`/etc/d2b/processes.json`, `/etc/d2b/realm-entrypoints.json`) deleted after Zone resource bundle activates |
-| Validation | Runtime integration: all CLI-visible cleanup/status/rollback/gc/audit tests (§CLI-visible tests for activation and cleanup), including no force-finalizer path; Nix unit and build tests owned by ADR-046-nix-configuration spec |
+| Validation | Runtime integration: all CLI-visible cleanup/status/rollback/gc/audit tests (§CLI-visible tests for activation and cleanup), including no force-finalizer path; Nix unit and build tests owned by ADR-046-nix-configuration spec; canonical-example fixture validates every authored resource against the authoritative Host, Guest, and Provider schemas, resolves every artifact/resource reference, rejects unsupported fields, and proves the compiled Guest `spec` is field-for-field identical to the adjacent JSON |
 | Removal proof | Old `nixos-modules/manifest.nix`, `nixos-modules/bundle-artifacts.nix` emitters removed only after `bundle-emit.nix` produces equivalent-or-superseding output and all downstream consumers of the old bundle format are migrated |
 
 ### ADR046-cli-012

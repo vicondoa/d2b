@@ -23,7 +23,7 @@ tie-break or omitted dependency is used.
 | Spec nodes | 55 |
 | Work-item nodes | 543 |
 | Total nodes | 598 |
-| Edges | 1902 |
+| Edges | 1908 |
 | Max topological rank | 22 |
 
 ## Waves (W0–W7)
@@ -143,8 +143,13 @@ fully represented in the JSON.
 | `ADR046-core-001` | `ADR046-exec-013` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-exec-015` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-network-008` | file-overlap-order |
+| `ADR046-device-006` | `ADR046-nix-014` | file-overlap-order |
 | `ADR046-cli-011` | `ADR046-nix-019` | file-overlap-order |
+| `ADR046-nix-019` | `ADR046-nix-031` | file-overlap-order |
+| `ADR046-transport-unix-009` | `ADR046-qemu-media-017` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-telem-011` | file-overlap-order |
+| `ADR046-gpu-007` | `ADR046-transport-unix-009` | file-overlap-order |
+| `ADR046-qemu-media-017` | `ADR046-usbip-008` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-zone-control-016` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-zone-control-021` | file-overlap-order |
 | `ADR-046-resource-object-model` | `ADR-046-resource-api-and-authorization` | shared-contract |
@@ -165,9 +170,12 @@ Only the listed `file-overlap-order` edges constrain shared files. Provider
 integration ordering that touches disjoint crate trees is not represented as
 file overlap. The former `wi:core-config-hub` is split into
 `wi:core-config-hub:w4` and `wi:core-config-hub:w5`; each parallel group is
-single-wave. The two `assertions.nix` edges order only
-`ADR046-nix-014` → `ADR046-cli-011` → `ADR046-nix-019`; all other files in
-those work items retain their existing parallelism.
+single-wave. The seven `assertions.nix` edges form the minimal per-wave chains
+`ADR046-device-006` → `ADR046-nix-014` → `ADR046-cli-011` →
+`ADR046-nix-019` → `ADR046-nix-031` in W5 and `ADR046-gpu-007` →
+`ADR046-transport-unix-009` → `ADR046-qemu-media-017` →
+`ADR046-usbip-008` in W6. W2 has one writer. These edges order only the shared
+file; all other destinations retain their existing parallelism.
 
 ## Parallel groups
 
@@ -276,7 +284,7 @@ those work items retain their existing parallelism.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
 - `ADR046-zone-control-024` owns the shared Core-derived `physical-usb-backing` tuple; both the security-key and USB effect DAGs depend on it.
 - Every `ADR046-security-key-*` dependency in `Dependency/owner` is encoded. The dependency subgraph is acyclic and uses no generator tie-break.
-- Nine file-overlap barriers cover only the shared core
+- Fourteen file-overlap barriers cover only the shared core
   configuration/cleanup files and `nixos-modules/assertions.nix`. Each appears
   both as a
   `file-overlap-order` edge and in the dependent node's `prerequisites`, so the
