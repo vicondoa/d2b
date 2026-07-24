@@ -412,7 +412,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "`ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
-      "sha256": "20c9b769bd52f26acc455977472a198d4233973d1f580f084f0a9910b25719c0"
+      "sha256": "08922e72a325908b6435487e312d096684e3d44684ec4652c6c9a8bcbf9f3379"
     },
     {
       "specId": "ADR-046-provider-runtime-azure-container-apps",

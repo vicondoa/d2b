@@ -280,8 +280,10 @@ ingest Endpoints and carries the D097 descriptor. Its
 `ResourceExport.spec.resourceRef` names the
 `TelemetryService`; that Service's local `ingestEndpointRefs` remain its private
 arbitration transport front doors and are not copied into `ResourceExport`.
-`exportedType` and `projectionType` are
-`telemetry.d2bus.org.TelemetryService`.
+`ResourceExport.spec.serviceType` and
+`ResourceImport.spec.expectedServiceType` are both
+`telemetry.d2bus.org.TelemetryService`, and both resources carry the matching
+canonical projection-schema and factory fingerprints.
 
 This initial implementation places every OTEL, OTLP, and SigNoz choice in the
 strict Provider extension:
@@ -469,16 +471,19 @@ watch Zone/*, Guest/*, Host/*              # producer identity and placement
    The Service owns neither a projection route nor a duplicate backend; its
    Provider extension maps the semantic service to the existing SigNoz stack.
 3. Admit `ResourceExport` only when `resourceRef` names this Service,
-   `endpointRef` names one of its local ingest Endpoints, and
-   `exportedType` is `TelemetryService`.
+   `serviceType` is `telemetry.d2bus.org.TelemetryService`, and
+   `projectionSchemaFingerprint` plus `factoryFingerprint` match the signed
+   semantic factory. The Export has no Endpoint ref.
 4. Write generic Service observations to `status.resource` and implementation
    observations to `status.provider`. It never copies a locator or telemetry
    payload into status.
 
 **Reconcile flow for a projected `TelemetryService`:**
 
-1. Require `ownerRef: ResourceImport/<name>`, `serviceRole: projection`, matching
-   fingerprint, and an active import lease.
+1. Require `ownerRef: ResourceImport/<name>`, `serviceRole: projection`, an
+   owning import whose `expectedServiceType`,
+   `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`
+   match the signed local factory, and an active import lease.
 2. Reject backend/ingest Endpoint ownership and any authority descriptor.
 3. Bind semantic routing through the core-owned import route and signed adapter;
    named streams remain internal transport.
@@ -1375,12 +1380,12 @@ allow-list projection only** (e.g. `source: store-sync-audit`).
 
 **Cross-Zone sharing (D096).** The owner Zone's `ResourceExport` has
 `resourceRef: telemetry.d2bus.org.TelemetryService/telemetry`,
-`endpointRef` equal to one referenced
-local ingest Endpoint, and
-`exportedType: telemetry.d2bus.org.TelemetryService`. The Endpoint is only the
-export adapter's transport front door. Every producer Zone declares a
-`ResourceImport` expecting/projecting
-`telemetry.d2bus.org.TelemetryService`; core creates
+`serviceType: telemetry.d2bus.org.TelemetryService`, and the canonical
+`projectionSchemaFingerprint` and `factoryFingerprint`. The Service retains its
+local ingest Endpoints as implementation transport; the Export has no Endpoint
+ref. Every producer Zone declares a `ResourceImport` with the corresponding
+`expectedServiceType`, `expectedProjectionSchemaFingerprint`, and
+`expectedFactoryFingerprint`; core creates
 `telemetry.d2bus.org.TelemetryService/<projection>` with
 `ownerRef: ResourceImport/<name>`.
 `TelemetryBinding.spec.serviceRef` names that same-Zone projection.
@@ -1505,9 +1510,9 @@ d2b.zones.sys-obs.resources.telemetry-export = {
   spec = {
     providerRef = "Provider/observability-otel";
     resourceRef = "telemetry.d2bus.org.TelemetryService/telemetry";
-    endpointRef = "Endpoint/telemetry-ingest";
-    exportedType = "telemetry.d2bus.org.TelemetryService";
-    baseSchemaFingerprint = "sha256:<telemetry-service-base>";
+    serviceType = "telemetry.d2bus.org.TelemetryService";
+    projectionSchemaFingerprint = "sha256:<telemetry-service-projection-schema>";
+    factoryFingerprint = "sha256:<telemetry-projection-factory>";
     operations = [ "ingest-metrics" "ingest-traces" "ingest-logs" ];
     arbitration = "multiplexed";
     quota = { maxConsumers = 64; fairness = "weighted"; leaseDeadlineMs = 30000; };
@@ -1529,10 +1534,10 @@ d2b.zones.work.resources.telemetry = {
     providerRef = "Provider/observability-otel";
     zoneLinkRef = "ZoneLink/work-uplink";
     exportKey = "sys-obs/telemetry-export";
-    expectedType = "telemetry.d2bus.org.TelemetryService";
-    expectedBaseSchemaFingerprint = "sha256:<telemetry-service-base>";
+    expectedServiceType = "telemetry.d2bus.org.TelemetryService";
+    expectedProjectionSchemaFingerprint = "sha256:<telemetry-service-projection-schema>";
+    expectedFactoryFingerprint = "sha256:<telemetry-projection-factory>";
     projectionName = "telemetry";
-    projectionType = "telemetry.d2bus.org.TelemetryService";
     requestedCapabilities = [ "ingest-metrics" "ingest-traces" "ingest-logs" ];
     requestedQuota = { bytesPerSecond = 4194304; maxInFlightBytes = 16777216; };
     updatePolicy.mode = "manual-disruptive";
@@ -1662,12 +1667,16 @@ stream handle, credential, or secret.
 3. Projection Services cannot be authored directly, carry ingest refs,
    `spec.provider`, or an authority descriptor; only core may create one
    under a `ResourceImport`.
-4. `ResourceExport.resourceRef` and `exportedType` name only the authority
-   Service; that Service's local `ingestEndpointRefs` remain implementation
-   transport. Exporting a Binding or Endpoint as the semantic telemetry type
-   fails, and an Endpoint field on `ResourceExport` is rejected.
-5. `ResourceImport.expectedType` and `projectionType` are both
-   exactly `telemetry.d2bus.org.TelemetryService`; an Endpoint projection fails.
+4. `ResourceExport.resourceRef` and `serviceType` name only the authority
+   Service; `projectionSchemaFingerprint` and `factoryFingerprint` match the
+   signed factory. That Service's local `ingestEndpointRefs` remain
+   implementation transport. Exporting a Binding or Endpoint fails, and the
+   obsolete `endpointRef`, `exportedType`, and `baseSchemaFingerprint` fields
+   are rejected.
+5. `ResourceImport.expectedServiceType`,
+   `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`
+   match the Export and local signed factory; the obsolete `expectedType`,
+   `expectedBaseSchemaFingerprint`, and `projectionType` fields are rejected.
 6. Binding `serviceRef` and `producerRef` resolve in the same Zone; signals are a
    non-empty Service subset; quotas/policy satisfy all bounds.
 7. The strict Service Provider extension validates backend and protocol
@@ -1758,8 +1767,9 @@ integration-only.
 
 - In memory, build authority Service with local ingest Endpoint refs →
   `ResourceExport.resourceRef` → `ResourceImport` → core-owned projected
-  Service → producer Binding `serviceRef`; assert the Export contains no
-  Endpoint ref.
+  Service → producer Binding `serviceRef`; assert the Export and Import use
+  only the canonical Service-type/projection-schema/factory fingerprint fields
+  and the Export contains no Endpoint ref.
 - Assert Export/Import expected/projected type is exactly
   `telemetry.d2bus.org.TelemetryService`, never `Endpoint`, and projection owner
   is exactly `ResourceImport/<name>`.
@@ -2171,10 +2181,10 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | SigNoz ingest authority (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
 | Reuse action | net-new (implement the signed observability export/import adapter) |
 | Destination | `packages/d2b-provider-observability-otel/src/share_adapter.rs` |
-| Detailed design | Implement the signed adapter: `sys-obs` exports the authority `TelemetryService`, with one referenced local ingest Endpoint as transport; every producer import causes Core to create one local `TelemetryService` projection with ResourceImport ownership, `providerRef`, semantic base/import fields, and no `spec.provider`. Routing derives from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version, never Provider/adapter identity, which the signed descriptor authenticates separately. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. |
+| Detailed design | Implement the signed adapter: `sys-obs` exports only the authority `TelemetryService`; its local ingest Endpoint remains Service-owned implementation transport and is never an Export field. ResourceExport uses only canonical `serviceType`, `projectionSchemaFingerprint`, and `factoryFingerprint`; ResourceImport uses the corresponding `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`. Every producer import causes Core to create one local `TelemetryService` projection with ResourceImport ownership, `providerRef`, semantic base/import fields, and no `spec.provider`. Routing derives from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version, never Provider/adapter identity, which the signed descriptor authenticates separately. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. |
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream, rejects projection `spec.provider`, and proves the semantic fingerprint is unchanged by Provider/adapter identity mutation while signed descriptor authentication remains exact; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
+| Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream, exact canonical Export/Import type and fingerprint fields, rejection of obsolete `endpointRef`/`exportedType`/`baseSchemaFingerprint`/`expectedType`/`expectedBaseSchemaFingerprint`/`projectionType`, rejection of projection `spec.provider`, and semantic-fingerprint stability under Provider/adapter identity mutation while signed descriptor authentication remains exact; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
 | Removal proof | Not applicable |
 
 ### ADR046-otel-006: TelemetryService authority and TelemetryBinding realization (D096/D097)
@@ -2206,7 +2216,7 @@ Old and new suites never run in parallel indefinitely.
    `telemetry.d2bus.org.TelemetryBinding`, initially implemented by
    `Provider/observability-otel`, including canonical base
    schemas/status/conditions, strict Provider extensions, and no aliases.
-4. **Cross-Zone chain**: authority Service → Export plus local ingest Endpoint → Import → Core-owned projected Service with no `spec.provider` → Binding `serviceRef`; Endpoint is never the semantic projection, and Provider/adapter identity is authenticated separately from the semantic factory fingerprint.
+4. **Cross-Zone chain**: authority Service (retaining its local ingest Endpoint) → Service-only Export with canonical projection/factory fingerprints → matching Import → Core-owned projected Service with no `spec.provider` → Binding `serviceRef`; Endpoint is never an Export field or semantic projection, and Provider/adapter identity is authenticated separately from the semantic factory fingerprint.
 5. **D097**: descriptor on the generic authority Service, with SigNoz/OTLP
    selection only in `spec.provider`, plus duplicate
    rejection/adoption/quarantine.
