@@ -718,9 +718,9 @@ The following are not standalone ResourceTypes:
 | --- | --- |
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `workload.rs`, `error.rs`; `packages/d2b-core/src/storage.rs`, `processes.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs` |
-| Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields |
+| Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Store/API/SDK/Nix/codegen consume one contract |
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
 | Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests; `status.update` currency object round-trip (state/reasons/disruption/preserveState/owned+dependency refs bounded); `spec.updatePolicy` base round-trip |

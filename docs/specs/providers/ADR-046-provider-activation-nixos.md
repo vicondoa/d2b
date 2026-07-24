@@ -1046,9 +1046,9 @@ Required adaptations (work item `ADR046-activation-001`):
 | --- | --- |
 | Dependency/owner | Provider/activation-nixos runner owner; reused helper owner in d2b-host |
 | Current source | packages/d2b-host/src/bin/d2b-activation-helper.rs |
-| Reuse action | adapt in place |
+| Reuse action | adapt |
 | Destination | packages/d2b-host/src/bin/d2b-activation-helper.rs |
-| Detailed design | Replace the helper CLI flag interface with structured JSON input and JSON output, accept bounded systemArtifactId and activationMode, resolve store path internally, emit bounded outcome code, write no resource metadata, and preserve the no-bash-fallback invariant. |
+| Detailed design | Replace the helper CLI flag interface with structured JSON input and JSON output, accept bounded systemArtifactId and activationMode, resolve store path internally, emit bounded outcome code, write no resource metadata, and preserve the no-bash-fallback invariant. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt in place. |
 | Integration | activation-runner invokes the helper through the pre-opened activation portal and system-manager effect resources, then reports structured outcome to activation-nixos status. |
 | Data migration | Full d2b 3.0 reset; no v2 activation-helper invocation compatibility |
 | Validation | Unit tests for JSON protocol, bounded outcomes, no resource metadata writes, and no Command::new bash fallback. |
@@ -1066,9 +1066,9 @@ Required adaptations (work item `ADR046-activation-001`):
 | --- | --- |
 | Dependency/owner | ADR-046-resource-object-model and ADR-046-core-controllers; d2b-contracts activation-nixos owner |
 | Current source | None — net-new v3 ResourceType; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new schema and DTOs |
+| Reuse action | create |
 | Destination | docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json and packages/d2b-contracts/src/activation_nixos.rs |
-| Detailed design | Define JSON schema and Rust DTOs for activation-nixos.d2bus.org.NixosGeneration, with systemArtifactId as the only artifact reference, no store path fields, activationDetail as a closed status.resource enum absent from spec, and phase constrained to the common framework enum values. |
+| Detailed design | Define JSON schema and Rust DTOs for activation-nixos.d2bus.org.NixosGeneration, with systemArtifactId as the only artifact reference, no store path fields, activationDetail as a closed status.resource enum absent from spec, and phase constrained to the common framework enum values. Primary reuse disposition: `create`. Preserved source-plan detail: net-new schema and DTOs. |
 | Integration | Resource API, resource store, Nix compiler, activation-nixos controller, and CLI projections consume the schema and DTOs. |
 | Data migration | Full d2b 3.0 reset; no v2 generation resource import |
 | Validation | Schema golden vectors, serde unknown-field rejection, phase enum tests, activationDetail-not-in-spec test, and no-store-path-in-spec-or-status test. |
@@ -1087,9 +1087,9 @@ Define JSON schema and Rust DTOs. Enforce:
 | --- | --- |
 | Dependency/owner | ADR046-activation-002; activation-nixos controller owner |
 | Current source | Current top-level activation behavior in packages/d2b/src/lib.rs and hardlink-farm/store ownership split described in this dossier |
-| Reuse action | replace top-level imperative activation flow with resource controller logic |
+| Reuse action | replace |
 | Destination | packages/d2b-provider-activation-nixos/src/controller/ |
-| Detailed design | Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical startRoot=true shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. |
+| Detailed design | Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical startRoot=true shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic. |
 | Integration | Controller watches NixosGeneration resources through Zone resource API, creates activation-runner EphemeralProcesses, releases ownership references for Provider/volume-local, and writes bounded status. |
 | Data migration | Full d2b 3.0 reset; adopt mode records an existing active generation but does not import v2 controller state |
 | Validation | Controller tests for retention, finalizer sequence, no TTL retention, no direct store ops, no store path in status, deleted event-only removal, and runner shape. |
@@ -1111,9 +1111,9 @@ Reconcile loop for `activation-nixos.d2bus.org.NixosGeneration`. Key invariants:
 | --- | --- |
 | Dependency/owner | ADR046-activation-003; activation-runner owner |
 | Current source | packages/d2b-host/src/bin/d2b-activation-helper.rs for helper invocation; runner process is net-new |
-| Reuse action | net-new runner invoking adapted helper |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-activation-nixos/src/runner/ |
-| Detailed design | Implement target-local activation-runner worker that executes on NixosGeneration.spec.executionRef for Host and Guest targets using the same contract, reads private artifact-catalog.json through the integrity channel, resolves systemArtifactId to a store path in memory only, invokes d2b-activation-helper through structured JSON, executes target-local switch-to-configuration through typed helper dispatch with no raw exec or SSH, emits structured outcome JSON, and never outputs store paths. |
+| Detailed design | Implement target-local activation-runner worker that executes on NixosGeneration.spec.executionRef for Host and Guest targets using the same contract, reads private artifact-catalog.json through the integrity channel, resolves systemArtifactId to a store path in memory only, invokes d2b-activation-helper through structured JSON, executes target-local switch-to-configuration through typed helper dispatch with no raw exec or SSH, emits structured outcome JSON, and never outputs store paths. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new runner invoking adapted helper. |
 | Integration | Controller-created EphemeralProcess runs under Provider/system-minijail on the target execution context and returns outcome through the activation portal for status update. |
 | Data migration | Full d2b 3.0 reset; no v2 runner state import |
 | Validation | Runner tests for artifact lookup, JSON helper invocation, Host and Guest target parity, no raw argv, no SSH, no store path in output, and terminal nonzero handling. |
@@ -1138,9 +1138,9 @@ use the same contract with no bypass.
 | --- | --- |
 | Dependency/owner | ADR-046-cli-and-operations; activation CLI owner |
 | Current source | packages/d2b/src/lib.rs top-level cmd_switch, cmd_boot, cmd_test, cmd_rollback, cmd_build, cmd_generations, cmd_gc, and cmd_migrate |
-| Reuse action | replace with grouped CLI projection |
+| Reuse action | replace |
 | Destination | packages/d2b/src/activation.rs |
-| Detailed design | Implement d2b activation build, switch, boot, test, rollback, adopt, generations, gc, and migrate subcommands, projecting ADR-046 CLI and Operations behavior and ensuring no store path, digest, or artifact catalog field appears in JSON or human output. |
+| Detailed design | Implement d2b activation build, switch, boot, test, rollback, adopt, generations, gc, and migrate subcommands, projecting ADR-046 CLI and Operations behavior and ensuring no store path, digest, or artifact catalog field appears in JSON or human output. Primary reuse disposition: `replace`. Preserved source-plan detail: replace with grouped CLI projection. |
 | Integration | d2b CLI dispatcher calls resource API and activation-nixos controller by creating or listing NixosGeneration resources; legacy top-level verbs are removed by ADR046-activation-007 after integration tests pass. |
 | Data migration | Full d2b 3.0 reset; CLI command surface changes with no runtime state import |
 | Validation | CLI integration tests for subcommand parsing, authorization, resource creation/listing, rollback priorGenerationRef, gc ownership release, and output redaction. |
@@ -1157,9 +1157,9 @@ only after this lands (work item ADR046-activation-007).
 | --- | --- |
 | Dependency/owner | ADR-046-nix-configuration; activation-nixos Nix owner |
 | Current source | Current VM Nix configuration emits activation inputs implicitly; this item creates the explicit Provider and NixosGeneration resource emitter |
-| Reuse action | net-new resource emitter adapted from existing Nix activation inputs |
+| Reuse action | adapt |
 | Destination | nixos-modules/providers/activation-nixos.nix |
-| Detailed design | Emit Provider spec and activation-nixos.d2bus.org.NixosGeneration resources per target, flow retainedGenerations only through Provider.spec.config.retainedGenerations, reference systems by systemArtifactId only, omit store paths from all emitted resources, and avoid dedicated state-layout User or ComponentPrincipal because ProviderStateSet is empty. |
+| Detailed design | Emit Provider spec and activation-nixos.d2bus.org.NixosGeneration resources per target, flow retainedGenerations only through Provider.spec.config.retainedGenerations, reference systems by systemArtifactId only, omit store paths from all emitted resources, and avoid dedicated state-layout User or ComponentPrincipal because ProviderStateSet is empty. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new resource emitter adapted from existing Nix activation inputs. |
 | Integration | Nix compiler emits Provider and NixosGeneration resources plus private artifact catalog entries consumed by core configuration publication and the activation-nixos controller. |
 | Data migration | Full d2b 3.0 reset; existing d2b.vms activation settings are reauthored as Zone resources rather than imported |
 | Validation | Nix eval tests for Provider config, NixosGeneration shape, retainedGenerations source, no systemStorePath in bundle, no state Volume or state-layout principal, and artifact ID resolution. |
@@ -1179,9 +1179,9 @@ Provider's normal principal model.
 | --- | --- |
 | Dependency/owner | ADR046-activation-005; d2b CLI dispatcher owner |
 | Current source | packages/d2b/src/lib.rs cmd_switch, cmd_boot, cmd_test, cmd_rollback, cmd_build, cmd_generations, cmd_gc, cmd_migrate and dispatcher registrations |
-| Reuse action | delete legacy top-level commands |
+| Reuse action | delete-after-cutover |
 | Destination | packages/d2b/src/lib.rs |
-| Detailed design | Remove the legacy top-level activation command functions and their dispatcher registrations after the grouped d2b activation namespace passes integration tests. |
+| Detailed design | Remove the legacy top-level activation command functions and their dispatcher registrations after the grouped d2b activation namespace passes integration tests. Primary reuse disposition: `delete-after-cutover`. Preserved source-plan detail: delete legacy top-level commands. |
 | Integration | CLI dispatcher routes only d2b activation subcommands for activation operations; documentation and tests use the new namespace. |
 | Data migration | Full d2b 3.0 reset; no command alias compatibility window |
 | Validation | CLI integration matrix for d2b activation passes; grep or contract test confirms old cmd_* symbols and dispatcher registrations are absent. |

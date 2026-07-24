@@ -1548,12 +1548,12 @@ targeted.
 
 **`d2b zone doctor`.** Resource status reads only; no resource names, paths,
 `argv`, or PIDs in output; includes an audit hash-chain integrity check
-(`ADR-046-telemetry-audit-and-support`, `ADR046-doctor-001`).
+(`ADR-046-telemetry-audit-and-support`, `ADR046-telem-016`).
 
 **`d2b zone support-bundle`.** No spec bytes and no `metadata.name` in the
 bundle; metadata and status only. When a Provider is quarantined, the bundle
 reports `bundle_completeness: "partial"` rather than silently omitting the
-gap or blocking entirely (`ADR046-doctor-002`). This is the concrete tool an
+gap or blocking entirely (`ADR046-telem-017`). This is the concrete tool an
 operator or a coordinated-disclosure responder uses to gather evidence
 without themselves becoming a redaction bypass — it is bound by exactly the
 same audit/status redaction rules as every other read path in
@@ -1562,7 +1562,7 @@ same audit/status redaction rules as every other read path in
 **`d2b zone audit export`.** Admin-only (`audit-export` verb); hash-chain
 breaks are reported inline in the export stream rather than silently
 truncating history; output carries no old field names (`realm`/`node`/
-`workload_id`) and no path/`argv` content (`ADR046-audit-004`).
+`workload_id`) and no path/`argv` content (`ADR046-telem-015`).
 
 **Coordination with disclosure policy.** `SECURITY.md`'s GitHub Security
 Advisory channel, response-time targets (7-day acknowledgment, 30-day
@@ -1914,9 +1914,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | All ResourceType/Provider specs; owned by the security/telemetry integrator alongside `ADR046-telem-008` |
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (existing v3 cardinality/label policy gate) |
 | Reuse source | None (new cross-cutting gate; no equivalent exists in main) |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` |
-| Detailed design | One policy test enumerating every forbidden metric-label/audit-field value from §21 and the content-secrecy table in §20 (store paths, `no_isolation`, credential bytes, raw paths/argv/PID/cgroup, CTAP/clipboard/terminal/notification content) and asserting, by static scan of instrumentation call sites plus a redaction-guard runtime test, that no `ADR046-*` Provider crate emits any of them |
+| Detailed design | One policy test enumerating every forbidden metric-label/audit-field value from §21 and the content-secrecy table in §20 (store paths, `no_isolation`, credential bytes, raw paths/argv/PID/cgroup, CTAP/clipboard/terminal/notification content) and asserting, by static scan of instrumentation call sites plus a redaction-guard runtime test, that no `ADR046-*` Provider crate emits any of them Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs as part of `make test-lint`/`make test-rust`; every Provider crate's own redaction test (e.g. `tests/stream_redaction.rs`) is a per-Provider instance of the same closed list |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic (`cargo test -p d2b-contract-tests policy_telemetry_redaction`); fails the build if a new Provider crate is added without a corresponding redaction test file under its `tests/` |
@@ -1927,12 +1927,12 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-002` |
-| Dependency/owner | `ADR046-session-001`/`ADR046-bus-001` (ComponentSession/d2b-bus implementation) |
+| Dependency/owner | `ADR046-session-001`/`ADR046-session-003` (ComponentSession/d2b-bus implementation) |
 | Current source | main `a1cc0b2d`: `d2b-session/tests/noise_vectors.rs`, `d2b-session/tests/component_session.rs`, `d2b-session-unix/tests/unix_session.rs` |
 | Reuse source | Same main commit/paths |
-| Reuse action | copy and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-session/tests/noise_conformance.rs`, `packages/d2b-session/fuzz/fuzz_targets/{handshake_offer,record_frame}.rs` |
-| Detailed design | Property/fuzz test suite over the three Noise profiles (§7): exact NN/KK/IKpsk2 vectors and rejection mutations (copied), plus new `cargo-fuzz` targets mutating the canonical handshake offer, preface, and encrypted record frame to assert no panic/UB and that every malformed input is a typed rejection (never a partial accept) |
+| Detailed design | Property/fuzz test suite over the three Noise profiles (§7): exact NN/KK/IKpsk2 vectors and rejection mutations (copied), plus new `cargo-fuzz` targets mutating the canonical handshake offer, preface, and encrypted record frame to assert no panic/UB and that every malformed input is a typed rejection (never a partial accept) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Wired into `make test-rust` (vectors) and a separate `make test-fuzz` target (new; time-boxed nightly run, not part of the PR-blocking gate) |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic vector tests plus fuzz corpus with a minimum 4-hour nightly run and zero crashes/hangs as acceptance |
@@ -1946,9 +1946,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | `ADR046-zone-control-004`/`ADR046-zone-control-005` (Role/RoleBinding implementation) |
 | Current source | `packages/d2bd/src/admission.rs` (`verb_requires_admin()` baseline verb table) |
 | Reuse source | None beyond the verb-table adaptation already tracked by `ADR046-zone-control-004` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-resource-store/tests/rbac_property.rs` |
-| Detailed design | Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers |
+| Detailed design | Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs against the real redb-backed resource store test harness, not a mock |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic property test (`proptest`/`quickcheck`-style, minimum 10,000 cases per property) |
@@ -1959,12 +1959,12 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-004` |
-| Dependency/owner | `ADR046-routing-005`/`ADR046-bus-001` (ZoneLink/d2b-bus relay implementation) |
+| Dependency/owner | `ADR046-routing-005`/`ADR046-session-003` (ZoneLink/d2b-bus relay implementation) |
 | Current source | None (v3 ZoneLink relay is `ADR-only`) |
 | Reuse source | None |
-| Reuse action | extract and adapt (design copied from `ADR-046-zone-routing.md` structural-rejection sections) |
+| Reuse action | adapt |
 | Destination | `packages/d2b-bus/fuzz/fuzz_targets/zonelink_frame.rs`, `packages/d2b-bus/tests/zonelink_structural_rejection.rs` |
-| Detailed design | Fuzz + property suite asserting that no mutation of a ZoneLink-bound frame (attachment count, credential-shaped byte runs, path-shaped strings, PID-shaped integers) is ever forwarded — every such mutation is rejected at serialization with `attachment-not-permitted-over-zone-link` or the transport-specific equivalent, never silently dropped or partially forwarded |
+| Detailed design | Fuzz + property suite asserting that no mutation of a ZoneLink-bound frame (attachment count, credential-shaped byte runs, path-shaped strings, PID-shaped integers) is ever forwarded — every such mutation is rejected at serialization with `attachment-not-permitted-over-zone-link` or the transport-specific equivalent, never silently dropped or partially forwarded Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design copied from `ADR-046-zone-routing.md` structural-rejection sections). |
 | Integration | `make test-fuzz`; a companion container test (`tests/integration/containers/zonelink-cross-zone.rs`) runs two real Zone runtime containers connected by a real ZoneLink and asserts the same property end to end over the wire, not just in the frame-serialization unit |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Fuzz corpus (`cargo fuzz run zonelink_frame -- -runs=1000000`, zero crashes); container test passes in `make test-integration` |
@@ -2010,9 +2010,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | `ADR046-minijail-005`, `ADR046-systemd-002`, `ADR046-aca-001`, `ADR046-volume-001` (every quarantine-on-ambiguity implementation) |
 | Current source | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` (existing fail-closed marker/quarantine pattern, `implemented-and-reachable`) |
 | Reuse source | Same v3 path, generalized |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/quarantine_not_kill_matrix.rs` |
-| Detailed design | One parameterized fault-injection matrix test, run once per adoption-capable Provider (`system-minijail`, `system-systemd`, `runtime-cloud-hypervisor`, `runtime-azure-container-apps`, `volume-local`), that restarts the controller with a deliberately ambiguous adoption candidate (duplicate InvocationID, mismatched marker inode, stale ACA operation handle) and asserts: (a) the resource transitions to `Degraded`/`Quarantined`, never `Deleted` or silently re-adopted; (b) no signal is sent to the ambiguous candidate process; (c) a `runtime-security-violation`-class audit record is emitted |
+| Detailed design | One parameterized fault-injection matrix test, run once per adoption-capable Provider (`system-minijail`, `system-systemd`, `runtime-cloud-hypervisor`, `runtime-azure-container-apps`, `volume-local`), that restarts the controller with a deliberately ambiguous adoption candidate (duplicate InvocationID, mismatched marker inode, stale ACA operation handle) and asserts: (a) the resource transitions to `Degraded`/`Quarantined`, never `Deleted` or silently re-adopted; (b) no signal is sent to the ambiguous candidate process; (c) a `runtime-security-violation`-class audit record is emitted Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `make test-rust` for the in-process cases; `make test-host-integration` for the real-pidfd/real-cgroup cases (`tests/host-integration/quarantine-not-kill.nix`) |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Matrix covers all five Providers listed; acceptance is 100% pass across all five with no signal sent to the ambiguous candidate in any case |
@@ -2058,9 +2058,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | `ADR046-credential-001` through `ADR046-credential-007` |
 | Current source | None (zero-secret invariant has no existing automated gate) |
 | Reuse source | None |
-| Reuse action | extract and adapt (design from `ADR-046-resources-credential.md` §1.1) |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/zero_secret_invariant.rs` |
-| Detailed design | Static + dynamic gate: (1) static — every DTO type reachable from a `Credential`-adjacent module must implement a hand-written redacted `Debug` and must not derive `Debug`, enforced by a `#[forbid(clippy::derive_debug_ambient)]`-style custom lint or an `xtask` AST scan; (2) dynamic — a property test that generates random `Credential` delivery sessions and asserts the delivered token/`SignChallenge` byte sequence never appears, byte-for-byte, in any captured audit record, OTEL span, log line, or resource-store row taken during the same test run |
+| Detailed design | Static + dynamic gate: (1) static — every DTO type reachable from a `Credential`-adjacent module must implement a hand-written redacted `Debug` and must not derive `Debug`, enforced by a `#[forbid(clippy::derive_debug_ambient)]`-style custom lint or an `xtask` AST scan; (2) dynamic — a property test that generates random `Credential` delivery sessions and asserts the delivered token/`SignChallenge` byte sequence never appears, byte-for-byte, in any captured audit record, OTEL span, log line, or resource-store row taken during the same test run Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-resources-credential.md` §1.1). |
 | Integration | `make test-lint` (static scan) and `make test-rust` (dynamic property test) |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic; the dynamic test additionally runs as a canary-byte test (a unique random marker is embedded in the token and searched for across every observability surface) |
@@ -2087,7 +2087,7 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-012` |
-| Dependency/owner | `ADR046-audit-002` (privileged audit durability) |
+| Dependency/owner | `ADR046-telem-013` (privileged audit durability) |
 | Current source | `packages/d2bd/src/daemon_audit.rs` (existing audit-write path, adapted target) |
 | Reuse source | Same v3 path |
 | Reuse action | adapt |
@@ -2106,9 +2106,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | `ADR046-zone-control-009`/`ADR046-zone-control-010` (Quota/EmergencyPolicy), `ADR046-session-001` (session limits) |
 | Current source | None new; ceiling values are already enumerated in `ADR-046-zone-routing.md`/`ADR-046-cli-and-operations.md` |
 | Reuse source | main `a1cc0b2d`: `d2b-session` credit-accounting/priority-scheduling tests, copied for the checked-arithmetic/priority-ordering assertions |
-| Reuse action | copy and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-bus/tests/dos_ceiling_fault_injection.rs` |
-| Detailed design | Fault-injection/load test suite: (1) attachment-credit exhaustion at each of the six scopes (Packet/Request/Operation/Session/Process/Host), asserting typed rejection never a panic; (2) reconnect-storm exceeding `MAX_RECONNECT_ATTEMPTS`/`MAX_RECONNECT_WINDOW_MS`, asserting the session fails closed rather than looping; (3) ZoneLink hop-count/route-advertisement replay flood, asserting `hop-limit-exceeded`/`zone-advertisement-replay` rather than unbounded forwarding; (4) a stalled data stream under load, asserting control/cancellation traffic is never starved (priority-scheduling property) |
+| Detailed design | Fault-injection/load test suite: (1) attachment-credit exhaustion at each of the six scopes (Packet/Request/Operation/Session/Process/Host), asserting typed rejection never a panic; (2) reconnect-storm exceeding `MAX_RECONNECT_ATTEMPTS`/`MAX_RECONNECT_WINDOW_MS`, asserting the session fails closed rather than looping; (3) ZoneLink hop-count/route-advertisement replay flood, asserting `hop-limit-exceeded`/`zone-advertisement-replay` rather than unbounded forwarding; (4) a stalled data stream under load, asserting control/cancellation traffic is never starved (priority-scheduling property) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | `make test-rust`; item (4) additionally runs as a container load test (`tests/integration/containers/backpressure-priority.rs`) with a real slow consumer |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection suite; container load test; acceptance is zero panics/unbounded-growth across all four scenarios |
@@ -2119,12 +2119,12 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-014` |
-| Dependency/owner | `ADR046-doctor-001`/`ADR046-doctor-002` (doctor/support-bundle commands) |
+| Dependency/owner | `ADR046-telem-016`/`ADR046-telem-017` (doctor/support-bundle commands) |
 | Current source | None (both commands are `ADR-only`) |
 | Reuse source | None |
-| Reuse action | extract and adapt (design from `ADR-046-telemetry-audit-and-support.md`) |
+| Reuse action | adapt |
 | Destination | `packages/d2b/src/commands/{doctor,support_bundle}.rs` |
-| Detailed design | `d2b zone doctor` performs read-only status/audit-hash-chain checks with the redaction rules from §21 enforced on every field it prints; `d2b zone support-bundle` assembles a bounded archive of metadata+status (never spec bytes or `metadata.name`) and sets `bundle_completeness: "partial"` when any Provider in scope is quarantined, rather than omitting the gap silently |
+| Detailed design | `d2b zone doctor` performs read-only status/audit-hash-chain checks with the redaction rules from §21 enforced on every field it prints; `d2b zone support-bundle` assembles a bounded archive of metadata+status (never spec bytes or `metadata.name`) and sets `bundle_completeness: "partial"` when any Provider in scope is quarantined, rather than omitting the gap silently Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-telemetry-audit-and-support.md`). |
 | Integration | `make test-rust` (CLI integration tests); a container test (`tests/integration/containers/support-bundle-quarantined.rs`) runs a real Zone with one quarantined Provider and asserts the bundle correctly reports `partial` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic CLI test asserting no spec byte or `metadata.name` appears in a generated bundle; container test for the quarantined-Provider case |
@@ -2135,12 +2135,12 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-015` |
-| Dependency/owner | `ADR046-audit-001` (`StateReset` record), Volume/Credential lifecycle work items |
+| Dependency/owner | `ADR046-telem-012` (`StateReset` record), Volume/Credential lifecycle work items |
 | Current source | Historical main ADR 0045 factory-reset design (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, reset process overview and apply-command verification steps) — reused only as a design precedent for atomicity/fail-closed sequencing, not as v3 architecture (see [Reset boundary](#reset-boundary) for the explicitly excluded assumptions) |
 | Reuse source | Same historical commit, sequencing pattern only (no code reuse; historical implementation was bash/systemd-generation-based and does not exist in any Rust crate) |
-| Reuse action | adapt (pattern only) |
+| Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/reset.rs`, `packages/d2b-core-controller/tests/reset_atomicity.rs` |
-| Detailed design | Implements the `scope` (`zone`, `provider`, `host`, or `guest`) `StateReset` flow from §25: quiesce via `EmergencyPolicy`, revoke open Credential leases in scope, destroy Volumes in scope (key-shred first), commit the `StateReset` audit record durably, and only then report the reset complete. A crash-recovery path re-derives "was this reset already committed?" solely from the durable `StateReset` record, never from partial filesystem state |
+| Detailed design | Implements the `scope` (`zone`, `provider`, `host`, or `guest`) `StateReset` flow from §25: quiesce via `EmergencyPolicy`, revoke open Credential leases in scope, destroy Volumes in scope (key-shred first), commit the `StateReset` audit record durably, and only then report the reset complete. A crash-recovery path re-derives "was this reset already committed?" solely from the durable `StateReset` record, never from partial filesystem state Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (pattern only). |
 | Integration | `make test-rust` (unit-level state machine); a host/KVM integration test (`tests/host-integration/reset-atomicity.nix`) kills the process mid-reset at each of the four phases (quiesce, credential revoke, Volume destroy, audit commit) and asserts recovery never double-destroys, never silently completes without the audit record, and never leaves an orphaned sealed-Volume-without-key state |
 | Data migration | None (v3-native; no v1/v2 reset-generation state to migrate) |
 | Validation | Hermetic state-machine test; host/KVM crash-injection test at all four phases; acceptance is zero non-atomic outcomes across all injected crash points |
@@ -2154,9 +2154,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | Documentation/CI integrator; depends on every Provider dossier's own `Security` section existing |
 | Current source | None (cross-reference check does not exist) |
 | Reuse source | None |
-| Reuse action | adapt (pattern from `tests/unit/gates/drift-check.sh`) |
+| Reuse action | adapt |
 | Destination | `tests/unit/gates/security-matrix-coverage.sh` |
-| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 19 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section |
+| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 19 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (pattern from `tests/unit/gates/drift-check.sh`). |
 | Integration | `make test-drift` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic shell-script gate; a negative test adds a scratch Provider dossier missing a Security section and asserts the gate fails |
@@ -2170,9 +2170,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | `ADR046-routing-004`, gateway-custody Provider work items (`ADR046-aca-*`, `ADR046-azure-vm-*`, `ADR046-transport-relay-*`) |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse source | None |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `tests/integration/containers/malicious-child-zone.rs` |
-| Detailed design | Container-based penetration test running a real parent Zone and a deliberately malicious child Zone container that attempts, over a real ZoneLink: FD smuggling, credential-shaped byte injection, cross-Zone `ownerRef` forgery, capability-ceiling widening claims, and route-advertisement replay. Every attempt must be rejected by the parent with the specific typed error named in §10, and none may reach the parent's resource store, Credential state, or Host substrate |
+| Detailed design | Container-based penetration test running a real parent Zone and a deliberately malicious child Zone container that attempts, over a real ZoneLink: FD smuggling, credential-shaped byte injection, cross-Zone `ownerRef` forgery, capability-ceiling widening claims, and route-advertisement replay. Every attempt must be rejected by the parent with the specific typed error named in §10, and none may reach the parent's resource store, Credential state, or Host substrate Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `make test-integration` (requires podman, per `AGENTS.md` "Local Layer 1 + container integration") |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Container integration test; acceptance is zero successful attacks across all five attempted vectors |
@@ -2186,9 +2186,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | Manual validation owner; depends on `ADR046-azure-vm-*`, `ADR046-transport-relay-*`, `ADR046-aca-*`, device Provider work items reaching a testable state |
 | Current source | None (manual cloud/hardware validation has no automated equivalent by design) |
 | Reuse source | None |
-| Reuse action | adapt (checklist pattern from `SECURITY.md`'s existing portability-roadmap manual milestones and `tests/README.md`'s manual hardware tier) |
+| Reuse action | adapt |
 | Destination | `docs/reference/security-manual-validation-checklist.md` (new reference doc, out of scope for this spec's own file but named here as the required destination for the future implementation PR) |
-| Detailed design | A checklist covering the scenarios that cannot be hermetically or even container-tested: (1) real Azure Container Apps/Azure VM credential rotation and revocation under `AzureEffectPort`, confirming zeroization on a real managed-identity/Entra token; (2) real TPM 2.0 hardware NVRAM persistence/tamper-marker behavior across a real host reboot; (3) real USBIP/security-key hardware mutual-exclusion enforcement with a physical FIDO2 device; (4) real Azure Relay listener/sender credential acquisition and relay-identity-not-local-auth verification against a live relay namespace |
+| Detailed design | A checklist covering the scenarios that cannot be hermetically or even container-tested: (1) real Azure Container Apps/Azure VM credential rotation and revocation under `AzureEffectPort`, confirming zeroization on a real managed-identity/Entra token; (2) real TPM 2.0 hardware NVRAM persistence/tamper-marker behavior across a real host reboot; (3) real USBIP/security-key hardware mutual-exclusion enforcement with a physical FIDO2 device; (4) real Azure Relay listener/sender credential acquisition and relay-identity-not-local-auth verification against a live relay namespace Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (checklist pattern from `SECURITY.md`'s existing portability-roadmap manual milestones and `tests/README.md`'s manual hardware tier). |
 | Integration | Run manually before each tagged release touching a cloud/hardware Provider, per the existing `tests/README.md` manual-tier convention |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Checklist sign-off recorded in the release's validation evidence, not a CI gate (matches `D2b_LIVE=1` manual-tier precedent in `AGENTS.md`) |
@@ -2202,9 +2202,9 @@ close. Each maps to the attacker class it is scoped against.
 | Dependency/owner | `ADR046-exec-003`/`ADR046-exec-007` and `ADR046-minijail-003` through `ADR046-minijail-005`; system-minijail/broker integration owner |
 | Current source | `packages/d2bd/src/supervisor/pidfd_table.rs` (`BrokerReapLog`) and `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`) |
 | Reuse source | Same v3 paths, adapted to the corrected ownership contract |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/minijail_process_ownership.rs`; `tests/host-integration/minijail-cgroup-kill.nix` |
-| Detailed design | Hermetic contract test proves only the broker that called `clone3` can produce the identity-bound `BrokerTerminalResult`; a non-parent poll-readable pidfd cannot be converted to status, while a verified duplicate holder can still request exact-main `pidfd_send_signal`. Host integration launches an owned descendant that calls `setsid(2)` plus an unrelated recycled-PGID decoy, performs graceful exact-main stop followed by anchored leaf `cgroup.kill`, and proves the owned leaf reaches `populated 0`, the broker reaps exactly once, the decoy survives, and rmdir/finalizer clearing wait for both proofs. Negative cases prove ambiguous adoption emits no signal/`cgroup.kill`, and Linux <5.14 or missing/unwritable `cgroup.kill` fails before spawn. |
+| Detailed design | Hermetic contract test proves only the broker that called `clone3` can produce the identity-bound `BrokerTerminalResult`; a non-parent poll-readable pidfd cannot be converted to status, while a verified duplicate holder can still request exact-main `pidfd_send_signal`. Host integration launches an owned descendant that calls `setsid(2)` plus an unrelated recycled-PGID decoy, performs graceful exact-main stop followed by anchored leaf `cgroup.kill`, and proves the owned leaf reaches `populated 0`, the broker reaps exactly once, the decoy survives, and rmdir/finalizer clearing wait for both proofs. Negative cases prove ambiguous adoption emits no signal/`cgroup.kill`, and Linux <5.14 or missing/unwritable `cgroup.kill` fails before spawn. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Hermetic contract test in `make test-rust`; real pidfd/cgroup scenario in `make test-host-integration` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Parent-only wait/reap, poll-readability-not-status, duplicate-holder signaling, setsid/PGID-reuse resistance, quarantine no-kill, exact-once reap, and Linux ≥5.14 platform-gate assertions all pass |

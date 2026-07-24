@@ -1355,9 +1355,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | Provider contract owner |
 | Current source | `d2bd/src/provider_registry.rs`: `AzureVmForbidden`, `AZURE_VM_IMPLEMENTATION_ID`; `d2b-realm-provider/src/provider.rs`: `InfrastructureProvider` (dead-reachable) |
-| Reuse action | Extract and adapt; DELETE `InfrastructureProvider` after this Provider is operational |
+| Reuse action | adapt |
 | Destination | `src/{lib.rs,config.rs,schema.rs,error.rs,effect/mod.rs}` |
-| Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest spec.provider.settings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; Endpoint ResourceType templates with name/transport/purpose |
+| Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest spec.provider.settings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; Endpoint ResourceType templates with name/transport/purpose Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt; DELETE `InfrastructureProvider` after this Provider is operational. |
 | Integration | ProviderDeployment loads the descriptor/catalog and ResourceType schemas; Nix and Guest specs reference the provider settings; controller and EffectPort modules consume the shared config/error types. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. Existing registry sentinels are deleted only after the Provider resource model replaces them. |
 | Validation | Provider catalog; descriptor fingerprint; schema/conformance tests |
@@ -1369,9 +1369,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-001 |
 | Current source | `d2b-realm-provider/src/rate_limit.rs` (implemented-and-reachable) |
-| Reuse action | Copy and adapt |
+| Reuse action | adapt |
 | Destination | `src/effect/{mod.rs,real.rs,fake.rs,rate_limit.rs}` |
-| Detailed design | `AzureEffectPort` async trait; opaque `AzureOperationHandle` (bounded bytes, no poll URL); real `azure_core`/`azure_mgmt_compute` impl; `FakeAzureEffectPort` for hermetic tests; ARM 429/503/409 handling |
+| Detailed design | `AzureEffectPort` async trait; opaque `AzureOperationHandle` (bounded bytes, no poll URL); real `azure_core`/`azure_mgmt_compute` impl; `FakeAzureEffectPort` for hermetic tests; ARM 429/503/409 handling Primary reuse disposition: `adapt`. Preserved source-plan detail: Copy and adapt. |
 | Integration | Azure VM controller lifecycle/idempotency code calls `AzureEffectPort`; the real implementation talks to ARM in production and `FakeAzureEffectPort` drives hermetic lifecycle tests. |
 | Data migration | No persistent data migration; in-flight ARM operation handles are new v3 status/core-ledger records and are re-derived or adopted on reconcile when absent. |
 | Validation | `tests/lifecycle_hermetic.rs`; all ARM paths via `FakeAzureEffectPort`; no ARM URL in test assertions |
@@ -1383,9 +1383,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-001; ADR046-azure-vm-002; Guest ResourceType controller contract |
 | Current source | `d2b-realm-provider/src/conformance.rs`; main `a1cc0b2d`: `d2b-provider-toolkit/src/reconciler_loop.rs` |
-| Reuse action | Copy/adapt main toolkit; adapt conformance shape |
+| Reuse action | adapt |
 | Destination | `src/controller/{mod.rs,lifecycle.rs,idempotency.rs}` |
-| Detailed design | Non-blocking reconcile: `start_*(...)` → persist `AzureOperationHandle` → `requeue-at`; `poll_lro` on subsequent ticks; controller as authorized `update-status` writer for Guest resources; finalizer held until ARM delete confirmed; top-level `phase`, `status.resource`, and Azure `status.provider.details.providerPhase` written atomically |
+| Detailed design | Non-blocking reconcile: `start_*(...)` → persist `AzureOperationHandle` → `requeue-at`; `poll_lro` on subsequent ticks; controller as authorized `update-status` writer for Guest resources; finalizer held until ARM delete confirmed; top-level `phase`, `status.resource`, and Azure `status.provider.details.providerPhase` written atomically Primary reuse disposition: `adapt`. Preserved source-plan detail: Copy/adapt main toolkit; adapt conformance shape. |
 | Integration | Zone core dispatches Guest resource events to the Azure VM controller; ResourceClient updates status/finalizers; `AzureEffectPort` starts, polls, and deletes ARM LROs. |
 | Data migration | Full d2b 3.0 reset; old WorkloadProvider lifecycle state is not imported. Existing ARM resources may be adopted by tag/idempotency checks during reconcile. |
 | Validation | `tests/lifecycle_hermetic.rs`; `tests/conformance.rs` |
@@ -1397,9 +1397,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-001; ComponentSession IKpsk2 |
 | Current source | `d2b-realm-provider/src/types.rs`: `ProviderGuestdBootstrapContract` (implemented-and-reachable); main `a1cc0b2d`: `d2b-session/src/bootstrap.rs` |
-| Reuse action | Copy/adapt main `BootstrapPsk`/`BootstrapAdmission` |
+| Reuse action | adapt |
 | Destination | `src/controller/bootstrap.rs`; `src/bootstrap_svc/{mod.rs,admission.rs,enrollment.rs}` |
-| Detailed design | PSK generation; sealed PSK/admission/enrollment recovery material (ciphertext) in the controller's single guest-local sealed recovery Volume; `GrantBootstrapAdmission` typed bus call; IKpsk2 in bootstrap-svc; enrollment record; enrolled KK; the bootstrap-svc declares **no** state Volume (session state in process memory; obtains sealed PSK/admission from the controller only); the controller's sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (before component Process start) from the controller's single `stateNamespaces` declaration with a Nix-preprovisioned `User/azure-vm-controller` layout principal; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase lives in `Guest.status` (D087); controller does not own, create, or add Volume to exported ResourceTypes; it consumes its view dirfd only |
+| Detailed design | PSK generation; sealed PSK/admission/enrollment recovery material (ciphertext) in the controller's single guest-local sealed recovery Volume; `GrantBootstrapAdmission` typed bus call; IKpsk2 in bootstrap-svc; enrollment record; enrolled KK; the bootstrap-svc declares **no** state Volume (session state in process memory; obtains sealed PSK/admission from the controller only); the controller's sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (before component Process start) from the controller's single `stateNamespaces` declaration with a Nix-preprovisioned `User/azure-vm-controller` layout principal; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase lives in `Guest.status` (D087); controller does not own, create, or add Volume to exported ResourceTypes; it consumes its view dirfd only Primary reuse disposition: `adapt`. Preserved source-plan detail: Copy/adapt main `BootstrapPsk`/`BootstrapAdmission`. |
 | Integration | Controller creates and seals recovery material in its state Volume, grants bootstrap admission over the bus, and bootstrap-svc performs IKpsk2 enrollment for Guest sessions. |
 | Data migration | No v2 bootstrap state import; the new sealed recovery Volume is initialized on first v3 activation, and old vsock bootstrap material is retired at cutover. |
 | Validation | `tests/bootstrap_hermetic.rs`; `tests/error_redaction.rs` |
@@ -1411,9 +1411,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-003; Credential ResourceType; D055/D056 |
 | Current source | `d2b-realm-provider/src/credential.rs`: `AzureControlPlaneRef`, `OpaqueAzureRef`, `ManagedIdentityRef` (implemented-and-reachable) |
-| Reuse action | Retain `OpaqueAzureRef` directly; adapt credential acquisition to enrolled KK |
+| Reuse action | adapt |
 | Destination | `src/credential.rs` |
-| Detailed design | ARM credential via enrolled KK `AcquireToken`; zeroizing token handling; no ambient credential fallback; `credential-managed-identity` guest-agent placement |
+| Detailed design | ARM credential via enrolled KK `AcquireToken`; zeroizing token handling; no ambient credential fallback; `credential-managed-identity` guest-agent placement Primary reuse disposition: `adapt`. Preserved source-plan detail: Retain `OpaqueAzureRef` directly; adapt credential acquisition to enrolled KK. |
 | Integration | Controller obtains ARM credentials through enrolled KK and the Credential ResourceType before EffectPort operations; the credential-managed-identity guest agent provides the token source. |
 | Data migration | No ambient credential migration; v3 requires ResourceType Credential/ManagedIdentityRef plus enrolled KK, and the old direct IMDS fallback is removed. |
 | Validation | `tests/credential_hermetic.rs`; `tests/error_redaction.rs` |
@@ -1425,9 +1425,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-003 |
 | Current source | `d2bd/src/provider_registry.rs`: `NEXT_LIFECYCLE_OPERATION_ID: AtomicU64` (production-reachable) |
-| Reuse action | Adapt to deterministic per-Guest keys |
+| Reuse action | adapt |
 | Destination | `src/controller/idempotency.rs` |
-| Detailed design | Deterministic ARM request ID derivation; `AzureOperationHandle` opaque persistence (no poll URL in state); ARM 409 adoption; finalizer held through async deletion |
+| Detailed design | Deterministic ARM request ID derivation; `AzureOperationHandle` opaque persistence (no poll URL in state); ARM 409 adoption; finalizer held through async deletion Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt to deterministic per-Guest keys. |
 | Integration | Lifecycle controller stores deterministic request IDs and opaque handles in the core Operation ledger/status; restart recovery reads them before polling or adopting ARM operations. |
 | Data migration | Old `AtomicU64` operation IDs are not imported; v3 operations use deterministic keys, while missing handles are re-derived or adopted from ARM. |
 | Validation | `tests/idempotency.rs`; restart-recovery scenario |
@@ -1439,7 +1439,7 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-001; ADR-046-provider-state; ADR-046-nix-configuration |
 | Current source | `nixos-modules/options-realms-workloads.nix`: `WorkloadProviderKind::ProviderManaged` |
-| Reuse action | Adapt |
+| Reuse action | adapt |
 | Destination | `nixos-modules/` (Provider/Guest resource emitters); crate Nix build |
 | Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; Endpoint ResourceType templates with name/transport/purpose |
 | Integration | Nix emitters produce Provider, Guest, Volume, and Endpoint resource specs consumed by ProviderDeployment, `Provider/volume-local`, the Process Provider, and the Azure VM controller. |
@@ -1453,9 +1453,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | ADR046-azure-vm-003; ADR-046-telemetry-audit-and-support |
 | Current source | `d2bd/src/metrics.rs` (production-reachable) |
-| Reuse action | Adapt audit shape; replace Prometheus with d2b-telemetry emitter |
+| Reuse action | adapt |
 | Destination | `src/{telemetry.rs,audit.rs}` |
-| Detailed design | Closed metric labels; OTEL span attributes; audit durability classes; `azure-vm-deleted` appended post-commit; no ARM URI, ARM resource ID, or cloud endpoint in any telemetry surface |
+| Detailed design | Closed metric labels; OTEL span attributes; audit durability classes; `azure-vm-deleted` appended post-commit; no ARM URI, ARM resource ID, or cloud endpoint in any telemetry surface Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt audit shape; replace Prometheus with d2b-telemetry emitter. |
 | Integration | Controller/error paths call telemetry and audit emitters after status commits; d2b-telemetry consumes the metrics/spans and policy_observability enforces redaction. |
 | Data migration | No metrics/audit data migration; new OTEL/audit surfaces start at v3 cutover and the old Prometheus registry is retired. |
 | Validation | `tests/error_redaction.rs`; `d2b-contract-tests/tests/policy_observability.rs` updated |
@@ -1467,9 +1467,9 @@ d2b.zones.dev.resources.corp-vm = {
 | --- | --- |
 | Dependency/owner | All ADR046-azure-vm-* |
 | Current source | No existing Azure VM tests at baseline; fake/hermetic patterns from main `a1cc0b2d` |
-| Reuse action | Copy/adapt fake toolkit; write new tests |
+| Reuse action | adapt |
 | Destination | `tests/`; `integration/` |
-| Detailed design | See §Test requirements |
+| Detailed design | See §Test requirements Primary reuse disposition: `adapt`. Preserved source-plan detail: Copy/adapt fake toolkit; write new tests. |
 | Integration | Provider crate tests, fake toolkit, and integration harness run under cargo/Layer-1 and validate all ADR046-azure-vm-* outputs together. |
 | Data migration | None — test-only work; no runtime state. Old mock tests are removed only after parity. |
 | Validation | All tests pass |

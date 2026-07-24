@@ -40,15 +40,20 @@ No `ADR046-W*` implementation wave in §3 may open until **all** of the
 following are true, per the parent ADR's "Review and acceptance" contract and
 `docs/specs/README.md`:
 
-1. Every file in the `docs/specs/ADR-046-*` manifest — the 24 top-level specs,
-   the 27 `docs/specs/providers/ADR-046-provider-*` dossiers, this spec, and
-   the four forthcoming closing specs (`ADR-046-security-hardening`,
-   `ADR-046-streamline`, `ADR-046-reset-and-cutover`,
-   `ADR-046-feasibility-proofs`) — is `Status: Accepted`.
+1. Every file in the `docs/specs/ADR-046-*` manifest — the exact 28 top-level
+   specs and 27 `docs/specs/providers/ADR-046-provider-*` dossiers — is
+   `Status: Accepted`. The five closing specs are
+   `ADR-046-feasibility-and-spikes`, `ADR-046-reset-and-cutover`,
+   `ADR-046-security-and-threat-model`, `ADR-046-streamline`, and this spec.
 2. `ADR-046-decision-register` has zero rows under "Open decisions."
 3. `docs/specs/ADR-046-spec-set.json` and `docs/specs/ADR-046-work-items.json`
-   exist, validate against their generator, and enumerate every spec above
-   with matching content digests (§8).
+   exist and enumerate every spec above with matching content digests (§8).
+   Every declared Markdown work-item heading is in exact bijection with the
+   work-item manifest, its owner/path/prefix and mandatory fields match, and
+   its `reuseAction` is one closed scalar. The future generator and its
+   fail-closed policy tests are `ADR046-delivery-004` and
+   `ADR046-delivery-009`; no checked-in generator exists in this Proposed
+   documentation candidate.
 4. The ADR/spec PR has both required human review gates from the parent ADR:
    approval before the immutable final panel snapshot, and approval after
    unanimous panel signoff (this is the spec-authoring panel, distinct from
@@ -90,7 +95,7 @@ below is the latest-safe placement, not the earliest-possible one.
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
 | `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
-| `ADR046-W7` | `ADR-046-streamline` (final; also requires `ADR-046-security-hardening`, `ADR-046-reset-and-cutover`, `ADR-046-feasibility-proofs` closed) | Cross-cutting friction fixes, reset/cutover mechanics, and the release gate (§15) |
+| `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release gate (§15) |
 
 Waves are numbered `ADR046-W0`…`ADR046-W7` — an ADR-046-scoped namespace,
 distinct from this repository's general per-plan `Wn` commit-tag convention
@@ -421,7 +426,7 @@ parallelism (it does, until resolved).
    are generated indexes (per `docs/specs/README.md`) binding exact member
    files, versions, statuses, dependency edges, content digests, and
    implementation work items. They are generated once the initial member set
-   exists (already true — all 24 top-level specs and 27 dossiers exist at
+   exists (already true — all 28 top-level specs and 27 dossiers exist at
    this baseline) and regenerated as the last commit of every wave in §3.2.
    A wave's exit criteria (§4) include this regeneration; `make test-drift`
    (extended per work item `ADR046-delivery-004`, §17) fails if the committed
@@ -506,7 +511,7 @@ manifest/fixture, per that file's closed-set rule.
 | Tier0 | Syntax + shellcheck for every new/changed shell/doc surface introduced by ADR 0046 tooling (§17) | `make check-tier0` | existing target, no change |
 | Layer-1 lint | `cargo fmt`/`clippy` for every new `d2b-*` crate in §3.2/§3.3 | `make test-lint` | existing target, extended by new crate membership |
 | Layer-1 rust | `cargo test --workspace` across every new crate, including the three broker feature passes where a new crate touches `d2b-priv-broker` (none does, per D077 — no Provider process imports the broker) | `make test-rust` | existing target |
-| Layer-1 proofs | Any new `proofs/` crate for redb/session invariants (only if a wave's feasibility spike needs a separate proof crate; see `ADR-046-feasibility-proofs`) | `make test-proofs` | existing target |
+| Layer-1 proofs | Any new `proofs/` crate for redb/session invariants (only if a wave's feasibility spike needs a separate proof crate; see `ADR-046-feasibility-and-spikes`) | `make test-proofs` | existing target |
 | Layer-1 flake | `eval-*` checks extended with Zone/resource examples once `ADR046-W5`'s `nix-configuration` lands; `examples/minimal` gains a `d2b.zones.dev.resources.*` block | `make test-flake` | existing target, new fixture |
 | Layer-1 drift | Schema/Nix-option/spec-set drift gates from §8 | `make test-drift` | existing target, extended rows |
 | Layer-1 policy | Workspace-policy, provider-crate-layout, and telemetry/audit-redaction policy lints (§10.4, §10.9) | `make test-policy` | existing target, extended rows |
@@ -842,7 +847,7 @@ with the production encrypted named-stream implementation.
 | --- | --- | --- |
 | Hardware | Real GPU/YubiKey/hardware-TPM passthrough for `device-gpu`, `device-security-key`, `device-tpm` | `make test-hardware`, manual, on a host with the devices |
 | Live-host | Destructive/stateful checks against a real deployed Zone (store adoption, restart/power-loss, USBIP guestd lifecycle equivalents) | `D2B_LIVE=1 bash tests/integration/live/<name>.sh`, manual, never CI |
-| Cloud | `runtime-azure-container-apps`, `runtime-azure-virtual-machine`, `transport-azure-relay`, `credential-managed-identity`, `credential-entra` against real Azure resources | manual tier, gated by `ADR-046-feasibility-proofs`; never run in CI or as a required wave-exit lane — recorded as external evidence only |
+| Cloud | `runtime-azure-container-apps`, `runtime-azure-virtual-machine`, `transport-azure-relay`, `credential-managed-identity`, `credential-entra` against real Azure resources | manual tier, gated by `ADR-046-feasibility-and-spikes`; never run in CI or as a required wave-exit lane — recorded as external evidence only |
 
 ### 10.12 Restart/power-loss
 
@@ -1207,10 +1212,10 @@ executed as part of landing this spec.
 `ADR046-W7` ("streamline & cutover") does not close, and d2b 3.0 does not
 release, until all of:
 
-1. `ADR-046-streamline`, `ADR-046-security-hardening`,
-   `ADR-046-reset-and-cutover`, and `ADR-046-feasibility-proofs` are
-   `Accepted` and their own work items' `Validation` evidence is imported
-   per §12.2.
+1. `ADR-046-streamline`, `ADR-046-security-and-threat-model`,
+   `ADR-046-reset-and-cutover`, `ADR-046-feasibility-and-spikes`, and this
+   validation spec are `Accepted` and their own work items' `Validation`
+   evidence is imported per §12.2.
 2. Every `DELETE`/`REPLACE` row in `ADR-046-current-code-migration-map` has
    satisfied its removal-proof test (§9) on the `ADR046-W7` candidate
    snapshot — this is the destructive-cutover gate; d2b 3.0 does not ship
@@ -1249,7 +1254,7 @@ binaries.
 | Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`–`ADR046-W7` wave graph and its file-overlap/shared-prep contracts |
 | Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; extend the existing ten-role panel table unchanged |
 | Replacement/deletion | Nothing in this repository's current validation/delivery tooling is removed by this spec; `ADR046-delivery-00x` work items (§17) are additive tooling built alongside, not instead of, the existing `Makefile`/panel-review process, until `ADR046-W7` explicitly retires any tooling the migration map marks `DELETE`/`REPLACE` |
-| Feasibility proof | The sibling-lineage candidate-snapshot/panel/seal process is already a proven, currently-running process (see the concurrently active sibling panel-writing agents observed during authoring of this spec); `ADR-046-feasibility-proofs` additionally proves the ADR-0046-specific redb/reconciliation/session/package/state numeric targets cited in §10.4 |
+| Feasibility proof | The sibling-lineage candidate-snapshot/panel/seal contract supplies the reuse design named in §11/§12; `ADR-046-feasibility-and-spikes` owns the ADR-0046-specific redb/reconciliation/session/package/state numeric proofs cited in §10.4 |
 | Future owner | Work items in §17 |
 
 ## 17. Implementation work items
@@ -1262,9 +1267,9 @@ binaries.
 | Dependency/owner | `ADR046-W0`; delivery-tooling integrator |
 | Current source | none in this repository; `Makefile` heavy-lane targets do not yet exist |
 | Reuse source | sibling-lineage `cargo xtask heavy-gate` implementation (per D001/D041 unrestricted-reuse policy) |
-| Reuse action | copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check` |
-| Detailed design | Two-slot per-UID OFD-locked semaphore, 250 ms nonblocking retry up to 30 minutes, fail-closed on unsupported locking, duplicated locked-FD handoff to child, wrapper-owned group-signal/reap, as specified in §11 |
+| Detailed design | Two-slot per-UID OFD-locked semaphore, 250 ms nonblocking retry up to 30 minutes, fail-closed on unsupported locking, duplicated locked-FD handoff to child, wrapper-owned group-signal/reap, as specified in §11 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout. |
 | Integration | Every heavy lane in §10.4/§10.10/§10.11 routes through this one binary; no wave adds a second lock mechanism |
 | Data migration | None — net-new tooling |
 | Validation | Unit tests for slot acquisition/timeout/fail-closed paths; integration test spawning two concurrent heavy-gate invocations and asserting the second blocks until the first releases |
@@ -1278,9 +1283,9 @@ binaries.
 | Dependency/owner | `ADR046-W0`; delivery-tooling integrator |
 | Current source | none in this repository |
 | Reuse source | sibling-lineage `cargo xtask delivery wave snapshot` implementation |
-| Reuse action | copy-unchanged, then adapt |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/snapshot.rs` |
-| Detailed design | Binds base/head OIDs, dependency graph, repository set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1 |
+| Detailed design | Binds base/head OIDs, dependency graph, repository set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | Called by the integrator immediately after PR opening (§13.1), before any validator/panel lane starts |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests asserting identical inputs produce identical digests and any single-byte content change produces a different `content_id` |
@@ -1294,9 +1299,9 @@ binaries.
 | Dependency/owner | `ADR046-delivery-002`; delivery-tooling integrator |
 | Current source | none in this repository |
 | Reuse source | sibling-lineage `cargo xtask delivery wave validate-import` implementation |
-| Reuse action | copy-unchanged, then adapt |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/validate_import.rs`; external candidate-ID-addressed evidence directory (never under Git) |
-| Detailed design | Imports CI/local/host validator command/result evidence, keyed by `candidate_id`, per §12.2 |
+| Detailed design | Imports CI/local/host validator command/result evidence, keyed by `candidate_id`, per §12.2 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | Consumed by `wave seal` (§ADR046-delivery-005) as one of the seal's required inputs |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Test asserting evidence for a stale `candidate_id` is rejected; test asserting raw command output never lands in a tracked file |
@@ -1310,9 +1315,9 @@ binaries.
 | Dependency/owner | `ADR046-delivery-002`; spec-set integrator |
 | Current source | `docs/specs/README.md`'s described-but-not-yet-generated `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract |
 | Reuse source | none required — this generator is specific to the `docs/specs/ADR-046-*` manifest shape |
-| Reuse action | adapt (new generator, following the existing `xtask gen-schemas`/`gen-nix-options` pattern already used for other generated artifacts) |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` |
-| Detailed design | Enumerates every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-provider-*.md` file, its metadata table, content digest, and every `### ADR046-<spec>-<ordinal>` work item, per §8 |
+| Detailed design | Enumerates every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-provider-*.md` file, its metadata table, registered globally unique `workItemPrefix`, content digest, and every `### ADR046-<workItemPrefix>-<ordinal>` work item, per §8. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (new generator, following the existing `xtask gen-schemas`/`gen-nix-options` pattern already used for other generated artifacts). |
 | Integration | `make test-drift` gains a row running this generator and `git diff --exit-code`; every wave's exit criteria (§4) require it committed as the wave's last commit |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden-fixture test against a small synthetic spec directory; drift test against the real `docs/specs/` tree |
@@ -1326,9 +1331,9 @@ binaries.
 | Dependency/owner | `ADR046-delivery-002`, `ADR046-delivery-003`; panel-tooling integrator |
 | Current source | none in this repository; this repository's existing `AGENTS.md` panel-review process is host-local script tooling (`/etc/nixos/scripts/panel-review.{md,sh}`), not a candidate-bound `xtask` subcommand |
 | Reuse source | sibling-lineage `cargo xtask delivery wave panel-request`/`panel-attest` implementation |
-| Reuse action | copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview`/`github-copilot` model/provider pair and this repository's existing ten-role roster (§12.3) |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/panel.rs` |
-| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 13-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 |
+| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 13-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview`/`github-copilot` model/provider pair and this repository's existing ten-role roster (§12.3). |
 | Integration | Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |
@@ -1342,9 +1347,9 @@ binaries.
 | Dependency/owner | `ADR046-delivery-002`, `ADR046-delivery-004`, `ADR046-delivery-005`; delivery-tooling integrator |
 | Current source | none in this repository |
 | Reuse source | sibling-lineage `cargo xtask delivery wave seal`, `merge-eligibility`, and history/byte-identity proof implementation |
-| Reuse action | copy-unchanged, then adapt |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` |
-| Detailed design | `seal` requires all ten panel records unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 |
+| Detailed design | `seal` requires all ten panel records unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | `make check` gains no new required step for ordinary contributors; this tooling is invoked only by the wave integrator per §4/§13 |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |
@@ -1374,10 +1379,26 @@ binaries.
 | Dependency/owner | `ADR046-streamline-001`, `ADR046-W0`; delivery-tooling integrator |
 | Current source | none in this repository; launch order and parallelism were previously derived only from this spec's §3/§6 prose |
 | Reuse source | `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and §3.1–§3.4/§3.5 of this spec; no new framework |
-| Reuse action | net-new (D095 artifact contract) |
+| Reuse action | adapt |
 | Destination | `docs/specs/ADR-046-implementation-graph.json`, `docs/specs/ADR-046-implementation-graph.md` (generated by `ADR046-streamline-001`'s `xtask implementation-graph`); the artifact contract, generation, validation, and ready-wave query are owned by §3.5 of this spec |
-| Detailed design | Owns the D095 implementation-graph contract: `artifactKind`/`schemaVersion`/`adr`/`status`; one node per member spec and per work item mapped exactly once to a `W0`–`W7` wave and a file-disjoint `parallelGroup`, with `owner`/`destinations`/`entryContracts`/`prerequisites`/`blockers`/`exitGate`/`topologicalRank`; typed `spec-depends-on`/`shared-contract`/`work-item-depends-on`/`implements-spec`/`file-overlap-order` edges; the §3.5.1 ready-wave query; and the anti-serialization invariant that every ready file-disjoint group launches concurrently while a same-wave dependency is a prep barrier, not whole-wave serialization. The graph is a generated non-member artifact and does not change the 55-member `ADR-046-spec-set.json` count. |
+| Detailed design | Owns the D095 implementation-graph contract: `artifactKind`/`schemaVersion`/`adr`/`status`; one node per member spec and per work item mapped exactly once to a `W0`–`W7` wave and a file-disjoint `parallelGroup`, with `owner`/`destinations`/`entryContracts`/`prerequisites`/`blockers`/`exitGate`/`topologicalRank`; typed `spec-depends-on`/`shared-contract`/`work-item-depends-on`/`implements-spec`/`file-overlap-order` edges; the §3.5.1 ready-wave query; and the anti-serialization invariant that every ready file-disjoint group launches concurrently while a same-wave dependency is a prep barrier, not whole-wave serialization. The graph is a generated non-member artifact and does not change the 55-member `ADR-046-spec-set.json` count. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (D095 artifact contract). |
 | Integration | Consumed by §4 wave entry/exit and §6 anti-serialization checks and by `ADR046-streamline-013`; a `tests/unit/gates/` drift gate regenerates and `git diff --exit-code`s the graph after any spec/work-item edit |
 | Data migration | None — docs/tooling only; no runtime state |
 | Validation | Every 55 spec node and every work item present exactly once; all edge endpoints resolve; graph acyclic; waves monotonic (dependencies earlier or explicit same-wave prep barrier); parallel groups claim no ordering absent a dependency/file-overlap edge; deterministic JSON with no timestamps/host paths; every Mermaid node ID valid; the ready-wave query returns the expected concurrently-launchable groups on a seeded fixture |
 | Removal proof | Not applicable |
+
+### ADR046-delivery-009
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-delivery-009` |
+| Dependency/owner | `ADR046-delivery-004`, `ADR046-delivery-008`; spec-set policy-test owner |
+| Current source | The fail-closed completeness, identity, and closed-action contract in `docs/specs/README.md`; the Proposed tree has no checked-in generator or policy test |
+| Reuse source | `ADR046-delivery-004` generator shape and the existing `d2b-contract-tests` fixture-driven policy-test pattern |
+| Reuse action | adapt |
+| Destination | `packages/xtask/src/gen_spec_set.rs`; `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs`; generated spec-set, work-item, and implementation-graph drift checks |
+| Detailed design | Parse every normative member's declared work-item headings and tables. Require an exact Markdown/manifest bijection; exact `specId`, `specPath`, and registered prefix; globally unique prefixes and IDs; three-digit nonzero ordinals; every mandatory field exactly once and nonempty; one closed scalar `reuseAction`; and `reuseSource: null` for `create`. Reject dropped, extra, malformed, duplicate, ambiguous, or unconsumed items before writing any artifact. Validate all dependency endpoints, DAG acyclicity, wave monotonicity, and single-wave parallel groups before atomically publishing all generated files. |
+| Integration | `make test-policy` runs negative fixtures; `make test-drift` regenerates all ADR 0046 artifacts and requires a clean diff; `ADR046-delivery-008` consumes only a manifest that passed this policy |
+| Data migration | None — documentation/build-policy contract only |
+| Validation | Fixtures fail for a dropped heading, extra manifest row, duplicate ID/prefix, wrong owner/path/prefix, two-digit/zero ordinal, missing/duplicate mandatory field, free-form/compound action, `create` with a reuse source, dangling dependency, cyclic DAG, backward-wave dependency, and cross-wave parallel group; the exact 55-spec real tree passes with every item once |
+| Removal proof | Not applicable; the policy remains the permanent generated-artifact closure gate |

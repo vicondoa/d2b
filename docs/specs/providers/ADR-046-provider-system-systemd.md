@@ -1321,9 +1321,9 @@ assumptions. Copied behavior is independently re-tested against v3
 | Dependency/owner | `ADR046-process-002`; Process contracts/supervisor owner; effect port interface owner |
 | Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs` — `SystemdUserScopeManager`, `VerifiedScope`; `packages/d2bd/src/supervisor/` — pidfd adoption, restart backoff |
 | Reuse source | Main `a1cc0b2d`: `d2b-session/src/engine.rs`, `d2b-session-unix/src/adapter.rs` (effect port test double session/transport) |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (launch algorithm via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + test double), `src/adoption.rs` (adoption algorithm), `src/sandbox.rs` (SandboxSpec → unit property compiler) |
-| Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration |
+| Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Core ProviderDeployment creates controller Process via Provider/system-minijail and creates/deletes one private Volume per component per execution target before/after component Processes (naming: `system-systemd--controller--main-state--<target>`; ownerRef: Provider/system-systemd; kind=state; persistenceClass=persistent; minimal nonzero quota; identity marker; migrationPolicy=none; layout principal: Nix-preprovisioned `User/<controller-system-user>` or bounded principal pool; no ComponentPrincipal ResourceRef); Provider/volume-local is sole Volume reconciler; system-systemd controller does NOT create, own, or reconcile its Volume; controller consumes only the `controller-rw` view dirfd via its Process mounts; controller watches Process/EphemeralProcess; ProviderSupervisor calls LaunchProcess; effect port implementation injected by core supervisor spec |
 | Data migration | No state migration; controller relists and adopts on restart |
 | Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
@@ -1351,9 +1351,9 @@ assumptions. Copied behavior is independently re-tested against v3
 | Work item ID | `ADR046-systemd-003` |
 | Dependency/owner | `ADR046-systemd-001`; conformance kit / test infrastructure |
 | Current source | `packages/d2bd/src/supervisor/` (existing process lifecycle tests); `packages/d2b-unsafe-local-helper/src/systemd.rs` (existing scope tests) |
-| Reuse action | copy/adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-systemd/tests/conformance.rs`, `tests/fault.rs`, `tests/ephemeral.rs`, `tests/sandbox_compile.rs`; `integration/host_scenario.rs`, `integration/guest_scenario.rs` |
-| Detailed design | Full §19 test/integration requirements |
+| Detailed design | Full §19 test/integration requirements Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All conformance vectors pass; all fault injection scenarios reach expected phase/condition; all §19 Host and Guest test scenarios pass |

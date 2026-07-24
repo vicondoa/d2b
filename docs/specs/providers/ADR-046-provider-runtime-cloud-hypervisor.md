@@ -1652,9 +1652,9 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | Provider toolkit / system-minijail; W1 spike owner |
 | Current source | `d2b-host/src/runtime_provider.rs`; `d2b-host/src/ch_argv.rs`; `d2bd/src/supervisor/dag.rs` |
-| Reuse action | Extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` |
-| Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. |
+| Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt. |
 | Integration | Zone ResourceClient + system-minijail Process Provider + fake broker effect |
 | Data migration | None (spike) |
 | Validation | Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: end-to-end VMM boot with real KVM and guest-control session (requires `make test-host-integration`) |
@@ -1666,9 +1666,9 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | ADR046-ch-001; Volume and Device foundation |
 | Current source | `d2b-core/src/processes.rs`; `nixos-modules/processes-json.nix`; `d2b-priv-broker/src/ops/swtpm_dir.rs`; `d2b-host/src/swtpm_argv.rs` |
-| Reuse action | EXTRACT and REPLACE |
+| Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` |
-| Detailed design | Single owned VMM Process resource; synchronous ResourceClient dependency check (Device/kvm + all declared Devices, Networks, virtiofs Volumes); immediate Process creation when all deps ready; no EphemeralProcess resources; conditional net-VM Guest creation; per-dependency readiness tracking in reconcile loop |
+| Detailed design | Single owned VMM Process resource; synchronous ResourceClient dependency check (Device/kvm + all declared Devices, Networks, virtiofs Volumes); immediate Process creation when all deps ready; no EphemeralProcess resources; conditional net-VM Guest creation; per-dependency readiness tracking in reconcile loop Primary reuse disposition: `replace`. Preserved source-plan detail: EXTRACT and REPLACE. |
 | Integration | Depends on `Provider/volume-virtiofs`, `Provider/device-tpm`, `Provider/device-kvm`, `Provider/network-local` ResourceType readiness |
 | Data migration | v3 reset; no v2 process graph migration |
 | Validation | Golden VMM Process spec vectors; dependency-ordering tests; parallel Guest tests (8 concurrent); net-VM creation tests; Device/kvm explicit-ref enforcement |
@@ -1680,9 +1680,9 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | ADR046-ch-002; artifact catalog foundation |
 | Current source | `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv`; `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` |
-| Reuse action | COPY/ADAPT |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
-| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; golden tests for headless/q35/microvm/gpu/video/macvtap variants |
+| Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; golden tests for headless/q35/microvm/gpu/video/macvtap variants Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT. |
 | Integration | ProviderSupervisor LaunchTicket resolution |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; redaction test (no store path in Debug output) |
@@ -1694,9 +1694,9 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | ADR046-ch-002; nix-configuration foundation (`ADR046-identities-002`) |
 | Current source | `nixos-modules/options-realms-workloads.nix`; `nixos-modules/options-vms.nix`; `nixos-modules/processes-json.nix`; `nixos-modules/store.nix` |
-| Reuse action | ADAPT and REPLACE |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter); `nixos-modules/` option extension for `runtime-cloud-hypervisor` Guest schema |
-| Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; Guest-control `Endpoint` resource emitted without raw locator; `make test-drift` gate for schema/Nix drift |
+| Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; Guest-control `Endpoint` resource emitted without raw locator; `make test-drift` gate for schema/Nix drift Primary reuse disposition: `adapt`. Preserved source-plan detail: ADAPT and REPLACE. |
 | Integration | Zone resource bundle emission; private artifact catalog; `xtask gen-resource-nix-options` for auto-generated Nix option types |
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
 | Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
@@ -1708,7 +1708,7 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | ADR046-ch-001; ComponentSession/d2b-bus (`ADR046-session-001`) |
 | Current source | `packages/d2bd/src/provider_shutdown.rs::GracefulVmShutdown`; `packages/d2b-host/src/runtime_provider.rs::RuntimeProvider::plan_guest_update` |
-| Reuse action | ADAPT |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
 | Detailed design | Authenticated KK ComponentSession health check over vsock; adoption verification (pid/cgroup/executable/generation) within `adoptionWindow`; ambiguity → Unknown/Degraded, never broad kill; graceful shutdown via guest-control session before SIGTERM |
 | Integration | ComponentSession enrolled KK; guest bootstrap credential from `d2b-gctl` virtiofs share; `GuestReachable` condition write |
@@ -1722,7 +1722,7 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | ADR046-ch-001; telemetry foundation (`ADR046-telem-001`) |
 | Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*`); `packages/d2b-contract-tests/tests/policy_observability.rs` |
-| Reuse action | REPLACE |
+| Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/metrics.rs`; `src/audit.rs` |
 | Detailed design | `d2b_runtime_ch_*` metrics from §18.3; bounded durable audit records from §17.3; no `vm=` metric label; no path/argv/socket in any field; closed OTEL attribute allowlist extended per §18.4 |
 | Integration | Zone lightweight bounded emitter; `Provider/observability-otel` forwarding |
@@ -1736,17 +1736,13 @@ per-test budget.
 | --- | --- |
 | Dependency/owner | ADR046-ch-001; `ADR046-pstate-001` (common status types) |
 | Current source | `packages/d2b-core/src/storage.rs` (`StoragePathSpec`, `SensitivityClass`) — to be retired |
-| Reuse action | REPLACE (storage.rs) |
+| Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs` |
-| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) — the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds |
+| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) — the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs). |
 | Integration | The controller reads Volume/Device/Network dependency status through its ComponentSession/ResourceClient and writes its own bounded `status`; no Provider state Volume is provisioned or mounted |
 | Data migration | v3 reset; no v2 state storage migration |
 | Validation | `state_status_test.rs` (hermetic): status projection round-trip and bound enforcement; restart re-derivation from store/ledger/external observation without a state Volume; no secret/path/argv/PID in status |
 | Removal proof | `d2b-core/src/storage.rs` `StoragePathSpec` / `SensitivityClass` retired only after all Provider state consumers migrate to v3 status/optional-Volume helpers |
-| Integration | Volume is provisioned and mounted by ProviderDeployment before controller Process launch (`required: true` mount); controller observes Volume status only through its ComponentSession, never through direct ResourceClient Volume verbs |
-| Data migration | v3 reset; no v2 state storage migration |
-| Validation | `state_volume_test.rs` (hermetic): StateEnvelope round-trip, view helper correctness, startup-check behavior when Volume phase is not current |
-| Removal proof | `d2b-core/src/storage.rs` `StoragePathSpec` / `SensitivityClass` retired only after all Provider state consumers migrate to v3 Volume state helpers |
 
 Per `ADR-046-provider-model-and-packaging` and `ADR-046-nix-configuration`, the
 workspace policy gate rejects the crate unless all four paths exist:

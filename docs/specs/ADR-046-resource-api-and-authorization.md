@@ -522,9 +522,9 @@ process data, and terminal bytes.
 | --- | --- |
 | Dependency/owner | W0; resource API integrator |
 | Current source | `packages/d2b-contracts/src/public_wire.rs`, `broker_wire.rs`; `d2b-daemon-access/src/lib.rs`; `d2b-realm-router/src/lib.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs` |
-| Detailed design | Async methods, contexts, preconditions, limits, errors, status/finalizer separation, batch API |
+| Detailed design | Async methods, contexts, preconditions, limits, errors, status/finalizer separation, batch API Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus exact service → Zone auth → redb actor |
 | Data migration | None; v3 clean break |
 | Validation | Protocol vectors; malformed/oversize/conflict/status-owner tests |

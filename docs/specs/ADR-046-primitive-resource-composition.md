@@ -412,9 +412,9 @@ systemd unit/minijail state; they write Process status.
 | --- | --- |
 | Dependency/owner | W0; resource contracts |
 | Current source | `packages/d2b-core/src/processes.rs`, `minijail_profile.rs`, `storage.rs`; `d2b-contracts/src/broker_wire.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/host.rs`, `guest.rs`, `execution_policy.rs`, `process.rs`, `volume.rs`, `user.rs`, `network.rs`, `device.rs`, `credential.rs` |
-| Detailed design | Complete minimal ResourceType schemas and shared execution/Volume sub-schemas |
+| Detailed design | Complete minimal ResourceType schemas and shared execution/Volume sub-schemas Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider dossiers/controller descriptors bind exact types |
 | Data migration | Full reset |
 | Validation | Schema vectors and folded-field/no-duplicate-type policy tests |
@@ -426,9 +426,9 @@ systemd unit/minijail state; they write Process status.
 | --- | --- |
 | Dependency/owner | Process contracts; system Provider slices |
 | Current source | broker SpawnRunner/pidfd; d2bd supervisor; unsafe-local helper; guest exec runner |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-systemd/`, `packages/d2b-provider-system-minijail/`, shared neutral process conformance library |
-| Detailed design | Common Process/EphemeralProcess, provider-specific launch/pidfd/wait/adoption/status |
+| Detailed design | Common Process/EphemeralProcess, provider-specific launch/pidfd/wait/adoption/status Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Process controller registration under Host/Guest; d2b-bus ResourceClient/status |
 | Data migration | Current ProcessRoles converted by exact disposition table |
 | Validation | Shared conformance plus Host/Guest/user integration |
@@ -440,9 +440,9 @@ systemd unit/minijail state; they write Process status.
 | --- | --- |
 | Dependency/owner | Volume contract; Volume Provider slices |
 | Current source | `storage-json.nix`, `d2b-core/src/storage.rs`, store/TPM/runtime path owners, virtiofsd argv/ProcessRole |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-*/`; `nixos-modules/resources-volume.nix` |
-| Detailed design | Fine-grained Volume layout/views, host-path policy, virtiofs attachments/status/owned Process |
+| Detailed design | Fine-grained Volume layout/views, host-path policy, virtiofs attachments/status/owned Process Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Host/Guest/Process refs and Volume controller |
 | Data migration | Full reset; Provider-specific state export only where separately specified |
 | Validation | ACL/no-follow/marker, sharing/views, virtiofs host/guest mount tests |

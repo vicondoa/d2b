@@ -1527,13 +1527,13 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-001 Crate scaffold and layout gate
+### ADR046-qemu-media-001 Crate scaffold and layout gate
 
 | Field | Value |
 | --- | --- |
 | Dependency/owner | P0; blocks all other runtime-qemu-media work items; owner: `runtime-qemu-media` Provider crate |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/{src/lib.rs,tests/provider_layout.rs,integration/mod.rs,README.md} |
 | Detailed design | Crate scaffold and layout gate: create the crate with the four required paths, commit a README.md stub meeting §1 requirements, and wire the workspace policy gate so the crate cannot land without `src/`, `tests/`, `integration/`, and `README.md`. |
 | Integration | Workspace/Cargo policy consumes the new crate layout; later Guest schema, controller, QMP, Nix, and integration work items build inside this crate. |
@@ -1543,15 +1543,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-002 Guest ResourceType schema and serde
+### ADR046-qemu-media-002 Guest ResourceType schema and serde
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P0; depends on WI-001; owner: runtime-qemu-media type/schema implementation |
+| Dependency/owner | P0; depends on ADR046-qemu-media-001; owner: runtime-qemu-media type/schema implementation |
 | Current source | `packages/d2b-core/src/host.rs` — `HostQemuMedia`, `QemuMediaSourceIntent` field names/types only; raw path/credential fields are discarded |
-| Reuse action | adapt selected baseline field concepts; discard raw paths, argv, and credential-carrying fields |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/types/guest.rs |
-| Detailed design | Guest ResourceType schema and serde: define `GuestSpec`, `GuestStatus`, and `GuestProviderSpecSettings` with serde and `schemars` JSON Schema. Fields must match §4, §5, and §16 exactly. Enforce `bootMediaRef` as a `Volume/<n>` ResourceRef, `removableVolumeRefs` max 4 entries, `providerPhase` max 64 chars with the closed value set, and no argv/path/credential bytes in any serialized type. |
+| Detailed design | Guest ResourceType schema and serde: define `GuestSpec`, `GuestStatus`, and `GuestProviderSpecSettings` with serde and `schemars` JSON Schema. Fields must match §4, §5, and §16 exactly. Enforce `bootMediaRef` as a `Volume/<n>` ResourceRef, `removableVolumeRefs` max 4 entries, `providerPhase` max 64 chars with the closed value set, and no argv/path/credential bytes in any serialized type. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt selected baseline field concepts; discard raw paths, argv, and credential-carrying fields. |
 | Integration | Nix-rendered Guest resources and ResourceAPI admission use these types; the controller consumes the validated spec and writes matching status; conformance and schema tests consume the generated schema. |
 | Data migration | Full d2b 3.0 reset; media guests are reauthored as `Guest`/`Volume`/`Device` resources rather than importing v2 host media config |
 | Validation | `tests/guest_schema_roundtrip.rs`; `tests/guest_provider_settings_bounds.rs` |
@@ -1559,15 +1559,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-003 Provider config schema and projection
+### ADR046-qemu-media-003 Provider config schema and projection
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P0; depends on WI-001; owner: runtime-qemu-media Provider config/schema implementation |
+| Dependency/owner | P0; depends on ADR046-qemu-media-001; owner: runtime-qemu-media Provider config/schema implementation |
 | Current source | `packages/d2b-core/src/runtime.rs` — timeout/quota concepts only |
-| Reuse action | adapt bounded timeout/quota concepts into v3 Provider config; project only to the controller component |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/config.rs |
-| Detailed design | Provider config schema and projection: define `ProviderConfig`, derive JSON Schema, require `controllerExecutionRef`, validate bounds, and project config only to the controller component. Worker processes receive no root config, no ResourceAPI authority, and no d2b-bus authority. |
+| Detailed design | Provider config schema and projection: define `ProviderConfig`, derive JSON Schema, require `controllerExecutionRef`, validate bounds, and project config only to the controller component. Worker processes receive no root config, no ResourceAPI authority, and no d2b-bus authority. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bounded timeout/quota concepts into v3 Provider config; project only to the controller component. |
 | Integration | Provider ResourceSpec admission validates this schema; ProviderDeployment injects the projected config into the controller; controller uses the provider refs and quotas when reconciling Guest, Volume, Network, Device, Endpoint, and Process resources. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/config_schema_projection.rs` |
@@ -1575,13 +1575,13 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-003B Controller status-first operational state (no state Volume)
+### ADR046-qemu-media-004 Controller status-first operational state (no state Volume)
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P0; depends on WI-001 and WI-003; owner: runtime-qemu-media controller descriptor/state implementation |
+| Dependency/owner | P0; depends on ADR046-qemu-media-001 and ADR046-qemu-media-003; owner: runtime-qemu-media controller descriptor/state implementation |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/{descriptor.rs,state.rs}; no Volume management code for Provider state |
 | Detailed design | Controller status-first operational state (no state Volume): controller component descriptor declares an empty `stateNamespaces` list; ProviderDeployment creates no controller state Volume; controller writes reconcile stage, per-Guest launch/adoption observations, bounded counters, and closed-enum error detail to `status` on material change without secrets, paths, argv, PIDs, or unit names; restart re-derives observed state from the Zone resource store, core Operation ledger, and independent external observation with fresh pidfds. Worker Processes and the controller receive no state-Volume mount. |
 | Integration | ProviderDeployment reads the descriptor; the controller projects bounded observations to Guest status and the Operation ledger; restart/adoption logic consumes resource-store, ledger, and external runner observations rather than private state storage. |
@@ -1591,15 +1591,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-004 Runtime tmpfs Volume resource
+### ADR046-qemu-media-005 Runtime tmpfs Volume resource
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-001 and WI-003; owner: runtime-qemu-media controller Volume reconciliation |
+| Dependency/owner | P1; depends on ADR046-qemu-media-001 and ADR046-qemu-media-003; owner: runtime-qemu-media controller Volume reconciliation |
 | Current source | `packages/d2b-host/src/qemu_media_argv.rs` — `run_dir` and socket naming pattern only; raw path construction is discarded |
-| Reuse action | adapt naming intent into controller-created Volume resources; replace raw runtime directory paths with `Volume` specs |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/volume.rs |
-| Detailed design | Runtime tmpfs Volume resource: controller creates the per-Guest runtime tmpfs Volume specified in §6.1. The emitted spec must exactly match the canonical YAML, including all layout entries, views, quota, and `cleanupPolicy: vm-stop-with-proof`. |
+| Detailed design | Runtime tmpfs Volume resource: controller creates the per-Guest runtime tmpfs Volume specified in §6.1. The emitted spec must exactly match the canonical YAML, including all layout entries, views, quota, and `cleanupPolicy: vm-stop-with-proof`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt naming intent into controller-created Volume resources; replace raw runtime directory paths with `Volume` specs. |
 | Integration | Guest reconcile creates/updates this Volume through the ResourceAPI; `volume-local` materializes the tmpfs and returns attachments to the Process launch flow; finalize proves cleanup before Guest finalization. |
 | Data migration | Full d2b 3.0 reset; runtime tmpfs state is ephemeral and not imported from v2 run directories |
 | Validation | `tests/runtime_volume_spec.rs`; `tests/volume_cleanup_policy.rs` |
@@ -1607,15 +1607,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-005 Media Volume watch and virtio-blk attachment validation
+### ADR046-qemu-media-006 Media Volume watch and virtio-blk attachment validation
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-002 and WI-004; owner: runtime-qemu-media media dependency controller |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002 and ADR046-qemu-media-005; owner: runtime-qemu-media media dependency controller |
 | Current source | `packages/d2b-core/src/host.rs` `QemuMediaSourceKind` — media kind enumeration only |
-| Reuse action | adapt media kind concepts to Volume source-kind assertions and ResourceRef watches |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/media_watch.rs |
-| Detailed design | Media Volume watch and virtio-blk attachment validation: controller watches `bootMediaRef` and `removableVolumeRefs` Volumes for `Ready` status and validates that each has a `virtio-blk` attachment for the owning Guest. It performs no path inspection. |
+| Detailed design | Media Volume watch and virtio-blk attachment validation: controller watches `bootMediaRef` and `removableVolumeRefs` Volumes for `Ready` status and validates that each has a `virtio-blk` attachment for the owning Guest. It performs no path inspection. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt media kind concepts to Volume source-kind assertions and ResourceRef watches. |
 | Integration | Guest reconcile gates Process launch on watched Volume readiness; Volume attachment status feeds LaunchTicket media fd assembly and Guest conditions. |
 | Data migration | Full d2b 3.0 reset; operator-authored media is declared as Volume resources rather than imported from raw qemu-media source paths |
 | Validation | `tests/media_volume_watch.rs`; `tests/media_attachment_validation.rs` |
@@ -1623,13 +1623,13 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-006 KVM Device watch
+### ADR046-qemu-media-007 KVM Device watch
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-002; owner: runtime-qemu-media Device dependency controller |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002; owner: runtime-qemu-media Device dependency controller |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/device_watch.rs |
 | Detailed design | KVM Device watch: controller watches `Device/host-kvm` from `spec.deviceAttachments` for `Ready` status and gates runner launch on it, propagating Pending/Ready/Failed transitions to Guest conditions. |
 | Integration | Device resource status drives Guest reconcile dependency gating; a Ready KVM Device contributes the sealed kvm fd slot to the LaunchTicket through the Process provider chain. |
@@ -1639,15 +1639,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-007 WaylandSession resource management
+### ADR046-qemu-media-008 WaylandSession resource management
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-002 and the `display-wayland` Provider dossier; owner: runtime-qemu-media display integration |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002 and the `display-wayland` Provider dossier; owner: runtime-qemu-media display integration |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new against the display-wayland Resource contract |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/display.rs |
-| Detailed design | WaylandSession resource management: when `spec.provider.settings.displayWindow = true`, controller creates, updates, deletes, and watches a `display-wayland.d2bus.org.WaylandSession` resource using the exact ResourceSpec from the display-wayland dossier. It reads the EndpointRef attachment from status using only display-wayland-defined field names. |
+| Detailed design | WaylandSession resource management: when `spec.provider.settings.displayWindow = true`, controller creates, updates, deletes, and watches a `display-wayland.d2bus.org.WaylandSession` resource using the exact ResourceSpec from the display-wayland dossier. It reads the EndpointRef attachment from status using only display-wayland-defined field names. Primary reuse disposition: `create`. Preserved source-plan detail: net-new against the display-wayland Resource contract. |
 | Integration | Guest reconcile produces WaylandSession resources; display-wayland publishes Endpoint attachments; LaunchTicket assembly consumes the display fd only when the session is Ready; finalize deletes the session. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/wayland_session_create.rs`; `tests/wayland_session_attachment_read.rs`; `tests/wayland_session_missing_provider.rs` |
@@ -1655,15 +1655,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-008 Process spec builder and LaunchTicket assembly
+### ADR046-qemu-media-009 Process spec builder and LaunchTicket assembly
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-002, WI-004, WI-005, WI-006, WI-007, and WI-011; owner: runtime-qemu-media Process launch builder |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002, ADR046-qemu-media-005, ADR046-qemu-media-006, ADR046-qemu-media-007, ADR046-qemu-media-008, and ADR046-qemu-media-012; owner: runtime-qemu-media Process launch builder |
 | Current source | `packages/d2b-host/src/qemu_media_argv.rs` fd-index arg shape; `packages/d2b-core/src/processes.rs` `ProcessRole::QemuMediaRunner` sandbox/budget baseline |
-| Reuse action | adapt fd-slot and sandbox/budget concepts to canonical Process resources and sealed LaunchTickets; do not copy raw argv strings or path construction |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/process_builder.rs |
-| Detailed design | Process spec builder and LaunchTicket assembly: build the canonical `qemu-media-runner` Process ResourceSpec from §10.1 and assemble the LaunchTicket with sealed fd slots for kvm, tap, media, and optional display fds. No raw path, argv, executable path, or principal appears in any public field. |
+| Detailed design | Process spec builder and LaunchTicket assembly: build the canonical `qemu-media-runner` Process ResourceSpec from §10.1 and assemble the LaunchTicket with sealed fd slots for kvm, tap, media, and optional display fds. No raw path, argv, executable path, or principal appears in any public field. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt fd-slot and sandbox/budget concepts to canonical Process resources and sealed LaunchTickets; do not copy raw argv strings or path construction. |
 | Integration | Controller emits Process resources; system-minijail/Process Provider consumes the spec and LaunchTicket; QEMU runner receives only sealed fds; Endpoint resources represent QMP/serial connections. |
 | Data migration | Full d2b 3.0 reset; existing QEMU runner process state is not imported and launch state is rebuilt from resources |
 | Validation | `tests/process_spec_golden.rs`; `tests/launch_ticket_fd_slots.rs`; `tests/no_raw_argv_in_spec.rs` |
@@ -1671,15 +1671,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-009 QMP endpoint attachment handling
+### ADR046-qemu-media-010 QMP endpoint attachment handling
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-008; owner: runtime-qemu-media QMP client implementation |
+| Dependency/owner | P1; depends on ADR046-qemu-media-009; owner: runtime-qemu-media QMP client implementation |
 | Current source | `packages/d2b-host/src/media.rs` QMP command set; `packages/d2b-contracts/src/broker_wire.rs` `QemuMedia*` command payload shapes only |
-| Reuse action | adapt QMP command payloads to internal DTOs; discard broker wire ops and all socket path/fd-open code |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/qmp/ |
-| Detailed design | QMP endpoint attachment handling: consume `qmp` and `serial` Endpoint connection attachments delivered by the ProviderSupervisor ComponentSession channel; implement QMP capability negotiation, command dispatch, and health check using only the delivered fd, never direct socket path access. |
+| Detailed design | QMP endpoint attachment handling: consume `qmp` and `serial` Endpoint connection attachments delivered by the ProviderSupervisor ComponentSession channel; implement QMP capability negotiation, command dispatch, and health check using only the delivered fd, never direct socket path access. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt QMP command payloads to internal DTOs; discard broker wire ops and all socket path/fd-open code. |
 | Integration | Process Provider publishes Endpoint attachments; the controller QMP client consumes those fds through ComponentSession; Guest status and health checks reflect QMP outcomes. |
 | Data migration | Full d2b 3.0 reset; no v2 QMP socket path/session state is imported |
 | Validation | `tests/qmp_capability_negotiation.rs`; `tests/qmp_command_dispatch.rs`; `tests/qmp_greeting_timeout.rs`; `tests/qmp_health_check.rs` |
@@ -1687,15 +1687,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-010 Hotplug attach/detach protocol
+### ADR046-qemu-media-011 Hotplug attach/detach protocol
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P2; depends on WI-005 and WI-009; owner: runtime-qemu-media hotplug controller |
+| Dependency/owner | P2; depends on ADR046-qemu-media-006 and ADR046-qemu-media-010; owner: runtime-qemu-media hotplug controller |
 | Current source | `packages/d2b-contracts/src/broker_wire.rs` `QemuMediaAttach` and `QemuMediaDetach` command bodies only |
-| Reuse action | adapt QMP hotplug command bodies; delete broker op wiring |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/hotplug.rs |
-| Detailed design | Hotplug attach/detach protocol: on `removableVolumeRefs` update, request a Volume fd from the `volume-local` ComponentSession service and issue `blockdev-add`/`device_add` QMP commands; reverse the sequence for detach; QMP failures set Degraded with `hotplug-media-failed`. |
+| Detailed design | Hotplug attach/detach protocol: on `removableVolumeRefs` update, request a Volume fd from the `volume-local` ComponentSession service and issue `blockdev-add`/`device_add` QMP commands; reverse the sequence for detach; QMP failures set Degraded with `hotplug-media-failed`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt QMP hotplug command bodies; delete broker op wiring. |
 | Integration | Guest spec updates trigger controller reconcile; volume-local supplies media fds; QMP client executes attach/detach; Guest status records hotplug outcomes. |
 | Data migration | Full d2b 3.0 reset; removable media hotplug state is reconciled from Guest spec and Volume status, not imported from broker op history |
 | Validation | `tests/hotplug_attach_sequence.rs`; `tests/hotplug_detach_sequence.rs`; `tests/hotplug_qmp_failure.rs` |
@@ -1703,15 +1703,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-011 Network tap fd acquisition
+### ADR046-qemu-media-012 Network tap fd acquisition
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-002 and Provider config `networkProviderRef`; owner: runtime-qemu-media network dependency integration |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002 and Provider config `networkProviderRef`; owner: runtime-qemu-media network dependency integration |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new against the `network-local` ComponentSession contract |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/network.rs |
-| Detailed design | Network tap fd acquisition: call the `network-local` ComponentSession service to request a tap fd for a Guest MAC/bridge assignment and include the fd in the LaunchTicket. No bridge name or interface name appears in any public field. |
+| Detailed design | Network tap fd acquisition: call the `network-local` ComponentSession service to request a tap fd for a Guest MAC/bridge assignment and include the fd in the LaunchTicket. No bridge name or interface name appears in any public field. Primary reuse disposition: `create`. Preserved source-plan detail: net-new against the `network-local` ComponentSession contract. |
 | Integration | Guest networkAttachments drive requests to network-local; network-local returns a sealed tap fd; Process LaunchTicket carries the fd to the QEMU runner; Guest conditions report unavailable taps. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/tap_fd_acquisition.rs`; `tests/tap_fd_unavailable.rs` |
@@ -1719,15 +1719,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-012 Reconcile loop and finalize
+### ADR046-qemu-media-013 Reconcile loop and finalize
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-004 through WI-011; owner: runtime-qemu-media controller |
+| Dependency/owner | P1; depends on ADR046-qemu-media-005 through ADR046-qemu-media-012; owner: runtime-qemu-media controller |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new reconcile/finalize implementation using the v3 Resource API |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/reconcile.rs |
-| Detailed design | Reconcile loop and finalize: implement the full async reconcile loop from §11.3 and finalize sequence from §11.4, including dependency gating, providerPhase transitions, condition management, runner exit handling, and WaylandSession cleanup. |
+| Detailed design | Reconcile loop and finalize: implement the full async reconcile loop from §11.3 and finalize sequence from §11.4, including dependency gating, providerPhase transitions, condition management, runner exit handling, and WaylandSession cleanup. Primary reuse disposition: `create`. Preserved source-plan detail: net-new reconcile/finalize implementation using the v3 Resource API. |
 | Integration | Resource watches feed the controller; the controller creates/updates/deletes Volume, WaylandSession, Endpoint, and Process resources; Guest status and finalizers expose lifecycle outcomes to core and CLI. |
 | Data migration | Full d2b 3.0 reset; lifecycle state is re-derived from Resource specs/status and Operation ledger rather than imported from v2 daemon state |
 | Validation | `tests/reconcile_dependency_gating.rs`; `tests/reconcile_runner_exit_handling.rs`; `tests/finalize_sequence.rs`; `tests/finalize_wayland_session_cleanup.rs` |
@@ -1735,15 +1735,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-013 Status, conditions, and error reporting
+### ADR046-qemu-media-014 Status, conditions, and error reporting
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-012; owner: runtime-qemu-media status/error implementation |
+| Dependency/owner | P1; depends on ADR046-qemu-media-013; owner: runtime-qemu-media status/error implementation |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new status/error projection for the v3 Guest ResourceType |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/controller/status.rs |
-| Detailed design | Status, conditions, and error reporting: implement all phase transitions from §16.1, providerPhase values from §16.2, condition types from §16.3, error codes from §16.4, and bounds enforcement on `providerPhase`. |
+| Detailed design | Status, conditions, and error reporting: implement all phase transitions from §16.1, providerPhase values from §16.2, condition types from §16.3, error codes from §16.4, and bounds enforcement on `providerPhase`. Primary reuse disposition: `create`. Preserved source-plan detail: net-new status/error projection for the v3 Guest ResourceType. |
 | Integration | Controller reconcile writes Guest status; ResourceAPI stores bounded status; CLI/support tooling reads status without paths, argv, fds, socket paths, VM names as labels, or secret material. |
 | Data migration | None — status schema is new v3 observation state; no v2 status import |
 | Validation | `tests/status_phase_transitions.rs`; `tests/condition_reason_codes.rs` |
@@ -1751,15 +1751,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-014 Audit event emission
+### ADR046-qemu-media-015 Audit event emission
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P2; depends on WI-012 and WI-013; owner: runtime-qemu-media audit integration |
+| Dependency/owner | P2; depends on ADR046-qemu-media-013 and ADR046-qemu-media-014; owner: runtime-qemu-media audit integration |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new audit emission for the Provider events in §17 |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/audit.rs |
-| Detailed design | Audit event emission: emit all audit events in §17 and verify that no sensitive fields such as paths, argv, fds, or socket paths appear in any payload. |
+| Detailed design | Audit event emission: emit all audit events in §17 and verify that no sensitive fields such as paths, argv, fds, or socket paths appear in any payload. Primary reuse disposition: `create`. Preserved source-plan detail: net-new audit emission for the Provider events in §17. |
 | Integration | Controller lifecycle and QMP/hotplug operations call audit helpers; the audit subsystem records bounded event kinds and outcomes; support tooling consumes redacted payloads. |
 | Data migration | None — audit-only work; no runtime state import |
 | Validation | `tests/audit_event_shapes.rs`; `tests/audit_no_sensitive_fields.rs` |
@@ -1767,15 +1767,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-015 Metrics and OTEL spans
+### ADR046-qemu-media-016 Metrics and OTEL spans
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P2; depends on WI-012 and WI-013; owner: runtime-qemu-media telemetry integration |
+| Dependency/owner | P2; depends on ADR046-qemu-media-013 and ADR046-qemu-media-014; owner: runtime-qemu-media telemetry integration |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new telemetry emission for the Provider metrics and spans in §18 |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/telemetry.rs |
-| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with label cardinality enforcement and no VM name, user identity, path, or other sensitive value in any label or attribute. |
+| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with label cardinality enforcement and no VM name, user identity, path, or other sensitive value in any label or attribute. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
 | Integration | Controller, QMP, hotplug, and dependency-watch paths call telemetry helpers; OTEL/metrics exporters consume only closed, bounded labels for support dashboards. |
 | Data migration | None — telemetry-only work; no runtime state import |
 | Validation | `tests/metrics_label_cardinality.rs`; `tests/otel_span_attributes.rs` |
@@ -1783,15 +1783,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-016 Nix module and assertions
+### ADR046-qemu-media-017 Nix module and assertions
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P1; depends on WI-002 and WI-003; owner: Nix resource compiler and runtime-qemu-media options |
+| Dependency/owner | P1; depends on ADR046-qemu-media-002 and ADR046-qemu-media-003; owner: Nix resource compiler and runtime-qemu-media options |
 | Current source | `nixos-modules/components/qemu-media.nix` option names only; `nixos-modules/assertions.nix` assertion framework |
-| Reuse action | adapt option names into v3 Guest/Provider spec fields; remove raw path options; extend existing assertion predicates |
+| Reuse action | adapt |
 | Destination | nixos-modules/options-guest-qemu-media.nix; nixos-modules/assertions.nix |
-| Detailed design | Nix module and assertions: implement the Guest resource declaration from §19 and eval-time assertions from §19.8. Rewrite qemu-media options as v3 spec fields and reject raw path options. |
+| Detailed design | Nix module and assertions: implement the Guest resource declaration from §19 and eval-time assertions from §19.8. Rewrite qemu-media options as v3 spec fields and reject raw path options. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt option names into v3 Guest/Provider spec fields; remove raw path options; extend existing assertion predicates. |
 | Integration | Nix authoring emits Provider, Guest, Volume, and Device resource JSON; assertions fail invalid configs before build; emitted resources feed ResourceAPI admission and controller reconcile. |
 | Data migration | Full d2b 3.0 reset; users reauthor qemu-media configuration as v3 resources and raw path options are not imported |
 | Validation | `tests/unit/nix/cases/guest-qemu-media-spec.nix`; `tests/assertions-eval.sh` new assertion cases |
@@ -1799,15 +1799,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-017 d2b-provider-toolkit conformance
+### ADR046-qemu-media-018 d2b-provider-toolkit conformance
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P2; depends on WI-012 through WI-015; owner: runtime-qemu-media conformance tests |
+| Dependency/owner | P2; depends on ADR046-qemu-media-013 through ADR046-qemu-media-016; owner: runtime-qemu-media conformance tests |
 | Current source | d2b-provider-toolkit conformance kit |
-| Reuse action | reuse conformance harness; add runtime-qemu-media Guest ResourceType coverage |
+| Reuse action | adapt |
 | Destination | packages/d2b-provider-runtime-qemu-media/tests/conformance_guest.rs |
-| Detailed design | d2b-provider-toolkit conformance: pass the Provider conformance kit for the Guest ResourceType axis, including reconcile/finalize contract, phase machine, condition typing, audit shape, and telemetry cardinality. |
+| Detailed design | d2b-provider-toolkit conformance: pass the Provider conformance kit for the Guest ResourceType axis, including reconcile/finalize contract, phase machine, condition typing, audit shape, and telemetry cardinality. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse conformance harness; add runtime-qemu-media Guest ResourceType coverage. |
 | Integration | Conformance tests instantiate the Provider against fake ResourceAPI/ComponentSession dependencies and verify the public Provider contract consumed by core CI. |
 | Data migration | None — test-only work; no runtime state import |
 | Validation | `make test-rust` (runs conformance suite) |
@@ -1815,15 +1815,15 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 
 ---
 
-### WI-018 Integration tests
+### ADR046-qemu-media-019 Integration tests
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | P2; depends on WI-004 through WI-017; owner: runtime-qemu-media integration fixtures |
+| Dependency/owner | P2; depends on ADR046-qemu-media-005 through ADR046-qemu-media-018; owner: runtime-qemu-media integration fixtures |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | net-new integration fixtures |
+| Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/integration/ |
-| Detailed design | Integration tests: implement container/fake-Host scenarios for full reconcile from Created to Ready with fake dependencies, finalize sequence, hotplug attach/detach, and restart recovery. |
+| Detailed design | Integration tests: implement container/fake-Host scenarios for full reconcile from Created to Ready with fake dependencies, finalize sequence, hotplug attach/detach, and restart recovery. Primary reuse disposition: `create`. Preserved source-plan detail: net-new integration fixtures. |
 | Integration | Integration fixtures launch the Provider with fake or containerized Host/Guest/Volume/Network/Device dependencies; CI `make test-integration` consumes the fixtures as the cross-process proof lane. |
 | Data migration | None — test-only work; no runtime state import |
 | Validation | `make test-integration` |
@@ -1954,7 +1954,7 @@ reference to `QemuMediaRunner` in any non-migration source file.
 | `nixos-modules/components/qemu-media.nix` raw path options | Replaced by `nixos-modules/options-guest-qemu-media.nix` |
 
 The migration guide `docs/how-to/migrate-qemu-media-v2-to-v3.md` (authored
-in WI-016) explains the option mapping for operator configurations.
+in ADR046-qemu-media-017) explains the option mapping for operator configurations.
 
 ### 23.4 `docs/adr/0036-qemu-media-runtime.md` supersession
 
@@ -1966,7 +1966,7 @@ check) verifies the superseded field is present.
 ### 23.5 CHANGELOG entry
 
 The CHANGELOG.md `## [Unreleased]` block receives an `Added` entry at the
-WI-001 commit and a `Changed` entry noting the removal of `QemuMedia*` broker
+ADR046-qemu-media-001 commit and a `Changed` entry noting the removal of `QemuMedia*` broker
 ops at the removal-gate commit. No process markers appear in the CHANGELOG
 text.
 

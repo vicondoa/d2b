@@ -1333,9 +1333,9 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | --- | --- |
 | Dependency/owner | W0 shared contract root; session/bus owner |
 | Current source | `packages/d2b-notify/src/{events,state,notifications,nonce}.rs` |
-| Reuse action | copy/adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-notification-desktop/src/{types,redact,action_nonce}.rs` |
-| Detailed design | `NotificationRequest`/`NotificationResult` DTOs and stream record types; bounded fields; closed category set; icon catalog contract; `ActionNonce`/`ActionNonceStore` adapted from main; no ResourceType DTO |
+| Detailed design | `NotificationRequest`/`NotificationResult` DTOs and stream record types; bounded fields; closed category set; icon catalog contract; `ActionNonce`/`ActionNonceStore` adapted from main; no ResourceType DTO Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | Zone bus service; host-sink stream consumer; guest-source stream producer |
 | Data migration | No v2 compatibility; reset |
 | Validation | `tests/stream_record.rs` — DTO schema vectors; `tests/action_nonce.rs` — single-use/TTL/capacity/replay |
@@ -1345,11 +1345,11 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-session-001, ADR046-bus-001; session/bus wiring |
+| Dependency/owner | ADR046-session-001, ADR046-session-003; session/bus wiring |
 | Current source | `packages/d2b-notify/src/services/` |
-| Reuse action | copy/adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
-| Detailed design | Session admission checks, Noise profile enforcement, transport class validation |
+| Detailed design | Session admission checks, Noise profile enforcement, transport class validation Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | ComponentSession/d2b-bus |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/stream_admission.rs` — all rejection vectors |
@@ -1361,7 +1361,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | --- | --- |
 | Dependency/owner | ADR046-notify-001, ADR046-reconcile-001; controller owner |
 | Current source | `packages/d2b-notify/src/services/observer.rs` |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-notification-desktop/src/controller.rs` |
 | Detailed design | Async Process placement controller; watches `guestSources` Guest refs; creates/drains/deletes guest-source Processes; creates/stops host-sink Process on display-wayland readiness change; declares no Provider state Volume and does not own/add/create/delete Volumes; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); notification delivery state (in-memory projection, action nonce store) is host-sink process memory only; no ResourceType reconcile loop |
 | Integration | Zone resource store (Process API); d2b-bus; display-wayland dependency watch |
@@ -1389,7 +1389,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | --- | --- |
 | Dependency/owner | ADR046-notify-002; guest-source owner |
 | Current source | v3 security-key guest vsock path (conceptual similarity only; not copied directly) |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-notification-desktop/src/guest_source.rs` |
 | Detailed design | Guest-side vsock ComponentSession; `NotificationRequest` record validation and field bounding; category filter; `DesktopNotificationSink` stream forwarding; `NotificationResult` handling; no host-side resource creation |
 | Integration | Guest process vsock → host ComponentSession |

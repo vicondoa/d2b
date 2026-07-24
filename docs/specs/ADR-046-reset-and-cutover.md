@@ -1487,7 +1487,7 @@ owns the destination.
 | `d2b-priv-broker.service`, `d2b-priv-broker.socket` | §7, `production-reachable` | Preserve until Phase 10 gate clears, then Destroy | Zone-local privileged broker (`ADR046-provider-003`) | `ADR046-provider-003` |
 | `/run/d2b/d2bd.sock`, `/run/d2b/broker.sock` | §7 | Destroy (Phase 3, boot-scoped) | `/run/d2b/z-<zone-id>/...` fresh sockets | `ADR046-core-controllers` "Process model" |
 | `/run/d2b/allocator.sock` | §7, config-ref/schema-only, engine not live | Destroy (Phase 3; never adopted — no live allocator process to quiesce) | No successor socket; provisioning integrates into fixed core controllers | `ADR046-core-001` |
-| `d2b-realm-router` PeerSession/MuxSession/`WorkloadOp`/`RealmMethod` wire | multiple rows, `dead-reachable`/`production-reachable` | Preserve (compiled into binary; Destroy only when the binary itself is retired at Phase 10) | ComponentSession/d2b-bus/`ResourceOp` | `ADR046-session-001`, `ADR046-bus-001`, `ADR046-api-001` |
+| `d2b-realm-router` PeerSession/MuxSession/`WorkloadOp`/`RealmMethod` wire | multiple rows, `dead-reachable`/`production-reachable` | Preserve (compiled into binary; Destroy only when the binary itself is retired at Phase 10) | ComponentSession/d2b-bus/`ResourceOp` | `ADR046-session-001`, `ADR046-session-003`, `ADR046-api-001` |
 | `d2b-unsafe-local-helper` binary, `DaemonToUnsafeLocalHelper` protocol | §7, `production-reachable` | Preserve until Process Provider supervisor ticket migration lands, then Destroy | User-only `Host` Process supervisor | `ADR046-primitives-003` |
 | `d2b-guest-shell-runner` | `production-reachable` | Preserve until user-only Host shell Process parity, then Destroy | `Process` child of user-only Host | `ADR046-primitives-003` |
 | `~/.local/state/d2b/unsafe-local-scopes.json` | §7 evidence, per-user scope ledger | Adopt into a declared user-only Host state Volume — this ledger is real private per-user content that passes the storage-need test, not derivable from status/core ledger — via a per-user migration `EphemeralProcess` | User-only Host declared component state Volume | `ADR046-primitives-003` |
@@ -1669,9 +1669,9 @@ applies here exactly as everywhere else in the repository).
 | Dependency/owner | W0 shared contract root; storage/broker integrator |
 | Current source | `packages/d2bd/src/storage_lifecycle.rs` (`run_startup_contract_check`, bundle-versioned contract validation pattern); `packages/d2bd/src/ownership_preflight.rs` (`EntrySpec`, legacy-recovery-artifact optionality); `packages/d2b/src/lib.rs` `build_storage_migration_plan`/`storage_migration_checkpoint_id` |
 | Reuse source | None from main; this is a v3-only cross-cutting concern with no main-branch equivalent |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-cutover/src/{inventory,snapshot,checkpoint}.rs` |
-| Detailed design | Implement the seven closed inventories of [Authoritative inventories](#authoritative-inventories); the `checkpoint_id` digest algorithm of [Preflight and immutable snapshot](#preflight-and-immutable-snapshot); the atomic snapshot-write sequence (temp file, fsync, rename, parent fsync, post-rename immutability) |
+| Detailed design | Implement the seven closed inventories of [Authoritative inventories](#authoritative-inventories); the `checkpoint_id` digest algorithm of [Preflight and immutable snapshot](#preflight-and-immutable-snapshot); the atomic snapshot-write sequence (temp file, fsync, rename, parent fsync, post-rename immutability) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover preflight`/`plan` CLI commands consume this crate exclusively; no other crate re-implements inventory walking |
 | Data migration | New; no prior inventory/snapshot format exists |
 | Validation | `checkpoint_id` determinism property test; snapshot atomic-write crash-injection test; `cutover_preflight_refuses_dirty_flake_check` |
@@ -1701,9 +1701,9 @@ applies here exactly as everywhere else in the repository).
 | Dependency/owner | ADR046-reset-001, ADR046-reset-002; Process/Guest lifecycle owner |
 | Current source | `packages/d2b/src/lib.rs` `require_explicit_mutation_flag`, `cmd_host_destroy` (dry-run/apply precondition pattern); [ADR 0040](../adr/0040-graceful-vm-shutdown.md) graceful shutdown path |
 | Reuse source | None from main |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-cutover/src/{consent,drain,disposition}.rs` |
-| Detailed design | Exact-consent-phrase gate bound to `checkpoint_id`; Phase 3 drain algorithm (§ [Old daemon/unit/process drain](#old-daemonunitprocess-drain)); the [Disposition framework](#disposition-framework)'s Adopt/Preserve/Destroy executor, delegating every Adopt to ADR046-reset-004 |
+| Detailed design | Exact-consent-phrase gate bound to `checkpoint_id`; Phase 3 drain algorithm (§ [Old daemon/unit/process drain](#old-daemonunitprocess-drain)); the [Disposition framework](#disposition-framework)'s Adopt/Preserve/Destroy executor, delegating every Adopt to ADR046-reset-004 Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover apply` orchestrates drain then disposition execution then hands off to Phase 5 (ADR046-reset-005) |
 | Data migration | Destructive; this is where Phase 3/4 boundary-of-no-return-approach begins (rollback still open through end of Phase 4) |
 | Validation | `cutover_apply_requires_exact_consent_phrase`; `cutover_drain_refuses_on_live_process` |
@@ -1733,7 +1733,7 @@ applies here exactly as everywhere else in the repository).
 | Dependency/owner | ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-003`); core-controller owner (`ADR046-core-001`) |
 | Current source | None (bootstrap sequencing over Zone runtime startup, which is itself ADR-only) |
 | Reuse source | None from main |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-cutover/src/{store_bootstrap,provider_sequence}.rs` |
 | Detailed design | Phase 5 store creation per [Resource-store initialization](#resource-store-initialization); Phase 6 topological Provider install per [Provider install/topological start](#provider-installtopological-start), including the fixed staged default order and cycle-rejection check |
 | Integration | Invoked immediately after ADR046-reset-003/004 complete; hands off to Phase 7 (ADR046-reset-006) |
@@ -1765,9 +1765,9 @@ applies here exactly as everywhere else in the repository).
 | Dependency/owner | ADR046-reset-006; telemetry-audit-and-support owner (`d2b-audit`) |
 | Current source | ADR 0034 degraded-state ledger taxonomy and repair-never-trusts-ledger-paths invariant |
 | Reuse source | None from main |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-cutover/src/{verify,doctor,degraded}.rs` |
-| Detailed design | The ten `verify` checks in [Post-cutover verification](#post-cutover-verification); the `cutover-quarantined` degraded class and `doctor` reporting in [Failure/quarantine/manual recovery](#failurequarantinemanual-recovery); audit chain closure/genesis-record cross-check (check 9) |
+| Detailed design | The ten `verify` checks in [Post-cutover verification](#post-cutover-verification); the `cutover-quarantined` degraded class and `doctor` reporting in [Failure/quarantine/manual recovery](#failurequarantinemanual-recovery); audit chain closure/genesis-record cross-check (check 9) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover verify`/`doctor` CLI commands; consumed by the Phase 10 finalize gate table |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Injected-digest-mismatch test for TPM/durable-Volume verify checks; audit-genesis-cross-check test; `cutover-full-rehearsal.nix` |
@@ -1781,7 +1781,7 @@ applies here exactly as everywhere else in the repository).
 | Dependency/owner | ADR046-reset-007; owner of each retiring artifact's ADR 0046 successor work item |
 | Current source | `ADR-046-cli-and-operations` "Removal notes" (live-successor-before-deletion criterion) |
 | Reuse source | None from main |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-cutover/src/finalize.rs` |
 | Detailed design | Per-candidate independent gate evaluation exactly as tabled in [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates); separate consent phrase from `apply`; never partial-destroys a candidate |
 | Integration | `d2b host cutover finalize` CLI command; reads gate status from ADR046-reset-007's verify results plus each named policy-lint/integration test's pass/fail recorded in CI |
@@ -1829,7 +1829,7 @@ applies here exactly as everywhere else in the repository).
 | Dependency/owner | ADR046-reset-001 through ADR046-reset-010, fully landed |
 | Current source | `tests/integration/live/` conventions; `tests/host-integration/hardware/` conventions |
 | Reuse source | None from main |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `tests/integration/live/cutover-real-host.sh`, `tests/integration/live/cutover-real-host-cloud-guest.sh`, `tests/host-integration/hardware/cutover-real-tpm.sh`, `tests/host-integration/hardware/cutover-real-usbip-security-key.sh` |
 | Detailed design | Manual, `D2B_LIVE=1`/hardware-gated validation scripts described in [Tests](#tests) Type 11/12 rows; never run in CI; require operator sign-off and an independent out-of-band backup before execution |
 | Integration | Run manually by an operator against a real host/device before the reset-and-cutover implementation is declared production-ready |

@@ -89,14 +89,18 @@ resource, indexed with owned/exported ResourceTypes and component placement in
 
 ### Generated manifests
 
-`ADR-046-spec-set.json` and `ADR-046-work-items.json` are deterministically
-generated indexes, regenerated from the member Markdown and not themselves
-members of the set.
+`ADR-046-spec-set.json` and `ADR-046-work-items.json` are deterministic indexes,
+regenerated from the member Markdown and not themselves members of the set.
+This Proposed documentation set does not yet contain the future checked-in
+generator. The current candidate was produced with a disposable script that was
+removed after regeneration; `ADR046-delivery-004` and
+`ADR046-delivery-009` own the future generator and fail-closed policy tests.
 
-- `ADR-046-spec-set.json` (`artifactKind: d2b-adr-spec-set`, `schemaVersion` 1)
+- `ADR-046-spec-set.json` (`artifactKind: d2b-adr-spec-set`, `schemaVersion` 2)
   binds the exact 55 member files: for each member, its `specId`, `path`,
   `status`, `version`, resolved `dependsOn` edges (the `ADR-046-provider-*`
-  dependency glob is expanded to every Provider dossier), `supersedes`, and the
+  dependency glob is expanded to every Provider dossier), `supersedes`,
+  registered `workItemPrefix` (or `null` for a member with no items), and the
   lowercase SHA-256 of the exact Markdown bytes. It records the parent path and
   the `v3` baseline commit and carries no timestamp or host path.
 - `ADR-046-work-items.json` (`artifactKind: d2b-adr-work-items`, `schemaVersion`
@@ -291,10 +295,10 @@ Each spec contains an **Implementation work items** section. Every item has:
 
 | Field | Requirement |
 | --- | --- |
-| Work item ID | Stable `ADR046-<spec-slug>-<ordinal>` ID |
+| Work item ID | Declared by the heading as `ADR046-<workItemPrefix>-<ordinal>`; an optional table row must match it exactly |
 | Dependency/owner | Prerequisites, future wave, crate/component, shared owner |
 | Current source | Exact v3 paths, symbols, call sites, artifacts, and tests |
-| Reuse source | Optional exact main commit/paths/symbols/tests used for copy/adaptation |
+| Reuse source | Optional exact main commit/paths/symbols/tests used for copy/adaptation; explicit `None` serializes as `null` |
 | Reuse action | Exactly one canonical `reuseAction` value defined below |
 | Destination | Exact future crate/module/file and binary targets |
 | Detailed design | Types, APIs, algorithms, state, limits, errors, security |
@@ -305,8 +309,68 @@ Each spec contains an **Implementation work items** section. Every item has:
 
 The exact work-item ID regex is
 `^ADR046-[a-z0-9]+(?:-[a-z0-9]+)*-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$`.
-`<spec-slug>` is the owning Spec ID with the literal `ADR-046-` prefix removed;
-`<ordinal>` is a three-digit value from `001` through `999`.
+`<workItemPrefix>` is the owning member's registered stable prefix below; it is
+not required to equal the full Spec ID suffix. `<ordinal>` is a three-digit
+value from `001` through `999`. Prefixes are globally unique and never inferred
+from a filename.
+
+| Normative member | Registered `workItemPrefix` |
+| --- | --- |
+| `ADR-046-cli-and-operations` | `cli` |
+| `ADR-046-components-processes-and-sandbox` | `process` |
+| `ADR-046-componentsession-and-bus` | `session` |
+| `ADR-046-core-controllers` | `core` |
+| `ADR-046-current-code-migration-map` | — |
+| `ADR-046-decision-register` | `decisions` |
+| `ADR-046-feasibility-and-spikes` | `feasibility` |
+| `ADR-046-nix-configuration` | `nix` |
+| `ADR-046-primitive-resource-composition` | `primitives` |
+| `ADR-046-provider-activation-nixos` | `activation` |
+| `ADR-046-provider-audio-pipewire` | `audio` |
+| `ADR-046-provider-clipboard-wayland` | `clipboard` |
+| `ADR-046-provider-credential-entra` | `cred-entra` |
+| `ADR-046-provider-credential-managed-identity` | `cred-mi` |
+| `ADR-046-provider-credential-secret-service` | `cred-ss` |
+| `ADR-046-provider-device-gpu` | `gpu` |
+| `ADR-046-provider-device-security-key` | `security-key` |
+| `ADR-046-provider-device-tpm` | `device-tpm` |
+| `ADR-046-provider-device-usbip` | `usbip` |
+| `ADR-046-provider-display-wayland` | `display` |
+| `ADR-046-provider-model-and-packaging` | `provider` |
+| `ADR-046-provider-network-local` | `nl` |
+| `ADR-046-provider-notification-desktop` | `notify` |
+| `ADR-046-provider-observability-otel` | `otel` |
+| `ADR-046-provider-runtime-azure-container-apps` | `aca` |
+| `ADR-046-provider-runtime-azure-virtual-machine` | `azure-vm` |
+| `ADR-046-provider-runtime-cloud-hypervisor` | `ch` |
+| `ADR-046-provider-runtime-qemu-media` | `qemu-media` |
+| `ADR-046-provider-shell-terminal` | `sterm` |
+| `ADR-046-provider-state` | `pstate` |
+| `ADR-046-provider-system-core` | `system-core` |
+| `ADR-046-provider-system-minijail` | `minijail` |
+| `ADR-046-provider-system-systemd` | `systemd` |
+| `ADR-046-provider-transport-azure-relay` | `transport-relay` |
+| `ADR-046-provider-transport-unix` | `transport-unix` |
+| `ADR-046-provider-transport-vsock` | `vsock` |
+| `ADR-046-provider-volume-local` | `vl` |
+| `ADR-046-provider-volume-virtiofs` | `vvfs` |
+| `ADR-046-reset-and-cutover` | `reset` |
+| `ADR-046-resource-api-and-authorization` | `api` |
+| `ADR-046-resource-object-model` | `object` |
+| `ADR-046-resource-reconciliation` | `reconcile` |
+| `ADR-046-resource-store-redb` | `store` |
+| `ADR-046-resources-credential` | `credential` |
+| `ADR-046-resources-device` | `device` |
+| `ADR-046-resources-host-guest-process-user` | `exec` |
+| `ADR-046-resources-network` | `network` |
+| `ADR-046-resources-volume` | `volume` |
+| `ADR-046-resources-zone-control` | `zone-control` |
+| `ADR-046-security-and-threat-model` | `security` |
+| `ADR-046-streamline` | `streamline` |
+| `ADR-046-telemetry-audit-and-support` | `telem` |
+| `ADR-046-terminology-and-identities` | `identities` |
+| `ADR-046-validation-and-delivery` | `delivery` |
+| `ADR-046-zone-routing` | `routing` |
 
 `reuseAction` is a closed scalar vocabulary:
 
@@ -327,12 +391,18 @@ separate items.
 Generation and validation fail closed unless every normative member's
 Implementation work items section is complete:
 
-- every work-item heading matches the ID regex, uses its owning spec slug, and
-  is unique across the set;
-- every item has exactly one of each required table field above, no unknown or
-  duplicate fields, and its Work item ID field exactly matches its heading;
-- every required value is nonempty except an explicitly absent Reuse source,
-  which serializes as `null`; `create` requires that null value;
+- every work-item heading matches the ID regex, uses its owning registered
+  prefix, and is unique across the set;
+- every item has exactly one nonempty `Dependency/owner`, `Current source`,
+  `Reuse action`, `Destination`, `Detailed design`, `Integration`,
+  `Data migration`, `Validation`, and `Removal proof` field, with no duplicate
+  fields; an optional `Work item ID` row exactly matches its heading and an
+  optional `Reuse source` is nonempty;
+- every heading prefix exactly matches the owning member's registered
+  `workItemPrefix`, every registered prefix is globally unique, and a member
+  with no work items has a `null` prefix in the generated spec set;
+- an absent or explicit-none Reuse source serializes as `null`; `create`
+  requires that null value;
 - every Markdown item appears exactly once in `ADR-046-work-items.json`, every
   manifest item resolves to exactly one Markdown item, and the bound `specId`
   and `specPath` match the owning member; and

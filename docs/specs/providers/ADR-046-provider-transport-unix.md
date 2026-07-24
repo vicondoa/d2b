@@ -1404,9 +1404,9 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-session-001 (v3 ComponentSession contracts); W0 shared contract root |
 | Current source | `packages/d2b-contracts/src/v2_component_session.rs` (protocol constants, credit-class constants) at main `a1cc0b2d` |
 | Reuse source | Same file; constants copied into `packages/d2b-contracts/src/v3/zone_session.rs` by ADR046-session-001 |
-| Reuse action | Dependency on ADR046-session-001 output |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/credit.rs` (imports `MAX_PACKET_ATTACHMENTS=32`, `RESERVED_CONTROL_FDS=64`, credit-class constants from v3 contract); `src/portal.rs` (imports `MAX_PACKET_ATTACHMENTS` for portal validation) |
-| Detailed design | Import credit scope capacities and headroom from `v3_zone_session.rs`; add `MAX_OPEN_TRANSPORTS: usize = 256` local constant for handle table bound |
+| Detailed design | Import credit scope capacities and headroom from `v3_zone_session.rs`; add `MAX_OPEN_TRANSPORTS: usize = 256` local constant for handle table bound. Primary reuse disposition: `adapt`. Preserved source-plan detail: Dependency on ADR046-session-001 output. |
 | Integration | `CreditScopeSet` constructed from imported constants at session setup |
 | Data migration | None; v3 constants freeze independently |
 | Validation | `tests/credit.rs::ancillary_capacity_is_derived_from_closed_hard_bounds` passes against v3 constants |
@@ -1419,12 +1419,12 @@ Old and new suites never run in parallel indefinitely.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-transport-unix-002` |
-| Dependency/owner | ADR046-transport-unix-001; d2b-bus transport layer (ADR046-bus-001) |
+| Dependency/owner | ADR046-transport-unix-001; d2b-bus transport layer (ADR046-session-003) |
 | Current source | `packages/d2b-session-unix/src/{adapter,socket,descriptor}.rs`, `tests/unix_session.rs` at main `a1cc0b2d` |
 | Reuse source | Same; `UnixSeqpacketTransport`, `PeerIdentityPolicy`, `UnixAttachmentPayload`, `OwnedUnixAttachment`, `SeqpacketSocket`, `PeerCredentials`, `ObjectIdentity`, `AcceptedAttachment`, `VerifiedPacket` |
-| Reuse action | copy and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/{seqpacket,identity,socket}.rs` |
-| Detailed design | Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup — that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available |
+| Detailed design | Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup — that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | `portal.rs::open_transport` calls `SeqpacketSocket::getsockopt(SO_TYPE)` and `setsockopt(SO_PASSCRED)`, constructs `UnixSeqpacketTransport`, hands OwnedTransport FD back to caller |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here` |
@@ -1440,9 +1440,9 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-001 |
 | Current source | `packages/d2b-session-unix/src/adapter.rs` `UnixStreamTransport`, `src/socket.rs` `StreamSocket` at main `a1cc0b2d` |
 | Reuse source | Same |
-| Reuse action | copy unchanged |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/{stream,socket}.rs` |
-| Detailed design | Copy verbatim; add `attachment_support: false` in `TransportDescriptor` (stream never carries SCM_RIGHTS regardless of route class); `admission.rs::validate_route_class` rejects `attachments_enabled=true` for stream |
+| Detailed design | Copy verbatim; add `attachment_support: false` in `TransportDescriptor` (stream never carries SCM_RIGHTS regardless of route class); `admission.rs::validate_route_class` rejects `attachments_enabled=true` for stream Primary reuse disposition: `adapt`. Preserved source-plan detail: copy unchanged. |
 | Integration | Same path as seqpacket but without SCM_RIGHTS paths |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::stream_open_transport_forces_no_attachments`; `tests/identity.rs::stream_transport_reassembles_partial_and_coalesced_records` |
@@ -1458,9 +1458,9 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-001 |
 | Current source | `packages/d2b-session-unix/src/credit.rs` at main `a1cc0b2d` |
 | Reuse source | Same; `CreditPool`, `CreditScopeSet`, `CreditBundle`, `ProcessCreditLimit`, `CreditScope` |
-| Reuse action | copy unchanged |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/credit.rs` |
-| Detailed design | Copy all five types verbatim; import scope-capacity constants from v3 contract; add `#[derive(Debug)]` with redacted Display (no raw counts in Debug output) |
+| Detailed design | Copy all five types verbatim; import scope-capacity constants from v3 contract; add `#[derive(Debug)]` with redacted Display (no raw counts in Debug output) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy unchanged. |
 | Integration | `CreditScopeSet` created per active ComponentSession; `CreditBundle` per packet receive; credits released in `UnixAttachmentPayload::close()` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 4 credit test functions; add `credit_released_on_attachment_close` and `emergency_headroom_constant_across_fd_counts` |
@@ -1476,9 +1476,9 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-002 |
 | Current source | `packages/d2b-session-unix/src/descriptor.rs` `PidfdIdentityPolicy`, `DescriptorPolicy` at main `a1cc0b2d` |
 | Reuse source | Same |
-| Reuse action | copy and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/descriptor.rs` |
-| Detailed design | Copy verbatim; adapt `DescriptorPolicy::verify` to produce `AcceptedAttachment` carrying `ObjectIdentity` binding for v3 ComponentSession attachment descriptor model; `pid` not stored beyond liveness check |
+| Detailed design | Copy verbatim; adapt `DescriptorPolicy::verify` to produce `AcceptedAttachment` carrying `ObjectIdentity` binding for v3 ComponentSession attachment descriptor model; `pid` not stored beyond liveness check Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Called by seqpacket transport after decrypting attachment descriptor |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` and `duplicate_kernel_objects_are_rejected_and_cleaned_up` |
@@ -1494,7 +1494,7 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-002 |
 | Current source | No existing v3 socket-kind admission module |
 | Reuse source | `getsockopt(SO_TYPE)` pattern widely used; no specific main reuse source |
-| Reuse action | new |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/admission.rs` |
 | Detailed design | `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)` calls `getsockopt(SO_TYPE)` (blocking adapter) on `received_fd`: `SOCK_SEQPACKET` must match `"seqpacket"`, `SOCK_STREAM` must match `"stream"`, any other type fails `invalid-socket-fd`; if `route_class == RouteClass::ZoneLink && attachments_enabled == true` fail `attachment-policy-conflict` with detail `cross-zone-attachments-forbidden`; if `socket_kind == "stream" && attachments_enabled == true` fail `attachment-policy-conflict`; no Noise profile enforcement (that is ComponentSession's responsibility); returns `Ok(RouteAdmission { route_class, socket_kind, attachments_enabled })` |
 | Integration | Called by `portal.rs::open_transport` before the monitoring dup and handle allocation |
@@ -1509,12 +1509,12 @@ Old and new suites never run in parallel indefinitely.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-transport-unix-007` |
-| Dependency/owner | ADR046-transport-unix-002 through 006; ADR046-bus-001 (d2b-bus ComponentSession method dispatch); ADR046-session-001 (named-stream protocol) |
+| Dependency/owner | ADR046-transport-unix-002 through 006; ADR046-session-003 (d2b-bus ComponentSession method dispatch); ADR046-session-001 (named-stream protocol) |
 | Current source | No portal service in v3 baseline; `d2b-provider-toolkit/src/server.rs` `GeneratedProviderServiceServer` dispatch pattern (main `a1cc0b2d`) for service entry pattern |
 | Reuse source | main `a1cc0b2d` `d2b-provider-toolkit/src/server.rs` service dispatch pattern |
-| Reuse action | adapt dispatch pattern; implement portal methods as new |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/{portal,service}.rs` |
-| Detailed design | `portal.rs`: `PortalHandler` struct owns a bounded `HashMap<TransportHandle, MonitorState>` (capacity `MAX_OPEN_TRANSPORTS=256`); `open_transport(req, attachment_fd)` validates via `admission.rs`, dups FD, allocates handle, stores `MonitorState { dup_fd, observation_senders: Vec<NamedStreamSender> }`; `close_transport(handle)` closes dup FD, half-closes all observation senders, removes entry; `observe_transport(handle)` registers a new `NamedStreamSender` and spawns an async epoll-watcher task on the dup FD; `TransportHandle` is a `[u8; 16]` random token; redacted in all Debug impls; `service.rs` is the binary entry: accepts the allocator-issued portal endpoint FD at launch, runs `GeneratedTransportServiceServer` over it, dispatches to `PortalHandler` |
+| Detailed design | `portal.rs`: `PortalHandler` struct owns a bounded `HashMap<TransportHandle, MonitorState>` (capacity `MAX_OPEN_TRANSPORTS=256`); `open_transport(req, attachment_fd)` validates via `admission.rs`, dups FD, allocates handle, stores `MonitorState { dup_fd, observation_senders: Vec<NamedStreamSender> }`; `close_transport(handle)` closes dup FD, half-closes all observation senders, removes entry; `observe_transport(handle)` registers a new `NamedStreamSender` and spawns an async epoll-watcher task on the dup FD; `TransportHandle` is a `[u8; 16]` random token; redacted in all Debug impls; `service.rs` is the binary entry: accepts the allocator-issued portal endpoint FD at launch, runs `GeneratedTransportServiceServer` over it, dispatches to `PortalHandler` Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt dispatch pattern; implement portal methods as new. |
 | Integration | Core ZoneLink controller calls the three methods via d2b-bus; portal endpoint FD is supplied by Zone runtime/allocator at Process spawn, not SD_LISTEN_FDS |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::open_transport_zone_link_validates_and_returns_ownedtransport`; `open_transport_local_portal_seqpacket_with_attachments_accepted`; `open_transport_zone_link_attachments_enabled_rejected`; `close_transport_is_idempotent_after_handle_removed`; `observe_transport_delivers_pollhup_as_peer_disconnected`; `handle_table_rejects_at_max_capacity`; `restart_clears_all_handles` |
@@ -1530,9 +1530,9 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-007; ADR046-provider-003 (system Provider framework); Provider/system-minijail (ADR046-provider-003) |
 | Current source | `packages/d2b-priv-broker/src/` minijail spawn patterns (v3 baseline); `packages/d2b-host/src/` process arg patterns; current package derivations in `flake.nix` |
 | Reuse source | Minijail sandbox semantic class patterns from current v3 broker; Process resource schema from ADR-046-resources-host-guest-process-user |
-| Reuse action | adapt; no direct symbol copy |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service`; Provider component descriptor JSON committed at `packages/d2b-provider-transport-unix/descriptor/unix-transport-service.json`; Nix package derivation at `packages/d2b-provider-transport-unix/` |
-| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed |
+| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt; no direct symbol copy. |
 | Integration | Provider resource installed → core ProviderDeployment reads component descriptor → creates child `Process/transport-unix-service` (no state-Volume prerequisite) → ProviderSupervisor spawns binary with portal FD in inherited FD table. On delete: Process terminal first → ProviderDeployment finalizer cleared last; the service `status` disappears with the resource row |
 | Data migration | None (fresh Provider resource) |
 | Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_is_empty`; `tests/conformance.rs::no_state_volume_mount`; sandbox policy tests against minijail conformance kit |
@@ -1548,7 +1548,7 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-001; Nix/build integrator |
 | Current source | `nixos-modules/options-realms.nix` realm options (v3 baseline); `nixos-modules/assertions.nix` |
 | Reuse source | None; new schema file |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`; `nixos-modules/assertions.nix` (assertion additions); generated `nixos-modules/generated/options-zones-ZoneLink.nix` provider-settings submodule |
 | Detailed design | Commit the JSON Schema; run `xtask gen-zone-schemas` and `xtask gen-zone-nix-options` to regenerate committed files; add two assertions to `assertions.nix` (stream+attachments conflict; sensitive key names); `xtask gen-zone-resources` adds provider-specific settings validation step |
 | Integration | Build emitter validates `spec.provider.settings` against schema before computing `generationId`; drift gate enforces sync |
@@ -1566,7 +1566,7 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-007; ADR-046-telemetry-audit-and-support |
 | Current source | v3 baseline `tracing` crate patterns; v3 `d2b-realm-router/src/service_v2.rs` audit field shapes |
 | Reuse source | None; new per v3 telemetry separation invariant |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-transport-unix/src/{audit,metrics}.rs` |
 | Detailed design | `AuditRecordKind` enum with 6 event kinds from Audit section; `AuditRecord` carries only the fields listed (no uid/gid/pid/path/handle/ZoneLink name); emit via Zone runtime `emit_audit_record()` interface; `MetricCounter`/`MetricHistogram` with closed label types per Metrics section; emit via bounded in-process ring to OTEL Provider datagram socket; `tracing::instrument` spans on `PortalHandler` methods with the 3 permitted span attributes only |
 | Integration | `portal.rs` calls `audit.rs::emit_*` before returning from each portal method; `seqpacket.rs` calls `metrics.rs::record_*` on every accept/packet/attachment |
@@ -1584,7 +1584,7 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-transport-unix-007 through 010; test orchestration owner |
 | Current source | No existing integration tests for Unix portal scenarios |
 | Reuse source | Test scenario shapes from `d2b-session-unix/tests/unix_session.rs` end-to-end test (main `a1cc0b2d`) |
-| Reuse action | new |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/integration/` and `integration/README.md` |
 | Detailed design | Four scenarios: `transport_open.rs` (fake Zone portal, allocator-socketpair FD attachment in → OwnedTransport attachment out → verify socket kind, CLOEXEC, SO_PASSCRED enabled; p95 latency assertion ≤2 ms); `fd_transfer.rs` (seqpacket `SCM_RIGHTS` transfer through opened transport, credit accounting, scavenge on error injection); `reconnect.rs` (CloseTransport + re-OpenTransport with fresh socketpair, verify previous handle is unknown, verify monitoring dup closed); `observation_stream.rs` (ObserveTransport stream receives `PEER_DISCONNECTED` event when peer closes socketpair end within 5 ms p95). `integration/README.md` documents prerequisites (no KVM required; all scenarios use in-process socketpairs and fake Zone API endpoint stub), invocation (`cargo test -p d2b-provider-transport-unix --test integration`), environment variables, and expected output |
 | Integration | Invoked by `make test-integration`; no host mutation; each scenario creates its own socketpairs |

@@ -1312,9 +1312,9 @@ download, or PATH scan.
 | --- | --- |
 | Dependency/owner | W0 shared contract root; ComponentSession transport adapter owner |
 | Current source | `packages/d2b-provider-relay/src/lib.rs` (`RelayEndpoint`, `RelayCredential`, `RelayRole`, `RelayStream`, `connect()`, `listen()`, `mint_sas()`) |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs` |
-| Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process — only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally |
+| Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process — only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Core ZoneLink controller calls `OpenTransport(spec.provider.settings)` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream |
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
 | Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; Noise KK binding; relay identity exclusion |
@@ -1326,7 +1326,7 @@ download, or PATH scan.
 | --- | --- |
 | Dependency/owner | ADR046-transport-relay-001; Credential KK session; ComponentSession/d2b-bus owner |
 | Current source | None (new) |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/credential_client.rs` |
 | Detailed design | Async Credential KK session client for service components (service processes have d2b-bus access, enabling Credential KK; workers do not); acquire listener credential via KK inside the gateway Guest using `config.credentialBindings[listenerCredentialAlias]`; acquire sender credential independently inside the child's gateway Guest via the same KK model using `config.credentialBindings[senderCredentialAlias]`; raw credential bytes held in zeroizing memory inside the gateway Guest, presented to Azure Relay, then immediately zeroized; no credential bytes cross process, network, or Guest boundary; redacted Debug; no credential bytes in logs/audit/OTEL; core ProviderDeployment creates a private persistent Volume (per ADR-046-provider-state) for each component before its Process starts — the transport Provider does not own or create these Volumes; `Provider/volume-local` reconciles them; `migrationPolicy: none` means no migration worker is ever spawned; no relay auth token, WebSocket handle, session key, or credential byte is written to that Volume; all relay session state remains transient in-process memory |
 | Integration | Listener service invokes before each relay connect attempt inside gateway Guest; child Zone's sender service acquires its own credential independently inside its own gateway Guest |
@@ -1340,7 +1340,7 @@ download, or PATH scan.
 | --- | --- |
 | Dependency/owner | ADR046-transport-relay-001; reconnect contract; ZoneLink handler |
 | Current source | None (new; core drives reconnect, not the transport Provider) |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/reconnect.rs` |
 | Detailed design | Relay service responds to `CloseTransport`+`OpenTransport` cycle from core; core owns reconnect policy and backoff scheduling; relay service tears down the current WebSocket when core calls `CloseTransport` and establishes a new WebSocket connection when core calls `OpenTransport`; relay service does not maintain a backoff state machine or independently retry — it starts a new WebSocket on demand and emits the connect result via `ObserveTransport`; listener and sender are long-lived service processes that do not re-spawn on reconnect |
 | Integration | `ObserveTransport` delivers `TransportObservation::Disconnected` to core; core drives reconnect via `CloseTransport` then `OpenTransport` after applying its own backoff |
@@ -1354,7 +1354,7 @@ download, or PATH scan.
 | --- | --- |
 | Dependency/owner | ADR046-transport-relay-001; transport settings schema; Nix configuration owner |
 | Current source | `docs/specs/ADR-046-zone-routing.md` transport settings Nix example |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs`; `docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json` |
 | Detailed design | `AzureRelayTransportSettings` Rust struct with serde; validation against committed JSON Schema; reject `secret`-annotated fields; enforce `^[a-z][a-z0-9-]*$` pattern for `listenerCredentialAlias`/`senderCredentialAlias` alias ID fields (never `Credential/<name>` refs); xtask `gen-provider-transport-schemas` integration |
 | Integration | `make test-drift` gate: `xtask gen-provider-transport-schemas && git diff --exit-code` |
@@ -1382,7 +1382,7 @@ download, or PATH scan.
 | --- | --- |
 | Dependency/owner | ADR046-transport-relay-001 through ADR046-transport-relay-005; telemetry/audit owner |
 | Current source | `packages/d2bd/src/metrics.rs` (hand-rolled Prometheus; baseline) |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}` |
 | Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed label sets; never label secret bytes; provider audit covers **carriage authentication and health observations only** — Azure auth events, WebSocket lifecycle, credential acquisition outcomes — and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
 | Integration | `Provider/observability-otel` receives emitter ring frames; audit log via Zone runtime `d2b.audit.transport` category |
@@ -1396,7 +1396,7 @@ download, or PATH scan.
 | --- | --- |
 | Dependency/owner | Provider crate owner; integration test owner |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/tests/integration/README` |
 | Detailed design | Required content: fake relay server setup and teardown using the injected fake Relay effect port; how to run hermetic integration tests without a live Azure service; how to configure the injected fake Credential effect port for credential delivery tests; how to run with a real Azure namespace (requires a `Credential` resource declared in `spec.config.credentialBindings`, not environment-variable credential paths); integration test scenarios and expected outcomes; CI/local execution instructions |
 | Integration | `make test-integration` invokes `tests/integration/containers/` scenarios which inject the fake relay and credential port implementations from `src/tests/integration/fake_relay_server.rs` |

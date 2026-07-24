@@ -1741,9 +1741,9 @@ produces the guest binary (see §19 removal table).
 | --- | --- |
 | Dependency/owner | `ADR046-provider-001`, `ADR046-process-001`; display Provider owner |
 | Current source | `packages/d2b-wayland-proxy/`, `packages/d2b-host/src/wayland_proxy_argv.rs`, `packages/d2b-host-providers/src/lib.rs`, `packages/d2b-realm-provider/src/{conformance,mock}.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-display-wayland/src/` |
-| Detailed design | Create Provider crate layout (`src/`, `tests/`, `integration/`, `README.md`); extract `FilterPolicy`, `PolicyInput`, `DecorationManager`, `BridgeConfig`, `ProxyReadinessEvent`, `ProxyIdentity`, `ClipboardGlobalDisposition` from `d2b-wayland-proxy`; implement single `display-controller` using toolkit `ResourceClient`/`Reconciler` to manage both `WaylandSession` and `WaylandPolicy` resources; implement `display-user-portal` as a separately sandboxed user-domain service that receives pre-opened compositor connections from the fixed user session supervisor (never reads `WAYLAND_DISPLAY`), validates same-user via `SO_PEERCRED`, and issues bounded per-session compositor connection attachment grants to `ProviderSupervisor`; implement LaunchTicket composition with opaque attachment grant handles (compositor, GPU endpoint) so no fd transits through the controller; implement pool-slot acquisition using opaque hash-derived account names (`d2b-wlp-<hex12>` for bundle sessions, `d2b-wlp-p<N>` for pool) that fails closed with `NoPrincipalAvailable` when all pool slots are occupied; implement `wl-cross-domain-proxy` guest frontend binary at `src/bin/wl-cross-domain-proxy.rs` within the Provider package; implement provider-neutral `display_fails_closed_when_unsupported` conformance; assert D087 status-first state: ProviderStateSet is empty and bounded operational state is in resource status plus the core Operation ledger |
+| Detailed design | Create Provider crate layout (`src/`, `tests/`, `integration/`, `README.md`); extract `FilterPolicy`, `PolicyInput`, `DecorationManager`, `BridgeConfig`, `ProxyReadinessEvent`, `ProxyIdentity`, `ClipboardGlobalDisposition` from `d2b-wayland-proxy`; implement single `display-controller` using toolkit `ResourceClient`/`Reconciler` to manage both `WaylandSession` and `WaylandPolicy` resources; implement `display-user-portal` as a separately sandboxed user-domain service that receives pre-opened compositor connections from the fixed user session supervisor (never reads `WAYLAND_DISPLAY`), validates same-user via `SO_PEERCRED`, and issues bounded per-session compositor connection attachment grants to `ProviderSupervisor`; implement LaunchTicket composition with opaque attachment grant handles (compositor, GPU endpoint) so no fd transits through the controller; implement pool-slot acquisition using opaque hash-derived account names (`d2b-wlp-<hex12>` for bundle sessions, `d2b-wlp-p<N>` for pool) that fails closed with `NoPrincipalAvailable` when all pool slots are occupied; implement `wl-cross-domain-proxy` guest frontend binary at `src/bin/wl-cross-domain-proxy.rs` within the Provider package; implement provider-neutral `display_fails_closed_when_unsupported` conformance; assert D087 status-first state: ProviderStateSet is empty and bounded operational state is in resource status plus the core Operation ledger Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone Provider resource/catalog → `WaylandSession` controller (in `display-controller`) → Process resources → supervisor ticket; framework enrollment creates no Provider state Volume for display components |
 | Data migration | Full reset; no v2 session compatibility |
 | Validation | conformance vectors, fake-bus tests, filter policy golden tests (migrate from `packages/d2b-wayland-proxy/`), redaction/audit contract tests, no-fallback test, `controller_unknown_interface_fails_closed`, `controller_finalizer_ambiguous_retained`, `user_portal_unavailable_blocks_pending`, `provider_state_set_empty_status_first` |
@@ -1769,9 +1769,9 @@ produces the guest binary (see §19 removal table).
 | --- | --- |
 | Dependency/owner | `ADR046-display-001`; telemetry/audit owner |
 | Current source | `packages/d2b-wayland-proxy/src/diag.rs` (rate-limited bounded diagnostics) |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-display-wayland/src/audit.rs`, `packages/d2b-provider-display-wayland/src/metrics.rs` |
-| Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed label sets; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface |
+| Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed label sets; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Providers emit via Zone telemetry emitter; audit records committed before operation completion |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Redaction contract tests (`policy_observability.rs` pattern), audit record schema tests, label-cardinality tests |
@@ -1783,7 +1783,7 @@ produces the guest binary (see §19 removal table).
 | --- | --- |
 | Dependency/owner | `ADR046-display-001`; integration test owner |
 | Current source | `tests/integration/` test orchestration structure |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-provider-display-wayland/integration/` |
 | Detailed design | Container/Host/Guest/cross-process integration fixtures for: (a) end-to-end WaylandSession create → proxy Process ready → guest frontend ready; (b) GPU endpoint unavailable → Pending; (c) proxy crash → Failed backoff; (d) policy policy warning production; (e) clipboard boundary denial; (f) crossDomainTrusted=false admission rejection. Follows `ADR-046-provider-model-and-packaging` integration/ convention. |
 | Integration | Invoked by existing repository test orchestration (`make test-integration` / container lane) |

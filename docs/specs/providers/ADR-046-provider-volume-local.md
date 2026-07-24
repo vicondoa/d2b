@@ -2288,9 +2288,9 @@ Documents:
 | Dependency/owner | ADR046-primitives-001; v3 contracts owner |
 | Depends on | `ADR046-pstate-001` (VolumeStateSchema/PersistenceClass/SensitivityClass/StateEnvelope in `d2b-contracts/src/v3/volume_state.rs`) |
 | Current source | `d2b-core/src/storage.rs` (`StoragePathSpec`, `StoragePathKind`, policy enums); `d2b-core/src/sync.rs` (`SyncJson`, `LockSpec`) |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId` each with custom redacted Debug, and `VolumeMountToken` opaque handle with custom redacted Debug) |
-| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage` |
+| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage` Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Volume spec and status structs; Provider descriptor component stateNamespace; Nix resource compiler schema validation |
 | Data migration | Full v3 reset; no row-level import |
 | Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract |
@@ -2304,9 +2304,9 @@ Documents:
 | Dependency/owner | ADR046-vl-001; volume-local Provider owner |
 | Depends on | `ADR046-pstate-003` |
 | Current source | `d2b-state/src/{atomic,path,lock}.rs` (main `6faa5256`); `d2b-priv-broker/src/ops/swtpm_dir.rs` (marker algorithm) |
-| Reuse action | copy-unchanged (`path.rs`); adapt (`atomic.rs`, `lock.rs`); adapt swtpm_dir marker algorithm |
+| Reuse action | adapt |
 | Destination | Full `packages/d2b-provider-volume-local/` scaffold per §Crate layout: `src/`, `tests/`, `integration/`, `README.md`; crate `Cargo.toml` depends only on `d2b-contracts`, `d2b-provider`, `d2b-provider-toolkit` |
-| Detailed design | `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath`; adapted `AtomicFilesystem`/`StateEnvelope`; adapted `LockGuard`/`LockSet`/`OfdTransfer`; marker write/verify/check; `src/effect_port.rs` re-exports `VolumeEffectPort` trait from `d2b-contracts::v3::effect_port` and provides Provider-side opaque ID construction helpers (no adapter implementation; adapter lives in host runtime); `sourcePolicyId` validation against declared policy list; no `openat2`/`setfacl`/`fallocate`/numeric-UID call sites in Provider crate |
+| Detailed design | `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath`; adapted `AtomicFilesystem`/`StateEnvelope`; adapted `LockGuard`/`LockSet`/`OfdTransfer`; marker write/verify/check; `src/effect_port.rs` re-exports `VolumeEffectPort` trait from `d2b-contracts::v3::effect_port` and provides Provider-side opaque ID construction helpers (no adapter implementation; adapter lives in host runtime); `sourcePolicyId` validation against declared policy list; no `openat2`/`setfacl`/`fallocate`/numeric-UID call sites in Provider crate Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged (`path.rs`); adapt (`atomic.rs`, `lock.rs`); adapt swtpm_dir marker algorithm. |
 | Integration | Controller binary receives `VolumeEffectPort` via ComponentSession injection; adapter calls `provision_marker` when a new Volume first appears in the `providerRef` reconcile queue (ProviderDeployment has already created the resource; volume-local provisions physical state) and `verify_marker` on restart relist |
 | Data migration | New marker written for each Volume at v3 first-boot |
 | Validation | All `tests/marker.rs`, `tests/state.rs` scenarios; all `integration/provision.rs` scenarios; `cargo deny check` verifies no `d2b-priv-broker`/`d2bd` dependency |
@@ -2364,7 +2364,7 @@ Documents:
 | Work item ID | `ADR046-vl-006` |
 | Dependency/owner | ADR046-vl-003 |
 | Current source | No equivalent in baseline; new |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `src/source.rs` (block-image and tmpfs branches); `tests/source.rs`; `integration/block_image.rs` |
 | Detailed design | `block-image`: image file create/verify via `provision_block_image` effect op; `fallocate` performed by adapter when `preallocate: true`; FD transfer to Guest runtime via LaunchTicket via `open_volume_mount_token` effect op; `tmpfs`: `mount_tmpfs`/`umount_tmpfs` effect ops; `size=` and `nr_inodes=` derived from quota fields; cleanup via `umount_tmpfs` op |
 | Integration | Guest runtime Provider (cloud-hypervisor) receives block-image FD from volume-local via LaunchTicket; no path crosses the boundary |
@@ -2394,7 +2394,7 @@ Documents:
 | Work item ID | `ADR046-vl-008` |
 | Dependency/owner | ADR046-vl-003; ADR046-vl-007 |
 | Current source | No equivalent; new |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `src/relocation.rs`; `tests/relocation_unit.rs`; `integration/relocation.rs` |
 | Detailed design | As documented in §Relocation, §Retention, §Incident hold, §Unclaimed Volume GC, §Destruction |
 | Integration | Controller adds `Relocating` finalizer; creates relocation EphemeralProcess; destruction sequence is ordered leaf-first with `fsync` after each step |
@@ -2439,9 +2439,9 @@ Documents:
 | Work item ID | `ADR046-vl-011` |
 | Dependency/owner | ADR046-vl-002; ADR046-pstate-011; workspace policy owner |
 | Current source | `packages/xtask/src/main.rs` (`gen-schemas`, workspace-policy checks); `tests/unit/gates/drift-check.sh` |
-| Reuse action | extend (per ADR046-pstate-011) |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/provider_crate_policy.rs`; `tests/unit/gates/provider-crate-layout-check.sh` |
-| Detailed design | `cargo xtask check-provider-crate-layout` gate asserts `src/`, `tests/`, `integration/` (with at least one `.rs` file and a `README.md`), and `README.md` for every `packages/d2b-provider-*` workspace member; fails closed with typed `missing-provider-crate-path` error |
+| Detailed design | `cargo xtask check-provider-crate-layout` gate asserts `src/`, `tests/`, `integration/` (with at least one `.rs` file and a `README.md`), and `README.md` for every `packages/d2b-provider-*` workspace member; fails closed with typed `missing-provider-crate-path` error Primary reuse disposition: `adapt`. Preserved source-plan detail: extend (per ADR046-pstate-011). |
 | Integration | `make test-policy` runs the gate; GitHub CI runs `make test-policy` on every PR |
 | Data migration | Not applicable |
 | Validation | Gate detects each missing path; idempotent across re-runs; existing non-provider `d2b-*` crates not flagged |
@@ -2455,9 +2455,9 @@ Documents:
 | Dependency/owner | ADR046-vl-001; ADR046-vl-002; Zone broker/core owner |
 | Depends on | `ADR046-pstate-003`; `ADR-046-provider-model-and-packaging` (generic effect-port injection contract) |
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract,swtpm_dir,store_sync,store_view_posture}.rs`; `d2b-host/src/hardlink_farm.rs` |
-| Reuse action | adapt into adapter |
+| Reuse action | adapt |
 | Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner); implements the `VolumeEffectPort` trait defined in `d2b-contracts` |
-| Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; emits path-free audit records for each op (audit is never atomic with redb write); injected into controller via Zone runtime ComponentSession; blocking filesystem calls run in bounded blocking-thread pool |
+| Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; emits path-free audit records for each op (audit is never atomic with redb write); injected into controller via Zone runtime ComponentSession; blocking filesystem calls run in bounded blocking-thread pool Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into adapter. |
 | Integration | Zone runtime creates adapter with required FD table and bundle reference at provider startup; passes `Arc<dyn VolumeEffectPort>` to controller via ComponentSession bootstrap |
 | Data migration | None (adapter replaces direct broker-op call sites) |
 | Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; no path in any output; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter does not expose raw paths to Provider crate; `integration/provision.rs` exercises full adapter path |
@@ -2471,7 +2471,7 @@ Documents:
 | Dependency/owner | ADR046-vl-001; ADR046-vl-012; Zone broker/core owner |
 | Depends on | `ADR-046-provider-model-and-packaging` (Provider install sequencing) |
 | Current source | No equivalent; new |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | Zone core ProviderDeployment controller-start path (outside `d2b-provider-volume-local`) |
 | Detailed design | The volume-local controller declares no Provider state Volume, so there is no bootstrap Volume, no `BootstrapProviderStateVolume` broker op, no pre-provisioned controller Volume, and no bootstrap-storage exception (D086, superseded by D087). On first install and on every daemon restart, core ProviderDeployment starts the volume-local controller Process directly; the controller reaches `Ready` from its own resource `status`, the core Operation ledger, and a resource-store relist. Once Ready, it reconciles every Volume carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' declared state Volumes) as they appear in its `providerRef` watch, re-verifying identity markers against external reality, never creating them itself. A Guest bootstraps its own Guest-local volume-local instance from Guest-local primitives only. |
 | Integration | Core ProviderDeployment spawns the controller Process with no state-Volume prerequisite; the controller's startup relist reconciles served Volumes and re-verifies markers |

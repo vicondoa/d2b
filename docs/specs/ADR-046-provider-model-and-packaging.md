@@ -637,9 +637,9 @@ cannot alias, rename, or vendor-qualify the base types.
 | --- | --- |
 | Dependency/owner | W0; Provider contract/catalog owner |
 | Current source | `packages/d2b-realm-provider/src/{provider,capabilities,error,credential,rate_limit,conformance}.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/provider.rs`, `packages/d2b-provider/src/lib.rs`, `packages/d2b-provider-toolkit/` |
-| Detailed design | Provider resource/manifest/components/dependencies/services/trust/compatibility/toolkit |
+| Detailed design | Provider resource/manifest/components/dependencies/services/trust/compatibility/toolkit Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone config/catalog → Provider resource → Process components → bus/resource routes |
 | Data migration | Full reset |
 | Validation | Contract vectors, fake/malicious Provider, one-crate/one-identity policy |
@@ -665,9 +665,9 @@ cannot alias, rename, or vendor-qualify the base types.
 | --- | --- |
 | Dependency/owner | Process contracts; system Provider owners |
 | Current source | `d2bd` DAG/broker spawn; unsafe-local helper; guestd/exec runner; `d2b-host` runtime provider |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-core/`, `d2b-provider-system-systemd/`, `d2b-provider-system-minijail/` |
-| Detailed design | Bootstrap system-core; common Process/EphemeralProcess providers and pidfd conformance |
+| Detailed design | Bootstrap system-core; common Process/EphemeralProcess providers and pidfd conformance Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Host/Guest providerRef/domain/userRef, local supervisors, resource status |
 | Data migration | Current roles converted under reset |
 | Validation | Shared conformance and host/user/non-Host tests |
@@ -679,7 +679,7 @@ cannot alias, rename, or vendor-qualify the base types.
 | --- | --- |
 | Dependency/owner | ADR046-provider-001; shared semantic Service/Binding contract owner |
 | Current source | None — D098 common semantic Service/Binding bases are net-new ADR 0046 contracts |
-| Reuse action | net-new |
+| Reuse action | create |
 | Destination | `packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs`; generated schema artifacts for the eight exact qualified ResourceTypes |
 | Detailed design | Define one shared strict base spec/status DTO and schema contract for each frozen D098 Service/Binding pair, including exact semantic type/schema IDs, versions, fingerprints, minimal valid base fixtures without `spec.provider`, authority/projection Service union, same-Zone Binding `serviceRef`/target rules, D088 `status.resource` layering, status-only observations, and projection-factory type binding. A Core-generated projection permits only `providerRef`, semantic base/import fields, and ResourceImport ownership; it rejects `spec.provider`. Register no implementation-qualified or former `*State` alias. |
 | Integration | Provider manifests and ResourceApiBindings consume the common catalog fingerprint; ADR046-zone-control-019/020 use the same factory metadata to admit an owner Service and core-create one same-type projection Service; the four initial Provider dossiers supply only strict implementation extensions/controllers. |

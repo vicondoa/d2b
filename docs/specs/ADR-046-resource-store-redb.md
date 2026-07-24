@@ -351,9 +351,9 @@ authorization, or audit cannot be weakened to pass.
 | --- | --- |
 | Dependency/owner | W0; store integrator |
 | Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-resource-store/src/lib.rs`, `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs` |
-| Detailed design | redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts |
+| Detailed design | redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime owns store; resource API is sole caller |
 | Data migration | Full reset; logical backup only for v3 stores |
 | Validation | Unit/property/fault tests and hard benchmark |

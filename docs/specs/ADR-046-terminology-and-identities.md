@@ -277,9 +277,9 @@ cgroup/scope, and provider-specific process identity.
 | --- | --- |
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `realm.rs`, `target.rs`, `workload.rs` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/identity.rs`, `packages/d2b-contracts/src/v3/resource_ref.rs` |
-| Detailed design | Add ZoneId, ResourceTypeName, ResourceName, ResourceUid, ResourceRef, generation/revision newtypes, exact parsing/serde/Debug/redaction, and golden vectors |
+| Detailed design | Add ZoneId, ResourceTypeName, ResourceName, ResourceUid, ResourceRef, generation/revision newtypes, exact parsing/serde/Debug/redaction, and golden vectors Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Resource API/store/controllers/SDK/Nix import only these canonical types |
 | Data migration | Destructive d2b 3.0 reset; no RealmRef parser compatibility |
 | Validation | Rust property/vector tests; pure-Nix vector parity; malformed/collision/UID-recreate tests |

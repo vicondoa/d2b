@@ -2039,9 +2039,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
 | Current source | `packages/d2b-contracts/src/security_key.rs` (SecurityKeyStatusResponse, SecurityKeySession, SecurityKeyLeaseState, SecurityKeyVmSessionState DTOs; implemented-and-reachable), `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule — implemented-and-reachable); `packages/d2b-core/src/manifest_v04.rs` VmEntry device fields (tpm, usbip_yubikey, security_key, graphics — old Workload manifest, generated-or-eval-contract) |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/device.rs` |
-| Detailed design | Device ResourceType schema (spec/status/conditions/claims/inventory); closed-set error codes; Device RBAC verbs; broker operation effect-limit constants |
+| Detailed design | Device ResourceType schema (spec/status/conditions/claims/inventory); closed-set error codes; Device RBAC verbs; broker operation effect-limit constants Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider dossiers, resource API/store, CLI status surfaces |
 | Data migration | Full reset; no v2 device object import |
 | Validation | Schema golden vectors; unknown-field denial; exclusive/shared conflict rejection; arbitration/maxClaims invariant |
@@ -2053,9 +2053,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | ADR046-device-001; device-tpm provider owner |
 | Current source | `packages/d2b-host/src/swtpm_argv.rs`; `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`; `nixos-modules/components/tpm.nix` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-tpm/src/` (controller, swtpm runner, state-dir logic); `packages/d2b-provider-device-tpm/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-tpm/integration/` (container/Host scenarios); `packages/d2b-provider-device-tpm/README.md` |
-| Detailed design | Device spec/status; flush EphemeralProcess → swtpm Process sequencing; state-dir hardening; tamper-marker; finalizer non-deletion of Volume; Nix emitter; all four required crate paths present (see "Provider crate layout") |
+| Detailed design | Device spec/status; flush EphemeralProcess → swtpm Process sequencing; state-dir hardening; tamper-marker; finalizer non-deletion of Volume; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone resource store; Process controller; Volume lifecycle |
 | Data migration | State dir and tamper markers preserved across reset |
 | Validation | `src/`: swtpm argv golden, state-dir, flush sequencing, finalizer no-delete; `tests/`: `controller_state_machine.rs`, `conformance.rs`, `fault_swtpm_missing.rs`; `integration/`: `provision_and_reboot/`, `tamper_marker_survives/`, `finalizer_no_delete/`; workspace policy check: `make test-policy` passes with all four paths present |
@@ -2067,9 +2067,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | ADR046-device-001; device-usbip provider owner |
 | Current source | `packages/d2b-contracts/src/usbip.rs` (USBIP DTOs, SYSFS_BUS_ID_MAX, bus-ID validation — implemented-and-reachable); `packages/d2b-core/src/bundle_resolver.rs` USBIP intents; `packages/d2b-core/src/privileges.rs` authz rows; `packages/d2bd/src/usbip_state_machine.rs` (typed per-busid bring-up state machine, step order: modprobe→lock→withhold→firewall→backend→bind→proxy — implemented-and-reachable); `packages/d2bd/src/usbipd_perenv_autostart.rs` (per-env usbipd daemon autostart — implemented-and-reachable); `packages/d2bd/src/usbip_reconcile_state.rs` (restart-safe reconciler state model — implemented-but-unwired); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.usbip.*` (generated-or-eval-contract); `nixos-modules/components/usbip.nix` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-usbip/src/` (controller, daemon Process, bind/unbind EphemeralProcess, firewall); `packages/d2b-provider-device-usbip/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-usbip/integration/` (container/Host scenarios); `packages/d2b-provider-device-usbip/README.md` |
-| Detailed design | Device spec/status; bus ID validation; firewall rule ownership-marker; bind/unbind EphemeralProcess; per-Device daemon Process (owned by device-usbip; Network supplies dependency/firewall interface); Nix emitter; all four required crate paths present (see "Provider crate layout") |
+| Detailed design | Device spec/status; bus ID validation; firewall rule ownership-marker; bind/unbind EphemeralProcess; per-Device daemon Process (owned by device-usbip; Network supplies dependency/firewall interface); Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone resource store; broker `UsbipBindFirewallRule`; nftables marker |
 | Data migration | None; full reset |
 | Validation | `src/`: bus ID corpus, firewall marker format, EphemeralProcess creation; `tests/`: `arbitration_conflict.rs`, `conformance.rs`, `firewall_marker.rs`, `explicit_attach_split.rs`; `integration/`: `arbitration_conflict/`, `busid_bind_cycle/`, `network_firewall_coexistence/`; workspace policy check: `make test-policy` passes with all four paths present |
@@ -2081,9 +2081,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | ADR046-device-001; device-security-key provider owner |
 | Current source | `packages/d2b-contracts/src/security_key.rs` (DTOs — implemented-and-reachable); `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation — implemented-and-reachable); **KEY: relay is in d2bd** — `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED, hidraw async fd, accept loop — implemented-and-reachable) and `packages/d2bd/src/lib.rs:start_sk_accept_loop` (ProcessRole::SecurityKeyFrontend dispatch — implemented-and-reachable); **guest binary**: `packages/d2b-sk-frontend/src/` (static UHID frontend — implemented-and-reachable); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.security_key.*`; `nixos-modules/components/security-key-guest.nix` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-security-key/src/` (controller, relay Process, guest frontend Process, lease/session ring); `packages/d2b-provider-device-security-key/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-security-key/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-security-key/README.md` |
-| Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see "Provider crate layout") |
+| Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone resource store; broker `SecurityKeyOpenDevice`/`SecurityKeyApplyUdevRules`; Guest frontend module |
 | Data migration | None; full reset |
 | Validation | `src/`: lease transitions, session ring eviction, broker op path-free, CID round-trip; `tests/`: `lease_state_machine.rs`, `session_ring.rs`, `mutual_exclusion.rs` proves security-key and USB implementations resolve one token to a byte-identical physical backing key and the loser receives `physical-usb-backing-conflict` before any effect, `conformance.rs`, `guest_frontend_process.rs`; `integration/`: `lease_acquire_cancel/`, `session_ring_capacity/`, `guest_frontend_connect/`; workspace policy check: `make test-policy` passes with all four paths present |
@@ -2095,9 +2095,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | ADR046-device-001; device-gpu provider owner |
 | Current source | `packages/d2b-host/src/gpu_argv.rs`, `video_argv.rs`; `packages/d2b-core/src/bundle_resolver.rs` Gpu/GpuRenderNode/Video; `nixos-modules/components/graphics.nix`, `video/guest.nix` |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-gpu/src/` (controller, GPU/render-node/video worker Processes, broker token set); `packages/d2b-provider-device-gpu/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-gpu/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-gpu/README.md` |
-| Detailed design | Combined Device spec/status; GPU worker Process (`device-<uid-short>-gpu`, exclusive); render-node Process (`device-<uid-short>-render-node`, exclusive default, shared when explicit); video-decoder Process (`device-<uid-short>-video`); broker token set; wire-contract constants; shared render-node arbitration enforcement; Nix emitter; all four required crate paths present (see "Provider crate layout") |
+| Detailed design | Combined Device spec/status; GPU worker Process (`device-<uid-short>-gpu`, exclusive); render-node Process (`device-<uid-short>-render-node`, exclusive default, shared when explicit); video-decoder Process (`device-<uid-short>-video`); broker token set; wire-contract constants; shared render-node arbitration enforcement; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone resource store; broker `SpawnRunner`/`OpenDevice`; Display Provider device consumption |
 | Data migration | None; full reset |
 | Validation | `src/`: process role selection, wire-constant snapshot, render-node vs full-GPU branching; `tests/`: `combined_reconcile.rs`, `render_node_enforcement.rs`, `wire_constant_snapshot.rs`, `conformance.rs`; `integration/`: `gpu_worker_start/`, `render_node_shared/`, `video_dependency/`; workspace policy check: `make test-policy` passes with all four paths present |
@@ -2123,7 +2123,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | ADR046-device-006; Zone runtime implementer |
 | Current source | None (new work; no equivalent in v3 baseline or main a1cc0b2d) |
-| Reuse action | new |
+| Reuse action | create |
 | Destination | `packages/d2b-core-controller/src/configuration.rs`; `packages/d2b-contract-tests/tests/device_gen_cleanup.rs` |
 | Detailed design | Implement the cleanup contract described in "Zone generation and cleanup": (1) on new generation activation, diff `resources` against prior generation's `resources` by (type, name) — resources absent from new generation that have `managedBy=configuration` go into `pendingDeletion`; (2) Zone phase transitions to `Degraded/pending-cleanup` until all items in `pendingDeletion` reach terminal Delete; (3) items in `pendingDeletion` with `managedBy=controller` or `managedBy=api` are rejected with `cleanup-config-ownership-mismatch`; (4) `managedBy=controller` and `managedBy=api` resources are never touched by generation cleanup — `cleanup-controller-resource-protected` emitted if attempted; `managedBy=api` resources persist until explicit Delete; (5) prior generations retained by count: default 3, range 1..16, configured via `d2b.zones.<zone>.retainedGenerations`; (6) each deletion is non-blocking; (7) finalizer-stuck timeout emits `cleanup-finalizer-stuck` and leaves Zone in `Degraded/pending-cleanup`; (8) all deletions emit `config-resource-deletion-requested` audit record with digested resource identity |
 | Integration | Consumes Zone resource bundle from ADR046-device-006 emitter; drives Device Provider finalizers via normal resource-Delete protocol; feeds Zone status conditions `GenerationCleanPending` and `GenerationCleanError` |
@@ -2137,9 +2137,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | --- | --- |
 | Dependency/owner | ADR046-device-002 through ADR046-device-005; workspace/tooling maintainer |
 | Current source | `packages/xtask/src/main.rs` (existing `gen-*` and `check-*` commands — implemented-and-reachable); `packages/d2b-contract-tests/tests/workspace_policy.rs` (existing workspace policy tests — implemented-and-reachable) |
-| Reuse action | extend |
+| Reuse action | adapt |
 | Destination | `packages/xtask/src/main.rs` (`check-provider-layout` subcommand); `packages/d2b-contract-tests/tests/workspace_policy.rs` (provider-layout policy assertions) |
-| Detailed design | Add `cargo xtask check-provider-layout`: enumerate workspace members matching `d2b-provider-*`; for each, assert `src/`, `tests/`, `integration/`, and `README.md` all exist relative to the crate root; report all missing paths before failing; no opt-out flag. Add companion test in `workspace_policy.rs` that asserts the same invariant against the static crate list in `Cargo.toml`. Wire `cargo xtask check-provider-layout` into `make test-policy` alongside existing workspace naming and sort checks. The check must also run in CI as part of the policy gate. |
+| Detailed design | Add `cargo xtask check-provider-layout`: enumerate workspace members matching `d2b-provider-*`; for each, assert `src/`, `tests/`, `integration/`, and `README.md` all exist relative to the crate root; report all missing paths before failing; no opt-out flag. Add companion test in `workspace_policy.rs` that asserts the same invariant against the static crate list in `Cargo.toml`. Wire `cargo xtask check-provider-layout` into `make test-policy` alongside existing workspace naming and sort checks. The check must also run in CI as part of the policy gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend. |
 | Integration | `make test-policy`; `make check`; GitHub CI policy job |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy gate passes once all four Device Provider crates exist with required paths; gate fails predictably when any path is removed from a Provider crate fixture; test fixture crate with one missing path must produce a named error identifying the exact missing path |

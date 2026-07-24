@@ -339,9 +339,9 @@ Keeping handlers in one process does not union arbitrary Provider privilege:
 | Dependency/owner | W0/W1a; core-controller owner |
 | Current source | `packages/d2bd/src/lib.rs`, `provider_registry.rs` if present on source ref, supervisor state, operations; `d2b-realm-core/src/{allocator_engine,identity_store}.rs` |
 | Reuse source | Useful pure handler/toolkit code from main named in implementation sub-items |
-| Reuse action | extract and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/{main,configuration,api_catalog,authz,providers,controllers,ownership,watches,cleanup,zone_links,budgets,store}.rs` |
-| Detailed design | One fixed process, isolated handlers, async ResourceClient, health/startup/restart |
+| Detailed design | One fixed process, isolated handlers, async ResourceClient, health/startup/restart Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime local bus/session; Provider/system-core resource identity |
 | Data migration | Full reset |
 | Validation | Per-handler unit/property tests plus multi-process startup/restart |
@@ -354,9 +354,9 @@ Keeping handlers in one process does not union arbitrary Provider privilege:
 | Dependency/owner | ADR046-core-001; system-core Provider owner |
 | Current source | Nix host/Realm options/index; host check/provider code; user/group lookup and unsafe-local eligibility |
 | Reuse source | Any main local-host/user-provider code selected by exact sub-items |
-| Reuse action | extract/adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-core/src/{host,user}.rs` linked into fixed core controller |
-| Detailed design | Host and User schemas/reconcile/status/capabilities |
+| Detailed design | Host and User schemas/reconcile/status/capabilities Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Bootstrap Provider/system-core; other controllers target Host/Guest/User refs |
 | Data migration | New v3 resources from Nix |
 | Validation | Multiple Hosts, system/user restrictions, UID/session drift |

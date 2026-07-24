@@ -367,9 +367,9 @@ transcript/session generation digest, route, and fixed outcome.
 | Dependency/owner | W0 shared contract root |
 | Current source | v3 `d2b-realm-router/src/{session,secure_session,mux_session,lifecycle}.rs`, guest auth/transport |
 | Reuse source | main `a1cc0b2d`: `d2b-contracts/src/v2_component_session.rs`, `d2b-session/src/{handshake,bootstrap,record,engine,scheduler,streams,lifecycle,transport}.rs`, Noise/component tests/vectors |
-| Reuse action | copy and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/component_session.rs`, `packages/d2b-session/` |
-| Detailed design | Reversion canonical offer/records; retain NN/KK/IKpsk2; add canonical subject/authorization context hooks |
+| Detailed design | Reversion canonical offer/records; retain NN/KK/IKpsk2; add canonical subject/authorization context hooks Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | d2b-bus, resource/controller/Provider services |
 | Data migration | No v2 session compatibility; reconnect on v3 |
 | Validation | Copied exact vectors/rejections plus subject/RBAC/revocation tests |
@@ -382,24 +382,24 @@ transcript/session generation digest, route, and fixed outcome.
 | Dependency/owner | ADR046-session-001; transport owner |
 | Current source | v3 guest vsock/local seqpacket implementations and d2b-realm-transport traits |
 | Reuse source | main `a1cc0b2d`: `d2b-session-unix/src/{adapter,socket,descriptor,pidfd,vsock,systemd,credit}.rs`, `tests/unix_session.rs` |
-| Reuse action | copy and adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-session-unix/`, future enrolled transport adapter crates |
-| Detailed design | Unix/socketpair/vsock owned transports, peer evidence, fd/pidfd/object validation, credits |
+| Detailed design | Unix/socketpair/vsock owned transports, peer evidence, fd/pidfd/object validation, credits Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | ProviderSupervisor/Host/Guest/Zone listeners hand owned transports to session |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copied fd/peer/credit tests plus Host/Guest subject mapping |
 | Removal proof | Ad hoc guest/public/helper transport removed only per service cutover |
 
-### ADR046-bus-001
+### ADR046-session-003
 
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Sessions + resource API; bus owner |
 | Current source | v3 `d2b-realm-router`, target resolver, CLI routing, operation router |
 | Reuse source | Any useful main d2b-client/provider/session routing symbols named by implementation sub-items |
-| Reuse action | extract/adapt |
+| Reuse action | adapt |
 | Destination | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` |
-| Detailed design | Exact service/resource routes, RBAC, pinned reverse route, cancellation, named stream bridge, no wildcard pub/sub |
+| Detailed design | Exact service/resource routes, RBAC, pinned reverse route, cancellation, named stream bridge, no wildcard pub/sub Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Every ResourceClient/controller/Provider/CLI service |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Message isolation, route/auth revocation, fairness, reconnect, no direct-store path |

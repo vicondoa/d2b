@@ -381,9 +381,9 @@ performed by this documentation-only spec.
 | Metrics | (1) every one of the 500 calls is delivered to exactly the recipient named by its route key, verified by a per-recipient received-call counter; (2) each recipient's session transcript hash and record sequence counter are independent (no shared state, verified by asserting the three sessions' internal sequence counters never reference each other's session object); (3) the deliberate cross-wiring case is rejected before any record is exchanged. |
 | Pass/fail threshold | 500/500 correct routing, 0 cross-recipient session-state leakage, 1/1 cross-wiring case rejected with a stable typed error (not a panic, not a silent no-op). |
 | Expected resource budget | ≤2 minutes wall time; ≤64 MiB RSS (three lightweight Noise sessions plus the fake router). |
-| Failure interpretation | A misrouted call or shared-session-state finding blocks `ADR046-bus-001` from starting until the route-key resolution or per-session isolation in `ADR-046-componentsession-and-bus` §"d2b-bus" is corrected; per anti-claim rule 3, the fix is never "widen the route key to fail open." |
-| Affected decisions/work items | D011, D039, D040, D054; `ADR046-session-001`, `ADR046-session-002`, `ADR046-bus-001`. |
-| Cleanup | Deleted once `packages/d2b-bus/src/router.rs` (the real `ADR046-bus-001` destination) carries an in-tree message-isolation/route-authorization/no-direct-store-path conformance test with equal or stricter coverage, per that work item's own Validation column. |
+| Failure interpretation | A misrouted call or shared-session-state finding blocks `ADR046-session-003` from starting until the route-key resolution or per-session isolation in `ADR-046-componentsession-and-bus` §"d2b-bus" is corrected; per anti-claim rule 3, the fix is never "widen the route key to fail open." |
+| Affected decisions/work items | D011, D039, D040, D054; `ADR046-session-001`, `ADR046-session-002`, `ADR046-session-003`. |
+| Cleanup | Deleted once `packages/d2b-bus/src/router.rs` (the real `ADR046-session-003` destination) carries an in-tree message-isolation/route-authorization/no-direct-store-path conformance test with equal or stricter coverage, per that work item's own Validation column. |
 | Status | Specified — not yet executed. |
 
 ### SPIKE-07 — Unix/vsock/Azure-Relay transports carry only opaque Noise record bytes
@@ -697,9 +697,9 @@ decisions/work items" row.
 | Dependency/owner | W0 shared contract root; store/reconciliation integrator |
 | Current source | `packages/d2b-core/src/{storage,sync}.rs` (atomic/idempotency reference shape, E4); no redb usage exists anywhere in this repository at any inspected commit |
 | Reuse source | None (redb is a new external dependency; no main or v3 code implements it) |
-| Reuse action | `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified) |
+| Reuse action | adapt |
 | Destination | `proofs/redb-resource-store-spike/` |
-| Detailed design | Implements SPIKE-01 and SPIKE-02: the eight-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries |
+| Detailed design | Implements SPIKE-01 and SPIKE-02: the eight-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified). |
 | Integration | None (standalone; no d2b-bus/ComponentSession/broker dependency) |
 | Data migration | None (disposable fixture data only) |
 | Validation | SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds |
@@ -713,9 +713,9 @@ decisions/work items" row.
 | Dependency/owner | `ADR046-feasibility-001`; reconciliation/process integrator |
 | Current source | `packages/d2bd/src/supervisor/{dag,pidfd}.rs` (current DAG/pidfd reference shape, E4) |
 | Reuse source | None (the generic async controller loop is ADR-only per `ADR-046-resource-reconciliation`'s own current-code-fit row) |
-| Reuse action | `adapt` (current DAG ordering/readiness concepts are adapted into the spike's per-resource single-flight/parallel-semaphore loop) |
+| Reuse action | adapt |
 | Destination | `proofs/process-fastlaunch-spike/` |
-| Detailed design | Implements SPIKE-03: the fake Process controller loop, fake `ProcessLaunchEffectPort`, and the 1/10/100-concurrency commit-to-launch-attempt and next-dispatch-independence benchmarks |
+| Detailed design | Implements SPIKE-03: the fake Process controller loop, fake `ProcessLaunchEffectPort`, and the 1/10/100-concurrency commit-to-launch-attempt and next-dispatch-independence benchmarks Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (current DAG ordering/readiness concepts are adapted into the spike's per-resource single-flight/parallel-semaphore loop). |
 | Integration | Consumes `ADR046-feasibility-001`'s hint-bus shape as its watch-receiver input |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-03 metrics (1)-(3) and thresholds |
@@ -729,7 +729,7 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001`/`-002`; EffectPort/ProviderSupervisor integrator |
 | Current source | `packages/d2b-priv-broker/src/ops/spawn_runner.rs` and `tests/pidfd_real_spawner.rs` (current blocking-call reference shape, E4) |
 | Reuse source | None |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/effectport-async-spike/` |
 | Detailed design | Implements SPIKE-04: the four fake EffectPort traits, the deliberately slow blocking-primitive backends, and the current-thread-runtime heartbeat-jitter detector |
 | Integration | None (standalone) |
@@ -745,9 +745,9 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001`/`-002`/`-003`; Provider packaging/toolkit integrator |
 | Current source | None in v3 at `b5ddbed6` (no generic Provider registry exists; per parent ADR context, this is explicitly listed as missing) |
 | Reuse source | None |
-| Reuse action | `adapt` (the crate-layout policy check reuses the same `src/`/`tests/`/`integration/`/`README.md` structure already enforced elsewhere in this repository's workspace policy tests) |
+| Reuse action | adapt |
 | Destination | `proofs/provider-packaging-spike/` |
-| Detailed design | Implements SPIKE-05: the two-binary crate, hand-authored manifest, fake `ProviderDeployment`, and the `cargo metadata` dependency-edge check |
+| Detailed design | Implements SPIKE-05: the two-binary crate, hand-authored manifest, fake `ProviderDeployment`, and the `cargo metadata` dependency-edge check Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the crate-layout policy check reuses the same `src/`/`tests/`/`integration/`/`README.md` structure already enforced elsewhere in this repository's workspace policy tests). |
 | Integration | None (standalone) |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-05 metrics (1)-(4) across 20 repeated randomized-order manifest loads |
@@ -761,9 +761,9 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001` through `-004`; bus/session/transport/credential integrator |
 | Current source | `packages/d2b-realm-router/src/{session,secure_session,mux_session}.rs` (current routing reference shape, E4); main `a1cc0b2d` `packages/d2b-session/**`, `packages/d2b-session-unix/**` (re-verified green in E3) |
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/{handshake,bootstrap,record,engine,scheduler,streams,lifecycle,transport}.rs`, `packages/d2b-session-unix/src/{adapter,vsock,pidfd,socket,systemd,credit,descriptor}.rs`, and the exact test files listed in E3's table |
-| Reuse action | `copy-unchanged` for the Noise/record/transport machinery (path-dependency on a pinned local checkout of `a1cc0b2d`); `adapt` for the fake router/relay/credential-delivery wrapper code that SPIKE-06/07/08 add on top |
+| Reuse action | adapt |
 | Destination | `proofs/bus-routing-noise-spike/`, `proofs/transport-opaque-streams-spike/`, `proofs/credential-kk-e2e-spike/` |
-| Detailed design | Implements SPIKE-06 (exact-addressed routing + per-recipient Noise isolation), SPIKE-07 (Unix/vsock/relay-shaped opaque byte-stream conformance across 3 backends), and SPIKE-08 (Credential Provider → consumer Provider KK delivery with the 13-field binding contract) |
+| Detailed design | Implements SPIKE-06 (exact-addressed routing + per-recipient Noise isolation), SPIKE-07 (Unix/vsock/relay-shaped opaque byte-stream conformance across 3 backends), and SPIKE-08 (Credential Provider → consumer Provider KK delivery with the 13-field binding contract) Primary reuse disposition: `adapt`. Preserved source-plan detail: `copy-unchanged` for the Noise/record/transport machinery (path-dependency on a pinned local checkout of `a1cc0b2d`); `adapt` for the fake router/relay/credential-delivery wrapper code that SPIKE-06/07/08 add on top. |
 | Integration | SPIKE-07's Unix backend and SPIKE-08's session machinery both depend on the same pinned `a1cc0b2d` path-dependency established for SPIKE-06 |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-06 metrics (1)-(3), SPIKE-07 metrics (1)-(4) against the exact numeric gates already committed in the transport-unix/vsock dossiers, SPIKE-08 metrics (1)-(6) |
@@ -777,7 +777,7 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001` through `-005`; Provider-state/Volume integrator |
 | Current source | None in v3 at `b5ddbed6` (ProviderStateSet and the generalized Volume ResourceType are both ADR-only) |
 | Reuse source | None |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/provider-state-export-spike/`, `proofs/volume-policy-spike/` |
 | Detailed design | Implements SPIKE-09 (optional declared state-Volume creation order, guest-local/host-backed-guest placement, virtiofs Export child ownership) and SPIKE-10 (Volume ACL/`sourcePolicyId`/quota/lifecycle-marker policy conformance) |
 | Integration | None between the two spikes beyond sharing the same fake resource-store oracle shape |
@@ -793,7 +793,7 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001` through `-006`; Process Provider integrator |
 | Current source | `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (real-spawn reference shape, E4); current unsafe-local helper runtime/systemd invocation shape |
 | Reuse source | None |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/process-provider-conformance-spike/` |
 | Detailed design | Implements SPIKE-11: the shared `ProcessProviderHarness` trait, the minijail-shaped `clone3(CLONE_PIDFD)` launcher, and the systemd transient-user-scope launcher, plus the identity-drift/quarantine and clean-exit cases |
 | Integration | None (standalone; requires a Linux host with `clone3`/`pidfd_open`, and optionally a running `systemd --user` instance behind the `systemd-user` feature) |
@@ -809,7 +809,7 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001` through `-007`; Nix/xtask integrator |
 | Current source | `nixos-modules/assertions.nix` pattern, `packages/xtask` `gen-schemas` pattern, `make test-drift` gate (existing generated-or-eval-contract precedent) |
 | Reuse source | None |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/nix-authoring-spike/` |
 | Detailed design | Implements SPIKE-12: the minimal flake, the two synthetic ResourceTypes, the hand-written committed schemas, the standalone `gen-schemas`-shaped drift check, and the two-generation removed-resource cleanup simulation |
 | Integration | None (standalone flake; no dependency on the main `flake.nix`) |
@@ -825,7 +825,7 @@ decisions/work items" row.
 | Dependency/owner | Independent of `-001` through `-008`; CLI integrator |
 | Current source | `packages/d2b/src/lib.rs` `cmd_audio`/`cmd_clipboard_arm` and the current command-table shape (current CLI reference shape) |
 | Reuse source | None |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/cli-discovery-spike/`, `proofs/clean-cutover-spike/` |
 | Detailed design | Implements SPIKE-13 (dynamic Provider-projection discovery, bounds, latency isolation) and SPIKE-14 (zero v2 dispatch, fresh Zone bootstrap ignoring legacy state) |
 | Integration | None between the two spikes beyond sharing the same fixture command-table shape |
@@ -841,7 +841,7 @@ decisions/work items" row.
 | Dependency/owner | `ADR046-feasibility-001` through `ADR046-feasibility-009` (integrates their fakes; must run last) |
 | Current source | None (this is a pure integration of the other nine work items' fixtures) |
 | Reuse source | None beyond what `-001` through `-009` already reuse |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/e2e-composition-spike/` |
 | Detailed design | Implements SPIKE-15: the three representative compositions (local/cloud-hypervisor, cloud/azure, interaction/shell-terminal-or-wayland), wired from the fakes built by `-001` through `-009`, plus the combined 3-Zone aggregate RSS measurement |
 | Integration | Depends on and imports the fake shapes from `proofs/redb-resource-store-spike/`, `proofs/process-fastlaunch-spike/`, `proofs/effectport-async-spike/`, `proofs/provider-packaging-spike/`, `proofs/bus-routing-noise-spike/`, `proofs/transport-opaque-streams-spike/`, `proofs/credential-kk-e2e-spike/`, `proofs/provider-state-export-spike/`, `proofs/volume-policy-spike/`, and `proofs/process-provider-conformance-spike/` |
@@ -857,7 +857,7 @@ decisions/work items" row.
 | Dependency/owner | `ADR046-delivery-007`; delivery/test-tooling integrator |
 | Current source | this codebase's ad hoc `tests/tools/` timing logs (`d2b-static-timing.$$/`), which are not a candidate-bound, reference-runner-recorded ledger |
 | Reuse source | existing `libtest --format=json` timing output and `xtask` (no new test framework) |
-| Reuse action | `adapt` |
+| Reuse action | adapt |
 | Destination | `proofs/test-runtime-budget-spike/`; the committed baseline ledger consumed by `ADR046-delivery-007` |
 | Detailed design | Establishes the D094 measurement baseline: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a regression |
 | Integration | Output ledger shape is consumed by the runtime ledger/timing gate; establishes the historical threshold seed |
