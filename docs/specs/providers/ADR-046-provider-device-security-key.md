@@ -288,6 +288,16 @@ report local import-route Endpoint/lease observations only in
 `status.provider`. Nix and ordinary API callers cannot create
 `mode: projection`.
 
+The signed Provider descriptor's D096 factory publishes
+`serviceType: security-key.d2bus.org.SecurityKeyService`, the SHA-256
+`projectionSchemaFingerprint` of the canonical committed projection schema, and
+a `factoryFingerprint` over the semantic factory fields plus projection-protocol
+version. Provider and export/import adapter identity are authenticated
+separately by the signed descriptor and never affect the semantic factory
+fingerprint. The authority relay Endpoint and projection import-route Endpoint
+remain Service-owned implementation children; neither is an Export or Import
+field.
+
 ## `SecurityKeyBinding` spec and status contract
 
 One Binding expresses one consuming Guest/user attachment and policy. It is authored
@@ -676,7 +686,8 @@ An authority Service owns its stable relay Endpoint. A projection Service owns a
 local import Endpoint created through the signed import adapter. Each
 `SecurityKeyBinding` owns a private frontend Endpoint. The Binding controller resolves
 only the same-Zone Service Endpoint; cross-Zone routing is behind the projection
-Endpoint and never appears as a remote Ref.
+Endpoint and never appears as a remote Ref. Service Endpoints remain
+implementation details and never appear in `ResourceExport` or `ResourceImport`.
 Endpoint spec/status never carries raw vsock CIDs, ports, hidraw/UHID paths, fd
 numbers, CTAP/session bytes, PINs, CBOR payloads, signatures, or credentials.
 Resolution occurs only through an authorized EffectPort/LaunchTicket;
@@ -1382,7 +1393,7 @@ The controller uses bounded indexed watches, never an unfiltered cross-Zone list
 | `SecurityKeyBinding` | same Zone + providerRef | that Binding |
 | `Process`, `Endpoint` | `ownerRef` index for Service or Binding | owning Service/Binding |
 | `Guest`, `User` | `dependencyRefIn` from Binding target | dependent Bindings only |
-| `ResourceExport`, `ResourceImport`, `ZoneLink` | local resource/endpoint/import-owner indexes | authority/projection Service and its Bindings |
+| `ResourceExport`, `ResourceImport`, `ZoneLink` | local Service/export/import-owner indexes | authority/projection Service and its Bindings |
 
 Core performs projection creation and import lease writes under its own RBAC; the
 Provider watch observes those committed revisions but cannot synthesize a
@@ -1402,9 +1413,12 @@ projection or mutate ResourceImport.
   `deviceUsage` for that exact Device and the owned relay Endpoint. A duplicate
   authority or USBIP owner fails without opening hidraw.
 - **Projection Service:** accept creation only from Core/import adapter with
-  `ownerRef: ResourceImport/<name>`; reject base or Provider-extension
-  `deviceRef`, authority, or physical selectors; create/repair only the local
-  projection-Service-owned local Endpoint and import binding.
+  `ownerRef: ResourceImport/<name>` after the adapter matches
+  `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and
+  `expectedFactoryFingerprint` to the signed factory; reject base or
+  Provider-extension `deviceRef`, authority, or physical selectors;
+  create/repair only the local projection-Service-owned Endpoint and import
+  binding.
   The Provider controller never opens hidraw for this branch.
 - **Binding:** require a same-Zone Ready Service and a valid Guest/User target,
   reject duplicate attachment intent, install `frontend-released`, and
@@ -1582,12 +1596,16 @@ frontend (`packages/d2b-sk-frontend/`: `/dev/uhid` virtual FIDO2 CTAPHID device,
 64-byte report relay).
 
 **Service export/import (D096).** The owner Zone declares a `ResourceExport`
-whose local `resourceRef` is the authority `SecurityKeyService` and whose local
-`endpointRef` is that Service's relay Endpoint. `exportedType` is
-`security-key.d2bus.org.SecurityKeyService`; a physical `Device` is never
-an export target. A consumer Zone declares a `ResourceImport` naming only its
-local ZoneLink plus export key and expects the Service fingerprint. Core and the
-signed import adapter create exactly one local projection
+whose local `resourceRef` is the authority `SecurityKeyService`, whose
+`serviceType` is `security-key.d2bus.org.SecurityKeyService`, and whose
+`projectionSchemaFingerprint` and `factoryFingerprint` match the signed
+semantic projection factory. The Service's relay Endpoint remains its local
+implementation child and is not copied into the Export. A physical `Device` is
+never an export target. A consumer Zone declares a `ResourceImport` naming only
+its local ZoneLink plus export key and supplies the corresponding
+`expectedServiceType`, `expectedProjectionSchemaFingerprint`, and
+`expectedFactoryFingerprint`. Core and the signed import adapter create exactly
+one local projection
 `SecurityKeyService` with `ownerRef: ResourceImport/<name>`. The projection has
 no physical Device ref, hidraw FD, DeviceGrant, selector, or open path.
 
@@ -1727,27 +1745,29 @@ d2b.zones.devices.resources."yubikey-primary-export" = {
     providerRef = "Provider/device-security-key";
     resourceRef =
       "security-key.d2bus.org.SecurityKeyService/yubikey-primary";
-    endpointRef = "Endpoint/yubikey-primary-ctaphid-relay";
-    exportedType = "security-key.d2bus.org.SecurityKeyService";
-    baseSchemaFingerprint = "sha256:...";
-    exportKey = "devices/yubikey-primary";
+    serviceType = "security-key.d2bus.org.SecurityKeyService";
+    projectionSchemaFingerprint =
+      "sha256:<security-key-service-projection-schema>";
+    factoryFingerprint = "sha256:<security-key-projection-factory>";
     arbitration = "exclusive";
     operations = [ "security-key-ceremony" ];
     consumerZonePolicy = { zones = [ "work" ]; };
   };
 };
 
-# Consumer Zone: import creates the projection Service; do not author a Device.
+# Consumer Zone: import creates the projection Service; do not author a Device
+# or an Endpoint.
 d2b.zones.work.resources."yubikey-primary-import" = {
   type = "ResourceImport";
   spec = {
     providerRef = "Provider/device-security-key";
     zoneLinkRef = "ZoneLink/work-uplink";
-    exportKey = "devices/yubikey-primary";
-    expectedType = "security-key.d2bus.org.SecurityKeyService";
-    expectedBaseSchemaFingerprint = "sha256:...";
+    exportKey = "devices/yubikey-primary-export";
+    expectedServiceType = "security-key.d2bus.org.SecurityKeyService";
+    expectedProjectionSchemaFingerprint =
+      "sha256:<security-key-service-projection-schema>";
+    expectedFactoryFingerprint = "sha256:<security-key-projection-factory>";
     projectionName = "yubikey-primary";
-    projectionType = "security-key.d2bus.org.SecurityKeyService";
     requestedCapabilities = [ "security-key-ceremony" ];
     disconnectPolicy = { mode = "degrade"; };
   };
@@ -1790,12 +1810,18 @@ d2b.zones.work.resources."corp-vm-yubikey" = {
    one same-Zone physical Device and one same-Zone reserved relay Endpoint.
 3. Two Services/USBIP resources that resolve to the same Host-scoped opaque
    physical key fail activation, including conflicts authored in different Zones.
-4. A `ResourceExport` targets an authority `SecurityKeyService` plus its local
-   Endpoint and declares the provider-neutral Service type/fingerprint. Exporting a
-   Device or Binding is rejected.
-5. A ResourceImport expects/projects the provider-neutral Service type. Nix cannot
-   author `mode=projection`; only Core creates it with
-   `ownerRef: ResourceImport/<name>`, and it has no Device or hidraw fields.
+4. A `ResourceExport` names only an authority `SecurityKeyService` through
+   `resourceRef`, `serviceType`, `projectionSchemaFingerprint`, and
+   `factoryFingerprint`. Its Service-owned Endpoint is not an Export field.
+   Exporting a Device or Binding is rejected, as are the obsolete Export
+   `endpointRef`, `exportedType`, `baseSchemaFingerprint`, and `exportKey`
+   fields.
+5. A ResourceImport's `expectedServiceType`,
+   `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`
+   match the Export and signed local factory. The obsolete `expectedType`,
+   `expectedBaseSchemaFingerprint`, and `projectionType` fields are rejected.
+   Nix cannot author `mode=projection`; only Core creates it with `ownerRef:
+   ResourceImport/<name>`, and it has no Device or hidraw fields.
 6. Every Binding base references a same-Zone Service and same-Guest User target;
    duplicate `(serviceRef, guestRef, userRef, policy-key)` intent is rejected.
 7. No cross-Zone ResourceRef, `hidrawPath`, sysfs path, serial-derived authority
@@ -1968,10 +1994,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | `packages/d2b-provider-device-security-key/src/controller.rs` |
-| Detailed design | One controller implements standard reconcile for local physical Devices, authority/projection SecurityKeyServices, and SecurityKeyBindings. It observes Devices; realizes an authority Service as relay Process/Endpoint; accepts projection Services only from Core/import; realizes each Binding as frontend Process/private Endpoint; enforces child-first finalizers and never creates an import or Device projection. |
-| Integration | Watches Device and both provider-neutral semantic types filtered by `providerRef=Provider/device-security-key`, plus Process, Endpoint, Guest/User, ResourceExport/Import, and dependency indexes; writes semantic base plus signed Provider-extension status/finalizers; drives relay-control messages. |
+| Detailed design | One controller implements standard reconcile for local physical Devices, authority/projection SecurityKeyServices, and SecurityKeyBindings. It observes Devices; realizes an authority Service as relay Process/Service-owned Endpoint; accepts projection Services only from Core/import after signed-factory admission; realizes each Binding as frontend Process/private Endpoint; enforces child-first finalizers and never creates an import or Device projection. Export/Import routing never treats an Endpoint as exported identity. |
+| Integration | Watches Device and both provider-neutral semantic types filtered by `providerRef=Provider/device-security-key`, plus Process, Endpoint, Guest/User, ResourceExport/Import, and Service/export/import-owner dependency indexes; writes semantic base plus signed Provider-extension status/finalizers; drives relay-control messages. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | `controller_reconcile.rs`, `service_binding_projection.rs`, `mutual_exclusion.rs`, `status_binding.rs`, and deletion/finalizer tests cover authority/projection/Binding branches, no Device projection, and no Volume API calls. |
+| Validation | `controller_reconcile.rs`, `service_binding_projection.rs`, `mutual_exclusion.rs`, `status_binding.rs`, and deletion/finalizer tests cover authority/projection/Binding branches, signed-factory admission before projection reconcile, Service-owned Endpoint isolation from Export/Import identity, no Device projection, and no Volume API calls. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 ### W-N03
@@ -2080,10 +2106,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | Signed Provider descriptor JSON for `Provider/device-security-key` in the provider package |
-| Detailed design | Signed descriptor: config; physical Device integration; implementation claim for the provider-neutral `security-key.d2bus.org` Service/Binding base schemas/fingerprints; strict `device-security-key.d2bus.org` spec/status extensions; authority/projection union and D097 descriptor; controller/relay/frontend/Endpoint templates; export/import adapter capability; ComponentSession services; empty ProviderStateSet; permission claims. |
+| Detailed design | Signed descriptor: config; physical Device integration; implementation claim for the provider-neutral `security-key.d2bus.org` Service/Binding base schemas/fingerprints; strict `device-security-key.d2bus.org` spec/status extensions; authority/projection union and D097 descriptor; a D096 projection factory with exact `serviceType`, `projectionSchemaFingerprint`, and semantic `factoryFingerprint`; controller/relay/frontend/Endpoint templates; export/import adapter capability; ComponentSession services; empty ProviderStateSet; permission claims. Provider/adapter identity is signed separately and Service-owned Endpoints are not factory or Export fields. |
 | Integration | Core ProviderDeployment verifies the signed descriptor, installs ResourceApiBinding and component descriptors, exposes service fingerprints to ComponentSession validation, and supplies permission claims/RBAC bindings. |
 | Data migration | Full d2b 3.0 reset; no provider descriptor import |
-| Validation | Descriptor schema validation, semantic-base versus Provider-extension fingerprints, exact type/no-alias tests, service inventory tests, permission claim tests, empty ProviderStateSet tests, and README/provider package conformance checks. |
+| Validation | Descriptor schema validation, semantic-base versus Provider-extension fingerprints, exact projection-schema/factory fingerprint derivation and stability under Provider/adapter identity changes, exact type/no-alias tests, service inventory tests, permission claim tests, empty ProviderStateSet tests, and README/provider package conformance checks. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 ### W-N11
@@ -2122,10 +2148,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | `nixos-modules/` resource compiler/eval assertions for physical Device, authority Service, ResourceExport/Import, and consumer Binding |
-| Detailed design | Compile the owner Device→Service→export and consumer import→projection-Service→Binding shape; reject authored projections, projection `spec.provider`, Device export/projection, cross-Zone refs, duplicate authorities/Bindings, paths, and any security-key/USB configuration that does not collide through the exact Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple after trusted identity resolution. |
-| Integration | Nix emits Device/authority Service/export/import/Binding; Core alone creates projection Service; bundle feeds Provider and authority-index admission. |
+| Detailed design | Compile the owner Device→Service→export and consumer import→projection-Service→Binding shape. Emit Export `resourceRef`, `serviceType`, `projectionSchemaFingerprint`, and `factoryFingerprint`, and matching Import `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`; the Import `exportKey` identifies the ResourceExport. Reject Export Endpoint/custom-key fields, authored projections, projection `spec.provider`, Device export/projection, cross-Zone refs, duplicate authorities/Bindings, paths, and any security-key/USB configuration that does not collide through the exact Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple after trusted identity resolution. |
+| Integration | Nix emits Device/authority Service/export/import/Binding with canonical D096 fields; Core alone creates projection Service; the Service controller alone owns relay/import-route Endpoints; bundle feeds Provider and authority-index admission. |
 | Data migration | Full d2b 3.0 reset; current Nix options migrate to v3 Zone resources without state import |
-| Validation | Nix eval tests for label resolution, `busClass=hidraw`, exclusive arbitration, Core-only projection without `spec.provider`, byte-identical USB/security-key physical backing tuple collision, Provider-private-class bypass rejection, prohibited fields, and providerRef resolution. |
+| Validation | Nix eval tests for label resolution, `busClass=hidraw`, exclusive arbitration, exact canonical Export/Import field emission and fingerprint matching, rejection of obsolete Export `endpointRef`/`exportedType`/`baseSchemaFingerprint`/`exportKey` and Import `expectedType`/`expectedBaseSchemaFingerprint`/`projectionType`, Core-only projection without `spec.provider`, byte-identical USB/security-key physical backing tuple collision, Provider-private-class bypass rejection, prohibited fields, and providerRef resolution. |
 | Removal proof | Supersedes current option shape only after v3 Zone resource option parity; legacy security-key/USBIP mutual-exclusion assertion is replaced by v3 resource assertion coverage. |
 
 ### W-N13
@@ -2220,10 +2246,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | `packages/d2b-provider-device-security-key/src/{resource_type,provider_extension,admission}.rs`; controller contracts; system-core Guest UHID authority-subresource DeviceGrant (common base lives under ADR046-provider-004) |
-| Detailed design | Bind the shared semantic authority/projection Service and Binding base versions/fingerprints from ADR046-provider-004, then define only the initial strict Provider extension and admission. The owner/Binding extension references the local physical Device/relay Endpoint and owns CTAPHID/fairness/frontend settings and observations. Projection is Core-owned by ResourceImport with `providerRef` plus semantic base/import fields, no `spec.provider`, and no Device/open; routing derives from the signed local descriptor, `providerRef`, and import record. Binding is operator intent and the initial extension realizes its frontend Process/private Endpoint. Standard Device remains physical only; provider-named ResourceType aliases are rejected. |
-| Integration | ResourceExport targets Service; ResourceImport creates projection Service; Binding references same-Zone Service; Core injects Guest UHID without a Device row. |
+| Detailed design | Bind the shared semantic authority/projection Service and Binding base versions/fingerprints from ADR046-provider-004, then define only the initial strict Provider extension and admission. The owner/Binding extension references the local physical Device/relay Endpoint and owns CTAPHID/fairness/frontend settings and observations. Projection is Core-owned by ResourceImport with `providerRef` plus semantic base/import fields, no `spec.provider`, and no Device/open; routing derives from the signed local descriptor, `providerRef`, and import record. Export admission binds the authority Service's `resourceRef` and `serviceType` to the signed projection-schema and factory fingerprints, never to its Endpoint. Binding is operator intent and the initial extension realizes its frontend Process/private Endpoint. Standard Device remains physical only; provider-named ResourceType aliases are rejected. |
+| Integration | ResourceExport targets Service with canonical type/fingerprint fields; ResourceImport supplies matching expected fields and creates projection Service; Binding references same-Zone Service; Service controllers retain Endpoint ownership; Core injects Guest UHID without a Device row. |
 | Data migration | Full d2b 3.0 reset; no legacy Device/claim projection import |
-| Validation | Fast schema/lifecycle conformance consumes the ADR046-provider-004 fixtures, accepts canonical minimal base without `spec.provider`, includes a fake alternate security-key Provider, and proves Device→provider-neutral Service→export→import→projection Service→provider-neutral Binding→frontend, projection `spec.provider` rejection, D088 status layering, strict base/Provider-extension separation, exact types with no aliases, strict ownership/finalizers, no Device projection, and no local hidraw open in consumer Zone. |
+| Validation | Fast schema/lifecycle conformance consumes the ADR046-provider-004 fixtures, accepts canonical minimal base without `spec.provider`, includes a fake alternate security-key Provider, and proves Device→provider-neutral Service→export→import→projection Service→provider-neutral Binding→frontend, exact canonical Export/Import fields, no Endpoint export, projection `spec.provider` rejection, D088 status layering, strict base/Provider-extension separation, exact types with no aliases, strict ownership/finalizers, no Device projection, and no local hidraw open in consumer Zone. |
 | Removal proof | Supersedes legacy frontend/import Device modeling; W-X06 removes udev mutation and W-X03 removes the legacy unit once Binding-owned realization is live. |
 
 ### Removal items
@@ -2320,10 +2346,10 @@ class.
 | Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
 | Reuse action | net-new (implement the signed security-key export/import adapter) |
 | Destination | `packages/d2b-provider-device-security-key/src/share_adapter.rs` |
-| Detailed design | Signed adapters admit ResourceExport only for an authority SecurityKeyService. Core invokes the signed semantic factory to create one projection SecurityKeyService with `ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, and no `spec.provider`; route selection comes from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version only, while adapter identity is authenticated separately by the signed Provider descriptor. They never project Device or auto-create Binding. Route Binding ceremonies over bounded encrypted named streams to the single authority fair queue; no FD/USBIP/hidraw/ref crosses Zones. |
+| Detailed design | Signed adapters admit ResourceExport only when `resourceRef` names an authority SecurityKeyService, `serviceType` is `security-key.d2bus.org.SecurityKeyService`, and `projectionSchemaFingerprint` plus `factoryFingerprint` match the signed semantic factory. ResourceImport must supply the corresponding `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`; its `exportKey` identifies the ResourceExport. The Service's relay Endpoint stays a Service-owned implementation child and is never an Export field. Core invokes the factory to create one projection SecurityKeyService with `ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, and no `spec.provider`; route selection comes from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version only, while adapter identity is authenticated separately by the signed Provider descriptor. They never project Device or auto-create Binding. Route Binding ceremonies over bounded encrypted named streams to the single authority fair queue; no FD/USBIP/hidraw/ref crosses Zones. |
 | Integration | Core export/import routing/projection lifecycle; W-N22 authority; W-N17 Endpoint streams; Nix/operator-authored Binding consumes the same-Zone projection. |
 | Data migration | Full d2b 3.0 reset; no cross-Zone sharing state |
-| Validation | Fast fake-stream conformance proves owner Service→export→import→projection Service→Binding→frontend, rejection of projection `spec.provider`, semantic factory-fingerprint stability when signed adapter identity changes, separate signed-descriptor identity authentication, one fair LeaseId-guarded ceremony, ciphertext to intermediaries, no Device projection/local hidraw/FD/USBIP, revocation degradation, and audit metadata only. |
+| Validation | Fast fake-stream conformance proves owner Service→export→import→projection Service→Binding→frontend; exact canonical Export/Import type and fingerprint fields; rejection of Export `endpointRef`, `exportedType`, `baseSchemaFingerprint`, and `exportKey` plus Import `expectedType`, `expectedBaseSchemaFingerprint`, and `projectionType`; rejection of projection `spec.provider`; semantic factory-fingerprint stability when signed adapter identity changes; separate signed-descriptor identity authentication; one fair LeaseId-guarded ceremony; ciphertext to intermediaries; no Device projection/local hidraw/FD/USBIP; revocation degradation; and audit metadata only. |
 | Removal proof | Not applicable (new surface) |
 
 ### W-N22
@@ -2373,7 +2399,7 @@ per-test budget.
 
 | Test file | What is tested |
 | --- | --- |
-| `resource_chain_conformance.rs` | Fast in-process owner chain: physical Device → authority `security-key.d2bus.org.SecurityKeyService`/Provider relay Endpoint → ResourceExport → ResourceImport → Core-owned projection Service (`ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, no `spec.provider`, Device, or hidraw) → Nix/operator `security-key.d2bus.org.SecurityKeyBinding` → Provider-realized Binding frontend Process/private Endpoint. Verifies local refs, ownership, finalizer order, semantic factory fingerprint independence from Provider/adapter identity, separately authenticated signed descriptor identity, and no Device projection. |
+| `resource_chain_conformance.rs` | Fast in-process owner chain: physical Device → authority `security-key.d2bus.org.SecurityKeyService`/Provider relay Endpoint → ResourceExport → ResourceImport → Core-owned projection Service (`ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, no `spec.provider`, Device, or hidraw) → Nix/operator `security-key.d2bus.org.SecurityKeyBinding` → Provider-realized Binding frontend Process/private Endpoint. Verifies canonical Export `resourceRef`/`serviceType`/`projectionSchemaFingerprint`/`factoryFingerprint`, matching Import `expectedServiceType`/`expectedProjectionSchemaFingerprint`/`expectedFactoryFingerprint`, rejection of obsolete Export and Import fields, Service-owned Endpoint isolation, local refs, ownership, finalizer order, semantic factory fingerprint independence from Provider/adapter identity, separately authenticated signed descriptor identity, and no Device projection. |
 | `provider_neutral_type_identity.rs` | Admits only the two exact `security-key.d2bus.org` ResourceTypes; rejects provider-named aliases and unknown variants; verifies `providerRef=Provider/device-security-key`, canonical minimal bases, strict authored `spec.provider`/`status.provider` schemas, projection `spec.provider` rejection, D088 status layering, and that physical Device, CTAPHID, hidraw, relay, UHID, queue, and ceremony fields cannot enter either semantic base schema. |
 | `ceremony_record_separation.rs` | Resource catalog/store contains Device, Service, Binding, Process, Endpoint, Export, and Import only; ceremony/session/LeaseId/CID/queue/cancel rows remain bounded high-churn records and cannot be admitted as Resource objects or ownerRef children. |
 | `controller_reconcile.rs` | Device observation creates no children; authority Service creates relay Process/Endpoint and physical DeviceGrant; projection Service is Core/import-only and creates no hidraw grant; Binding creates frontend Process/private Endpoint and system-core UHID grant; child-first deletion and no Volume calls. |
@@ -2394,7 +2420,7 @@ per-test budget.
 | Fixture | What is tested |
 | --- | --- |
 | `host_relay_guest_frontend/` | Authority Service relay receives fake hidraw DeviceGrant; Binding frontend receives system-core fake UHID grant; owned Endpoints establish Noise KK; 64-byte CTAPHID exchange translates/reverses CID with no Device projection |
-| `cross_zone_service_binding/` | Real processes exercise export/import projection Service plus Binding frontend over encrypted named stream; no FD/USBIP/hidraw open in consumer Zone; revocation degrades Binding |
+| `cross_zone_service_binding/` | Real processes exercise canonical type/fingerprint Export/Import fields, projection Service, and Binding frontend over an encrypted named stream; the relay/import-route Endpoints remain Service-owned and absent from Export/Import; no FD/USBIP/hidraw open occurs in the consumer Zone; revocation degrades Binding |
 | `fair_queue/` | Multiple Binding frontends serialize one authority ceremony; bounded wait returns `ERR_CHANNEL_BUSY` without disturbing active holder |
 | `usbip_mutual_exclusion/` | Host-wide trusted identity resolution produces the same `physical-usb-backing` tuple for USBIP and security-key; the second claim fails before either duplicate effect |
 
