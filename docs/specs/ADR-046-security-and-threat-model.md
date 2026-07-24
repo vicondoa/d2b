@@ -511,17 +511,29 @@ principal, or a wider capability merely by writing it into a request.
 
 **Closed verb sets.** Resource verbs: `get, list, watch, create, update-spec,
 update-status, update-metadata, update-finalizers, delete`. Session verbs:
-`connect, invoke, open-stream, attach, cancel, observe`. All verb tokens
+`connect, invoke, open-stream, relay, attach, cancel, observe`. All verb tokens
 outside this closed set are rejected with `role-unknown-verb-rejected`
 (RZC lines 3422-3430, adapted from `verb_requires_admin()` in the baseline
 `d2bd/src/admission.rs`).
 
+**Relay is narrow transport authority.** `relay` permits the exact
+already-authenticated ZoneLink/transport subject to forward one admitted
+invocation or stream to the route-selected next hop. It grants no resource
+CRUD, identity mapping, capability widening, FD/credential authority, or local
+lifecycle permission. It is core-generated and ZoneLink-scoped by default.
+Wildcard, self-asserted, Provider-authored, or ordinary operator-authored relay
+grants fail admission unless an already-authorized local administrator
+explicitly permits the exact bounded grant through durable admin policy.
+
 **Per-hop RBAC.** For every intermediate Zone hop in a ZoneLink chain, the
-forwarding d2b-bus performs a `relay` verb check against the local RBAC index
-before forwarding the frame — a Zone never grants authority beyond its own
-Role/RoleBinding evaluation, and forwarded calls are re-authorized at each
-hop (ZR lines 1526-1555, 1574-1601). This closes the historical "one relay
-hop is authorized, therefore every downstream hop is trusted" gap.
+forwarding d2b-bus performs two independent local checks before forwarding:
+`relay` for the authenticated adjacent-Zone transport subject and the immutable
+target verb for the invocation/stream. The final target checks the target verb
+again. A Zone never grants authority beyond its own Role/RoleBinding
+evaluation; missing relay, missing target authority, or unavailable policy
+state fails closed. This closes both the historical "one relay hop is
+authorized, therefore every downstream hop is trusted" gap and the converse
+"relay implies target authority" gap.
 
 **Wildcard restriction.** Explicit wildcard (`resourceNames: ["*"]`) is
 permitted only for core-controller-generated Roles. Operator-authored or
@@ -530,6 +542,8 @@ Provider Roles with a wildcard are rejected at admission with
 is the corresponding conformance test (RZC line 2985). An empty
 `resourceNames: []` for a non-core Role means "all names of this
 ResourceType" and is a distinct, narrower grant than `["*"]`.
+Relay is stricter: neither `["*"]` nor the empty/all-name form is accepted,
+including for core-generated relay Roles.
 
 **RoleBinding immutability and atomic deletion.** `spec.roleRef` is immutable
 after creation. Deletion is one atomic redb write transaction: RBAC index
@@ -1161,7 +1175,9 @@ when explicitly required and planned with ownership/state transfer, and full
 destructive factory reset remains a separate authorized path.
 
 **Endpoint resource (D092).** A stable endpoint is the `Endpoint` ResourceType,
-never a raw locator in spec/status/CLI: the base carries only closed
+never a raw locator in spec/status/CLI: `visibility` is exactly
+`owner|provider|zone`, with finer exact access in `consumerPolicy`; the base
+carries only closed
 class/transport/locality/purpose values and bounded fingerprints, and status
 carries no path/address/CID/port/fd/credential. Core/ProviderSupervisor resolves
 an `Endpoint` to a live transport/FD only through the EffectPort/LaunchTicket
@@ -1966,7 +1982,7 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None beyond the verb-table adaptation already tracked by `ADR046-zone-control-004` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store/tests/rbac_property.rs` |
-| Detailed design | Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers; (5) `relay` is accepted only as the canonical ZoneLink-scoped session verb with core-generated or explicit admin-policy provenance and exact target bounds; and (6) every forwarding hop independently requires relay plus the target verb Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs against the real redb-backed resource store test harness, not a mock |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic property test (`proptest`/`quickcheck`-style, minimum 10,000 cases per property) |

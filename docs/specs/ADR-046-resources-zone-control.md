@@ -1003,7 +1003,7 @@ status.
 | Field | Rule |
 | --- | --- |
 | `metadata.name` | Zone-unique ResourceName |
-| `metadata.ownerRef` | Optional; may be owned by a Provider (for generated Roles) or null for operator-created Roles |
+| `metadata.ownerRef` | Optional; may be owned by a Provider (for generated Roles), by a ZoneLink (for core-generated relay Roles), or null for operator-created Roles |
 | `metadata.finalizers` | Core adds `core.role-binding-drain` when a Role with active RoleBindings is deleted |
 | `metadata.deletionRequestedAt` | Set on operator delete or owning resource delete |
 
@@ -1085,6 +1085,7 @@ Unknown verbs are rejected at admission.
 | `connect` | Open a ComponentSession to a service |
 | `invoke` | Call a ttrpc method |
 | `open-stream` | Open a named stream |
+| `relay` | Forward an already-admitted invocation or stream to one authorized next ZoneLink hop |
 | `attach` | Transfer a local file descriptor |
 | `cancel` | Cancel an in-progress operation |
 | `observe` | Subscribe to service health/event notifications |
@@ -1092,6 +1093,31 @@ Unknown verbs are rejected at admission.
 Session verbs in a Role rule grant ComponentSession/d2b-bus access to the
 services bound by the same rule's `resourceTypes` and `zones` constraints.
 They are evaluated by the same native RBAC engine as resource verbs.
+
+`relay` is transport forwarding authority only. It permits the exact
+authenticated ZoneLink/transport subject to forward an invocation or named
+stream that has already passed admission to the next route-selected hop. The
+same hop independently evaluates the invocation's original target verb; a
+`relay` allow never satisfies that check. `relay` grants no resource read,
+create, update, or delete operation, identity mapping, capability widening,
+attachment right, credential access, or local lifecycle authority.
+
+A relay-bearing rule is admitted only when all of the following hold:
+
+- `relay` appears in `sessionVerbs`, never `verbs`;
+- `resourceTypes`, `resourceNames`, and `zones` exactly bound the forwarded
+  target; empty/all-name scope and every wildcard form are rejected;
+- the Role and RoleBinding are core-generated with `ownerRef` naming the
+  governing `ZoneLink`, and the binding's trusted external-principal selector
+  matches the exact enrolled adjacent-`Zone` transport subject; or an
+  already-authorized local administrator explicitly permits the same bounded
+  grant through the durable admin-policy path;
+- the request payload, Provider descriptor, and Provider/operator-authored
+  resource cannot assert core-generated or admin-policy provenance.
+
+Permission to create a Role or RoleBinding is not itself permission to grant
+`relay`. Missing `relay`, missing target-verb authority, stale policy, or
+unavailable policy state denies forwarding. There is no implicit relay grant.
 
 #### 5.3.3 Explicit wildcard form
 
@@ -1125,7 +1151,7 @@ Roles) must be enforced at admission. For non-core-controller Roles,
 | Rules per Role | 32 |
 | `resourceTypes` per rule | 16 |
 | `verbs` per rule | 16 (bounded by verb enum: currently 9 verbs) |
-| `sessionVerbs` per rule | 6 (bounded by session verb enum: currently 6 verbs) |
+| `sessionVerbs` per rule | 7 (bounded by session verb enum: currently 7 verbs) |
 | `subresources` per rule | 16 |
 | `resourceNames` per rule | 64 |
 | `executionRefs` per rule | 32 |
@@ -1223,7 +1249,7 @@ RoleBinding spec or status.
 | Field | Rule |
 | --- | --- |
 | `metadata.name` | Zone-unique ResourceName |
-| `metadata.ownerRef` | Optional; may be owned by the Provider that generates this binding |
+| `metadata.ownerRef` | Optional; may be owned by the Provider that generates this binding, or by the governing ZoneLink for a core-generated relay binding |
 | `metadata.finalizers` | No standard finalizer; core clears the binding on deletion without deferral (no downstream finalizer chain) |
 | `metadata.deletionRequestedAt` | Set on operator delete or owning resource delete |
 
@@ -1289,10 +1315,13 @@ subjects:
 Rules:
 
 - each subject is a `<ResourceType>/<resource_name>` ResourceRef in this Zone;
-- supported subject ResourceTypes: `User`, `Provider`, `Host`, `Guest`,
-  `Process`; other ResourceTypes are rejected at admission with
+- supported subject ResourceTypes: `Zone`, `User`, `Provider`, `Host`, `Guest`,
+  `Process`; a ResourceRef `Zone` subject can name only the store's self Zone,
+  while an enrolled adjacent-Zone transport subject is matched by
+  `externalPrincipalSelector`; other ResourceTypes are rejected at admission with
   `resource-schema-invalid`;
-- subjects list must be non-empty;
+- subjects list must be non-empty except for a core-generated, ZoneLink-owned
+  relay binding with one exact trusted `externalPrincipalSelector`;
 - duplicate subjects are rejected at admission;
 - a subject that does not currently exist as a resource causes `SubjectNotFound`
   condition (warning only, not Failed; the subject may be created later);
@@ -1322,6 +1351,9 @@ Rules:
 - external selectors are bounded in size (max 512 bytes canonical JSON);
 - `externalPrincipalSelector` and `subjects` may both be present; a request
   satisfies the binding if it matches either.
+- a core-generated relay binding uses an exact adjacent-Zone enrollment
+  selector and no broad subject-class selector; a peer cannot supply it in a
+  request.
 
 #### 6.3.4 (removed — no expiry field)
 
@@ -1351,6 +1383,8 @@ Rules:
   with `resource-schema-invalid`;
 - narrowed rules are the intersection of the Role rules and the narrowing
   rules;
+- `sessionVerbs`, including `relay`, are intersected exactly like resource
+  verbs; narrowing cannot add relay or remove its exact target bounds;
 - `scopeNarrowing: null` means the full Role is granted without restriction;
 - scope narrowing affects only this RoleBinding; the referenced Role is
   unchanged.
@@ -2524,7 +2558,7 @@ The `authorization` handler reconciles Role and RoleBinding:
 
 1. **Role reconciliation**:
    a. Validate rules (verbs, ResourceType names, ref formats, explicit wildcard
-      restriction).
+      restriction, and relay origin/ZoneLink/target bounds).
    b. Build index entry: for each (subject, Zone, ResourceType, verb, subresource,
       resourceNames, executionRefs) tuple, add an allow entry.
    c. Write `IndexBuilt=True`, `phase=Ready`.
@@ -2535,11 +2569,14 @@ The `authorization` handler reconciles Role and RoleBinding:
    b. Resolve each subject in `subjects` to current UID; note unresolved.
    c. Resolve `externalPrincipalSelector` if present.
    d. Apply `scopeNarrowing` as an intersection with Role rules.
-   e. Honor operator revocation state and any pending deletion request.
-   f. Build index entry: for each subject × (narrowed rule) add allow entry.
-   g. Increment Role `activeBindingCount`.
-   h. Write `phase=Ready`, `IndexBuilt=True`, `roleResolved=true`.
-   i. Invalidate authorization caches for all covered subjects.
+   e. For a relay-bearing Role, verify the exact adjacent-Zone enrollment
+      selector, governing ZoneLink owner, and core-generated or explicit
+      admin-policy provenance.
+   f. Honor operator revocation state and any pending deletion request.
+   g. Build index entry: for each subject × (narrowed rule) add allow entry.
+   h. Increment Role `activeBindingCount`.
+   i. Write `phase=Ready`, `IndexBuilt=True`, `roleResolved=true`.
+   j. Invalidate authorization caches for all covered subjects.
 
 3. **Index swap**: After every batch of Role/RoleBinding commits, the
    authorization handler atomically swaps the in-memory evaluator to the new
@@ -2806,6 +2843,7 @@ Stable error codes for Zone control types:
 | `provider-dependency-cycle` | Provider dependency alias creates a cycle |
 | `role-wildcard-denied` | Explicit wildcard attempted by non-core-controller Role |
 | `role-unknown-verb` | Rule contains an unknown verb token |
+| `role-relay-grant-restricted` | Relay is unbounded, self-asserted, lacks ZoneLink ownership/exact adjacent-Zone enrollment selector, or lacks explicit admin-policy provenance |
 | `role-unknown-resource-type` | Rule names a ResourceType not in Zone API catalog |
 | `rolebinding-role-not-found` | `roleRef` does not resolve to an existing Role |
 | `rolebinding-subject-type-invalid` | Subject ResourceType is not a permitted subject type |
@@ -3061,6 +3099,11 @@ Eval-time validations: `spec.rules[*].verbs` against the closed verb enum;
 `spec.rules[*].executionRefs` format if non-empty. `spec.rules[*].resourceTypes`
 validation against the Zone API catalog is deferred to Phase 2 (catalog requires
 loading Provider manifests; core types are known at eval time).
+Generated option help lists all seven session verbs and describes `relay` as
+ZoneLink-scoped forwarding only. Nix recognizes `relay` as a session-verb token,
+but Phase 2 admission still rejects an unbounded, wildcard, Provider-asserted,
+or ordinary operator-authored relay grant unless explicit admin policy permits
+that exact bounded grant.
 
 ### 14.5 RoleBinding authoring
 
@@ -3767,6 +3810,11 @@ Rollback atomically:
 | Test | Assertion |
 | --- | --- |
 | `role-unknown-verb-rejected` | Rule with an unknown verb token fails admission |
+| `role-relay-core-zonelink-admitted` | Core-generated, ZoneLink-owned Role/RoleBinding with an exact adjacent-Zone enrollment selector and exact target bounds admits `relay` |
+| `role-relay-missing-denied` | A forwarding hop without `relay` fails closed even when the target verb is allowed |
+| `role-relay-target-verb-required` | `relay` alone cannot authorize the forwarded invocation/stream target verb |
+| `role-relay-provider-self-assertion-rejected` | A Provider- or payload-asserted relay grant is rejected |
+| `role-relay-wildcard-rejected` | Relay with empty/all-name or wildcard target scope is rejected, including for a core-generated Role |
 | `role-unknown-resource-type-rejected` | Rule naming a ResourceType not in Zone API catalog is rejected |
 | `role-wildcard-non-core-rejected` | Non-core-controller Role with `resourceNames: ["*"]` is rejected |
 | `role-wildcard-core-permitted` | Core-generated Role with `resourceNames: ["*"]` is admitted |
@@ -3815,8 +3863,10 @@ Rollback atomically:
 | `nix-eval-name-length-enforced` | Resource name of 129 characters fails eval |
 | `nix-eval-verb-closed-enum` | Rule with verb `"delete-all"` (unknown) fails eval |
 | `nix-eval-session-verb-closed-enum` | Rule with `sessionVerbs=["sudo"]` fails eval |
+| `nix-eval-relay-session-verb-known` | `sessionVerbs=["relay"]` reaches Phase 2 as the canonical token; placing `relay` in `verbs` fails eval |
+| `nix-build-relay-scope-restricted` | Unbounded, wildcard, or Provider/self-asserted relay configuration fails before bundle activation |
 | `nix-eval-roleref-format` | `roleRef="role/foo"` (wrong case) fails eval |
-| `nix-eval-subject-type-restricted` | Subject `"Process/foo"` (non-permitted type) fails eval |
+| `nix-eval-subject-type-restricted` | Subject `"Device/foo"` (non-permitted type) fails eval |
 | `nix-eval-no-duplicate-subjects` | Two identical subjects in one RoleBinding fails eval |
 | `nix-eval-no-cross-zone-ref` | Subject `"dev/Role/foo"` (Zone-prefixed) fails eval |
 | `nix-eval-bootstrap-provider-rejected` | `d2b.zones.dev.resources.system-core = { type = "Provider"; ... }` fails eval with named assertion |
@@ -4194,10 +4244,10 @@ None of the following exist in baseline:
 | Current source | `packages/d2bd/src/admission.rs` (`PeerRole::{Admin, Launcher, HostShutdown}`, `PeerIdentity`, `authorize_peer()`, `verb_requires_admin()`, `verb_allowed_for_host_shutdown()` — `implemented-and-reachable`, baseline `b5ddbed6`); `packages/d2b-daemon-access/src/lib.rs` (`LocalUnixAllowlistRole::{Admin, Launcher}`, `DaemonAccessPolicyRole::RealmAdmin`, `DaemonAccessDecision`, `MappedDaemonAccessPrincipal`, `map_local_unix_daemon_access()` — `implemented-and-reachable`); Role resource schema and RBAC index: `ADR-only` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/role.rs`; `packages/d2b-core-controller/src/authz.rs` |
-| Detailed design | Role resource schema with rule schema from §5.3 and resolved bounds (32 rules, 16 resourceTypes per rule, 64 resourceNames, 32 executionRefs); verb enum; explicit wildcard enforcement; index builder; phase/conditions; `role-binding-drain` finalizer; Nix Role options; audit/OTEL instrumentation Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`verb_requires_admin()` verb table → Role verb enum; `DaemonAccessDecision` error types → Role admission errors; `MappedDaemonAccessPrincipal` → subject identity model). |
+| Detailed design | Role resource schema with rule schema from §5.3 and resolved bounds (32 rules, 16 resourceTypes per rule, 64 resourceNames, 32 executionRefs); separate closed resource/session verb enums including `relay`; core-generated ZoneLink ownership, exact adjacent-Zone enrollment selector, exact target bounds, and explicit admin-policy exception admission; explicit wildcard enforcement; index builder; phase/conditions; `role-binding-drain` finalizer; generated Nix Role option help; audit/OTEL instrumentation Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`verb_requires_admin()` verb table → Role verb enum; `DaemonAccessDecision` error types → Role admission errors; `MappedDaemonAccessPrincipal` → subject identity model). |
 | Integration | Authorization evaluator (ADR046-api-002) reads Role index entries; core `authz` handler owns reconcile loop |
 | Data migration | Initial Roles generated from Nix config; no v2 Role resource import |
-| Validation | All §15.4 Role tests including the resolved bounds checks |
+| Validation | All §15.4 Role tests including closed-enum, relay origin/scope/target-verb, and resolved-bounds checks |
 | Removal proof | `daemon-access` capability enum removed after RBAC Role engine covers all access decisions |
 
 ### ADR046-zone-control-005
@@ -4239,10 +4289,10 @@ None of the following exist in baseline:
 | Current source | `nixos-modules/options-realms.nix` (`providerKind = "^[a-z][a-z0-9-]*$"` label regex matching `LABEL_PATTERN` in `ids.rs`; `providerType` submodule with `enable`/`kind`/`placement`/`freeformType` fields; `d2b.realms.<realm>.providers.*` attrset — `generated-or-eval-contract`, baseline `b5ddbed6`); `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.workloads.*` submodule shape — `generated-or-eval-contract`); `d2b.zones.*` Nix options: `ADR-only` |
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-zones.nix`; `nixos-modules/resources-zone-control.nix`; extended `nixos-modules/index.nix` |
-| Detailed design | `d2b.zones.<zone>.*` Nix options for Zone/ZoneLink/Provider/Role/RoleBinding/Quota/EmergencyPolicy authoring; compiler-only scalar `parentZone` required on non-root Zones and forbidden on `local-root`; Nix eval-time validation of parent existence, one resolved parent, self/cycle rejection, 16-name ancestry depth, ResourceRefs, verb enums, digest format, subject types, child-local ZoneLink self-name/one-uplink/local transport-ref constraints, and the no-expiry RoleBinding model; canonical JSON serialization; generation-bound resource bundle output; the compiler seals the validated parent map into allocator bootstrap topology without emitting `parentZone` into `Zone.spec` or reciprocal resources Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (`providerType` submodule → Provider option submodule; label regex `^[a-z][a-z0-9-]*$` retained unchanged; `placement` option → Provider component placement; `d2b.realms.*` option namespace → `d2b.zones.*` option namespace). |
+| Detailed design | `d2b.zones.<zone>.*` Nix options for Zone/ZoneLink/Provider/Role/RoleBinding/Quota/EmergencyPolicy authoring; compiler-only scalar `parentZone` required on non-root Zones and forbidden on `local-root`; Nix eval-time validation of parent existence, one resolved parent, self/cycle rejection, 16-name ancestry depth, ResourceRefs, separate resource/session verb enums (including session-only `relay`), relay origin/scope restrictions, digest format, subject types, child-local ZoneLink self-name/one-uplink/local transport-ref constraints, and the no-expiry RoleBinding model; generated help carries the relay semantics; canonical JSON serialization; generation-bound resource bundle output; the compiler seals the validated parent map into allocator bootstrap topology without emitting `parentZone` into `Zone.spec` or reciprocal resources Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (`providerType` submodule → Provider option submodule; label regex `^[a-z][a-z0-9-]*$` retained unchanged; `placement` option → Provider component placement; `d2b.realms.*` option namespace → `d2b.zones.*` option namespace). |
 | Integration | Nix compiler → sealed allocator topology for `parentZone`; resource compiler → configuration publication handler → Zone store; bootstrap Provider records auto-generated |
 | Data migration | Full reset; Nix realm options (`d2b.realms.*`) remain until purge wave |
-| Validation | nix-unit vectors for each Zone control type schema; cross-field constraint tests; rendered JSON contract tests (`make test-drift`) |
+| Validation | nix-unit vectors for each Zone control type schema; closed resource/session verb and relay restriction vectors; cross-field constraint tests; rendered JSON contract tests (`make test-drift`) |
 | Removal proof | `nixos-modules/options-realms.nix` and related realm options removed only after Zone resource Nix integration is live |
 
 ### ADR046-zone-control-008
@@ -4435,7 +4485,7 @@ Evidence class for all: `main-reuse-source`.
 | Detailed design | Consume the generator and registry established by ADR046-routing-011 to declare the unified `d2b.zones.<zone>.resources.<name>` option tree plus the Zone-level compiler-only `parentZone` scalar. The generated standard registry is exactly the canonical 19 types (`Zone`, `ZoneLink`, `Provider`, `Host`, `Guest`, `Process`, `EphemeralProcess`, `Network`, `Volume`, `Credential`, `Device`, `Endpoint`, `User`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `ResourceExport`, `ResourceImport`), and every standard type has a strict generated `spec` submodule carrying the schema's Nix types, defaults, bounds, and documentation. Installed Provider artifacts may append only signed qualified ResourceTypes whose strict schema has been verified and generated into the evaluated option set. `type` is selected from that closed combined registry: an unknown standard string, an unqualified extension, or a qualified type without an installed verified schema fails evaluation; there is no unrestricted string or free-form `spec` fallback. Require `parentZone` on every non-root Zone and forbid it on `local-root`; resolve it against declared Zone keys, reject self-parent/conflicting module definitions/cycles, and cap each ancestry path at 16 Zone names. Compile the validated map into sealed allocator bootstrap topology; never emit it into the resource bundle or `Zone.spec`. Declare the global `d2b.artifacts.<id>` catalog with `package` (types.package, required) and `type` (closed enum, required). Provider `spec.artifactId` is a plain catalog ID; the derivation is not a `spec` field. Implement the Phase 1 cross-resource assertions (§14.10 Phase 1 table); retain `credentialRef`, `resourceRef`, and `closedEnum` helpers; reject operator-authored `Zone`; and enforce child-local ZoneLink topology. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to the dedicated Host admission gate. Provider manifest-derived fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) are read-only and setting one is an eval error. |
 | Integration | ADR046-routing-011 supplies the one canonical 19-type registry and generated option family; validated `parentZone` feeds the allocator bootstrap sealer; the closed `d2b.zones.<zone>.resources.*` tree is consumed by ADR046-zone-control-015; the Zone controller (ADR046-zone-control-001) reads the resulting bundle; Provider package conventions come from ADR046-zone-control-003 |
 | Data migration | Replace `nixos-modules/options-realms.nix`-derived option trees once Zone controller is live and has reached parity |
-| Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema |
+| Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-session-verb-closed-enum`, `nix-eval-relay-session-verb-known`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); Phase 2 runs `nix-build-relay-scope-restricted`; drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema |
 | Removal proof | `nixos-modules/options-realms.nix`, `nixos-modules/realm-controller-config-json.nix`, `nixos-modules/realm-identity-config-json.nix` deleted after Zone controller and resource compiler reach full parity; `nixos-modules/assertions.nix` lines referencing `allowUnsafeLocal`/realm names removed after Host admission validation replaces them |
 
 ### ADR046-zone-control-015

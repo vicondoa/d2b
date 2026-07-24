@@ -303,7 +303,8 @@ rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll,
 resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut);
 replace `RealmSessionAuthority` with Zone principal + RBAC binding;
 replace `BootstrapBinding`/`EnrollmentBinding` with v3 ZoneLink enrollment
-records; add `relay` verb check per hop; adapt shortcut model to ZonePath.
+records; add independent `relay` and target-verb checks per forwarding hop;
+adapt shortcut model to ZonePath.
 
 **Excluded ADR45 assumptions**:
 - `CredentialCustody::GatewayGuest` maps to the ADR45 constellation gateway
@@ -467,10 +468,11 @@ capability is covered. There is no per-hop RBAC subject/verb check.
 
 **ADR 0046 mapping:**
 v3 adds a **RBAC layer above the allocated capability scope**: at each hop, the
-intermediate Zone evaluates a `relay` verb check against the forwarded
-principal's RoleBinding. Capability-scope propagation from
-`RouteNamespaceAllocation` is preserved. The delta (RBAC relay verb check)
-is genuinely new; it does not exist anywhere in the current baseline.
+intermediate Zone evaluates both the target verb and a separate `relay` verb
+against the authenticated adjacent-Zone subject's RoleBinding.
+Capability-scope propagation from `RouteNamespaceAllocation` is preserved.
+The dual RBAC check is genuinely new; it does not exist anywhere in the current
+baseline.
 
 ### Realm config artifacts
 
@@ -1629,7 +1631,8 @@ subject mapped from the ZoneLink's enrolled identity:
 
 ```
 child-local subject = child RoleBinding that:
-  - names the parent Zone's link principal as its subjectRef
+  - matches the parent Zone's enrolled link principal with a trusted exact
+    externalPrincipalSelector
   - grants only the verbs/resourceTypes/names declared in the binding
   - has a capability scope no wider than the allocator-issued scope
 ```
@@ -1641,12 +1644,19 @@ parent identity, not from the forwarded request payload.
 
 Authorization at each hop is independent:
 
-- The parent authorizes the outbound forwarded call using parent-local RBAC.
-- The intermediate Zone authorizes relay using its own RBAC.
-- The target child authorizes the final call using child-local RBAC.
+- The source Zone authorizes the caller's target verb before selecting a route.
+- Each intermediate Zone authenticates the inbound adjacent-Zone transport
+  subject, then independently authorizes both `relay` and the immutable target
+  verb using its own RBAC.
+- The target child authenticates its inbound adjacent-Zone subject and
+  authorizes the final target verb using child-local RBAC.
 
 A child that has not bound a matching parent RoleBinding refuses the call
-with `authorization-denied`. No ambient cross-Zone authority exists.
+with `authorization-denied`. A forwarding Zone without the separate `relay`
+grant returns `relay-denied`. `relay` is core-generated/ZoneLink-scoped and
+permits only one route-selected next hop; it grants no CRUD, identity mapping,
+capability widening, attachment/credential access, or local lifecycle
+authority. No ambient cross-Zone authority exists.
 
 ### Capability floor at local root
 
@@ -1673,17 +1683,23 @@ Parent ResourceClient
 At each intermediate hop, d2b-bus:
 
 1. Verifies the inbound ComponentSession's `AuthenticatedSubjectContext`.
-2. Evaluates local RBAC for the `relay` verb with the forwarded
-   ResourceType and target Zone name.
-3. Decrements the hop counter; refuses if zero.
-4. Opens the allocator-bound ComponentSession represented by the next child
+2. Evaluates local RBAC for the forwarded target verb with the immutable
+   ResourceType/service, resource name, and target Zone.
+3. Separately evaluates local RBAC for the `relay` session verb against the
+   authenticated inbound Zone transport subject, governing ZoneLink, exact
+   target bounds, and route-selected next hop.
+4. Fails closed if either check or policy state is missing; no grant is inferred
+   from a prior hop.
+5. Decrements the hop counter; refuses if zero.
+6. Opens the allocator-bound ComponentSession represented by the next child
    Zone's local uplink.
-5. Re-serializes the request with the decremented hop counter; preserves
+7. Re-serializes the request with the decremented hop counter; preserves
    the original operation/idempotency/correlation/trace IDs unchanged.
-6. Returns the child response to the inbound caller.
+8. Returns the child response to the inbound caller.
 
 Relay is a distinct RBAC verb. Intermediate Zones may deny relay without
-blocking local resource calls.
+blocking local resource calls. A relay allow never supplies the target-verb
+allow.
 
 ### No cross-Zone resource references
 
@@ -1738,7 +1754,9 @@ be forwarded through a ZoneLink if:
 - the target service is declared in a child Zone Provider's service
   descriptor;
 - the call's `purpose` class is `remote-zone`;
-- RBAC at each hop grants the `relay` verb for the service name;
+- RBAC at each forwarding hop grants both `relay` for the authenticated
+  adjacent-Zone subject and the target session verb (`connect`, `invoke`, or
+  `open-stream`) for the exact service/method/stream;
 - the hop count does not exceed the fixed protocol limit of 16.
 
 The forwarded session carries:
@@ -1841,9 +1859,10 @@ more credit than its downstream grants it. A source that exceeds its hop-1
 credit budget blocks rather than buffering unboundedly.
 
 Named streams inherit the `purpose`, `service`, and `schema fingerprint`
-of the originating session. They are not re-authenticated at each hop;
-the authentication is carried in the original KK ComponentSession
-prologue.
+of the originating session. At every hop the adjacent ZoneLink transport
+subject is authenticated by that hop's KK ComponentSession and local RBAC
+separately requires `relay` plus `open-stream` for the immutable target. No
+forwarded payload may self-assert the subject or either authorization result.
 
 ### Direct shortcuts
 
@@ -1875,6 +1894,10 @@ Shortcuts are authorized using `ZoneRouteEngine::decide_direct_shortcut`
 A shortcut is optional optimization metadata. Absence of a shortcut does
 not break routing; the tree relay path remains authoritative. Shortcuts
 are not provisioned without explicit policy authorization.
+Shortcut establishment does not convert `relay` into target authority: every
+tree hop must admit the setup under its bounded relay and target scope, and
+every operation on the resulting direct session is authorized for its target
+verb at the destination.
 
 ## No FD, credential, or host path forwarding
 
@@ -2064,11 +2087,12 @@ RBAC at each hop:
 
 ```
 K0:  subject=User/alice verb=get resourceType=Process zone=K2
-     -> K0 Role allows relay to K1 for Process/get in K2
-K1:  subject=K0-link-principal verb=relay resourceType=Process zone=K2
-     -> K1 Role allows relay to K2 for Process/get
-K2:  subject=K1-link-principal verb=get resourceType=Process name=web-server
-     -> K2 Role allows K1-link-principal to get Process/web-server
+     -> K0 Role admits the target operation before route selection
+K1:  subject=Zone/k0 verbs=[relay,get] resourceType=Process
+     name=web-server zone=K2
+     -> K1 RoleBinding independently allows one-hop forwarding and target get
+K2:  subject=Zone/k1 verb=get resourceType=Process name=web-server
+     -> K2 Role allows the authenticated adjacent Zone to get Process/web-server
 ```
 
 ### Simple K0/K1 example (local Host + remote Guest)
@@ -2170,7 +2194,8 @@ included in span attributes.
 | `zone-link-intent-queue-full` | Intent queue reached `spec.limits.maxPendingIntents` |
 | `hop-limit-exceeded` | Forwarded call has no remaining hops |
 | `malformed-hop-count` | Hop counter in inbound frame claims more hops than allowed |
-| `relay-denied` | Intermediate Zone's RBAC denied relay |
+| `relay-denied` | Intermediate Zone lacks the exact ZoneLink-scoped relay grant |
+| `authorization-denied` | A source, intermediate, or target Zone denied the forwarded operation's target verb |
 | `attachment-not-permitted-over-zone-link` | FD attachment rejected on ZoneLink transport |
 | `zone-route-not-found` | No ZoneLink path exists to the target Zone |
 | `zone-route-capability-denied` | Required capability absent from route |
@@ -2190,7 +2215,8 @@ credentials, or provider diagnostics.
 ### Security invariants
 
 1. A Zone never grants authority beyond its own Role/RoleBinding evaluation.
-   Forwarded calls are re-authorized at each hop.
+   Forwarded calls require the target verb at each hop and a separate `relay`
+   allow at each forwarding hop.
 2. A child Zone's resource status is not inferred from local intents; the
    parent only learns child state from authenticated responses.
 3. The KK handshake verifies the allocator-sealed enrolled identity and
@@ -2311,7 +2337,7 @@ The following transitions are NOT simple textual renames:
 
 1. **`RealmControllerPlacement` enum → private Zone runtime bootstrap placement + explicit parent topology + child-local uplink identity**: 6 variants collapse into per-Zone bootstrap configuration; compiler-only `parentZone` selects the allocator owner, and the child-local ZoneLink's `childZoneName`/`transportProviderRef` supplies transport state. The compiler seals the parent edge into allocator state. Placement and `parentZone` are not public `Zone.spec` fields; `Zone.spec` is `{}`.
 2. **`WorkloadId` → Guest/Host split**: VM/sandbox workloads become `Guest`; local/bare-metal become `Host`. Classification is semantic, not mechanical.
-3. **`CapabilitySet`-only authz → RBAC + allocated capability scope**: current engine checks a route allocation scope only. Per-hop `relay` verb RBAC is new.
+3. **`CapabilitySet`-only authz → RBAC + allocated capability scope**: current engine checks a route allocation scope only. Independent per-hop target-verb and `relay` RBAC is new.
 4. **`RealmPath` DNS target form → Zone resource path**: grammar preserved; wire address format changes.
 5. **`EntrypointMode` enum → child-local ZoneLink transport plus topology projection**: `HostResident`/`GatewayBacked` mode is replaced by the child's transport spec; parent routing and CLI inspection use sealed topology and authenticated route projection state.
 6. **`realm-controllers.json`/`realm-identity.json` → sealed parent topology + child-local Zone/ZoneLink state**: data is loaded today but routing/trust sessions are explicitly inert.
@@ -2320,7 +2346,7 @@ The following transitions are NOT simple textual renames:
 | Item | Treatment |
 | --- | --- |
 | Behavior retained | Pure in-memory NCA tree-walk; loop/multi-parent detection; advertisement replay-window; allocated capability-scope propagation; idempotency dedup full 6-tuple `(realm, principal, node, operation_kind, idempotency_key)`; fail-closed on unknown realm/route; bounded audit label cardinality; `TreeRoutePath`/`TreeRouteHop` already exist (rename to ZoneRoutePath/ZoneRouteHop); `DirectShortcut*` machinery already exists; `RouteAuditEventKind` event set already exists |
-| Required delta | Consume the canonical ZoneLink ResourceType spec/status/intent contract from ADR046-zone-control-002; compiler-only validated `parentZone` map sealed into allocator bootstrap topology; RBAC `relay` verb check per intermediate hop; watch cursor resync over ZoneLink; named-stream credit forwarding; hop counter byte in wire frames; no-FD/credential structural rejection at serialization boundary; private Zone runtime bootstrap placement (replaces placement enum, not a public spec field); per-hop subject narrowing |
+| Required delta | Consume the canonical ZoneLink ResourceType spec/status/intent contract from ADR046-zone-control-002; compiler-only validated `parentZone` map sealed into allocator bootstrap topology; independent target-verb plus canonical `relay` RBAC checks per intermediate hop; watch cursor resync over ZoneLink; named-stream credit forwarding; hop counter byte in wire frames; no-FD/credential structural rejection at serialization boundary; private Zone runtime bootstrap placement (replaces placement enum, not a public spec field); per-hop subject narrowing |
 | Reuse path | Copy and adapt `RouteTreeEngine` (rename RealmPath→ZonePath, RouteId→ZoneRouteId); copy `RouteAdvertisement`/`RouteNamespaceAllocation`/`TreeRoutePath`/`TreeRouteHop`/`RouteFailClosedReason`/`DirectShortcut*`/`RouteAuditEventKind`; copy `OperationRouter` idempotency dedup; extract `RealmEntrypointTable` suffix-match into ZoneEntrypointResolver; adapt KK handshake from `SecurePeerSession`/`PeerSession` |
 | Replacement/deletion | `RealmEntrypointTable`/`RouteTreeEngine` on RealmPath types retire after ZoneRouteEngine live; `RemoteNodeRegistry` retires when ZoneLink controller live; `WorkloadTargetIndex` retires when Guest/Host resource lookup live; CLI `Route::GatewayBacked` retires when ZoneLink handles all cross-Zone routing; `realm-controllers.json`/`realm-identity.json` retire when sealed `parentZone` topology, runtime Zone identity, and ZoneLink transport state replace them |
 | Feasibility proof | `route_engine.rs` inline test suite (45 functions at line 1202) proves NCA, advertisement, loop, capability, replay, DirectShortcut; `target_resolver.rs` tests prove suffix match; `lib.rs` tests prove idempotency dedup namespace |
@@ -2404,10 +2430,10 @@ The following transitions are NOT simple textual renames:
 | Reuse source | Same v3 baseline commit `b5ddbed6` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-bus/src/zone_route.rs` (cross-Zone bus routing), `packages/d2b-bus/src/relay.rs` (per-hop relay handler) |
-| Detailed design | Cross-Zone routing path in d2b-bus: ZoneEntrypointResolver consumes sealed topology plus authenticated route projections → ZoneRouteEngine::decide_route → admitted ComponentSession established by each next-hop child's local ZoneLink; hop-counter decrement and enforcement; RBAC `relay` verb check at each intermediate hop; idempotency key namespace (full 6-tuple) in ZoneLinkIdempotencyKey; pinned reverse path tracking; cancellation forwarding; watch cursor forwarding and revision-expired handling; no-FD/credential structural rejection at serialization boundary. No parent route step performs Resource API Get/List/Watch on ZoneLink Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Cross-Zone routing path in d2b-bus: ZoneEntrypointResolver consumes sealed topology plus authenticated route projections → ZoneRouteEngine::decide_route → admitted ComponentSession established by each next-hop child's local ZoneLink; hop-counter decrement and enforcement; independent target-verb plus canonical ZoneLink-scoped `relay` checks at each intermediate hop; idempotency key namespace (full 6-tuple) in ZoneLinkIdempotencyKey; pinned reverse path tracking; cancellation forwarding; watch cursor forwarding and revision-expired handling; no-FD/credential structural rejection at serialization boundary. No parent route step performs Resource API Get/List/Watch on ZoneLink Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | ResourceClient → d2b-bus → ZoneLink CS → intermediate zone → target zone; cancel/watch/stream all use the same routing path |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | End-to-end K0→K1→K2 resource call; relay-denied/hop-limit/FD-rejection tests; idempotency namespace collision tests; cancellation delivery tests; watch resync tests |
+| Validation | End-to-end K0→K1→K2 resource call; relay-missing, target-verb-missing, wildcard/self-asserted relay, hop-limit, and FD-rejection tests; prove relay alone grants no CRUD/local lifecycle; idempotency namespace collision tests; cancellation delivery tests; watch resync tests |
 | Removal proof | Old direct-dispatch and gateway-backed paths retired per bus routing parity |
 
 ### ADR046-routing-006
@@ -2503,7 +2529,7 @@ The following transitions are NOT simple textual renames:
 | Detailed design | Retain `ProviderRegistry`/`ProviderRegistryBuilder`/`ProviderRegistryManager` lifecycle verbatim; adapt `SessionIdentity` to carry `ZonePath` instead of `RealmId`; adapt `AdmissionOptions::peer_role` to v3 Zone principal + RBAC binding; adapt `ProviderDescriptor` schema version to v3; `RegistryLimits` unchanged; `RpcProviderProxy` field adaptations to match v3 session identity; `ProviderInstance` variants retain all 11 types Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Zone runtime `ProviderComposition` builds a `ProviderRegistry` per Zone; Provider resource controller admits calls through `ProviderRegistry::admit()` |
 | Data migration | None (pure runtime) |
-| Validation | Port inline registry lifecycle/drain/shutdown tests; add v3 ZonePath routing test; add RBAC relay-verb check at provider admission |
+| Validation | Port inline registry lifecycle/drain/shutdown tests; add v3 ZonePath routing test; prove provider admission cannot self-assert relay and each forward requires relay plus the target verb |
 | Removal proof | Provider registry is v3 core infrastructure; no retirement |
 
 ### ADR046-routing-015
@@ -2532,10 +2558,10 @@ The following transitions are NOT simple textual renames:
 | Main reuse source | `packages/d2b-realm-router/src/service_v2.rs` (commit `a1cc0b2d`): same symbols, unchanged from v3 baseline in the main commit. All evidence class notes apply equally to main. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-zone-routing/src/service.rs` |
-| Detailed design | Rename `RealmServiceServer` → `ZoneServiceServer`; service wire name `d2b.realm.v2.RealmService` → `d2b.zone.v3.ZoneService`; rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll, resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut, revoke_shortcut→revoke-zone-shortcut, report_shortcut_close→report-zone-shortcut-close, inspect→zone-inspect) and add list/watch topology-projection methods. The read-only projection starts from the sealed sorted `{ childZone, parentZone }` compiler input and joins only authenticated, admitted `ZoneRouteEngine` route/projection status. It exposes no ZoneLink resource name, UID, spec, status, Provider ref, fingerprint, transport setting, or handle. Replace `RealmSessionAuthority` with Zone principal + RBAC binding; replace `BootstrapBinding` with allocator-issued PSK binding associated with the child's local ZoneLink; replace `EnrollmentBinding` with the corresponding KK enrollment record; add `relay` verb RBAC check per hop; adapt shortcut model to ZonePath addressing; `RealmServiceLimits` defaults preserved; `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s` preserved; `CredentialCustody::GatewayGuest` excluded (all ZoneLink sessions are direct KK) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
+| Detailed design | Rename `RealmServiceServer` → `ZoneServiceServer`; service wire name `d2b.realm.v2.RealmService` → `d2b.zone.v3.ZoneService`; rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll, resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut, revoke_shortcut→revoke-zone-shortcut, report_shortcut_close→report-zone-shortcut-close, inspect→zone-inspect) and add list/watch topology-projection methods. The read-only projection starts from the sealed sorted `{ childZone, parentZone }` compiler input and joins only authenticated, admitted `ZoneRouteEngine` route/projection status. It exposes no ZoneLink resource name, UID, spec, status, Provider ref, fingerprint, transport setting, or handle. Replace `RealmSessionAuthority` with Zone principal + RBAC binding; replace `BootstrapBinding` with allocator-issued PSK binding associated with the child's local ZoneLink; replace `EnrollmentBinding` with the corresponding KK enrollment record; add independent target-verb plus canonical `relay` RBAC checks per forwarding hop; adapt shortcut model to ZonePath addressing; `RealmServiceLimits` defaults preserved; `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s` preserved; `CredentialCustody::GatewayGuest` excluded (all ZoneLink sessions are direct KK) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Zone runtime instantiates one `ZoneServiceServer` per Zone; d2b-bus routes `d2b.zone.v3.ZoneService` calls to this server; CLI uses `ZoneServiceClient` (from ADR046-routing-010) for topology list/inspect/watch, enrollment, and route resolution |
 | Data migration | None; v3 Zone service is new; no v2 realm-service compatibility |
-| Validation | Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-verb RBAC test; KK enrollment test; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight) |
+| Validation | Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-plus-target-verb RBAC tests; KK enrollment test; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight) |
 | Removal proof | `RealmServiceServer` on `d2b.realm.v2` retires after `ZoneServiceServer` handles all routing; display-session path migrates separately as part of Provider resource work |
 
 ### ADR046-routing-011

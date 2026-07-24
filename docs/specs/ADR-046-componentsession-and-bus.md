@@ -63,7 +63,7 @@ generated async ttrpc services / named streams
 d2b-transport provides carriage/evidence only. ComponentSession authenticates
 and protects a session. d2b-bus resolves an exact service/Zone/Provider/
 controller route. Native Role/RoleBinding authorizes connect/invoke/stream/
-resource verbs. No layer may widen the authority established below it.
+relay/resource verbs. No layer may widen the authority established below it.
 
 ## Noise profiles
 
@@ -114,7 +114,8 @@ The trusted endpoint policy binds:
 - reconnect generation;
 - exact limit profile;
 - attachment policy;
-- authorization service/verb requirements.
+- authorization service/verb requirements, including the immutable forwarded
+  target verb and next-hop scope when the session carries a relay.
 
 The canonical preface+offer is the Noise prologue. Any mismatch changes the
 transcript and fails. There is no negotiation down to another service, schema,
@@ -153,9 +154,11 @@ Role/RoleBinding evaluator used by the resource API checks:
 subject
 Zone
 session purpose/service
-verb = connect | invoke | open-stream | attach | cancel | observe
+verb = connect | invoke | open-stream | relay | attach | cancel | observe
 method/stream kind
 target ResourceRef/Provider/Host/Guest
+forwarded target verb and target Zone (relay only)
+authenticated inbound ZoneLink and route-selected next hop (relay only)
 Provider/controller/session generations
 ```
 
@@ -165,9 +168,22 @@ Rules may authorize ComponentSession connect/service/stream attributes in the
 same Role resource as resource verbs. There is no endpoint-local parallel RBAC
 language.
 
+`relay` is the closed session verb for one-hop forwarding. It permits only the
+already-authenticated inbound ZoneLink/transport subject to pass an
+already-admitted invocation or named stream to the route-selected next
+authorized hop. The peer cannot supply or replace the subject, target verb,
+target Zone, next hop, or authorization result. A relay grant conveys no
+resource CRUD, identity mapping, capability widening, attachment, credential,
+or local lifecycle authority.
+
 Authorization:
 
 - is required for the session itself and each method/stream;
+- for every forwarded method/stream, independently requires both `relay` for
+  the authenticated adjacent-Zone subject and the original target verb under
+  the same exact local scope; the destination rechecks the target verb;
+- fails closed when relay, target-verb authorization, or policy state is
+  missing;
 - is revision-bound to Role/RoleBinding/Provider/API/Zone policy;
 - is cached only under exact attributes/short expiry;
 - invalidates immediately after relevant durable policy commit;
@@ -278,6 +294,8 @@ It:
 - resolves local/Host/Guest/parent-child Zone transport;
 - binds authenticated subject and operation/deadline;
 - checks session connect/service/stream RBAC;
+- for a ZoneLink forward, checks the canonical `relay` verb and the immutable
+  target verb separately before opening the next-hop session;
 - invokes exact generated ttrpc client/server;
 - bridges named streams with bounded credit;
 - preserves pinned reverse route/cancellation;
@@ -402,5 +420,5 @@ transcript/session generation digest, route, and fixed outcome.
 | Detailed design | Exact service/resource routes, RBAC, pinned reverse route, cancellation, named stream bridge, no wildcard pub/sub Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Every ResourceClient/controller/Provider/CLI service |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Message isolation, route/auth revocation, fairness, reconnect, no direct-store path |
+| Validation | Message isolation; closed session-verb enum including `relay`; relay missing/target verb missing/provider self-assertion fail-closed vectors; route/auth revocation; fairness; reconnect; no direct-store path |
 | Removal proof | Old direct dispatch branches removed only after route parity |

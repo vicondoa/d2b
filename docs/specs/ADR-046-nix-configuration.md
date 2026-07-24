@@ -866,6 +866,9 @@ the ResourceType schema permits. An authored `Endpoint` spec carries only closed
 through the effect adapter at runtime). `ProcessSpec` carries no inline
 `endpoints`; a Process's stable endpoints are owned `Endpoint` resources with
 `producerRef`, and consumers reference `Endpoint/<name>`.
+Endpoint `visibility` accepts only `owner`, `provider`, or `zone`; finer access
+belongs in the bounded `consumerPolicy`. Nix examples and generated option help
+must not invent additional visibility tokens.
 
 **ResourceExport and ResourceImport (D096).** Cross-Zone singleton sharing uses
 ordinary `d2b.zones.<zone>.resources.<name>` declarations. The Nix compiler does
@@ -1550,9 +1553,22 @@ Eval assertions:
   membership may narrow User admission at runtime but is not declared as a
   RoleBinding subject.
 - A subject referencing a `Provider`, `Host`, `Guest`, `Process`, or `User`
-  must resolve a declared resource of that type in the same Zone.
+  must resolve a declared resource of that type in the same Zone. A `Zone`
+  ResourceRef subject can name only the runtime-created local self Zone;
+  adjacent enrolled Zone transport subjects use an exact trusted
+  `externalPrincipalSelector` generated outside untrusted Provider/request
+  input.
 - Verbs must be from the closed set published by the resource-api and authz
   foundation spec; the compiler rejects any verb not in that set at eval time.
+- `sessionVerbs` uses the separate closed set `connect`, `invoke`,
+  `open-stream`, `relay`, `attach`, `cancel`, `observe`. `relay` is valid only
+  in `sessionVerbs`; generated option help describes it as one-hop
+  ZoneLink-scoped forwarding, not resource or lifecycle authority.
+- A relay-bearing Role/RoleBinding is rejected before bundle activation unless
+  it has exact Zone/resource/name bounds and core-generated ZoneLink provenance,
+  or durable explicit local-admin policy permits that exact bounded grant.
+  Wildcard, empty/all-name, Provider-self-asserted, and ordinary
+  operator-self-asserted relay grants fail closed.
 
 The initial closed subject ResourceType set (`Zone`, `Provider`, `Host`,
 `Guest`, `Process`, `User`) is extended only by a future foundation spec
@@ -2155,7 +2171,8 @@ The Nix compiler detects and rejects at eval time:
 | Artifact type mismatch | An artifact ID used in a field that expects a different `type` (e.g., `"nixos-system"` where `"provider"` is required) |
 | Duplicate artifact ID | Two `d2b.artifacts.<id>` entries with the same key |
 | Missing ref target | Any `*Ref` field whose target is not declared |
-| Role verb unknown | A verb not in the initial closed set |
+| Role verb unknown | A resource or session verb not in its canonical closed set; `relay` is session-only |
+| Relay grant invalid | Relay is wildcard/unbounded, not ZoneLink-scoped, self-asserted, or lacks core/admin-policy provenance |
 
 ## Current-code mapping
 
@@ -2351,7 +2368,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` — single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]*$`; ref validation assertions; `WorkloadProviderKind` → Guest/Host mapping per disposition table above; `Capability` → Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `parentZone` is a required non-root/forbidden-root compiler-only plain Zone name compiled into sealed allocator topology; `retainedGenerations`/`trustedPublishers` are likewise Zone-level compiler settings not emitted in Zone spec |
 | Integration | `nixos-modules/default.nix` imports new options files; old realms options coexist until ADR046-nix-002 |
 | Data migration | Operator configs migrate `d2b.realms.*` → `d2b.zones.*`; `d2b.vms.*` → `d2b.zones.<z>.resources.*` with `type = "Guest"` |
-| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.) |
+| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; resource/session verb closed-enum vectors accept `relay` only in `sessionVerbs`; relay wildcard/unbounded/Provider-self-asserted fixtures fail before activation while an exact core-generated ZoneLink fixture passes; Endpoint visibility accepts exactly `owner|provider|zone` and uses `consumerPolicy` for finer bounds; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.) |
 | Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix` |
 | Drift pin | `make nix-unit-pin` after adding cases |
 | Removal proof | `options-realms*.nix` removed after `options-zones*.nix` achieves parity and parity drift test passes |
