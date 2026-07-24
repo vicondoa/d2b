@@ -1531,6 +1531,30 @@ All steps are asynchronous. Steps 4–11 run concurrently for independent
 `AudioState` resources. Each task holds its own optimistic revision
 precondition; a conflict causes a retry.
 
+## Cross-Zone audio sharing (D096)
+
+One owner-Zone `audio-pipewire` **authority/mediator** service connects to the
+physical PipeWire microphone and speakers; it is the sole holder of that
+connection. Child Zones never open the physical device or receive a PipeWire
+FD/socket — that FD never crosses a Zone.
+
+- The owner Zone declares a `ResourceExport` referencing the local audio
+  authority `Endpoint` and the exported `audio-pipewire.d2bus.org/AudioState`
+  type. The **speaker** path is `multiplexed`: the authority mixes all consumer
+  Zones with per-Zone volume and quota. The **microphone** path is explicit
+  `exclusive` OR approved `multiplexed` capture, arbitrated with consent,
+  priority, and a fair queue.
+- Each child Zone declares a `ResourceImport` that binds its local `ZoneLink` and
+  `exportKey` to a local `AudioState`/proxy **projection** resource; ordinary
+  consumers use that local projection Ref. Audio frames stream over the bounded,
+  encrypted named stream (per-import session generation, credits/backpressure,
+  cancel, deadline) — intermediaries see ciphertext.
+- The audio Provider's signed **export/import adapter** performs mix/consent/
+  arbitration and builds the projection; core owns `ResourceExport`/
+  `ResourceImport` routing and base lifecycle. Export removal or ZoneLink loss
+  revokes leases and degrades the local `AudioState` projection; reconnect
+  revalidates generation/fingerprint.
+
 ## Nix authoring and configuration
 
 ### Operator-facing schema
@@ -1812,6 +1836,22 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Data migration | No guest runtime state migration; GuestAudioAgent reconnects to guest PipeWire and applies current AudioState grants and levels on reconcile, replacing guestd wpctl dispatch. |
 | Validation | `tests/guest_agent.rs`: AudioSet service call → libpipewire apply; mute/route/level; session-unavailable path; reconnect state restore; no wpctl binary; no command path; N-agent creation (one per guestUser); parallel call and aggregated failure |
 | Removal proof | `d2b-guestd` wpctl audio dispatch path deleted after all Guests have GuestAudioAgent deployed and e2e parity test passes |
+
+### ADR046-audio-012: Cross-Zone audio export/import adapter (D096)
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-audio-012` |
+| Dependency/owner | ADR046-zone-control-019, ADR046-zone-control-020; audio Provider owner |
+| Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
+| Reuse source | audio authority/mediator service (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
+| Reuse action | net-new (implement the signed audio export/import adapter) |
+| Destination | `packages/d2b-provider-audio-pipewire/src/share_adapter.rs` |
+| Detailed design | Implement the signed audio `ExportAdapter`/`ImportAdapter`: the owner-Zone authority mediates the physical mic/speakers, mixes speaker output per consumer Zone with per-Zone volume/quota, and arbitrates microphone as `exclusive` or approved `multiplexed` capture with consent/priority/fair queue. The import adapter builds the local `AudioState`/proxy projection and streams audio frames over the bounded encrypted named stream. No PipeWire FD/socket crosses a Zone; intermediaries see ciphertext. Semantic admission/observation only — core owns routing and base lifecycle. |
+| Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | Speaker mix with per-Zone volume/quota; microphone exclusivity and approved multiplexed capture with consent/priority/fair queue; reconnect revalidation and revocation degrade the projection; no PipeWire FD/socket crosses a Zone (fake-stream hermetic + real-stream integration) |
+| Removal proof | Not applicable (new surface) |
 
 ## Required crate layout
 

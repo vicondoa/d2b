@@ -104,14 +104,15 @@ immutable UIDs prevent delete/recreate name confusion.
 
 ### Standard ResourceTypes
 
-The frozen catalog (D035) has **17 standard, unqualified, Zone-unique
+The frozen catalog (D035) has **19 standard, unqualified, Zone-unique
 ResourceTypes**:
 
 - control plane: `Zone`, `ZoneLink`, `Provider`, `Role`, `RoleBinding`,
   `Quota`, `EmergencyPolicy`;
 - execution: `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`;
 - primitives: `Volume`, `Network`, `Device`, `Credential`;
-- connectivity: `Endpoint` (added by **D092**).
+- connectivity: `Endpoint` (added by **D092**);
+- cross-Zone sharing: `ResourceExport`, `ResourceImport` (added by **D096**).
 
 `Endpoint` promotes stable managed endpoint identities (TPM/GPU/Wayland/vhost/
 QMP/guest-control/service/listener endpoints) from opaque IDs to first-class
@@ -119,7 +120,10 @@ resources referenced by `Endpoint/<name>` refs; `ProcessSpec` no longer carries
 an inline `endpoints` field, and per-session/high-churn handles
 (pidfd, fd index, named-stream id, transport byte-stream handle) stay internal.
 A general promotion test (D092) decides ResourceType vs opaque handle for every
-entity.
+entity. `ResourceExport`/`ResourceImport` (D096) let scarce singleton resources
+(one mic/speaker, one security key, one SigNoz ingest) serve multiple Zones
+through a single Provider authority, with no cross-Zone ResourceRef and no direct
+device open by consumers.
 
 Every ResourceType is **layered**: a Provider implements the ResourceType
 **base spec plus a strict provider extension** (**D089**), and status is the
@@ -421,8 +425,14 @@ The authoritative set has **55 members** — 28 foundation, resource,
 cross-cutting, and closing specs plus 27 Provider dossiers — indexed by
 [`docs/specs/README.md`](../specs/README.md) and bound by the generated
 `docs/specs/ADR-046-spec-set.json` and `docs/specs/ADR-046-work-items.json`
-manifests. This decision and every member are `Proposed` and reviewed as one
-atomic unit; the PR delivers documentation only.
+manifests. The generated implementation DAG
+(`docs/specs/ADR-046-implementation-graph.json` and its human view
+`docs/specs/ADR-046-implementation-graph.md`, decision D095) maps every member
+spec and work item to a dependency-ordered `W0`–`W7` launch wave and a
+file-disjoint parallel group; like the manifests it is a generated non-member
+artifact and does not change the 55-member count. This decision and every member
+are `Proposed` and reviewed as one atomic unit; the PR delivers documentation
+only.
 
 Foundation and platform (15): resource object model / three-layer status
 ([`ADR-046-resource-object-model`](../specs/ADR-046-resource-object-model.md)),
@@ -455,7 +465,8 @@ the current-code migration map
 and the resolved decision register
 ([`ADR-046-decision-register`](../specs/ADR-046-decision-register.md)).
 
-Resource catalog (6): the 17 standard ResourceTypes (including `Endpoint`) are
+Resource catalog (6): the 19 standard ResourceTypes (including `Endpoint`,
+`ResourceExport`, and `ResourceImport`) are
 specified in
 [`ADR-046-resources-zone-control`](../specs/ADR-046-resources-zone-control.md),
 [`ADR-046-resources-host-guest-process-user`](../specs/ADR-046-resources-host-guest-process-user.md),

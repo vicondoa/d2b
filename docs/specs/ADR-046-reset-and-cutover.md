@@ -1124,7 +1124,8 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
 3. Every non-`Zone` resource receives a delete request in reverse dependency
    order under normal finalizer protocol (Guests/Processes first, then their
    owning Providers, then Volumes, then Networks/Devices/Credentials, then
-   ZoneLinks, then Role/RoleBinding/Quota/EmergencyPolicy).
+   ResourceImport projections, ResourceImport/ResourceExport rows, ZoneLinks,
+   then Role/RoleBinding/Quota/EmergencyPolicy).
 4. After every other resource is deleted, `core.zone-drain` is cleared and a
    final transaction emits the Zone's own `phase=Deleted` event and closes
    the store.
@@ -1197,6 +1198,25 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
 5. Scope: never touches the Zone, the Guest's runtime Provider, or any other
    Guest.
 
+### ResourceExport/ResourceImport reset behavior (D096)
+
+All reset scopes tear down cross-Zone sharing child-first:
+
+1. `ResourceExport` reset stops new advertisements, revokes every active lease
+   through the Provider export adapter, waits for bounded revoke/deadline
+   completion, and then drops the advertisement before the export row is
+   deleted.
+2. `ResourceImport` reset stops local projection consumers first, releases the
+   remote lease over the local `ZoneLink`, deletes the core-owned local
+   projection (`ownerRef: ResourceImport/<name>`), and only then deletes the
+   import row.
+3. ZoneLink loss during reset is treated as revoke/degrade, not as retained
+   authority. Reconnect after a reset must revalidate generation and schema
+   fingerprint before any new lease is admitted.
+4. Full factory reset removes all export/import state, active lease state,
+   advertisements, and local projections. No cross-Zone authority, capability
+   grant, stream credit, or import session generation survives a reset.
+
 ### Comparison table
 
 | Property | Full Zone reset | Provider reset | Guest reset |
@@ -1204,6 +1224,7 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
 | Scope | Entire Zone (all resources) | One Provider + its ProviderStateSet | One Guest + its children |
 | Authentication | OS-level (uid=0/local `d2b` group), never remote/d2b-bus | Normal resource API RBAC | Normal resource API RBAC |
 | Durable Volume default | Preserved (relocated out of Zone) unless `--destroy-durable-volumes` | Detached/Unclaimed unless `--destroy-volumes` | Detached/Unclaimed unless `--destroy-volumes` |
+| ResourceExport/ResourceImport | Revoke all leases, drop advertisements, delete imports and projections child-first | Exports/imports owned by the Provider revoke/degrade; dependents lose only the lease/projection | Imports/projections owned by the Guest delete child-first; sibling exports unaffected |
 | Re-entry after reset | Compiled bootstrap authorization | Normal Provider install | Normal Guest declaration |
 | Effect on siblings | None (other Zones on the host, if any, are unaffected) | Dependents degrade; not deleted | None |
 

@@ -490,24 +490,24 @@ the standard ResourceType/Provider work-item table, because none of these
 items reuse or replace v3 runtime code — they are new tooling with no current
 v3 source to extract from.
 
-### ADR046-streamline-001 — Generated spec registry and dependency graph
+### ADR046-streamline-001 — Generated spec registry, dependency graph, and implementation DAG
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-streamline-001` |
 | Tier | A (shared prep) |
-| Observed friction evidence | F1, F8, F11: dossier branches diverged from a superseded foundation commit with no generated way to detect it; three different per-spec decision-ID prefixes existed with no generated cross-reference |
-| Desired behavior | A generated, deterministic JSON registry enumerating every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-*.md` file's metadata-table fields and `Depends on` edges, rendered as an acyclic dependency graph |
-| Destination | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` (generated, committed; already named as future artifacts in `docs/specs/README.md`) |
+| Observed friction evidence | F1, F8, F11: dossier branches diverged from a superseded foundation commit with no generated way to detect it; three different per-spec decision-ID prefixes existed with no generated cross-reference; launch order and parallelism were re-derived from prose per round |
+| Desired behavior | A generated, deterministic JSON registry enumerating every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-*.md` file's metadata-table fields and `Depends on` edges, rendered as an acyclic dependency graph; and, per D095, a generated machine-readable implementation DAG (`ADR-046-implementation-graph.json` + human view `ADR-046-implementation-graph.md`) mapping every member spec and every work item to a `W0`–`W7` launch wave, a file-disjoint parallel group, typed edges, and a topological rank |
+| Destination | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json`, `docs/specs/ADR-046-implementation-graph.json`, `docs/specs/ADR-046-implementation-graph.md` (generated, committed non-member artifacts; named in `docs/specs/README.md`) |
 | Owner/dependencies | `packages/xtask` owner; no dependency on any other streamline item |
 | Dependency/owner | `packages/xtask` owner; no dependency on any other streamline item |
 | Current source | None — net-new ADR 0046 spec tooling; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
-| Implementation shape | New `cargo run -p xtask -- spec-registry` subcommand parsing every spec's metadata table + work-item tables with a Markdown-table parser, emitting the two JSON files; wired into the existing `gen-*`/`run_task` dispatch pattern in `packages/xtask/src/main.rs` |
-| Detailed design | New `cargo run -p xtask -- spec-registry` subcommand parsing every spec's metadata table + work-item tables with a Markdown-table parser, emitting the two JSON files; wired into the existing `gen-*`/`run_task` dispatch pattern in `packages/xtask/src/main.rs` |
-| Integration | `tests/unit/gates/` drift gate (`xtask spec-registry + git diff --exit-code`) added to the existing drift-gate set; consumed by ADR046-streamline-005/006/008/013 as their structured input instead of each re-parsing Markdown independently |
+| Implementation shape | New `cargo run -p xtask -- spec-registry` subcommand parsing every spec's metadata table + work-item tables with a Markdown-table parser, emitting `ADR-046-spec-set.json` and `ADR-046-work-items.json`; a companion `cargo run -p xtask -- implementation-graph` reads those two manifests plus the `ADR-046-validation-and-delivery.md` §3 wave topology and emits `ADR-046-implementation-graph.json` and its rendered `.md`; both wired into the existing `gen-*`/`run_task` dispatch pattern in `packages/xtask/src/main.rs` |
+| Detailed design | New `cargo run -p xtask -- spec-registry` subcommand parsing every spec's metadata table + work-item tables with a Markdown-table parser, emitting the two manifest JSON files; the `implementation-graph` generator then maps every member spec and every work item exactly once to a wave and file-disjoint parallel group, emits typed edges (`spec-depends-on`, `work-item-depends-on`, `implements-spec`, `shared-contract`, `file-overlap-order`), computes topological rank, and renders the Mermaid/table human view; output is deterministic with sorted keys and no timestamps or host paths |
+| Integration | `tests/unit/gates/` drift gate (`xtask spec-registry`/`xtask implementation-graph` + `git diff --exit-code`) added to the existing drift-gate set; the graph is consumed by ADR046-streamline-005/006/008/013 and the ready-wave query in `ADR-046-validation-and-delivery` instead of each re-parsing Markdown independently |
 | Data migration | None — docs/tooling only; no runtime state |
-| Validation | `spec_registry::parse_metadata_table`, `spec_registry::acyclic_dependency_graph`, `xtask_spec_registry_regenerates_clean`, `spec_registry_json_schema_matches_doc` |
+| Validation | `spec_registry::parse_metadata_table`, `spec_registry::acyclic_dependency_graph`, `xtask_spec_registry_regenerates_clean`, `spec_registry_json_schema_matches_doc`, `implementation_graph::every_spec_and_work_item_mapped_once`, `implementation_graph::acyclic_and_wave_monotonic`, `implementation_graph::parallel_groups_are_file_disjoint`, `implementation_graph_regenerates_clean` |
 | Adoption timing | Immediately; first Tier A item, since every other generator/lint below consumes its output |
 | Removal/supersession | None; this is the foundational generator for the remaining items |
 | Removal proof | None — net-new; no prior owner to remove; this is the foundational generator for the remaining items |

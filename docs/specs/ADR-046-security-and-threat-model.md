@@ -864,7 +864,7 @@ lines 3553-3559).
 Current `unsafe-local` becomes a user-only `Host` under `Provider/system-core`
 in v3, not a separate Provider (D042). It is `defaultDomain=user`,
 `allowedDomains=[user]`, `defaultUserRef` set, and
-`providerSettings.isolationPosture = "none"`. This is a genuine reduction in
+`spec.isolationPosture = "none"` (a promoted Host base field). This is a genuine reduction in
 guarantee — a Process running there executes as the operator's own host UID
 with **no VM or Provider-managed isolation boundary** — and the spec
 requires the reduction to be impossible to hide.
@@ -1565,7 +1565,7 @@ quiesce/atomicity rules as any other scope.
 
 ## Per-ResourceType threat matrix
 
-The seventeen standard ResourceTypes (D035) each face a distinct primary
+The nineteen standard ResourceTypes (D035) each face a distinct primary
 threat and are covered by controls already defined above. This table is the
 single index a reviewer uses to confirm every ResourceType has at least one
 documented threat/control pair; the "Detail" column points to the exact
@@ -1590,6 +1590,8 @@ section with the full control description.
 | `User` | Numeric UID/GID leaking into authorization decisions or public surface | `User/<name>` typed refs only; `mappingClass: process-principal-root` never exposes numeric UID/GID publicly | §15 |
 | `Credential` | Secret bytes reaching resource store/audit/telemetry, or a non-enrolled consumer reading a token | Zero-secret invariant; Noise KK-only sensitive delivery; exact `consumerRef` match | §9/§19 |
 | `Endpoint` | A stable endpoint leaking a raw locator (path/address/CID/port/fd/credential) into spec/status/CLI, or an unauthorized consumer resolving it to a live transport/FD | No raw locator in spec/status (closed transport/locality classes only); Core/ProviderSupervisor resolves via EffectPort/LaunchTicket under authorization; unauthorized resolve denied with a typed error (D092) | §D092 |
+| `ResourceExport` | A consumer Zone reaching the physical device/sink directly, an export leaking the local `resourceRef`/`endpointRef` or raw bytes/path/token cross-Zone, or an unauthorized Zone admitted as a consumer | Single Provider authority holds the only device/sink open; export advertises only bounded `exportKey`/type/fingerprint/capability-ceiling (no local Ref, path, or bytes); per-hop RBAC + capability ceiling; consumerZonePolicy restricts to opted-in child Zones; leases revoked on delete/ZoneLink loss (D096) | §D096 |
+| `ResourceImport` | A stale binding surviving export revocation, a schema/generation mismatch binding wrong authority, or a cross-Zone Ref/FD leaking into the consumer | Import names only local `zoneLinkRef`+`exportKey` (no remote Ref); reconnect revalidates remote generation+fingerprint before rebinding; bytes only over bounded encrypted named streams (ciphertext to intermediaries); no FD/resource grant crosses a Zone; local projection degrades on revocation (D096) | §D096 |
 
 ## Per-Provider-family threat matrix
 
@@ -2056,7 +2058,7 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None |
 | Reuse action | adapt (pattern from `tests/unit/gates/drift-check.sh`) |
 | Destination | `tests/unit/gates/security-matrix-coverage.sh` |
-| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 17 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section |
+| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 19 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section |
 | Integration | `make test-drift` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic shell-script gate; a negative test adds a scratch Provider dossier missing a Security section and asserts the gate fails |

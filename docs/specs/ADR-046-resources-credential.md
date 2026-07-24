@@ -77,8 +77,6 @@ shape. It omits `providerRef` and
 `observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
 rather than observed.
 
-Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
-
 **D091 update policy.** The universal base spec carries `spec.updatePolicy` for
 every Credential: disruptive changes default to manual, while automatic
 non-disruptive upgrades are permitted by policy. A `spec.provider` extension MAY
@@ -104,6 +102,13 @@ align.
 Provider resource dossiers below retain the D075 Provider self-description shape
 (`spec.artifactId`, `spec.config`) because a Provider has no non-circular
 `spec.providerRef`.
+
+**Non-exportable by default (D096).** Credential and token resources are
+non-exportable by default: no `ResourceExport` may name a `Credential` and no
+credential/token bytes cross a Zone. Per D093, Entra ID identity stays a
+same-Zone identity Guest (`identityGuestRef`); there is no cross-Zone export of
+Entra credentials unless a future, explicitly reviewed export capability is
+added.
 
 ```yaml
 apiVersion: resources.d2bus.org/v3

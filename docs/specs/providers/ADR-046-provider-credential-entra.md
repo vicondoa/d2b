@@ -35,6 +35,11 @@ ComponentSession routes, project bounded status, and coordinate lifecycle. They
 never perform a Host login, never hold refresh tokens, never run a browser flow,
 and never call Microsoft Entra directly.
 
+**Non-exportable (D096).** Entra `Credential` resources are non-exportable: the
+identity stays a same-Zone identity Guest and there is no `ResourceExport` for
+Entra credentials/tokens unless a future, explicitly reviewed cross-Zone export
+capability is added. Credential/token bytes never cross a Zone.
+
 Each Entra `Credential` binds:
 
 - an exact same-Zone `identityGuestRef: Guest/<name>`; and

@@ -85,8 +85,6 @@ Provider-specific desired extension. It omits `providerRef` and
 `observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
 rather than observed.
 
-Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
-
 **D091 update policy.** The universal base spec carries `spec.updatePolicy` for
 every Volume: disruptive changes default to manual, while automatic
 non-disruptive upgrades are permitted by policy. A `spec.provider` extension MAY
@@ -122,8 +120,9 @@ base spec and never live in `spec.provider`; generic CLI/controllers operate on
 base spec plus base status. For the same Provider, the `spec.provider` and
 `status.provider` schemas align.
 
-`Volume.spec.source.settings` (including `kind` and `sourcePolicyId`) is a
-Volume base structure, not a Provider extension. Only genuinely
+`Volume.spec.source.settings` (including `kind` and `sourcePolicyId`) and the
+per-attachment `settings` object (typed mount options) are Volume base
+structures, not a Provider extension. Only genuinely
 implementation-only desired settings use `spec.provider.settings`.
 Provider resource dossiers in this file retain the D075 Provider
 self-description shape (`spec.artifactId`, `spec.config`) because a Provider has
@@ -487,7 +486,7 @@ attachments:
 | `view` | ViewName | Yes | — | Must exist in the Volume spec |
 | `access` | `read-only`, `read-write`, or `shared-write` | No | `read-only` | `read-write`: single writer enforced by controller; `shared-write`: requires Provider `supportsSharedWrite: true`; must be compatible with View rights |
 | `mountPath` | absolute path string | Yes | — | Guest-side mount path |
-| `settings` | provider-specific object | No | — | Validated against Provider virtiofs attachment schema |
+| `settings` | typed attachment-options object | No | `{}` | Volume base nested attachment (mount) options defined by the Volume base schema (`posixAcl`, `xattr`, `cache`, `threadPoolSize`, `inodeFileHandles`, `socketGroup`) and validated against it; a ResourceType-common structure, not a Provider extension. Genuinely implementation-only tuning uses `spec.provider.settings`, never this base object. |
 
 The Volume controller creates one owned virtiofsd Process per attachment when
 `transport: virtiofs`. Multiple attachments with distinct `executionRef` values

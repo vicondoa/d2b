@@ -61,8 +61,6 @@ Provider-specific desired extension. It omits `providerRef` and
 `observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
 rather than observed.
 
-Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
-
 **D091 update policy.** The universal base spec carries `spec.updatePolicy` for
 every Network: disruptive changes default to manual, while automatic
 non-disruptive upgrades are permitted by policy. A `spec.provider` extension MAY

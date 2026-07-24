@@ -53,6 +53,8 @@ Standard execution/shared:
 | User | Named identity, UID/session observations, ACL/process subject |
 | Credential | Opaque rotating credential/lease lifecycle |
 | Endpoint | Stable managed service/device/transport/control/data attachment point (D092); no raw locator |
+| ResourceExport | Cross-Zone share of a scarce singleton resource via a single Provider authority; no cross-Zone Ref (D096) |
+| ResourceImport | Cross-Zone share of a scarce singleton resource via a single Provider authority; no cross-Zone Ref (D096) |
 
 Provider-specific semantic ResourceTypes may extend this set, always qualified
 `<provider-name>.d2bus.org.<Type>` (for example `display-wayland.d2bus.org.WaylandSession`).
@@ -80,8 +82,6 @@ Provider-specific desired extension for primitive ResourceTypes and for any
 qualified Provider-defined ResourceType. It omits `providerRef` and
 `observedProviderGeneration`: `spec.providerRef` is base, and spec is desired
 rather than observed.
-
-Mapping convention: within this spec a reference to `spec.providerSettings` (or the former Device `spec.settings`) denotes the canonical `spec.provider.settings`; `spec.providerRef` and every other `spec.*` field is ResourceType base.
 
 Every Provider `ResourceApiBinding` MUST implement the exact base spec schema
 version and fingerprint for each ResourceType it serves, accept the canonical

@@ -164,54 +164,80 @@ placement and for the speculative-readiness check in §6.
 | all 27 `provider-*` dossiers | see §3.3; every dossier's deepest edge resolves to a W5 spec (`resources-host-guest-process-user`, `resources-volume`, `resources-device`, `resources-zone-control`, `resources-credential`, `telemetry-audit-and-support`, `cli-and-operations`, or `nix-configuration`) | W6 |
 | `security-hardening`, `streamline`, `reset-and-cutover`, `feasibility-proofs` (forthcoming) | the entire manifest (cross-cutting closing review) | W7 |
 
-### 3.5 Generated implementation graph artifact
+### 3.5 Machine-readable implementation graph (D095)
 
-[`docs/specs/ADR-046-implementation-graph.json`](./ADR-046-implementation-graph.json)
-(`artifactKind: d2b-adr-implementation-graph`, `schemaVersion` 1) and its
-generated human view,
-[`docs/specs/ADR-046-implementation-graph.md`](./ADR-046-implementation-graph.md),
-are the deterministic implementation DAG derived mechanically from
-`ADR-046-spec-set.json`, `ADR-046-work-items.json`, and this section's wave
-topology: all 55 spec nodes plus all 518 work-item nodes (573 total),
-typed `spec-depends-on`/`work-item-depends-on`/`implements-spec`/
-`shared-contract`/`file-overlap-order` edges, topological rank, exact
-`ADR046-W0`-`ADR046-W7` wave assignment, and file-disjoint `parallelGroup`s.
-Regenerating one of these two files without the other, or without this
-section, is a drift bug; the refresh procedure is defined in the `.md`
-companion's §7 and applies unchanged to any future spec/work-item addition
-(including forthcoming D096 items) — no wave or rank is ever hand-picked for
-a new node.
+The wave topology in §3.1–§3.4 and the file-overlap graph in §6 are also emitted
+as a single generated, committed, machine-readable artifact so no author
+re-derives launch order or parallelism from this prose. Per D095:
 
-Two derivation notes surfaced while generating the graph, applying rules
-already stated above rather than introducing new ones:
+- **Artifacts.** `docs/specs/ADR-046-implementation-graph.json` (canonical) and
+  `docs/specs/ADR-046-implementation-graph.md` (rendered human view: Mermaid DAG,
+  the `W0`–`W7` table, shared-prep and parallel groups, this ready-wave
+  algorithm, the critical path, and counts). Both are **generated non-member
+  artifacts**: they are NOT part of the 55 `ADR-046-spec-set.json` members and do
+  not change that count.
+- **Contract.** The JSON declares `artifactKind`
+  (`d2b-adr-implementation-graph`), `schemaVersion`, `adr` (`0046`), and `status`.
+  It carries one `node` for every one of the 55 member specs and every work item
+  in `ADR-046-work-items.json`, each mapped **exactly once** to a `wave`
+  (`W0`–`W7`), a file-disjoint `parallelGroup`, `owner`/`destinations`,
+  `entryContracts`, `prerequisites`, `blockers` (empty in a `Proposed` plan
+  unless an explicit blocker is recorded), `exitGate`, and `topologicalRank`. It
+  carries typed `edges`: `spec-depends-on` (cross-wave spec dependency),
+  `shared-contract` (same-wave spec prep barrier), `work-item-depends-on`,
+  `implements-spec` (work item → its spec), and `file-overlap-order` (same-wave
+  file contention ordering).
+- **Source of truth.** `spec-depends-on`/`shared-contract` edges derive from
+  `ADR-046-spec-set.json.members[].dependsOn`; waves derive from §3.1–§3.4;
+  work-item mapping and `work-item-depends-on` derive from
+  `ADR-046-work-items.json`; the W6 `file-overlap-order` edges derive from §3.3.
+- **Generation.** `cargo run -p xtask -- implementation-graph`
+  (`ADR046-streamline-001`) reads the two manifests plus this section and writes
+  both files deterministically (sorted keys, no timestamps, no host paths). A
+  `tests/unit/gates/` drift gate runs the generator and `git diff --exit-code`.
+  Regenerate the graph after any spec or work-item edit, always **after**
+  `ADR-046-spec-set.json` and `ADR-046-work-items.json` are regenerated.
+- **Validation.** Every one of the 55 spec nodes and every work item appears
+  exactly once; all edge endpoints resolve to a declared node; the graph is
+  acyclic; waves are monotonic (every edge's dependency resolves to an earlier
+  wave, or to an explicit same-wave `shared-contract`/`file-overlap-order` prep
+  barrier whose `topologicalRank` precedes its consumers); every work item is
+  mapped to a wave; a `parallelGroup` never implies ordering absent a
+  dependency or file-overlap edge; the JSON is deterministic; and every Mermaid
+  node ID is a valid identifier.
+- **Anti-serialization.** The graph embodies §6: all ready, file-disjoint
+  parallel groups launch concurrently. A same-wave dependency is a
+  `shared-contract`/`file-overlap-order` prep barrier before its specific
+  consumers — never a reason to serialize a whole wave.
 
-1. `ADR-046-current-code-migration-map` has an empty `dependsOn` list in
-   `ADR-046-spec-set.json`, identically to `ADR-046-decision-register`, but
-   is not listed in §3.2's wave table. Applying §3.1's derivation rule
-   mechanically ("wave floor" for a zero-dependency spec) places it in
-   `ADR046-W0` alongside `ADR-046-decision-register`, as an independent,
-   file-disjoint, zero-dependency sibling of the `ADR046-W0` serial chain
-   (never folded into that chain, since nothing depends on it and it depends
-   on nothing).
-2. This section's closing-wave row above names `security-hardening` and
-   `feasibility-proofs`; the corresponding committed files are
-   `ADR-046-security-and-threat-model.md` and
-   `ADR-046-feasibility-and-spikes.md` (`docs/specs/README.md`'s member
-   index uses these names). The generated graph uses the committed file
-   names; this is a naming-drift note, not a behavior change, since both
-   resolve to `ADR046-W7` either way.
+#### 3.5.1 Ready-wave query
 
-The graph also records two same-wave file-overlap contentions not yet
-present in §7's table above (`packages/d2b-contracts/src/v3/component_session.rs`
-shared by `ADR046-zone-control-013`/`ADR046-nix-027`, and
-`packages/d2b-core-controller/src/configuration.rs`/`cleanup.rs` shared
-across five `ADR046-W5` specs' work items), plus two same-wave duplicate-
-generator findings in `ADR046-W7` (`ADR046-delivery-004`/`ADR046-streamline-001`
-and `ADR046-delivery-007`/`ADR046-streamline-022`). Per §6.2 item 4, each is
-recorded as a `sharedPrepBarriers` entry in the generated artifact in the
-same change that discovered it; none of them requires editing this
-section's own text, since §6.2's file-overlap-graph procedure already
-governs how such a newly discovered contention is handled at wave entry.
+A node is **ready to launch** when every node it lists in `prerequisites` is
+`done` (or, before implementation begins, when every prerequisite is in an
+earlier wave than the current open wave and any same-wave prep barrier has
+landed). Against `ADR-046-implementation-graph.json` the exact query is:
+
+```bash
+# All ready nodes: no unfinished prerequisite. $done is a JSON array of done node ids.
+jq --argjson done "$DONE" '
+  .nodes[]
+  | select((.prerequisites - $done) | length == 0)
+  | {id, kind, wave, parallelGroup, topologicalRank}
+' docs/specs/ADR-046-implementation-graph.json
+
+# Ready and NOT yet launched, grouped by file-disjoint parallelGroup so every
+# concurrently-launchable track is visible at once (anti-serialization check):
+jq --argjson done "$DONE" --argjson launched "$LAUNCHED" '
+  [ .nodes[]
+    | select((.prerequisites - $done) | length == 0)
+    | select([.id] - $launched | length == 1) ]
+  | group_by(.parallelGroup)
+  | map({parallelGroup: .[0].parallelGroup, wave: .[0].wave, ready: [.[].id]})
+' docs/specs/ADR-046-implementation-graph.json
+```
+
+A scope that is ready but absent from `$launched` and has no recorded blocker is
+an anti-serialization violation (see §6 and `ADR046-streamline-013`).
 
 ## 4. Per-wave entry/exit criteria
 
@@ -683,7 +709,7 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   Endpoint/<name>` shows readiness/currency, no locator); high-churn-handle
   non-resource lint asserts pidfd/fd-index/named-stream/`OwnedTransport`/
   `operationId` are NOT promoted to resources and stay internal; the
-  `ProcessSpec`-has-no-inline-`endpoints` lint; standard ResourceType count is 17
+  `ProcessSpec`-has-no-inline-`endpoints` lint; standard ResourceType count is 19
   (Endpoint present in the catalog); every retained public `*Id`/`Handle` has a
   documented rationale row.
 - Entra identity-Guest login tests (D093), all against a **fake Entrablau Guest
@@ -730,6 +756,26 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
 - Interactions (display/audio/clipboard/notification/shell-terminal): one
   ResourceType-conformance + fault-injection pass per Provider dossier,
   per D059's mandatory `tests/` tree.
+
+### 10.9a Cross-Zone sharing (ResourceExport/ResourceImport, D096)
+
+Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
+(real bounded encrypted streams) tests cover, per
+[`ADR-046-resources-zone-control.md` §8A.7](ADR-046-resources-zone-control.md):
+
+- opt-in required on both sides; a `ResourceExport`/`ResourceImport` with a
+  cross-Zone ResourceRef is rejected; schema-fingerprint mismatch fails closed;
+  an unauthorized consumer Zone is rejected;
+- quota/fairness/deadline enforcement; reconnect revalidation and revocation
+  degrade the local projection; D091 update propagation remote → import →
+  projection/owners;
+- audio: speaker mix with per-Zone volume/quota and microphone
+  exclusivity/consent/fair-queue; security-key: CTAP serialization with one
+  exclusive per-device lease/deadline/cancel; observability: one SigNoz ingest
+  with many producer Zones under quota/backpressure/redaction/cardinality;
+- the invariant that **no FD or raw device/socket/token crosses a Zone** (bytes
+  are ciphertext to intermediaries); fake-stream tests are fast hermetic, real
+  encrypted-stream tests are the slower integration tier.
 
 ### 10.10 Container integration and host runNixOSTest KVM/TCG
 
@@ -1267,4 +1313,20 @@ binaries.
 | Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; a synthetic timing regression fails the gate; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
+| Removal proof | Not applicable |
+
+### ADR046-delivery-008
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-delivery-008` |
+| Dependency/owner | `ADR046-streamline-001`, `ADR046-W0`; delivery-tooling integrator |
+| Current source | none in this repository; launch order and parallelism were previously derived only from this spec's §3/§6 prose |
+| Reuse source | `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and §3.1–§3.4/§3.5 of this spec; no new framework |
+| Reuse action | net-new (D095 artifact contract) |
+| Destination | `docs/specs/ADR-046-implementation-graph.json`, `docs/specs/ADR-046-implementation-graph.md` (generated by `ADR046-streamline-001`'s `xtask implementation-graph`); the artifact contract, generation, validation, and ready-wave query are owned by §3.5 of this spec |
+| Detailed design | Owns the D095 implementation-graph contract: `artifactKind`/`schemaVersion`/`adr`/`status`; one node per member spec and per work item mapped exactly once to a `W0`–`W7` wave and a file-disjoint `parallelGroup`, with `owner`/`destinations`/`entryContracts`/`prerequisites`/`blockers`/`exitGate`/`topologicalRank`; typed `spec-depends-on`/`shared-contract`/`work-item-depends-on`/`implements-spec`/`file-overlap-order` edges; the §3.5.1 ready-wave query; and the anti-serialization invariant that every ready file-disjoint group launches concurrently while a same-wave dependency is a prep barrier, not whole-wave serialization. The graph is a generated non-member artifact and does not change the 55-member `ADR-046-spec-set.json` count. |
+| Integration | Consumed by §4 wave entry/exit and §6 anti-serialization checks and by `ADR046-streamline-013`; a `tests/unit/gates/` drift gate regenerates and `git diff --exit-code`s the graph after any spec/work-item edit |
+| Data migration | None — docs/tooling only; no runtime state |
+| Validation | Every 55 spec node and every work item present exactly once; all edge endpoints resolve; graph acyclic; waves monotonic (dependencies earlier or explicit same-wave prep barrier); parallel groups claim no ordering absent a dependency/file-overlap edge; deterministic JSON with no timestamps/host paths; every Mermaid node ID valid; the ready-wave query returns the expected concurrently-launchable groups on a seeded fixture |
 | Removal proof | Not applicable |

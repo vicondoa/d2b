@@ -359,8 +359,7 @@ version/fingerprint, accepts the canonical minimal valid base Spec, and rejects
 unsupported optional base capabilities only through its signed capability matrix
 and provider-neutral `unsupported-capability`. `spec.provider` aligns with
 `status.provider`; generic CLI/controllers operate on the base spec and base
-status only. A reference to the former Device `spec.settings` denotes
-`spec.provider.settings`; no secret bytes are allowed in any spec layer, and no
+status only. No secret bytes are allowed in any spec layer, and no
 credential material is allowed in `spec.provider.settings`.
 
 ```yaml

@@ -295,6 +295,8 @@ The following are unconditionally forbidden as metric label values:
 - PID, pidfd, or cgroup path values
 - Operation IDs or correlation IDs (allowed in trace span attributes, not metric labels)
 - Endpoint addresses, port numbers, or IP addresses
+- ResourceExport `exportKey` values, raw stream bytes, device serials, token
+  values, and any path/device/socket locator
 
 Note: the current `d2b_daemon_vm_*` metrics in `packages/d2bd/src/metrics.rs`
 use `vm` labels with VM name values (e.g. labels `["vm", "state"]`,
@@ -398,6 +400,22 @@ Key current metrics that inform bucket design:
 `d2b_controller_hint_to_handler_seconds` measures the interval from durable
 store commit to the first instruction of the matching controller handler. The
 p95 hard target is ≤5 ms per ADR 0046.
+
+#### ResourceExport and ResourceImport controller (D096)
+
+Target crate: `d2b-core-controller` export/import controller. Metrics count
+state and outcomes only; Zone names, resource names, payload bytes, paths,
+device identifiers, tokens, and `exportKey` values are forbidden labels.
+
+| Metric | Type | Labels | Buckets (s) |
+| --- | --- | --- | --- |
+| `d2b_resource_export_state` | gauge | `exported_type`, `arbitration={exclusive,shared,multiplexed}`, `state={advertised,ready,revoking,degraded}` | — |
+| `d2b_resource_import_state` | gauge | `projection_type`, `state={pending,reachable,bound,degraded,revoked}` | — |
+| `d2b_resource_export_consumers` | gauge | `exported_type`, `state={active,pending}` | — |
+| `d2b_resource_share_lease_total` | counter | `operation={admit,revoke,reconnect}`, `arbitration`, `outcome={ok,denied,quota,timeout,cancel,revoked,error}` | — |
+
+`exported_type` and `projection_type` use the closed ResourceType catalog short
+name; vendor-qualified types collapse to `vendor`.
 
 #### Process Providers
 
@@ -658,6 +676,22 @@ use native OTLP/gRPC over vsock. The SigNoz stack is unchanged; only the
 forwarding transport changes. The current Nix ingress source model
 (`ingressSources` in `stack.nix`) is preserved with a per-Zone entry replacing
 the per-VM entry.
+
+### `sys-obs` ResourceExport/ResourceImport model (D096)
+
+One observability Zone (`sys-obs`) owns the SigNoz ingest authority. Its
+`Provider/observability-otel` advertises a local telemetry-ingest `Endpoint`
+through `ResourceExport`; every other Zone opts in with a local
+`ResourceImport` that creates one local telemetry route/projection. The result is
+many-to-one multiplexed ingest with per-import quota, credits/backpressure,
+schema validation, redaction, and cardinality enforcement before data reaches
+SigNoz. The import never receives a SigNoz socket, token, or FD; bytes traverse
+only the bounded encrypted named stream defined by the ZoneLink session.
+
+Authoritative audit remains Zone-local. Exporting audit copies to `sys-obs` or
+another Zone requires a separate explicit `ResourceExport`/`ResourceImport`
+whose payload is a copy only and transfers no audit authority, writer role, or
+authorization decision surface.
 
 ## Nix configuration and resource bundle
 
@@ -1091,6 +1125,26 @@ streams recorded.
 }
 ```
 
+#### ResourceShare (D096)
+
+ResourceExport/ResourceImport advertise/admit/revoke/reconnect decisions emit a
+bounded resource-share audit record. The event carries only the local Zone from
+the envelope, the peer Zone, a closed capability subset, and the outcome. It
+never carries payload bytes, paths, device identifiers, tokens, raw stream data,
+ResourceType/resource names, arbitration internals, or `exportKey`.
+
+```json
+{
+  "record_class": "resource-share",
+  "resource_share_fields": {
+    "event":              "advertise|admit|revoke|reconnect",
+    "peer_zone":          "<zone_name>",
+    "capability_subset":  ["<closed capability>"],
+    "outcome":            "ok|denied|quota|revoked|degraded|error"
+  }
+}
+```
+
 #### BrokerEffect
 
 ```json
@@ -1180,8 +1234,8 @@ re-versioned in v3 with `zone: String` replacing `realm` and `node` dropped.
 
 | Class | Records | Durability | Failure policy |
 | --- | --- | --- | --- |
-| Privileged | ResourceMutation (RBAC verbs), RBACChange, SessionConnect (auth-failure/denial), StateReset | Durable before operation completes | Fail operation with `audit-unavailable` |
-| Standard | ResourceMutation (non-RBAC), RouteAdmission, ProcessEffect | Durable within bounded window | Log warning; metric increment; continue |
+| Privileged | ResourceMutation (RBAC verbs), RBACChange, SessionConnect (auth-failure/denial), ResourceShare (`admit`/`revoke`), StateReset | Durable before operation completes | Fail operation with `audit-unavailable` |
+| Standard | ResourceMutation (non-RBAC), RouteAdmission, ResourceShare (`advertise`/`reconnect`), ProcessEffect | Durable within bounded window | Log warning; metric increment; continue |
 | Best-effort | BrokerEffect (informational), telemetry-self records | Async append | Drop under rate-limit; no operation impact |
 
 Privileged records are never rate-limited. Unprivileged records follow the

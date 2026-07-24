@@ -95,8 +95,7 @@ spec/status version/fingerprint, accepts the canonical minimal valid base Spec,
 and rejects unsupported optional base capabilities only through its signed
 capability matrix and provider-neutral `unsupported-capability`.
 `spec.provider` aligns with `status.provider`; generic CLI/controllers operate on
-the base spec and base status only. A reference to the former Device
-`spec.settings` denotes `spec.provider.settings`; no secret bytes are allowed
+the base spec and base status only. No secret bytes are allowed
 in any spec layer, and no credential material is allowed in
 `spec.provider.settings`.
 
@@ -1264,6 +1263,28 @@ Constraints specific to this Provider:
 - OTEL emitter: lightweight bounded ring (no OTEL SDK in the Provider process;
   tracing crate only). The `observability-otel` Provider drains and forwards.
 
+## Cross-Zone security-key sharing (D096)
+
+The owner-Zone `device-security-key` **relay** is the sole holder of the hidraw
+FD; no other Zone opens the device and no USBIP or direct hidraw access crosses a
+Zone. The owner Zone declares a `ResourceExport` referencing the local relay
+`Endpoint` and the exported `Device` (security-key) type with `arbitration:
+exclusive`.
+
+- The export **serializes CTAP ceremonies**: one exclusive per-device lease at a
+  time, a fair queue, and per-ceremony deadline/cancel. A child Zone declares a
+  `ResourceImport` binding its local `ZoneLink` + `exportKey` to a local `Device`
+  projection/frontend; ordinary consumers use that local `Device` Ref.
+- CTAPHID bytes flow over the bounded encrypted named stream and are visible only
+  to the trusted authority relay and the exact child frontend; intermediate
+  controllers see ciphertext only. Only bounded audit metadata (Zone, lease
+  state, ceremony outcome) is recorded — never CTAP payload bytes.
+- The security-key Provider's signed export/import adapter enforces the exclusive
+  lease/fair-queue/deadline/cancel and builds the local `Device` projection; core
+  owns `ResourceExport`/`ResourceImport` routing and base lifecycle. Export
+  removal or ZoneLink loss revokes the lease and degrades the local projection;
+  reconnect revalidates generation/fingerprint.
+
 ## Nix configuration
 
 ### Nix authoring shape
@@ -1833,6 +1854,20 @@ class.
 | Data migration | Full d2b 3.0 reset; no udev rule state migration |
 | Validation | DTO unknown-field/capability tests prove `SecurityKeyApplyUdevRulesRequest` and op are absent; `device_grant_no_path.rs` proves frontend has UHID fd without udev/plugdev; broker build has no related code. |
 | Removal proof | Concrete removed path/behavior: `SecurityKeyApplyUdevRules` broker operation, `SecurityKeyApplyUdevRulesRequest` in `packages/d2b-contracts/src/security_key.rs`, and related broker code are absent. |
+
+### W-N21
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ADR046-zone-control-019, ADR046-zone-control-020; security-key relay/session owner |
+| Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
+| Reuse action | net-new (implement the signed security-key export/import adapter) |
+| Destination | `packages/d2b-provider-device-security-key/src/share_adapter.rs` |
+| Detailed design | Implement the signed security-key `ExportAdapter`/`ImportAdapter`: the owner-Zone relay stays the sole hidraw FD holder; the `ResourceExport` serializes CTAP ceremonies with one exclusive per-device lease, a fair queue, and per-ceremony deadline/cancel; the import adapter builds a local `Device` projection/frontend. CTAPHID bytes flow over the bounded encrypted named stream, visible only to the trusted relay and the exact child frontend; intermediaries see ciphertext. No USBIP or direct hidraw access crosses a Zone; only bounded audit metadata is recorded. Core owns routing and base lifecycle. |
+| Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); relay session/lease (`session.rs`); ComponentSession bounded encrypted named streams |
+| Data migration | Full d2b 3.0 reset; no cross-Zone sharing state |
+| Validation | CTAP ceremony serialization with one exclusive per-device lease/fair-queue/deadline/cancel; child `Device` projection reachable; CTAP bytes ciphertext to intermediaries; no hidraw FD/USBIP crosses a Zone; reconnect revalidation and revocation degrade the projection; audit metadata only (fake-stream hermetic + real-device integration) |
+| Removal proof | Not applicable (new surface) |
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable

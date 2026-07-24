@@ -30,8 +30,9 @@ The parent and every manifest-listed spec form one atomic normative set:
 
 The set has **55 normative member specs**: 28 foundation, resource,
 cross-cutting, and closing specs, plus 27 Provider dossiers. The parent ADR,
-this `README.md`, the `providers/README.md` index, and the generated `*.json`
-manifests are **not** members.
+this `README.md`, the `providers/README.md` index, the generated `*.json`
+manifests, and the generated implementation-graph artifacts
+(`ADR-046-implementation-graph.json`/`.md`) are **not** members.
 
 **Foundation and platform (15):**
 
@@ -52,10 +53,10 @@ manifests are **not** members.
 - [`ADR-046-nix-configuration`](ADR-046-nix-configuration.md)
 - [`ADR-046-current-code-migration-map`](ADR-046-current-code-migration-map.md)
 
-**Resource catalog (6)** — the 17 standard ResourceTypes (`Zone`, `ZoneLink`,
+**Resource catalog (6)** — the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
 `Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `Host`, `Guest`,
 `Process`, `EphemeralProcess`, `User`, `Volume`, `Network`, `Device`,
-`Credential`, `Endpoint`) are owned across the foundation and these catalog
+`Credential`, `Endpoint`, `ResourceExport`, `ResourceImport`) are owned across the foundation and these catalog
 specs:
 
 - [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) —
@@ -101,6 +102,18 @@ members of the set.
   sorted by `workItemId`, each bound to its `specId` and `specPath`. Every
   canonical required field is nonempty; `reuseSource` is `null` when a spec
   declares no reuse source. Work-item IDs are unique across the whole set.
+- `ADR-046-implementation-graph.json` (`artifactKind:
+  d2b-adr-implementation-graph`, `schemaVersion` 1) and its rendered human view
+  `ADR-046-implementation-graph.md` are the D095 machine-readable
+  implementation DAG. They map every one of the 55 member specs and every work
+  item exactly once to a `W0`–`W7` launch wave and a file-disjoint parallel
+  group, with typed edges, owner/destinations, entry contracts, prerequisites,
+  blockers, exit gate, and topological rank. They are generated from the two
+  manifests above plus the 8-wave topology in
+  [`ADR-046-validation-and-delivery.md` §3](ADR-046-validation-and-delivery.md),
+  are deterministic (no timestamps/host paths), and are **not** members of the
+  set. They do not change the 55-member count. See
+  [`ADR-046-implementation-graph.md`](ADR-046-implementation-graph.md).
 
 ## Required metadata
 

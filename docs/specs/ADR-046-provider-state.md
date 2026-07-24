@@ -37,6 +37,13 @@ Bounded non-secret operational state that belongs in `status` includes:
 
 Reconcile writes status only on a **material change**; there are no high-frequency byte streams, logs, metrics, command output, or ring buffers in status. Watches, revision compaction, and backpressure remain bounded per `ADR-046-resource-store-redb` and `ADR-046-resource-reconciliation`.
 
+For `ResourceExport`/`ResourceImport` (D096), per-session lease handles, stream
+session state, credits, and payload bytes are high-churn runtime state, not
+resource status or Provider payload state. Their statuses carry only bounded
+lease summaries, counts, generation digests, readiness, and D091 currency; they
+never carry raw bytes, paths, device handles, FDs, tokens, or authority-conferring
+session handles.
+
 ### Status prohibitions
 
 Resource `status` MUST NOT contain:

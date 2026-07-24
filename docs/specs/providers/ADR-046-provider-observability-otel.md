@@ -1166,6 +1166,28 @@ are claimed. No `Provider (self) status` write is claimed; core writes status.
 
 ---
 
+## Cross-Zone telemetry ingest sharing (D096)
+
+There is one observability Zone (`sys-obs`) whose SigNoz **ingest authority** is
+the sole owner of the ingest connection. It exports a telemetry-ingest
+`Endpoint` via a `ResourceExport`; every other Zone declares a `ResourceImport`
+that binds its local `ZoneLink` + `exportKey` to a local observability
+route/projection resource. This is a many-to-one `multiplexed` share: many
+producer Zones, one ingest authority, with per-Zone quotas, backpressure, schema
+enforcement, redaction, and cardinality caps applied by the authority.
+
+- Telemetry bytes flow only over the bounded encrypted named stream
+  (per-import session generation, credits/backpressure, cancel, deadline);
+  intermediaries see ciphertext. No ingest FD/socket crosses a Zone.
+- Authoritative **audit** stays Zone-local. Exporting audit copies requires a
+  separate, explicit `ResourceExport` and transfers no authority — the local
+  Zone remains the system of record.
+- The otel Provider's signed export/import adapter performs schema/redaction/
+  cardinality/quota enforcement; core owns `ResourceExport`/`ResourceImport`
+  routing and base lifecycle. Export removal or ZoneLink loss revokes leases and
+  degrades the local route projection; reconnect revalidates generation/
+  fingerprint.
+
 ## Nix configuration
 
 ### Provider artifact catalog registration
@@ -1721,6 +1743,22 @@ Old and new suites never run in parallel indefinitely.
 | Integration | Contract-tests run in workspace `make test-drift` and `make test-lint` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All contract-tests pass after update; existing allowlist test does not regress |
+| Removal proof | Not applicable |
+
+### ADR046-otel-005: Cross-Zone telemetry-ingest export/import adapter (D096)
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-otel-005` |
+| Dependency/owner | ADR046-zone-control-019, ADR046-zone-control-020; observability Provider owner |
+| Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
+| Reuse source | SigNoz ingest authority (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
+| Reuse action | net-new (implement the signed observability export/import adapter) |
+| Destination | `packages/d2b-provider-observability-otel/src/share_adapter.rs` |
+| Detailed design | Implement the signed observability `ExportAdapter`/`ImportAdapter`: `sys-obs` exports a telemetry-ingest `Endpoint`; every Zone imports a local route/projection; many-to-one `multiplexed` with per-Zone quotas, backpressure, schema enforcement, redaction, and cardinality caps. Telemetry flows over the bounded encrypted named stream; no ingest FD/socket crosses a Zone. Zone-local audit stays authoritative; exporting audit copies is a separate explicit export that transfers no authority. |
+| Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | One SigNoz ingest with many producer Zones under quota/backpressure; schema/redaction/cardinality enforced; audit remains Zone-local unless separately exported; reconnect revalidation and revocation degrade the route projection; no ingest FD/socket crosses a Zone (fake-stream hermetic + real-stream integration) |
 | Removal proof | Not applicable |
 
 ---

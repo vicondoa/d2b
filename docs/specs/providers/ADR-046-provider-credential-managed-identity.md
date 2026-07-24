@@ -60,8 +60,7 @@ Credential spec/status version/fingerprint, accepts the canonical minimal valid
 base Spec, and rejects unsupported optional base capabilities only through its
 signed capability matrix and provider-neutral `unsupported-capability`.
 `spec.provider` aligns with `status.provider`; generic CLI/controllers operate on
-the base spec and base status only. A reference to the former Credential
-`spec.providerSettings` denotes `spec.provider.settings`; no secret
+the base spec and base status only. No secret
 bytes or credential material are allowed in any spec layer, including
 `spec.provider.settings`; credential bytes are delivered only over Noise_KK
 sessions.

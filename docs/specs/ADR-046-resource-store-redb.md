@@ -79,6 +79,15 @@ caller strings. Dynamic spec/status is canonical JSON validated against the
 exact signed schema before storage. Envelope/index/operation/change values use
 one versioned deterministic encoding owned by d2b-contracts.
 
+`ResourceExport` and `ResourceImport` rows are stored and indexed like any other
+bound ResourceType through `resources`, `type_index`, `owner_index`, and
+`controller_index`. The local typed projection that core creates for a
+`ResourceImport` is a normal local resource with
+`metadata.ownerRef: ResourceImport/<name>`, so it appears in the same indexes as
+any Provider-created resource. No cross-Zone rows are stored in a Zone database;
+imports carry only their local `zoneLinkRef` plus bounded `exportKey`, and
+ZoneLink cursor state remains the only cross-Zone store state.
+
 Spec has the frozen three-layer shape (D089): the universal Resource
 envelope/metadata, the ResourceType base spec at top-level `spec.*` (including
 `spec.providerRef`), and an optional canonical `spec.provider =
