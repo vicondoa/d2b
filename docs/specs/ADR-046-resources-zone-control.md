@@ -918,7 +918,7 @@ paths or the workspace/package policy check fails the build:
 #### 4.8.2 Policy enforcement
 
 The workspace policy check (`packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs`,
-implemented in work item ADR046-zone-control-026) walks every `packages/d2b-provider-*`
+implemented in work item ADR046-pkg-001) walks every `packages/d2b-provider-*`
 crate directory in the workspace and asserts all four paths exist. A missing
 `src/`, `tests/`, `integration/`, or `README.md` in any Provider crate is a
 **hard policy failure** that blocks `make test-policy` (and therefore
@@ -4179,7 +4179,7 @@ None of the following exist in baseline:
 | Reuse source | main `a1cc0b2d`: any `d2b-provider-toolkit` registry/descriptor patterns named in ADR046-zone-control-017 sub-items |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/provider.rs`; `packages/d2b-core-controller/src/provider_lifecycle.rs`; `packages/d2b-core-controller/src/api_catalog.rs` |
-| Detailed design | Provider resource schema with all spec fields from §4.3, including resolved component bounds (max 8 controllers, 8 services, 32 worker templates, 16 ResourceTypes per controller); trust/conformance/config validation; component descriptor validation; dependency alias resolution; API binding with permission intersection; lifecycle policies; Nix Provider installation options; Provider crate layout enforcement per §4.8 (see ADR046-zone-control-026) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`workload_lists_and_advertises`/`display_fails_closed_when_unsupported` conformance behavior; `RuntimeCapabilitySet`/`WorkloadCapabilitySet`/`NodeCapabilitySet` → Provider component `supportedCapabilities`; `ProviderError`/`RetryHint` → Provider lifecycle error schema; `ProviderId` → Provider `metadata.name` validator; `ProcessRole` variants → Provider component type identifiers). |
+| Detailed design | Provider resource schema with all spec fields from §4.3, including resolved component bounds (max 8 controllers, 8 services, 32 worker templates, 16 ResourceTypes per controller); trust/conformance/config validation; component descriptor validation; dependency alias resolution; API binding with permission intersection; lifecycle policies; Nix Provider installation options; Provider crate layout enforcement per §4.8 (see ADR046-pkg-001) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`workload_lists_and_advertises`/`display_fails_closed_when_unsupported` conformance behavior; `RuntimeCapabilitySet`/`WorkloadCapabilitySet`/`NodeCapabilitySet` → Provider component `supportedCapabilities`; `ProviderError`/`RetryHint` → Provider lifecycle error schema; `ProviderId` → Provider `metadata.name` validator; `ProcessRole` variants → Provider component type identifiers). |
 | Integration | Zone config publication installs Provider resources; API catalog handler binds exported ResourceTypes; Provider/system-core and Provider/system-minijail are bootstrap exceptions with pre-created records |
 | Data migration | Full reset; Provider packages recompiled and re-registered per new schema |
 | Validation | All §15.3 Provider tests including the resolved bounds checks |
@@ -4375,11 +4375,11 @@ Evidence class for all: `main-reuse-source`.
 | Validation | `provider-registry-drain-waiter-race-safe` (ported from both notify-race tests), `provider-registry-publish-validates-snapshot-before-swap`, `provider-rpc-proxy-placement-exact` (ported from `provider_and_user_agent_session_identities_are_placement_exact`), `provider-agent-adapter-rejects-non-monotone-attachment-indexes`, `provider-server-shutdown-drains-in-flight-requests`, `provider-conformance-health-inspection-observability-sequence` |
 | Removal proof | `d2b-realm-provider` trait crate removed after v3 Provider resource + registry integration (§16.5) |
 
-### ADR046-zone-control-027
+### ADR046-provider-agent-001
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-zone-control-027` |
+| Work item ID | `ADR046-provider-agent-001` |
 | Dependency/owner | ADR046-zone-control-011, ADR046-zone-control-017, ADR046-zone-control-018 |
 | Current source | main `a1cc0b2d`: `packages/d2b-gateway-runtime/src/provider_agent.rs` (`ProviderAgentError::{UnregisteredAdapter,RegistryNotAccepting,RegistrationRejected,InvalidAuditCapacity,SessionClosed,ProtocolViolation}`, `ProviderAgentAuditOutcome`, `ProviderAgentAuditEvent`, `ProviderAgentProcess::from_registry/from_registry_with/provider_type/service_names/audit_snapshot/serve`, `run_registered`, bounded in-memory audit ring, frame dispatch loop: semaphore in-flight limit, service/method routing, negative-timeout guard, `SessionClosed` termination, `ProtocolViolation` audit + terminate — lines 31–452; tests `standalone_entrypoint_fails_without_registration`, `audit_capacity_is_bounded` — lines 454–486); `packages/d2b-contracts/src/provider_registry_v2.rs` (`ProviderRegistryV2` wire contract, `ProviderRegistryEntryV2::validate` with provider-id derivation rule, schema fingerprint, scope-digest, generation exactness, `TrustedFirstPartyInProcess` placement requirement, `ProviderIntentId` label rules `max 128 bytes`, `MAX_PROVIDER_REGISTRY_ENTRIES`, `MAX_PROVIDER_MAPPING_IDS=64`, `ProviderBindingV2` non-exhaustive + `UnsupportedProviderBindingV2` fallback, `ProviderRegistryV2::validate` sort/unique/count checks — lines 23–566; tests `validates_closed_local_runtime_mapping`, `validates_closed_local_observability_mapping`, `serializes_declared_mapping_axes_as_closed_variants`, `rejects_duplicate_or_unbounded_mapping_ids`, `local_storage_binding_realm_must_match_descriptor_placement`, `rejects_generation_and_exact_identity_mismatches`, `contradictory_binding_realm_json_is_unrepresentable`, `unknown_binding_axis_remains_rejected_on_the_wire`, `identity_mismatch_messages_name_the_failed_contract`, `accepts_explicit_empty_registry` — lines 722–1044) |
 | Reuse action | adapt |
@@ -4390,11 +4390,11 @@ Evidence class for all: `main-reuse-source`.
 | Validation | `provider-agent-dispatch-unsupported-service-returns-ttrpc-error`, `provider-agent-negative-timeout-rejected`, `provider-agent-session-closed-terminates-serve-loop`, `provider-agent-audit-ring-capacity-bounded` (ported from `audit_capacity_is_bounded`), `provider-registry-entry-fingerprint-generation-exact` (ported from `rejects_generation_and_exact_identity_mismatches`), `provider-registry-unknown-axis-fallback-non-exhaustive` (ported from `unknown_binding_axis_remains_rejected_on_the_wire`), `provider-registry-duplicate-ids-rejected` (ported from `rejects_duplicate_or_unbounded_mapping_ids`) |
 | Removal proof | Not applicable; new implementation |
 
-### ADR046-zone-control-025
+### ADR046-client-001
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-zone-control-025` |
+| Work item ID | `ADR046-client-001` |
 | Dependency/owner | ADR046-zone-control-011, ADR046-zone-control-012, ADR046-zone-control-013, ADR046-zone-control-018 |
 | Current source | main `a1cc0b2d`: `packages/d2b-client/src/client.rs` (`WallClock`, `MetadataInput`, `RetryPolicy` 1..8 attempts, `CallOptions`, `CancellationToken`, `Client::new/with_clock/connect`, `ConnectedClient` methods incl. `session_generation/session_limits/service/invoke/invoke_with_attachments/named_stream/open_server_stream`, `prepare_typed_request/prepare_operation_context`, `can_retry/retryable_failure/validate_outbound_attachments/validate_reply/service_package/map_remote_kind/map_retry` — lines 35–921); `packages/d2b-client/src/session.rs` (`ComponentSessionConnector` trait, `NamedStream` lifecycle, `StreamDispatcher`, `SharedDriver`, aggregate-queue-bound test — lines 24–626); `packages/d2b-client/src/target.rs` (`ServiceOwner`, `TargetInput`, `TransportKind`, `RouteRecord`, `ResolvedTarget`, `TargetResolver`, `RouteTable` — lines 7–228); `packages/d2b-client/src/service.rs` (`ServiceKind`, `GeneratedClient`, `MethodHandle`, `ServiceHandle::new/kind/generated/proxy/method/invoke` — lines 21–184); `packages/d2b-client/src/daemon_service.rs` (`DaemonClient::new/session_generation/connected/resolve/inspect/lifecycle/open_terminal`, `DaemonTerminal`, `daemon_call_options`, `ensure_daemon_outcome`, `map_ttrpc_error`, test `redacted_terminal_debug_payload` — lines 29–689); `packages/d2b-client/src/host_socket.rs` (`HostSocketConnector::new/from_seqpacket_fd`, `local_daemon_endpoint_identity`, `ComponentSessionConnector::connect` — lines 252–383); `packages/d2b-client/src/error.rs` (`RemoteErrorKind`, `RetryClass`, `ClientError` — lines 5–128) |
 | Reuse action | adapt |
@@ -4405,11 +4405,11 @@ Evidence class for all: `main-reuse-source`.
 | Validation | `client-retry-policy-max-8-attempts-enforced`, `client-named-stream-close-local-then-remote-close-transitions-closed`, `client-route-table-ambiguous-route-rejected`, `client-host-socket-peer-uid-verified-on-connect`, `client-retryable-failure-only-safe-mutations` |
 | Removal proof | `DaemonMethod` v2 verb enum retired after all v2 daemon operations migrated to Zone API |
 
-### ADR046-zone-control-028
+### ADR046-wire-001
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-zone-control-028` |
+| Work item ID | `ADR046-wire-001` |
 | Dependency/owner | ADR046-zone-control-013 |
 | Current source | main `a1cc0b2d`: `packages/d2b-contracts/src/v2_services.rs` (`MethodSpec{mutating,stream_kind,...}`, `ServiceSpec`, `SERVICE_INVENTORY` covering 20+ services and all provider services, `service_schema_fingerprint`, `public_daemon_schema_fingerprint`, `direct_guest_schema_fingerprint`, `StrictWireMessage`, `decode_strict`, `encode_strict`, `admit_metadata`, `TerminalStreamValidator`, `ServerStreamLease`, `RedactedTerminalFrame`, stream-name validators — lines 204–1004; tests `public_endpoint_fingerprint_binds_both_services_dependencies_and_order`, `public_endpoint_fingerprint_binds_daemon_and_guest_method_descriptors`, `direct_guest_fingerprint_binds_activation_and_remains_separate_from_public_endpoint` — lines 872–1030); `packages/d2b-contracts/src/v2_state.rs` (constants: `STATE_SCHEMA_VERSION=2`, `STATE_SCHEMA_GENERATION=1`, `MAX_JSON_DOCUMENT_BYTES=1_048_576`, `MAX_INVENTORY_ROWS=4096`, `MAX_LOCKS=1024`, `MAX_LOCK_DEPENDENCIES=32`, `MAX_DISCOVERY_OBSERVATIONS=4096`, `MAX_AUDIT_RECORD_BYTES=8192`, `MAX_AUDIT_RECORDS_PER_SEGMENT=16384`, `MAX_AUDIT_SEGMENT_BYTES=64*1024*1024`, `MAX_AUDIT_RETENTION_DAYS=14`, `MAX_LOCK_DEADLINE_MS=300_000`; types: `Digest`, `Generation`, `OwnershipEpoch`, `SafeJsonInteger`, `StorageCategory`, `StateEnvelope<T>`, `CanonicalPayloadVerifier<T>`, `AtomicWritePhase`, `RunnerEvidence`, audit types incl. `AuditRecord/Segment/Checkpoint/Gap`, `detect_audit_gap`, `AuditRetentionPolicy`, lock types: `LockClass`, `LockSpec`, `SyncInventory`, `LeaseRecord`); `packages/d2b-contracts/src/v2_identity.rs` (`IdentityError` 13 variants, canonical name rules `^[a-z][a-z0-9-]*$` max 63 bytes start-lowercase-letter, `RealmPath` label/separator rules, `ProviderType::ALL` 11 types + `as_str()` — lines 11–250); `packages/d2b-contracts/src/v2_provider.rs` (bounded opaque IDs `[a-z][a-z0-9-]{0,63}`: `ImplementationId`, `OperationId`, `IdempotencyKey`, `PlanId`, `HandleId`, `LeaseId`, `TransferId`, `PROVIDER_CONTRACT_FINGERPRINT`, `ProviderContractError` 34 variants, `Fingerprint` 64 lowercase-hex chars — lines 18–219); `packages/d2b-contracts/src/generated_v2_services/` (all 40+ generated ttrpc client/server stubs for v2 services) |
 | Reuse action | adapt |
@@ -4470,11 +4470,11 @@ Evidence class for all: `main-reuse-source`.
 | Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-bundledigest-integrity`, `nix-runtime-generation-monotone`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zonename-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, all `cleanup-*` and `rollback-*` tests) |
 | Removal proof | `d2bd/src/lib.rs` config-load at lines 1408 and 16741 removed after Zone configuration publication handler reaches parity; `realm-controller-config-json.nix` and `realm-identity-config-json.nix` Nix bundle-emit removed after resource compiler reaches parity |
 
-### ADR046-zone-control-026
+### ADR046-pkg-001
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-zone-control-026` |
+| Work item ID | `ADR046-pkg-001` |
 | Dependency/owner | ADR046-zone-control-003; workspace policy owner |
 | Current source | `packages/d2b-contract-tests/tests/policy_contracts.rs` lines 5–6 (D2B_FIXTURES gate / workspace-checks integration pattern — `implemented-and-reachable`, baseline `b5ddbed6`); `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure — `implemented-and-reachable`); `tests/tools/rust-workspace-checks.sh` (D2B_FIXTURES step shell harness — `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules — `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation — `implemented-and-reachable`) |
 | Reuse source | None from main; workspace policy tests are repo-specific |

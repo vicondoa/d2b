@@ -223,6 +223,26 @@
       "type" : "implements-spec"
     },
     {
+      "from" : "ADR046-audit-001",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-audit-002",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-audit-003",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-audit-004",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
       "from" : "ADR046-azure-vm-001",
       "to" : "ADR-046-provider-runtime-azure-virtual-machine",
       "type" : "implements-spec"
@@ -265,6 +285,11 @@
     {
       "from" : "ADR046-azure-vm-009",
       "to" : "ADR-046-provider-runtime-azure-virtual-machine",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-bus-001",
+      "to" : "ADR-046-componentsession-and-bus",
       "type" : "implements-spec"
     },
     {
@@ -368,6 +393,11 @@
       "type" : "implements-spec"
     },
     {
+      "from" : "ADR046-client-001",
+      "to" : "ADR-046-resources-zone-control",
+      "type" : "implements-spec"
+    },
+    {
       "from" : "ADR046-clipboard-001",
       "to" : "ADR-046-provider-clipboard-wayland",
       "type" : "implements-spec"
@@ -459,11 +489,6 @@
     },
     {
       "from" : "ADR046-cred-mi-004",
-      "to" : "ADR-046-provider-credential-managed-identity",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-cred-mi-005",
       "to" : "ADR-046-provider-credential-managed-identity",
       "type" : "implements-spec"
     },
@@ -713,6 +738,16 @@
       "type" : "implements-spec"
     },
     {
+      "from" : "ADR046-doctor-001",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-doctor-002",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
       "from" : "ADR046-exec-001",
       "to" : "ADR-046-resources-host-guest-process-user",
       "type" : "implements-spec"
@@ -828,11 +863,6 @@
       "type" : "implements-spec"
     },
     {
-      "from" : "ADR046-exec-024",
-      "to" : "ADR-046-resources-host-guest-process-user",
-      "type" : "implements-spec"
-    },
-    {
       "from" : "ADR046-feasibility-001",
       "to" : "ADR-046-feasibility-and-spikes",
       "type" : "implements-spec"
@@ -933,6 +963,11 @@
       "type" : "implements-spec"
     },
     {
+      "from" : "ADR046-host-posture-001",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
       "from" : "ADR046-identities-001",
       "to" : "ADR-046-terminology-and-identities",
       "type" : "implements-spec"
@@ -940,6 +975,11 @@
     {
       "from" : "ADR046-identities-002",
       "to" : "ADR-046-terminology-and-identities",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-mi-topology-001",
+      "to" : "ADR-046-provider-credential-managed-identity",
       "type" : "implements-spec"
     },
     {
@@ -1363,6 +1403,11 @@
       "type" : "implements-spec"
     },
     {
+      "from" : "ADR046-pkg-001",
+      "to" : "ADR-046-resources-zone-control",
+      "type" : "implements-spec"
+    },
+    {
       "from" : "ADR046-primitives-001",
       "to" : "ADR-046-primitive-resource-composition",
       "type" : "implements-spec"
@@ -1405,6 +1450,11 @@
     {
       "from" : "ADR046-provider-004",
       "to" : "ADR-046-provider-model-and-packaging",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-provider-agent-001",
+      "to" : "ADR-046-resources-zone-control",
       "type" : "implements-spec"
     },
     {
@@ -1630,6 +1680,51 @@
     {
       "from" : "ADR046-reset-011",
       "to" : "ADR-046-reset-and-cutover",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-001",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-002",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-003",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-004",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-005",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-006",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-007",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-008",
+      "to" : "ADR-046-telemetry-audit-and-support",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-reuse-009",
+      "to" : "ADR-046-telemetry-audit-and-support",
       "type" : "implements-spec"
     },
     {
@@ -1993,11 +2088,6 @@
       "type" : "implements-spec"
     },
     {
-      "from" : "ADR046-session-003",
-      "to" : "ADR-046-componentsession-and-bus",
-      "type" : "implements-spec"
-    },
-    {
       "from" : "ADR046-sterm-001",
       "to" : "ADR-046-provider-shell-terminal",
       "type" : "implements-spec"
@@ -2273,86 +2363,6 @@
       "type" : "implements-spec"
     },
     {
-      "from" : "ADR046-telem-012",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-013",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-014",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-015",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-016",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-017",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-018",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-019",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-020",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-021",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-022",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-023",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-024",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-025",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-026",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-telem-027",
-      "to" : "ADR-046-telemetry-audit-and-support",
-      "type" : "implements-spec"
-    },
-    {
       "from" : "ADR046-transport-relay-001",
       "to" : "ADR-046-provider-transport-azure-relay",
       "type" : "implements-spec"
@@ -2485,6 +2495,11 @@
     {
       "from" : "ADR046-usbip-009",
       "to" : "ADR-046-provider-device-usbip",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-user-session-001",
+      "to" : "ADR-046-resources-host-guest-process-user",
       "type" : "implements-spec"
     },
     {
@@ -2648,8 +2663,13 @@
       "type" : "implements-spec"
     },
     {
-      "from" : "ADR046-vvfs-007",
+      "from" : "ADR046-vvfs-export-001",
       "to" : "ADR-046-provider-volume-virtiofs",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-wire-001",
+      "to" : "ADR-046-resources-zone-control",
       "type" : "implements-spec"
     },
     {
@@ -2769,26 +2789,6 @@
     },
     {
       "from" : "ADR046-zone-control-024",
-      "to" : "ADR-046-resources-zone-control",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-zone-control-025",
-      "to" : "ADR-046-resources-zone-control",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-zone-control-026",
-      "to" : "ADR-046-resources-zone-control",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-zone-control-027",
-      "to" : "ADR-046-resources-zone-control",
-      "type" : "implements-spec"
-    },
-    {
-      "from" : "ADR046-zone-control-028",
       "to" : "ADR-046-resources-zone-control",
       "type" : "implements-spec"
     },
@@ -5428,6 +5428,36 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-audit-002",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-audit-002",
+      "to" : "ADR046-store-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-audit-003",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-audit-003",
+      "to" : "ADR046-bus-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-audit-003",
+      "to" : "ADR046-session-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-audit-004",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-azure-vm-002",
       "to" : "ADR046-azure-vm-001",
       "type" : "work-item-depends-on"
@@ -5628,6 +5658,26 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-client-001",
+      "to" : "ADR046-zone-control-011",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-client-001",
+      "to" : "ADR046-zone-control-012",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-client-001",
+      "to" : "ADR046-zone-control-013",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-client-001",
+      "to" : "ADR046-zone-control-018",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-clipboard-002",
       "to" : "ADR046-clipboard-001",
       "type" : "work-item-depends-on"
@@ -5734,17 +5784,17 @@
     },
     {
       "from" : "ADR046-cred-mi-001",
-      "to" : "ADR046-cred-mi-005",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-cred-mi-001",
       "to" : "ADR046-credential-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-cred-mi-001",
       "to" : "ADR046-credential-002",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-cred-mi-001",
+      "to" : "ADR046-mi-topology-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -5754,17 +5804,17 @@
     },
     {
       "from" : "ADR046-cred-mi-002",
-      "to" : "ADR046-cred-mi-005",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-cred-mi-002",
       "to" : "ADR046-credential-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-cred-mi-002",
       "to" : "ADR046-credential-002",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-cred-mi-002",
+      "to" : "ADR046-mi-topology-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -5799,17 +5849,7 @@
     },
     {
       "from" : "ADR046-cred-mi-004",
-      "to" : "ADR046-cred-mi-005",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-cred-mi-005",
-      "to" : "ADR046-credential-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-cred-mi-005",
-      "to" : "ADR046-credential-002",
+      "to" : "ADR046-mi-topology-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -5844,12 +5884,12 @@
     },
     {
       "from" : "ADR046-credential-002",
-      "to" : "ADR046-credential-001",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-credential-002",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-credential-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -6153,6 +6193,21 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-doctor-001",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-doctor-001",
+      "to" : "ADR046-core-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-doctor-002",
+      "to" : "ADR046-doctor-001",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-exec-002",
       "to" : "ADR046-exec-001",
       "type" : "work-item-depends-on"
@@ -6328,11 +6383,6 @@
       "type" : "work-item-depends-on"
     },
     {
-      "from" : "ADR046-exec-024",
-      "to" : "ADR046-zone-control-019",
-      "type" : "work-item-depends-on"
-    },
-    {
       "from" : "ADR046-feasibility-002",
       "to" : "ADR046-feasibility-001",
       "type" : "work-item-depends-on"
@@ -6393,8 +6443,28 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-host-posture-001",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-host-posture-001",
+      "to" : "ADR046-core-001",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-identities-002",
       "to" : "ADR046-identities-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-mi-topology-001",
+      "to" : "ADR046-credential-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-mi-topology-001",
+      "to" : "ADR046-credential-002",
       "type" : "work-item-depends-on"
     },
     {
@@ -6424,6 +6494,11 @@
     },
     {
       "from" : "ADR046-minijail-005",
+      "to" : "ADR046-bus-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-minijail-005",
       "to" : "ADR046-minijail-001",
       "type" : "work-item-depends-on"
     },
@@ -6445,11 +6520,6 @@
     {
       "from" : "ADR046-minijail-005",
       "to" : "ADR046-session-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-minijail-005",
-      "to" : "ADR046-session-003",
       "type" : "work-item-depends-on"
     },
     {
@@ -6844,12 +6914,12 @@
     },
     {
       "from" : "ADR046-notify-002",
-      "to" : "ADR046-session-001",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-notify-002",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-session-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -6958,6 +7028,11 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-pkg-001",
+      "to" : "ADR046-zone-control-003",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-process-002",
       "to" : "ADR046-process-001",
       "type" : "work-item-depends-on"
@@ -6965,6 +7040,21 @@
     {
       "from" : "ADR046-provider-004",
       "to" : "ADR046-provider-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-provider-agent-001",
+      "to" : "ADR046-zone-control-011",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-provider-agent-001",
+      "to" : "ADR046-zone-control-017",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-provider-agent-001",
+      "to" : "ADR046-zone-control-018",
       "type" : "work-item-depends-on"
     },
     {
@@ -7483,6 +7573,81 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-reuse-001",
+      "to" : "ADR046-telem-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-002",
+      "to" : "ADR046-reuse-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-003",
+      "to" : "ADR046-reuse-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-004",
+      "to" : "ADR046-reuse-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-004",
+      "to" : "ADR046-reuse-003",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-005",
+      "to" : "ADR046-audit-003",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-005",
+      "to" : "ADR046-reuse-004",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-006",
+      "to" : "ADR046-bus-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-006",
+      "to" : "ADR046-reuse-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-007",
+      "to" : "ADR046-reuse-004",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-007",
+      "to" : "ADR046-reuse-006",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-008",
+      "to" : "ADR046-reuse-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-009",
+      "to" : "ADR046-reuse-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-009",
+      "to" : "ADR046-telem-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reuse-009",
+      "to" : "ADR046-telem-003",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-routing-002",
       "to" : "ADR046-routing-001",
       "type" : "work-item-depends-on"
@@ -7589,12 +7754,12 @@
     },
     {
       "from" : "ADR046-security-002",
-      "to" : "ADR046-session-001",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-security-002",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-session-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -7609,12 +7774,12 @@
     },
     {
       "from" : "ADR046-security-004",
-      "to" : "ADR046-routing-005",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-security-004",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-routing-005",
       "type" : "work-item-depends-on"
     },
     {
@@ -7674,7 +7839,7 @@
     },
     {
       "from" : "ADR046-security-012",
-      "to" : "ADR046-telem-013",
+      "to" : "ADR046-audit-002",
       "type" : "work-item-depends-on"
     },
     {
@@ -7694,17 +7859,17 @@
     },
     {
       "from" : "ADR046-security-014",
-      "to" : "ADR046-telem-016",
+      "to" : "ADR046-doctor-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-security-014",
-      "to" : "ADR046-telem-017",
+      "to" : "ADR046-doctor-002",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-security-015",
-      "to" : "ADR046-telem-012",
+      "to" : "ADR046-audit-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -8454,6 +8619,11 @@
     },
     {
       "from" : "ADR046-system-core-001",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-system-core-001",
       "to" : "ADR046-exec-003",
       "type" : "work-item-depends-on"
     },
@@ -8483,11 +8653,6 @@
       "type" : "work-item-depends-on"
     },
     {
-      "from" : "ADR046-system-core-001",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
       "from" : "ADR046-systemd-001",
       "to" : "ADR046-process-002",
       "type" : "work-item-depends-on"
@@ -8514,12 +8679,12 @@
     },
     {
       "from" : "ADR046-telem-003",
-      "to" : "ADR046-session-001",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-telem-003",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-session-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -8584,6 +8749,11 @@
     },
     {
       "from" : "ADR046-telem-011",
+      "to" : "ADR046-audit-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-telem-011",
       "to" : "ADR046-store-001",
       "type" : "work-item-depends-on"
     },
@@ -8595,141 +8765,6 @@
     {
       "from" : "ADR046-telem-011",
       "to" : "ADR046-telem-010",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-011",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-013",
-      "to" : "ADR046-store-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-013",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-014",
-      "to" : "ADR046-session-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-014",
-      "to" : "ADR046-session-003",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-014",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-015",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-016",
-      "to" : "ADR046-core-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-016",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-017",
-      "to" : "ADR046-telem-016",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-018",
-      "to" : "ADR046-core-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-018",
-      "to" : "ADR046-telem-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-019",
-      "to" : "ADR046-telem-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-020",
-      "to" : "ADR046-telem-019",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-021",
-      "to" : "ADR046-telem-019",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-022",
-      "to" : "ADR046-telem-019",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-022",
-      "to" : "ADR046-telem-021",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-023",
-      "to" : "ADR046-telem-014",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-023",
-      "to" : "ADR046-telem-022",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-024",
-      "to" : "ADR046-session-003",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-024",
-      "to" : "ADR046-telem-019",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-025",
-      "to" : "ADR046-telem-022",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-025",
-      "to" : "ADR046-telem-024",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-026",
-      "to" : "ADR046-telem-019",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-027",
-      "to" : "ADR046-telem-001",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-027",
-      "to" : "ADR046-telem-003",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-telem-027",
-      "to" : "ADR046-telem-019",
       "type" : "work-item-depends-on"
     },
     {
@@ -8784,7 +8819,7 @@
     },
     {
       "from" : "ADR046-transport-unix-002",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -8814,12 +8849,12 @@
     },
     {
       "from" : "ADR046-transport-unix-007",
-      "to" : "ADR046-session-001",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-transport-unix-007",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-session-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -8965,6 +9000,11 @@
     {
       "from" : "ADR046-usbip-009",
       "to" : "ADR046-usbip-008",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-user-session-001",
+      "to" : "ADR046-zone-control-019",
       "type" : "work-item-depends-on"
     },
     {
@@ -9119,7 +9159,7 @@
     },
     {
       "from" : "ADR046-vsock-001",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -9129,7 +9169,7 @@
     },
     {
       "from" : "ADR046-vsock-003",
-      "to" : "ADR046-session-003",
+      "to" : "ADR046-bus-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -9159,7 +9199,7 @@
     },
     {
       "from" : "ADR046-vvfs-001",
-      "to" : "ADR046-vvfs-007",
+      "to" : "ADR046-vvfs-export-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -9189,7 +9229,7 @@
     },
     {
       "from" : "ADR046-vvfs-003",
-      "to" : "ADR046-vvfs-007",
+      "to" : "ADR046-vvfs-export-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -9223,8 +9263,13 @@
       "type" : "work-item-depends-on"
     },
     {
-      "from" : "ADR046-vvfs-007",
+      "from" : "ADR046-vvfs-export-001",
       "to" : "ADR046-volume-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-wire-001",
+      "to" : "ADR046-zone-control-013",
       "type" : "work-item-depends-on"
     },
     {
@@ -9475,51 +9520,6 @@
     {
       "from" : "ADR046-zone-control-024",
       "to" : "ADR046-zone-control-022",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-025",
-      "to" : "ADR046-zone-control-011",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-025",
-      "to" : "ADR046-zone-control-012",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-025",
-      "to" : "ADR046-zone-control-013",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-025",
-      "to" : "ADR046-zone-control-018",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-026",
-      "to" : "ADR046-zone-control-003",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-027",
-      "to" : "ADR046-zone-control-011",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-027",
-      "to" : "ADR046-zone-control-017",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-027",
-      "to" : "ADR046-zone-control-018",
-      "type" : "work-item-depends-on"
-    },
-    {
-      "from" : "ADR046-zone-control-028",
-      "to" : "ADR046-zone-control-013",
       "type" : "work-item-depends-on"
     }
   ],
@@ -12094,6 +12094,92 @@
     {
       "blockers" : [],
       "destinations" : [
+        "`packages/d2b-audit/src/{hash_chain.rs,segment.rs,rate_limit.rs,record_types.rs,sink.rs,export.rs}`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-audit-001",
+      "kind" : "work-item",
+      "owner" : "W0/W1a; audit crate owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 10,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-resource-store-redb/src/audit.rs`, `packages/d2b-core-controller/src/authz_audit.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-audit-002",
+      "kind" : "work-item",
+      "owner" : "ADR046-audit-001 + ADR046-store-001; store/authz owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-001",
+        "ADR046-store-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 11,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-session/src/audit.rs`, `packages/d2b-bus/src/audit.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-audit-003",
+      "kind" : "work-item",
+      "owner" : "ADR046-audit-001 + ADR046-session-001 + ADR046-bus-001; session/bus owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-001",
+        "ADR046-bus-001",
+        "ADR046-session-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 11,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand); `packages/d2b/tests/zone_audit_contract.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-audit-004",
+      "kind" : "work-item",
+      "owner" : "ADR046-audit-001; CLI owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 11,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
         "`src/{lib.rs,config.rs,schema.rs,error.rs,effect/mod.rs}`"
       ],
       "entryContracts" : [
@@ -12278,6 +12364,26 @@
       "specId" : "ADR-046-provider-runtime-azure-virtual-machine",
       "topologicalRank" : 11,
       "wave" : "W6"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-componentsession-and-bus"
+      ],
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-bus-001",
+      "kind" : "work-item",
+      "owner" : "Sessions + resource API; bus owner",
+      "parallelGroup" : "wi:ADR-046-componentsession-and-bus",
+      "prerequisites" : [
+        "ADR-046-componentsession-and-bus"
+      ],
+      "specId" : "ADR-046-componentsession-and-bus",
+      "topologicalRank" : 6,
+      "wave" : "W1"
     },
     {
       "blockers" : [],
@@ -12714,6 +12820,30 @@
     {
       "blockers" : [],
       "destinations" : [
+        "`packages/d2b-client/src/` (updated for v3 Zone API, replacing ADR45 daemon verbs with Zone resource operations)"
+      ],
+      "entryContracts" : [
+        "ADR-046-resources-zone-control"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-client-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-zone-control-011, ADR046-zone-control-012, ADR046-zone-control-013, ADR046-zone-control-018",
+      "parallelGroup" : "wi:ADR-046-resources-zone-control",
+      "prerequisites" : [
+        "ADR-046-resources-zone-control",
+        "ADR046-zone-control-011",
+        "ADR046-zone-control-012",
+        "ADR046-zone-control-013",
+        "ADR046-zone-control-018"
+      ],
+      "specId" : "ADR-046-resources-zone-control",
+      "topologicalRank" : 13,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
         "packages/d2b-provider-clipboard-wayland/ with src, tests, integration, README.md, and binaries clipboard-controller, clipd-host, picker-session"
       ],
       "entryContracts" : [
@@ -13043,13 +13173,13 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-cred-mi-001",
       "kind" : "work-item",
-      "owner" : "`ADR046-credential-001` (contracts), `ADR046-credential-002` (service); `ADR046-reconcile-001`; `ADR046-cred-mi-005`; `credential-managed-identity` crate owner",
+      "owner" : "`ADR046-credential-001` (contracts), `ADR046-credential-002` (service); `ADR046-reconcile-001`; `ADR046-mi-topology-001`; `credential-managed-identity` crate owner",
       "parallelGroup" : "wi:ADR-046-provider-credential-managed-identity",
       "prerequisites" : [
         "ADR-046-provider-credential-managed-identity",
-        "ADR046-cred-mi-005",
         "ADR046-credential-001",
         "ADR046-credential-002",
+        "ADR046-mi-topology-001",
         "ADR046-reconcile-001"
       ],
       "specId" : "ADR-046-provider-credential-managed-identity",
@@ -13067,13 +13197,13 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-cred-mi-002",
       "kind" : "work-item",
-      "owner" : "ADR046-credential-001, ADR046-credential-002; ADR046-reconcile-001, ADR046-reconcile-002; ADR046-cred-mi-005; owner: Credential controller toolkit and managed-identity controller",
+      "owner" : "ADR046-credential-001, ADR046-credential-002; ADR046-reconcile-001, ADR046-reconcile-002; ADR046-mi-topology-001; owner: Credential controller toolkit and managed-identity controller",
       "parallelGroup" : "wi:ADR-046-provider-credential-managed-identity",
       "prerequisites" : [
         "ADR-046-provider-credential-managed-identity",
-        "ADR046-cred-mi-005",
         "ADR046-credential-001",
         "ADR046-credential-002",
+        "ADR046-mi-topology-001",
         "ADR046-reconcile-001",
         "ADR046-reconcile-002"
       ],
@@ -13115,37 +13245,15 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-cred-mi-004",
       "kind" : "work-item",
-      "owner" : "Depends on ADR046-cred-mi-001 and ADR046-cred-mi-005; owner: credential-managed-identity audit/telemetry implementation",
+      "owner" : "Depends on ADR046-cred-mi-001 and ADR046-mi-topology-001; owner: credential-managed-identity audit/telemetry implementation",
       "parallelGroup" : "wi:ADR-046-provider-credential-managed-identity",
       "prerequisites" : [
         "ADR-046-provider-credential-managed-identity",
         "ADR046-cred-mi-001",
-        "ADR046-cred-mi-005"
+        "ADR046-mi-topology-001"
       ],
       "specId" : "ADR-046-provider-credential-managed-identity",
       "topologicalRank" : 13,
-      "wave" : "W6"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "packages/d2b-provider-credential-managed-identity/src/{controller.rs,agent.rs}; packages/d2b-provider-credential-managed-identity/{controller/main.rs,agent/main.rs}; packages/d2b-provider-credential-managed-identity/tests/topology.rs"
-      ],
-      "entryContracts" : [
-        "ADR-046-provider-credential-managed-identity"
-      ],
-      "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-cred-mi-005",
-      "kind" : "work-item",
-      "owner" : "ADR046-credential-001 and ADR046-credential-002; owner: credential-managed-identity controller/agent topology. This topology contract is consumed by the later managed-identity controller work.",
-      "parallelGroup" : "wi:ADR-046-provider-credential-managed-identity",
-      "prerequisites" : [
-        "ADR-046-provider-credential-managed-identity",
-        "ADR046-credential-001",
-        "ADR046-credential-002"
-      ],
-      "specId" : "ADR-046-provider-credential-managed-identity",
-      "topologicalRank" : 11,
       "wave" : "W6"
     },
     {
@@ -13304,13 +13412,13 @@
       "exitGate" : "ADR046-W4 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-credential-002",
       "kind" : "work-item",
-      "owner" : "`ADR046-credential-001`; `ADR046-api-001` (resource API); `ADR046-session-003` (d2b-bus); Credential service owner",
+      "owner" : "`ADR046-credential-001`; `ADR046-api-001` (resource API); `ADR046-bus-001` (d2b-bus); Credential service owner",
       "parallelGroup" : "wi:ADR-046-resources-credential",
       "prerequisites" : [
         "ADR-046-resources-credential",
         "ADR046-api-001",
-        "ADR046-credential-001",
-        "ADR046-session-003"
+        "ADR046-bus-001",
+        "ADR046-credential-001"
       ],
       "specId" : "ADR-046-resources-credential",
       "topologicalRank" : 10,
@@ -13809,6 +13917,7 @@
       "parallelGroup" : "wi:core-config-hub:w5",
       "prerequisites" : [
         "ADR-046-resources-device",
+        "ADR046-core-001",
         "ADR046-device-006"
       ],
       "specId" : "ADR-046-resources-device",
@@ -14199,6 +14308,49 @@
     {
       "blockers" : [],
       "destinations" : [
+        "`packages/d2b/src/zone_doctor.rs`, `packages/d2b/tests/zone_doctor_contract.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-doctor-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-core-001 + ADR046-audit-001; CLI/doctor owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-001",
+        "ADR046-core-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 11,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b/src/zone_support_bundle.rs`, `packages/d2b/tests/zone_support_bundle_contract.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-doctor-002",
+      "kind" : "work-item",
+      "owner" : "ADR046-doctor-001; CLI/doctor owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-doctor-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 12,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
         "`packages/d2b-contracts/src/v3/host.rs`, `packages/d2b-contracts/src/v3/guest.rs`, `packages/d2b-contracts/src/v3/execution_policy.rs`, `packages/d2b-contracts/src/v3/process.rs`, `packages/d2b-contracts/src/v3/ephemeral_process.rs`, `packages/d2b-contracts/src/v3/user.rs`"
       ],
       "entryContracts" : [
@@ -14468,6 +14620,7 @@
       "parallelGroup" : "wi:core-config-hub:w5",
       "prerequisites" : [
         "ADR-046-resources-host-guest-process-user",
+        "ADR046-core-001",
         "ADR046-exec-008"
       ],
       "specId" : "ADR-046-resources-host-guest-process-user",
@@ -14511,6 +14664,7 @@
       "parallelGroup" : "wi:core-config-hub:w5",
       "prerequisites" : [
         "ADR-046-resources-host-guest-process-user",
+        "ADR046-core-001",
         "ADR046-exec-001",
         "ADR046-exec-014",
         "ADR046-exec-022"
@@ -14689,27 +14843,6 @@
       ],
       "specId" : "ADR-046-resources-host-guest-process-user",
       "topologicalRank" : 14,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-core-controller/src/user_session_authority.rs` (or a core/user-agent per-session agent Process under `Provider/system-systemd`); `AuthorityDescriptor` on the session authority"
-      ],
-      "entryContracts" : [
-        "ADR-046-resources-host-guest-process-user"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-exec-024",
-      "kind" : "work-item",
-      "owner" : "ADR046-zone-control-019 (authority index); `Provider/system-systemd` (user manager) + core/user-agent owner",
-      "parallelGroup" : "wi:ADR-046-resources-host-guest-process-user",
-      "prerequisites" : [
-        "ADR-046-resources-host-guest-process-user",
-        "ADR046-zone-control-019"
-      ],
-      "specId" : "ADR-046-resources-host-guest-process-user",
-      "topologicalRank" : 12,
       "wave" : "W5"
     },
     {
@@ -15127,6 +15260,28 @@
     {
       "blockers" : [],
       "destinations" : [
+        "`packages/d2b-provider-system-core/src/{host_reconciler.rs,host_status.rs,host_process_audit.rs}`; adapted `nixos-modules/unsafe-local-workloads-json.nix`; `packages/d2b-provider-system-core/tests/host_posture_contract.rs`"
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-host-posture-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-audit-001 + ADR046-core-001; `Provider/system-core` owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-001",
+        "ADR046-core-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 11,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
         "`packages/d2b-contracts/src/v3/identity.rs`, `packages/d2b-contracts/src/v3/resource_ref.rs`"
       ],
       "entryContracts" : [
@@ -15164,6 +15319,28 @@
       "specId" : "ADR-046-terminology-and-identities",
       "topologicalRank" : 3,
       "wave" : "W0"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "packages/d2b-provider-credential-managed-identity/src/{controller.rs,agent.rs}; packages/d2b-provider-credential-managed-identity/{controller/main.rs,agent/main.rs}; packages/d2b-provider-credential-managed-identity/tests/topology.rs"
+      ],
+      "entryContracts" : [
+        "ADR-046-provider-credential-managed-identity"
+      ],
+      "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-mi-topology-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-credential-001 and ADR046-credential-002; owner: credential-managed-identity controller/agent topology. This topology contract is consumed by the later managed-identity controller work.",
+      "parallelGroup" : "wi:ADR-046-provider-credential-managed-identity",
+      "prerequisites" : [
+        "ADR-046-provider-credential-managed-identity",
+        "ADR046-credential-001",
+        "ADR046-credential-002"
+      ],
+      "specId" : "ADR-046-provider-credential-managed-identity",
+      "topologicalRank" : 11,
+      "wave" : "W6"
     },
     {
       "blockers" : [],
@@ -15261,16 +15438,16 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-minijail-005",
       "kind" : "work-item",
-      "owner" : "All of ADR046-minijail-001 through ADR046-minijail-004; ComponentSession/d2b-bus (ADR046-session-001, ADR046-session-003); bootstrap authz",
+      "owner" : "All of ADR046-minijail-001 through ADR046-minijail-004; ComponentSession/d2b-bus (ADR046-session-001, ADR046-bus-001); bootstrap authz",
       "parallelGroup" : "wi:ADR-046-provider-system-minijail",
       "prerequisites" : [
         "ADR-046-provider-system-minijail",
+        "ADR046-bus-001",
         "ADR046-minijail-001",
         "ADR046-minijail-002",
         "ADR046-minijail-003",
         "ADR046-minijail-004",
-        "ADR046-session-001",
-        "ADR046-session-003"
+        "ADR046-session-001"
       ],
       "specId" : "ADR-046-provider-system-minijail",
       "topologicalRank" : 14,
@@ -15462,6 +15639,7 @@
       "parallelGroup" : "wi:core-config-hub:w4",
       "prerequisites" : [
         "ADR-046-resources-network",
+        "ADR046-core-001",
         "ADR046-network-004",
         "ADR046-network-005"
       ],
@@ -16685,12 +16863,12 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-notify-002",
       "kind" : "work-item",
-      "owner" : "ADR046-session-001, ADR046-session-003; session/bus wiring",
+      "owner" : "ADR046-session-001, ADR046-bus-001; session/bus wiring",
       "parallelGroup" : "wi:ADR-046-provider-notification-desktop",
       "prerequisites" : [
         "ADR-046-provider-notification-desktop",
-        "ADR046-session-001",
-        "ADR046-session-003"
+        "ADR046-bus-001",
+        "ADR046-session-001"
       ],
       "specId" : "ADR-046-provider-notification-desktop",
       "topologicalRank" : 11,
@@ -16960,6 +17138,27 @@
     {
       "blockers" : [],
       "destinations" : [
+        "`packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; gated under D2B_FIXTURES in existing `tests/tools/rust-workspace-checks.sh`)"
+      ],
+      "entryContracts" : [
+        "ADR-046-resources-zone-control"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-pkg-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-zone-control-003; workspace policy owner",
+      "parallelGroup" : "wi:ADR-046-resources-zone-control",
+      "prerequisites" : [
+        "ADR-046-resources-zone-control",
+        "ADR046-zone-control-003"
+      ],
+      "specId" : "ADR-046-resources-zone-control",
+      "topologicalRank" : 13,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
         "`packages/d2b-contracts/src/v3/host.rs`, `guest.rs`, `execution_policy.rs`, `process.rs`, `volume.rs`, `user.rs`, `network.rs`, `device.rs`, `credential.rs`"
       ],
       "entryContracts" : [
@@ -17138,6 +17337,29 @@
       "specId" : "ADR-046-provider-model-and-packaging",
       "topologicalRank" : 9,
       "wave" : "W3"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-provider/src/agent.rs` (v3 provider agent dispatch); `packages/d2b-contracts/src/v3/provider_registry.rs` (v3 provider registry wire contract)"
+      ],
+      "entryContracts" : [
+        "ADR-046-resources-zone-control"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-provider-agent-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-zone-control-011, ADR046-zone-control-017, ADR046-zone-control-018",
+      "parallelGroup" : "wi:ADR-046-resources-zone-control",
+      "prerequisites" : [
+        "ADR-046-resources-zone-control",
+        "ADR046-zone-control-011",
+        "ADR046-zone-control-017",
+        "ADR046-zone-control-018"
+      ],
+      "specId" : "ADR-046-resources-zone-control",
+      "topologicalRank" : 13,
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -18145,6 +18367,201 @@
     {
       "blockers" : [],
       "destinations" : [
+        "`packages/d2b-session/` copied verbatim; v3 contract extension renames endpoint purpose values while preserving backward wire compatibility during transition."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-telem-001 (d2b-telemetry must exist first for MetricsSink injection); session owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-telem-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 11,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-session-unix/` copied verbatim."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-002",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-001; Unix transport owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-reuse-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 12,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-client/` copied; DaemonClient/GuestClient adapted to v3 service packages; `MetadataInput::with_trace` drives `TraceContext` propagation."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-003",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-001; client owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-reuse-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 12,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-provider/` and `packages/d2b-provider-toolkit/` copied with v3 session admission and bus routing adaptations."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-004",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-001 + ADR046-reuse-003; Provider owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-reuse-001",
+        "ADR046-reuse-003"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 13,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-provider-observability-otel/src/agent.rs` adapted; ComponentSessionDriver mock becomes shared Provider session fixture."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-005",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-004 + ADR046-audit-003; Provider agent / observability-otel owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-003",
+        "ADR046-reuse-004"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 14,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-bus/src/routing.rs` adapted from `service_v2.rs`; RemoteNodeErrorKind stable code pattern becomes v3 BusErrorKind."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-006",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-001 + ADR046-bus-001; bus routing owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-bus-001",
+        "ADR046-reuse-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 12,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-bus/src/service_router.rs` and `packages/d2b-core-controller/src/provider_effects.rs`."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-007",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-004 + ADR046-reuse-006; core-controller routing owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-reuse-004",
+        "ADR046-reuse-006"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 14,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` and `tests/noise_vectors.rs` copied verbatim."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-008",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-001; contract-tests owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-reuse-001"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 12,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-telemetry/src/session_metrics_sink.rs`."
+      ],
+      "entryContracts" : [
+        "ADR-046-telemetry-audit-and-support"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-reuse-009",
+      "kind" : "work-item",
+      "owner" : "ADR046-reuse-001 + ADR046-telem-001 + ADR046-telem-003; telemetry/session owner",
+      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
+      "prerequisites" : [
+        "ADR-046-telemetry-audit-and-support",
+        "ADR046-reuse-001",
+        "ADR046-telem-001",
+        "ADR046-telem-003"
+      ],
+      "specId" : "ADR-046-telemetry-audit-and-support",
+      "topologicalRank" : 12,
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
         "`packages/d2b-contracts/src/v3/zone_routing.rs`"
       ],
       "entryContracts" : [
@@ -18514,12 +18931,12 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-security-002",
       "kind" : "work-item",
-      "owner" : "`ADR046-session-001`/`ADR046-session-003` (ComponentSession/d2b-bus implementation)",
+      "owner" : "`ADR046-session-001`/`ADR046-bus-001` (ComponentSession/d2b-bus implementation)",
       "parallelGroup" : "wi:ADR-046-security-and-threat-model",
       "prerequisites" : [
         "ADR-046-security-and-threat-model",
-        "ADR046-session-001",
-        "ADR046-session-003"
+        "ADR046-bus-001",
+        "ADR046-session-001"
       ],
       "specId" : "ADR-046-security-and-threat-model",
       "topologicalRank" : 12,
@@ -18558,12 +18975,12 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-security-004",
       "kind" : "work-item",
-      "owner" : "`ADR046-routing-005`/`ADR046-session-003` (ZoneLink/d2b-bus relay implementation)",
+      "owner" : "`ADR046-routing-005`/`ADR046-bus-001` (ZoneLink/d2b-bus relay implementation)",
       "parallelGroup" : "wi:ADR-046-security-and-threat-model",
       "prerequisites" : [
         "ADR-046-security-and-threat-model",
-        "ADR046-routing-005",
-        "ADR046-session-003"
+        "ADR046-bus-001",
+        "ADR046-routing-005"
       ],
       "specId" : "ADR-046-security-and-threat-model",
       "topologicalRank" : 12,
@@ -18731,11 +19148,11 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-security-012",
       "kind" : "work-item",
-      "owner" : "`ADR046-telem-013` (privileged audit durability)",
+      "owner" : "`ADR046-audit-002` (privileged audit durability)",
       "parallelGroup" : "wi:ADR-046-security-and-threat-model",
       "prerequisites" : [
         "ADR-046-security-and-threat-model",
-        "ADR046-telem-013"
+        "ADR046-audit-002"
       ],
       "specId" : "ADR-046-security-and-threat-model",
       "topologicalRank" : 12,
@@ -18775,12 +19192,12 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-security-014",
       "kind" : "work-item",
-      "owner" : "`ADR046-telem-016`/`ADR046-telem-017` (doctor/support-bundle commands)",
+      "owner" : "`ADR046-doctor-001`/`ADR046-doctor-002` (doctor/support-bundle commands)",
       "parallelGroup" : "wi:ADR-046-security-and-threat-model",
       "prerequisites" : [
         "ADR-046-security-and-threat-model",
-        "ADR046-telem-016",
-        "ADR046-telem-017"
+        "ADR046-doctor-001",
+        "ADR046-doctor-002"
       ],
       "specId" : "ADR-046-security-and-threat-model",
       "topologicalRank" : 13,
@@ -18797,11 +19214,11 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-security-015",
       "kind" : "work-item",
-      "owner" : "`ADR046-telem-012` (`StateReset` record), Volume/Credential lifecycle work items",
+      "owner" : "`ADR046-audit-001` (`StateReset` record), Volume/Credential lifecycle work items",
       "parallelGroup" : "wi:ADR-046-security-and-threat-model",
       "prerequisites" : [
         "ADR-046-security-and-threat-model",
-        "ADR046-telem-012"
+        "ADR046-audit-001"
       ],
       "specId" : "ADR-046-security-and-threat-model",
       "topologicalRank" : 12,
@@ -19750,26 +20167,6 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-componentsession-and-bus"
-      ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-session-003",
-      "kind" : "work-item",
-      "owner" : "Sessions + resource API; bus owner",
-      "parallelGroup" : "wi:ADR-046-componentsession-and-bus",
-      "prerequisites" : [
-        "ADR-046-componentsession-and-bus"
-      ],
-      "specId" : "ADR-046-componentsession-and-bus",
-      "topologicalRank" : 6,
-      "wave" : "W1"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
         "`packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs`"
       ],
       "entryContracts" : [
@@ -20607,17 +21004,17 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-system-core-001",
       "kind" : "work-item",
-      "owner" : "`ADR046-provider-001`, `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`, `ADR046-telem-001`, and `ADR046-telem-012`; `Provider/system-core` owner",
+      "owner" : "`ADR046-provider-001`, `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`, `ADR046-telem-001`, and `ADR046-audit-001`; `Provider/system-core` owner",
       "parallelGroup" : "wi:ADR-046-provider-system-core",
       "prerequisites" : [
         "ADR-046-provider-system-core",
+        "ADR046-audit-001",
         "ADR046-exec-003",
         "ADR046-exec-004",
         "ADR046-exec-005",
         "ADR046-provider-001",
         "ADR046-pstate-012",
-        "ADR046-telem-001",
-        "ADR046-telem-012"
+        "ADR046-telem-001"
       ],
       "specId" : "ADR-046-provider-system-core",
       "topologicalRank" : 13,
@@ -20739,12 +21136,12 @@
       "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-telem-003",
       "kind" : "work-item",
-      "owner" : "ADR046-telem-001 + ADR046-session-001 + ADR046-session-003; session/bus owner",
+      "owner" : "ADR046-telem-001 + ADR046-session-001 + ADR046-bus-001; session/bus owner",
       "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
       "prerequisites" : [
         "ADR-046-telemetry-audit-and-support",
+        "ADR046-bus-001",
         "ADR046-session-001",
-        "ADR046-session-003",
         "ADR046-telem-001"
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
@@ -20913,360 +21310,15 @@
       "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-telem-011",
       "kind" : "work-item",
-      "owner" : "ADR046-telem-009 + ADR046-telem-010 + ADR046-telem-012 + ADR046-store-001; core-controller owner",
+      "owner" : "ADR046-telem-009 + ADR046-telem-010 + ADR046-audit-001 + ADR046-store-001; core-controller owner",
       "parallelGroup" : "wi:core-config-hub:w5",
       "prerequisites" : [
         "ADR-046-telemetry-audit-and-support",
+        "ADR046-audit-001",
+        "ADR046-core-001",
         "ADR046-store-001",
         "ADR046-telem-009",
-        "ADR046-telem-010",
-        "ADR046-telem-012"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 12,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-audit/src/{hash_chain.rs,segment.rs,rate_limit.rs,record_types.rs,sink.rs,export.rs}`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-012",
-      "kind" : "work-item",
-      "owner" : "W0/W1a; audit crate owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 10,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-resource-store-redb/src/audit.rs`, `packages/d2b-core-controller/src/authz_audit.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-013",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-012 + ADR046-store-001; store/authz owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-store-001",
-        "ADR046-telem-012"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 11,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-session/src/audit.rs`, `packages/d2b-bus/src/audit.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-014",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-012 + ADR046-session-001 + ADR046-session-003; session/bus owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-session-001",
-        "ADR046-session-003",
-        "ADR046-telem-012"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 11,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand); `packages/d2b/tests/zone_audit_contract.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-015",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-012; CLI owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-012"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 11,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b/src/zone_doctor.rs`, `packages/d2b/tests/zone_doctor_contract.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-016",
-      "kind" : "work-item",
-      "owner" : "ADR046-core-001 + ADR046-telem-012; CLI/doctor owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-core-001",
-        "ADR046-telem-012"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 11,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b/src/zone_support_bundle.rs`, `packages/d2b/tests/zone_support_bundle_contract.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-017",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-016; CLI/doctor owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-016"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 12,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-provider-system-core/src/{host_reconciler.rs,host_status.rs,host_process_audit.rs}`; adapted `nixos-modules/unsafe-local-workloads-json.nix`; `packages/d2b-provider-system-core/tests/host_posture_contract.rs`"
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-018",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-012 + ADR046-core-001; `Provider/system-core` owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-core-001",
-        "ADR046-telem-012"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 11,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-session/` copied verbatim; v3 contract extension renames endpoint purpose values while preserving backward wire compatibility during transition."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-019",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-001 (d2b-telemetry must exist first for MetricsSink injection); session owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-001"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 11,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-session-unix/` copied verbatim."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-020",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-019; Unix transport owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-019"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 12,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-client/` copied; DaemonClient/GuestClient adapted to v3 service packages; `MetadataInput::with_trace` drives `TraceContext` propagation."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-021",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-019; client owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-019"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 12,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-provider/` and `packages/d2b-provider-toolkit/` copied with v3 session admission and bus routing adaptations."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-022",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-019 + ADR046-telem-021; Provider owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-019",
-        "ADR046-telem-021"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 13,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-provider-observability-otel/src/agent.rs` adapted; ComponentSessionDriver mock becomes shared Provider session fixture."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-023",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-022 + ADR046-telem-014; Provider agent / observability-otel owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-014",
-        "ADR046-telem-022"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 14,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-bus/src/routing.rs` adapted from `service_v2.rs`; RemoteNodeErrorKind stable code pattern becomes v3 BusErrorKind."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-024",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-019 + ADR046-session-003; bus routing owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-session-003",
-        "ADR046-telem-019"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 12,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-bus/src/service_router.rs` and `packages/d2b-core-controller/src/provider_effects.rs`."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-025",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-022 + ADR046-telem-024; core-controller routing owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-022",
-        "ADR046-telem-024"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 14,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` and `tests/noise_vectors.rs` copied verbatim."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-026",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-019; contract-tests owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-019"
-      ],
-      "specId" : "ADR-046-telemetry-audit-and-support",
-      "topologicalRank" : 12,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-telemetry/src/session_metrics_sink.rs`."
-      ],
-      "entryContracts" : [
-        "ADR-046-telemetry-audit-and-support"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-telem-027",
-      "kind" : "work-item",
-      "owner" : "ADR046-telem-019 + ADR046-telem-001 + ADR046-telem-003; telemetry/session owner",
-      "parallelGroup" : "wi:ADR-046-telemetry-audit-and-support",
-      "prerequisites" : [
-        "ADR-046-telemetry-audit-and-support",
-        "ADR046-telem-001",
-        "ADR046-telem-003",
-        "ADR046-telem-019"
+        "ADR046-telem-010"
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 12,
@@ -21453,11 +21505,11 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-transport-unix-002",
       "kind" : "work-item",
-      "owner" : "ADR046-transport-unix-001; d2b-bus transport layer (ADR046-session-003)",
+      "owner" : "ADR046-transport-unix-001; d2b-bus transport layer (ADR046-bus-001)",
       "parallelGroup" : "wi:ADR-046-provider-transport-unix",
       "prerequisites" : [
         "ADR-046-provider-transport-unix",
-        "ADR046-session-003",
+        "ADR046-bus-001",
         "ADR046-transport-unix-001"
       ],
       "specId" : "ADR-046-provider-transport-unix",
@@ -21559,12 +21611,12 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-transport-unix-007",
       "kind" : "work-item",
-      "owner" : "ADR046-transport-unix-002 through 006; ADR046-session-003 (d2b-bus ComponentSession method dispatch); ADR046-session-001 (named-stream protocol)",
+      "owner" : "ADR046-transport-unix-002 through 006; ADR046-bus-001 (d2b-bus ComponentSession method dispatch); ADR046-session-001 (named-stream protocol)",
       "parallelGroup" : "wi:ADR-046-provider-transport-unix",
       "prerequisites" : [
         "ADR-046-provider-transport-unix",
+        "ADR046-bus-001",
         "ADR046-session-001",
-        "ADR046-session-003",
         "ADR046-transport-unix-002",
         "ADR046-transport-unix-003",
         "ADR046-transport-unix-004",
@@ -21858,6 +21910,27 @@
       "specId" : "ADR-046-provider-device-usbip",
       "topologicalRank" : 16,
       "wave" : "W6"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-core-controller/src/user_session_authority.rs` (or a core/user-agent per-session agent Process under `Provider/system-systemd`); `AuthorityDescriptor` on the session authority"
+      ],
+      "entryContracts" : [
+        "ADR-046-resources-host-guest-process-user"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-user-session-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-zone-control-019 (authority index); `Provider/system-systemd` (user manager) + core/user-agent owner",
+      "parallelGroup" : "wi:ADR-046-resources-host-guest-process-user",
+      "prerequisites" : [
+        "ADR-046-resources-host-guest-process-user",
+        "ADR046-zone-control-019"
+      ],
+      "specId" : "ADR-046-resources-host-guest-process-user",
+      "topologicalRank" : 12,
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -22280,11 +22353,11 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-vsock-001",
       "kind" : "work-item",
-      "owner" : "Title: Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes; Phase 1; Priority P0; Depends on ADR046-session-003 (OwnedTransport in d2b-session); Owner crate `d2b-provider-transport-vsock`.",
+      "owner" : "Title: Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes; Phase 1; Priority P0; Depends on ADR046-bus-001 (OwnedTransport in d2b-session); Owner crate `d2b-provider-transport-vsock`.",
       "parallelGroup" : "wi:ADR-046-provider-transport-vsock",
       "prerequisites" : [
         "ADR-046-provider-transport-vsock",
-        "ADR046-session-003"
+        "ADR046-bus-001"
       ],
       "specId" : "ADR-046-provider-transport-vsock",
       "topologicalRank" : 11,
@@ -22322,11 +22395,11 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-vsock-003",
       "kind" : "work-item",
-      "owner" : "Title: Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport); Phase 1; Priority P0; Depends on ADR046-vsock-002 and ADR046-session-003; Owner crate `d2b-provider-transport-vsock`.",
+      "owner" : "Title: Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport); Phase 1; Priority P0; Depends on ADR046-vsock-002 and ADR046-bus-001; Owner crate `d2b-provider-transport-vsock`.",
       "parallelGroup" : "wi:ADR-046-provider-transport-vsock",
       "prerequisites" : [
         "ADR-046-provider-transport-vsock",
-        "ADR046-session-003",
+        "ADR046-bus-001",
         "ADR046-vsock-002"
       ],
       "specId" : "ADR-046-provider-transport-vsock",
@@ -22427,12 +22500,12 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-vvfs-001",
       "kind" : "work-item",
-      "owner" : "ADR046-volume-001 (Volume contract types); ADR046-vvfs-007 (Export type); W1; volume-virtiofs Provider owner",
+      "owner" : "ADR046-volume-001 (Volume contract types); ADR046-vvfs-export-001 (Export type); W1; volume-virtiofs Provider owner",
       "parallelGroup" : "wi:ADR-046-provider-volume-virtiofs",
       "prerequisites" : [
         "ADR-046-provider-volume-virtiofs",
         "ADR046-volume-001",
-        "ADR046-vvfs-007"
+        "ADR046-vvfs-export-001"
       ],
       "specId" : "ADR-046-provider-volume-virtiofs",
       "topologicalRank" : 12,
@@ -22471,14 +22544,14 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-vvfs-003",
       "kind" : "work-item",
-      "owner" : "ADR046-vvfs-001, ADR046-vvfs-002, ADR046-vvfs-007; ADR046-volume-001; W2; volume-virtiofs controller owner",
+      "owner" : "ADR046-vvfs-001, ADR046-vvfs-002, ADR046-vvfs-export-001; ADR046-volume-001; W2; volume-virtiofs controller owner",
       "parallelGroup" : "wi:ADR-046-provider-volume-virtiofs",
       "prerequisites" : [
         "ADR-046-provider-volume-virtiofs",
         "ADR046-volume-001",
         "ADR046-vvfs-001",
         "ADR046-vvfs-002",
-        "ADR046-vvfs-007"
+        "ADR046-vvfs-export-001"
       ],
       "specId" : "ADR-046-provider-volume-virtiofs",
       "topologicalRank" : 14,
@@ -22559,7 +22632,7 @@
         "ADR-046-provider-volume-virtiofs"
       ],
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-vvfs-007",
+      "id" : "ADR046-vvfs-export-001",
       "kind" : "work-item",
       "owner" : "ADR046-volume-001; W1; volume-virtiofs Provider owner",
       "parallelGroup" : "wi:ADR-046-provider-volume-virtiofs",
@@ -22570,6 +22643,27 @@
       "specId" : "ADR-046-provider-volume-virtiofs",
       "topologicalRank" : 11,
       "wave" : "W6"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-contracts/src/v3/{services,state,identity,provider}.rs` (new v3 namespace); generated stubs regenerated from v3 proto files in `packages/d2b-contracts/proto/v3/`"
+      ],
+      "entryContracts" : [
+        "ADR-046-resources-zone-control"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-wire-001",
+      "kind" : "work-item",
+      "owner" : "ADR046-zone-control-013",
+      "parallelGroup" : "wi:ADR-046-resources-zone-control",
+      "prerequisites" : [
+        "ADR-046-resources-zone-control",
+        "ADR046-zone-control-013"
+      ],
+      "specId" : "ADR-046-resources-zone-control",
+      "topologicalRank" : 11,
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -22919,6 +23013,7 @@
       "parallelGroup" : "wi:core-config-hub:w5",
       "prerequisites" : [
         "ADR-046-resources-zone-control",
+        "ADR046-core-001",
         "ADR046-zone-control-001",
         "ADR046-zone-control-015"
       ],
@@ -23029,6 +23124,7 @@
       "parallelGroup" : "wi:core-config-hub:w5",
       "prerequisites" : [
         "ADR-046-resources-zone-control",
+        "ADR046-core-001",
         "ADR046-zone-control-001",
         "ADR046-zone-control-016"
       ],
@@ -23099,95 +23195,6 @@
       ],
       "specId" : "ADR-046-resources-zone-control",
       "topologicalRank" : 13,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-client/src/` (updated for v3 Zone API, replacing ADR45 daemon verbs with Zone resource operations)"
-      ],
-      "entryContracts" : [
-        "ADR-046-resources-zone-control"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-zone-control-025",
-      "kind" : "work-item",
-      "owner" : "ADR046-zone-control-011, ADR046-zone-control-012, ADR046-zone-control-013, ADR046-zone-control-018",
-      "parallelGroup" : "wi:ADR-046-resources-zone-control",
-      "prerequisites" : [
-        "ADR-046-resources-zone-control",
-        "ADR046-zone-control-011",
-        "ADR046-zone-control-012",
-        "ADR046-zone-control-013",
-        "ADR046-zone-control-018"
-      ],
-      "specId" : "ADR-046-resources-zone-control",
-      "topologicalRank" : 13,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; gated under D2B_FIXTURES in existing `tests/tools/rust-workspace-checks.sh`)"
-      ],
-      "entryContracts" : [
-        "ADR-046-resources-zone-control"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-zone-control-026",
-      "kind" : "work-item",
-      "owner" : "ADR046-zone-control-003; workspace policy owner",
-      "parallelGroup" : "wi:ADR-046-resources-zone-control",
-      "prerequisites" : [
-        "ADR-046-resources-zone-control",
-        "ADR046-zone-control-003"
-      ],
-      "specId" : "ADR-046-resources-zone-control",
-      "topologicalRank" : 13,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-provider/src/agent.rs` (v3 provider agent dispatch); `packages/d2b-contracts/src/v3/provider_registry.rs` (v3 provider registry wire contract)"
-      ],
-      "entryContracts" : [
-        "ADR-046-resources-zone-control"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-zone-control-027",
-      "kind" : "work-item",
-      "owner" : "ADR046-zone-control-011, ADR046-zone-control-017, ADR046-zone-control-018",
-      "parallelGroup" : "wi:ADR-046-resources-zone-control",
-      "prerequisites" : [
-        "ADR-046-resources-zone-control",
-        "ADR046-zone-control-011",
-        "ADR046-zone-control-017",
-        "ADR046-zone-control-018"
-      ],
-      "specId" : "ADR-046-resources-zone-control",
-      "topologicalRank" : 13,
-      "wave" : "W5"
-    },
-    {
-      "blockers" : [],
-      "destinations" : [
-        "`packages/d2b-contracts/src/v3/{services,state,identity,provider}.rs` (new v3 namespace); generated stubs regenerated from v3 proto files in `packages/d2b-contracts/proto/v3/`"
-      ],
-      "entryContracts" : [
-        "ADR-046-resources-zone-control"
-      ],
-      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
-      "id" : "ADR046-zone-control-028",
-      "kind" : "work-item",
-      "owner" : "ADR046-zone-control-013",
-      "parallelGroup" : "wi:ADR-046-resources-zone-control",
-      "prerequisites" : [
-        "ADR-046-resources-zone-control",
-        "ADR046-zone-control-013"
-      ],
-      "specId" : "ADR-046-resources-zone-control",
-      "topologicalRank" : 11,
       "wave" : "W5"
     }
   ],

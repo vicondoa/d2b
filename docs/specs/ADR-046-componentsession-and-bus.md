@@ -390,7 +390,7 @@ transcript/session generation digest, route, and fixed outcome.
 | Validation | Copied fd/peer/credit tests plus Host/Guest subject mapping |
 | Removal proof | Ad hoc guest/public/helper transport removed only per service cutover |
 
-### ADR046-session-003
+### ADR046-bus-001
 
 | Field | Value |
 | --- | --- |

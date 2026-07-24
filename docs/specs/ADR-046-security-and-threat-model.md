@@ -1548,12 +1548,12 @@ targeted.
 
 **`d2b zone doctor`.** Resource status reads only; no resource names, paths,
 `argv`, or PIDs in output; includes an audit hash-chain integrity check
-(`ADR-046-telemetry-audit-and-support`, `ADR046-telem-016`).
+(`ADR-046-telemetry-audit-and-support`, `ADR046-doctor-001`).
 
 **`d2b zone support-bundle`.** No spec bytes and no `metadata.name` in the
 bundle; metadata and status only. When a Provider is quarantined, the bundle
 reports `bundle_completeness: "partial"` rather than silently omitting the
-gap or blocking entirely (`ADR046-telem-017`). This is the concrete tool an
+gap or blocking entirely (`ADR046-doctor-002`). This is the concrete tool an
 operator or a coordinated-disclosure responder uses to gather evidence
 without themselves becoming a redaction bypass — it is bound by exactly the
 same audit/status redaction rules as every other read path in
@@ -1562,7 +1562,7 @@ same audit/status redaction rules as every other read path in
 **`d2b zone audit export`.** Admin-only (`audit-export` verb); hash-chain
 breaks are reported inline in the export stream rather than silently
 truncating history; output carries no old field names (`realm`/`node`/
-`workload_id`) and no path/`argv` content (`ADR046-telem-015`).
+`workload_id`) and no path/`argv` content (`ADR046-audit-004`).
 
 **Coordination with disclosure policy.** `SECURITY.md`'s GitHub Security
 Advisory channel, response-time targets (7-day acknowledgment, 30-day
@@ -1927,7 +1927,7 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-002` |
-| Dependency/owner | `ADR046-session-001`/`ADR046-session-003` (ComponentSession/d2b-bus implementation) |
+| Dependency/owner | `ADR046-session-001`/`ADR046-bus-001` (ComponentSession/d2b-bus implementation) |
 | Current source | main `a1cc0b2d`: `d2b-session/tests/noise_vectors.rs`, `d2b-session/tests/component_session.rs`, `d2b-session-unix/tests/unix_session.rs` |
 | Reuse source | Same main commit/paths |
 | Reuse action | adapt |
@@ -1959,7 +1959,7 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-004` |
-| Dependency/owner | `ADR046-routing-005`/`ADR046-session-003` (ZoneLink/d2b-bus relay implementation) |
+| Dependency/owner | `ADR046-routing-005`/`ADR046-bus-001` (ZoneLink/d2b-bus relay implementation) |
 | Current source | None (v3 ZoneLink relay is `ADR-only`) |
 | Reuse source | None |
 | Reuse action | adapt |
@@ -2087,7 +2087,7 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-012` |
-| Dependency/owner | `ADR046-telem-013` (privileged audit durability) |
+| Dependency/owner | `ADR046-audit-002` (privileged audit durability) |
 | Current source | `packages/d2bd/src/daemon_audit.rs` (existing audit-write path, adapted target) |
 | Reuse source | Same v3 path |
 | Reuse action | adapt |
@@ -2119,7 +2119,7 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-014` |
-| Dependency/owner | `ADR046-telem-016`/`ADR046-telem-017` (doctor/support-bundle commands) |
+| Dependency/owner | `ADR046-doctor-001`/`ADR046-doctor-002` (doctor/support-bundle commands) |
 | Current source | None (both commands are `ADR-only`) |
 | Reuse source | None |
 | Reuse action | adapt |
@@ -2135,7 +2135,7 @@ close. Each maps to the attacker class it is scoped against.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-security-015` |
-| Dependency/owner | `ADR046-telem-012` (`StateReset` record), Volume/Credential lifecycle work items |
+| Dependency/owner | `ADR046-audit-001` (`StateReset` record), Volume/Credential lifecycle work items |
 | Current source | Historical main ADR 0045 factory-reset design (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, reset process overview and apply-command verification steps) — reused only as a design precedent for atomicity/fail-closed sequencing, not as v3 architecture (see [Reset boundary](#reset-boundary) for the explicitly excluded assumptions) |
 | Reuse source | Same historical commit, sequencing pattern only (no code reuse; historical implementation was bash/systemd-generation-based and does not exist in any Rust crate) |
 | Reuse action | adapt |

@@ -1419,7 +1419,7 @@ Old and new suites never run in parallel indefinitely.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-transport-unix-002` |
-| Dependency/owner | ADR046-transport-unix-001; d2b-bus transport layer (ADR046-session-003) |
+| Dependency/owner | ADR046-transport-unix-001; d2b-bus transport layer (ADR046-bus-001) |
 | Current source | `packages/d2b-session-unix/src/{adapter,socket,descriptor}.rs`, `tests/unix_session.rs` at main `a1cc0b2d` |
 | Reuse source | Same; `UnixSeqpacketTransport`, `PeerIdentityPolicy`, `UnixAttachmentPayload`, `OwnedUnixAttachment`, `SeqpacketSocket`, `PeerCredentials`, `ObjectIdentity`, `AcceptedAttachment`, `VerifiedPacket` |
 | Reuse action | adapt |
@@ -1509,7 +1509,7 @@ Old and new suites never run in parallel indefinitely.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-transport-unix-007` |
-| Dependency/owner | ADR046-transport-unix-002 through 006; ADR046-session-003 (d2b-bus ComponentSession method dispatch); ADR046-session-001 (named-stream protocol) |
+| Dependency/owner | ADR046-transport-unix-002 through 006; ADR046-bus-001 (d2b-bus ComponentSession method dispatch); ADR046-session-001 (named-stream protocol) |
 | Current source | No portal service in v3 baseline; `d2b-provider-toolkit/src/server.rs` `GeneratedProviderServiceServer` dispatch pattern (main `a1cc0b2d`) for service entry pattern |
 | Reuse source | main `a1cc0b2d` `d2b-provider-toolkit/src/server.rs` service dispatch pattern |
 | Reuse action | adapt |

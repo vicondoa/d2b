@@ -18,7 +18,9 @@
       "status" : "Proposed",
       "supersedes" : "Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline)",
       "version" : 1,
-      "workItemPrefix" : "cli"
+      "workItemPrefixes" : [
+        "cli"
+      ]
     },
     {
       "dependsOn" : [
@@ -32,7 +34,9 @@
       "status" : "Proposed",
       "supersedes" : "Current ProcessRole/VmProcessDag as the public process model",
       "version" : 1,
-      "workItemPrefix" : "process"
+      "workItemPrefixes" : [
+        "process"
+      ]
     },
     {
       "dependsOn" : [
@@ -40,12 +44,15 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-componentsession-and-bus.md",
-      "sha256" : "dedab5286a5c324b9c1d3765d9c1230e3ad684a65a6fa15e8c48cc4d2b5f2164",
+      "sha256" : "2eca9b7d988406889a0fbd5062abb35e5c56c67c6df4f4385dab3d3e89d21904",
       "specId" : "ADR-046-componentsession-and-bus",
       "status" : "Proposed",
       "supersedes" : "Current v3 Realm PeerSession and ad hoc guest/user/public IPC",
       "version" : 1,
-      "workItemPrefix" : "session"
+      "workItemPrefixes" : [
+        "bus",
+        "session"
+      ]
     },
     {
       "dependsOn" : [
@@ -60,7 +67,9 @@
       "status" : "Proposed",
       "supersedes" : "Current daemon-global hard-coded orchestration ownership",
       "version" : 1,
-      "workItemPrefix" : "core"
+      "workItemPrefixes" : [
+        "core"
+      ]
     },
     {
       "dependsOn" : [],
@@ -70,7 +79,7 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : null
+      "workItemPrefixes" : []
     },
     {
       "dependsOn" : [],
@@ -80,7 +89,9 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "decisions"
+      "workItemPrefixes" : [
+        "decisions"
+      ]
     },
     {
       "dependsOn" : [
@@ -101,12 +112,14 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "4ecfb8e3e90ac932f019424e5003897c3809647e3ffd0c9c72c9faab476b147f",
+      "sha256" : "c6f82e63c4b7b76865510fcf151813e7feb66c2c72e85717c0e8d41b2b6ebf4e",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "feasibility"
+      "workItemPrefixes" : [
+        "feasibility"
+      ]
     },
     {
       "dependsOn" : [
@@ -122,7 +135,9 @@
       "status" : "Proposed",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
       "version" : 2,
-      "workItemPrefix" : "nix"
+      "workItemPrefixes" : [
+        "nix"
+      ]
     },
     {
       "dependsOn" : [
@@ -135,7 +150,9 @@
       "status" : "Proposed",
       "supersedes" : "Current implementation-shaped ProcessRole composition",
       "version" : 1,
-      "workItemPrefix" : "primitives"
+      "workItemPrefixes" : [
+        "primitives"
+      ]
     },
     {
       "dependsOn" : [
@@ -157,7 +174,9 @@
       "status" : "Proposed",
       "supersedes" : "Current `d2b switch`/`boot`/`test`/`rollback`/`build`/`generations`/`gc`/`migrate` top-level verbs in `packages/d2b/src/lib.rs` and hardlink-farm activation in `packages/d2b-host/src/hardlink_farm.rs`",
       "version" : 3,
-      "workItemPrefix" : "activation"
+      "workItemPrefixes" : [
+        "activation"
+      ]
     },
     {
       "dependsOn" : [
@@ -180,7 +199,9 @@
       "status" : "Proposed",
       "supersedes" : "`nixos-modules/components/audio/host.nix`, `nixos-modules/components/audio/guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs`",
       "version" : 10,
-      "workItemPrefix" : "audio"
+      "workItemPrefixes" : [
+        "audio"
+      ]
     },
     {
       "dependsOn" : [
@@ -199,7 +220,9 @@
       "status" : "Proposed",
       "supersedes" : "`nixos-modules/clipboard.nix` (v3 migration), ADR-046-provider-clipboard-wayland v1",
       "version" : 2,
-      "workItemPrefix" : "clipboard"
+      "workItemPrefixes" : [
+        "clipboard"
+      ]
     },
     {
       "dependsOn" : [
@@ -217,7 +240,9 @@
       "status" : "Proposed",
       "supersedes" : "No Host login/token chains; no direct `EntraCredentialClient` production egress; no `DefaultAzureCredential`, environment, DBus, browser, or path discovery",
       "version" : 2,
-      "workItemPrefix" : "cred-entra"
+      "workItemPrefixes" : [
+        "cred-entra"
+      ]
     },
     {
       "dependsOn" : [
@@ -229,12 +254,15 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-credential-managed-identity.md",
-      "sha256" : "192348ac96f06c90fadd73be9d437c81c4e742cd04415809c3b70cf4cdc30940",
+      "sha256" : "8e5a211b4b74a29096605a23b9e90f85ee44363b1c6b11a7b6c25f82728cf821",
       "specId" : "ADR-046-provider-credential-managed-identity",
       "status" : "Proposed",
       "supersedes" : "Current v3 `ManagedIdentityRef`, `managed_identity_client_id` ACA config field, `CredentialProvider` trait (status/enrollment-only) in `d2b-realm-provider/src/credential.rs` and `provider.rs`",
       "version" : 1,
-      "workItemPrefix" : "cred-mi"
+      "workItemPrefixes" : [
+        "cred-mi",
+        "mi-topology"
+      ]
     },
     {
       "dependsOn" : [
@@ -253,7 +281,9 @@
       "status" : "Proposed",
       "supersedes" : "v2 `SecretServiceCredentialProvider` / `SecretServiceCredentialProviderFactory` in `d2b-realm-provider`; v2 `CredentialProvider` trait",
       "version" : 1,
-      "workItemPrefix" : "cred-ss"
+      "workItemPrefixes" : [
+        "cred-ss"
+      ]
     },
     {
       "dependsOn" : [
@@ -272,7 +302,9 @@
       "status" : "Proposed",
       "supersedes" : "`ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` in `packages/d2b-core/src/processes.rs`; Nix `nixos-modules/components/graphics.nix`; Nix `nixos-modules/components/video/guest.nix`; `d2b.vms.<vm>.graphics.*` options",
       "version" : 8,
-      "workItemPrefix" : "gpu"
+      "workItemPrefixes" : [
+        "gpu"
+      ]
     },
     {
       "dependsOn" : [
@@ -294,7 +326,9 @@
       "status" : "Proposed",
       "supersedes" : "`ProcessRole::SecurityKeyFrontend` daemon-internal accept loop (`packages/d2bd/src/security_key.rs`), `nixos-modules/components/security-key-guest.nix` untracked guest `d2b-sk-frontend.service` unit",
       "version" : 6,
-      "workItemPrefix" : "security-key"
+      "workItemPrefixes" : [
+        "security-key"
+      ]
     },
     {
       "dependsOn" : [
@@ -313,7 +347,9 @@
       "status" : "Proposed",
       "supersedes" : "Current `nixos-modules/components/tpm.nix` swtpm provisioning and `d2b-priv-broker` swtpm-dir hardening path",
       "version" : 3,
-      "workItemPrefix" : "device-tpm"
+      "workItemPrefixes" : [
+        "device-tpm"
+      ]
     },
     {
       "dependsOn" : [
@@ -336,7 +372,9 @@
       "status" : "Proposed",
       "supersedes" : "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
       "version" : 7,
-      "workItemPrefix" : "usbip"
+      "workItemPrefixes" : [
+        "usbip"
+      ]
     },
     {
       "dependsOn" : [
@@ -357,7 +395,9 @@
       "status" : "Proposed",
       "supersedes" : "`ProcessRole::WaylandProxy` in `packages/d2b-core/src/processes.rs`; `LocalCrossDomainWaylandProvider` in `packages/d2b-host-providers/src/lib.rs`; `generate_wayland_proxy_argv` in `packages/d2b-host/src/wayland_proxy_argv.rs`; `nixos-modules/components/graphics.nix` `graphics.waylandProxy.*` options; `nixos-modules/ui-colors.nix` VM border color resolution; current `pkgs/wl-cross-domain-proxy` guest binary",
       "version" : 2,
-      "workItemPrefix" : "display"
+      "workItemPrefixes" : [
+        "display"
+      ]
     },
     {
       "dependsOn" : [
@@ -372,7 +412,9 @@
       "status" : "Proposed",
       "supersedes" : "Current direct Provider construction/composition",
       "version" : 1,
-      "workItemPrefix" : "provider"
+      "workItemPrefixes" : [
+        "provider"
+      ]
     },
     {
       "dependsOn" : [
@@ -392,7 +434,9 @@
       "status" : "Proposed",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",
       "version" : 3,
-      "workItemPrefix" : "nl"
+      "workItemPrefixes" : [
+        "nl"
+      ]
     },
     {
       "dependsOn" : [
@@ -405,12 +449,14 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-notification-desktop.md",
-      "sha256" : "7388e079a6b30eb235b04686237eaf7611b0b8721628cd14275cf78b14f10b01",
+      "sha256" : "9e886c51a12d25ab771019e2001c7e134c277be3f18576ecbdcedf54c1a4db1a",
       "specId" : "ADR-046-provider-notification-desktop",
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 2,
-      "workItemPrefix" : "notify"
+      "workItemPrefixes" : [
+        "notify"
+      ]
     },
     {
       "dependsOn" : [
@@ -433,7 +479,9 @@
       "status" : "Proposed",
       "supersedes" : "`ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
       "version" : 3,
-      "workItemPrefix" : "otel"
+      "workItemPrefixes" : [
+        "otel"
+      ]
     },
     {
       "dependsOn" : [
@@ -452,7 +500,9 @@
       "status" : "Proposed",
       "supersedes" : "`packages/d2b-provider-aca/` (`AcaWorkloadProvider`, `GuestControlEndpointProvider`), `AcaRelayTransportConfig`, direct vsock guest-control path",
       "version" : 1,
-      "workItemPrefix" : "aca"
+      "workItemPrefixes" : [
+        "aca"
+      ]
     },
     {
       "dependsOn" : [
@@ -478,7 +528,9 @@
       "status" : "Proposed",
       "supersedes" : "Current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads",
       "version" : 3,
-      "workItemPrefix" : "azure-vm"
+      "workItemPrefixes" : [
+        "azure-vm"
+      ]
     },
     {
       "dependsOn" : [
@@ -502,7 +554,9 @@
       "status" : "Proposed",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
       "version" : 1,
-      "workItemPrefix" : "ch"
+      "workItemPrefixes" : [
+        "ch"
+      ]
     },
     {
       "dependsOn" : [
@@ -524,7 +578,9 @@
       "status" : "Proposed",
       "supersedes" : "`docs/adr/0036-qemu-media-runtime.md`",
       "version" : 2,
-      "workItemPrefix" : "qemu-media"
+      "workItemPrefixes" : [
+        "qemu-media"
+      ]
     },
     {
       "dependsOn" : [
@@ -551,7 +607,9 @@
       "status" : "Proposed",
       "supersedes" : "v1 of this spec; `guestd/src/shell.rs` guest persistent-shell runtime (ADR 0038); `d2b-unsafe-local-helper` shell supervisor and wire protocol v2 (ADR 0044); `ShellOp`/`ShellOpResponse` seqpacket protocol (`d2b-contracts/src/public_wire.rs:1319,1394,1527`)",
       "version" : 2,
-      "workItemPrefix" : "sterm"
+      "workItemPrefixes" : [
+        "sterm"
+      ]
     },
     {
       "dependsOn" : [
@@ -568,7 +626,9 @@
       "status" : "Proposed",
       "supersedes" : "`d2b-core/src/storage.rs` generated contract, ADR 0034 storage/sync/adoption model for v3",
       "version" : 1,
-      "workItemPrefix" : "pstate"
+      "workItemPrefixes" : [
+        "pstate"
+      ]
     },
     {
       "dependsOn" : [
@@ -582,12 +642,14 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-core.md",
-      "sha256" : "88b56dc8b5ce5535317ab311931b3498488fb304a4456d84fa33d30f557df80f",
+      "sha256" : "a858d857fee753b704d43a9c6b70c36fdc3093afe9b1cbb01820cb8e6cfcf172",
       "specId" : "ADR-046-provider-system-core",
       "status" : "Proposed",
       "supersedes" : "Current `WorkloadProviderKind::UnsafeLocal`, host/User grouping helpers, `HostJson`/`VmRuntimeRow` host-management paths in `d2bd` and `d2b-realm-core`",
       "version" : 1,
-      "workItemPrefix" : "system-core"
+      "workItemPrefixes" : [
+        "system-core"
+      ]
     },
     {
       "dependsOn" : [
@@ -605,12 +667,14 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-minijail.md",
-      "sha256" : "ccc2116577ba8aedfd59f2810a7af0bd3814227b9872c731424170b90cddaee5",
+      "sha256" : "a7685f42c424d14f7da3a190ea40a24313c2a85200d949e688e0ab439318b9e4",
       "specId" : "ADR-046-provider-system-minijail",
       "status" : "Proposed",
       "supersedes" : "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
       "version" : 1,
-      "workItemPrefix" : "minijail"
+      "workItemPrefixes" : [
+        "minijail"
+      ]
     },
     {
       "dependsOn" : [
@@ -628,7 +692,9 @@
       "status" : "Proposed",
       "supersedes" : "Current `d2b-unsafe-local-helper` systemd scope runtime; current `d2bd` `supervisor/` VM process management; broker `SpawnRunner` (systemd-owned roles)",
       "version" : 1,
-      "workItemPrefix" : "systemd"
+      "workItemPrefixes" : [
+        "systemd"
+      ]
     },
     {
       "dependsOn" : [
@@ -646,7 +712,9 @@
       "status" : "Proposed",
       "supersedes" : "`d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface",
       "version" : 1,
-      "workItemPrefix" : "transport-relay"
+      "workItemPrefixes" : [
+        "transport-relay"
+      ]
     },
     {
       "dependsOn" : [
@@ -663,12 +731,14 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-unix.md",
-      "sha256" : "6c5200e6b424c002ece340839684c7dfa7141c09de0e58e4e7b2aeed4bd12725",
+      "sha256" : "57f3e2b23777b7a595edb6444ff8243a1874e6f4723186466ea1e1fa09f0af62",
       "specId" : "ADR-046-provider-transport-unix",
       "status" : "Proposed",
       "supersedes" : "v1 of this dossier (ADR-046-provider-transport-unix v1; incorrect ownership model); `InheritedSocketTransport` SD_LISTEN_FDS path (`packages/d2b-session-unix/src/systemd.rs`)",
       "version" : 3,
-      "workItemPrefix" : "transport-unix"
+      "workItemPrefixes" : [
+        "transport-unix"
+      ]
     },
     {
       "dependsOn" : [
@@ -682,12 +752,14 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-vsock.md",
-      "sha256" : "5a73239f90903b689ec05a0ddbbbe24b7a78ccedbb6de377cc105f0afe43d202",
+      "sha256" : "824bc597f1c5ee34d6ebd3063a5a75d5b8b6a9ee8f0419357cd87fca0a779df7",
       "specId" : "ADR-046-provider-transport-vsock",
       "status" : "Proposed",
       "supersedes" : "`packages/d2bd/src/guest_control_vsock.rs` transport probe (→ allocator-issued endpoint via VsockEffectPort); `packages/d2b-host/src/vsock_relay_argv.rs` socat relay (→ native FramedVsockTransport in Provider service); `NativeVsock`/`CloudHypervisorVsock` in `d2b-session-unix/src/vsock.rs` (→ FramedVsockTransport implementing OwnedTransport adapted as service-Provider transport bridge)",
       "version" : 2,
-      "workItemPrefix" : "vsock"
+      "workItemPrefixes" : [
+        "vsock"
+      ]
     },
     {
       "dependsOn" : [
@@ -706,7 +778,9 @@
       "status" : "Proposed",
       "supersedes" : "`d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation",
       "version" : 2,
-      "workItemPrefix" : "vl"
+      "workItemPrefixes" : [
+        "vl"
+      ]
     },
     {
       "dependsOn" : [
@@ -722,12 +796,15 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-virtiofs.md",
-      "sha256" : "41883d577282a85d1771286c603f7e029356e59dae13eaa58c2103975f04e73b",
+      "sha256" : "b80201a129196e56150dfa0c4520ecd0ecc2d8eccfba2860c9962efeee284725",
       "specId" : "ADR-046-provider-volume-virtiofs",
       "status" : "Proposed",
       "supersedes" : "`nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/supervisor/dag.rs`",
       "version" : 2,
-      "workItemPrefix" : "vvfs"
+      "workItemPrefixes" : [
+        "vvfs",
+        "vvfs-export"
+      ]
     },
     {
       "dependsOn" : [
@@ -756,12 +833,14 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-reset-and-cutover.md",
-      "sha256" : "8bacde7ecc5384f57d35d348fb95926cf6da0930133bda0a9d96446a84a8a11d",
+      "sha256" : "22beccd8ef43db1474b3b8ceb7564e072d5ab7f1eaf1bcc093eb87655e7a4439",
       "specId" : "ADR-046-reset-and-cutover",
       "status" : "Proposed",
       "supersedes" : "[ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) \"Migration decision\" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` \"v2 command surface removed at 3.0 clean break\": it served the one-time v1→v2 storage layout cutover only and has no v3 successor)",
       "version" : 1,
-      "workItemPrefix" : "reset"
+      "workItemPrefixes" : [
+        "reset"
+      ]
     },
     {
       "dependsOn" : [
@@ -775,7 +854,9 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "api"
+      "workItemPrefixes" : [
+        "api"
+      ]
     },
     {
       "dependsOn" : [
@@ -788,7 +869,9 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "object"
+      "workItemPrefixes" : [
+        "object"
+      ]
     },
     {
       "dependsOn" : [
@@ -802,7 +885,9 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "reconcile"
+      "workItemPrefixes" : [
+        "reconcile"
+      ]
     },
     {
       "dependsOn" : [
@@ -815,7 +900,9 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "store"
+      "workItemPrefixes" : [
+        "store"
+      ]
     },
     {
       "dependsOn" : [
@@ -828,12 +915,14 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-credential.md",
-      "sha256" : "09dbcec4e1eccb67022b38103e649d1fe4ebb86707a6c92e67725b2cd5a54363",
+      "sha256" : "e2f0f583c0b5c8bfbda370960343648f141efd5376cc4e2f25f0b1a346b005a0",
       "specId" : "ADR-046-resources-credential",
       "status" : "Proposed",
       "supersedes" : "Current v3 `CredentialProvider` trait, `CredentialStatus`, `CredentialPlane` model in `d2b-realm-provider/src/credential.rs` and `provider.rs`",
       "version" : 1,
-      "workItemPrefix" : "credential"
+      "workItemPrefixes" : [
+        "credential"
+      ]
     },
     {
       "dependsOn" : [
@@ -850,7 +939,9 @@
       "status" : "Proposed",
       "supersedes" : "Current ProcessRole device sidecars (Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video) and their Nix components",
       "version" : 1,
-      "workItemPrefix" : "device"
+      "workItemPrefixes" : [
+        "device"
+      ]
     },
     {
       "dependsOn" : [
@@ -865,12 +956,15 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "b0be4f30c866dd27c06389c9ddc332c66ed1e5c72da99d6ce9a48fc26583feeb",
+      "sha256" : "8d6b786fd2a04cfa00fc8beff51bca3c62044adca265969dbf3899eb44847642",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Proposed",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
       "version" : 1,
-      "workItemPrefix" : "exec"
+      "workItemPrefixes" : [
+        "exec",
+        "user-session"
+      ]
     },
     {
       "dependsOn" : [
@@ -886,7 +980,9 @@
       "status" : "Proposed",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
       "version" : 2,
-      "workItemPrefix" : "network"
+      "workItemPrefixes" : [
+        "network"
+      ]
     },
     {
       "dependsOn" : [
@@ -902,7 +998,9 @@
       "status" : "Proposed",
       "supersedes" : "`storage.json` v2, `sync.json` v1, per-VM hardlink-farm and store-view emitters in `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`",
       "version" : 1,
-      "workItemPrefix" : "volume"
+      "workItemPrefixes" : [
+        "volume"
+      ]
     },
     {
       "dependsOn" : [
@@ -916,12 +1014,18 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "73de2de2eba753bd17528d397ffbc7dad68a41fa9007148c2bfc67cab77da479",
+      "sha256" : "c622e9286f85d882acd7fcada9920f5f3ab447d645810abce37c67dbea3e5988",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "zone-control"
+      "workItemPrefixes" : [
+        "client",
+        "pkg",
+        "provider-agent",
+        "wire",
+        "zone-control"
+      ]
     },
     {
       "dependsOn" : [
@@ -977,12 +1081,14 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-security-and-threat-model.md",
-      "sha256" : "fd302854317e87b86f9ba1d349fcbcd00f729e9ec512ada409978308507212ee",
+      "sha256" : "6f1c04852e3e7276d2744d20abd01afb47517b9fe2e6a67d458ff3bf6b59bccf",
       "specId" : "ADR-046-security-and-threat-model",
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "security"
+      "workItemPrefixes" : [
+        "security"
+      ]
     },
     {
       "dependsOn" : [
@@ -1002,7 +1108,9 @@
       "status" : "Proposed",
       "supersedes" : null,
       "version" : 1,
-      "workItemPrefix" : "streamline"
+      "workItemPrefixes" : [
+        "streamline"
+      ]
     },
     {
       "dependsOn" : [
@@ -1015,12 +1123,18 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-telemetry-audit-and-support.md",
-      "sha256" : "0a47bc9532152e443a36ab61619a1fd3f3310fd858cb125e58e8b646d3cd1317",
+      "sha256" : "9acf45aed9f496d72b30a9d093c00cff474beb272a09110f7c3cc4887b922720",
       "specId" : "ADR-046-telemetry-audit-and-support",
       "status" : "Proposed",
       "supersedes" : "Current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",
       "version" : 2,
-      "workItemPrefix" : "telem"
+      "workItemPrefixes" : [
+        "audit",
+        "doctor",
+        "host-posture",
+        "reuse",
+        "telem"
+      ]
     },
     {
       "dependsOn" : [
@@ -1032,7 +1146,9 @@
       "status" : "Proposed",
       "supersedes" : "Public Realm terminology selected by ADR 0043 for d2b v3",
       "version" : 1,
-      "workItemPrefix" : "identities"
+      "workItemPrefixes" : [
+        "identities"
+      ]
     },
     {
       "dependsOn" : [
@@ -1065,12 +1181,14 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "ee3ea5d1e335388053e8a29ae228cefb073b30e89c275b882d53abb74601bbfe",
+      "sha256" : "ef2412e7d995a880d3a23e79e16d3f22f898f5da8eeacda93fa966ccb51677c8",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Proposed",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
       "version" : 1,
-      "workItemPrefix" : "delivery"
+      "workItemPrefixes" : [
+        "delivery"
+      ]
     },
     {
       "dependsOn" : [
@@ -1086,10 +1204,12 @@
       "status" : "Proposed",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + capability ceiling)",
       "version" : 1,
-      "workItemPrefix" : "routing"
+      "workItemPrefixes" : [
+        "routing"
+      ]
     }
   ],
   "parent" : "docs/adr/0046-d2b-3-provider-control-plane.md",
-  "schemaVersion" : 2,
+  "schemaVersion" : 3,
   "status" : "Proposed"
 }

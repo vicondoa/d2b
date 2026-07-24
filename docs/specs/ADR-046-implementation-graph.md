@@ -271,7 +271,11 @@ single-wave while the exact seven ordering edges above remain unchanged.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
 - `ADR046-zone-control-024` owns the shared Core-derived `physical-usb-backing` tuple; both the security-key and USB effect DAGs depend on it.
 - Every `ADR046-security-key-*` dependency in `Dependency/owner` is encoded. The dependency subgraph is acyclic and uses no generator tie-break.
-- File-overlap barriers cover only the shared core configuration/cleanup files. Soft cross-Provider integration order remains file-disjoint and concurrent.
+- Seven file-overlap barriers cover only the shared core
+  configuration/cleanup files. Each appears both as a
+  `file-overlap-order` edge and in the dependent node's `prerequisites`, so the
+  ready-wave query enforces it. Soft cross-Provider integration order remains
+  file-disjoint and concurrent.
 - No repository generator exists at this Proposed stage. `ADR046-streamline-001`/`024` and `ADR046-delivery-004`/`009` own the future canonical implementation and policy gate.
 
 ## Ready-wave algorithm

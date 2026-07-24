@@ -104,7 +104,7 @@ is a protocol error. The `SessionEngine` checks `descriptor().attachment_support
 before dispatching and returns `attachment-not-permitted-over-vsock` without
 contacting the remote end.
 
-**V3 destination**: Imported from `packages/d2b-bus/src/session/` (ADR046-session-003).
+**V3 destination**: Imported from `packages/d2b-bus/src/session/` (ADR046-bus-001).
 The `OwnedTransport` trait is not re-implemented in the transport Provider; it
 is consumed from `d2b-session`.
 
@@ -827,7 +827,7 @@ expression.
 | Aspect | Anchor | Evidence class | Retained / Delta / Replacement |
 | --- | --- | --- | --- |
 | 2-byte framing utilities | `d2b-session-unix/src/vsock.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | Retained: `FramedVsockTransport` framing (length-prefix encode/decode, bounded allocation, EOF/reset classification) → `framing.rs` in Provider crate. `NativeVsockTransport` / `NativeVsockListener` (raw AF_VSOCK socket calls) → core `LiveVsockEffectPort` in `d2b-core-controller`; NOT in Provider crate |
-| `OwnedTransport` trait | `d2b-session-unix/src/adapter.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | Retained verbatim; destination `d2b-session` crate (ADR046-session-003) |
+| `OwnedTransport` trait | `d2b-session-unix/src/adapter.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | Retained verbatim; destination `d2b-session` crate (ADR046-bus-001) |
 | vsock error variants (12) | `d2b-session-unix/src/vsock.rs` (main `a1cc0b2d`) | `implemented-but-unwired` | Retained verbatim in `errors.rs` |
 | CONNECT-proxy guest-control | `d2bd/src/guest_control_vsock.rs` | `implemented-and-reachable` | Replacement: superseded by `LiveVsockEffectPort` allocator path; guest-control port 14318 excluded from ZoneLink allocation |
 | socat OTLP relay | `d2b-host/src/vsock_relay_argv.rs` | `implemented-and-reachable` | Replacement: superseded by `observability-otel` Provider native vsock relay |
@@ -846,7 +846,7 @@ expression.
 ### ADR046-vsock-001
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes; Phase 1; Priority P0; Depends on ADR046-session-003 (OwnedTransport in d2b-session); Owner crate `d2b-provider-transport-vsock`. |
+| Dependency/owner | Title: Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes; Phase 1; Priority P0; Depends on ADR046-bus-001 (OwnedTransport in d2b-session); Owner crate `d2b-provider-transport-vsock`. |
 | Current source | Evidence class `test-only-or-preview`; baseline has no generic vsock transport Provider or opaque endpoint/binding ID trait. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-vsock/src/effect_port.rs`; test fake in `tests/effect_port_mock.rs`; redaction checks in `tests/redaction.rs`. |
@@ -873,7 +873,7 @@ expression.
 ### ADR046-vsock-003
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport); Phase 1; Priority P0; Depends on ADR046-vsock-002 and ADR046-session-003; Owner crate `d2b-provider-transport-vsock`. |
+| Dependency/owner | Title: Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport); Phase 1; Priority P0; Depends on ADR046-vsock-002 and ADR046-bus-001; Owner crate `d2b-provider-transport-vsock`. |
 | Current source | Evidence class `test-only-or-preview`; no current v3 generic `VsockTransportService` implementation exists. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-vsock/src/service.rs`; tests `tests/open_close.rs`, `tests/observe.rs`, and conformance kit. |

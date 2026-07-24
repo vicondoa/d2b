@@ -1352,7 +1352,7 @@ it does not import session implementation internals directly.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-volume-001 (Volume contract types); ADR046-vvfs-007 (Export type); W1; volume-virtiofs Provider owner |
+| Dependency/owner | ADR046-volume-001 (Volume contract types); ADR046-vvfs-export-001 (Export type); W1; volume-virtiofs Provider owner |
 | Current source | `packages/d2b-host/src/virtiofsd_argv.rs` (VirtiofsdArgvInput, generate_virtiofsd_argv, 14 unit tests, golden argv.txt); `packages/d2b-host/src/lib.rs` (module declaration) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`; `packages/d2b-provider-volume-virtiofs/tests/argv_golden.rs` |
@@ -1362,7 +1362,7 @@ it does not import session implementation internals directly.
 | Validation | `tests/argv_golden.rs`: 14 migrated tests + `no_extra_args_ever_emitted`, `socket_path_is_not_in_args`, `shared_dir_is_fd_path`, `path_length_within_sunpath_limit`; `tests/socket_path_privacy.rs`: `socket_path_not_in_export_status`, `socket_path_not_in_volume_status`, `socket_path_not_in_audit_record`; `tests/schema_conformance.rs`: `process_spec_readiness_class_is_provider_defined`, `process_spec_readiness_has_no_kind_or_period_fields`, `process_spec_budget_cpu_request_limit_nested`, `process_spec_budget_memory_request_limit_nested`, `process_spec_budget_pids_limit_present`, `process_spec_budget_fds_limit_present`, `process_spec_sandbox_no_new_privileges_true`, `process_spec_sandbox_read_only_root_true`, `process_spec_no_host_uid_gid_in_spec` |
 | Removal proof | `packages/d2b-host/src/virtiofsd_argv.rs` removed only after parity confirmed by argv-shape gate |
 
-### ADR046-vvfs-007 — Export ResourceType declaration
+### ADR046-vvfs-export-001 — Export ResourceType declaration
 
 | Field | Value |
 | --- | --- |
@@ -1394,7 +1394,7 @@ it does not import session implementation internals directly.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-vvfs-001, ADR046-vvfs-002, ADR046-vvfs-007; ADR046-volume-001; W2; volume-virtiofs controller owner |
+| Dependency/owner | ADR046-vvfs-001, ADR046-vvfs-002, ADR046-vvfs-export-001; ADR046-volume-001; W2; volume-virtiofs controller owner |
 | Current source | `packages/d2bd/src/supervisor/dag.rs` (ProcessRole::Virtiofsd dag node); `nixos-modules/processes-json.nix` (virtiofsdRunner block; attachment-to-Process mapping) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs`; `packages/d2b-provider-volume-virtiofs/src/export.rs` |

@@ -1633,11 +1633,11 @@ delivery assumptions are not copied.
 | Validation | `tests/lifecycle.rs`; `tests/broker_wait_contract.rs` (only clone3 parent calls waitid/reaps; poll readability cannot supply status); `tests/cgroup_kill_finalize.rs` (setsid descendant and PGID reuse); `tests/redaction.rs` (PID never in log/status/audit); `tests/blocking_adapter.rs` (duplicate/status relay via adapter; timeout → error) |
 | Removal proof | Old `PidfdTable` in `d2bd` supervisor removed after Provider integration |
 
-### ADR046-minijail-005 (Dependency: ADR046-minijail-002, ADR046-minijail-004, ADR046-session-001, ADR046-session-003)
+### ADR046-minijail-005 (Dependency: ADR046-minijail-002, ADR046-minijail-004, ADR046-session-001, ADR046-bus-001)
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | All of ADR046-minijail-001 through ADR046-minijail-004; ComponentSession/d2b-bus (ADR046-session-001, ADR046-session-003); bootstrap authz |
+| Dependency/owner | All of ADR046-minijail-001 through ADR046-minijail-004; ComponentSession/d2b-bus (ADR046-session-001, ADR046-bus-001); bootstrap authz |
 | Current source | `d2bd/src/supervisor/*.rs` (DagExecutor, NodeOutcome); `d2bd/src/supervisor/pidfd_table.rs`; `d2b-realm-core/src/allocator_engine.rs` (adoption/identity concepts) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-minijail/src/` — controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize |

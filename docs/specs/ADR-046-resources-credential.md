@@ -1898,7 +1898,7 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-credential-002` |
-| Dependency/owner | `ADR046-credential-001`; `ADR046-api-001` (resource API); `ADR046-session-003` (d2b-bus); Credential service owner |
+| Dependency/owner | `ADR046-credential-001`; `ADR046-api-001` (resource API); `ADR046-bus-001` (d2b-bus); Credential service owner |
 | Current source | `packages/d2b-realm-provider/src/provider.rs:CredentialProvider` (status-only trait); `d2b-contracts/proto/v2/provider_credential.proto` (main: Health, Capabilities, Status, AcquireLease, RefreshLease, RevokeLease) |
 | Reuse source | main `a1cc0b2d`: `packages/d2b-contracts/proto/v2/provider_credential.proto` method names |
 | Reuse action | adapt |

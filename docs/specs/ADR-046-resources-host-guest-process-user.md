@@ -2565,11 +2565,11 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Validation | Runtime/integration tests 19–23 from the "Tests for Nix configuration and ResourceType-specific lifecycle" section in this spec; additionally: `GenerationDiff` hermetic unit tests (new/changed/unchanged/removed classification); `bundleSha256` integrity failure aborts and emits correct audit event; `catalogSha256` mismatch aborts bundle; UpdateSpec optimistic lock conflict retried correctly; Watch `Deleted` revision events consumed (not polling GET) to track cleanup completion; Zone `phase=Pending` while intents outstanding; Zone `phase=Degraded` immediately when any cleanup outstanding (no grace window); Zone `phase=Ready` when complete; activation returns after durable queue commit, not after reconcile; same-name `managedBy=controller` OR `managedBy=api` collision emits per-item `config-collision` error without seizing resource, other intents continue; unchanged spec refreshes `configurationGeneration` without triggering controller reconcile; final deletion: atomic tx commits `Deleted` revision event + row/index removal only; audit append follows committed revision via dedup/exactly-once recovery (NOT part of atomic tx); recovery retry produces no duplicate audit record; prior bundle record released after cleanup-complete and retention count exceeded; activation with zero diff and identical bundleSha256 is a no-op |
 | Removal proof | None — net-new controller; no prior owner to remove |
 
-### ADR046-exec-024
+### ADR046-user-session-001
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-exec-024` |
+| Work item ID | `ADR046-user-session-001` |
 | Dependency/owner | ADR046-zone-control-019 (authority index); `Provider/system-systemd` (user manager) + core/user-agent owner |
 | Current source | None — the fixed user-session authority is today ambient prose across the display/audio/clipboard/notification/secret-service dossiers; no named owner exists |
 | Reuse source | `Provider/system-systemd` user-manager scope; D077 EffectPort/LaunchTicket FD handoff |

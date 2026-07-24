@@ -381,9 +381,9 @@ performed by this documentation-only spec.
 | Metrics | (1) every one of the 500 calls is delivered to exactly the recipient named by its route key, verified by a per-recipient received-call counter; (2) each recipient's session transcript hash and record sequence counter are independent (no shared state, verified by asserting the three sessions' internal sequence counters never reference each other's session object); (3) the deliberate cross-wiring case is rejected before any record is exchanged. |
 | Pass/fail threshold | 500/500 correct routing, 0 cross-recipient session-state leakage, 1/1 cross-wiring case rejected with a stable typed error (not a panic, not a silent no-op). |
 | Expected resource budget | ≤2 minutes wall time; ≤64 MiB RSS (three lightweight Noise sessions plus the fake router). |
-| Failure interpretation | A misrouted call or shared-session-state finding blocks `ADR046-session-003` from starting until the route-key resolution or per-session isolation in `ADR-046-componentsession-and-bus` §"d2b-bus" is corrected; per anti-claim rule 3, the fix is never "widen the route key to fail open." |
-| Affected decisions/work items | D011, D039, D040, D054; `ADR046-session-001`, `ADR046-session-002`, `ADR046-session-003`. |
-| Cleanup | Deleted once `packages/d2b-bus/src/router.rs` (the real `ADR046-session-003` destination) carries an in-tree message-isolation/route-authorization/no-direct-store-path conformance test with equal or stricter coverage, per that work item's own Validation column. |
+| Failure interpretation | A misrouted call or shared-session-state finding blocks `ADR046-bus-001` from starting until the route-key resolution or per-session isolation in `ADR-046-componentsession-and-bus` §"d2b-bus" is corrected; per anti-claim rule 3, the fix is never "widen the route key to fail open." |
+| Affected decisions/work items | D011, D039, D040, D054; `ADR046-session-001`, `ADR046-session-002`, `ADR046-bus-001`. |
+| Cleanup | Deleted once `packages/d2b-bus/src/router.rs` (the real `ADR046-bus-001` destination) carries an in-tree message-isolation/route-authorization/no-direct-store-path conformance test with equal or stricter coverage, per that work item's own Validation column. |
 | Status | Specified — not yet executed. |
 
 ### SPIKE-07 — Unix/vsock/Azure-Relay transports carry only opaque Noise record bytes

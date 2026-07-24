@@ -1345,7 +1345,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-session-001, ADR046-session-003; session/bus wiring |
+| Dependency/owner | ADR046-session-001, ADR046-bus-001; session/bus wiring |
 | Current source | `packages/d2b-notify/src/services/` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
