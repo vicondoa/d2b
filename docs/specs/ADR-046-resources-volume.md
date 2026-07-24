@@ -1693,7 +1693,7 @@ audit record.
 | Integration | Each sub-item produces a focused spec amendment; resolved decisions already reflected in spec revision 2 |
 | Data migration | Per-sub-item; block-image and tmpfs are new capabilities with no legacy migration required |
 | Validation | (1) `VirtioblkArgvInput` unit tests; block-image integration fixture. (2) Quota-enforcement fixture with FS-without-quota; hard-enforcement failure test. (3) EphemeralProcess snapshot lifecycle test; content-migration parity test. (4) Single-writer rejection test; shared-write capability gate test. (5) tmpfs mount/unmount lifecycle test; memory-budget accounting assertion. (6) Schema bound rejection tests (1025 entries, 65 views, 65 attachments). (7) File/symlink independent lifecycle tests; target validation (absolute rejected, `..` rejected, escape rejected). (8) ACL principal ResourceRef validation; numeric form rejected; User revision trigger test. (9) foreignChildPolicy preserve/fail tests; continuous repair cycle test. (10) Socket path invariant test; no-status-leak assertion. |
-| Removal proof | Not applicable; these are new capabilities
+| Removal proof | None — net-new capabilities; no prior owner to remove |
 
 ### ADR046-volume-006
 

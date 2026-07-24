@@ -1741,7 +1741,7 @@ observeInterval: 30s
 | `ManagedIdentityRef` | `packages/d2b-realm-provider/src/credential.rs` | `implemented-and-reachable` | `client_id: OpaqueAzureRef` maps to `clientId` config field (snake_case → camelCase); retained as reuse anchor |
 | `CredentialProvider` trait (status/enrollment-only) | `packages/d2b-realm-provider/src/provider.rs` | `implemented-and-reachable` | Superseded by `d2b.credential.v3` service interface; removed only after v3 controller has full parity |
 | `ProviderWorkloadIdentity::ManagedIdentity` | `packages/d2b-realm-provider/src/types.rs` | `implemented-and-reachable` (live ACA bootstrap path) | ACA bootstrap migration: v3 ACA Provider config uses `credentialRef` after `credential-managed-identity` controller is live |
-| `managed_identity_client_id: Option<String>` | `packages/d2b-provider-aca/src/lib.rs` (line 112) | `implemented-and-reachable` | Superseded by Credential resource + `credentialRef` in ACA Provider config; removed by work item `ADR046-credential-005` removal precondition |
+| `managed_identity_client_id: Option<String>` | `packages/d2b-provider-aca/src/lib.rs` (line 112) | `implemented-and-reachable` | Superseded by Credential resource + `credentialRef` in ACA Provider config; removed by work item `ADR046-cred-mi-001` removal precondition |
 | `managed_identity_client_id` | `packages/d2bd/src/lib.rs` (line 3960, 4173) | `implemented-and-reachable` | Superseded; see above |
 | `contains_sensitive_shape` | `packages/d2b-realm-provider/src/error.rs` | `implemented-and-reachable` | Adapted for all string-field guards in Provider config, audit, and telemetry output |
 | `no_secrets_or_credentials: bool` | `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants` | `implemented-and-reachable` | Provides v3 evidence for the zero-secret-bytes design principle; Credential ResourceType extends this invariant to all resource/store/status/audit/log boundaries |
@@ -1769,18 +1769,21 @@ endpoint-role, and provider-factory code is explicitly excluded.
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-mi-topology-001` |
-| Dependency/owner | `ADR046-credential-001`, `ADR046-credential-002`; `ADR046-credential-005`; `ADR046-credential-006` |
-| Description | Implement the controller/agent process split: separate `d2b-managed-identity-controller` binary (no IMDS client, no KK delivery) and `d2b-managed-identity-agent` binary (injected IMDS client via effect port, KK delivery). Controller manages Credential resources, spawns/monitors agent Processes. Agent receives `d2b.credential.v3` token-delivery methods and terminates Noise_KK delivery sessions. |
-| Destination | `packages/d2b-provider-credential-managed-identity/src/{controller.rs, agent.rs}`; `packages/d2b-provider-credential-managed-identity/{controller/main.rs, agent/main.rs}`; `packages/d2b-provider-credential-managed-identity/tests/topology.rs` |
-| Design | (1) Controller binary: watch/reconcile loop; no IMDS import; no Noise_KK delivery; spawns agent Process on Credential admission+dependency-ready (not on `phase=Ready`); uses canonical Process template (processClass/template/sandbox namespaceClasses `[mount,pid,ipc]`/capabilityClasses/seccompClass `strict`/startRoot/noNewPrivileges/environmentClass `minimal`/readOnlyRoot, BudgetSpec nested cpu/memory/pids/fds, no inline endpoint fields; owned credential-service Endpoint resource, readiness `{class provider-defined,initialDelay,timeout,failureThreshold,successThreshold}`, TelemetrySpec metricsEnabled/tracingEnabled/logLevel/sensitiveLabels); attaches LaunchTicket projecting `imdsEndpointAlias`+`credentialRef` at spawn time; `executionRef` bound from `Provider.spec.config.controllerExecutionRef`. (2) Agent binary: receives injected `ManagedIdentityCredentialClient` via effect port from co-located runtime Provider (client constructed by runtime Provider from LaunchTicket projection); `networkUsage: {networkRef: null, ports: [], allowEgress: false}`; inherits execution target network namespace (no `network` namespaceClass); no direct IMDS network; serves `AcquireToken`/`RefreshToken`/`RevokeToken`/live `InspectMetadata`; terminates Noise_KK delivery session; reports lease state to controller. (3) Controller monitors agent Process health via `ownerChildTrigger`; respawns on failure with bounded backoff. (4) Deleted-phase cleanup: controller drains/revokes, issues delete on agent Process resource, observes agent Process deletion watch event (no `phase=Deleted` row for agent Process), then clears `provider-revoke` finalizer only; Core atomically writes event-only Deleted revision + removes Credential row/index; audit subsystem appends deletion record from committed revision with exactly-once dedup; controller never commits store deletion or emits Deleted-phase closure audit record. (5) Agent validates `ExactSdkConsumer` via `AuthenticatedSubjectContext` from ComponentSession, independently of scope fields. (6) No principalRef/profileRef/endpoint-kind/Process-config/telemetry.componentRef/readiness.probe/timeoutMs/network.allowedEffects/budget.class/telemetry.class in either template. D087 status-first state model applies: `credential-managed-identity` declares no Provider state Volume, ProviderStateSet is optional/query-time and empty, and no Process receives a state mount or layout principal. Bounded non-secret lease observation (phase, expiry, audience, opaque non-authorizing lease ID, retry/outcome detail) lives in `Credential.status`; in-flight idempotency/retry lives in the core Operation ledger; token bytes remain transient process memory and are delivered only over Noise_KK sensitive sessions. Core aggregates Provider status; controller writes Credential/agent status only. |
-| Validation | `tests/topology.rs` (see §topology.rs test matrix); `integration/host-guest-placement.nix` verifying both processes; `make test-rust`, `make test-integration`, `make test-host-integration` |
+| Dependency/owner | ADR046-credential-001 and ADR046-credential-002; ADR046-cred-mi-001; ADR046-cred-mi-002; owner: credential-managed-identity controller/agent topology |
+| Current source | `packages/d2b-realm-provider/src/provider.rs:CredentialProvider` status/enrollment-only trait; main `a1cc0b2d` managed-identity Provider implementation and tests listed in §Source reuse |
+| Reuse action | copy and adapt the main managed-identity Provider; replace v2 provider registry/session assumptions with v3 controller/agent Process topology and `d2b.credential.v3` service |
+| Destination | packages/d2b-provider-credential-managed-identity/src/{controller.rs,agent.rs}; packages/d2b-provider-credential-managed-identity/{controller/main.rs,agent/main.rs}; packages/d2b-provider-credential-managed-identity/tests/topology.rs |
+| Detailed design | Implement the controller/agent process split: separate `d2b-managed-identity-controller` binary with no IMDS client and no KK delivery, and `d2b-managed-identity-agent` binary with injected IMDS client via effect port and KK delivery. Controller manages Credential resources, spawns/monitors agent Processes, uses canonical Process templates, attaches LaunchTickets projecting `imdsEndpointAlias` and `credentialRef`, monitors agent Process health with bounded backoff, performs Deleted-phase cleanup without emitting Deleted closure audit, and applies D087 status-first state with no Provider state Volume. Agent validates `ExactSdkConsumer` via `AuthenticatedSubjectContext`, serves token-delivery methods, terminates Noise_KK delivery sessions, reports lease state, declares no direct IMDS egress, and keeps token bytes transient. |
+| Integration | ProviderDeployment starts the controller Process; controller reconciles Credential resources and creates agent Process/Endpoint resources at the declared executionRef; d2b-bus routes `d2b.credential.v3` calls to the agent; co-located runtime Provider injects the IMDS client through the LaunchTicket/effect port; core aggregates Provider status and audit subsystem appends deletion records. |
+| Data migration | Full d2b 3.0 reset; no v2 managed-identity process/session state import |
+| Validation | `tests/topology.rs`; `integration/host-guest-placement.nix`; `make test-rust`; `make test-integration`; `make test-host-integration` |
+| Removal proof | V2 single-process/trait topology is superseded once controller and agent Process split is integrated and all token delivery terminates in the agent |
 
-### ADR046-credential-005
+### ADR046-cred-mi-001
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-credential-005` |
+| Work item ID | `ADR046-cred-mi-001` |
 | Dependency/owner | `ADR046-credential-001` (contracts), `ADR046-credential-002` (service); `ADR046-reconcile-001`; `ADR046-mi-topology-001`; `credential-managed-identity` crate owner |
 | Current source | `packages/d2b-realm-provider/src/credential.rs:ManagedIdentityRef` (reachable); `packages/d2b-provider-aca/src/lib.rs:managed_identity_client_id` line 112 (reachable ACA config); `packages/d2bd/src/lib.rs:managed_identity_client_id` lines 3960, 4173 (reachable) |
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-managed-identity/src/lib.rs` (full implementation); `src/tests.rs` (full test suite) |
@@ -1792,34 +1795,51 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Validation | See §Test matrix |
 | Removal proof | `d2b-provider-aca:managed_identity_client_id` raw field removed only after the `credential-managed-identity` controller and agent are integrated and the ACA Provider config uses `credentialRef` exclusively; `ProviderWorkloadIdentity::ManagedIdentity` bootstrap path superseded only after the ACA Provider controller uses the Credential resource for token acquisition |
 
-### ADR046-credential-006 (shared with other Credential Providers)
-
-This work item is shared with `credential-secret-service` and `credential-entra`.
-The `managed-identity-controller` entry point for this work item is:
+### ADR046-cred-mi-002 (shared with other Credential Providers)
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-credential-006` |
-| Dependency/owner | `ADR046-credential-001`, `ADR046-credential-002`; `ADR046-reconcile-001`, `ADR046-reconcile-002`; `ADR046-mi-topology-001`; Credential controller owner |
-| Relevant destination | `packages/d2b-provider-credential-managed-identity/src/controller.rs`; `packages/d2b-contracts/src/v3/credential_controller.rs` (shared contract) |
-| Managed-identity-specific design | Implement the async reconcile lifecycle and agent spawn/teardown lifecycle as specified in §Async reconcile; enforce `system`-only domain throughout; spawn agent on Credential admission+dependency-ready (not on `phase=Ready`); implement `observeInterval=30s` health-check RPC to agent (agent calls `InspectMetadata` on injected client received via effect port); controller never calls IMDS directly; implement idempotency key derivation as `SHA-256(UID \|\| ':' \|\| rotationGeneration.to_le_bytes() \|\| ':' \|\| operation_class_byte)`; implement `MAX_LOCAL_LEASES=256` (enforced in resource-store); implement Deleted-phase closure: controller clears `provider-revoke` finalizer after observing agent Process deletion watch event and confirming revocation; Core atomically writes event-only Deleted revision and removes row/index; audit subsystem appends deletion record with exactly-once dedup; controller never commits store deletion or emits Deleted-phase closure audit record |
+| Dependency/owner | ADR046-credential-001, ADR046-credential-002; ADR046-reconcile-001, ADR046-reconcile-002; ADR046-mi-topology-001; owner: Credential controller toolkit and managed-identity controller |
+| Current source | `packages/d2b-realm-provider/src/provider.rs:CredentialProvider` status/enrollment-only trait; main `a1cc0b2d` managed-identity controller/test behavior listed in §Source reuse |
+| Reuse action | adapt shared Credential controller lifecycle to managed-identity controller/agent spawn and teardown |
+| Destination | packages/d2b-provider-credential-managed-identity/src/controller.rs; packages/d2b-contracts/src/v3/credential_controller.rs |
+| Detailed design | Managed-identity-specific controller design: implement async reconcile and agent spawn/teardown from §Async reconcile; enforce system-only domain; spawn agent on Credential admission plus dependency-ready, not on `phase=Ready`; implement `observeInterval=30s` health-check RPC to the agent, which calls `InspectMetadata` on the injected client; controller never calls IMDS; derive idempotency key as `SHA-256(UID \|\| ":" \|\| rotationGeneration.to_le_bytes() \|\| ":" \|\| operation_class_byte)`; enforce `MAX_LOCAL_LEASES=256` in the resource store; implement Deleted-phase closure by clearing `provider-revoke` only after agent Process deletion and revocation confirmation while core/audit own Deleted revision and deletion record. |
+| Integration | Shared Credential controller contract produces reconcile events; managed-identity controller consumes them, manages agent Process resources, and writes Credential/agent status; generated controller contracts are consumed by all Credential Providers. |
+| Data migration | None — controller lifecycle code only; no runtime state import |
+| Validation | Managed-identity reconcile/controller tests; shared Credential reconciliation tests; topology tests validating agent spawn/teardown and Deleted-phase cleanup |
+| Removal proof | V2 `CredentialProvider` status/enrollment trait lifecycle is superseded after shared controller reconcile and managed-identity agent lifecycle pass parity |
 
-### ADR046-credential-007 (shared Nix + cleanup)
+This work item is shared with `credential-secret-service` and `credential-entra`;
+the table above is the `managed-identity-controller` entry point for this work
+item.
+
+### ADR046-cred-mi-003 (shared Nix + cleanup)
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-credential-007` |
-| Relevant destination | `nixos-modules/options-resources.nix`, `nixos-modules/activation-nixos-cleanup.nix` |
-| Managed-identity-specific design | Nix eval-time assertions 1–12 from §Eval-time assertions; Provider schema for `imdsEndpointAlias` closed enum; `clientId` `OpaqueAzureRef` charset; generation cleanup contract; artifact catalog validation for `credential-managed-identity-bin` |
-| Integration fixture | `integration/aca-credential-ref.sh`: assert that after migration, the ACA Provider resource config carries `credentialRef: "Credential/aca-relay-mi"` and that the raw `managed_identity_client_id` string field is absent from the rendered Provider config JSON and from the ACA runtime's bundle |
+| Dependency/owner | Depends on ADR046-credential-001, ADR046-credential-002, and ADR046-cred-mi-001; owner: Nix resource compiler and activation cleanup |
+| Current source | `packages/d2b-provider-aca/src/lib.rs:managed_identity_client_id` and `packages/d2bd/src/lib.rs:managed_identity_client_id` are the current raw ACA managed-identity config surfaces; v3 Provider/Credential resource authoring is net-new |
+| Reuse action | replace raw ACA managed identity client-id fields with Credential resource references and v3 Provider/Credential Nix emission |
+| Destination | nixos-modules/options-resources.nix; nixos-modules/activation-nixos-cleanup.nix; integration/aca-credential-ref.sh |
+| Detailed design | Shared Nix and cleanup: implement Nix eval-time assertions 1–12 from §Eval-time assertions, closed enum schema for `imdsEndpointAlias`, `clientId` validation via `OpaqueAzureRef` charset, generation cleanup contract, and artifact catalog validation for `credential-managed-identity-bin`. Integration fixture asserts that the migrated ACA Provider config carries `credentialRef: "Credential/aca-relay-mi"` and the raw `managed_identity_client_id` string field is absent from rendered Provider config JSON and ACA runtime bundle. |
+| Integration | Nix compiler emits Provider/Credential/ACA resource config; ResourceAPI admission validates it; activation cleanup deletes old generation resources through finalizers; ACA Provider consumes `credentialRef` to obtain tokens from the managed-identity Credential Provider. |
+| Data migration | Full d2b 3.0 reset; raw ACA `managed_identity_client_id` config is replaced by a newly authored Credential resource reference rather than imported in place |
+| Validation | Nix eval assertion tests; artifact catalog validation tests; `integration/aca-credential-ref.sh` |
+| Removal proof | `managed_identity_client_id` raw fields in ACA config and daemon plumbing are removed only after ACA Provider config uses `credentialRef` exclusively |
 
-### ADR046-credential-008 (shared audit/OTEL)
+### ADR046-cred-mi-004 (shared audit/OTEL)
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-credential-008` |
-| Relevant destination | `packages/d2b-provider-credential-managed-identity/src/{audit.rs, telemetry.rs}`; `packages/d2b-contract-tests/tests/credential_audit.rs` |
-| Managed-identity-specific design | Emit audit records for all methods and controller events per §Audit; emit OTEL spans/metrics per §OTEL and metrics; add `d2b_credential_imds_calls_total` counter with `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `"managed-identity-canary"`, `"credential_canary"`, and `"imds-endpoint-canary"` in `canary.rs` |
+| Dependency/owner | Depends on ADR046-cred-mi-001 and ADR046-mi-topology-001; owner: credential-managed-identity audit/telemetry implementation |
+| Current source | `packages/d2b-realm-provider/src/error.rs:contains_sensitive_shape`; `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; main `a1cc0b2d` managed-identity canary tests listed in §Source reuse |
+| Reuse action | adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces |
+| Destination | packages/d2b-provider-credential-managed-identity/src/{audit.rs,telemetry.rs}; packages/d2b-contract-tests/tests/credential_audit.rs |
+| Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit; emit OTEL spans and metrics per §OTEL and metrics; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, and `imds-endpoint-canary` in `canary.rs`. |
+| Integration | Controller and agent service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded redacted records; contract tests validate credential audit shape across providers. |
+| Data migration | None — audit/telemetry only; no runtime state import |
+| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests for labels and sensitive-shape rejection |
+| Removal proof | None — audit/telemetry helpers are additive; no prior owner to remove |
 
 ---
 
@@ -2072,7 +2092,7 @@ Old and new suites never run in parallel indefinitely.
 | Behavior retained | `OpaqueAzureRef` charset/length validation fail-closed on `clientId`; injected-client pattern keeps token material in the client process; zero-secret-bytes invariant at config/audit/log boundary; `ExactSdkConsumer` ownership model; `contains_sensitive_shape` guard |
 | Required delta | Full `ManagedIdentityCredentialProvider` implementation; split `managed-identity-controller` (no IMDS) + `managed-identity-agent` (IMDS client, KK delivery); `d2b.credential.v3` service dispatch split by role; agent spawn/teardown lifecycle in controller reconcile; `Noise_KK` delivery channel terminated by agent; Provider resource/descriptor; agent Process template; `imdsEndpointAlias` closed-alias config; `ExactSdkConsumer` via `AuthenticatedSubjectContext`; D087 status-first state model with no Provider state Volume, empty ProviderStateSet, status/Operation-ledger lease observation, and transient-only token bytes; Nix eval assertions; controller finalizer-release-only deletion path; Core-written event-only Deleted revision; audit subsystem deletion record with exactly-once dedup; audit/OTEL; `aca-credential-ref` migration |
 | Feasibility proof | Main `a1cc0b2d` proves the `ManagedIdentityCredentialProvider` implementation; its `FakeClient` test suite covers acquire/refresh/revoke/inspect, idempotency, unavailable state, canary enforcement, `ExactSdkConsumer` enforcement, and lease cardinality |
-| Future owner | `ADR046-mi-topology-001` (process split), `ADR046-credential-005` (primary), `ADR046-credential-006`, `ADR046-credential-007`, `ADR046-credential-008` |
+| Future owner | `ADR046-mi-topology-001` (process split), `ADR046-cred-mi-001` (primary), `ADR046-cred-mi-002`, `ADR046-cred-mi-003`, `ADR046-cred-mi-004` |
 
 ---
 

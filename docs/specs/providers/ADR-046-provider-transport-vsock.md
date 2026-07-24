@@ -843,15 +843,97 @@ expression.
 
 ## Work items
 
-| ID | Title | Phase | Priority | Depends on | Owner crate | Proof type | Evidence class | Description |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ADR046-vsock-001 | Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes | Phase 1 | P0 | ADR046-bus-001 (OwnedTransport in d2b-session) | `d2b-provider-transport-vsock` | hermetic unit + redaction test | `test-only-or-preview` | Define `VsockEffectPort` async trait and opaque ID newtypes in `effect_port.rs`; implement `FakeVsockEffectPort` for tests; `redaction.rs` asserts no raw `u32` in any `Debug`/`Display` output of opaque types; no real vsock socket opened |
-| ADR046-vsock-002 | Implement framing utilities and bridge task in Provider crate | Phase 1 | P0 | ADR046-vsock-001 | `d2b-provider-transport-vsock` | hermetic framing tests | `implemented-but-unwired` | Copy `FramedVsockTransport` framing-only code (length-prefix encode/decode, bounded allocation, EOF/reset) from main `a1cc0b2d` → `framing.rs`; implement bridge task pumping bytes between an opaque `AsyncRead+AsyncWrite` stream from `VsockEffectPort::open` and the named ComponentSession stream; hermetic tests using `FakeVsockEffectPort` (no real socket) |
-| ADR046-vsock-003 | Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport) | Phase 1 | P0 | ADR046-vsock-002, ADR046-bus-001 | `d2b-provider-transport-vsock` | service round-trip test (mock) | `test-only-or-preview` | Implement all three service methods in `service.rs`; `open_close.rs` and `observe.rs` test full service API against `FakeVsockEffectPort`; conformance kit passes |
-| ADR046-vsock-004 | Implement `LiveVsockEffectPort` in Zone runtime | Phase 2 | P0 | ADR046-vsock-001, ADR046-alloc-001 (Zone allocator) | `d2b-core-controller` | integration test | `ADR-only` | Zone runtime provides `LiveVsockEffectPort` backed by core allocator state; resolves `OpaqueEndpointId` → CID and `OpaqueBindingId` → port; opens AF_VSOCK socket; injects into Provider service at startup; no raw CID/port exposed to Provider |
-| ADR046-vsock-005 | Core ProviderDeployment creates/deletes service component state Volume | Phase 1 | P0 | ADR046-vol-001 (volume-local Provider) | `d2b-provider-transport-vsock` | unit + integration test | `test-only-or-preview` | Core ProviderDeployment creates `Volume/transport-vsock--service--empty-state--*` before the component Process and deletes it after the Process finalizer; transport-vsock Provider controller does not own Volume, does not add Volume to exported ResourceTypes, and does not create its prerequisite; Volume spec: empty schema, `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`, `User/d2b-transport-vsock` owner, minimal nonzero `quota.maxBytes`/`quota.maxInodes` with `enforcement: hard`, `private` sensitivity, `broker-maintained` identity marker; `state_volume.rs` test verifies Volume spec fields against canonical schema; integration test verifies marker written at install and removed at Provider deletion; no operator-authored Volume; component receives dirfd view only |
-| ADR046-vsock-006 | Integration test: real vsock socketpair + full ZoneLink open/close | Phase 2 | P1 | ADR046-vsock-003, ADR046-vsock-004 | `d2b-provider-transport-vsock` | integration test | `test-only-or-preview` | `integration/host_guest.rs`: real vsock socketpair (Linux); `OpenTransport` + byte round-trip + `CloseTransport`; validates bridge throughput ≥ 512 MiB/s; `no_fd_transfer.rs`: structural rejection of attachment packets over vsock transport |
-| ADR046-vsock-007 | Delete legacy socat OTLP relay and CONNECT-proxy guest-control vsock | Phase 3 | P2 | ADR046-obs-001 (observability-otel Provider), ADR046-guest-001 (Guest resource lifecycle) | `d2b-host`, `d2bd` | deletion + parity test | `implemented-and-reachable` | Remove `vsock_relay_argv.rs` socat path after `observability-otel` Provider native vsock relay passes parity; remove `guest_control_vsock.rs` CONNECT-proxy after Guest resource lifecycle + guestd vsock bootstrap reach parity; no raw CID or socat vsock path remains |
+### ADR046-vsock-001
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes; Phase 1; Priority P0; Depends on ADR046-bus-001 (OwnedTransport in d2b-session); Owner crate `d2b-provider-transport-vsock`. |
+| Current source | Evidence class `test-only-or-preview`; baseline has no generic vsock transport Provider or opaque endpoint/binding ID trait. |
+| Reuse action | net-new trait/newtypes with redaction tests; no real vsock socket opened |
+| Destination | `packages/d2b-provider-transport-vsock/src/effect_port.rs`; test fake in `tests/effect_port_mock.rs`; redaction checks in `tests/redaction.rs`. |
+| Detailed design | Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes. Define `VsockEffectPort` async trait and opaque ID newtypes in `effect_port.rs`; implement `FakeVsockEffectPort` for tests; `redaction.rs` asserts no raw `u32` in any `Debug`/`Display` output of opaque types; no real vsock socket opened. |
+| Integration | Core ZoneLink/delegation controller calls the Provider service with opaque IDs; Provider calls injected `VsockEffectPort`; live AF_VSOCK resolution remains in core runtime, not the Provider crate. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | Proof type: hermetic unit + redaction test; `tests/effect_port_mock.rs` and `tests/redaction.rs`. |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-vsock-002
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Implement framing utilities and bridge task in Provider crate; Phase 1; Priority P0; Depends on ADR046-vsock-001; Owner crate `d2b-provider-transport-vsock`. |
+| Current source | Evidence class `implemented-but-unwired`; main commit `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` `packages/d2b-session-unix/src/vsock.rs` contains `FramedVsockTransport` framing behavior, not current v3 baseline behavior. |
+| Reuse source | Main `a1cc0b2d` `packages/d2b-session-unix/src/vsock.rs` framing-only code and `packages/d2b-session-unix/tests/unix_session.rs` vsock framing subset. |
+| Reuse action | copy/adapt framing-only code; exclude raw AF_VSOCK socket calls and ADR 0045 endpoint-role assumptions |
+| Destination | `packages/d2b-provider-transport-vsock/src/framing.rs` and `src/bridge.rs`; tests in `packages/d2b-provider-transport-vsock/tests/framing.rs`. |
+| Detailed design | Implement framing utilities and bridge task in Provider crate. Copy `FramedVsockTransport` framing-only code (length-prefix encode/decode, bounded allocation, EOF/reset) from main `a1cc0b2d` → `framing.rs`; implement bridge task pumping bytes between an opaque `AsyncRead+AsyncWrite` stream from `VsockEffectPort::open` and the named ComponentSession stream; hermetic tests using `FakeVsockEffectPort` (no real socket). |
+| Integration | OpenTransport creates a framed opaque stream, bridge task pumps to a named ComponentSession stream, and d2b-bus consumes it as an `OwnedTransport` without FD attachment support. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | Proof type: hermetic framing tests; `tests/framing.rs` covers partial/coalesced records, oversized frames, EOF/reset classification, and no real socket. |
+| Removal proof | None for framing; raw socket portions from the source are deliberately not copied into the Provider crate. |
+
+### ADR046-vsock-003
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport); Phase 1; Priority P0; Depends on ADR046-vsock-002 and ADR046-bus-001; Owner crate `d2b-provider-transport-vsock`. |
+| Current source | Evidence class `test-only-or-preview`; no current v3 generic `VsockTransportService` implementation exists. |
+| Reuse action | net-new service implementation over ComponentSession and fake effect port tests |
+| Destination | `packages/d2b-provider-transport-vsock/src/service.rs`; tests `tests/open_close.rs`, `tests/observe.rs`, and conformance kit. |
+| Detailed design | Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport). Implement all three service methods in `service.rs`; `open_close.rs` and `observe.rs` test full service API against `FakeVsockEffectPort`; conformance kit passes. |
+| Integration | Core ZoneLink/delegation controller is the only authorized caller; service opens named stream handles for d2b-bus, releases them on close, and streams transport events for observe. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | Proof type: service round-trip test (mock); `tests/open_close.rs`, `tests/observe.rs`, and provider conformance tests. |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-vsock-004
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Implement `LiveVsockEffectPort` in Zone runtime; Phase 2; Priority P0; Depends on ADR046-vsock-001 and ADR046-alloc-001 (Zone allocator); Owner crate `d2b-core-controller`. |
+| Current source | Evidence class `ADR-only`; baseline has guest-control and relay vsock paths, but no allocator-backed `LiveVsockEffectPort` for ZoneLink transport. |
+| Reuse action | net-new core adapter; keep raw AF_VSOCK syscalls outside Provider crate |
+| Destination | `d2b-core-controller` Zone runtime `LiveVsockEffectPort`; Provider receives it by dependency injection at startup. |
+| Detailed design | Implement `LiveVsockEffectPort` in Zone runtime. Zone runtime provides `LiveVsockEffectPort` backed by core allocator state; resolves `OpaqueEndpointId` → CID and `OpaqueBindingId` → port; opens AF_VSOCK socket; injects into Provider service at startup; no raw CID/port exposed to Provider. |
+| Integration | Zone allocator issues endpoint/binding IDs; core runtime resolves them, opens/accepts AF_VSOCK sockets, returns opaque streams to Provider service, and excludes reserved ports. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | Proof type: integration test; `integration/host_guest.rs` exercises live open/close byte round-trip with the injected effect. |
+| Removal proof | None — net-new core adapter; no prior owner to remove. |
+
+### ADR046-vsock-005
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Core ProviderDeployment creates/deletes service component state Volume; Phase 1; Priority P0; Depends on ADR046-vol-001 (volume-local Provider); Owner crate `d2b-provider-transport-vsock`. |
+| Current source | Evidence class `test-only-or-preview`; no operator-authored v3 state Volume exists for transport-vsock in baseline. |
+| Reuse action | net-new ProviderDeployment/Volume integration and tests |
+| Destination | ProviderDeployment Volume creation/deletion path plus `packages/d2b-provider-transport-vsock/tests/state_volume.rs`. |
+| Detailed design | Core ProviderDeployment creates/deletes service component state Volume. Core ProviderDeployment creates `Volume/transport-vsock--service--empty-state--*` before the component Process and deletes it after the Process finalizer; transport-vsock Provider controller does not own Volume, does not add Volume to exported ResourceTypes, and does not create its prerequisite; Volume spec: empty schema, `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`, `User/d2b-transport-vsock` owner, minimal nonzero `quota.maxBytes`/`quota.maxInodes` with `enforcement: hard`, `private` sensitivity, `broker-maintained` identity marker; `state_volume.rs` test verifies Volume spec fields against canonical schema; integration test verifies marker written at install and removed at Provider deletion; no operator-authored Volume; component receives dirfd view only. |
+| Integration | Core ProviderDeployment creates Volume before Process, volume-local reconciles it, Provider process receives only a dirfd view, and Provider deletion removes the Process before deleting the Volume/identity marker. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import; state Volume is created fresh with `migrationPolicy: none`. |
+| Validation | Proof type: unit + integration test; `tests/state_volume.rs` and Provider install/remove integration tests verify schema, user refs, marker lifecycle, and no ComponentPrincipal. |
+| Removal proof | Remove the state Volume and its broker-maintained identity marker during Provider deletion; no operator-authored Volume remains. |
+
+### ADR046-vsock-006
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Integration test: real vsock socketpair + full ZoneLink open/close; Phase 2; Priority P1; Depends on ADR046-vsock-003 and ADR046-vsock-004; Owner crate `d2b-provider-transport-vsock`. |
+| Current source | Evidence class `test-only-or-preview`; existing guest-control compile proof and socat relay tests are not full ZoneLink transport coverage. |
+| Reuse action | net-new integration coverage with no FD transfer over vsock |
+| Destination | `packages/d2b-provider-transport-vsock/integration/host_guest.rs` and `integration/no_fd_transfer.rs`. |
+| Detailed design | Integration test: real vsock socketpair + full ZoneLink open/close. `integration/host_guest.rs`: real vsock socketpair (Linux); `OpenTransport` + byte round-trip + `CloseTransport`; validates bridge throughput ≥ 512 MiB/s; `no_fd_transfer.rs`: structural rejection of attachment packets over vsock transport. |
+| Integration | Test drives Provider service, LiveVsockEffectPort, d2b-bus `OwnedTransport`, byte bridge, close path, and attachment rejection across the integration lane. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | Proof type: integration test; `make test-integration` runs `host_guest.rs` and `no_fd_transfer.rs`. |
+| Removal proof | None — test coverage net-new; old duplicate vsock tests are retired only after successor assertions migrate. |
+
+### ADR046-vsock-007
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Title: Delete legacy socat OTLP relay and CONNECT-proxy guest-control vsock; Phase 3; Priority P2; Depends on ADR046-obs-001 (observability-otel Provider) and ADR046-guest-001 (Guest resource lifecycle); Owner crates `d2b-host`, `d2bd`. |
+| Current source | Evidence class `implemented-and-reachable`; legacy sources are `packages/d2b-host/src/vsock_relay_argv.rs` socat OTLP relay and `packages/d2bd/src/guest_control_vsock.rs` CONNECT-proxy guest-control path. |
+| Reuse action | delete after replacement parity; preserve reserved guest-control/OTLP port exclusions until replacements own them |
+| Destination | Remove legacy paths from `d2b-host` and `d2bd`; replacement lives in `observability-otel` Provider native vsock relay and Guest resource lifecycle/bootstrap. |
+| Detailed design | Delete legacy socat OTLP relay and CONNECT-proxy guest-control vsock. Remove `vsock_relay_argv.rs` socat path after `observability-otel` Provider native vsock relay passes parity; remove `guest_control_vsock.rs` CONNECT-proxy after Guest resource lifecycle + guestd vsock bootstrap reach parity; no raw CID or socat vsock path remains. |
+| Integration | Observability-otel owns OTLP vsock relay replacement; Guest lifecycle owns guest-control bootstrap replacement; transport-vsock ZoneLink allocator excludes ports 14317, 14318, and 14319. |
+| Data migration | Full d2b 3.0 reset; no v2 relay or guest-control state/config import. |
+| Validation | Proof type: deletion + parity test; parity tests for observability-otel and Guest lifecycle plus redaction checks that no raw CID/socat vsock path remains. |
+| Removal proof | Delete `packages/d2b-host/src/vsock_relay_argv.rs` socat path after observability parity, delete `packages/d2bd/src/guest_control_vsock.rs` CONNECT-proxy after Guest lifecycle parity, and prove no raw CID or socat vsock path remains. |
 
 ---
 

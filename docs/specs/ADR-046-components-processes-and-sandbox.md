@@ -455,6 +455,6 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Destination | `packages/d2b-provider-system-systemd/`, `packages/d2b-provider-system-minijail/` |
 | Detailed design | Two Process/EphemeralProcess implementations, pidfd/wait ownership, system/user domains |
 | Integration | Zone-installed Providers/controller instances per Host/Guest |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Identical schema/status conformance plus provider-specific adoption |
 | Removal proof | Old helpers retained until host/user/guest parity |

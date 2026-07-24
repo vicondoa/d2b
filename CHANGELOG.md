@@ -12,10 +12,24 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Proposed ADR 0046 and its normative specification set for the d2b 3.0
-  Provider control plane: Zone-local ResourceSpecs, independently packaged
-  multi-process Providers, a lightweight redb resource store, asynchronous
-  owner-driven reconciliation, and Noise-protected d2b-bus control channels.
+- Proposed ADR 0046 and its complete, documentation-only normative
+  specification set for the d2b 3.0 Provider control plane, under user review.
+  The atomic set has 55 member specs (28 foundation, resource, cross-cutting,
+  and closing specs plus a 27-Provider dossier catalog) indexed by
+  `docs/specs/README.md` and `docs/specs/providers/README.md` and bound by the
+  generated `ADR-046-spec-set.json` and `ADR-046-work-items.json` manifests.
+  It specifies Zone-local resources over the 17 standard ResourceTypes
+  (including `Endpoint`), independently packaged multi-process Providers
+  selected by `{ artifactId, config }`, an asynchronous embedded redb resource
+  plane with owner-driven reconciliation and commit-gated expedited reconcile,
+  status-first component state with optional Volumes, layered base-plus-provider
+  ResourceType specs with three-layer status, resource currency/upgrade/recycle
+  with CLI projections, Guest-resident Entrablau identity custody, fast hermetic
+  tests with integration-only slow coverage, and Noise-protected
+  ComponentSession/d2b-bus channels on the `d2bus.org` public namespace,
+  together with the security/threat-model, reset/cutover, feasibility,
+  validation and delivery, and streamline contracts. Everything remains
+  Proposed; no crates, services, controllers, or Providers are created.
 
 ## [1.4.1] - 2026-07-12
 

@@ -8,9 +8,11 @@
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
+| Owners | `packages/d2b-provider-notification-desktop/` |
 | Provider crate | `packages/d2b-provider-notification-desktop/` |
 | providerRef | `Provider/notification-desktop` |
 | Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-reconciliation`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration`, `ADR-046-provider-state`, `ADR-046-primitive-resource-composition` |
+| Supersedes | None |
 | Runtime dependency | `Provider/display-wayland` (required for host desktop sink processes) |
 
 ---
@@ -1349,7 +1351,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
 | Detailed design | Session admission checks, Noise profile enforcement, transport class validation |
 | Integration | ComponentSession/d2b-bus |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/stream_admission.rs` — all rejection vectors |
 | Removal proof | Old `DesktopServices` session admitted under v2 contract removed when v3 session established |
 
@@ -1363,7 +1365,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/controller.rs` |
 | Detailed design | Async Process placement controller; watches `guestSources` Guest refs; creates/drains/deletes guest-source Processes; creates/stops host-sink Process on display-wayland readiness change; declares no Provider state Volume and does not own/add/create/delete Volumes; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); notification delivery state (in-memory projection, action nonce store) is host-sink process memory only; no ResourceType reconcile loop |
 | Integration | Zone resource store (Process API); d2b-bus; display-wayland dependency watch |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for placement FSM in `tests/stream_record.rs`; Volume creation/deletion lifecycle in `tests/volume_lifecycle.rs`; see also `integration/cross_zone_source.rs` end-to-end |
 | Removal proof | Not applicable (new controller) |
 
@@ -1377,7 +1379,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/host_sink.rs` |
 | Detailed design | D-Bus client; `DesktopNotificationSink` stream consumer; action nonce issuance; `DesktopNotificationObserver` projection (in-memory, not persisted); display-wayland ComponentSession bootstrap for pre-opened D-Bus FD |
 | Integration | D-Bus session (pre-opened FD via ComponentSession bootstrap); ComponentSession named streams |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `integration/dbus_sink.rs`, `integration/observer_client.rs`, `integration/action_invoke.rs` |
 | Removal proof | `nixos-modules/notifications.nix` state-dir tmpfiles rule retired; all notification state is in-memory per-session with no Volume replacement |
 
@@ -1391,7 +1393,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/guest_source.rs` |
 | Detailed design | Guest-side vsock ComponentSession; `NotificationRequest` record validation and field bounding; category filter; `DesktopNotificationSink` stream forwarding; `NotificationResult` handling; no host-side resource creation |
 | Integration | Guest process vsock → host ComponentSession |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `integration/cross_zone_source.rs` |
 | Removal proof | v3 baseline security-key notification path in `d2b-notify` is superseded; clipd direct `notify_rust` call superseded |
 

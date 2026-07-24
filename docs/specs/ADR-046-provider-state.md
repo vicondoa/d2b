@@ -1129,7 +1129,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Crate layout | See [Provider crate layout](#provider-crate-layout). Hermetic golden-record and cardinality tests → `tests/audit_unit.rs`; live Zone audit stream emission and OTEL export against a running observability Provider → `integration/audit.rs` (added by ADR046-pstate-009) |
 | Detailed design | Volume-state audit event types and Zone audit emission; OTEL metric definitions with closed cardinality label sets |
 | Integration | Every state lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Audit event golden records; no content/path/credential in audit payload; OTEL cardinality label tests |
 | Removal proof | Not applicable |
 
@@ -1145,7 +1145,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Crate layout | See [Provider crate layout](#provider-crate-layout). This work item populates both `tests/` (hermetic ported d2b-state tests using `FakeProvider`/`DeterministicClock`) and `integration/` (end-to-end provider-system scenarios requiring a live daemon + real Volume mount); must include a populated `integration/README.md` describing scenario prerequisites |
 | Detailed design | Port all d2b-state integration tests replacing ADR 0045 contract setup with v3 Volume/StateEnvelope; add provider-state-specific migration, marker, quota, sealing, relocation, snapshot, incident-hold, and unclaimed-GC tests; include cross-component N-Volume coordination test |
 | Integration | Tests run against the real volume-local Provider over a fake Zone runtime (no live daemon required) using the standard controller-toolkit fake clients |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All ported tests pass under v3 contracts; test coverage includes every fault-injection scenario listed in d2b-state/tests/state.rs plus new provider-state cases; stateless-component-declares-no-Volume test passes; shared-Volume attempt rejected; `guest-local` Volume creation inside Guest domain (source.executionRef=Guest, no Export created, Host volume-local holds no dirfd/path); `host-backed-guest` Volume creation (source on Host, Export created, Export reaches Ready, Guest Process mounts source Volume view); `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; cross-domain isolation: Guest-local volume-local does not create or observe Host-domain Volumes |
 | Removal proof | `d2b-state` crate retired from workspace only after every caller migrates to v3 Volume state helpers and all ported tests pass |
 

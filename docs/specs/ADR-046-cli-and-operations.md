@@ -2165,7 +2165,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/guest.rs` (`d2b guest start/stop/restart/list/status`); unsafe-local workloads go to `packages/d2b/src/host.rs` (`d2b host list/status/get`), NOT guest.rs |
 | Detailed design | Route Guest lifecycle (WorkloadProviderKind: LocalVm/QemuMedia/ProviderManaged) through `d2b.resource.v3` Get/UpdateSpec/Watch; map dry-run/apply to resource API precondition; `--no-wait-ready` exits on accepted; with-wait uses `d2b status --watch` loop. WorkloadProviderKind::UnsafeLocal entries MUST route to `d2b host` commands only; any code path that would return an unsafe-local entry from `d2b guest list` is a correctness violation. v2 commands (`d2b up/down/restart/list/status`, `d2b vm start/stop/restart/list/status`) are deleted at 3.0; `d2b migrate-check` explains replacements. |
 | Integration | ZoneContext → resource API client → Guest resource; status watch uses Watch stream |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Dry-run/apply/wait/no-wait-ready tests; zone-unavailable degraded path; JSON output schema tests; confirm v2 command paths are absent (compilation failure if any cmd_vm_start/stop alias re-introduced) |
 | Removal proof | Old `cmd_vm_start/stop/restart` seqpacket paths removed after Guest resource API paths are live with full test coverage |
 
@@ -2181,7 +2181,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/exec.rs` (`d2b exec run/attach/wait/status/list/logs/kill`) |
 | Detailed design | Map EphemeralProcess resource lifecycle; `exec run` creates resource and returns ref; `exec attach` opens named stream via adapted `DaemonClient::open_terminal(DaemonMethod::Exec, ...)` → `DaemonTerminal`; retain full `exec_client.rs` FSM and TTY machinery from baseline; retain `--json` envelope fields `source`/`reason`/`guestExitCode`/`signal`/`transportExitCode`; retain reserved exit codes 42/69/70/75/76/77. v2 commands (`d2b vm exec *`) are deleted at 3.0; no dispatch wiring. Excluded ADR 0045: `GuestClient` vsock/guest-control proxy path; `TargetInput::Workload`; old `WorkloadName`-keyed exec management. |
 | Integration | ZoneContext → EphemeralProcess Create → named stream attach via `DaemonClient::open_terminal` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Full `exec_client.rs` test suite migrated; adapted tests from main `client.rs:terminal_*` and `guest_exec_*`; TTY/raw-mode/RAII/signal tests; `--json` envelope/disambiguation tests; capacity/transport/auth/protocol exit-code tests; confirm v2 `cmd_vm_exec` path is absent |
 | Removal proof | Old `cmd_vm_exec` seqpacket path removed after `d2b exec` paths have equivalent coverage |
 
@@ -2197,7 +2197,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/shell.rs` (`d2b shell open/attach/list/detach/kill/status`) |
 | Detailed design | Route ShellSession resource lifecycle through resource API using adapted `ShellService` generated types; `shell open` → `ShellCreate` → `DaemonClient::open_terminal(Shell)` → `DaemonTerminal`; retain FSM/TTY/signal/RAII behavior from `run_shell_fsm`; `--name` required for kill; SIGHUP detaches without kill. v2 commands (`d2b shell <target> *`) are deleted at 3.0; no dispatch wiring. Excluded: gateway relay path (`VmTargetRoute::Gateway`); old `ShellOp`/`ShellOpResponse` seqpacket protocol; `TargetInput::Workload`-keyed realm routing. |
 | Integration | ZoneContext → ShellSession Create via `DaemonClient::open_terminal` → `NamedStream` I/O |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Shell list/detach/kill/attach unit tests (adapted from existing); adapted `client.rs:shell_management_*` and `named_stream_*` tests; TTY RAII/signal tests; confirm v2 `cmd_shell` path is absent |
 | Removal proof | Old `cmd_shell` seqpacket path removed after new shell commands have equivalent coverage |
 
@@ -2213,7 +2213,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/provider.rs` (`d2b provider list/get/status/inspect`; dynamic projection loading) |
 | Detailed design | `d2b provider list/get/status/inspect`; InspectSchema call returns dynamic projection descriptor using `ConnectedClient::invoke` with generated provider service types; projection bounds enforcement (64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); built-in name collision guard; audio/clipboard/display as first providers to migrate their projections |
 | Integration | ZoneContext → Provider resource + InspectSchema via `ConnectedClient::invoke` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Projection size/name/collision/timeout bounds tests; audio/clipboard/display projection conformance tests; completion script safety tests; adapted `conformance.rs` tests |
 | Removal proof | Built-in `cmd_audio`/`cmd_clipboard_arm`/`cmd_vm_display` removed only after Provider projection paths pass equivalence tests |
 
@@ -2229,7 +2229,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/complete.rs` (`d2b complete bash/zsh/fish`) |
 | Detailed design | `d2b complete <shell>` emits completion script; uses clap `CommandFactory::command()` plus dynamic projection fetch (2s per-Provider, 10s total); result bounded at 256 KiB; shell-escaped; newlines stripped |
 | Integration | Standalone command; no Zone API required for static completion; Zone API used for dynamic Provider projection |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Completion script tests (bash/zsh/fish syntax valid); projection injection safety tests; deadline/partial-Provider tests |
 | Removal proof | Not applicable |
 
@@ -2245,7 +2245,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/activation.rs` (`d2b activation build/generations/switch/boot/test/rollback/gc/migrate/keys/trust/rotate-known-host/config`) |
 | Detailed design | Route through `activation-nixos` Provider service via `ConnectedClient::invoke` using adapted `DaemonMethod::Apply`/lifecycle dispatch pattern; retain dry-run/apply; retain guest-control transport for config sync (no SSH). v2 top-level activation commands (`d2b build/switch/boot/test/rollback/gc/migrate/keys/trust/rotate-known-host/config`) are deleted at 3.0; no dispatch wiring. |
 | Integration | ZoneContext → activation-nixos Provider service → resource API via `ConnectedClient::invoke` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All existing switch/boot/test/rollback/keys tests adapted; config sync/diff/approve/reject tests; confirm v2 top-level activation paths are absent; adapted `client.rs:daemon_typed_list_preserves_projection_and_truncation` apply pattern |
 | Removal proof | Old top-level activation verbs removed only after `d2b activation *` paths have equivalent coverage |
 
@@ -2261,7 +2261,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/host.rs` (all `d2b host` subcommands) |
 | Detailed design | Route `host prepare/destroy` through Zone resource API Host reconcile operation via `ConnectedClient::invoke`; retain broker-mediated mutation and ownership-marker semantics; `host doctor` prefers Zone resource API status, falls back to local state files; `host check` retains exit-code 3; `host validate` retains wave/evidence-dir/scripts-dir/signature |
 | Integration | ZoneContext → Host resource; broker op path retained for emergency/shutdown-hook |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All existing host-check/prepare/destroy/doctor/install/reconcile/validate tests; exit-code 3 regression; doctor Zone-fallback/local-state-fallback tests |
 | Removal proof | Raw broker-socket paths removed only after Host resource API routes have equivalent coverage |
 
@@ -2277,7 +2277,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/zone.rs` (`d2b zone get/list/status`) |
 | Detailed design | `d2b zone get [<name>]` fetches Zone self resource via `ConnectedClient::invoke`; `d2b zone list` lists ZoneLink resources. v2 commands (`d2b realm list/inspect/enter/run`) are deleted at 3.0; no dispatch wiring. Excluded ADR 0045: `RealmServiceServer`/`RealmServiceProcess` multi-realm service; `RemoteNodeRegistration` constellation routing; `TargetInput::Realm`; `RealmMethod::ResolveRoute`/`AuthorizeShortcut`/`RevokeShortcut`. |
 | Integration | ZoneContext → Zone resource Get/List via `ConnectedClient::invoke` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Zone get/list tests; confirm v2 `cmd_realm_*` paths are absent |
 | Removal proof | `cmd_realm_*` and `target_routing.rs` removed only after zone routes pass equivalence tests |
 
@@ -2287,13 +2287,13 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | --- | --- |
 | Work item ID | `ADR046-cli-010` |
 | Dependency/owner | ADR046-cli-001; CLI crate owner |
-| Current source | None |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()`, `ConnectedClient::invoke_with_attachments()`, `ConnectedClient::open_server_stream()` — copy unchanged; these are the three primitives for resource Get/List/Watch respectively; (2) `packages/d2b-client/src/session.rs` `NamedStream` (`send`, `receive`, `cancel`, `close`, `is_terminal`) — copy unchanged; Watch stream output arrives over a named stream; (3) `packages/d2b-session/src/deadline.rs` `DeadlineBudget` — copy unchanged; `--deadline` flag maps to `DeadlineBudget::admit_metadata` wall deadline; `MAX_REQUEST_LIFETIME_MS=900000` caps all Watch/List deadlines; (4) `packages/d2b-client/src/client.rs` `CancellationToken::cancel()` — copy unchanged; `SIGINT`/SIGTERM → `CancellationToken::cancel()` → propagated to `ConnectedClient::invoke` and `NamedStream`; (5) `packages/d2b-client/src/client.rs` `MetadataInput`, `RetryPolicy`, `CallOptions` — copy unchanged; `--idempotency-token` maps to `MetadataInput`; `RetryPolicy::mutating_once()` is the default for Create/UpdateSpec/Delete; tests to adapt/import: `client.rs:metadata_retries_and_cancellation_use_canonical_driver`, `mutating_retries_require_stable_idempotency`, `concurrent_named_streams_route_events_without_cross_consumption`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`; excluded ADR 0045 assumptions: `TargetInput::Workload/Realm/Provider` routing variants; `GuestClient` cross-realm proxy routing; old `DeploymentProjection`/`RuntimeProjection` ADR 0045-specific field types |
 | Reuse action | copy-then-adapt |
 | Destination | `packages/d2b/src/resource.rs` (standard `d2b get/list/watch/create/update-spec/delete/status` top-level verbs) |
 | Detailed design | Generic typed dispatch to resource API Get/List/Watch/Create/UpdateSpec/Delete using `ConnectedClient::invoke` (Get/List/Create/UpdateSpec/Delete) and `ConnectedClient::open_server_stream` + `NamedStream` (Watch); ResourceRef argument parsing and validation; page token pagination; `--phase`/`--label-selector` filters; `--deadline` bounded by `MAX_REQUEST_LIFETIME_MS=900s` via `DeadlineBudget`; Watch output streams resource events as JSON lines; JSON schema version field; `CancellationToken` wired to process signal handlers. Excluded: `GuestClient` vsock exec/shell routing; `TargetInput` realm/workload/provider variants. |
 | Integration | ZoneContext → `ConnectedClient` → resource API |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Get/list/watch/create/update-spec/delete tests per ResourceType; pagination/filter/watch-deadline tests; error-class/exit-code tests; adapted `client.rs:metadata_retries_*` and `mutating_retries_*` and `concurrent_named_streams_*` tests |
 | Removal proof | Not applicable (new surface) |
 

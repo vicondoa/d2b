@@ -700,7 +700,7 @@ decisions/work items" row.
 | Destination | `proofs/process-fastlaunch-spike/` |
 | Detailed design | Implements SPIKE-03: the fake Process controller loop, fake `ProcessLaunchEffectPort`, and the 1/10/100-concurrency commit-to-launch-attempt and next-dispatch-independence benchmarks |
 | Integration | Consumes `ADR046-feasibility-001`'s hint-bus shape as its watch-receiver input |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-03 metrics (1)-(3) and thresholds |
 | Removal proof | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` and the Process Provider integration tests named by `ADR046-reconcile-003` reproduce equal-or-stricter coverage |
 
@@ -716,7 +716,7 @@ decisions/work items" row.
 | Destination | `proofs/effectport-async-spike/` |
 | Detailed design | Implements SPIKE-04: the four fake EffectPort traits, the deliberately slow blocking-primitive backends, and the current-thread-runtime heartbeat-jitter detector |
 | Integration | None (standalone) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-04 heartbeat-jitter metric and threshold |
 | Removal proof | Deleted once `packages/d2b-provider-supervisor` and the volume-domain effect adapter each carry an equal-or-stricter in-tree blocking-adapter regression test |
 
@@ -732,7 +732,7 @@ decisions/work items" row.
 | Destination | `proofs/provider-packaging-spike/` |
 | Detailed design | Implements SPIKE-05: the two-binary crate, hand-authored manifest, fake `ProviderDeployment`, and the `cargo metadata` dependency-edge check |
 | Integration | None (standalone) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-05 metrics (1)-(4) across 20 repeated randomized-order manifest loads |
 | Removal proof | Deleted once the real Provider-toolkit crate (`ADR046-provider-001` destination) ships equal-or-stricter manifest-parsing/enumeration/workspace-policy coverage |
 
@@ -748,7 +748,7 @@ decisions/work items" row.
 | Destination | `proofs/bus-routing-noise-spike/`, `proofs/transport-opaque-streams-spike/`, `proofs/credential-kk-e2e-spike/` |
 | Detailed design | Implements SPIKE-06 (exact-addressed routing + per-recipient Noise isolation), SPIKE-07 (Unix/vsock/relay-shaped opaque byte-stream conformance across 3 backends), and SPIKE-08 (Credential Provider → consumer Provider KK delivery with the 13-field binding contract) |
 | Integration | SPIKE-07's Unix backend and SPIKE-08's session machinery both depend on the same pinned `a1cc0b2d` path-dependency established for SPIKE-06 |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-06 metrics (1)-(3), SPIKE-07 metrics (1)-(4) against the exact numeric gates already committed in the transport-unix/vsock dossiers, SPIKE-08 metrics (1)-(6) |
 | Removal proof | Deleted per each spike's own Cleanup row: `packages/d2b-bus/src/router.rs` for SPIKE-06; the three real transport Provider crates for SPIKE-07; the real Credential Provider crates for SPIKE-08 |
 
@@ -764,7 +764,7 @@ decisions/work items" row.
 | Destination | `proofs/provider-state-export-spike/`, `proofs/volume-policy-spike/` |
 | Detailed design | Implements SPIKE-09 (optional declared state-Volume creation order, guest-local/host-backed-guest placement, virtiofs Export child ownership) and SPIKE-10 (Volume ACL/`sourcePolicyId`/quota/lifecycle-marker policy conformance) |
 | Integration | None between the two spikes beyond sharing the same fake resource-store oracle shape |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-09 metrics (1)-(4); SPIKE-10 metrics (1)-(5), zero-tolerance on path leakage |
 | Removal proof | Deleted per each spike's Cleanup row: the real `ADR-046-provider-state` work-item destination for SPIKE-09; `d2b-provider-volume-local`'s own `tests/`/`integration/` suite for SPIKE-10 |
 
@@ -780,7 +780,7 @@ decisions/work items" row.
 | Destination | `proofs/process-provider-conformance-spike/` |
 | Detailed design | Implements SPIKE-11: the shared `ProcessProviderHarness` trait, the minijail-shaped `clone3(CLONE_PIDFD)` launcher, and the systemd transient-user-scope launcher, plus the identity-drift/quarantine and clean-exit cases |
 | Integration | None (standalone; requires a Linux host with `clone3`/`pidfd_open`, and optionally a running `systemd --user` instance behind the `systemd-user` feature) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-11 metrics (1)-(4), zero-tolerance on false adoption |
 | Removal proof | Deleted once `packages/d2b-provider-system-systemd` and `packages/d2b-provider-system-minijail` each carry this exact shared conformance suite in their own `tests/` |
 
@@ -796,7 +796,7 @@ decisions/work items" row.
 | Destination | `proofs/nix-authoring-spike/` |
 | Detailed design | Implements SPIKE-12: the minimal flake, the two synthetic ResourceTypes, the hand-written committed schemas, the standalone `gen-schemas`-shaped drift check, and the two-generation removed-resource cleanup simulation |
 | Integration | None (standalone flake; no dependency on the main `flake.nix`) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-12 metrics (1)-(5), byte-for-byte reproducibility across 3 hermetic builds |
 | Removal proof | Deleted once the real `nixos-modules/resources.nix` and `packages/xtask` `gen-schemas` implementation reproduce these metrics as part of `make test-drift`/`make test-flake` |
 
@@ -812,7 +812,7 @@ decisions/work items" row.
 | Destination | `proofs/cli-discovery-spike/`, `proofs/clean-cutover-spike/` |
 | Detailed design | Implements SPIKE-13 (dynamic Provider-projection discovery, bounds, latency isolation) and SPIKE-14 (zero v2 dispatch, fresh Zone bootstrap ignoring legacy state) |
 | Integration | None between the two spikes beyond sharing the same fixture command-table shape |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-13 metrics (1)-(7); SPIKE-14 metrics (1)-(3), zero-tolerance on legacy-file access |
 | Removal proof | Deleted per each spike's Cleanup row: the real `d2b` CLI crate's own discovery conformance test for SPIKE-13; the real CLI crate's workspace-policy/lint gate plus the real bootstrap sequence for SPIKE-14 |
 
@@ -828,7 +828,7 @@ decisions/work items" row.
 | Destination | `proofs/e2e-composition-spike/` |
 | Detailed design | Implements SPIKE-15: the three representative compositions (local/cloud-hypervisor, cloud/azure, interaction/shell-terminal-or-wayland), wired from the fakes built by `-001` through `-009`, plus the combined 3-Zone aggregate RSS measurement |
 | Integration | Depends on and imports the fake shapes from `proofs/redb-resource-store-spike/`, `proofs/process-fastlaunch-spike/`, `proofs/effectport-async-spike/`, `proofs/provider-packaging-spike/`, `proofs/bus-routing-noise-spike/`, `proofs/transport-opaque-streams-spike/`, `proofs/credential-kk-e2e-spike/`, `proofs/provider-state-export-spike/`, `proofs/volume-policy-spike/`, and `proofs/process-provider-conformance-spike/` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-15 metrics (1)-(4) across all three compositions |
 | Removal proof | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce all three compositions against real, non-fake Zone/store/bus/broker code |
 
@@ -844,6 +844,6 @@ decisions/work items" row.
 | Destination | `proofs/test-runtime-budget-spike/`; the committed baseline ledger consumed by `ADR046-delivery-007` |
 | Detailed design | Establishes the D094 measurement baseline: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a regression |
 | Integration | Output ledger shape is consumed by the runtime ledger/timing gate; establishes the historical threshold seed |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets |
 | Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces the baseline against the real crate set |

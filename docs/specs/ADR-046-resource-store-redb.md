@@ -360,7 +360,7 @@ authorization, or audit cannot be weakened to pass.
 | Destination | `packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs` |
 | Detailed design | replay/live no-gap watch, cursors, owner hints, compaction floor, expired relist |
 | Integration | d2b-bus named streams; controller toolkit |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | deterministic watch/compaction/disconnect/fan-in tests |
 | Removal proof | Not applicable |
 

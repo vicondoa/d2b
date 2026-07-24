@@ -2323,7 +2323,7 @@ Documents:
 | Destination | `src/controller.rs`, `src/layout.rs`, `src/acl.rs`, `src/source.rs` |
 | Detailed design | Async reconcile loop; topological LayoutEntry evaluation; `VolumeEffectPort` semantic op dispatch (no direct broker connection; no `openat2`/`setfacl` call sites); ACL reconciliation cycle via effect port; drift detection; status write with expected revision; `sourcePolicyId` validation against declared `sourcePolicies`; controller watch remains responsive while per-resource effect calls run concurrently; **single watch scope** `providerRef: Provider/volume-local` — physical state reconciliation for all served Volumes (layout/ACL/quota/marker); ProviderDeployment creates/deletes Volume instances; volume-local does not issue create/delete API calls; Nix-preprovisioned `User/<name>` layout principals; no cross-component Volume sharing; each component consumes only its declared view; empty-payload stateNamespace Volumes use `migrationPolicy: none` — no migration EphemeralProcess dispatched |
 | Integration | Controller binary instantiated by Zone runtime after Provider Ready; receives `VolumeEffectPort` implementation and d2b-bus `ResourceClient` via ComponentSession |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/layout_provision.rs`, `tests/layout_repair.rs`, `tests/layout_adopt.rs`, `tests/acl.rs`, `tests/view_rights.rs`, `tests/source.rs`, `integration/provision.rs` |
 | Removal proof | `d2b-priv-broker/src/ops/storage_contract.rs` `reconcile_storage_scope` retired only after Volume controller parity confirmed |
 
@@ -2368,7 +2368,7 @@ Documents:
 | Destination | `src/source.rs` (block-image and tmpfs branches); `tests/source.rs`; `integration/block_image.rs` |
 | Detailed design | `block-image`: image file create/verify via `provision_block_image` effect op; `fallocate` performed by adapter when `preallocate: true`; FD transfer to Guest runtime via LaunchTicket via `open_volume_mount_token` effect op; `tmpfs`: `mount_tmpfs`/`umount_tmpfs` effect ops; `size=` and `nr_inodes=` derived from quota fields; cleanup via `umount_tmpfs` op |
 | Integration | Guest runtime Provider (cloud-hypervisor) receives block-image FD from volume-local via LaunchTicket; no path crosses the boundary |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/source.rs` allowlist pass/fail; block-image/tmpfs eval constraints; `integration/block_image.rs` real image lifecycle |
 | Removal proof | Not applicable (new) |
 
@@ -2413,7 +2413,7 @@ Documents:
 | Destination | `src/audit.rs`; `src/otel.rs`; `src/error.rs`; `tests/audit_unit.rs`; `integration/audit.rs` |
 | Detailed design | Event types and Zone audit emission per §Audit events; OTEL metric definitions per §OTEL metrics; error catalog per §Error catalog; no-path invariant enforced in all outputs |
 | Integration | Every lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/audit_unit.rs` golden records; `tests/error_messages.rs` bounded messages; OTEL label cardinality; `integration/audit.rs` live stream |
 | Removal proof | Not applicable |
 

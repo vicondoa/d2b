@@ -16,18 +16,91 @@ The parent decision is
 [`docs/adr/0046-d2b-3-provider-control-plane.md`](../adr/0046-d2b-3-provider-control-plane.md).
 The parent and every manifest-listed spec form one atomic normative set:
 
-- all files move from `Proposed` to `Accepted` together;
+- all files move from `Proposed` to `Accepted` together, and every member is
+  `Proposed` today; this is a documentation-only set under user review;
 - a content change to any member invalidates validation and panel evidence for
   the set;
 - no spec may silently override another spec;
-- cross-spec dependencies must be acyclic;
+- cross-spec dependencies must name existing member Spec IDs and stay acyclic;
+  the parent ADR is not itself a spec dependency;
 - one spec owns each serialized contract, state machine, ResourceType,
   controller, Provider dossier, process model, and security invariant.
 
-`ADR-046-spec-set.json` and `ADR-046-work-items.json` are generated indexes.
-They bind the exact member files, versions, statuses, dependency edges, content
-digests, and implementation work items. They are generated only after the
-initial member set exists.
+### Member index (55 specs)
+
+The set has **55 normative member specs**: 28 foundation, resource,
+cross-cutting, and closing specs, plus 27 Provider dossiers. The parent ADR,
+this `README.md`, the `providers/README.md` index, and the generated `*.json`
+manifests are **not** members.
+
+**Foundation and platform (15):**
+
+- [`ADR-046-decision-register`](ADR-046-decision-register.md) — resolved
+  decisions (through D094)
+- [`ADR-046-terminology-and-identities`](ADR-046-terminology-and-identities.md)
+- [`ADR-046-resource-object-model`](ADR-046-resource-object-model.md)
+- [`ADR-046-resource-store-redb`](ADR-046-resource-store-redb.md)
+- [`ADR-046-resource-api-and-authorization`](ADR-046-resource-api-and-authorization.md)
+- [`ADR-046-resource-reconciliation`](ADR-046-resource-reconciliation.md)
+- [`ADR-046-primitive-resource-composition`](ADR-046-primitive-resource-composition.md)
+- [`ADR-046-componentsession-and-bus`](ADR-046-componentsession-and-bus.md)
+- [`ADR-046-zone-routing`](ADR-046-zone-routing.md)
+- [`ADR-046-provider-model-and-packaging`](ADR-046-provider-model-and-packaging.md)
+- [`ADR-046-provider-state`](ADR-046-provider-state.md)
+- [`ADR-046-core-controllers`](ADR-046-core-controllers.md)
+- [`ADR-046-components-processes-and-sandbox`](ADR-046-components-processes-and-sandbox.md)
+- [`ADR-046-nix-configuration`](ADR-046-nix-configuration.md)
+- [`ADR-046-current-code-migration-map`](ADR-046-current-code-migration-map.md)
+
+**Resource catalog (6)** — the 17 standard ResourceTypes (`Zone`, `ZoneLink`,
+`Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `Host`, `Guest`,
+`Process`, `EphemeralProcess`, `User`, `Volume`, `Network`, `Device`,
+`Credential`, `Endpoint`) are owned across the foundation and these catalog
+specs:
+
+- [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) —
+  `Zone`, `ZoneLink`, `Quota`, `EmergencyPolicy`
+- [`ADR-046-resources-host-guest-process-user`](ADR-046-resources-host-guest-process-user.md) —
+  `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`, `Endpoint`
+- [`ADR-046-resources-volume`](ADR-046-resources-volume.md) — `Volume`
+- [`ADR-046-resources-network`](ADR-046-resources-network.md) — `Network`
+- [`ADR-046-resources-device`](ADR-046-resources-device.md) — `Device`
+- [`ADR-046-resources-credential`](ADR-046-resources-credential.md) — `Credential`
+
+**Cross-cutting (3):**
+
+- [`ADR-046-cli-and-operations`](ADR-046-cli-and-operations.md)
+- [`ADR-046-telemetry-audit-and-support`](ADR-046-telemetry-audit-and-support.md)
+- [`ADR-046-security-and-threat-model`](ADR-046-security-and-threat-model.md)
+
+**Closing (4):**
+
+- [`ADR-046-reset-and-cutover`](ADR-046-reset-and-cutover.md)
+- [`ADR-046-feasibility-and-spikes`](ADR-046-feasibility-and-spikes.md)
+- [`ADR-046-validation-and-delivery`](ADR-046-validation-and-delivery.md)
+- [`ADR-046-streamline`](ADR-046-streamline.md)
+
+**Provider dossiers (27)** — one dossier per installed `Provider/<name>`
+resource, indexed with owned/exported ResourceTypes and component placement in
+[`providers/README.md`](providers/README.md).
+
+### Generated manifests
+
+`ADR-046-spec-set.json` and `ADR-046-work-items.json` are deterministically
+generated indexes, regenerated from the member Markdown and not themselves
+members of the set.
+
+- `ADR-046-spec-set.json` (`artifactKind: d2b-adr-spec-set`, `schemaVersion` 1)
+  binds the exact 55 member files: for each member, its `specId`, `path`,
+  `status`, `version`, resolved `dependsOn` edges (the `ADR-046-provider-*`
+  dependency glob is expanded to every Provider dossier), `supersedes`, and the
+  lowercase SHA-256 of the exact Markdown bytes. It records the parent path and
+  the `v3` baseline commit and carries no timestamp or host path.
+- `ADR-046-work-items.json` (`artifactKind: d2b-adr-work-items`, `schemaVersion`
+  1) enumerates every implementation work item extracted from the member specs,
+  sorted by `workItemId`, each bound to its `specId` and `specPath`. Every
+  canonical required field is nonempty; `reuseSource` is `null` when a spec
+  declares no reuse source. Work-item IDs are unique across the whole set.
 
 ## Required metadata
 

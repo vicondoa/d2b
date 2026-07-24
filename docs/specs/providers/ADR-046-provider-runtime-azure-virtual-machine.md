@@ -1357,6 +1357,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Extract and adapt; DELETE `InfrastructureProvider` after this Provider is operational |
 | Destination | `src/{lib.rs,config.rs,schema.rs,error.rs,effect/mod.rs}` |
 | Detailed design | Provider descriptor/manifest; `spec.config` schema; Guest spec.provider.settings schema; `AzureEffectPort` trait + `AzureOperationHandle`; `AzureVmError` enum; `SandboxSpec` with semantic classes; `BudgetSpec` with SI suffix memory fields; `restartPolicy` class/backoffBase/backoffMax; `networkUsage.allowEgress=false`; Endpoint ResourceType templates with name/transport/purpose |
+| Integration | ProviderDeployment loads the descriptor/catalog and ResourceType schemas; Nix and Guest specs reference the provider settings; controller and EffectPort modules consume the shared config/error types. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. Existing registry sentinels are deleted only after the Provider resource model replaces them. |
 | Validation | Provider catalog; descriptor fingerprint; schema/conformance tests |
 | Removal proof | `InfrastructureProvider` deleted; `AzureVmForbidden` removed after Provider resource model replaces registry |
 
@@ -1369,6 +1371,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Copy and adapt |
 | Destination | `src/effect/{mod.rs,real.rs,fake.rs,rate_limit.rs}` |
 | Detailed design | `AzureEffectPort` async trait; opaque `AzureOperationHandle` (bounded bytes, no poll URL); real `azure_core`/`azure_mgmt_compute` impl; `FakeAzureEffectPort` for hermetic tests; ARM 429/503/409 handling |
+| Integration | Azure VM controller lifecycle/idempotency code calls `AzureEffectPort`; the real implementation talks to ARM in production and `FakeAzureEffectPort` drives hermetic lifecycle tests. |
+| Data migration | No persistent data migration; in-flight ARM operation handles are new v3 status/core-ledger records and are re-derived or adopted on reconcile when absent. |
 | Validation | `tests/lifecycle_hermetic.rs`; all ARM paths via `FakeAzureEffectPort`; no ARM URL in test assertions |
 | Removal proof | Old `InfrastructureProvider` ARM simulation deleted after parity |
 
@@ -1381,6 +1385,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Copy/adapt main toolkit; adapt conformance shape |
 | Destination | `src/controller/{mod.rs,lifecycle.rs,idempotency.rs}` |
 | Detailed design | Non-blocking reconcile: `start_*(...)` → persist `AzureOperationHandle` → `requeue-at`; `poll_lro` on subsequent ticks; controller as authorized `update-status` writer for Guest resources; finalizer held until ARM delete confirmed; top-level `phase`, `status.resource`, and Azure `status.provider.details.providerPhase` written atomically |
+| Integration | Zone core dispatches Guest resource events to the Azure VM controller; ResourceClient updates status/finalizers; `AzureEffectPort` starts, polls, and deletes ARM LROs. |
+| Data migration | Full d2b 3.0 reset; old WorkloadProvider lifecycle state is not imported. Existing ARM resources may be adopted by tag/idempotency checks during reconcile. |
 | Validation | `tests/lifecycle_hermetic.rs`; `tests/conformance.rs` |
 | Removal proof | Old `WorkloadProvider::provision`/`deprovision` paths retired |
 
@@ -1393,6 +1399,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Copy/adapt main `BootstrapPsk`/`BootstrapAdmission` |
 | Destination | `src/controller/bootstrap.rs`; `src/bootstrap_svc/{mod.rs,admission.rs,enrollment.rs}` |
 | Detailed design | PSK generation; sealed PSK/admission/enrollment recovery material (ciphertext) in the controller's single guest-local sealed recovery Volume; `GrantBootstrapAdmission` typed bus call; IKpsk2 in bootstrap-svc; enrollment record; enrolled KK; the bootstrap-svc declares **no** state Volume (session state in process memory; obtains sealed PSK/admission from the controller only); the controller's sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (before component Process start) from the controller's single `stateNamespaces` declaration with a Nix-preprovisioned `User/azure-vm-controller` layout principal; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase lives in `Guest.status` (D087); controller does not own, create, or add Volume to exported ResourceTypes; it consumes its view dirfd only |
+| Integration | Controller creates and seals recovery material in its state Volume, grants bootstrap admission over the bus, and bootstrap-svc performs IKpsk2 enrollment for Guest sessions. |
+| Data migration | No v2 bootstrap state import; the new sealed recovery Volume is initialized on first v3 activation, and old vsock bootstrap material is retired at cutover. |
 | Validation | `tests/bootstrap_hermetic.rs`; `tests/error_redaction.rs` |
 | Removal proof | Old vsock bootstrap path removed at v3 cutover |
 
@@ -1405,6 +1413,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Retain `OpaqueAzureRef` directly; adapt credential acquisition to enrolled KK |
 | Destination | `src/credential.rs` |
 | Detailed design | ARM credential via enrolled KK `AcquireToken`; zeroizing token handling; no ambient credential fallback; `credential-managed-identity` guest-agent placement |
+| Integration | Controller obtains ARM credentials through enrolled KK and the Credential ResourceType before EffectPort operations; the credential-managed-identity guest agent provides the token source. |
+| Data migration | No ambient credential migration; v3 requires ResourceType Credential/ManagedIdentityRef plus enrolled KK, and the old direct IMDS fallback is removed. |
 | Validation | `tests/credential_hermetic.rs`; `tests/error_redaction.rs` |
 | Removal proof | Old direct IMDS calls from controller removed |
 
@@ -1417,6 +1427,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Adapt to deterministic per-Guest keys |
 | Destination | `src/controller/idempotency.rs` |
 | Detailed design | Deterministic ARM request ID derivation; `AzureOperationHandle` opaque persistence (no poll URL in state); ARM 409 adoption; finalizer held through async deletion |
+| Integration | Lifecycle controller stores deterministic request IDs and opaque handles in the core Operation ledger/status; restart recovery reads them before polling or adopting ARM operations. |
+| Data migration | Old `AtomicU64` operation IDs are not imported; v3 operations use deterministic keys, while missing handles are re-derived or adopted from ARM. |
 | Validation | `tests/idempotency.rs`; restart-recovery scenario |
 | Removal proof | `AtomicU64` lifecycle op ID removed after all ARM callers migrate |
 
@@ -1429,6 +1441,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Adapt |
 | Destination | `nixos-modules/` (Provider/Guest resource emitters); crate Nix build |
 | Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; Endpoint ResourceType templates with name/transport/purpose |
+| Integration | Nix emitters produce Provider, Guest, Volume, and Endpoint resource specs consumed by ProviderDeployment, `Provider/volume-local`, the Process Provider, and the Azure VM controller. |
+| Data migration | Full d2b 3.0 reset; old `d2b.realms.<r>.workloads.<w>` config is replaced by v3 resource authoring with no automatic v2 config import. |
 | Validation | Nix eval tests; `make test-flake`; `make test-drift` |
 | Removal proof | `d2b.realms.<r>.workloads.<w>` removed at v3 cutover |
 
@@ -1441,6 +1455,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Adapt audit shape; replace Prometheus with d2b-telemetry emitter |
 | Destination | `src/{telemetry.rs,audit.rs}` |
 | Detailed design | Closed metric labels; OTEL span attributes; audit durability classes; `azure-vm-deleted` appended post-commit; no ARM URI, ARM resource ID, or cloud endpoint in any telemetry surface |
+| Integration | Controller/error paths call telemetry and audit emitters after status commits; d2b-telemetry consumes the metrics/spans and policy_observability enforces redaction. |
+| Data migration | No metrics/audit data migration; new OTEL/audit surfaces start at v3 cutover and the old Prometheus registry is retired. |
 | Validation | `tests/error_redaction.rs`; `d2b-contract-tests/tests/policy_observability.rs` updated |
 | Removal proof | `d2bd/src/metrics.rs` hand-rolled registry removed after observability-otel Provider integration |
 
@@ -1453,6 +1469,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Reuse action | Copy/adapt fake toolkit; write new tests |
 | Destination | `tests/`; `integration/` |
 | Detailed design | See §Test requirements |
+| Integration | Provider crate tests, fake toolkit, and integration harness run under cargo/Layer-1 and validate all ADR046-azure-vm-* outputs together. |
+| Data migration | None — test-only work; no runtime state. Old mock tests are removed only after parity. |
 | Validation | All tests pass |
 | Removal proof | Old `InfrastructureProvider` mock tests deleted after parity |
 

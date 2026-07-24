@@ -1773,7 +1773,7 @@ produces the guest binary (see §19 removal table).
 | Destination | `packages/d2b-provider-display-wayland/src/audit.rs`, `packages/d2b-provider-display-wayland/src/metrics.rs` |
 | Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed label sets; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface |
 | Integration | Providers emit via Zone telemetry emitter; audit records committed before operation completion |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Redaction contract tests (`policy_observability.rs` pattern), audit record schema tests, label-cardinality tests |
 | Removal proof | N/A (new code) |
 
@@ -1787,7 +1787,7 @@ produces the guest binary (see §19 removal table).
 | Destination | `packages/d2b-provider-display-wayland/integration/` |
 | Detailed design | Container/Host/Guest/cross-process integration fixtures for: (a) end-to-end WaylandSession create → proxy Process ready → guest frontend ready; (b) GPU endpoint unavailable → Pending; (c) proxy crash → Failed backoff; (d) policy policy warning production; (e) clipboard boundary denial; (f) crossDomainTrusted=false admission rejection. Follows `ADR-046-provider-model-and-packaging` integration/ convention. |
 | Integration | Invoked by existing repository test orchestration (`make test-integration` / container lane) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All six scenarios above pass; no socket paths in test output |
 | Removal proof | N/A (new code) |
 

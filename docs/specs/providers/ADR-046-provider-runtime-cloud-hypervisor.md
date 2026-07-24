@@ -1684,7 +1684,7 @@ per-test budget.
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
 | Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; golden tests for headless/q35/microvm/gpu/video/macvtap variants |
 | Integration | ProviderSupervisor LaunchTicket resolution |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; redaction test (no store path in Debug output) |
 | Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; old golden test files adapted |
 
@@ -1712,7 +1712,7 @@ per-test budget.
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
 | Detailed design | Authenticated KK ComponentSession health check over vsock; adoption verification (pid/cgroup/executable/generation) within `adoptionWindow`; ambiguity → Unknown/Degraded, never broad kill; graceful shutdown via guest-control session before SIGTERM |
 | Integration | ComponentSession enrolled KK; guest bootstrap credential from `d2b-gctl` virtiofs share; `GuestReachable` condition write |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Fake guest-control server test; health check timeout/failure/retry; adoption property test (ambiguity, gone, stale pid); graceful shutdown ordering |
 | Removal proof | `ProcessRole::GuestControlHealth` observation path; `ProcessRole::GuestSshReadiness` deleted at cutover |
 

@@ -1972,7 +1972,7 @@ marked compile-only.
 | `Capability` enum, `CapabilitySet` | `d2b-realm-core/src/capability.rs` | Live in provider advertisement | Role verbs / Provider descriptor fields per Capability disposition table | ADR046-nix-001 |
 | `RuntimeProvider`, `WorkloadProvider`, `HostSubstrateProvider` traits | `d2b-realm-provider/src/provider.rs` | Live (ACA/local-vm implement these) | Provider component descriptors + `ADR-046-provider-<name>.md` dossiers | ADR046-provider-001 |
 | `OperationRouter`, `DurableExecTable`, `TargetResolver` | `d2b-realm-router/src/`; `d2bd/src/realm_stubs.rs` | COMPILE-ONLY at baseline (`dead_code`-allowed, not called) | `d2b-bus` routing; adapt `RealmSessionAuthority`/`CredentialCustody`/`RealmServiceLimits` from `main:packages/d2b-realm-router/src/service_v2.rs` | ADR046-bus-010 |
-| `TransportProvider`, `loopback`, `LocalTcpTransport` | `d2b-realm-transport/src/lib.rs`, `local_tcp.rs` | COMPILE-ONLY / conformance tests only | `Provider/transport-unix` (Unix seqpacket); `Provider/transport-vsock`; transport primitives adapt `main:packages/d2b-session-unix/src/` | ADR046-bus-004 |
+| `TransportProvider`, `loopback`, `LocalTcpTransport` | `d2b-realm-transport/src/lib.rs`, `local_tcp.rs` | COMPILE-ONLY / conformance tests only | `Provider/transport-unix` (Unix seqpacket); `Provider/transport-vsock`; transport primitives adapt `main:packages/d2b-session-unix/src/` | ADR046-nix-026 |
 
 ### Systemd unit mapping
 
@@ -2054,13 +2054,13 @@ excluded or adapted before integration.
 
 | Main package | Key files/symbols | v3 destination | Work item |
 | --- | --- | --- | --- |
-| `d2b-session` | `engine.rs`, `handshake.rs`, `lifecycle.rs`, `scheduler.rs`, `record.rs`, `fragmentation.rs`, `transport.rs`, `driver.rs`, `server.rs`, `metrics.rs` | `packages/d2b-bus/src/session/` | ADR046-bus-001 |
-| `d2b-session` | `attachment.rs`, `streams.rs`, `cancellation.rs`, `deadline.rs`, `bootstrap.rs` | `packages/d2b-bus/src/session/` | ADR046-bus-002, ADR046-bus-003 |
-| `d2b-contracts` | `v2_component_session.rs` — all wire constants + types | `packages/d2b-contracts/src/v3/component_session.rs` | ADR046-bus-005 |
-| `d2b-contracts` | `generated_v2_services/` (24 service + 24 ttrpc files) | `packages/d2b-contracts/src/v3/services/` | ADR046-bus-006 |
-| `d2b-session-unix` | `adapter.rs`, `socket.rs`, `descriptor.rs`, `credit.rs`, `pidfd.rs`, `systemd.rs`, `vsock.rs` | `packages/d2b-bus/src/transport/unix/` | ADR046-bus-004 |
-| `d2b-provider` | `registry.rs`, `rpc.rs`, `instance.rs`, `context.rs` | `packages/d2b-provider/src/` (adapt in place) | ADR046-bus-007 |
-| `d2b-provider-toolkit` | `adapter.rs`, `server.rs`, `conformance.rs`, `registration.rs` | `packages/d2b-provider-toolkit/src/` (adapt in place) | ADR046-bus-008 |
+| `d2b-session` | `engine.rs`, `handshake.rs`, `lifecycle.rs`, `scheduler.rs`, `record.rs`, `fragmentation.rs`, `transport.rs`, `driver.rs`, `server.rs`, `metrics.rs` | `packages/d2b-bus/src/session/` | ADR046-nix-023 |
+| `d2b-session` | `attachment.rs`, `streams.rs`, `cancellation.rs`, `deadline.rs`, `bootstrap.rs` | `packages/d2b-bus/src/session/` | ADR046-nix-024, ADR046-nix-025 |
+| `d2b-contracts` | `v2_component_session.rs` — all wire constants + types | `packages/d2b-contracts/src/v3/component_session.rs` | ADR046-nix-027 |
+| `d2b-contracts` | `generated_v2_services/` (24 service + 24 ttrpc files) | `packages/d2b-contracts/src/v3/services/` | ADR046-nix-028 |
+| `d2b-session-unix` | `adapter.rs`, `socket.rs`, `descriptor.rs`, `credit.rs`, `pidfd.rs`, `systemd.rs`, `vsock.rs` | `packages/d2b-bus/src/transport/unix/` | ADR046-nix-026 |
+| `d2b-provider` | `registry.rs`, `rpc.rs`, `instance.rs`, `context.rs` | `packages/d2b-provider/src/` (adapt in place) | ADR046-nix-029 |
+| `d2b-provider-toolkit` | `adapter.rs`, `server.rs`, `conformance.rs`, `registration.rs` | `packages/d2b-provider-toolkit/src/` (adapt in place) | ADR046-nix-030 |
 | `d2b-client` | `client.rs`, `session.rs`, `target.rs`, `service.rs`, `daemon_service.rs`, `guest_service.rs`, `host_socket.rs` | `packages/d2b-client/src/` (adapt in place) | ADR046-bus-009 |
 | `d2b-realm-router` | `service_v2.rs` | `packages/d2b-bus/src/routing/zone_service.rs` | ADR046-bus-010 |
 | `d2bd` | `provider_registry.rs` | `packages/d2bd/src/provider_registry.rs` (adapt in place) | ADR046-bus-011 |
@@ -2112,6 +2112,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | adapt |
 | Destination | `Network` resource fields in `nixos-modules/options-zones-resources.nix`; `Guest` resource fields |
 | Detailed design | `d2b.envs.work.lanSubnet` → `d2b.zones.work.resources.work-lan = { type = "Network"; spec = { lanSubnet = "..."; ... }; }`; CIDR overlap assertion migrated; `sys-` reserved prefix and VM-name regex retained; `d2b.vms.<v>.tpm.enable` → `d2b.zones.<z>.resources.vm-tpm = { type = "Device"; spec = { providerRef = "Provider/device-tpm"; ... }; }` |
+| Integration | `options-zones-resources.nix` emits Network/Guest resources consumed by the rewritten index/bundle and Provider/network-local/device Providers; assertions run during eval before bundle emission. |
+| Data migration | Operator configs migrate env/VM component options into Zone Network/Guest/Device resources; full d2b 3.0 reset means no v2 runtime state/config import beyond rewritten Nix declarations. |
 | Validation | nix-unit CIDR rejection; eval assertion for `sys-` prefix; VM-name regex |
 | Tests | `tests/unit/nix/cases/zones-network.nix`, `tests/assertions-eval.sh` extended |
 | Drift pin | `make nix-unit-pin` |
@@ -2126,6 +2128,9 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | retain and extend |
 | Destination | `nixos-modules/options-site.nix` (retained); per-Zone options in `options-zones.nix` |
 | Detailed design | `d2b.zones.<z>.retainedGenerations` (default 3, range 1..16, compiler setting — not emitted in Zone spec); `d2b.site.stateDir` maps to Zone storage roots; `d2b.site.usePrebuiltHostTools` retained |
+| Integration | `options-site.nix` retains site defaults consumed by `options-zones.nix` and `bundle-zones.nix`; activation-helper and Zone storage roots read `stateDir`/`usePrebuiltHostTools` settings. |
+| Data migration | Operator site options stay in place; new per-Zone `retainedGenerations` defaults apply on first v3 activation; no v2 runtime state import. |
+| Validation | nix-unit case verifies `retainedGenerations` default/range, `site.stateDir` mapping, and `usePrebuiltHostTools` retention. |
 | Tests | `tests/unit/nix/cases/site-options.nix` |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | No removal; file extended only |
@@ -2139,6 +2144,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | rewrite |
 | Destination | `nixos-modules/index.nix` (rewritten); emits `/etc/d2b/index.json` |
 | Detailed design | Cross-Zone normalized index: zone/host/guest/network/closure entries; executionIndex; networkIndex; closureIndex; sorted output; `cfg._index` attribute tree retained as internal helper during migration |
+| Integration | `options-zones-resources.nix` feeds rewritten `index.nix`; `bundle-zones.nix`, resource emitters, and activation-helper consume `/etc/d2b/index.json`. |
+| Data migration | Index is rebuilt from v3 Zone resources at activation; full d2b 3.0 reset; no v2 index state import. |
 | Validation | nix-unit golden vectors for index shape; drift gate: `xtask gen-index` round-trip |
 | Tests | `tests/unit/nix/cases/index-zones.nix`; `tests/unit/gates/drift-check.sh` extended |
 | Drift pin | `make nix-unit-pin`; `make flake-matrix-pin` if flake checks change |
@@ -2154,6 +2161,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Destination | `nixos-modules/bundle-zones.nix` (per-Zone bundle derivation); common helpers retained in `bundle-artifacts.nix` |
 | Detailed design | Per-Zone `bundle.json` with `candidateId`/`contentId` binding; SHA256 digest chain; `generationIndex`; atomic activation pointer; `manifestVersion` → `schemaVersion` rename |
 | Integration | `d2b-activation-helper` reads `bundle.json` per Zone; validates digest chain before staging |
+| Data migration | Per-Zone bundles are generated from v3 resource declarations; full d2b 3.0 reset; no v2 monolithic bundle state import. |
 | Validation | Artifact-shape contract tests in `packages/d2b-contract-tests/tests/`; determinism test (build twice, diff outputs) |
 | Tests | `tests/unit/nix/cases/bundle-zones.nix`; `tests/unit/gates/drift-check.sh` for schema drift |
 | Drift pin | `make test-drift` |
@@ -2169,6 +2177,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Destination | `nixos-modules/resources-zones-processes.nix`; emits `zones/<z>/processes.json` |
 | Detailed design | Process/EphemeralProcess resource serialization per disposition table; no free-form `binaryPath` or `argv`; template refs; mounts from `volumeRef`; sandbox from named profile; VsockRelay → `Process` under `Provider/transport-vsock`; GuestSshReadiness retired at v3 cutover; Usbip long-lived backend/proxy → `Process`, Usbip per-busid attach/detach → `EphemeralProcess`, all owned by `Provider/device-usbip` |
 | Integration | `processes.json` replaces `cfg._bundle.processesJson`; Process Providers read the new format |
+| Data migration | Processes are emitted from v3 Process/EphemeralProcess resources; full d2b 3.0 reset; no v2 process artifact import. |
 | Validation | Process resource schema vectors; no-raw-path assertion; ProcessRole parity test (every variant has a test case) |
 | Tests | `tests/unit/nix/cases/zones-processes.nix`; `packages/d2b-contract-tests/tests/processes-schema.rs` |
 | Drift pin | `make test-drift` after schema changes |
@@ -2183,6 +2192,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | extract storage policy → adapt; retire sync rows |
 | Destination | `nixos-modules/resources-zones-volumes.nix`; emits `zones/<z>/volumes.json`; OFD lock rows move to `d2b-contracts` internals |
 | Detailed design | Volume layout/views/ACL/no-follow/repair preserving current policy; `PrincipalRef { kind: "uid" }` → `User/<name>` typed ref only; OFD rows removed from Nix artifacts |
+| Integration | Volume resources feed `zones/<z>/volumes.json`; the Volume Provider consumes it for path/view/ACL reconciliation; `d2b-contracts` internals own OFD lock rows. |
+| Data migration | Volume resources are regenerated from v3 config; full d2b 3.0 reset; no v2 storage/sync state import. |
 | Validation | Volume schema vectors; ACL/no-follow/view policy tests |
 | Tests | `tests/unit/nix/cases/zones-volumes.nix`; `packages/d2b-contract-tests/tests/volumes-schema.rs` |
 | Drift pin | `make test-drift` |
@@ -2197,6 +2208,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | adapt and retire |
 | Destination | Zone self-resource in `zones/<z>/zone.json`; allocator concept retired from Nix; socket paths in Zone resource spec; `realm-controllers.json` RETAINED during migration (live d2bd reads it) |
 | Detailed design | Zone runtime derives socket paths from Zone name; broker row → Network/Host resource; `realm-controllers.json` must remain published until `realm_access_resolver` is replaced by Zone resource API |
+| Integration | Zone bootstrap config publishes socket paths consumed by the Zone runtime and `realm_access_resolver` during migration; the replacement Zone resource API takes over before legacy artifacts are removed. |
+| Data migration | Zone bootstrap data is regenerated from v3 Zone resources; full d2b 3.0 reset; no allocator/realm-controller state import. |
 | Validation | Zone resource round-trip; bootstrap socket path regression tests |
 | Tests | `tests/unit/nix/cases/zones-bootstrap.nix`; `realm_access_resolver` contract test |
 | Drift pin | `make nix-unit-pin` |
@@ -2211,6 +2224,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | adapt |
 | Destination | Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/processes.json`; `Provider/credential-entra` Credential resource; `realm-identity.json` RETAINED during migration |
 | Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `scope`, `audience`, `allowedOperations`, `providerSettings` where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
+| Integration | Provider/display-wayland, Provider/shell-terminal, and Provider/credential-entra consume Process/Credential resources; `d2bd` continues reading `realm-identity.json` until the Credential reader lands. |
+| Data migration | Launcher and identity config are re-emitted as v3 resources; full d2b 3.0 reset; no v2 launcher/identity state import. |
 | Validation | Launcher metadata shape regression; no-secret assertion vectors |
 | Tests | `tests/unit/nix/cases/zones-launcher-metadata.nix`; no-secret vectors |
 | Drift pin | `make nix-unit-pin` |
@@ -2225,6 +2240,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | adapt |
 | Destination | User-only `Host` resource in `zones/<z>/hosts.json` (`providerSettings.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/processes.json` using normal Process Providers; shell session supervisor → `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
 | Detailed design | `providerSettings.isolationPosture: "none"` is declared in the Host schema under `providerSettings`; enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; every `ProcessEffect` audit event under this Host carries `no_isolation=true`; OTEL telemetry never carries an isolation label; CLI/UI warning non-suppressible |
+| Integration | The unsafe-local Nix emitter produces a user-only Host plus Process resources; Provider/system-core and shell-terminal consume them; CLI/UI and audit/telemetry surfaces read resulting status/events. |
+| Data migration | unsafe-local declarations migrate to Host/Process resources in Nix; full d2b 3.0 reset; no helper runtime state import. |
 | Validation | User-only Host rejection of system-domain Process refs; `providerSettings.isolationPosture != "none"` assertion rejection for user-only system-core Hosts; `NoIsolation` condition present in status; `no_isolation=true` in `ProcessEffect` audit event; OTEL attribute absent; no Guest emitted for unsafe-local declaration |
 | Tests | `tests/unit/nix/cases/zones-unsafe-local.nix`; `tests/host-integration/unsafe-local-helper.nix` extended |
 | Drift pin | `make nix-unit-pin` |
@@ -2239,6 +2256,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | retain |
 | Destination | `nixos-modules/privileges-json.nix` (retained); `/etc/d2b/privileges.json` (retained, site-wide) |
 | Detailed design | Broker op catalog is not Zone-scoped; no structural change required |
+| Integration | `privileges-json.nix` remains a site-wide bundle artifact consumed by broker authorization and drift gates; Zone resource emission references it without Zone scoping. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Existing `tests/unit/gates/drift-check.sh` |
 | Removal proof | Not removed in this spec |
 
@@ -2251,6 +2270,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | adapt |
 | Destination | `nixos-modules/closures-json.nix` (rewritten, keyed by artifact ID from `d2b.artifacts` with `type = "nixos-system"`); `nixos-modules/minijail-profiles.nix` (retained, adapted to reference Zone Guests) |
 | Detailed design | Closure emitter iterates `d2b.artifacts` entries with `type = "nixos-system"`, computes `pkgs.closureInfo`, records `storePath`/digest/size in artifact catalog (private root:d2bd 0640 field; absent from all public ResourceSpecs/status/audit/OTEL); `Guest.spec.systemArtifactId` links Guest to artifact; `Volume.source.systemArtifactId` links Volume to artifact; minijail profile emitter structurally unchanged; old `d2b.vms.<name>` keying retired |
+| Integration | Artifact catalog and Guest/Volume resources reference closure entries; activation-helper and Provider/volume-virtiofs consume private `storePath` metadata while public surfaces remain path-free. |
+| Data migration | Closure entries are regenerated by artifact ID from `d2b.artifacts`; full d2b 3.0 reset; no v2 VM-keyed closure state import. |
 | Validation | Closure map round-trip; per-VM store hardlink integrity; `storePath` present in private catalog; `storePath` absent from all emitted public ResourceSpecs and status/audit/OTEL surfaces |
 | Tests | `tests/unit/nix/cases/closures-zones.nix`; `tests/unit/nix/cases/artifact-catalog-store-path-public-absent.nix` |
 | Drift pin | `make nix-unit-pin` |
@@ -2265,6 +2286,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | replace |
 | Destination | Per-Zone `zones/<z>/bundle.json` (`schemaVersion`); Host resource in `zones/<z>/hosts.json` |
 | Detailed design | `manifestVersion` → `schemaVersion`; `host.json` host config folded into Host resource spec; CHANGELOG entry for rename required |
+| Integration | `bundle-zones.nix` writes `schemaVersion` into per-Zone `bundle.json`; activation-helper validates it and Host resource consumers replace `host.json` readers. |
+| Data migration | Manifest/host artifacts are regenerated as Zone bundle/Host resources; full d2b 3.0 reset; no v2 manifest state import. |
 | Validation | Schema drift gate; CHANGELOG enforcement |
 | Tests | `tests/unit/gates/drift-check.sh` extended for `schemaVersion` |
 | Drift pin | `make test-drift` |
@@ -2279,6 +2302,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | extend in place |
 | Destination | `nixos-modules/assertions.nix` |
 | Detailed design | Migrate existing assertions to Zone/Resource terminology; add ref validation, owner cycles, CIDR overlap (Zones), provider resolution, RoleBinding verb set assertions |
+| Integration | `assertions.nix` validates Zone/Resource declarations before index, bundle, and schema validation derivations run; failing configs block activation artifacts. |
+| Data migration | None — docs/tooling only; no runtime state |
 | Validation | Each new assertion has a failing-config test vector |
 | Tests | `tests/assertions-eval.sh` extended; `tests/unit/nix/cases/assertions-zones.nix` |
 | Drift pin | `make nix-unit-pin` |
@@ -2293,6 +2318,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | retain and adapt |
 | Destination | Same files; updated to use Zone bundle activation path and Zone resource state dirs |
 | Detailed design | `d2b-activation-helper` updated to validate/stage per-Zone bundles; `d2bd.service` updated to read Zone bundle; `d2b` group retained for `SO_PEERCRED` |
+| Integration | Host activation units call `d2b-activation-helper` against per-Zone bundles, then `d2bd.service` reads the staged Zone bundle; `SO_PEERCRED` authorization remains via the `d2b` group. |
+| Data migration | Host activation reads newly staged Zone bundles on first v3 switch; full d2b 3.0 reset; no v2 daemon runtime state import. |
 | Validation | Host-integration test with Zone bundle activation and daemon readiness |
 | Tests | `tests/host-integration/` extended for Zone activation |
 | Removal proof | No removal; adapted in place |
@@ -2306,6 +2333,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | retain until Provider successor |
 | Destination | Network reconciliation by `Provider/network-local` Process resources |
 | Detailed design | Current bridge/NAT/DHCP/firewall Nix units retained; `Provider/network-local` controller emits equivalent configuration from Network resources; `lib.mkForce` neutralization preserved |
+| Integration | Network resources feed Provider/network-local parity implementation while `net.nix`/`network.nix` remain the fallback; network eval tests compare both paths. |
+| Data migration | Network resource specs are generated from v3 Nix declarations; full d2b 3.0 reset; no v2 bridge/NAT runtime state import. |
 | Validation | `tests/net-vm-network-eval.sh` passes against Network resource spec |
 | Tests | `tests/unit/nix/cases/zones-network-parity.nix` |
 | Drift pin | `make nix-unit-pin` |
@@ -2320,6 +2349,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | retain until Provider successor |
 | Destination | Per-VM store reconciliation by `Provider/volume-virtiofs` EphemeralProcess/Process resources |
 | Detailed design | `store.nix` retained; `Provider/volume-virtiofs` controller creates equivalent EphemeralProcess; per-VM store path derived from Zone stateDir + Guest name via Provider, not raw path in spec |
+| Integration | Guest/Volume resources drive Provider/volume-virtiofs, which stages hardlink farm processes consumed by Guest process resources; `store.nix` remains until parity. |
+| Data migration | Full d2b 3.0 reset; no v2 store metadata import |
 | Validation | Store hardlink integrity; no direct `/nix/store` export |
 | Tests | Existing store integrity tests extended with Zone/Guest resource fixture |
 | Removal proof | `store.nix` removed after `Provider/volume-virtiofs` manages farm lifecycle and existing store tests pass |
@@ -2333,6 +2364,8 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Reuse action | each component becomes a Provider install resource + Device/Guest spec field |
 | Destination | `Provider/device-tpm`, `Provider/device-usbip`, `Provider/device-gpu`, `Provider/audio-pipewire` resource install declarations in `options-zones-resources.nix` |
 | Detailed design | `d2b.vms.<v>.tpm.enable = true` → `d2b.zones.<z>.resources.vm-tpm = { type = "Device"; spec = { providerRef = "Provider/device-tpm"; ... }; }`; all component eval assertions migrated to `assertions.nix`; GuestSshReadiness retired at v3 cutover; Usbip long-lived backend/proxy → `Process`, per-busid attach/detach → `EphemeralProcess`, both owned by `Provider/device-usbip` |
+| Integration | Device/Guest specs feed Provider/device-* and Provider/audio-pipewire install declarations; migrated assertions/tests consume Zone resource configs instead of component toggles. |
+| Data migration | Component toggles migrate to v3 Device/Guest resource declarations; full d2b 3.0 reset; no v2 component runtime state import. |
 | Validation | Existing component eval tests; `tests/usbip-gating-eval.sh`; `tests/video-contract-eval.sh` |
 | Tests | `tests/unit/nix/cases/zones-devices.nix` |
 | Drift pin | `make nix-unit-pin` |
@@ -2342,12 +2375,13 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-nix-005; ADR046-nix-001; `d2b-contracts` schema generation (ADR046-bus-005) |
+| Dependency/owner | ADR046-nix-005; ADR046-nix-001; `d2b-contracts` schema generation (ADR046-nix-027) |
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, mode/ownership); `nixos-modules/bundle.nix` (digest chain, SHA256SUMS); `packages/xtask/src/main.rs` (`gen-schemas`); no current per-ResourceType JSON Schema under `docs/reference/schemas/v3/` |
 | Reuse action | extend xtask schema generation; new Nix eval/build validation hooks |
 | Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `providerSettings` where declared in schema, and Provider `config`, against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |
 | Detailed design | `cargo xtask gen-schemas` emits one JSON Schema per ResourceType under `docs/reference/schemas/v3/`; Nix derivation reads these schemas from `pkgs.d2b-resource-schemas` and validates every emitted `spec` JSON before producing the Zone bundle; Provider-settings validation reads `settingsSchemaDigest` from `provider-catalog.json` and resolves the schema from the Provider package closure; Credential ref enforcement: eval assertion rejects any `spec` string field matching `-----BEGIN`, `eyJ`, or a hex string ≥ 32 bytes in a secret-typed field; `managedBy` in any input spec rejected at eval (core-set runtime field, never in Nix input); bundle integrity: `candidateId`/`contentId` computed over canonical sorted output |
 | Integration | Validation hooks wired into `bundle-zones.nix` derivation; `d2b-activation-helper` re-verifies digest chain at staging |
+| Data migration | None — docs/tooling only; no runtime state |
 | Validation | Schema round-trip: emit spec, validate against schema, verify byte-identical re-emit; `providerSettings` rejection test (unknown field, out-of-bounds value, raw store path, secret bytes) where schema declares the field; Provider `config` rejection test (unknown field); Credential ref enforcement: PEM-in-spec rejected; secret-pattern-in-spec rejected; valid `Credential/<name>` ref accepted; `managedBy` in spec input rejected at eval |
 | Tests | `tests/unit/nix/cases/resource-schema-validation.nix`; `tests/unit/nix/cases/provider-settings-validation.nix`; `tests/unit/nix/cases/credential-ref-enforcement.nix`; `tests/unit/nix/cases/managed-by-rejection.nix`; `packages/d2b-contract-tests/tests/resource-schema-round-trip.rs` |
 | Drift pin | `make test-drift` after any `gen-schemas` run; `make nix-unit-pin` after adding cases |
@@ -2363,6 +2397,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Destination | Configuration-publication controller handler in `packages/d2bd/src/config_publication.rs`; `ConfigurationOwnedClassifier`; `AbsentResourceReaper`; `Zone` status conditions in `d2b-contracts/src/v3/zone_status.rs`; cleanup audit emitter in `d2b-state/src/audit_segments.rs` |
 | Detailed design | `ConfigurationOwnedClassifier`: classify resources by core-set `managedBy` field only — `managedBy=configuration` resources are owned by config publication; `managedBy=controller` and `managedBy=api` resources are never touched. At activation, diff new-generation bundle name+type set against all resources with `managedBy=configuration` in the Zone store; resources absent from the new bundle are enqueued for Delete. Never infer ownership from `ownerRef`, labels, or absence from emitted files. `AbsentResourceReaper`: processes the Absent queue asynchronously; does not block pointer swap (step 4); sets `status.phase=Pending` + `PendingDeletion` condition (`reason: AbsentFromConfiguration`); waits for all finalizers to clear; commits a single store transaction that appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; the `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery. Zone phase: `Pending` during pointer-swap-to-first-reconcile window; `Degraded` while any `managedBy=configuration` resource carries `PendingDeletion` or a ZoneLink lags; `Ready` when all reconciled. Generation pruning: prune when `generationIndex ≤ activeIndex - retainedGenerations` AND all enqueued resources from that generation have reached `Deleted`. Rollback: re-adopt `managedBy=configuration` resources in `Pending/PendingDeletion` back to the rollback target generation's owned set |
 | Integration | `d2b-activation-helper` sets `managedBy=configuration` + `configurationGeneration` on every resource it activates; controller reads these fields to determine owned set — never `ownerRef` or bundle membership alone |
+| Data migration | Full d2b 3.0 reset; existing resources gain `managedBy`/`configurationGeneration` only when first v3 activation creates them; no v2 state/config import. |
 | Validation | Classification: `managedBy=controller` resource never enqueued (even if absent from bundle). `managedBy=api` resource never enqueued. `managedBy=configuration` resource absent from new bundle always enqueued. Finalizer safety: resource with active finalizer enters DeletionBlocked; not force-deleted; stays in `Pending`. Final deletion: a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery. Zone status: `Pending` during activation; `Degraded` while PendingDeletion outstanding; `Ready` when clean. Audit: `ResourceDelete` event includes `configurationGeneration` field. |
 | Tests | `tests/unit/nix/cases/cleanup-two-generation.nix` (bundle diff); `tests/host-integration/cleanup-activation.nix` (async cleanup, Pending→Deleted, single store transaction appends `Deleted` revision + removes row/indexes, subsequent `Get` not-found, `ResourceDelete` audit event appended afterward with dedup/exactly-once recovery, Zone Pending→Degraded→Ready); `tests/host-integration/cleanup-finalizer.nix` (DeletionBlocked, stays Pending, cleared on finalizer removal, single store transaction appends `Deleted` revision + removes row/indexes, subsequent `Get` not-found); `tests/host-integration/cleanup-controller-managed.nix` (managedBy=controller preserved); `tests/host-integration/cleanup-api-managed.nix` (managedBy=api preserved); `tests/host-integration/cleanup-rollback.nix` (rollback re-adoption); `tests/host-integration/cleanup-retention-window.nix` (generation pruning) |
 | Drift pin | `make nix-unit-pin`; `make test-drift` if status/audit schema changes |
@@ -2378,6 +2413,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Destination | `packages/d2b-contract-tests/tests/provider-crate-layout.rs`; workspace scan in `packages/xtask/src/main.rs` (extend `check-workspace` or add `check-provider-layout` subcommand) |
 | Detailed design | Parse the root `packages/Cargo.toml` workspace member list; for every member path matching `packages/d2b-provider-*-*`: assert (1) `src/` directory exists and contains at least one `.rs` file; (2) `tests/` directory exists and contains at least one `.rs` file; (3) `integration/` directory exists and contains at least one `.rs` or fixture file; (4) `README.md` exists and is ≥ 200 bytes. All four conditions required; any single failure fails the test with a structured message naming the crate and missing path. Test runs as `cargo test -p d2b-contract-tests provider_crate_layout`; wired into `make test-policy`. |
 | Integration | Wired into `make test-policy` (same gate family as existing workspace policy tests); no new `Makefile` target needed unless `test-policy` does not yet exist |
+| Data migration | None — docs/tooling only; no runtime state |
 | Validation | Fixture: add a stub `packages/d2b-provider-test-missing-integration/` with `src/lib.rs` and `tests/smoke.rs` but no `integration/` and no `README.md`; assert test fails naming both missing paths. Add complete stub with all four paths; assert test passes. |
 | Tests | `packages/d2b-contract-tests/tests/provider-crate-layout.rs` with fixture sub-directories under `packages/d2b-contract-tests/fixtures/`; included in `make test-policy` |
 | Drift pin | `make test-policy`; re-run after any new `d2b-provider-*-*` crate is added to the workspace |
@@ -2387,23 +2423,32 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-nix-005 (bundle derivation); `d2b-contracts` schema generation (ADR046-bus-005) |
+| Dependency/owner | ADR046-nix-005 (bundle derivation); `d2b-contracts` schema generation (ADR046-nix-027) |
 | Current source | No current equivalent for a separate artifact catalog. Current `nixos-modules/bundle.nix` embeds package derivation references inline. Current `nixos-modules/closures-json.nix` uses `pkgs.closureInfo` keyed by `d2b.vms.<name>`. |
 | Reuse action | new |
 | Destination | `nixos-modules/artifact-catalog.nix` (new emitter); `nixos-modules/options-artifacts.nix` (new option: `d2b.artifacts.<id> = { package; type; }`); `/etc/d2b/artifact-catalog.json` (output artifact, `root:d2bd` 0640); `nixos-modules/bundle-zones.nix` (extend to include artifact catalog digest in `bundle.json`); `nixos-modules/options-zones-resources.nix` (replace `closureRef` / `nixosSystem` helpers with `systemArtifactId` validation) |
 | Detailed design | `d2b.artifacts.<id>` attrset option: `id` matches `^[a-z][a-z0-9-]*$`; `type ∈ { "provider", "nixos-system", "nixos-module-set", "config-bundle" }`; no other fields. Emitter computes `pkgs.closureInfo` for each entry and writes `artifact-catalog.json` with sorted entries (by `artifactId`) containing `artifactId`, `type`, `storePath` (private, for activation-helper staging), `packageDigest`, `closureDigest`, `closureSize`. `storePath` is a private field of the root:d2bd 0640 file; it is never emitted in public ResourceSpecs, status fields, audit records, or OTEL telemetry. The `bundle.json` manifest includes the artifact catalog file entry and its SHA256 digest. `d2b-activation-helper` reads `storePath` from the catalog to resolve and stage each artifact; verifies catalog digest before staging. Build-time validation: `artifactId` / `systemArtifactId` / `source.systemArtifactId` fields in resource specs resolve against `d2b.artifacts`; type-mismatch fails with a structured error. `d2b.providerCatalog.<name>.package` option is removed; replaced by `d2b.providerCatalog.<name>.artifactId`. `Guest.spec.systemArtifactId` replaces the former `nixosSystem` Nix-only helper. `Volume.source.systemArtifactId` replaces `source.closureRef`. |
 | Integration | `nixos-modules/closures-json.nix` rewritten (ADR046-nix-012) to key by artifact ID; `nixos-modules/bundle-zones.nix` includes artifact catalog in integrity chain |
+| Data migration | Artifact catalog entries are generated from new `d2b.artifacts` declarations; full d2b 3.0 reset; no v2 `closureRef`/`nixosSystem` metadata import. |
 | Validation | Artifact catalog round-trip: declare artifact, build, verify JSON entry present with correct type/digests/storePath; missing artifact ID fails build with structured error; wrong-type artifact fails build; `storePath` absent from all public ResourceSpecs and status/audit/OTEL surfaces |
 | Tests | `tests/unit/nix/cases/artifact-catalog.nix` (declaration, resolution, storePath present in private catalog); `tests/unit/nix/cases/artifact-catalog-type-mismatch.nix` (build failure for wrong type); `tests/unit/nix/cases/artifact-catalog-missing-id.nix` (build failure for absent ID); `tests/unit/nix/cases/artifact-catalog-public-surfaces.nix` (storePath absent from all emitted ResourceSpecs); `packages/d2b-contract-tests/tests/artifact-catalog-schema.rs` |
 | Drift pin | `make test-drift` (artifact catalog schema); `make nix-unit-pin` |
 | Removal proof | Not removed; extended as new artifact types are added |
 
 
-### ADR046-bus-001
+### ADR046-nix-023
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR-046-componentsession-and-bus spec; ADR046-bus-005 (wire contract) must land first |
+| Dependency/owner | ADR-046-componentsession-and-bus spec; ADR046-nix-027 (wire contract) must land first |
+| Current source | Main commit source row below: `packages/d2b-session/` at `a1cc0b2d`, including session engine, handshake, lifecycle, scheduler, record protection, fragmentation, transport, driver, server, and metrics modules. |
+| Reuse action | Reuse from main commit `a1cc0b2d`; adapt ADR45 EndpointPurpose/ServicePackage names listed in `ADR45 exclusions` while preserving wire tag values. |
+| Destination | `packages/d2b-bus/src/session/` (new crate `d2b-bus`); `ComponentSessionDriver` becomes the central abstraction for all Zone bus sessions. |
+| Detailed design | Complete session protocol: preface negotiation, Noise handshake profiles, record protection, replay cache, fair scheduler, fragmentation/reassembly, keepalive, ttrpc bridge, generation discovery, and `ComponentSessionDriver` application surface. |
+| Integration | `d2b-bus` session runtime is used by Zone bus sessions for local-root controller to broker, controller to guest agent, and controller to provider agent; `serve_ttrpc_services` exposes service handlers. |
+| Data migration | Full d2b 3.0 reset; no v2 session runtime state/config import |
+| Validation | Port `component_session.rs` and `noise_vectors.rs`; run `make test-rust`; Noise KAT vectors must pass after copy. |
+| Removal proof | ADR45 EndpointPurpose/ServicePackage realm names listed in `ADR45 exclusions` are adapted during copy; no prior v3 session owner to remove. |
 | Main commit source | `packages/d2b-session/src/engine.rs` (`SessionEngine`, `SessionEvent`); `packages/d2b-session/src/handshake.rs` (`NoiseHandshake`, `HandshakeCredentials` Nn/Kk/IkPsk2 variants, `HandshakeRole`, `NegotiatedOffer`, `EstablishedHandshake`, `encode_offer`, `negotiate_offer`, `x25519_public_key`, `encode_generation_discovery_request`, `accept_generation_discovery_request`, `encode_generation_discovery_response`, `decode_generation_discovery_response`); `packages/d2b-session/src/lifecycle.rs` (`SessionLifecycle`, `SessionPhase`, `KeepaliveAction`); `packages/d2b-session/src/scheduler.rs` (`FairScheduler`, `QueueClass`, `OutboundFrame`); `packages/d2b-session/src/record.rs` (`RecordProtector`, `ProtectedRecord`; replay cache 1024 entries); `packages/d2b-session/src/fragmentation.rs` (`Fragmenter`, `Reassembler`, `Fragment`); `packages/d2b-session/src/transport.rs` (`OwnedTransport`, `TransportDescriptor`, `TransportPacket`, `TransportError`); `packages/d2b-session/src/driver.rs` (`ComponentSessionDriver` trait with 20 async methods, `SessionDriverHandle`); `packages/d2b-session/src/server.rs` (`serve_ttrpc_services`, `SessionServerError`); `packages/d2b-session/src/metrics.rs` (`MetricEvent`, `MetricsSink`, `NoopMetrics`) |
 | Tests at main | `packages/d2b-session/tests/component_session.rs` — full Nn/Kk/IkPsk2 session lifecycle, fragmentation, attachments, named streams, cancellation, keepalive; `packages/d2b-session/tests/noise_vectors.rs` — KAT against `docs/reference/component-session-v2-vectors.json` |
 | Selected behavior | Complete session protocol: preface negotiation, Noise handshake (all three profiles), record protection with 1024-entry replay cache, fair two-class scheduler, fragmentation/reassembly, keepalive (ping/timeout/close), ttrpc bridge (`serve_ttrpc_services`), generation discovery (pre-handshake version probe), `ComponentSessionDriver` as the sole application-layer control surface |
@@ -2411,77 +2456,133 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | ADR45 exclusions | `HandshakeOffer` fields `purpose: EndpointPurpose` and `service: ServicePackage` reference ADR45 enum values (`RealmPeer`, `RealmBootstrap`, `RealmV2`); adapt variant names per ADR-046-componentsession-and-bus owning spec; wire tag values are stable and must not change; `Locality::GuestLocal` remains valid for vsock guest sessions |
 | Drift pin | `make test-rust` (session crate); Noise KAT vectors must pass after copy |
 
-### ADR046-bus-002
+### ADR046-nix-024
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-001; ADR046-bus-005 |
+| Dependency/owner | ADR046-nix-023; ADR046-nix-027 |
+| Current source | Main commit source row below: `packages/d2b-session/src/attachment.rs` and `packages/d2b-session/src/streams.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse from main commit `a1cc0b2d`; keep attachment/stream semantics and descriptor validation, with no ADR45 realm adaptation required for this item. |
+| Destination | `packages/d2b-bus/src/session/` (same crate as ADR046-nix-023). |
+| Detailed design | Attachment ownership validates descriptors only after authenticated decrypt; unconsumed payloads close on drop. NamedStreamMux preserves half-close, reset, per-stream limits, aggregate limits, and credit-based flow control. |
+| Integration | `d2b-bus` session transport validates attachments after authenticated decrypt and exposes named streams to ttrpc/services; Unix/vsock transports provide payloads. |
+| Data migration | Full d2b 3.0 reset; no v2 attachment or stream state/config import |
+| Validation | Port `component_session.rs` attachment ownership, stream mux, and credit-accounting tests. |
+| Removal proof | None — net-new; no prior owner to remove |
 | Main commit source | `packages/d2b-session/src/attachment.rs` (`AttachmentPayload` trait with `validate_descriptor()`, `close()`, `as_any()`, `into_any()`; `OwnedAttachment` with `unbound()`/`bind_received()`/`bind_outbound()`/`validate_payload_descriptor()`/`into_payload()`; `AttachmentValidationError` enum: Kind/ObjectType/Access/CloseOnExec/Other); `packages/d2b-session/src/streams.rs` (`NamedStreamMux`, `StreamId`, `StreamEvent` enum: Data/RemoteClosed/Reset, `StreamPhase` enum: Open/HalfClosedLocal/HalfClosedRemote/Closed/Reset) |
 | Tests at main | `packages/d2b-session/tests/component_session.rs` (attachment ownership, stream mux, credit accounting) |
 | Selected behavior | Attachment lifecycle: `OwnedAttachment::unbound()` for transport-received before descriptor auth; `validate_descriptor()` called only after authenticated decryption; `into_payload()` transfers ownership without close; `Drop` closes remaining payload. `NamedStreamMux` with per-stream and aggregate queue byte limits; half-close semantics; credit-based flow control |
-| v3 destination | `packages/d2b-bus/src/session/` (same crate as ADR046-bus-001); `AttachmentPayload` and `OwnedAttachment` are transport-neutral and require no ADR45 adaptation |
+| v3 destination | `packages/d2b-bus/src/session/` (same crate as ADR046-nix-023); `AttachmentPayload` and `OwnedAttachment` are transport-neutral and require no ADR45 adaptation |
 | ADR45 exclusions | `AttachmentDescriptor` from `v2_component_session` has `kind: AttachmentKind` and `object_type: KernelObjectType`; these values are wire-stable and carry no ADR45 realm naming; no exclusions for this item |
 
-### ADR046-bus-003
+### ADR046-nix-025
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-001; ADR046-bus-005 |
+| Dependency/owner | ADR046-nix-023; ADR046-nix-027 |
+| Current source | Main commit source row below: `packages/d2b-session/src/cancellation.rs`, `deadline.rs`, and `bootstrap.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse from main commit `a1cc0b2d`; adapt `CancelRequest`/`CancelResponse` module paths if v3 services move the common proto types. |
+| Destination | `packages/d2b-bus/src/session/`. |
+| Detailed design | Per-generation `RequestRegistry`, request-wide cancellation, `DeadlineBudget::admit_metadata()` as the inbound metadata gate, and single-use `BootstrapAdmission::consume()` replay protection. |
+| Integration | `RequestRegistry`, `DeadlineBudget`, and `BootstrapAdmission` feed all `d2b-bus` inbound ttrpc calls and resource API cancellation paths. |
+| Data migration | Full d2b 3.0 reset; no v2 cancellation/deadline/bootstrap state import |
+| Validation | Port cancel-before-dispatch, cancel-after-dispatch, generation-mismatch cancel, and deadline admit tests; add v3 common-proto path adapter test. |
+| Removal proof | ADR45 common proto type paths are adapted to the v3 service module; no prior v3 owner to remove. |
 | Main commit source | `packages/d2b-session/src/cancellation.rs` (`Cancellation` with `cancel()`/`is_cancelled()`/`cancelled()` async notify; `RequestRegistry` with generation scoping, `register()`/`mark_dispatched()`/`cancel()`/`cancel_all()`/`cancel_generated()`/`complete()`/`remove()`/`signal()`/`active()`); `packages/d2b-session/src/deadline.rs` (`DeadlineBudget` with `admit_metadata()` validating clock skew ≤30 s, request lifetime ≤15 min, idempotency key, peer ttrpc timeout); `packages/d2b-session/src/bootstrap.rs` (`Secret32` zeroizing 32-byte key; `BootstrapPsk`; `AdmittedBootstrapPsk`; `BootstrapAdmission` single-use PSK with operation-ID + replay-nonce check) |
 | Tests at main | `packages/d2b-session/tests/component_session.rs` (cancel-before-dispatch, cancel-after-dispatch, generation-mismatch cancel, deadline admit) |
 | Selected behavior | `RequestRegistry` is per-generation; calling `cancel_all()` cancels every outstanding request; `DeadlineBudget::admit_metadata()` is the single gate for all inbound request metadata; `BootstrapAdmission::consume()` single-use PSK prevents replay |
 | v3 destination | `packages/d2b-bus/src/session/` |
-| ADR45 exclusions | `cancel_generated()` calls `common::CancelRequest`/`CancelResponse` from `v2_services`; the `common.rs` proto type paths may change when services are versioned to v3 (ADR046-bus-006); the underlying `CancelRequest`/`CancelAck`/`CancelResult` contract from `v2_component_session` is wire-stable and requires no change |
+| ADR45 exclusions | `cancel_generated()` calls `common::CancelRequest`/`CancelResponse` from `v2_services`; the `common.rs` proto type paths may change when services are versioned to v3 (ADR046-nix-028); the underlying `CancelRequest`/`CancelAck`/`CancelResult` contract from `v2_component_session` is wire-stable and requires no change |
 
-### ADR046-bus-004
+### ADR046-nix-026
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-001 |
+| Dependency/owner | ADR046-nix-023 |
+| Current source | Main commit source row below: `packages/d2b-session-unix/src/{adapter,credit,descriptor,pidfd,socket,systemd,vsock}.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse from main commit `a1cc0b2d`; retain host-socket/native-vsock feature gates and replace only ADR45 socket-name strings with Zone bootstrap config. |
+| Destination | `packages/d2b-bus/src/transport/unix/`. |
+| Detailed design | Unix seqpacket/stream transports, pidfd identity verification, six-scope credit pool with host/process bounds, systemd-activated seqpacket listener support, and length-prefixed vsock framing. |
+| Integration | `d2b-bus` listeners and Provider/guest sessions instantiate UnixSeqpacket/UnixStream/vsock transports; credit pool enforces attachment FD budgets before handing payloads to session runtime. |
+| Data migration | Full d2b 3.0 reset; no v2 Unix transport state/config import |
+| Validation | Port `unix_session.rs` seqpacket, stream, pidfd, FD attachment, and credit pool tests; add Zone bootstrap socket-name fixture. |
+| Removal proof | ADR45 socket-name strings listed in exclusions are replaced by Zone bootstrap config; no prior v3 transport owner to remove. |
 | Main commit source | `packages/d2b-session-unix/src/adapter.rs` (feature `host-socket`) — `UnixSeqpacketTransport`, `UnixStreamTransport`, `UnixAttachmentPayload`, `OwnedUnixAttachment`, `PeerIdentityPolicy` (Pathname/InheritedSocketpair), `DescriptorPolicyResolver`, `PathnamePeerVerifier`; `packages/d2b-session-unix/src/credit.rs` — `CreditBundle`, `CreditError`, `CreditPool`, `CreditScope`, `CreditScopeSet`, `ProcessCreditLimit`; `packages/d2b-session-unix/src/descriptor.rs` — `ReceivedPacket`, `AcceptedAttachment`, `DescriptorPolicy`, `FirstPacketCredentials`, `ObjectIdentity`, `PeerCredentials`, `PidfdIdentityPolicy`, `VerifiedPacket`; `packages/d2b-session-unix/src/pidfd.rs` — `DigestEvidenceCallback`, `PidfdEvidence`, `PidfdIdentityVerifier`, `PidfdInfoSource`, `ProcPidfdIdentityVerifier`, `ProcSelfFdInfoSource`, `parse_pidfd_fdinfo`; `packages/d2b-session-unix/src/socket.rs` — `AncillaryCapacity`, `OutboundPacket`, `PacketBurst`, `SendBurst`, `SentPacket`, `SeqpacketSocket`, `StreamRead`, `StreamSocket`, `prearmed_seqpacket_pair`; `packages/d2b-session-unix/src/systemd.rs` — `ActivatedSeqpacketListener`, `ActivatedSeqpacketListeners`, `SystemdActivationError`; `packages/d2b-session-unix/src/vsock.rs` (feature `native-vsock`) — `FramedVsockTransport`, `NativeVsockListener`, `NativeVsockTransport` |
 | Tests at main | `packages/d2b-session-unix/tests/unix_session.rs` — seqpacket pair, Unix stream, pidfd identity, FD attachment validation, credit pool exhaustion and recovery |
 | Selected behavior | Audited Unix seqpacket and stream transports implementing `OwnedTransport`; pidfd identity verification reads `/proc/<pid>/fdinfo/<pidfd>` for `st_dev`/`st_ino`; 6-scope credit pool with per-process and per-host limits (`MAX_PROCESS_ATTACHMENT_CREDITS=2048`, `MAX_HOST_ATTACHMENT_CREDITS=8192`); systemd `SD_LISTEN_FDS` seqpacket activation; vsock framing with length-prefixed records |
 | v3 destination | `packages/d2b-bus/src/transport/unix/` — adapt as the Unix transport backend for `d2b-bus` sessions; keep the `host-socket`/`native-vsock` feature gates intact; the transport code itself has no ADR45 realm bindings |
 | ADR45 exclusions | `ActivatedSeqpacketListeners` reads socket names from `SD_LISTEN_FDS`; socket names are bound to current `d2bd.socket` / `d2b-priv-broker.socket` unit names; v3 socket paths come from Zone bootstrap config — activation code is reusable, socket name strings are not. `PeerIdentityPolicy::accepted()` is transport-layer code and has no ADR45 binding |
 
-### ADR046-bus-005
+### ADR046-nix-027
 
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR-046-componentsession-and-bus; naming and wire enumeration decisions per ADR-046-componentsession-and-bus owning spec before final adoption |
+| Current source | Main commit source row below: `packages/d2b-contracts/src/v2_component_session.rs` at `a1cc0b2d` plus committed session/noise tests. |
+| Reuse action | Reuse wire constants/types from main commit `a1cc0b2d`; rename ADR45 realm-oriented variants only as directed by the bus owning spec and preserve numeric tags. |
+| Destination | `packages/d2b-contracts/src/v3/component_session.rs`. |
+| Detailed design | Canonical wire values, bounded vectors, binary size constants, closed-enum tag codecs, and fail-closed validation for the ComponentSession protocol. |
+| Integration | `d2b-contracts` v3 component_session module is consumed by `d2b-bus`, `d2b-session`, `d2b-session-unix`, `d2b-client`, and provider toolkit for shared wire constants/enums. |
+| Data migration | Full d2b 3.0 reset; no v2 ComponentSession contract state import |
+| Validation | Port component session and Noise vector tests; add wire-tag stability gates for renamed role/service/purpose variants. |
+| Removal proof | ADR45 realm-named enum variants are renamed only if the owning spec requires while preserving wire tags; no prior v3 contract owner to remove. |
 | Main commit source | `packages/d2b-contracts/src/v2_component_session.rs` (entire file, 2500+ lines at `a1cc0b2d`): wire constants — `PREFACE_MAGIC=*b"D2BCS2\r\n"`, `COMPONENT_SESSION_MAJOR=2`, `COMPONENT_SESSION_MINOR=0`, all `MAX_*` limits, `FRAGMENT_HEADER_LEN=24`, `RECORD_HEADER_LEN=24`; structs — `BoundedVec<T,MIN,MAX>`, `ComponentSessionPreface`, `HandshakeOffer`, `EndpointPolicy`, `EndpointPolicyIdentity`, `LimitProfile`, `TransportBinding`, `AttachmentPolicy`, `RequestEnvelope`, `AdmittedDeadline`, `RecordHeader`, `FragmentHeader`, `SendSequence`, `ReceiveSequence`, `KeepaliveRecord`, `CloseRecord`, `GuestSessionCredentialV1`, `GuestBootstrapCredentialV1`, `GuestBootstrapPsk`, `BootstrapPskBinding`, `BootstrapPskState`; enums — `EndpointPurpose`(19 variants), `PurposeClass`(3), `EndpointRole`(19), `ServicePackage`(15), `NoiseProfile`(3), `Locality`(4), `TransportClass`(5+), `AttachmentKind`, `KernelObjectType`, `CloseReason`, `ContractError`, `BinaryError`; closed-enum wire tag codec |
 | Tests at main | `packages/d2b-session/tests/component_session.rs` (wire protocol round-trip); `packages/d2b-session/tests/noise_vectors.rs` (KAT from `docs/reference/component-session-v2-vectors.json`) |
 | Selected behavior | Canonical wire values and fail-closed validation for the session protocol; `BoundedVec` serde+JsonSchema; all binary size constants are stable wire commitments and must not change without a `COMPONENT_SESSION_MAJOR` bump |
 | v3 destination | `packages/d2b-contracts/src/v3/component_session.rs`; `COMPONENT_SESSION_MAJOR` stays 2 unless the wire handshake format changes; KAT vectors in `docs/reference/component-session-v2-vectors.json` must still pass after copy |
 | ADR45 exclusions | `EndpointRole` variants `RealmController`(3), `RealmBroker`(5): may rename per ADR-046-componentsession-and-bus owning spec; wire tag values 3 and 5 are stable and must not change. `ServicePackage` variants `RealmV2`(2, `"d2b.realm.v2"`) and `DaemonV2`(1): `RealmV2` may rename per owning spec; wire tag 2 is stable. `EndpointPurpose` variants `RealmPeer`(3), `RealmBootstrap`(4): may rename per owning spec; wire tags 3 and 4 are stable. `PurposeClass` and `Locality` variant names: confirm per owning spec; no "realm" prefix in either enum so rename is unlikely but must be verified before adoption |
 
-### ADR046-bus-006
+### ADR046-nix-028
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-005; Zone service naming per ADR-046-componentsession-and-bus owning spec |
+| Dependency/owner | ADR046-nix-027; Zone service naming per ADR-046-componentsession-and-bus owning spec |
+| Current source | Main commit source row below: `packages/d2b-contracts/src/generated_v2_services/`, `v2_guest_services.rs`, and `v2_component_session.rs` service inventory at `a1cc0b2d`. |
+| Reuse action | Reuse generated ttrpc service tables from main commit `a1cc0b2d`; adapt ADR45 Realm/Workload fields and service names to v3 Zone/Resource naming per owning bus spec. |
+| Destination | `packages/d2b-contracts/src/v3/services/`. |
+| Detailed design | Versioned ttrpc service modules preserve server dispatch tables, shared request/cancel/outcome/error types, and service fingerprint inventory. |
+| Integration | Generated v3 services feed `d2b-bus` server/client dispatch, provider-toolkit conformance, and `SERVICE_INVENTORY` fingerprint validation. |
+| Data migration | Full d2b 3.0 reset; no v2 generated service state import |
+| Validation | Port provider-toolkit conformance and service fingerprint assertions; add v3 service-name gate for Zone service and ResourceName field adaptation. |
+| Removal proof | ADR45 realm/user WorkloadId fields listed in exclusions are adapted to Zone/ResourceName; `generated_v2_services` remains only as reuse source. |
 | Main commit source | `packages/d2b-contracts/src/generated_v2_services/` (48 files at `a1cc0b2d`): `activation.rs`+`_ttrpc.rs`, `broker.rs`+`_ttrpc.rs`, `clipboard.rs`+`_ttrpc.rs`, `clipboard_picker.rs`+`_ttrpc.rs`, `daemon.rs`+`_ttrpc.rs`, `guest.rs`+`_ttrpc.rs`, `notify.rs`+`_ttrpc.rs`, `provider_audio.rs`+`_ttrpc.rs`, `provider_credential.rs`+`_ttrpc.rs`, `provider_device.rs`+`_ttrpc.rs`, `provider_display.rs`+`_ttrpc.rs`, `provider_infrastructure.rs`+`_ttrpc.rs`, `provider_network.rs`+`_ttrpc.rs`, `provider_observability.rs`+`_ttrpc.rs`, `provider_runtime.rs`+`_ttrpc.rs`, `provider_storage.rs`+`_ttrpc.rs`, `provider_substrate.rs`+`_ttrpc.rs`, `provider_transport.rs`+`_ttrpc.rs`, `realm.rs`+`_ttrpc.rs`, `runtime_systemd_user.rs`+`_ttrpc.rs`, `security_key.rs`+`_ttrpc.rs`, `shell.rs`+`_ttrpc.rs`, `terminal.rs`, `tty.rs`+`_ttrpc.rs`, `user.rs`+`_ttrpc.rs`, `wayland.rs`+`_ttrpc.rs`, `common.rs`, `mod.rs`; also `packages/d2b-contracts/src/v2_guest_services.rs`, `v2_component_session.rs`'s `SERVICE_INVENTORY` + fingerprint functions |
 | Tests at main | `packages/d2b-provider-toolkit/tests/conformance.rs` (all 11 provider-type axes); `packages/d2b-session/tests/component_session.rs` (service fingerprint assertions) |
 | Selected behavior | Each `*_ttrpc.rs` defines the ttrpc `Arc<dyn XxxTtrpc>` server type and method dispatch table; `common.rs` defines shared `RequestMetadata`, `CancelRequest`/`CancelResponse`, `Outcome`, `ErrorKind`; `SERVICE_INVENTORY` indexes all services for schema-fingerprint verification |
 | v3 destination | `packages/d2b-contracts/src/v3/services/` (versioned sub-path); service interfaces adopted as-is initially; breaking method changes require a new proto major version |
 | ADR45 exclusions | `realm.rs` service `"d2b.realm.v2.RealmService"` and its `RealmId`-typed fields → rename per ADR-046-componentsession-and-bus owning spec; `user.rs` and `runtime_systemd_user.rs` reference `WorkloadId` in some method contexts → adapt to `ResourceName` on copy; the 11 provider service files (`provider_*.rs`) carry no realm naming and require no ADR45 adaptation |
 
-### ADR046-bus-007
+### ADR046-nix-029
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-005; ADR046-bus-006; EndpointRole naming per ADR-046-componentsession-and-bus owning spec |
+| Dependency/owner | ADR046-nix-027; ADR046-nix-028; EndpointRole naming per ADR-046-componentsession-and-bus owning spec |
+| Current source | Main commit source row below: `packages/d2b-provider/src/{registry,rpc,instance,context}.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse ProviderRegistry/RPC runtime from main commit `a1cc0b2d`; adapt `SessionIdentity` to Zone naming and update EndpointRole/ServicePackage names per owning bus spec. |
+| Destination | `packages/d2b-provider/src/` (adapt in place). |
+| Detailed design | ProviderRegistry snapshot admission/drain, bounded in-flight caps, typed RpcProviderProxy dispatch, and build-time RegistryLimits validation. |
+| Integration | Zone controller publishes active ProviderRegistry snapshots; provider-toolkit RPC proxy admits sessions through `d2b-bus` and dispatches typed Provider operations. |
+| Data migration | Full d2b 3.0 reset; no v2 ProviderRegistry runtime state import |
+| Validation | Port `d2b-provider` `runtime.rs` tests; add v3 AdmissionOptions peer-role and SessionIdentity zone-name gates. |
+| Removal proof | ADR45 role/service names are adapted per owning bus spec; no prior v3 ProviderRegistry owner to remove. |
 | Main commit source | `packages/d2b-provider/src/registry.rs` (`ProviderRegistry`, `ProviderRegistryBuilder`, `RegistryLimits` defaults: total_in_flight=256, per_provider_in_flight=32, `AdmissionOptions`); `packages/d2b-provider/src/rpc.rs` (`AuthenticatedProviderRpc` trait, `RpcProviderProxy`, `RpcCall`, `RpcOperation` enum: Health/Capabilities/Method, `RpcPayload` enum: None/Operation/Plan/Adoption/LeaseRequest/Lease, `RpcResponse` enum: Health/Capabilities/Plan/Handle/Observation/ObservabilityQuery/Mutation/Lease, `SessionIdentity`, `ProviderClock`, `SystemProviderClock`); `packages/d2b-provider/src/instance.rs` (`ProviderInstance` enum, 11 variants: Runtime/Infrastructure/Transport/Substrate/Credential/Display/Network/Storage/Device/Audio/Observability); `packages/d2b-provider/src/context.rs` (`OwnedOperationContext`, `CancellationToken`) |
 | Tests at main | `packages/d2b-provider/tests/runtime.rs` |
 | Selected behavior | `ProviderRegistry` admits sessions against a versioned generational snapshot and drains before rotation; per-provider in-flight cap prevents one slow provider from consuming all capacity; `RpcProviderProxy` converts typed `RpcCall` into the correct per-ProviderType ttrpc service invocation through `AuthenticatedProviderRpc`; `RegistryLimits` validated at build time |
 | v3 destination | `packages/d2b-provider/src/` (adapt in place); `ProviderRegistry` becomes the Zone controller's active Provider registry; `ProviderInstance` enum extended with new Provider types as dossiers are ratified |
 | ADR45 exclusions | `AdmissionOptions.peer_role: EndpointRole` contains ADR45 role values — update variant names per ADR-046-componentsession-and-bus owning spec; `SessionIdentity` contains `provider_generation` and `service: ServicePackage` — the generation type is stable; `ServicePackage::ProviderV2` may rename per owning spec; `v2_identity::ProviderId`/`ProviderType` carry no realm naming and require no adaptation |
 
-### ADR046-bus-008
+### ADR046-nix-030
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-007; ADR046-bus-006; EndpointRole and ServicePackage naming per ADR-046-componentsession-and-bus owning spec |
+| Dependency/owner | ADR046-nix-029; ADR046-nix-028; EndpointRole and ServicePackage naming per ADR-046-componentsession-and-bus owning spec |
+| Current source | Main commit source row below: `packages/d2b-provider-toolkit/src/{adapter,server,conformance,registration}.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse provider toolkit from main commit `a1cc0b2d`; adapt endpoint role/service variant names and v2_identity imports while preserving wire tags. |
+| Destination | `packages/d2b-provider-toolkit/src/` (adapt in place). |
+| Detailed design | ProviderAgentAdapter validates ComponentSession identity, GeneratedProviderServiceServer dispatches all ProviderType method families with bounded stores/in-flight state, and conformance kit gates every Provider implementation. |
+| Integration | Provider processes embed `GeneratedProviderServiceServer`; `ProviderAgentAdapter` validates ComponentSession identity before invoking registry instances; conformance kit gates every Provider crate. |
+| Data migration | Full d2b 3.0 reset; no v2 provider-toolkit runtime state import |
+| Validation | Port `conformance.rs`; assert endpoint role/service wire tags remain 7/4 after any variant rename. |
+| Removal proof | ADR45 `v2_identity` imports are adapted to ZoneId/ResourceName; no prior v3 toolkit owner to remove. |
 | Main commit source | `packages/d2b-provider-toolkit/src/adapter.rs` (`ProviderAgentAdapter::new()` validates session identity — checks `peer_role == EndpointRole::ProviderAgent`, `service == ServicePackage::ProviderV2`, `binding.agent_generation == identity.provider_generation`; `invoke_session()` checks attachment index ordering); `packages/d2b-provider-toolkit/src/server.rs` (`GeneratedProviderServiceServer` with per-session object stores — `MAX_SESSION_PLANS=256`, `MAX_SESSION_HANDLES=1024`, `MAX_SESSION_LEASES=1024`, `MAX_AGENT_IN_FLIGHT=64`; atomic `accepting`/`in_flight`; `idle: Notify`; routes all 11 ProviderType ttrpc method families); `packages/d2b-provider-toolkit/src/conformance.rs` (`check_provider_conformance`, `check_descriptor_conformance`, `ConformanceError` enum); `packages/d2b-provider-toolkit/src/registration.rs` (`register_exact_instances`, `ToolkitError` enum) |
 | Tests at main | `packages/d2b-provider-toolkit/tests/conformance.rs` — `every_axis_passes_identical_in_process_and_rpc_conformance` tests all 11 `ProviderType` variants both in-process and through the full RPC path |
 | Selected behavior | `ProviderAgentAdapter` is the descriptor-bound validation gate between a ComponentSession and a provider instance; `GeneratedProviderServiceServer` is the agent-side ttrpc dispatch engine; conformance kit provides a reference test harness for every Provider implementation; `register_exact_instances` is the canonical pattern for building a test registry from static descriptors |
@@ -2492,7 +2593,15 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-007; ADR046-bus-005; TargetInput v3 shape per ADR-046-componentsession-and-bus owning spec |
+| Dependency/owner | ADR046-nix-029; ADR046-nix-027; TargetInput v3 shape per ADR-046-componentsession-and-bus owning spec |
+| Current source | Main commit source row below: `packages/d2b-client/src/{client,session,target,service,daemon_service,guest_service,host_socket}.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse async client from main commit `a1cc0b2d`; adapt TargetInput, ServiceOwner, service packages, and local socket identity to Zone/ResourceRef semantics. |
+| Destination | `packages/d2b-client/src/` (adapt in place). |
+| Detailed design | Transport-neutral typed async client, ComponentSessionConnector abstraction, precise SessionFailure classification, signed metadata envelopes, named-stream client abstraction, and host-socket connector. |
+| Integration | CLI/controllers construct TargetInput/MetadataInput; `d2b-client` resolves Zone/Resource routes via `d2b-bus` and reuses ComponentSessionConnector for calls/streams. |
+| Data migration | Full d2b 3.0 reset; no v2 client state/config import |
+| Validation | Port `d2b-client` tests; add ResourceRef TargetInput and Zone bootstrap socket identity gates. |
+| Removal proof | ADR45 TargetInput Realm/Workload forms are replaced by Zone/ResourceRef forms; no prior v3 client owner to remove. |
 | Main commit source | `packages/d2b-client/src/client.rs` (`Client`, `ConnectedClient`, `MetadataInput`, `CallOptions`, `CancellationToken`, `Response`, `RetryPolicy`, `SystemClock`, `WallClock`); `packages/d2b-client/src/session.rs` (`ComponentSessionConnector` trait, `ConnectedSession` with `driver: SharedDriver` + `ttrpc_socket: Socket` + `limits: LimitProfile`, `SessionCall`, `SessionReply`, `SessionFailure` enum: BeforeDispatch/Retryable/Ambiguous/Disconnected/Deadline/Cancelled/Protocol, `NamedStream`, `SharedDriver`); `packages/d2b-client/src/target.rs` (`TargetInput` enum, `ServiceOwner`, `ResolvedTarget`, `RouteRecord`, `RouteTable`, `TransportKind`, `TransportSelection`); `packages/d2b-client/src/service.rs` (`GeneratedClient`, `MethodHandle`, `ServiceHandle`, `ServiceKind`); `packages/d2b-client/src/daemon_service.rs` (`DaemonClient`, `DaemonMethod`, `DaemonLifecycleRequest`, `DaemonTerminal`, `daemon_call_options`); `packages/d2b-client/src/guest_service.rs` (`GuestClient`, `GuestOperation`, `GuestCancelCall`, `GuestInspectCall`, `GuestRetainedLogCall`); `packages/d2b-client/src/host_socket.rs` (feature `host-socket`) — `HostSocketConnector`, `local_daemon_endpoint_identity` |
 | Tests at main | `packages/d2b-client/tests/client.rs` |
 | Selected behavior | Transport-neutral typed async client; `ComponentSessionConnector` abstracts connection setup; `SessionFailure` provides precise failure classification for retry policy; `MetadataInput` constructs signed request envelopes with clock-bounded lifetimes; `NamedStream` exposes named-stream channel as a client-side abstraction; `HostSocketConnector` is the reference Unix socket connection implementation |
@@ -2503,7 +2612,15 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-001; ADR046-bus-005; naming and service name per ADR-046-componentsession-and-bus owning spec |
+| Dependency/owner | ADR046-nix-023; ADR046-nix-027; naming and service name per ADR-046-componentsession-and-bus owning spec |
+| Current source | Main commit source row below: `packages/d2b-realm-router/src/service_v2.rs` and tests at `a1cc0b2d`. |
+| Reuse action | Reuse routing service behavior from main commit `a1cc0b2d`; rename RealmSessionAuthority/service identifiers to Zone terms per owning bus spec while preserving custody behavior. |
+| Destination | `packages/d2b-bus/src/routing/zone_service.rs`. |
+| Detailed design | ZoneSessionAuthority preserves no-host-credential custody, gateway/ZoneLink custody behavior, bounded concurrent dispatch, and graceful shutdown semantics. |
+| Integration | `d2b-bus` Zone service handles route admission and shortcut lifecycle; ZoneSessionAuthority feeds session/audit/metric labels with stable custody state. |
+| Data migration | Full d2b 3.0 reset; no v2 routing state import |
+| Validation | Port `realm_service_v2.rs` and topology harness tests with Zone naming; add service-name wire gate. |
+| Removal proof | ADR45 RealmService name and RealmId fields are adapted to Zone service; no prior v3 router owner to remove. |
 | Main commit source | `packages/d2b-realm-router/src/service_v2.rs` (`RealmSessionAuthority` struct with `realm: RealmId`, `peer_role: EndpointRole`, `locality: Locality`, `purpose: PurposeClass`, `custody: CredentialCustody`; `CredentialCustody` enum: None/GatewayGuest; constructors `local_controller()`/`gateway_peer()`/`new()`; `REALM_SERVICE_NAME = "d2b.realm.v2.RealmService"`; constants `DEFAULT_MAX_REALM_BINDINGS=256`, `DEFAULT_MAX_SHORTCUTS=256`, `DEFAULT_MAX_MUTATION_RECORDS=1024`, `DEFAULT_AUDIT_CAPACITY=1024`; internal `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s`; `RealmServiceLimits`; dispatch using `Arc<Semaphore>(MAX_DISPATCH_IN_FLIGHT)` and `JoinSet<()>`); `packages/d2b-realm-router/tests/realm_service_v2.rs`; `packages/d2b-realm-router/tests/transport_topology_harness.rs` |
 | Tests at main | `packages/d2b-realm-router/tests/realm_service_v2.rs` — routing service tests; `packages/d2b-realm-router/tests/transport_topology_harness.rs` — topology harness |
 | Selected behavior | `RealmSessionAuthority` enforces that host-local sessions hold no realm credentials (`CredentialCustody::None`) while gateway sessions hold `GatewayGuest` custody — this is the runtime enforcement of ADR 0032 "relay identity is not local auth"; concurrent dispatch with `Semaphore(64)` bound; 5-second graceful shutdown via `JoinSet` |
@@ -2514,7 +2631,15 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-007; ADR046-bus-006; ADR046-bus-005; PROVIDER_BUNDLE_VERSION bump required on any bundle artifact format change |
+| Dependency/owner | ADR046-nix-029; ADR046-nix-028; ADR046-nix-027; PROVIDER_BUNDLE_VERSION bump required on any bundle artifact format change |
+| Current source | Main commit source row below: `packages/d2bd/src/provider_registry.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse fail-closed provider composition from main commit `a1cc0b2d`; adapt v2 identity/bundle artifact types to v3 provider registry contracts and bump bundle versions. |
+| Destination | `packages/d2bd/src/provider_registry.rs` (adapt in place). |
+| Detailed design | Named ProviderCompositionError variants, first-party factory instantiation, bundle resolver validation, version/schema constants, and monotone lifecycle operation IDs. |
+| Integration | `provider_registry.rs` composes the v3 provider catalog into active ProviderRegistry snapshots consumed by `d2b-bus`/provider runtime and bundle validation. |
+| Data migration | Full d2b 3.0 reset; provider bundle format bumps to v3 and no v2 provider registry state import. |
+| Validation | Port provider_registry composition tests; add PROVIDER_BUNDLE_VERSION/SCHEMA_VERSION v3 bump gate and ZoneId/ResourceName binding test. |
+| Removal proof | ADR45 `provider_registry_v2` bundle artifact types are replaced by `d2b_contracts::v3::provider_registry` after v3 bundle schema lands. |
 | Main commit source | `packages/d2bd/src/provider_registry.rs` (`ProviderCompositionError` enum with 26 named variants including `AzureVmForbidden`, `LegacyRunnerForbidden`, `NondispatchableCapability`, `ProcessIdentityMismatch`, `LifecycleBudgetExceeded`; all first-party factory instantiations: `PipewireVhostUserAudioFactory`, `HostMediatedDeviceFactory`, `WaylandDisplayFactory`, `LocalRealmNetworkFactory`, `LocalObservabilityFactory`, `AzureContainerAppsRuntimeProviderFactory`, `LocalRuntimeProviderFactory` CH/QEMU/systemd-user, `LocalStorageFactory`, `HostSubstrateProviderFactory` Linux/NixOS, `AzureRelayProviderFactory`, `LocalTransportFactory`; constants `PROVIDER_BUNDLE_VERSION: u32 = 13`, `PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v2"`, `AZURE_VM_IMPLEMENTATION_ID: &str = "azure-vm"`, static `NEXT_LIFECYCLE_OPERATION_ID: AtomicU64`) |
 | Tests at main | `packages/d2bd/src/` integration tests exercising composition (search `#[cfg(test)]` blocks in `provider_registry.rs`) |
 | Selected behavior | Fail-closed composition: every error is named; `AzureVmForbidden` explicitly rejects non-production implementations; bundle loaded through `load_bundle_resolver()` and validated against `PROVIDER_BUNDLE_VERSION`; `NEXT_LIFECYCLE_OPERATION_ID` provides monotone IDs across restarts |
@@ -2525,7 +2650,15 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-bus-011; ADR046-bus-007; GuestLifecycleRequest ResourceRef addressing per ADR-046-componentsession-and-bus owning spec |
+| Dependency/owner | ADR046-bus-011; ADR046-nix-029; GuestLifecycleRequest ResourceRef addressing per ADR-046-componentsession-and-bus owning spec |
+| Current source | Main commit source row below: `packages/d2bd/src/provider_effects.rs` at `a1cc0b2d`. |
+| Reuse action | Reuse descriptor-bound effect dispatch from main commit `a1cc0b2d`; adapt lifecycle request wire type from VM name to Zone-scoped Guest ResourceRef. |
+| Destination | `packages/d2bd/src/provider_effects.rs` (adapt in place). |
+| Detailed design | DaemonEffectAdapters bind semantic effect ports; ProviderLifecycleDispatch bounds lifecycle mutations and routes broker start/stop through blocking adapters with idempotency-key deduplication. |
+| Integration | `ProviderLifecycleDispatch` receives v3 Guest lifecycle operations from `d2b-bus`/core controller and routes broker start/stop through descriptor-bound effect ports. |
+| Data migration | Full d2b 3.0 reset; no v2 lifecycle mutation state import |
+| Validation | Port `provider_effects.rs` lifecycle dispatch tests; add ResourceRef Guest lifecycle request and BrokerCallerRole compatibility gates. |
+| Removal proof | `VmLifecycleRequest`/`vm_name` path is replaced by a v3 ResourceRef Guest lifecycle op after broker/public wire contract versioning. |
 | Main commit source | `packages/d2bd/src/provider_effects.rs` (`DaemonEffectAdapters` struct binding all semantic port traits; `ProviderLifecycleDispatch` with `MAX_TRACKED_LIFECYCLE_MUTATIONS=256` and `BTreeMap<String, ProviderLifecycleInvocation>`; all effect port imports: `AudioEffectPort`/`AudioQueryPort`, `DeviceEffectPort`/`DeviceQueryPort`, `DisplayEffectPort`, `NetworkEffectPort`, `BoundedExportSink`/`ObservabilityExportPort`/`ObservabilityQueryPort`, `RuntimeAdoptionControl`/`RuntimeConfiguredItemControl`/`RuntimeControlPort`/`RuntimeEnsureControl`/`RuntimeOperationControl`/`RuntimePlanDecision`, `StorageEffectPort`, `HostSubstratePort`, `LocalEndpointPort`; lifecycle dispatch functions `dispatch_broker_vm_start_on_blocking_adapter`, `dispatch_broker_vm_stop_on_blocking_adapter`; test helpers `reset_test_runtime_lifecycle_calls()`, `test_runtime_lifecycle_calls()`, `TEST_RUNTIME_START_CALLS`/`TEST_RUNTIME_STOP_CALLS` thread-locals) |
 | Tests at main | `packages/d2bd/src/provider_effects.rs` `#[cfg(test)]` blocks; `packages/d2bd/src/provider_registry.rs` composition tests |
 | Selected behavior | Each effect adapter is descriptor-bound at composition time in `provider_registry.rs`; `ProviderLifecycleDispatch` tracks in-flight lifecycle mutations with a bounded BTreeMap and idempotency-keyed deduplication; `dispatch_broker_vm_start/stop_on_blocking_adapter` routes to the broker via a blocking task adapter; test helpers provide per-test reset of lifecycle call counters |

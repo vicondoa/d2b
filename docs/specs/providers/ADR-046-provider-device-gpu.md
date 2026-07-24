@@ -1638,7 +1638,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/` with `src/`, `tests/`, `integration/`, `README.md`; add to workspace `Cargo.toml` members list (alphanumerically sorted) |
 | Detailed design | Crate scaffold: `Cargo.toml` with `d2b-host`, `d2b-contracts`, `d2b-provider-toolkit`, `d2b-core` dependencies; `lib.rs` exporting controller binary entry points; `error.rs` with `DeviceGpuError` closed-set enum; placeholder `controller.rs` |
 | Integration | Workspace policy test must pass; crate must build; `src/`, `tests/`, `integration/`, `README.md` must exist |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo build -p d2b-provider-device-gpu`; workspace policy crate-layout check passes |
 | Removal proof | N/A (new crate) |
 
@@ -1654,7 +1654,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/src/controller.rs` |
 | Detailed design | Five triggers: `spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed`. Each trigger handler writes optimistic `ResourceMutationBatch`. Status writer in `status.rs`. Async watch task + per-resource reconcile tasks. Independent resources in parallel. |
 | Integration | Resource API (ADR046 store) must be present; fake ResourceClient available from Provider toolkit; `tests/combined_reconcile.rs` validates trigger dispatch |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu --test combined_reconcile`; all five trigger handlers must reach their expected output state |
 | Removal proof | Current ProcessRole::Gpu/Video/GpuRenderNode retained until this test passes; see ProcessRole disposition table |
 
@@ -1670,7 +1670,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/src/probe.rs` |
 | Detailed design | Call `GpuEffectPort::probe_drm_device(selector)` on each `scheduled-observe` trigger; the effect port resolves device presence against the trusted device table and returns a presence/health result without exposing raw sysfs or device paths to the controller. Three-strike failure counter; `observe_interval_secs` (10–60, default 30); emit `DevicePresent` condition and update `lastProbedAt`. |
 | Integration | `scheduled-observe` trigger from reconcile loop calls `probe::check_drm_device` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/conformance.rs` contains probe-mock path; `cargo test` passes |
 | Removal proof | N/A (new module) |
 
@@ -1686,7 +1686,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/src/arbitration.rs` |
 | Detailed design | On `spec-generation-changed` and each new claim: check `arbitration` vs `maxConcurrentClaims` vs current `holderRefs` length. Exclusive: reject any second claim with `ClaimConflict` condition, set requesting Device phase `Degraded`. Shared render-node: accept up to `maxConcurrentClaims`. Admission: `shared + renderNodeOnly=false` fails with `shared-arbitration-requires-render-node-only`. |
 | Integration | Tested by `tests/arbitration_conflict.rs`; integration fixture `render_node_shared/` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu --test arbitration_conflict`; `cargo test -p d2b-provider-device-gpu --test render_node_enforcement` |
 | Removal proof | N/A (new module) |
 
@@ -1702,7 +1702,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/src/worker_gpu.rs` |
 | Detailed design | Build and commit `Process` resource record with `template: gpu-worker` or `template: render-node-worker`; set `sandbox.seccompClass` (`w1-gpu` or `w1-gpu-render-node`), `sandbox.userNamespace: {mappingClass: process-principal-root}` (uid/gid resolved privately by core from signed worker template — controller does NOT write numeric values), `sandbox.namespaceClasses`, `sandbox.capabilityClasses=[]`, `sandbox.startRoot=false`; set `deviceUsage[{deviceRef,access,purpose}]`, `networkUsage: null`, `endpoints[{name,transport,purpose}]`, `budget` (including `pids` and `fds` bounded limits), `readiness` (with `class`, `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`), and `restartPolicy` (with `class`, `backoffBase`, `backoffMax`, `backoffMultiplier`, `maxRestarts`, `resetAfter`). Provider/system-minijail validates and resolves the LaunchTicket and sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the **privileged broker** which performs `SpawnRunner`, `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and fd transfer — the device-gpu controller does not have execution authority or fd access. `crossDomainTrusted` gating: the signed descriptor is static; `crossDomainTrusted` is projected from the Device setting into the LaunchTicket by Provider/system-minijail, which omits `GpuContextType::CrossDomain` from runtime argv when false. |
 | Integration | `integration/gpu_worker_start/`; `integration/render_node_shared/`; `packages/d2b-contract-tests/tests/minijail_gpu.rs` (reused existing test) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu`; `cargo test -p d2b-contract-tests --test minijail_gpu` continues to pass |
 | Removal proof | `ProcessRole::Gpu` and `ProcessRole::GpuRenderNode` removed from `processes.rs` only after both integration tests pass and the ProcessRole disposition contract test confirms zero remaining references |
 
@@ -1718,7 +1718,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/src/worker_video.rs`, `tests/wire_constant_snapshot.rs` |
 | Detailed design | Controller creates `Process/device-<uid-short>-video` only after `GpuWorkerReady=True`. `worker_video.rs` builds `VideoArgvInput` from resolved device spec and signed descriptor binary path. Validates `wire_contract_snapshot()` matches committed golden at startup; fails closed if mismatch (error `device-wire-contract-mismatch`). NVIDIA device gating: include `nvidia-ctl`, `nvidia-device`, `nvidia-uvm` tokens in `deviceUsage[]` entries only when `videoNvidiaDecode=true`; the **privileged broker** opens the fds when executing the effect request from the core EffectPort adapter. Distinct allocator-assigned principal enforced by LaunchTicket (internal invariant; not expressed in the resource spec); `template: video-worker` descriptor declares no Wayland/audio endpoint capability. `sandbox.seccompClass: w1-video`; `sandbox.namespaceClasses` includes `pid`; `userNamespace: null` (explicit, tested invariant). |
 | Integration | `integration/video_dependency/`; `packages/d2b-contract-tests/tests/video_binary_contract.rs` (reused); `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` video section (reused) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu --test video_dependency`; `cargo test -p d2b-provider-device-gpu --test wire_constant_snapshot`; `cargo test -p d2b-contract-tests --test video_binary_contract` continues to pass |
 | Removal proof | `ProcessRole::Video` removed from `processes.rs` only after `integration/video_dependency/` passes and the video Process reaches `Ready` in a live Zone |
 
@@ -1744,7 +1744,7 @@ disposition contract test passes.
 | --- | --- |
 | Work item ID | `ADR046-provider-device-gpu-08` |
 | Dependency/owner | ADR046-provider-device-gpu-01; D087 status-first state model present in the foundational ADR-046 specs |
-| Current source | None |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse source | None |
 | Reuse action | `new` — status-first state assertions in the component descriptor and controller tests |
 | Destination | `packages/d2b-provider-device-gpu/` component descriptor; controller/status tests |
@@ -1767,7 +1767,7 @@ disposition contract test passes.
 | Destination | `packages/d2b-provider-device-gpu/README.md` |
 | Detailed design | Must include: Provider identity, supported ResourceTypes, controller/service/worker binary descriptions, placement (Host, system domain), dependencies (system-minijail, volume-local, observability-otel), RBAC roles, security model summary, state/telemetry contract, build command (`cargo build -p d2b-provider-device-gpu`), test commands (`cargo test -p d2b-provider-device-gpu`), integration command (`make test-integration`), hardware test note (see `integration/README.md`), standalone-repository consumption stub. |
 | Integration | Workspace policy checks for `README.md` presence |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `make test-policy` (workspace crate layout policy check) |
 | Removal proof | N/A (new file) |
 

@@ -1330,7 +1330,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/credential_client.rs` |
 | Detailed design | Async Credential KK session client for service components (service processes have d2b-bus access, enabling Credential KK; workers do not); acquire listener credential via KK inside the gateway Guest using `config.credentialBindings[listenerCredentialAlias]`; acquire sender credential independently inside the child's gateway Guest via the same KK model using `config.credentialBindings[senderCredentialAlias]`; raw credential bytes held in zeroizing memory inside the gateway Guest, presented to Azure Relay, then immediately zeroized; no credential bytes cross process, network, or Guest boundary; redacted Debug; no credential bytes in logs/audit/OTEL; core ProviderDeployment creates a private persistent Volume (per ADR-046-provider-state) for each component before its Process starts — the transport Provider does not own or create these Volumes; `Provider/volume-local` reconciles them; `migrationPolicy: none` means no migration worker is ever spawned; no relay auth token, WebSocket handle, session key, or credential byte is written to that Volume; all relay session state remains transient in-process memory |
 | Integration | Listener service invokes before each relay connect attempt inside gateway Guest; child Zone's sender service acquires its own credential independently inside its own gateway Guest |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs`: credential bytes never reach any Debug/log/audit/OTEL path; `src/tests/integration/credential_delivery.rs`: end-to-end credential delivery using injected fake Credential effect port |
 | Removal proof | N/A; new module |
 
@@ -1344,7 +1344,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/reconnect.rs` |
 | Detailed design | Relay service responds to `CloseTransport`+`OpenTransport` cycle from core; core owns reconnect policy and backoff scheduling; relay service tears down the current WebSocket when core calls `CloseTransport` and establishes a new WebSocket connection when core calls `OpenTransport`; relay service does not maintain a backoff state machine or independently retry — it starts a new WebSocket on demand and emits the connect result via `ObserveTransport`; listener and sender are long-lived service processes that do not re-spawn on reconnect |
 | Integration | `ObserveTransport` delivers `TransportObservation::Disconnected` to core; core drives reconnect via `CloseTransport` then `OpenTransport` after applying its own backoff |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/reconnect_backoff.rs`: relay responds to CloseTransport/OpenTransport cycle; WebSocket starts on demand; ObserveTransport reports connect result; `src/tests/integration/reconnect_scenario.rs`: full reconnect cycle including Credential re-acquisition |
 | Removal proof | N/A; new module |
 
@@ -1358,7 +1358,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs`; `docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json` |
 | Detailed design | `AzureRelayTransportSettings` Rust struct with serde; validation against committed JSON Schema; reject `secret`-annotated fields; enforce `^[a-z][a-z0-9-]*$` pattern for `listenerCredentialAlias`/`senderCredentialAlias` alias ID fields (never `Credential/<name>` refs); xtask `gen-provider-transport-schemas` integration |
 | Integration | `make test-drift` gate: `xtask gen-provider-transport-schemas && git diff --exit-code` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/transport_settings_schema.rs`: valid/invalid schema vectors; eval-time Nix assertion coverage from `nix-unit: transport-settings-secret-key` test (see zone-routing spec) |
 | Removal proof | N/A; new contract |
 
@@ -1372,7 +1372,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/backpressure.rs` |
 | Detailed design | Outbound WebSocket send buffer bounded at `MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES`; relay WebSocket write backpressure propagates to `FairScheduler` credit; `d2b_relay_transport_backpressure_events_total` counter emitted; no unbounded memory growth under slow relay |
 | Integration | Named stream send on `transport-service` Unix endpoint blocks on relay WebSocket write; d2b-bus `FairScheduler` observes backpressure via credit stall |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/backpressure_credit.rs`: slow relay writer saturates outbound queue; named-stream credit stalls before unbounded growth; source Zone never buffers beyond aggregate limit |
 | Removal proof | N/A; new module |
 
@@ -1386,7 +1386,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}` |
 | Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed label sets; never label secret bytes; provider audit covers **carriage authentication and health observations only** — Azure auth events, WebSocket lifecycle, credential acquisition outcomes — and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
 | Integration | `Provider/observability-otel` receives emitter ring frames; audit log via Zone runtime `d2b.audit.transport` category |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/fake_relay_transport.rs` asserts audit record fields against schema |
 | Removal proof | N/A; new module |
 
@@ -1395,12 +1395,12 @@ download, or PATH scan.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Provider crate owner; integration test owner |
-| Current source | None |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | new |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/tests/integration/README` |
 | Detailed design | Required content: fake relay server setup and teardown using the injected fake Relay effect port; how to run hermetic integration tests without a live Azure service; how to configure the injected fake Credential effect port for credential delivery tests; how to run with a real Azure namespace (requires a `Credential` resource declared in `spec.config.credentialBindings`, not environment-variable credential paths); integration test scenarios and expected outcomes; CI/local execution instructions |
 | Integration | `make test-integration` invokes `tests/integration/containers/` scenarios which inject the fake relay and credential port implementations from `src/tests/integration/fake_relay_server.rs` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | File must be present; workspace policy gate enforces `src/tests/integration/README` |
 | Removal proof | N/A; mandatory layout |
 

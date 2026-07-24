@@ -9,7 +9,7 @@
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | ADR 0046 integrator, `xtask` delivery tooling, panel/validator process owners |
-| Depends on | `ADR-046-decision-register`, `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-store-redb`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-componentsession-and-bus`, `ADR-046-primitive-resource-composition`, `ADR-046-zone-routing`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-core-controllers`, `ADR-046-resources-network`, `ADR-046-resources-credential`, `ADR-046-provider-state`, `ADR-046-resources-zone-control`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-volume`, `ADR-046-resources-device`, `ADR-046-telemetry-audit-and-support`, `ADR-046-cli-and-operations`, `ADR-046-nix-configuration`, `ADR-046-current-code-migration-map`, every `ADR-046-provider-*` dossier, and the forthcoming `ADR-046-security-hardening`, `ADR-046-streamline`, `ADR-046-reset-and-cutover`, `ADR-046-feasibility-proofs` closing specs |
+| Depends on | `ADR-046-decision-register`, `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-store-redb`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-componentsession-and-bus`, `ADR-046-primitive-resource-composition`, `ADR-046-zone-routing`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-core-controllers`, `ADR-046-resources-network`, `ADR-046-resources-credential`, `ADR-046-provider-state`, `ADR-046-resources-zone-control`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-volume`, `ADR-046-resources-device`, `ADR-046-telemetry-audit-and-support`, `ADR-046-cli-and-operations`, `ADR-046-nix-configuration`, `ADR-046-current-code-migration-map`, every `ADR-046-provider-*` dossier, and the `ADR-046-security-and-threat-model`, `ADR-046-streamline`, `ADR-046-reset-and-cutover`, `ADR-046-feasibility-and-spikes` closing specs |
 | Supersedes | This repository's current `AGENTS.md` "Panel review" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation |
 
 ## 1. Purpose and scope
@@ -1136,7 +1136,7 @@ binaries.
 | Destination | `packages/xtask/src/delivery/snapshot.rs` |
 | Detailed design | Binds base/head OIDs, dependency graph, repository set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1 |
 | Integration | Called by the integrator immediately after PR opening (§13.1), before any validator/panel lane starts |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests asserting identical inputs produce identical digests and any single-byte content change produces a different `content_id` |
 | Removal proof | Not applicable |
 
@@ -1152,7 +1152,7 @@ binaries.
 | Destination | `packages/xtask/src/delivery/validate_import.rs`; external candidate-ID-addressed evidence directory (never under Git) |
 | Detailed design | Imports CI/local/host validator command/result evidence, keyed by `candidate_id`, per §12.2 |
 | Integration | Consumed by `wave seal` (§ADR046-delivery-005) as one of the seal's required inputs |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Test asserting evidence for a stale `candidate_id` is rejected; test asserting raw command output never lands in a tracked file |
 | Removal proof | Not applicable |
 
@@ -1168,7 +1168,7 @@ binaries.
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` |
 | Detailed design | Enumerates every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-provider-*.md` file, its metadata table, content digest, and every `### ADR046-<spec>-<ordinal>` work item, per §8 |
 | Integration | `make test-drift` gains a row running this generator and `git diff --exit-code`; every wave's exit criteria (§4) require it committed as the wave's last commit |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden-fixture test against a small synthetic spec directory; drift test against the real `docs/specs/` tree |
 | Removal proof | Not applicable |
 
@@ -1184,7 +1184,7 @@ binaries.
 | Destination | `packages/xtask/src/delivery/panel.rs` |
 | Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 13-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 |
 | Integration | Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |
 | Removal proof | Not applicable |
 
@@ -1200,7 +1200,7 @@ binaries.
 | Destination | `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` |
 | Detailed design | `seal` requires all ten panel records unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 |
 | Integration | `make check` gains no new required step for ordinary contributors; this tooling is invoked only by the wave integrator per §4/§13 |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |
 | Removal proof | Not applicable |
 
@@ -1216,6 +1216,6 @@ binaries.
 | Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 shard targets |
 | Detailed design | Measures execution-only time (after build, warm cache) per test/crate/shard against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, applies a historical regression threshold, and emits a machine-readable CI artifact; the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
 | Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; a synthetic timing regression fails the gate; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |

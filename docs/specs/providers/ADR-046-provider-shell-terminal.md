@@ -1408,21 +1408,178 @@ per-test budget.
 
 ## Implementation work items
 
-| ID | Area | Description | src path | tests path | integration path |
-| --- | --- | --- | --- | --- | --- |
-| `ADR046-sterm-001` | Resource schemas | Implement `shell-terminal.d2bus.org.ShellPool` and `shell-terminal.d2bus.org.ShellSession` schemas with qualified names, common phases, and typed detail fields. | `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` | `packages/d2b-provider-shell-terminal/integration/resource-shape/` |
-| `ADR046-sterm-002` | Controller binary | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; assert ProviderStateSet is empty; publish bounded non-secret operational state to resource status and the core Operation ledger; no controller Provider state Volume or `/state` mount exists. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` | `packages/d2b-provider-shell-terminal/integration/controller-restart/` |
-| `ADR046-sterm-003` | Supervisor binary | Implement `d2b-shell-session-supervisor` as the sole PTY owner for Host and Guest pools. | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-session-supervisor.rs` | `packages/d2b-provider-shell-terminal/tests/supervisor_runtime.rs` | `packages/d2b-provider-shell-terminal/integration/supervisor-host-guest/` |
-| `ADR046-sterm-004` | Process templates | Teach the Nix compiler and controller to emit the canonical controller and user-domain supervisor `Process` templates. | `packages/d2b-provider-shell-terminal/src/process_templates.rs` | `packages/d2b-provider-shell-terminal/tests/process_templates.rs` | `packages/d2b-provider-shell-terminal/integration/process-placement/` |
-| `ADR046-sterm-005` | OpenSession lifecycle | Create sessions from pools, freeze inherited fields, and return `supervisorGeneration` to callers. | `packages/d2b-provider-shell-terminal/src/service/open_session.rs` | `packages/d2b-provider-shell-terminal/tests/open_session.rs` | `packages/d2b-provider-shell-terminal/integration/open-session/` |
-| `ADR046-sterm-006` | PTY and ring | Implement the in-memory PTY owner model, bounded ring buffer, replay, and eviction counters; do not create any management worker or `EphemeralProcess`. | `packages/d2b-provider-shell-terminal/src/session/{pty,ring}.rs` | `packages/d2b-provider-shell-terminal/tests/ring_buffer.rs` | `packages/d2b-provider-shell-terminal/integration/ring-overflow/` |
-| `ADR046-sterm-007` | Adoption and routing | Implement restart adoption, InvocationID plus cgroup verification, route registration, and stale-generation invalidation. | `packages/d2b-provider-shell-terminal/src/session/adopt.rs` | `packages/d2b-provider-shell-terminal/tests/adoption.rs` | `packages/d2b-provider-shell-terminal/integration/adopt-after-restart/` |
-| `ADR046-sterm-008` | Host rules | Emit Host `isolationPosture=none` warnings, same-UID verification, and relay denial for Host user-domain pools. | `packages/d2b-provider-shell-terminal/src/host_rules.rs` | `packages/d2b-provider-shell-terminal/tests/host_rules.rs` | `packages/d2b-provider-shell-terminal/integration/host-warning/` |
-| `ADR046-sterm-009` | Guest rules | Require Guest `allowedDomains` to include `user`, require `defaultUserRef`, and place supervisors through the Guest user manager. | `packages/d2b-provider-shell-terminal/src/guest_rules.rs` | `packages/d2b-provider-shell-terminal/tests/guest_rules.rs` | `packages/d2b-provider-shell-terminal/integration/guest-user-domain/` |
-| `ADR046-sterm-010` | RBAC and relay denial | Gate all verbs on `Role/shell-admin` or Zone-admin superset and fail closed for relay-authenticated Host user-domain callers. | `packages/d2b-provider-shell-terminal/src/authz.rs` | `packages/d2b-provider-shell-terminal/tests/authz.rs` | `packages/d2b-provider-shell-terminal/integration/authz/` |
-| `ADR046-sterm-011` | Audit and telemetry | Implement closed-label metrics, redacted spans, and audit events with no usernames, session names, paths, or terminal bytes. | `packages/d2b-provider-shell-terminal/src/{audit,telemetry}.rs` | `packages/d2b-provider-shell-terminal/tests/redaction.rs` | `packages/d2b-provider-shell-terminal/integration/support-redaction/` |
-| `ADR046-sterm-012` | Baseline removal | Delete superseded guestd shell runtime, unsafe-local helper shell supervisor, and public-wire `ShellOp` or `ShellOpResponse` shell protocol. | `packages/d2b-provider-shell-terminal/src/migration.rs` | `packages/d2b-provider-shell-terminal/tests/migration.rs` | `packages/d2b-provider-shell-terminal/integration/migration-baseline/` |
-| `ADR046-sterm-013` | Supervisor service | Define and implement `shell-terminal.v3` and `shell-session-supervisor.v1` ComponentSession services and the named `terminal` stream contract. | `packages/d2b-provider-shell-terminal/src/service/{controller,supervisor}.rs` | `packages/d2b-provider-shell-terminal/tests/service_contract.rs` | `packages/d2b-provider-shell-terminal/integration/service-contract/` |
+### ADR046-sterm-001
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Resource schemas area; owned by `d2b-provider-shell-terminal` resource modules. |
+| Current source | None — net-new v3 qualified `ShellPool` and `ShellSession` resource schemas; superseded draft and legacy shell code do not define these canonical resources. |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` |
+| Detailed design | Implement `shell-terminal.d2bus.org.ShellPool` and `shell-terminal.d2bus.org.ShellSession` schemas with qualified names, common phases, and typed detail fields. |
+| Integration | Nix resource compiler, resource API admission, controller reconcile, status writers, and d2b-bus routing all consume the qualified pool/session schemas. Integration path: `packages/d2b-provider-shell-terminal/integration/resource-shape/`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-sterm-002
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Controller binary area; owned by `d2b-provider-shell-terminal` controller and core Operation ledger integration. |
+| Current source | None — net-new v3 controller; legacy guestd and unsafe-local helper shell paths are not the controller/state authority. |
+| Reuse action | net-new controller; preserve status-first ProviderStateSet-empty rule |
+| Destination | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` |
+| Detailed design | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; assert ProviderStateSet is empty; publish bounded non-secret operational state to resource status and the core Operation ledger; no controller Provider state Volume or `/state` mount exists. |
+| Integration | Core ProviderDeployment starts the controller Process; controller reconciles ShellPool/ShellSession resources, writes status, registers routes, and records operations without a Provider state Volume. Integration path: `packages/d2b-provider-shell-terminal/integration/controller-restart/`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` |
+| Removal proof | None — net-new controller; legacy controller-equivalent state owner does not exist. |
+
+### ADR046-sterm-003
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Supervisor binary area; owned by `d2b-provider-shell-terminal` session supervisor runtime. |
+| Current source | Reuse narrow ring/runtime ideas from `packages/d2b-guestd/src/shell.rs` and adoption-shape ideas from `packages/d2b-unsafe-local-helper/src/runtime.rs`; both legacy authorities are superseded. |
+| Reuse source | `packages/d2b-guestd/src/shell.rs`; `packages/d2b-unsafe-local-helper/src/runtime.rs`. |
+| Reuse action | reuse narrow mechanics only; move PTY authority into per-session supervisor and exclude legacy protocols/identities/state storage |
+| Destination | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-session-supervisor.rs` |
+| Detailed design | Implement `d2b-shell-session-supervisor` as the sole PTY owner for Host and Guest pools. |
+| Integration | Controller creates one user-domain supervisor Process per ShellSession; supervisor owns PTY, login shell, ring, attach bookkeeping, and private ComponentSession service. Integration path: `packages/d2b-provider-shell-terminal/integration/supervisor-host-guest/`. |
+| Data migration | Full d2b 3.0 reset; no v2 shell state import; PTY/ring state is live process memory only. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/supervisor_runtime.rs` |
+| Removal proof | Supersedes `guestd/src/shell.rs` managed runtime and unsafe-local helper shell supervisor; removed once successor supervisor coverage passes. |
+
+### ADR046-sterm-004
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Process templates area; owned by Nix compiler plus shell-terminal controller. |
+| Current source | Superseded draft templates included pool-wide/system-domain or management-worker concepts; canonical v3 templates are defined in this spec. |
+| Reuse action | replace incorrect draft templates with canonical controller and user-domain supervisor Process templates |
+| Destination | `packages/d2b-provider-shell-terminal/src/process_templates.rs` |
+| Detailed design | Teach the Nix compiler and controller to emit the canonical controller and user-domain supervisor `Process` templates. |
+| Integration | Nix compiler emits controller Process/Endpoint resources; controller emits per-session user-domain supervisor Processes; Provider/system-systemd realizes them. Integration path: `packages/d2b-provider-shell-terminal/integration/process-placement/`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/process_templates.rs` |
+| Removal proof | Removes forbidden pool-wide supervisor, disguised system-domain supervisor, management EphemeralProcess, and sealed output Volume concepts from the template surface. |
+
+### ADR046-sterm-005
+| Field | Value |
+| --- | --- |
+| Dependency/owner | OpenSession lifecycle area; owned by controller service implementation. |
+| Current source | None — net-new v3 `OpenSession` lifecycle; legacy shell protocols do not create ShellSession resources with inherited-field freeze. |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-shell-terminal/src/service/open_session.rs` |
+| Detailed design | Create sessions from pools, freeze inherited fields, and return `supervisorGeneration` to callers. |
+| Integration | `shell-terminal.v3.OpenSession` validates pool capacity and policy, creates ShellSession and supervisor Process, registers route data, and returns session/supervisor references to clients. Integration path: `packages/d2b-provider-shell-terminal/integration/open-session/`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/open_session.rs` |
+| Removal proof | None — net-new resource lifecycle; no prior owner to remove. |
+
+### ADR046-sterm-006
+| Field | Value |
+| --- | --- |
+| Dependency/owner | PTY and ring area; owned by per-session supervisor runtime. |
+| Current source | Ring buffer mechanics may reuse ideas from `packages/d2b-guestd/src/shell.rs`; management workers and sealed output Volumes from prior draft are removed. |
+| Reuse source | `packages/d2b-guestd/src/shell.rs` bounded ring ideas only. |
+| Reuse action | reuse ring semantics; keep bytes in supervisor memory and remove management worker/EphemeralProcess model |
+| Destination | `packages/d2b-provider-shell-terminal/src/session/{pty,ring}.rs` |
+| Detailed design | Implement the in-memory PTY owner model, bounded ring buffer, replay, and eviction counters; do not create any management worker or `EphemeralProcess`. |
+| Integration | Supervisor named terminal stream replays bounded ring tail then streams live PTY I/O; status publishes only ring byte counters and attach count. Integration path: `packages/d2b-provider-shell-terminal/integration/ring-overflow/`. |
+| Data migration | Full d2b 3.0 reset; no terminal byte or ring-state import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/ring_buffer.rs` |
+| Removal proof | Proves no controller-owned PTY, management worker, EphemeralProcess, or sealed output Volume remains for shell output/management responses. |
+
+### ADR046-sterm-007
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Adoption and routing area; owned by controller session adoption/routing module. |
+| Current source | Reuse verification/adoption shape only from `packages/d2b-unsafe-local-helper/src/runtime.rs` `ScopeRuntime` and `PersistedScope`; exclude helper protocol and state storage. |
+| Reuse source | `packages/d2b-unsafe-local-helper/src/runtime.rs` `ScopeRuntime` and `PersistedScope` adoption pattern. |
+| Reuse action | adapt identity-verification shape; do not reuse helper protocol, identities, or state storage assumptions |
+| Destination | `packages/d2b-provider-shell-terminal/src/session/adopt.rs` |
+| Detailed design | Implement restart adoption, InvocationID plus cgroup verification, route registration, and stale-generation invalidation. |
+| Integration | Controller restart scans supervisor Processes, verifies owner/session/generation identity, re-registers exact d2b-bus routes, and rejects stale or ambiguous handles. Integration path: `packages/d2b-provider-shell-terminal/integration/adopt-after-restart/`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/adoption.rs` |
+| Removal proof | Supersedes unsafe-local helper adoption storage/protocol; proof is degraded-ambiguity and stale-generation tests with no helper state dependency. |
+
+### ADR046-sterm-008
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Host rules area; owned by shell-terminal Host policy module. |
+| Current source | Supersedes unsafe-local Host shell path from `packages/d2b-unsafe-local-helper/src/services/shell/` while preserving explicit non-isolation warning semantics. |
+| Reuse action | replace unsafe-local helper shell policy with resource-backed Host pool warnings and same-UID checks |
+| Destination | `packages/d2b-provider-shell-terminal/src/host_rules.rs` |
+| Detailed design | Emit Host `isolationPosture=none` warnings, same-UID verification, and relay denial for Host user-domain pools. |
+| Integration | Pool reconcile reads Host posture and User identity, writes warning status/audit, and admission rejects relay-authenticated Host user-domain access. Integration path: `packages/d2b-provider-shell-terminal/integration/host-warning/`. |
+| Data migration | Full d2b 3.0 reset; no unsafe-local shell state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/host_rules.rs` |
+| Removal proof | Supersedes unsafe-local Host shell supervisor path; proof requires no SSH/direct-host fallback and relay denial coverage. |
+
+### ADR046-sterm-009
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Guest rules area; owned by shell-terminal Guest policy module. |
+| Current source | Supersedes guest persistent-shell runtime in `packages/d2b-guestd/src/shell.rs`; Guest user-domain placement moves to Provider/system-systemd. |
+| Reuse action | replace guestd shell authority with Guest resource user-domain admission and supervisor placement |
+| Destination | `packages/d2b-provider-shell-terminal/src/guest_rules.rs` |
+| Detailed design | Require Guest `allowedDomains` to include `user`, require `defaultUserRef`, and place supervisors through the Guest user manager. |
+| Integration | Pool admission validates Guest capabilities and default user; controller creates user-domain supervisor Processes through the Guest user manager exposed by Provider/system-systemd. Integration path: `packages/d2b-provider-shell-terminal/integration/guest-user-domain/`. |
+| Data migration | Full d2b 3.0 reset; no guestd shell runtime state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/guest_rules.rs` |
+| Removal proof | Supersedes independent guestd session-limit/runtime authority; proof is rejection of Guests without `user` domain and no guestd-managed shell path. |
+
+### ADR046-sterm-010
+| Field | Value |
+| --- | --- |
+| Dependency/owner | RBAC and relay denial area; owned by shell-terminal authorization module. |
+| Current source | Existing public-wire `ShellOp`/unsafe-local surfaces are superseded; v3 requires ComponentSession service authorization. |
+| Reuse action | replace legacy shell operation authorization with Role/shell-admin or Zone-admin service gates |
+| Destination | `packages/d2b-provider-shell-terminal/src/authz.rs` |
+| Detailed design | Gate all verbs on `Role/shell-admin` or Zone-admin superset and fail closed for relay-authenticated Host user-domain callers. |
+| Integration | Controller and supervisor ComponentSession methods authorize before capacity or route lookup, preserving stale-handle non-disclosure and Host relay denial. Integration path: `packages/d2b-provider-shell-terminal/integration/authz/`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/authz.rs` |
+| Removal proof | Supersedes public-wire shell protocol authorization; proof requires no `ShellOp` or `ShellOpResponse` path remains. |
+
+### ADR046-sterm-011
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Audit and telemetry area; owned by shell-terminal audit/telemetry modules. |
+| Current source | None — net-new v3 closed-label/redacted observability for shell-terminal; legacy shell paths must not leak names, paths, PIDs, or terminal bytes. |
+| Reuse action | net-new redacted observability |
+| Destination | `packages/d2b-provider-shell-terminal/src/{audit,telemetry}.rs` |
+| Detailed design | Implement closed-label metrics, redacted spans, and audit events with no usernames, session names, paths, or terminal bytes. |
+| Integration | Reconcile, OpenSession, Attach, Detach, Kill, terminal exit, degradation, and Host posture warnings emit only digest/enum surfaces consumed by audit and OTEL collectors. Integration path: `packages/d2b-provider-shell-terminal/integration/support-redaction/`. |
+| Data migration | Full d2b 3.0 reset; no v2 audit/telemetry state import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/redaction.rs` |
+| Removal proof | None — net-new observability surface; legacy paths must be removed or adapted to pass redaction tests. |
+
+### ADR046-sterm-012
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Baseline removal area; owned by migration/removal implementation for shell-terminal. |
+| Current source | Superseded sources: `packages/d2b-guestd/src/shell.rs`, `packages/d2b-unsafe-local-helper/src/services/shell/`, and `packages/d2b-contracts/src/public_wire.rs` `ShellOp`/`ShellOpResponse`. |
+| Reuse action | delete superseded runtime/protocol surfaces after successor parity |
+| Destination | `packages/d2b-provider-shell-terminal/src/migration.rs` |
+| Detailed design | Delete superseded guestd shell runtime, unsafe-local helper shell supervisor, and public-wire `ShellOp` or `ShellOpResponse` shell protocol. |
+| Integration | Removal runs after shell-terminal resource, supervisor, service, RBAC, and integration coverage prove parity; workspace manifests, CI shards, and pins are updated so old and new suites do not run indefinitely. Integration path: `packages/d2b-provider-shell-terminal/integration/migration-baseline/`. |
+| Data migration | Full d2b 3.0 reset; no v2 shell state/config import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/migration.rs` |
+| Removal proof | Delete `packages/d2b-guestd/src/shell.rs` managed runtime flow, `packages/d2b-unsafe-local-helper/src/services/shell/`, and `ShellOp`/`ShellOpResponse`; update closed gate manifests, flake/matrix/Nix-unit pins, generated ledgers, and CI workflow shards. |
+
+### ADR046-sterm-013
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Supervisor service area; owned by shell-terminal controller/supervisor service modules and ComponentSession contracts. |
+| Current source | Reuse service-shape ideas only from main commit `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` generated v2 shell services; exclude ADR 0045 session, realm, and constellation assumptions. |
+| Reuse source | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` `packages/d2b-contracts/src/generated_v2_services/shell.rs` and `shell_ttrpc.rs`. |
+| Reuse action | adapt service-shape ideas into v3 ComponentSession services and named terminal stream |
+| Destination | `packages/d2b-provider-shell-terminal/src/service/{controller,supervisor}.rs` |
+| Detailed design | Define and implement `shell-terminal.v3` and `shell-session-supervisor.v1` ComponentSession services and the named `terminal` stream contract. |
+| Integration | Controller service handles OpenSession/ListSessions/PoolStatus; supervisor service handles Attach/Detach/DetachAll/Kill/SupervisorStatus and terminal named stream routed by d2b-bus generation identity. Integration path: `packages/d2b-provider-shell-terminal/integration/service-contract/`. |
+| Data migration | Full d2b 3.0 reset; no v2 service/session state import. |
+| Validation | `packages/d2b-provider-shell-terminal/tests/service_contract.rs` |
+| Removal proof | Supersedes public-wire shell protocol and helper supervisor protocol once ComponentSession service-contract tests pass. |
 
 ## Baseline reuse and removal
 

@@ -9,7 +9,7 @@
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` |
 | Normative | Yes |
-| Owner | `packages/d2b-provider-runtime-azure-container-apps/` |
+| Owners | `packages/d2b-provider-runtime-azure-container-apps/` |
 | Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-componentsession-and-bus`, `ADR-046-zone-routing`, `ADR-046-provider-state`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
 | Supersedes | `packages/d2b-provider-aca/` (`AcaWorkloadProvider`, `GuestControlEndpointProvider`), `AcaRelayTransportConfig`, direct vsock guest-control path |
 
@@ -1280,9 +1280,9 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
 | Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`. Operation ledger persisted to Volume inside gateway Guest. Credential lease acquire/revoke per call. Noise KK enrollment via ZoneLink (from gateway Guest to managed ACA sandbox). `providerPhase` and `guestIdentityDigest` in `status.provider.details`; no raw endpoint/path in any status field. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** |
 | Integration | Zone ResourceClient → ProviderDeployment → Process launch inside gateway Guest → d2b-bus → deployment service |
-| Data migration | Full reset; no v2 provider state compatibility |
+| Data migration | Full d2b 3.0 reset; no v2 provider state compatibility |
 | Validation | Controller conformance suite; adoption/ambiguity tests; deadline/cancellation matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template`, canonical `sandbox`/`budget`/`networkUsage`/`endpoints`/`readiness`/`restartPolicy` fields, `mounts` with `required: true`, `providerRef: Provider/system-minijail`); ProviderDeployment creates both Processes (controller never self-spawns); no raw endpoint/path in Guest status |
-| Removal proof | `packages/d2b-provider-aca/` removed only after conformance suite green
+| Removal proof | `packages/d2b-provider-aca/` removed only after conformance suite green |
 
 ### ADR046-aca-007
 
@@ -1294,7 +1294,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Destination | `nixos-modules/` (gateway Guest declaration, Process template wiring, Credential scope assertion); eval-time validation module |
 | Detailed design | Nix eval-time assertions for: (a) `gatewayExecutionRef` resolves to a `Guest` resource, not `Host/*`; (b) Credential `scope.executionRef` matches `gatewayExecutionRef`; (c) all Process templates emitted for this Provider have `executionRef` equal to `gatewayExecutionRef`. No `User` resource or `users.users.*` declarations required — component principals are framework-assigned and not OS accounts. Gateway Guest NixOS closure includes only the two ACA component binaries (§15.6). Assertion error messages name the offending resource and the required `gatewayExecutionRef`. |
 | Integration | Nix eval gate; `d2b.zones.*.resources` validation pass; consumer flake usage example |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Nix eval assertion tests (wrong `executionRef` → assertion fires; correct setup → passes); §15.7 assertion coverage tests |
 | Removal proof | n/a — ongoing eval-time constraint |
 
@@ -1308,7 +1308,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Destination | `packages/d2b-provider-runtime-azure-container-apps/src/deployment_service.rs` |
 | Detailed design | `ProviderAgentProcess`-shaped binary; bounded dispatch (64 in-flight); bounded audit ring (1024 capacity); shutdown within 5 s; serves `d2b.aca.v3.deployment` service schema including `GuestHealth` (health probing folded in from former health worker). All ACA API calls go through the injected `AcaControl` port — no ambient network call, no SDK default chain. Long-running ops return `progressing`/`requeue-at` to the caller; no blocking on Azure API completion. |
 | Integration | ProviderDeployment spawns service; d2b-bus routes GuestProvision/Start/Stop/Destroy/Adopt/Inspect/Health methods |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Service dispatch matrix; RBAC refusal tests; redaction tests; shutdown deadline tests |
 | Removal proof | Old `GuestControlEndpointProvider` dispatch removed per ADR046-aca-001 |
 
@@ -1322,7 +1322,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Destination | `packages/d2b-contracts/src/provider_effects/aca.rs` (shared `d2b-contracts` provider-effects module; no new crate; provider crate remains one package) |
 | Detailed design | `AcaCredentialLeaseClient`, `AcaCredentialLease`, `AcaCredentialLeaseRequest`, and `AcaCredentialPurpose` live in the shared `d2b-contracts` provider-effects module. Adapt `CredentialLease` to v3 Credential resource opaque lease handle. `AcaCredentialPurpose` maps to `allowedOperations` check against `Credential.spec`. Lease expiry capped at call deadline. Cleanup job pattern retained verbatim. |
 | Integration | Controller acquires lease per reconcile step via injected `AcaCredentialLeaseClient`; raw token delivered only via Noise KK E2E channel through `d2b.credential.v3.AcquireToken` method |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Mock credential client tests; lease cleanup timeout tests; token non-exposure assertion |
 | Removal proof | Old `CredentialProvider` trait deleted after `credential-managed-identity` Provider conformance |
 
@@ -1364,7 +1364,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Destination | `nixos-modules/` (generated Guest resource options); `packages/d2b-provider-runtime-azure-container-apps/src/{audit,metrics}.rs` |
 | Detailed design | Eval-time assertions for ACA-specific invariants (§15.6). Closed OTEL label set (§13.4). Audit event schema (§13.3). Tracing target constant `d2b_provider_runtime_azure_container_apps::credential_lease_cleanup` retained. |
 | Integration | Nix eval gate; `observability-otel` Provider OTEL pipeline |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Label cardinality policy test; audit commit-before-complete test; Nix assertion eval tests |
 | Removal proof | Old Nix `ProviderManaged` workload options retired after Guest resource Nix emitter parity |
 

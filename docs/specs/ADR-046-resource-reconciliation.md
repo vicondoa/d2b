@@ -404,7 +404,7 @@ core Operation ledger, and independent external observation.
 | Destination | `packages/d2b-controller-toolkit/src/lib.rs`, `runner.rs`, `queue.rs`, `context.rs`, `result.rs` |
 | Detailed design | Async ResourceReconciler, watch receiver, coalescing, per-resource serialization, parallel tasks, retry/checkpoint/finalize; expedited priority lane and `CommittedRevisionProof`-gated effects (D090); `assess_update`/`plan_upgrade`/`execute_upgrade` methods serialized in the same single-flight (D091) |
 | Integration | Provider controller binaries wrap handlers with toolkit |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden state-machine vectors, deterministic clocks, conflict/restart/queue tests; D090: commit-fails/Abort → no effect, controller finishes-before-commit gated on proof, effects-gate, status-write-delayed (`statusPersistence: pending`), normal-queued no-op/rejoin, concurrent mutation, delete event-only projection, expedited timeout committed-but-pending, restart re-entry no duplicate; D091: current/non-disruptive/each-trigger assess, UpgradeRequired-not-in-place, dependency propagation/topological drain-recycle-restart, GPU blocking, state/TPM preservation, crash/re-entry resume, single-flight reconcile-vs-upgrade serialization |
 | Removal proof | Current per-role orchestration removed only after ResourceType successors |
 
@@ -418,7 +418,7 @@ core Operation ledger, and independent external observation.
 | Destination | `packages/d2b-core-controller/src/hints.rs`, `dependencies.rs`, `owner_reconcile.rs` |
 | Detailed design | Watch-plan validation, indexes, suppression, owner/dependency hints, leases, startup relist, fair admission |
 | Integration | Store post-commit dispatcher → d2b-bus controller streams |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Owner/dependency chains, suppression/no-loss, restart/relist, lease withdrawal |
 | Removal proof | Not applicable |
 
@@ -432,6 +432,6 @@ core Operation ledger, and independent external observation.
 | Destination | `packages/d2b-controller-toolkit/benches/reaction.rs`, Process Provider integration tests |
 | Detailed design | Commit-to-handler/launch fast path, nonblocking watch, parallel ready resources |
 | Integration | Resource store → bus/session → controller → Process effect/status |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency |
 | Removal proof | Not applicable |

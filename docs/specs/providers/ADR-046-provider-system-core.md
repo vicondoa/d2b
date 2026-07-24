@@ -1381,7 +1381,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-system-core/{src,tests,integration,README.md}` |
 | Detailed design | Workspace policy gate (`make test-policy`) verifies all four paths exist and are non-empty; `tests/` runs `check_provider_conformance` against Host/User axes and verifies the ProviderStateSet model: empty (system-core declares no Provider state Volume), bounded non-secret operational state in `status`/the core Operation ledger, handler checkpoints reconstructible from a relist, no state-Volume mount; no bootstrap-state exception (D086 superseded by D087); `integration/` contains container scenario for Host reconcile under real Zone runtime |
 | Integration | `make test-policy`; `make test-integration`; `make test-host-integration` |
-| Data migration | N/A |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Workspace policy test catches missing/empty paths; conformance kit asserts zero `ConformanceError`; ProviderStateSet asserted empty (system-core declares no Provider state Volume); operational state asserted in `status`/the core Operation ledger with handler checkpoints reconstructible from a relist; no state-Volume mount on either controller Process; no bootstrap-state exception |
 | Removal proof | No removal; gate added permanently |
 
@@ -1395,7 +1395,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-telemetry/src/attributes.rs` (allowlist extension); `packages/d2b-contract-tests/tests/policy_observability.rs` (updated gate) |
 | Detailed design | Add `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version` to OTEL resource attribute allowlist; add `system_core_host`, `system_core_user` to `handler` closed set in metric label gate; assert `no_isolation` absent from all metric/span/log label dimensions; assert `provider="unsafe-local"` label absent from all OTEL surfaces |
 | Integration | Existing `policy_observability.rs` contract test gate |
-| Data migration | N/A |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Updated `loki_native_otel_resource_attributes` test; cardinality gate asserts no resource-name labels in system-core metrics |
 | Removal proof | Old `d2b_daemon_vm_*` metrics with `vm=<name>` label verified absent in v3 telemetry contract test before d2bd daemon is retired |
 

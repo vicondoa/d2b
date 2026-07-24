@@ -1368,51 +1368,471 @@ class.
 
 ### Reuse from baseline
 
-| Work item | Source (baseline evidence class) | v3 destination |
-| --- | --- | --- |
-| W-R01 | `packages/d2bd/src/security_key.rs` — `SecurityKeyState`, `LeaseState`, `LeaseId`, `CidTranslator`, `try_acquire_lease`, `release_lease`, `CEREMONY_TIMEOUT`, `QUEUE_WAIT_TIMEOUT` (implemented-and-reachable) | Move to `packages/d2b-provider-device-security-key/src/session.rs` and `cid.rs`; adapt to Provider Process model (remove daemon Mutex wrapping, add async relay protocol) |
-| W-R02 | `packages/d2bd/src/security_key.rs` — CTAPHID relay loop, `SkAcceptHandle`, `relay_one_ceremony` (implemented-and-reachable) | Move to `packages/d2b-provider-device-security-key/src/relay.rs`; replace daemon-internal Unix socket proxy with vsock framing |
-| W-R03 | `packages/d2b-sk-frontend/src/` — `main.rs`, `uhid.rs` (implemented-and-reachable); `framing.rs` and `vsock.rs` are obsolete under v3 (replaced by ComponentSession transport) | Adopt `main.rs` and `uhid.rs` as the v3 Process binary entry point; replace `framing.rs`/`vsock.rs` with ComponentSession client from `d2b-session-unix/src/vsock.rs`; wire as Process service in Provider crate |
-| W-R04 | `packages/d2b-priv-broker/src/ops/security_key.rs` — `live_open_hidraw_security_key`, FIDO usage page revalidation, group validation, `ALLOWED_GROUPS` (implemented-and-reachable) | Preserve revalidation logic; update `SecurityKeyOpenDevice` to use bundle device table `device_token` as sole open target (no iterative sysfs scan); add zone-field handling; remove sysfs fallback. **Core's LaunchTicket calls this internally; the Provider does not call it.** |
-| W-R05 | `packages/d2b-contracts/src/security_key.rs` — `SecurityKeySessionId`, `SecurityKeyDeviceLabel`, `SecurityKeySession`, `SecurityKeySessionResult`, `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`, `SecurityKeyOpenDeviceRequest`, `SecurityKeyEvent` (implemented-and-reachable) | Adapt to v3 Zone/ResourceRef identifiers; preserve serde shapes for zero downstream breakage where possible; remove `SecurityKeyApplyUdevRulesRequest` (W-X06) |
-| W-R06 | `packages/d2b-contract-tests/tests/usb_sk_contract.rs` — DTO serde round-trips, unknown-field denial, broker capability set (implemented-and-reachable) | Move to `packages/d2b-provider-device-security-key/tests/`; update imports and v3 type names |
-| W-R07 | `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` — minijail profile shape, `ProcessRole::SecurityKeyFrontend` (implemented-and-reachable) | Move to `packages/d2b-provider-device-security-key/tests/`; update for v3 Process resource minijail profile; retain zero-capabilities assertion |
+### W-R01
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ADR-046 provider-device-security-key session/relay owner; depends on ADR-046-components-processes-and-sandbox, ADR-046-componentsession-and-bus, and W-N03/W-N04/W-N05 relay/session/CID implementation. |
+| Current source | `packages/d2bd/src/security_key.rs` — `SecurityKeyState`, `LeaseState`, `LeaseId`, `CidTranslator`, `try_acquire_lease`, `release_lease`, `CEREMONY_TIMEOUT`, `QUEUE_WAIT_TIMEOUT` (implemented-and-reachable) |
+| Reuse action | extract and adapt |
+| Destination | Move to `packages/d2b-provider-device-security-key/src/session.rs` and `cid.rs`; adapt to Provider Process model (remove daemon Mutex wrapping, add async relay protocol) |
+| Detailed design | Extract the baseline lease/session constants and CID mapping into provider-local modules. Preserve `CEREMONY_TIMEOUT` and `QUEUE_WAIT_TIMEOUT`, remove daemon-global `Mutex` ownership, model the relay as an async Provider-owned Process, keep DeviceGrant/OFD lease ownership for the relay lifetime, and expose session transitions to the controller through the typed relay-control protocol. |
+| Integration | Host relay Process (W-N03) owns `session.rs` and `cid.rs`; Device controller (W-N02) consumes relay lifecycle events over `device-security-key.relay-ctrl.v1`; Device status and audit rows consume bounded session-ring summaries; ComponentSession named stream carries CTAPHID bytes. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import |
+| Validation | `session_state_machine.rs`, `session_ring.rs`, `cancel_propagation.rs`, `session_timeout.rs`, and `cid_isolation.rs` verify Idle/Active/Completed/TimedOut transitions, ring eviction, cancel/timeout behavior, and per-session CID isolation with no daemon-global lease state. |
+| Removal proof | W-X01 deletes the superseded daemon-internal `packages/d2bd/src/security_key.rs` `SecurityKeyState`, `LeaseState`, `SkRegistry`, and accept-loop ownership after the provider relay/session tests pass. |
+
+### W-R02
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ADR-046 provider-device-security-key relay owner; depends on W-N03 relay Process, W-N07 descriptor validation, and W-N17 transport-vsock integration. |
+| Current source | `packages/d2bd/src/security_key.rs` — CTAPHID relay loop, `SkAcceptHandle`, `relay_one_ceremony` (implemented-and-reachable) |
+| Reuse action | extract and adapt |
+| Destination | Move to `packages/d2b-provider-device-security-key/src/relay.rs`; replace daemon-internal Unix socket proxy with vsock framing |
+| Detailed design | Extract the CTAPHID ceremony relay behavior into the provider relay binary. Preserve one-ceremony-at-a-time proxy semantics and CTAPHID cancel handling, but replace daemon-internal Unix socket proxying with the `d2b.security-key.v3` ComponentSession over the owned CTAPHID Endpoint and named `ctaphid` stream. |
+| Integration | Core launches the relay Process with a LaunchTicket DeviceGrant and Endpoint attachment; transport-vsock resolves `Endpoint/<device-uid>-sk-ctaphid-relay`; frontend Process connects as ComponentSession initiator; controller receives session events over the manifest-declared internal channel. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import |
+| Validation | `host_relay_guest_frontend/` integration fixture, `device_grant_no_path.rs`, `descriptor_validation.rs`, and `cancel_propagation.rs` prove relay fd injection, ComponentSession transport, cancel propagation, and absence of daemon-internal socket proxying. |
+| Removal proof | W-X01 and W-X02 remove `start_sk_accept_loop`, `SkAcceptHandle`, `relay_one_ceremony`, and the daemon-internal Unix socket proxy bind from `packages/d2bd/src/security_key.rs` and `packages/d2bd/src/lib.rs`. |
+
+### W-R03
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ADR-046 provider-device-security-key frontend owner; depends on W-N03 relay service, W-N07 ComponentSession validation, W-N13 guest Nix migration gate, W-N17 transport-vsock, and W-N19 virtual frontend Device lifecycle. |
+| Current source | `packages/d2b-sk-frontend/src/` — `main.rs`, `uhid.rs` (implemented-and-reachable); `framing.rs` and `vsock.rs` are obsolete under v3 (replaced by ComponentSession transport) |
+| Reuse action | extract and adapt |
+| Destination | Adopt `main.rs` and `uhid.rs` as the v3 Process binary entry point; replace `framing.rs`/`vsock.rs` with ComponentSession client from `d2b-session-unix/src/vsock.rs`; wire as Process service in Provider crate |
+| Detailed design | Retain the UHID creation and frontend binary entry behavior from `main.rs` and `uhid.rs`, but run it as a v3 user-domain Process that receives a pre-opened `/dev/uhid` fd from the virtual Device LaunchTicket. Delete the raw frame/vsock protocol and use the ComponentSession client and named `ctaphid` stream for relay communication. |
+| Integration | Device controller creates the frontend Process and virtual `Device/<device-name>-frontend`; Core pre-opens UHID for the frontend LaunchTicket; frontend consumes the CTAPHID Endpoint via transport-vsock and reports readiness through Process status. |
+| Data migration | Full d2b 3.0 reset; no frontend session state import |
+| Validation | `host_relay_guest_frontend/`, `device_grant_no_path.rs`, `descriptor_validation.rs`, and guest Nix migration tests prove UHID fd injection, no `/dev/uhid` path, ComponentSession client use, and no raw `framing.rs`/`vsock.rs` protocol. |
+| Removal proof | W-X03 removes the legacy `d2b-sk-frontend.service` unit declaration, and the v3 frontend excludes the obsolete `packages/d2b-sk-frontend/src/framing.rs` and `vsock.rs` raw transport behavior. |
+
+### W-R04
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core LaunchTicket/privileged broker device-grant owner; depends on ADR-046-resources-device, W-N06 probe/device-token population, and W-N11 broker op update. |
+| Current source | `packages/d2b-priv-broker/src/ops/security_key.rs` — `live_open_hidraw_security_key`, FIDO usage page revalidation, group validation, `ALLOWED_GROUPS` (implemented-and-reachable) |
+| Reuse action | adapt |
+| Destination | Preserve revalidation logic; update `SecurityKeyOpenDevice` to use bundle device table `device_token` as sole open target (no iterative sysfs scan); add zone-field handling; remove sysfs fallback. **Core's LaunchTicket calls this internally; the Provider does not call it.** |
+| Detailed design | Keep the FIDO usage-page and post-open revalidation logic, but make the trusted private bundle `device_token` the only open target. Add Zone-aware request handling, reject path/sysfs fallback inputs, and keep the operation internal to Core LaunchTicket DeviceGrant resolution rather than callable by the Provider controller. |
+| Integration | Provider activation records label-to-`device_token` mappings; Core LaunchTicket resolves `deviceUsage` for the relay Process; broker opens and revalidates the hidraw fd; relay receives only an inherited fd; Core emits path-free `device-grant` audit. |
+| Data migration | Full d2b 3.0 reset; no v2 device state import |
+| Validation | `packages/d2b-priv-broker/tests/security_key_broker.rs` updates for bundle table lookup and zone-field round trip; `device_grant_no_path.rs` proves Provider code does not call the broker and sees no device path; audit tests prove path-free grant records. |
+| Removal proof | The superseded iterative sysfs scan/fallback behavior in `packages/d2b-priv-broker/src/ops/security_key.rs` is removed once bundle-token lookup and revalidation tests pass. |
+
+### W-R05
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | `d2b-contracts` security-key DTO owner; depends on ADR-046-resource-object-model, ADR-046-resources-device, W-N10 provider descriptor, and W-X06 udev-op removal. |
+| Current source | `packages/d2b-contracts/src/security_key.rs` — `SecurityKeySessionId`, `SecurityKeyDeviceLabel`, `SecurityKeySession`, `SecurityKeySessionResult`, `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`, `SecurityKeyOpenDeviceRequest`, `SecurityKeyEvent` (implemented-and-reachable) |
+| Reuse action | adapt |
+| Destination | Adapt to v3 Zone/ResourceRef identifiers; preserve serde shapes for zero downstream breakage where possible; remove `SecurityKeyApplyUdevRulesRequest` (W-X06) |
+| Detailed design | Rebase the security-key wire DTOs onto v3 Zone and ResourceRef identifiers while preserving compatible serde shape where the semantics remain unchanged. Keep opaque session/device labels and bounded events, add the `zone` field to `SecurityKeyOpenDeviceRequest`, and drop the udev-rules request because UHID is pre-opened through DeviceGrant. |
+| Integration | Core LaunchTicket, broker security-key open op, Device controller status/audit, CLI status/session readers, and provider tests consume the v3 DTOs from `d2b-contracts`. |
+| Data migration | Full d2b 3.0 reset; no v2 DTO compatibility migration beyond serde-shape preservation where possible |
+| Validation | DTO serde round trips, unknown-field denial, zone-field round trip, path-redaction tests, and updated `usb_sk_contract.rs` assertions in the provider crate. |
+| Removal proof | W-X06 removes `SecurityKeyApplyUdevRulesRequest`, the `SecurityKeyApplyUdevRules` broker op, and related broker code after UHID DeviceGrant coverage is live. |
+
+### W-R06
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider crate test owner; depends on W-R05 v3 DTOs and W-N01 provider crate layout. |
+| Current source | `packages/d2b-contract-tests/tests/usb_sk_contract.rs` — DTO serde round-trips, unknown-field denial, broker capability set (implemented-and-reachable) |
+| Reuse action | move and adapt |
+| Destination | Move to `packages/d2b-provider-device-security-key/tests/`; update imports and v3 type names |
+| Detailed design | Move the reusable semantic assertions for security-key DTO serde, unknown-field denial, and broker capability shape into the provider crate's hermetic `tests/` suite, updating imports and names to the v3 contract modules without weakening assertions. |
+| Integration | `cargo test -p d2b-provider-device-security-key --lib --tests` runs the moved contract tests with the provider's DTO/controller test matrix; old contract-test manifests point to the successor coverage before deletion. |
+| Data migration | None — test-only move; no runtime state |
+| Validation | Moved tests pass under the provider crate; contract assertions are retained; D094 disposition records moved/adapted coverage before old duplicate tests are deleted. |
+| Removal proof | W-X04 deletes `packages/d2b-contract-tests/tests/usb_sk_contract.rs` only after the provider-crate successor test covers all prior assertions. |
+
+### W-R07
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider crate test/minijail owner; depends on W-N08 minijail profiles, W-N09 Process templates, and W-N01 provider crate layout. |
+| Current source | `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` — minijail profile shape, `ProcessRole::SecurityKeyFrontend` (implemented-and-reachable) |
+| Reuse action | move and adapt |
+| Destination | Move to `packages/d2b-provider-device-security-key/tests/`; update for v3 Process resource minijail profile; retain zero-capabilities assertion |
+| Detailed design | Move the reusable minijail/sandbox assertions into the provider crate and retarget them from `ProcessRole::SecurityKeyFrontend` to the v3 Process resource templates and relay/controller minijail profiles. Preserve zero-capabilities and seccomp-class assertions while recognizing the frontend uses `Provider/system-systemd` hardening rather than a minijail profile. |
+| Integration | Provider tests validate Nix minijail profile entries, Process resource sandbox templates, and system-minijail/system-systemd conformance expectations before old contract tests are retired. |
+| Data migration | None — test-only move; no runtime state |
+| Validation | Provider-crate tests retain zero-capability and seccomp assertions for relay/controller and assert no minijail profile is used for the frontend Process. |
+| Removal proof | W-X04 deletes `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` only after the provider-crate successor test covers all prior assertions. |
 
 ### New items
 
-| Work item | Description |
+### W-N01
+
+| Field | Value |
 | --- | --- |
-| W-N01 | New crate `packages/d2b-provider-device-security-key/` with `src/`, `tests/`, `integration/`, `README.md` (workspace policy requires all four) |
-| W-N02 | Device controller: `controller.rs` implementing standard reconcile interface (`spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed`) |
-| W-N03 | Relay Process entry point: `relay.rs` — async ComponentSession accept loop (`d2b.security-key.v3` responder over the owned `Endpoint/<device-uid>-sk-ctaphid-relay` resource), CID translation, hidraw fd received from LaunchTicket DeviceGrant (not broker), CTAPHID proxy over named CTAPHID stream; manifest-declared internal service `device-security-key.relay-ctrl.v1` connected via LaunchTicket internal channel FD for controller messaging |
-| W-N04 | Session state machine: `session.rs` — `SessionStateMachine` (Idle/Active/Completed/TimedOut; no AwaitingLease), session ring, session ID allocation, ring eviction; DeviceGrant held for relay lifetime; `CancelSession(sessionId)` from controller terminates Active ceremony |
-| W-N05 | CID translator: `cid.rs` — per-session u32→u64 host-CID allocation, bimap, eviction on session end |
-| W-N06 | hidraw probe: `probe.rs` — calls `SecurityKeyEffectPort::observe_inventory(&device_id, &policy_id)` with opaque types injected by Core; interprets `InventoryObservation`; never reads `/sys/class/hidraw/` directly; bundle device table population at activation time (Provider activation resolves label → `device_token` via Core; stored in private bundle) |
-| W-N07 | ComponentSession descriptor validation: `descriptor.rs` — manifest-declared relay↔controller service `device-security-key.relay-ctrl.v1` Noise NN handshake; socket FD injected via LaunchTicket internal channel (no ambient path); relay↔frontend `d2b.security-key.v3` Noise KK enrolled-key registration and session authority enforcement; relay uses canonical authenticated subject from ComponentSession, never raw vsock CID |
-| W-N08 | Minijail profiles for relay and controller only; frontend uses `Provider/system-systemd` hardening directives compiled from `SandboxSpec` (no minijail profile for frontend). Add relay and controller entries to `nixos-modules/minijail-profiles.nix`; `capabilityClasses: []`; `seccompClass: sk-relay` and `seccompClass: sk-controller` |
-| W-N09 | Process resource templates in Provider descriptor: controller template (`Host/host-system`, `system`, `controller`, `environmentClass: provider-defined`), relay template (`Host/host-system`, `system`, `service`, `environmentClass: provider-defined`), frontend template (`Guest/<vm>`, `user`, `service`, `environmentClass: provider-defined`, `userRef` required), and the owned CTAPHID relay Endpoint resource |
-| W-N10 | Provider descriptor JSON (signed): identity, config schema, exported ResourceType (Device/hidraw), controller/relay/frontend component descriptors, `d2b.security-key.v3` service declaration, D087 status-first state declaration with an empty ProviderStateSet, permission claims |
-| W-N11 | v3 `SecurityKeyOpenDevice` broker op update: add `zone` field; implement bundle device table `device_token` lookup as sole open path; remove iterative sysfs scan from broker; add post-open revalidation steps (fstat, HIDIOCGRAWINFO, HIDIOCGRDESC). This is an internal Core operation called by LaunchTicket; the Provider controller does not call it. |
-| W-N20 | Status-first Provider state contract: the signed Provider descriptor declares no Provider state Volume for controller, relay, or frontend; ProviderStateSet is empty. Device resources and the Core Operation ledger are the operational authority. Controller/relay/frontend Process templates have no `/state` mount and no dedicated state-layout principals. Nix pre-provisions only principals required for genuine Process placement and DeviceGrant access, not state Volume ownership. |
-| W-N12 | Nix resource compilation: Device spec validation in `nixos-modules/`, eval-time mutual-exclusion assertion, label resolution against Provider config, prohibited-field rejection |
-| W-N13 | Guest Nix module migration gate: `d2b.securityKey._legacySystemdUnit` option, defaulting to false when Provider is installed; remove `d2b-sk-frontend.service` unit |
-| W-N14 | Audit record emission: bounded path-free `device-grant` records from Core at DeviceGrant resolution time; `device-session` lifecycle events from Device controller; neither block carries device path, guest name, session content, or CTAP bytes |
-| W-N15 | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring |
-| W-N16 | `README.md` for the crate: Provider identity, root config schema, Device spec, process model, RBAC, security invariants, state/telemetry, build/test/integration commands, standalone-repository consumption |
-| W-N17 | `Provider/transport-vsock` integration: resolve the owned CTAPHID relay Endpoint into opaque LaunchTicket transport attachments for the relay and frontend; enroll Noise KK static keys for relay/frontend pair before first connection |
-| W-N18 | `SecurityKeyEffectPort` trait and associated opaque types (`DeviceId`, `ObservationPolicyId`) defined in `d2b-contracts` (neutral contract crate); both types have custom `Debug` impls that redact content; `effect_port.rs` in the Provider crate re-exports from `d2b-contracts`; Core adapter implementation in `d2b-provider` or `d2b-provider-toolkit` crate; inject into Device controller at startup with concrete `DeviceId` and `ObservationPolicyId` per Device; relay does NOT use the port |
-| W-N19 | Virtual frontend Device lifecycle: controller creates `Device/<device-name>-frontend` (`deviceClass: virtual`, `busClass: uhid`, `ownerRef: Device/<device-name>`, `settings.bindGuest`) on claim; updates `bindGuest` on claim transfer; emits event-only `Deleted` on Device deletion; Core pre-opens `/dev/uhid` inside the Guest at frontend launch time using the virtual Device's DeviceGrant |
+| Dependency/owner | ADR-046 provider-device-security-key crate owner; depends on provider-model/package workspace policy. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | New crate `packages/d2b-provider-device-security-key/` with `src/`, `tests/`, `integration/`, `README.md` (workspace policy requires all four) |
+| Detailed design | New crate `packages/d2b-provider-device-security-key/` with `src/`, `tests/`, `integration/`, `README.md` (workspace policy requires all four) |
+| Integration | Workspace membership and provider package descriptor expose the crate to Core ProviderDeployment; W-N02 through W-N20 add controller, relay, frontend, descriptor, tests, and README content under this crate. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import |
+| Validation | Workspace package-policy check rejects missing `src/`, `tests/`, `integration/`, or `README.md`; `cargo test -p d2b-provider-device-security-key --lib --tests` discovers the hermetic suite; README acceptance criteria from the provider crate standard layout are satisfied. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N02
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Device controller owner for `Provider/device-security-key`; depends on W-N01 crate layout, W-N06 probe port, W-N09 templates, W-N18 effect port, and ADR-046-resource-reconciliation. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/src/controller.rs` |
+| Detailed design | Device controller: `controller.rs` implementing standard reconcile interface (`spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed`) |
+| Integration | Zone ResourceClient watches Device resources for this Provider, creates relay/frontend Process and virtual frontend Device resources, writes Device status/finalizers, and drives relay-control messages through `device-security-key.relay-ctrl.v1`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import |
+| Validation | `controller_reconcile.rs`, `mutual_exclusion.rs`, `status_state.rs`, and deletion/finalizer tests cover all reconcile triggers, status writes, virtual Device lifecycle, and absence of Volume API calls. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N03
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Relay Process owner for `Provider/device-security-key`; depends on W-R01/W-R02/W-N04/W-N05/W-N07/W-N17. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/src/relay.rs` |
+| Detailed design | Relay Process entry point: `relay.rs` — async ComponentSession accept loop (`d2b.security-key.v3` responder over the owned `Endpoint/<device-uid>-sk-ctaphid-relay` resource), CID translation, hidraw fd received from LaunchTicket DeviceGrant (not broker), CTAPHID proxy over named CTAPHID stream; manifest-declared internal service `device-security-key.relay-ctrl.v1` connected via LaunchTicket internal channel FD for controller messaging |
+| Integration | Core LaunchTicket injects hidraw fd, CTAPHID Endpoint attachment, and internal controller channel; frontend connects over ComponentSession; controller consumes session events and sends `CancelSession`; Core releases DeviceGrant on relay exit. |
+| Data migration | Full d2b 3.0 reset; no relay session state import |
+| Validation | `host_relay_guest_frontend/`, `claim_conflict/`, `device_grant_no_path.rs`, `descriptor_validation.rs`, `cancel_propagation.rs`, and `cid_isolation.rs` prove relay launch, one-session policy, fd-only device access, internal service validation, cancel, and CID translation. |
+| Removal proof | Supersedes daemon-internal relay behavior removed by W-X01/W-X02 after relay Process tests pass. |
+
+### W-N04
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Relay session-state owner; depends on W-R01 and W-N03. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/src/session.rs` |
+| Detailed design | Session state machine: `session.rs` — `SessionStateMachine` (Idle/Active/Completed/TimedOut; no AwaitingLease), session ring, session ID allocation, ring eviction; DeviceGrant held for relay lifetime; `CancelSession(sessionId)` from controller terminates Active ceremony |
+| Integration | Relay uses the state machine for ComponentSession connections; controller receives lifecycle messages; Device status consumes bounded session ring observations; audit consumes timeout/cancel/release outcomes. |
+| Data migration | Full d2b 3.0 reset; no session ring import |
+| Validation | `session_state_machine.rs`, `session_ring.rs`, `session_timeout.rs`, and `cancel_propagation.rs` cover transitions, eviction, timeout, cancel, and the absence of `AwaitingLease`. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N05
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Relay CID-translation owner; depends on W-R01 and W-N03. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/src/cid.rs` |
+| Detailed design | CID translator: `cid.rs` — per-session u32→u64 host-CID allocation, bimap, eviction on session end |
+| Integration | Relay rewrites frontend CTAPHID CIDs before sending to hidraw fd and reverses responses before writing the ComponentSession named stream; session teardown drops the map. |
+| Data migration | Full d2b 3.0 reset; CID maps are transient and not imported |
+| Validation | `cid_isolation.rs` verifies per-session allocation, round trip, no sharing across relays, and eviction on session end. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N06
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Probe/effect-port and activation owner; depends on W-N18 effect port and Core private bundle device table support. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/src/probe.rs`; Provider activation/Core private bundle device table population for label → `device_token` |
+| Detailed design | hidraw probe: `probe.rs` — calls `SecurityKeyEffectPort::observe_inventory(&device_id, &policy_id)` with opaque types injected by Core; interprets `InventoryObservation`; never reads `/sys/class/hidraw/` directly; bundle device table population at activation time (Provider activation resolves label → `device_token` via Core; stored in private bundle) |
+| Integration | Controller scheduled-observe invokes `probe.rs`; Core adapter implements `SecurityKeyEffectPort`; Nix activation emits private label-to-token bundle entries; Device status receives `DevicePresent` and phase updates. |
+| Data migration | Full d2b 3.0 reset; no v2 probe state import |
+| Validation | `controller_reconcile.rs` scheduled-observe tests, `descriptor_validation.rs` Debug-redaction capture, and path-safety tests prove Provider never reads sysfs and receives only opaque observations. |
+| Removal proof | Supersedes provider-side or broker fallback sysfs scanning; W-R04/W-N11 removal proof verifies only bundle `device_token` lookup remains. |
+
+### W-N07
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | ComponentSession/security descriptor owner; depends on ADR-046-componentsession-and-bus, W-N03 relay, W-N17 transport-vsock, and W-N18 effect-port redaction types. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/src/descriptor.rs` |
+| Detailed design | ComponentSession descriptor validation: `descriptor.rs` — manifest-declared relay↔controller service `device-security-key.relay-ctrl.v1` Noise NN handshake; socket FD injected via LaunchTicket internal channel (no ambient path); relay↔frontend `d2b.security-key.v3` Noise KK enrolled-key registration and session authority enforcement; relay uses canonical authenticated subject from ComponentSession, never raw vsock CID |
+| Integration | Provider descriptor declares services and fingerprints; LaunchTicket injects internal channel and Endpoint transport; relay/controller/frontend validate descriptors and peer authority before exchanging messages. |
+| Data migration | Full d2b 3.0 reset; no v2 transport/session state import |
+| Validation | `descriptor_validation.rs` covers wrong service, wrong descriptor digest, wrong SO_PEERCRED uid, unenrolled key, oversized records, no ambient path, and redacted opaque IDs. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N08
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Sandbox/minijail owner; depends on W-N09 Process templates and ADR-046-components-processes-and-sandbox. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `nixos-modules/minijail-profiles.nix` entries for relay and controller; provider descriptor sandbox templates for relay/controller/frontend |
+| Detailed design | Minijail profiles for relay and controller only; frontend uses `Provider/system-systemd` hardening directives compiled from `SandboxSpec` (no minijail profile for frontend). Add relay and controller entries to `nixos-modules/minijail-profiles.nix`; `capabilityClasses: []`; `seccompClass: sk-relay` and `seccompClass: sk-controller` |
+| Integration | Nix minijail profiles feed system-minijail Process launches for controller/relay; frontend Process template feeds system-systemd hardening; provider tests assert the split. |
+| Data migration | Full d2b 3.0 reset; no sandbox state import |
+| Validation | `minijail_sk_frontend` successor tests, sandbox template tests, and zero-capability/seccomp assertions cover relay/controller minijail profiles and no frontend minijail profile. |
+| Removal proof | Supersedes `ProcessRole::SecurityKeyFrontend`-centric minijail test ownership removed by W-X04/W-X05 after Process-resource coverage passes. |
+
+### W-N09
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider descriptor/process-template owner; depends on W-N01 crate, W-N08 sandbox profiles, W-N17 Endpoint transport, and W-N19 virtual frontend Device. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | Provider descriptor Process templates and owned CTAPHID `Endpoint` template for `Provider/device-security-key` |
+| Detailed design | Process resource templates in Provider descriptor: controller template (`Host/host-system`, `system`, `controller`, `environmentClass: provider-defined`), relay template (`Host/host-system`, `system`, `service`, `environmentClass: provider-defined`), frontend template (`Guest/<vm>`, `user`, `service`, `environmentClass: provider-defined`, `userRef` required), and the owned CTAPHID relay Endpoint resource |
+| Integration | Core ProviderDeployment creates controller; Device controller creates relay/frontend Process and Endpoint resources from templates; Process Providers launch them through system-minijail/system-systemd; frontend consumes Endpoint. |
+| Data migration | Full d2b 3.0 reset; no v2 processes.json import |
+| Validation | `controller_reconcile.rs`, Process template golden tests, Endpoint resource tests, and frontend `userRef` admission tests prove templates and Endpoint shape. |
+| Removal proof | Supersedes the legacy readiness-only `ProcessRole::SecurityKeyFrontend` tracking node removed by W-X05 after v3 Process resources are live. |
+
+### W-N10
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider package descriptor owner; depends on W-N01 crate, W-N09 templates, W-N20 state contract, and ADR-046-provider-model-and-packaging. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | Signed Provider descriptor JSON for `Provider/device-security-key` in the provider package |
+| Detailed design | Provider descriptor JSON (signed): identity, config schema, exported ResourceType (Device/hidraw), controller/relay/frontend component descriptors, `d2b.security-key.v3` service declaration, D087 status-first state declaration with an empty ProviderStateSet, permission claims |
+| Integration | Core ProviderDeployment verifies the signed descriptor, installs ResourceApiBinding and component descriptors, exposes service fingerprints to ComponentSession validation, and supplies permission claims/RBAC bindings. |
+| Data migration | Full d2b 3.0 reset; no provider descriptor import |
+| Validation | Descriptor schema validation, signature/fingerprint tests, service inventory tests, permission claim tests, empty ProviderStateSet tests, and README/provider package conformance checks. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N11
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core LaunchTicket/broker owner; depends on W-R04, W-R05, W-N06, and ADR-046-resources-device. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | v3 `SecurityKeyOpenDevice` broker op and Core LaunchTicket DeviceGrant resolution path |
+| Detailed design | v3 `SecurityKeyOpenDevice` broker op update: add `zone` field; implement bundle device table `device_token` lookup as sole open path; remove iterative sysfs scan from broker; add post-open revalidation steps (fstat, HIDIOCGRAWINFO, HIDIOCGRDESC). This is an internal Core operation called by LaunchTicket; the Provider controller does not call it. |
+| Integration | Device controller declares relay `deviceUsage`; Core LaunchTicket resolves DeviceGrant through the private bundle table; broker returns an fd to Core; relay receives the inherited fd; audit consumes the path-free grant outcome. |
+| Data migration | Full d2b 3.0 reset; no v2 broker state import |
+| Validation | Broker unit tests for zone field and token lookup, path-rejection tests, post-open revalidation tests, and provider tests proving no Provider broker call or sysfs path. |
+| Removal proof | Superseded broker iterative sysfs scan behavior is removed; tests prove only bundle `device_token` lookup is accepted for `SecurityKeyOpenDevice`. |
+
+### W-N20
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider state/status owner; depends on ADR-046-provider-state, W-N10 descriptor, and W-N09 Process templates. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | Provider descriptor state declaration, controller/status logic, Process templates, and Nix principal provisioning for `Provider/device-security-key` |
+| Detailed design | Status-first Provider state contract: the signed Provider descriptor declares no Provider state Volume for controller, relay, or frontend; ProviderStateSet is empty. Device resources and the Core Operation ledger are the operational authority. Controller/relay/frontend Process templates have no `/state` mount and no dedicated state-layout principals. Nix pre-provisions only principals required for genuine Process placement and DeviceGrant access, not state Volume ownership. |
+| Integration | Provider descriptor advertises an empty ProviderStateSet; controller writes bounded observations to Device status and Operation ledger; Nix principal provisioning feeds Process placement and DeviceGrant access only; Volume controllers see no provider state Volume requests. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import |
+| Validation | `status_state.rs` proves empty ProviderStateSet, no `/state` mounts, no Volume API calls, and no CTAP/fd/session secrets in status/log/audit/metrics. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N12
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Nix resource compiler owner; depends on W-N10 provider descriptor/config schema and ADR-046-nix-configuration. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `nixos-modules/` v3 resource compiler/eval assertions for `Provider/device-security-key` Device resources |
+| Detailed design | Nix resource compilation: Device spec validation in `nixos-modules/`, eval-time mutual-exclusion assertion, label resolution against Provider config, prohibited-field rejection |
+| Integration | Nix authoring under `d2b.zones.<zone>.resources` emits Device resources; eval assertions block invalid labels, bus classes, raw paths, and USBIP conflicts; zone bundle feeds Provider controller admission. |
+| Data migration | Full d2b 3.0 reset; current Nix options migrate to v3 Zone resources without state import |
+| Validation | Nix eval tests for label resolution, `busClass=hidraw`, exclusive arbitration, USBIP mutual exclusion, prohibited fields, and providerRef resolution. |
+| Removal proof | Supersedes current option shape only after v3 Zone resource option parity; legacy security-key/USBIP mutual-exclusion assertion is replaced by v3 resource assertion coverage. |
+
+### W-N13
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Guest Nix module migration owner; depends on W-N03 frontend Process, W-N09 Process templates, and W-N19 virtual frontend Device. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `nixos-modules/components/security-key-guest.nix` migration gate `d2b.securityKey._legacySystemdUnit` |
+| Detailed design | Guest Nix module migration gate: `d2b.securityKey._legacySystemdUnit` option, defaulting to false when Provider is installed; remove `d2b-sk-frontend.service` unit |
+| Integration | Guest Nix keeps `uhid` kernel module and static frontend binary in the closure while Process controller owns frontend lifecycle; option gate disables the legacy unit when Provider/device-security-key is installed. |
+| Data migration | Full d2b 3.0 reset; no legacy frontend unit state import |
+| Validation | Nix eval tests show the legacy unit is absent by default with Provider installed, can be gated only during transition if required, and `uhid` module/binary wiring remains present. |
+| Removal proof | W-X03 deletes the superseded `nixos-modules/components/security-key-guest.nix` `d2b-sk-frontend.service` declaration after the gate defaults to false. |
+
+### W-N14
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Audit owner for Core device-grant and Device controller lifecycle; depends on W-N02 controller, W-N11 DeviceGrant open, and ADR-046-telemetry-audit-and-support. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | Core audit emission for `device-grant` and Device controller audit emission for `device-session`/lease lifecycle events |
+| Detailed design | Audit record emission: bounded path-free `device-grant` records from Core at DeviceGrant resolution time; `device-session` lifecycle events from Device controller; neither block carries device path, guest name, session content, or CTAP bytes |
+| Integration | Core LaunchTicket emits grant audit; Device controller emits lifecycle audit; Zone audit stream stores bounded records; CLI/support tooling consumes digests and stable outcomes. |
+| Data migration | Full d2b 3.0 reset; no v2 audit import |
+| Validation | Audit tests assert path-free fields, bounded digests, no guest name/session content/CTAP bytes, grant emitted by Core not Provider controller, and lifecycle emitted by controller. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N15
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Observability owner; depends on W-N03 relay, W-N02 controller, and ADR-046-telemetry-audit-and-support. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | Provider/controller bounded telemetry emitter and observability-otel handoff for security-key metrics |
+| Detailed design | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring |
+| Integration | Relay/controller write metric events to the bounded ring; observability-otel Provider drains and exports; dashboards/CLI consume closed labels and bounded histograms. |
+| Data migration | Full d2b 3.0 reset; no v2 telemetry import |
+| Validation | Metrics tests assert closed label sets, no device/session/guest/path labels, bounded ring behavior, and correct session/ceremony/restart counters. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N16
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider documentation owner; depends on W-N01 through W-N15 and W-N17 through W-N20 for complete crate behavior. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-device-security-key/README.md` |
+| Detailed design | `README.md` for the crate: Provider identity, root config schema, Device spec, process model, RBAC, security invariants, state/telemetry, build/test/integration commands, standalone-repository consumption |
+| Integration | Workspace/package policy and provider crate acceptance use the README as the human entry point; docs link to it for provider-local build/test/integration commands. |
+| Data migration | None — docs/tooling only; no runtime state |
+| Validation | README presence check from provider crate standard layout; documentation review verifies every listed section and command is present and matches the crate/package behavior. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N17
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | transport-vsock/ComponentSession integration owner; depends on W-N03 relay, W-N07 descriptor validation, and ADR-046-componentsession-and-bus. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `Provider/transport-vsock` Endpoint resolution and LaunchTicket attachment integration for security-key relay/frontend |
+| Detailed design | `Provider/transport-vsock` integration: resolve the owned CTAPHID relay Endpoint into opaque LaunchTicket transport attachments for the relay and frontend; enroll Noise KK static keys for relay/frontend pair before first connection |
+| Integration | Endpoint resource is produced by relay template/controller; transport-vsock resolves opaque attachments; Core injects attachments and enrolled keys into relay/frontend LaunchTickets; ComponentSession establishes `d2b.security-key.v3`. |
+| Data migration | Full d2b 3.0 reset; no v2 transport state import |
+| Validation | `host_relay_guest_frontend/` and `descriptor_validation.rs` verify Endpoint resolution, Noise KK enrollment, attachment opacity, and no raw vsock CID/port in status/spec. |
+| Removal proof | Supersedes baseline `vsock.sock_14320` raw port usage; tests prove no `vsockPort` or raw AF_VSOCK framing remains for security-key transport. |
+
+### W-N18
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | `d2b-contracts` neutral effect-port owner and Core adapter owner; depends on ADR-046-resources-device and W-N06 probe behavior. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | `d2b-contracts` neutral `SecurityKeyEffectPort` trait/types; `packages/d2b-provider-device-security-key/src/effect_port.rs` re-export; Core adapter implementation in `d2b-provider` or `d2b-provider-toolkit` |
+| Detailed design | `SecurityKeyEffectPort` trait and associated opaque types (`DeviceId`, `ObservationPolicyId`) defined in `d2b-contracts` (neutral contract crate); both types have custom `Debug` impls that redact content; `effect_port.rs` in the Provider crate re-exports from `d2b-contracts`; Core adapter implementation in `d2b-provider` or `d2b-provider-toolkit` crate; inject into Device controller at startup with concrete `DeviceId` and `ObservationPolicyId` per Device; relay does NOT use the port |
+| Integration | Core resolves Zone/label to opaque IDs and injects the port into the controller; controller scheduled-observe calls the trait; Provider crate depends only on the neutral contract/re-export; relay path is unaffected. |
+| Data migration | Full d2b 3.0 reset; no v2 effect-port state import |
+| Validation | Unit tests assert Debug redaction, controller calls `observe_inventory` with injected IDs, relay has no port dependency, and fake Core adapter returns bounded `InventoryObservation`. |
+| Removal proof | None — net-new; no prior owner to remove |
+
+### W-N19
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Virtual frontend Device lifecycle owner; depends on W-N02 controller, W-N03 frontend/relay, W-N11 DeviceGrant, and ADR-046-resources-device. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new |
+| Destination | Device controller virtual `Device/<device-name>-frontend` lifecycle and Core frontend LaunchTicket UHID DeviceGrant resolution |
+| Detailed design | Virtual frontend Device lifecycle: controller creates `Device/<device-name>-frontend` (`deviceClass: virtual`, `busClass: uhid`, `ownerRef: Device/<device-name>`, `settings.bindGuest`) on claim; updates `bindGuest` on claim transfer; emits event-only `Deleted` on Device deletion; Core pre-opens `/dev/uhid` inside the Guest at frontend launch time using the virtual Device's DeviceGrant |
+| Integration | Device controller creates/updates/deletes the virtual Device; Core uses its DeviceGrant to inject the UHID fd into the frontend Process; frontend creates the virtual FIDO2 device without ambient `/dev` access. |
+| Data migration | Full d2b 3.0 reset; no v2 frontend device state import |
+| Validation | `controller_reconcile.rs`, `device_grant_no_path.rs`, and `host_relay_guest_frontend/` prove virtual Device creation/update/delete, UHID fd injection, no `/dev/uhid` path, and child-first deletion. |
+| Removal proof | Supersedes guest udev/plugdev access for UHID; W-X06 removes runtime udev broker op and W-X03 removes legacy frontend unit once DeviceGrant path is live. |
 
 ### Removal items
 
-| Removal item | Target to remove | Condition |
-| --- | --- | --- |
-| W-X01 | `packages/d2bd/src/security_key.rs` — `start_sk_accept_loop`, `SecurityKeyState`, `LeaseState`, `SkRegistry` | After v3 relay Process is live and stable; behind feature gate if needed during transition |
-| W-X02 | `packages/d2bd/src/lib.rs` — `start_sk_accept_loop` call site and daemon-internal Unix socket proxy bind | After W-X01 |
-| W-X03 | `nixos-modules/components/security-key-guest.nix` — `d2b-sk-frontend.service` systemd unit declaration | After W-N13 migration gate defaults to false |
-| W-X04 | `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` | After W-R06/W-R07 tests are in Provider crate and cover all prior assertions |
-| W-X05 | `ProcessRole::SecurityKeyFrontend` in `d2b-core/src/processes.rs` | After relay and frontend are v3 Process resources; no other code reference expected |
-| W-X06 | Remove `SecurityKeyApplyUdevRules` broker op, `SecurityKeyApplyUdevRulesRequest` DTO in `packages/d2b-contracts/src/security_key.rs`, and all related broker code | After v3 guest Nix module with static udev rules is live and stable |
+### W-X01
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider-device-security-key removal owner; depends on W-R01, W-R02, W-N03, W-N04, and W-N05 successor relay/session coverage. |
+| Current source | `packages/d2bd/src/security_key.rs` — `start_sk_accept_loop`, `SecurityKeyState`, `LeaseState`, `SkRegistry` |
+| Reuse action | delete |
+| Destination | Removed from daemon; successor behavior lives in `packages/d2b-provider-device-security-key/src/relay.rs`, `session.rs`, and `cid.rs` |
+| Detailed design | Remove target `packages/d2bd/src/security_key.rs` — `start_sk_accept_loop`, `SecurityKeyState`, `LeaseState`, `SkRegistry` after v3 relay Process is live and stable; keep behind feature gate only if needed during transition. |
+| Integration | d2bd no longer owns security-key accept/session state; Device controller and relay Process own lifecycle; Core LaunchTicket owns hidraw DeviceGrant; tests and call sites are redirected before deletion. |
+| Data migration | Full d2b 3.0 reset; no daemon session state migration |
+| Validation | Provider relay/session tests pass; daemon build has no references to removed symbols; no legacy security-key accept loop starts under d2bd. |
+| Removal proof | Concrete removed path/behavior: `packages/d2bd/src/security_key.rs` `start_sk_accept_loop`, `SecurityKeyState`, `LeaseState`, and `SkRegistry` daemon-internal accept/session ownership are absent. |
+
+### W-X02
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | d2bd integration removal owner; depends on W-X01. |
+| Current source | `packages/d2bd/src/lib.rs` — `start_sk_accept_loop` call site and daemon-internal Unix socket proxy bind |
+| Reuse action | delete |
+| Destination | Removed from daemon startup; successor launch path is ProviderDeployment/controller-created relay Process plus Endpoint/ComponentSession transport |
+| Detailed design | Remove target `packages/d2bd/src/lib.rs` — `start_sk_accept_loop` call site and daemon-internal Unix socket proxy bind after W-X01. |
+| Integration | d2bd startup no longer binds a security-key Unix socket proxy; Core/ProviderDeployment starts provider controller and relay Process resources; transport-vsock Endpoint supplies frontend connectivity. |
+| Data migration | Full d2b 3.0 reset; no daemon socket state migration |
+| Validation | d2bd startup tests/build prove no `start_sk_accept_loop` call or security-key proxy bind remains; provider integration test proves CTAPHID flow through Endpoint/ComponentSession. |
+| Removal proof | Concrete removed path/behavior: `packages/d2bd/src/lib.rs` no longer calls `start_sk_accept_loop` and no longer binds the daemon-internal security-key Unix socket proxy. |
+
+### W-X03
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Guest Nix module removal owner; depends on W-N13 migration gate and W-N03/W-N19 frontend Process/UHID DeviceGrant. |
+| Current source | `nixos-modules/components/security-key-guest.nix` — `d2b-sk-frontend.service` systemd unit declaration |
+| Reuse action | delete |
+| Destination | Removed from guest Nix module; successor frontend lifecycle is the v3 Process resource `device-<uid-short>-sk-frontend` managed by Process Provider |
+| Detailed design | Remove target `nixos-modules/components/security-key-guest.nix` — `d2b-sk-frontend.service` systemd unit declaration after W-N13 migration gate defaults to false. |
+| Integration | Guest Nix keeps `uhid` module and frontend binary closure only; Device controller creates frontend Process; system-systemd manages the transient user-scope Process. |
+| Data migration | Full d2b 3.0 reset; no legacy unit state migration |
+| Validation | Nix eval tests prove no static `d2b-sk-frontend.service` is emitted with Provider installed; frontend Process integration proves replacement lifecycle. |
+| Removal proof | Concrete removed path/behavior: `nixos-modules/components/security-key-guest.nix` no longer declares the static `d2b-sk-frontend.service` unit. |
+
+### W-X04
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Test-suite migration/removal owner; depends on W-R06 and W-R07 provider-crate successor tests. |
+| Current source | `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` |
+| Reuse action | delete after move/adapt |
+| Destination | Removed from `packages/d2b-contract-tests/tests/`; successor tests live in `packages/d2b-provider-device-security-key/tests/` |
+| Detailed design | Remove target `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` after W-R06/W-R07 tests are in Provider crate and cover all prior assertions. |
+| Integration | D094 disposition updates closed gate manifests, layer1 jobs, pins, ledgers, and CI shards so only the provider-crate successor suite remains. |
+| Data migration | None — test-only move/delete; no runtime state |
+| Validation | Provider-crate tests pass with retained assertions; old contract-test paths are absent from manifests/CI; no duplicate old/new suite runs indefinitely. |
+| Removal proof | Concrete removed paths: `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` are deleted after provider-crate successor coverage passes. |
+
+### W-X05
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core ProcessRole removal owner; depends on W-N09 Process resources, W-N08 sandbox templates, and system-minijail/system-systemd conformance. |
+| Current source | `ProcessRole::SecurityKeyFrontend` in `d2b-core/src/processes.rs` |
+| Reuse action | delete |
+| Destination | Removed from `d2b-core/src/processes.rs`; successor frontend is a v3 Process resource owned by `Provider/device-security-key` |
+| Detailed design | Remove target `ProcessRole::SecurityKeyFrontend` in `d2b-core/src/processes.rs` after relay and frontend are v3 Process resources; no other code reference expected. |
+| Integration | ProcessRole disposition table confirms all security-key frontend lifecycle, sandbox, readiness, and DeviceGrant semantics are represented by Resource Process templates and Process Providers before enum removal. |
+| Data migration | Full d2b 3.0 reset; no processes.json role migration |
+| Validation | Workspace build proves no `ProcessRole::SecurityKeyFrontend` references; provider Process template tests prove the v3 replacement; process conformance passes. |
+| Removal proof | Concrete removed path/behavior: `d2b-core/src/processes.rs` no longer contains `ProcessRole::SecurityKeyFrontend` or a security-key frontend role in the legacy ProcessRole/VmProcessDag model. |
+
+### W-X06
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Broker/contracts/Nix removal owner; depends on W-R05, W-N11, W-N13, and W-N19 UHID DeviceGrant replacement. |
+| Current source | `SecurityKeyApplyUdevRules` broker op, `SecurityKeyApplyUdevRulesRequest` DTO in `packages/d2b-contracts/src/security_key.rs`, and all related broker code |
+| Reuse action | delete |
+| Destination | Removed from contracts and broker; successor access is static guest Nix `uhid` module plus Core pre-opened `/dev/uhid` DeviceGrant for the frontend Process |
+| Detailed design | Remove `SecurityKeyApplyUdevRules` broker op, `SecurityKeyApplyUdevRulesRequest` DTO in `packages/d2b-contracts/src/security_key.rs`, and all related broker code after v3 guest Nix module with static udev rules is live and stable. |
+| Integration | Guest Nix/Process DeviceGrant path provides UHID access; contracts no longer expose the op/request; broker capability set drops the udev mutation; provider/contract tests assert absence. |
+| Data migration | Full d2b 3.0 reset; no udev rule state migration |
+| Validation | DTO unknown-field/capability tests prove `SecurityKeyApplyUdevRulesRequest` and op are absent; `device_grant_no_path.rs` proves frontend has UHID fd without udev/plugdev; broker build has no related code. |
+| Removal proof | Concrete removed path/behavior: `SecurityKeyApplyUdevRules` broker operation, `SecurityKeyApplyUdevRulesRequest` in `packages/d2b-contracts/src/security_key.rs`, and related broker code are absent. |
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable

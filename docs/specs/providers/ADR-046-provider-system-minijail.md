@@ -1512,7 +1512,7 @@ delivery assumptions are not copied.
 | Destination | `packages/d2b-provider-system-minijail/src/launch.rs` |
 | Detailed design | LaunchTicket construction with compiled sandbox/budget/mount digests; ticket verification on ProviderSupervisor receipt; `d2b.supervisor.v3/IssueLaunchTicket` service call; expired/revoked/malformed ticket rejection |
 | Integration | `ProviderSupervisor` local adapter; minijail controller (ADR046-minijail-005) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/lifecycle.rs`; `tests/fault_injection.rs`; `tests/fast_path.rs` |
 | Removal proof | Current `process_builder.rs` removed after parity |
 
@@ -1526,7 +1526,7 @@ delivery assumptions are not copied.
 | Destination | Broker-side: `d2b-priv-broker` retains `SpawnRunner` op, invoked by the `MinijailProcessEffectPort` implementation owned by core/ProviderSupervisor; Provider-side: `packages/d2b-provider-system-minijail/src/launch.rs` calls `MinijailProcessEffectPort` with opaque Process/LaunchTicket/profile IDs; `user_ns.rs` implements the user namespace pre-establishment protocol |
 | Detailed design | `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `MinijailProcessEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO |
 | Integration | ADR046-minijail-002 (LaunchTicket); real cgroup/broker fixture in `integration/clone3_pidfd/` and `integration/user_namespace/` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/fault_injection.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/` |
 | Removal proof | Old broker `SpawnRunner` direct-caller paths in `d2bd` removed after system-minijail Provider integration |
 
@@ -1540,7 +1540,7 @@ delivery assumptions are not copied.
 | Destination | `packages/d2b-provider-system-minijail/src/pidfd.rs`; `packages/d2b-provider-system-minijail/src/wait.rs` |
 | Detailed design | Async `waitid(P_PIDFD)` via `AsyncFd` fd readability; no blocking `waitid` on watch-loop task; `pidfd_open(2)` dispatched through bounded blocking adapter with explicit timeout; pidfd never serialized; pidfd close/reopen after controller restart; exit class classification (clean-exit/crash/signal/timeout/unknown); SIGTERM/SIGKILL via pidfd_send_signal; drainTimeout enforcement |
 | Integration | Controller restart → adoption (ADR046-minijail-005); finalize (§8.6) |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/lifecycle.rs`; `tests/redaction.rs` (PID never in log/status/audit); `tests/blocking_adapter.rs` (pidfd_open via adapter; timeout → error) |
 | Removal proof | Old `PidfdTable` in `d2bd` supervisor removed after Provider integration |
 

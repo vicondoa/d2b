@@ -1355,7 +1355,7 @@ assumptions. Copied behavior is independently re-tested against v3
 | Destination | `packages/d2b-provider-system-systemd/tests/conformance.rs`, `tests/fault.rs`, `tests/ephemeral.rs`, `tests/sandbox_compile.rs`; `integration/host_scenario.rs`, `integration/guest_scenario.rs` |
 | Detailed design | Full §19 test/integration requirements |
 | Integration | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All conformance vectors pass; all fault injection scenarios reach expected phase/condition; all §19 Host and Guest test scenarios pass |
 | Removal proof | No removal; tests are permanent |
 

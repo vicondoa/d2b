@@ -2172,25 +2172,257 @@ On controller binary upgrade:
 
 | ID | Category | Description |
 | --- | --- | --- |
-| ADR046-network-001 | Core | Implement `NetworkEffectPort` core adapter in `d2b-core`; map to broker wire ops; emit audit records. Versioning: minor releases may add methods with default impls; major releases require Provider upgrade. The trait lives in `d2b-contracts`; the adapter in `d2b-core`. |
-| ADR046-network-002 | Core | Add `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags` broker ops |
-| ADR046-network-003 | Core | Implement `AttachmentHandle` and `FabricHandle` as opaque byte-array newtypes (32 bytes of HMAC-SHA-256 over internal identity material; key held by core). Each handle is single-use; revocation is implicit when the owning Network is deleted. These types are declared in `d2b-contracts`, not in the provider crate. |
-| ADR046-network-004 | Core | Implement LaunchTicket FD resolution: when core builds the LaunchTicket for a Guest with `ownerRef: Network/<name>`, it walks the owner graph, locates the Network, reads its internally-held `AttachmentHandle` set, and includes the corresponding tap FDs in the ticket. No API surface for the provider or runtime is required beyond the existing LaunchTicket mechanism. |
-| ADR046-network-005 | Provider | The `d2b-host` IfName/nftables/bridge/route modules are consumed directly by the core adapter (not by the provider crate). The provider crate re-exports only `d2b_host::ifname::derive_ifname` for validation purposes. No additional extraction work is required beyond confirming the `d2b-host` API surface is stable. |
-| ADR046-network-006 | Provider | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection |
-| ADR046-network-007 | Provider | Implement `NetworkAgentService` Noise-KK vsock ComponentSession (Reload + ReadinessQuery methods). Agent reconnect policy: if the controller cannot reach the agent vsock (Guest restart in progress), it retries with exponential backoff up to `drainTimeout` of the agent Process; after timeout it deletes and re-creates the agent Process resource. |
-| ADR046-network-008 | Provider | Implement config Volume content rendering (dnsmasq.conf, nftables.rules, routing.conf, attachments.json) |
-| ADR046-network-009 | Provider | Implement canonical Process spec builders for agent, dnsmasq, mdns-reflector, mdns-dnsbridge |
-| ADR046-network-010 | net-vm artifact | Build generic `net-vm-base` nixos-system artifact with net-agent binary, agent-service endpoint, guest-agent binary, standard NIC bootstrap, lib.mkForce override; bake `net-local-controller` account with the UID/GID allocated from the host-users reservation table (documented in `nixos-modules/host-users.nix`) |
-| ADR046-network-011 | Nix | Nix module for `Provider/network-local` resource declaration; `User/net-local-controller` declaration; OS account provisioning; artifact catalog entries |
-| ADR046-network-012 | Nix | Build-time CIDR overlap check for declared Networks in flake check |
-| ADR046-network-013 | Tests | Conformance suite: NetworkSpec round-trip, IfName derivation, CIDR validation matrix |
-| ADR046-network-014 | Tests | Controller state-machine unit tests with fake `NetworkEffectPort` (from d2b-contracts mock) and deterministic clock |
-| ADR046-network-015 | Tests | Integration tests: full Network lifecycle (create, config update, agent Reload, delete sequence) in container environment |
-| ADR046-network-016 | Security | Verify INV-NET-008 (Guest-network-admin isolation): Process Provider correctly inherits Guest netns for agent/dnsmasq |
-| ADR046-network-017 | Docs | `packages/d2b-provider-network-local/README.md` covering all 7 required topics |
-| ADR046-network-018 | Broker | `UsbipBindFirewallRule` broker op stays with `Provider/device-usbip`; verify separation in integration tests |
-| ADR046-network-019 | Provider | Confirm `controller-main` declares no stateNamespace and core ProviderDeployment creates no Provider state Volume or state mount; validate ProviderStateSet query returns empty for `Provider/network-local`; validate bounded operational state is written to revisioned/redacted status and the core Operation ledger with `status-oversize` conformance; confirm per-Network config Volumes remain `ownerRef: Network/<name>` runtime/config operational Volumes outside the ProviderStateSet and `Volume` is not in `ResourceTypes implemented` |
+
+### ADR046-nl-001
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core; owns `NetworkEffectPort` contract/versioning in `d2b-contracts` and adapter implementation in `d2b-core`. |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent for a provider-neutral `NetworkEffectPort` core adapter. |
+| Reuse action | net-new |
+| Destination | `d2b-contracts` trait plus `d2b-core` core adapter; maps to broker wire operations and audit emission. |
+| Detailed design | Implement `NetworkEffectPort` core adapter in `d2b-core`; map to broker wire ops; emit audit records. Versioning: minor releases may add methods with default impls; major releases require Provider upgrade. The trait lives in `d2b-contracts`; the adapter in `d2b-core`. |
+| Integration | `Provider/network-local` reconcile calls injected `NetworkEffectPort`; the core adapter resolves opaque Network intents to closed broker wire ops and emits broker-level audit records. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `packages/d2b-provider-network-local/tests/fault_injection.rs` verifies fake `NetworkEffectPort` behavior, error mapping, no broker socket in provider context, and audit-safe adapter boundaries. |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-nl-002
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core; broker/core contract work consumed by ADR046-nl-001. |
+| Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, and SeedDnsmasqLease operations, but no `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, or `ReadBridgePortFlags` v3 ops. |
+| Reuse action | extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape |
+| Destination | Broker wire contract and broker/core adapter operation table for `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, and `ReadBridgePortFlags`. |
+| Detailed design | Add `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags` broker ops. |
+| Integration | `NetworkEffectPort` core adapter invokes these broker ops for bridge lifecycle and observe/drift checks; `Provider/network-local` receives only typed results and opaque digests/handles. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `integration/host_fabric.rs` covers bridge create/delete, nftables apply/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation. |
+| Removal proof | None — net-new broker ops; remove only if no Provider consumes them per the removal checklist. |
+
+### ADR046-nl-003
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core; handle DTOs are owned by `d2b-contracts` and consumed by `d2b-core` plus `Provider/network-local`. |
+| Current source | None — net-new v3 work; no public pre-ADR45 baseline equivalent for opaque `AttachmentHandle` or `FabricHandle`. |
+| Reuse action | net-new |
+| Destination | `d2b-contracts` opaque byte-array newtypes; core-held HMAC key and provider-facing redacted handle types. |
+| Detailed design | Implement `AttachmentHandle` and `FabricHandle` as opaque byte-array newtypes (32 bytes of HMAC-SHA-256 over internal identity material; key held by core). Each handle is single-use; revocation is implicit when the owning Network is deleted. These types are declared in `d2b-contracts`, not in the provider crate. |
+| Integration | Core creates handles from Network and attachment identity, stores them only in internal state/status-resource attachment realization, and supplies resolved tap FDs through LaunchTicket without exposing IfNames or MACs. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `tests/fault_injection.rs` and `tests/controller_state.rs` cover opaque-handle mismatch, revocation-on-delete, and no raw IfName/IP/MAC public surface. |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-nl-004
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Core; depends on ADR046-nl-003 handles and runtime-cloud-hypervisor LaunchTicket consumption. |
+| Current source | Existing v1 runtime tap handling is broker/runtime-specific; no v3 LaunchTicket owner-graph FD resolution surface exists. |
+| Reuse action | net-new LaunchTicket integration; reuse existing LaunchTicket mechanism without adding provider/runtime API surface |
+| Destination | Core LaunchTicket builder and dependency resolver that walks `Guest.ownerRef: Network/<name>` to resolved tap FDs. |
+| Detailed design | Implement LaunchTicket FD resolution: when core builds the LaunchTicket for a Guest with `ownerRef: Network/<name>`, it walks the owner graph, locates the Network, reads its internally-held `AttachmentHandle` set, and includes the corresponding tap FDs in the ticket. No API surface for the provider or runtime is required beyond the existing LaunchTicket mechanism. |
+| Integration | Runtime-cloud-hypervisor starts Guests using tap FDs supplied in LaunchTickets; `Provider/network-local` declares attachments and core resolves handles privately. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `integration/guest_lifecycle.rs` validates net-VM/workload Guest lifecycle, opaque attachment handle resolution, and `systemArtifactId` binding. |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-nl-005
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider plus Core; provider validates through `d2b_host::ifname::derive_ifname`, while core adapter consumes host networking modules. |
+| Current source | Reuse modules listed in §25.1: `packages/d2b-host/src/ifname.rs:derive_ifname`, `packages/d2b-host/src/nftables.rs`, `packages/d2b-host/src/bridge_port.rs`, `packages/d2b-host/src/routes.rs`, and `packages/d2b-host/src/netlink.rs`. |
+| Reuse source | `d2b-host` IfName, nftables, bridge-port, route preflight, and sysctl/netlink modules. |
+| Reuse action | reuse directly in core adapter; provider re-exports only `derive_ifname` for validation |
+| Destination | Core adapter imports `d2b-host` modules; `packages/d2b-provider-network-local/src/ifname.rs` re-exports `d2b_host::ifname::derive_ifname` only. |
+| Detailed design | The `d2b-host` IfName/nftables/bridge/route modules are consumed directly by the core adapter (not by the provider crate). The provider crate re-exports only `d2b_host::ifname::derive_ifname` for validation purposes. No additional extraction work is required beyond confirming the `d2b-host` API surface is stable. |
+| Integration | Provider validateSpec uses deterministic IfName derivation for collision checks; core adapter applies bridge, nftables, route, and sysctl effects through reused `d2b-host` helpers. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `tests/ifname_derive.rs`, `tests/fault_injection.rs`, and `integration/host_fabric.rs` prove derivation, adapter reuse, and real host-fabric behavior. |
+| Removal proof | None — reused modules remain owned by `d2b-host`; no prior provider-local copy to remove. |
+
+### ADR046-nl-006
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider; depends on ADR046-nl-001 through ADR046-nl-005 and owns the Network reconcile/observe/finalize handlers. |
+| Current source | None — net-new v3 provider controller; v1 behavior lived in `nixos-modules/network.nix` and `nixos-modules/net.nix` static NixOS module logic. |
+| Reuse action | port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership |
+| Destination | `packages/d2b-provider-network-local/src/controller.rs`. |
+| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection. |
+| Integration | Controller watches Network, Guest, Volume, Process, User, Host, and Zone resources; creates child resources, writes status, invokes `NetworkEffectPort`, and drives finalizers. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock. |
+| Removal proof | Supersedes static per-env lifecycle in `nixos-modules/network.nix` and `nixos-modules/net.nix`; removal proof is successor controller coverage plus deletion of duplicate old gates when this provider lands. |
+
+### ADR046-nl-007
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider; owns net-agent ComponentSession service and depends on ComponentSession/bus and net-VM Process lifecycle. |
+| Current source | None — net-new v3 NetworkAgentService; v1 net-VM behavior was encoded in NixOS services and scripts under `nixos-modules/net.nix`. |
+| Reuse action | net-new service; preserve semantic nftables/routes reload behavior from v1 net VM configuration |
+| Destination | `packages/d2b-provider-network-local/src/process_specs.rs` agent template plus agent service implementation in the net-VM artifact. |
+| Detailed design | Implement `NetworkAgentService` Noise-KK vsock ComponentSession (Reload + ReadinessQuery methods). Agent reconnect policy: if the controller cannot reach the agent vsock (Guest restart in progress), it retries with exponential backoff up to `drainTimeout` of the agent Process; after timeout it deletes and re-creates the agent Process resource. |
+| Integration | Controller writes config Volume content, resolves `Endpoint/net-<networkName>-agent-service`, calls `Reload(config_digest)`, and uses readiness predicates to set Network conditions. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `integration/agent_reload.rs` validates Reload, `nft_applied` and `routes_applied` predicates, reconnect behavior, and config digest matching. |
+| Removal proof | None — net-new ComponentSession service; no prior service endpoint to remove. |
+
+### ADR046-nl-008
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider; config rendering owned by `Provider/network-local`, storage reconciliation owned by `Provider/volume-local`. |
+| Current source | Reuse semantics from `nixos-modules/net.nix` lines 168–296 for nftables and lines 302–441 for dnsmasq; runtime volume model is net-new. |
+| Reuse source | `nixos-modules/net.nix` dnsmasq, nftables, routing, and attachment configuration semantics. |
+| Reuse action | port and render into bounded config Volume files |
+| Destination | `packages/d2b-provider-network-local/src/config_volume.rs`. |
+| Detailed design | Implement config Volume content rendering (dnsmasq.conf, nftables.rules, routing.conf, attachments.json). |
+| Integration | Controller creates `Volume/net-<networkName>-config`, writes four files through the Volume service, attaches the read-only view to the net VM, and triggers agent reload plus dnsmasq restart. |
+| Data migration | Full d2b 3.0 reset; config Volume is runtime tmpfs content regenerated from Network spec. |
+| Validation | `tests/controller_state.rs`, `integration/agent_reload.rs`, and `integration/delete_sequence.rs` validate rendering, write flow, reload, and cleanup ordering. |
+| Removal proof | Supersedes static per-env config generation in `nixos-modules/net.nix`; successor coverage retires duplicate old Nix/service assertions. |
+
+### ADR046-network-009
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider; Process resource builders owned by `d2b-provider-network-local`. |
+| Current source | v1 dnsmasq and mDNS process shape came from `nixos-modules/net.nix` and static NixOS services; no v3 Process builder exists. |
+| Reuse action | port service semantics into canonical Process resource specs |
+| Destination | `packages/d2b-provider-network-local/src/process_specs.rs`. |
+| Detailed design | Implement canonical Process spec builders for agent, dnsmasq, mdns-reflector, mdns-dnsbridge. |
+| Integration | Controller creates agent service, dnsmasq worker, and optional mDNS workers as owned Process resources on the net VM; Process Provider reports readiness and lifecycle status. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `tests/controller_state.rs`, `integration/mdns_reflector.rs`, and eval case `process-sandbox-netns.nix` validate Process shape, optional mDNS, and guest-netns capability isolation. |
+| Removal proof | Supersedes static per-env systemd services; old duplicate service tests are retired after successor Process coverage passes. |
+
+### ADR046-network-010
+| Field | Value |
+| --- | --- |
+| Dependency/owner | net-vm artifact; owns generic `net-vm-base` nixos-system artifact and shared net-local-controller UID/GID reservation. |
+| Current source | Reuse lib.mkForce NIC bootstrap from `nixos-modules/base.nix` `10-eth-dhcp` override and account reservation documented in `nixos-modules/host-users.nix`; v1 per-Network config does not carry forward. |
+| Reuse source | `nixos-modules/base.nix` `10-eth-dhcp` lib.mkForce override and host-users reservation table. |
+| Reuse action | preserve generic boot/safety invariants; exclude per-Network static config |
+| Destination | `net-vm-base` nixos-system artifact and artifact catalog entry `d2b.artifacts.net-vm-base`. |
+| Detailed design | Build generic `net-vm-base` nixos-system artifact with net-agent binary, agent-service endpoint, guest-agent binary, standard NIC bootstrap, lib.mkForce override; bake `net-local-controller` account with the UID/GID allocated from the host-users reservation table (documented in `nixos-modules/host-users.nix`). |
+| Integration | Network resource `spec.netVmSystemArtifactId` points to `net-vm-base`; runtime-cloud-hypervisor consumes the artifact ID, and the config Volume provides all per-Network DHCP/firewall/routing content. |
+| Data migration | Full d2b 3.0 reset; no per-Network v2 net-VM config import. |
+| Validation | Eval cases `net-vm-artifact-id-eval.nix` and `network-spec-eval.nix`, plus `tests/net-vm-network-eval.sh` for the lib.mkForce invariant. |
+| Removal proof | Supersedes implicit microvm/Nix path coupling; remove `net-vm-base` artifact catalog entry only after all Network resources and provider references are gone. |
+
+### ADR046-network-011
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Nix; owns resource declaration, User declaration, host account provisioning, and artifact catalog wiring. |
+| Current source | Existing NixOS modules `nixos-modules/network.nix`, `nixos-modules/net.nix`, and `nixos-modules/host-users.nix` provide v1 static declarations and user/account patterns. |
+| Reuse action | adapt Nix option/resource emission and account provisioning to v3 resources |
+| Destination | Nix module resource emission for `Provider/network-local`, `User/net-local-controller`, host OS account, `provider-network-local`, and `net-vm-base` artifacts. |
+| Detailed design | Nix module for `Provider/network-local` resource declaration; `User/net-local-controller` declaration; OS account provisioning; artifact catalog entries. |
+| Integration | Nix compiler emits Provider/User/Network resources and host prerequisites; core ProviderDeployment starts controller Process; system-core reconciles the User resource. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | Eval cases `network-spec-eval.nix`, `user-no-managed-by-eval.nix`, `net-vm-artifact-id-eval.nix`, and `make test-policy` for artifact/package paths. |
+| Removal proof | Supersedes v1 NixOS module declarations; removal proof is deletion of old resource emission and account/artifact entries when provider is retired. |
+
+### ADR046-network-012
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Nix; depends on Network resource schema and CIDR validation rules. |
+| Current source | `nixos-modules/lib.nix:cidrOverlaps` lines 429–462 provides CIDR overlap logic in the v1 module layer. |
+| Reuse source | `nixos-modules/lib.nix:cidrOverlaps`. |
+| Reuse action | port/reuse overlap semantics in v3 eval checks and provider validation |
+| Destination | Nix flake/resource schema checks for declared Networks and provider `validate.rs` parity. |
+| Detailed design | Build-time CIDR overlap check for declared Networks in flake check. |
+| Integration | Nix compiler rejects overlapping declared Network CIDRs before resource publication; runtime `validateSpec` re-checks full overlap matrix. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | Eval case `network-cidr-overlap-eval.nix` and `tests/cidr_overlap.rs` cover same-Network, cross-Network, external CIDR, and adjacency cases. |
+| Removal proof | None — validation net-new in v3 resource compiler; no prior owner to remove. |
+
+### ADR046-network-013
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Tests; owned by `d2b-provider-network-local` hermetic test suite. |
+| Current source | Reusable semantic assertions come from §25.1 IfName/CIDR reuse inventory and Network schema defined in this spec. |
+| Reuse action | adapt existing IfName/CIDR assertions into provider conformance tests |
+| Destination | `packages/d2b-provider-network-local/tests/schema_roundtrip.rs`, `tests/ifname_derive.rs`, and `tests/cidr_overlap.rs`. |
+| Detailed design | Conformance suite: NetworkSpec round-trip, IfName derivation, CIDR validation matrix. |
+| Integration | Test suite runs under `cargo test -p d2b-provider-network-local --lib --tests` and validates provider schema before integration gates. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | The listed conformance tests themselves are the validation, with workspace policy ensuring `tests/` exists. |
+| Removal proof | Retire replaced current-code tests only after successor hermetic tests cover the minimum reusable assertions and gate manifests/pins are updated. |
+
+### ADR046-network-014
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Tests; depends on ADR046-nl-006 controller and fake `NetworkEffectPort` from `d2b-contracts`. |
+| Current source | None — net-new v3 controller state-machine test; v1 shell/Nix gates are not a controller-reconcile equivalent. |
+| Reuse action | net-new |
+| Destination | `packages/d2b-provider-network-local/tests/controller_state.rs`. |
+| Detailed design | Controller state-machine unit tests with fake `NetworkEffectPort` (from d2b-contracts mock) and deterministic clock. |
+| Integration | Hermetic fake effect port drives reconcile, observe, finalizer, and adoption transitions without real broker, systemd, container, or network dependencies. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | `tests/controller_state.rs` covers normal path, CIDR conflict, User not Ready, Volume error, Guest timeout, agent reload failure, finalizer sequence, adoption, and drift. |
+| Removal proof | None — net-new; no prior owner to remove. |
+
+### ADR046-network-015
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Tests; integration coverage for the complete Network lifecycle. |
+| Current source | Existing Layer-1 eval and shell gates cover fragments; no v3 provider lifecycle integration test exists. |
+| Reuse action | adapt reusable semantic assertions into v3 integration coverage |
+| Destination | `packages/d2b-provider-network-local/integration/host_fabric.rs`, `guest_lifecycle.rs`, `agent_reload.rs`, and `delete_sequence.rs`. |
+| Detailed design | Integration tests: full Network lifecycle (create, config update, agent Reload, delete sequence) in container environment. |
+| Integration | Integration tests exercise resource publication, host fabric effects, config Volume updates, ComponentSession reload, Process lifecycle, and finalizer cleanup through the provider stack. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | `make test-integration` for container tests and `make test-host-integration` where guest lifecycle requires host/KVM coverage. |
+| Removal proof | Old duplicate tests, shell gates, fixtures, static artifacts, CI jobs, manifests, and pins are deleted once successor coverage and removal proof pass. |
+
+### ADR046-network-016
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Security; depends on Process sandbox schema and `Provider/system-minijail` guest namespace inheritance. |
+| Current source | The invariant is specified as INV-NET-008 and has eval coverage named `tests/unit/nix/cases/process-sandbox-netns.nix`. |
+| Reuse action | preserve and verify existing guest-netns isolation invariant in v3 Process specs |
+| Destination | Process templates for agent and dnsmasq plus sandbox/eval tests. |
+| Detailed design | Verify INV-NET-008 (Guest-network-admin isolation): Process Provider correctly inherits Guest netns for agent/dnsmasq. |
+| Integration | `Provider/network-local` emits `namespaceClasses: []` and guest-only capability classes; Process Provider starts agent/dnsmasq inside the net VM network namespace only. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | `tests/unit/nix/cases/process-sandbox-netns.nix` and provider Process-template tests assert no host capability or host network namespace grant. |
+| Removal proof | None — security invariant preserved; no prior owner to remove. |
+
+### ADR046-network-017
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Docs; owned by `d2b-provider-network-local` package documentation. |
+| Current source | None — provider crate README is net-new for v3 packaging; this dossier supplies the required topics. |
+| Reuse action | net-new documentation |
+| Destination | `packages/d2b-provider-network-local/README.md`. |
+| Detailed design | `packages/d2b-provider-network-local/README.md` covering all 7 required topics. |
+| Integration | Workspace policy requires the README alongside `src/`, `tests/`, and `integration/`; operators and contributors use it for provider identity, build, test, integration, state, RBAC, and standalone-repo path. |
+| Data migration | None — docs/tooling only; no runtime state. |
+| Validation | `make test-policy` / `xtask workspace-policy` verifies required provider crate paths and README presence. |
+| Removal proof | None — net-new documentation; no prior owner to remove. |
+
+### ADR046-network-018
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Broker plus device provider boundary; `UsbipBindFirewallRule` remains owned by `Provider/device-usbip`. |
+| Current source | Existing `UsbipBindFirewallRule` broker operation and USBIP provider boundary; network-local supplies only the generic TCP/3240 host firewall carve-out. |
+| Reuse action | preserve ownership separation; do not move USBIP broker op into network-local |
+| Destination | Integration/boundary tests for `Provider/network-local` and `Provider/device-usbip`; no new network-local broker op destination. |
+| Detailed design | `UsbipBindFirewallRule` broker op stays with `Provider/device-usbip`; verify separation in integration tests. |
+| Integration | `Provider/device-usbip` consumes `Network/<name>` via `networkRef`, while `Provider/network-local` emits only generic uplink bridge allow-rule semantics and never calls `UsbipBindFirewallRule`. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | Integration tests assert the network-local controller does not call `UsbipBindFirewallRule` and that USBIP attach/firewall behavior remains under device-usbip ownership. |
+| Removal proof | None — existing USBIP owner remains; proof is absence of network-local calls and unchanged device-usbip ownership. |
+
+### ADR046-network-019
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Provider; depends on D087 ProviderStateSet and status-first storage rules. |
+| Current source | None — net-new v3 ProviderStateSet/status contract; v1 network module did not expose Provider state Volumes. |
+| Reuse action | net-new status-first provider-state conformance |
+| Destination | Provider descriptor, controller-main deployment, `tests/state_schema_roundtrip.rs`, and eval case `provider-state-volume-eval.nix`. |
+| Detailed design | Confirm `controller-main` declares no stateNamespace and core ProviderDeployment creates no Provider state Volume or state mount; validate ProviderStateSet query returns empty for `Provider/network-local`; validate bounded operational state is written to revisioned/redacted status and the core Operation ledger with `status-oversize` conformance; confirm per-Network config Volumes remain `ownerRef: Network/<name>` runtime/config operational Volumes outside the ProviderStateSet and `Volume` is not in `ResourceTypes implemented`. |
+| Integration | Core ProviderDeployment starts controller without `/state`; controller uses Network status and Operation ledger for bounded observations; ProviderStateSet query excludes per-Network config Volumes. |
+| Data migration | Full d2b 3.0 reset; no v2 state/config import. |
+| Validation | `tests/state_schema_roundtrip.rs` and `tests/unit/nix/cases/provider-state-volume-eval.nix` validate empty ProviderStateSet, status bounds/redaction, and config Volume exclusion. |
+| Removal proof | None — net-new; no Provider state Volume or prior owner to remove. |
 
 ---
 

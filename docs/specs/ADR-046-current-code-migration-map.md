@@ -1,11 +1,17 @@
 # ADR-046 Current-Code Migration/Disposition Map
 
-| Spec ID | `ADR-046-migration-map` |
-|---------|------------------------|
-| Status | Working document |
-| Baseline | `b5ddbed6` — wayland: route provider-neutral identity and readiness (#288) |
+| Field | Value |
+| --- | --- |
+| Spec ID | `ADR-046-current-code-migration-map` |
+| Parent | ADR 0046 |
+| Status | Proposed |
+| Version | 1 |
+| Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
+| Normative | Yes |
+| Owners | Integrator; current-code migration/disposition map |
+| Depends on | None |
+| Supersedes | None |
 | Foundation | `fd5b0067` — docs: establish d2b 3.0 Provider control-plane foundation |
-| Branch | `adr0046-spec-migration-map` |
 | Main reuse | Permitted (copy/adapt); main is not current-state evidence |
 
 ---

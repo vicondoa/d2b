@@ -134,6 +134,6 @@ authoring work item is:
 | Destination | `docs/specs/ADR-046-decision-register.md` |
 | Detailed design | Record every evidence-underdetermined choice before dependent spec work proceeds |
 | Integration | Parent decision summary and all affected specs link the decision ID |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Zero unresolved entries before pre-panel review; manifest/link consistency |
 | Removal proof | Not applicable |

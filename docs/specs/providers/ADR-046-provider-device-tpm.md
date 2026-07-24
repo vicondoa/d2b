@@ -10,6 +10,7 @@
 | Normative | Yes |
 | Owners | `d2b-provider-device-tpm` crate |
 | Depends on | `ADR-046-resources-device`, `ADR-046-resources-volume`, `ADR-046-resources-host-guest-process-user`, `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`, `ADR-046-primitive-resource-composition`, `ADR-046-resource-object-model`, `ADR-046-resource-reconciliation` |
+| Supersedes | Current `nixos-modules/components/tpm.nix` swtpm provisioning and `d2b-priv-broker` swtpm-dir hardening path |
 | Current code fit | Partial; v3 requires privilege-boundary inversion (controller → TpmEffectPort), controller Process resource, controller-created Device-owned Volume with exact canonical base fields, `userNamespace.mappingClass`, Device-owned TPM `Endpoint` resource, and crate split. |
 
 ---
@@ -1252,9 +1253,15 @@ v3: the Nix Device declaration in §17.1 replaces this option. Migration steps:
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | — |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; unblocked; owner: `d2b-provider-device-tpm` crate |
+| Current source | No existing provider crate; baseline TPM behavior is in `nixos-modules/components/tpm.nix`, `packages/d2b-host/src/swtpm_argv.rs`, and broker/daemon swtpm paths listed in §18 |
+| Reuse action | net-new crate scaffold; later items adapt baseline TPM behavior into the new Provider boundary |
+| Destination | packages/d2b-provider-device-tpm/{src/,tests/,integration/README.md,README.md}; Cargo workspace membership |
+| Detailed design | Crate scaffold: create `packages/d2b-provider-device-tpm/` with `src/`, `tests/`, `integration/README.md`, and `README.md`; add it to the Cargo workspace; workspace policy test must pass. |
+| Integration | Workspace policy and Cargo consume the new crate; all controller, effect-port, resource-builder, status, Nix, and integration work lands under this scaffold. |
+| Data migration | None — scaffold only; TPM state migration is covered by later Volume/Nix work per §17.3 |
+| Validation | Workspace policy test for required crate paths and Cargo workspace membership |
+| Removal proof | None — net-new crate scaffold; legacy TPM owners are removed only by later parity/removal items |
 
 Create `packages/d2b-provider-device-tpm/` with `src/`, `tests/`,
 `integration/README.md`, `README.md`. Add to Cargo workspace. Workspace
@@ -1264,9 +1271,15 @@ policy test must pass.
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-001 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-001; owner: device-tpm effect boundary |
+| Current source | `PrepareSwtpmDir` in `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` and `SpawnRunner { role: Swtpm }` in `packages/d2b-priv-broker/src/ops/spawn_runner.rs` remain privileged executors, but the controller must not import broker crates |
+| Reuse action | wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind `volume-local` and `system-minijail` |
+| Destination | packages/d2b-provider-device-tpm/src/{effect_port.rs,effect_impl.rs}; packages/d2b-provider-device-tpm/tests/effect_fake.rs |
+| Detailed design | TpmEffectPort and FakeTpmEffectPort: implement the effect trait, typed TPM EndpointRef handoff, and fake test port. Prove non-test files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. |
+| Integration | Device controller calls `TpmEffectPort`; ResourceClient-backed implementation talks to ResourceAPI/ComponentSession; `volume-local` and `system-minijail` translate resource operations into broker effects. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | `tests/effect_fake.rs`; static proof that non-test files do not import `d2b_priv_broker` |
+| Removal proof | Direct broker references in controller/daemon TPM paths are superseded by the effect-port/resource-provider boundary; final deletion is ADR046-device-tpm-013 |
 
 Implement `TpmEffectPort` trait, typed TPM EndpointRef handoff, and
 `FakeTpmEffectPort`. Prove: no `use d2b_priv_broker::` in non-test files.
@@ -1275,9 +1288,15 @@ Implement `TpmEffectPort` trait, typed TPM EndpointRef handoff, and
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-002 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-002; owner: device-tpm controller FSM |
+| Current source | Current direct daemon/broker swtpm lifecycle call sites in `packages/d2bd/src/*` are superseded; controller algorithm is specified in §11.1 |
+| Reuse action | replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status |
+| Destination | packages/d2b-provider-device-tpm/src/controller.rs; packages/d2b-provider-device-tpm/tests/controller_fsm.rs |
+| Detailed design | Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, covering happy path, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained. |
+| Integration | Resource watches drive the controller; controller creates/observes Volume, Process, EphemeralProcess, and Endpoint resources through `TpmEffectPort`; Device status/finalizers expose outcomes to the ResourceAPI. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | `tests/controller_fsm.rs` covering happy path, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior |
+| Removal proof | Direct daemon swtpm lifecycle logic is removable after this Provider reconcile FSM reaches parity and ADR046-device-tpm-013 removes the old call sites |
 
 Implement Device reconcile algorithm (§11.1) against `FakeTpmEffectPort`.
 Tests cover: happy path, Volume not-ready, marker fail-closed, flush failed,
@@ -1287,9 +1306,15 @@ swtpm maxRestarts, finalizer (Process deleted; Volume retained).
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-001 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-001; owner: device-tpm resource builders |
+| Current source | `nixos-modules/components/tpm.nix` declares TPM enablement today; §17.3 defines migration from the existing swtpm directory and marker |
+| Reuse action | replace VM-level TPM option/state path with controller-created Device-owned Volume spec |
+| Destination | packages/d2b-provider-device-tpm/src/resources.rs; packages/d2b-provider-device-tpm/tests/volume_create.rs |
+| Detailed design | Controller-created Volume spec: implement `build_tpm_state_volume_spec` with `cleanupPolicy: never`, `repairPolicy: fail-closed`, `adoptionPolicy: quarantine-on-ambiguity`, `sensitivity: secret-adjacent`, required invariants, `source.sourceId`, no `hostPath`, no top-level identityMarker/persistenceClass/quotaBytes/stateSchema, `ownerRef: Device/<name>`, `managedBy: controller`, empty attachments, and `quota: null`. |
+| Integration | Device controller creates the TPM data Volume; `volume-local` materializes/protects state and marker; swtpm Process mounts the Volume; Guest runtime receives only EndpointRefs. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | `tests/volume_create.rs` proving every canonical Volume field and forbidden field listed in this item |
+| Removal proof | `nixos-modules/components/tpm.nix` state-path ownership is superseded by the Device-owned Volume once migration and Nix roundtrip are complete |
 
 Implement `build_tpm_state_volume_spec` in `resources.rs`. Tests prove:
 - `cleanupPolicy: never`; `repairPolicy: fail-closed`;
@@ -1305,9 +1330,15 @@ Implement `build_tpm_state_volume_spec` in `resources.rs`. Tests prove:
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-004 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-004; owner: device-tpm Process resource builder |
+| Current source | `SwtpmArgvInput` in `packages/d2b-host/src/swtpm_argv.rs`; `ProcessRole::Swtpm` in `packages/d2b-core/src/processes.rs`; `minijail_swtpm_video.rs` contract tests |
+| Reuse action | extract swtpm argv/sandbox intent into canonical Process resources; remove caller-supplied binary path, UID, GID, and socket path fields |
+| Destination | packages/d2b-provider-device-tpm/src/resources.rs; Process spec tests under packages/d2b-provider-device-tpm/tests/ |
+| Detailed design | Canonical swtpm Process spec: implement `build_swtpm_process_spec` with `readOnlyRoot: true`, `userNamespace.mappingClass: process-principal-root`, namespace classes `[pid, mount, user]`, empty capability classes, `seccompClass: w1-swtpm`, two Device-owned Endpoint resources (`tpm` and `ctrl`), `mounts[0].required: true`, and no socket path, binary path, UID integer, or GID integer in any spec field. |
+| Integration | Controller emits the Process spec; `system-minijail` consumes it and invokes broker `SpawnRunner`; Endpoint resources publish TPM and control sockets for downstream consumers. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | Process spec golden tests proving all required and forbidden fields; preserved `minijail_swtpm_video.rs` contract tests |
+| Removal proof | `ProcessRole::Swtpm` and swtpm argv builder call sites can be retired after the canonical Process resource covers runner launch |
 
 Implement `build_swtpm_process_spec` in `resources.rs`. Tests prove:
 - `readOnlyRoot: true`.
@@ -1322,9 +1353,15 @@ Implement `build_swtpm_process_spec` in `resources.rs`. Tests prove:
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-003 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-003; owner: device-tpm EphemeralProcess resource builder |
+| Current source | `SwtpmIoctlFlushInput` in `packages/d2b-host/src/swtpm_argv.rs`; `ProcessRole::SwtpmPreStartFlush` in `packages/d2b-core/src/processes.rs` |
+| Reuse action | extract flush intent into mandatory EphemeralProcess resource; remove configurable `startupClear` path and caller-supplied binary path fields |
+| Destination | packages/d2b-provider-device-tpm/src/resources.rs; packages/d2b-provider-device-tpm/tests/flush_mandatory.rs |
+| Detailed design | Mandatory flush EphemeralProcess spec: implement `build_flush_ephemeral_process_spec`; no `startupClear` field exists; flush is always created before swtpm Process start with no skip path; TTLs are `successfulTtl: "1h"` and `failedTtl: "24h"`; no userNamespace on flush Process; deadlines are `startDeadline: "30s"` and `runtimeDeadline: "60s"`. |
+| Integration | Controller inserts the EphemeralProcess before every swtpm activation cycle; Process provider runs the flush against the control Endpoint fd before the long-lived swtpm Process becomes Ready. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | `tests/flush_mandatory.rs` plus contract proof that user-NS is long-lived only |
+| Removal proof | `ProcessRole::SwtpmPreStartFlush` and any optional startup-clear wiring are retired after mandatory EphemeralProcess coverage is complete |
 
 Implement `build_flush_ephemeral_process_spec` in `resources.rs`. Tests prove:
 - No `startupClear` field anywhere in spec or controller code.
@@ -1337,9 +1374,15 @@ Implement `build_flush_ephemeral_process_spec` in `resources.rs`. Tests prove:
 
 | Field | Value |
 | --- | --- |
-| Priority | P1 |
-| Blocked by | ADR046-device-tpm-003 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P1; blocked by ADR046-device-tpm-003; owner: device-tpm status builder |
+| Current source | Existing status/path observations from direct daemon TPM paths are superseded; status fields are defined in §10 |
+| Reuse action | net-new bounded Device status projection; do not reuse path/socket/UID/GID/PID observations |
+| Destination | packages/d2b-provider-device-tpm/src/status.rs; packages/d2b-provider-device-tpm/tests/{endpoint_ref.rs,redaction.rs} |
+| Detailed design | Device status builder: implement `build_device_status`; `tpmEndpointRef` is an `Endpoint/<name>` ResourceRef with no opaque endpoint ID compatibility alias and never a filesystem path; `stateVolumeRef` and `swtpmProcessRef` are canonical ResourceRef strings; no path, socket name, UID, GID, PID, or pidfd appears in status; `markerStatus` is one of `verified`, `missing`, `replaced`, or `unknown`. |
+| Integration | Controller writes Device status; Guest runtime Provider reads EndpointRef from Device status; CLI/support tooling reads bounded non-secret status. |
+| Data migration | None — status is re-derived during v3 reconcile; TPM state migration remains the Volume/marker migration in §17.3 |
+| Validation | `tests/endpoint_ref.rs`; `tests/redaction.rs`; status builder tests for allowed `markerStatus` values |
+| Removal proof | Legacy path/socket status compatibility aliases are absent; removal is proven by redaction/status tests |
 
 Implement `build_device_status` in `status.rs`. Tests prove:
 - `tpmEndpointRef` is an `Endpoint/<name>` ResourceRef; no opaque endpoint ID compatibility alias;
@@ -1352,9 +1395,15 @@ Implement `build_device_status` in `status.rs`. Tests prove:
 
 | Field | Value |
 | --- | --- |
-| Priority | P1 |
-| Blocked by | ADR046-device-tpm-007 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P1; blocked by ADR046-device-tpm-007; owner: device-tpm endpoint handoff integration |
+| Current source | Baseline guest wiring consumed socket paths from TPM sidecar state; v3 handoff is the Endpoint resource contract in §8.4 and §10.5 |
+| Reuse action | replace path handoff with EndpointRef and Zone runtime endpoint resolver fd acquisition |
+| Destination | packages/d2b-provider-device-tpm/src/{effect_port.rs,status.rs}; packages/d2b-provider-device-tpm/integration/guest_endpoint.rs |
+| Detailed design | EndpointRef handoff: hermetic tests prove `tpmEndpointRef` is an EndpointRef and never a path; integration proves Guest runtime Provider reads `tpmEndpointRef` and obtains the socket fd from the Zone runtime endpoint resolver with no path string in Guest spec or LaunchTicket API surface. |
+| Integration | Device status publishes EndpointRef; Guest runtime Provider resolves the Endpoint through the Zone endpoint resolver; LaunchTicket receives an fd, not a socket path. |
+| Data migration | None — endpoint handoff has no state migration; TPM data migration remains §17.3 |
+| Validation | `tests/endpoint_ref.rs`; `integration/guest_endpoint.rs` |
+| Removal proof | Socket-path handoff is superseded when all Guest runtime TPM attachment uses EndpointRef resolution |
 
 Hermetic test: `tpmEndpointRef` is an EndpointRef; no path. Integration test:
 Guest runtime Provider reads `tpmEndpointRef` and obtains socket fd from Zone
@@ -1365,9 +1414,15 @@ surface.
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-004 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-004; owner: device-tpm marker/fail-closed tests |
+| Current source | Existing provisioning marker behavior in `/var/lib/d2b/swtpm-markers/<vm>` is preserved and re-keyed by volume-local per §17.3 |
+| Reuse action | preserve fail-closed marker semantics while moving ownership to Volume/Device resources |
+| Destination | packages/d2b-provider-device-tpm/tests/marker_fail_closed.rs; packages/d2b-provider-device-tpm/integration/marker_tamper.rs |
+| Detailed design | Marker fail-closed test: FakeTpmEffectPort returning `markerStatus: replaced` makes Device Failed, prevents a second `ensure_state_volume` call, and prevents swtpm Process creation. Integration physically replaces `swtpm/`; volume-local sets Volume Failed; Device fails with no auto-recovery. |
+| Integration | volume-local observes marker state and reports Volume/marker status; controller maps that to Device failure and blocks Process creation; integration exercises the actual filesystem marker path through volume-local. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | `tests/marker_fail_closed.rs`; `integration/marker_tamper.rs` |
+| Removal proof | Any silent marker recreation path is removed/proven absent by the fail-closed tests |
 
 Hermetic: FakeTpmEffectPort returns `markerStatus: replaced` → Device Failed;
 no second `ensure_state_volume` call; swtpm Process not created.
@@ -1379,9 +1434,15 @@ Device Failed; no auto-recovery.
 
 | Field | Value |
 | --- | --- |
-| Priority | P1 |
-| Blocked by | ADR046-device-tpm-001 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P1; blocked by ADR046-device-tpm-001; owner: device-tpm controller Process descriptor |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new status-first controller Process spec; no Provider state Volume is reused or created |
+| Destination | packages/d2b-provider-device-tpm/src/resources.rs; packages/d2b-provider-device-tpm/tests/controller_process.rs |
+| Detailed design | Controller Process (status-first; no Provider state Volume): implement the controller Process spec from §4.1 with `processClass: controller`, `readOnlyRoot: true`, empty mounts, no controller-scratch namespace, no scratch mount, no `User/device-tpm-controller-system` state-layout principal, no permission to create Provider-owned Volumes, and restart re-derivation from resource store plus external marker/process observations while treating status as observation. |
+| Integration | ProviderDeployment creates the controller Process from the descriptor; controller status and Operation ledger carry bounded non-secret observations; Device-owned TPM data Volume remains separate from ProviderStateSet. |
+| Data migration | None — controller has no Provider state Volume to migrate; Device data migration remains §17.3 |
+| Validation | Controller Process spec tests proving the bullets in this item |
+| Removal proof | None — this item prevents introduction of a Provider state Volume and has no prior state owner to remove |
 
 Implement controller Process spec (§4.1). Tests prove:
 - `processClass: controller`; `readOnlyRoot: true`.
@@ -1402,9 +1463,15 @@ Implement controller Process spec (§4.1). Tests prove:
 
 | Field | Value |
 | --- | --- |
-| Priority | P1 |
-| Blocked by | ADR046-device-tpm-001 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P1; blocked by ADR046-device-tpm-001; owner: Nix Resource compiler for Device declarations |
+| Current source | `nixos-modules/components/tpm.nix` current `d2b.vms.<vm>.tpm.enable` option is replaced by the Device declaration in §17.1 |
+| Reuse action | replace VM-level TPM enable option with v3 Device resource emission and assertions |
+| Destination | nixos-modules/options-resources.nix and Nix eval/golden tests for §17.1 Device JSON |
+| Detailed design | Nix roundtrip test: Device Nix spec from §17.1 round-trips through the Nix emitter to expected resource JSON; emitted bundle contains no Volume, Process, or EphemeralProcess resources because controller-managed resources are not in the Nix bundle. |
+| Integration | Nix authoring emits only the Device and Provider resources; ResourceAPI admission hands the Device to the controller; controller creates managed resources at runtime. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | Nix roundtrip/golden test for §17.1 and emitted-bundle absence of controller-managed resources |
+| Removal proof | `d2b.vms.<vm>.tpm.enable` in `nixos-modules/components/tpm.nix` is superseded after Device Nix declaration roundtrip and migration are in place |
 
 Device Nix spec (§17.1) round-trips through the Nix emitter to expected
 resource JSON. Emitted bundle contains no Volume, Process, or EphemeralProcess
@@ -1414,9 +1481,15 @@ resources (`managedBy: controller` resources are not in the Nix bundle).
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-003 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-003; owner: device-tpm finalizer lifecycle |
+| Current source | Current TPM state retention behavior is tied to the swtpm directory and marker; v3 retention is `cleanupPolicy: never` on the Device-owned Volume |
+| Reuse action | preserve TPM identity retention while moving deletion sequencing to Resource finalizers |
+| Destination | packages/d2b-provider-device-tpm/src/controller.rs; packages/d2b-provider-device-tpm/tests/finalizer.rs |
+| Detailed design | Finalizer: Volume retained on Device deletion. Hermetic tests cover Device deletion finalizer leading to swtpm Process deletion, TPM state Volume not deleted because `cleanupPolicy: never`, Volume persists, Core emits `phase=Deleted` for Device after finalizer clears, and audit carries no path/UID. |
+| Integration | Resource deletion sets finalizer; controller deletes Process and retains Volume; core completes Deleted revision after finalizer clears; audit subsystem records redacted deletion outcome. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | `tests/finalizer.rs` proving Process deletion, retained Volume, core Deleted phase, and redacted audit |
+| Removal proof | Any cleanup path that deletes TPM state on Device deletion is removed/proven absent by the finalizer test |
 
 Hermetic: Device deletion finalizer → swtpm Process deleted → TPM state
 Volume NOT deleted (`cleanupPolicy: never`) → Volume persists. Core emits
@@ -1426,9 +1499,15 @@ Volume NOT deleted (`cleanupPolicy: never`) → Volume persists. Core emits
 
 | Field | Value |
 | --- | --- |
-| Priority | P0 |
-| Blocked by | ADR046-device-tpm-002 |
-| Evidence class | implemented-and-reachable |
+| Dependency/owner | P0; blocked by ADR046-device-tpm-002; owner: device-tpm migration/removal cleanup |
+| Current source | `packages/d2bd/src/*` direct broker/swtpm call sites; `packages/d2b-core/src/processes.rs` `ProcessRole::Swtpm` and `ProcessRole::SwtpmPreStartFlush`; `packages/d2b-host/src/swtpm_argv.rs` argv builders |
+| Reuse action | remove direct broker references from daemon and move argv builders into the Provider with binary path fields removed; retain broker ops only behind resource providers |
+| Destination | packages/d2bd/src/*; packages/d2b-core/src/processes.rs; packages/d2b-provider-device-tpm/src/; packages/d2b-host/src/swtpm_argv.rs |
+| Detailed design | Remove direct broker references: remove pre-ADR-0046 daemon swtpm broker call sites, retire `ProcessRole::Swtpm` and `ProcessRole::SwtpmPreStartFlush`, move argv builders from `d2b-host/src/swtpm_argv.rs` to `d2b-provider-device-tpm/src/` with binary path fields removed, while retaining `d2b-priv-broker/src/ops/swtpm_dir.rs` for `volume-local` and `spawn_runner.rs` for `system-minijail`. |
+| Integration | After controller/effect-port parity, daemon no longer calls TPM broker ops; Resource providers invoke broker effects from Volume and Process reconciliation; contract tests ensure swtpm sandbox/readiness still hold. |
+| Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
+| Validation | Static search/proof for no direct broker swtpm references in daemon/controller plus preserved swtpm contract tests |
+| Removal proof | Direct daemon swtpm call sites removed; `ProcessRole::Swtpm` and `ProcessRole::SwtpmPreStartFlush` retired; `d2b-host/src/swtpm_argv.rs` no longer owns Provider argv builders |
 
 Remove direct broker call sites for swtpm from pre-ADR-0046 daemon path.
 Retire `ProcessRole::Swtpm` and `::SwtpmPreStartFlush` from `d2b-core`.
@@ -1436,9 +1515,6 @@ Move argv builders from `d2b-host/src/swtpm_argv.rs` to
 `d2b-provider-device-tpm/src/` with binary path fields removed.
 `d2b-priv-broker/src/ops/swtpm_dir.rs` and `spawn_runner.rs` retained
 (used by `volume-local` and `system-minijail` respectively).
-
----
-
 ## 20. Tests
 
 ### Fast hermetic execution and test placement (D094)

@@ -11,7 +11,7 @@
 | Owners | `packages/d2b-provider-credential-secret-service/`, Credential controller (user-domain), Nix Credential compiler |
 | Depends on | `ADR-046-resources-credential`, `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resource-api-and-authorization`, `ADR-046-components-processes-and-sandbox` |
 | Supersedes | v2 `SecretServiceCredentialProvider` / `SecretServiceCredentialProviderFactory` in `d2b-realm-provider`; v2 `CredentialProvider` trait |
-| Work items | ADR046-credential-003 (primary), ADR046-credential-001, ADR046-credential-002, ADR046-credential-006, ADR046-credential-007, ADR046-credential-008 |
+| Work items | ADR046-cred-ss-003 (primary), ADR046-cred-ss-001, ADR046-cred-ss-002, ADR046-cred-ss-004, ADR046-cred-ss-005, ADR046-cred-ss-006 |
 
 ---
 
@@ -1199,12 +1199,12 @@ All controller handlers are async. The reconcile loop follows
 
 ## 15. Implementation work items
 
-### ADR046-credential-003 (primary)
+### ADR046-cred-ss-003 (primary)
 
 | Field | Value |
 | --- | --- |
-| Work item ID | `ADR046-credential-003` |
-| Dependency/owner | `ADR046-credential-001` (contract types); `ADR046-credential-002` (service proto); `ADR046-reconcile-001`; credential-secret-service owner |
+| Work item ID | `ADR046-cred-ss-003` |
+| Dependency/owner | `ADR046-cred-ss-001` (contract types); `ADR046-cred-ss-002` (service proto); `ADR046-reconcile-001`; credential-secret-service owner |
 | Current source | `packages/d2b-realm-provider/src/provider.rs:CredentialProvider` (minimal v3 baseline) |
 | Reuse source | main `a1cc0b2d`: `packages/d2b-provider-credential-secret-service/src/lib.rs` (full implementation); `src/tests.rs` (full test suite including `FakeOo7Port`, lease lifecycle, locked state, canary enforcement, cardinality limits) |
 | Reuse action | copy and adapt |
@@ -1215,7 +1215,19 @@ All controller handlers are async. The reconcile loop follows
 | Validation | See §16 |
 | Removal proof | Old `d2b-realm-provider:CredentialProvider` trait removed only after all three v3 Credential Provider controllers reach full reconcile parity |
 
-### ADR046-credential-001 (dependency: contract types)
+### ADR046-cred-ss-001 (dependency: contract types)
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Dependency for ADR046-cred-ss-003; owner: `packages/d2b-contracts` Credential ResourceType contract |
+| Current source | `packages/d2b-realm-provider/src/provider.rs:CredentialProvider`; `packages/d2b-realm-provider/src/credential.rs` opaque credential refs and `OpaqueAzureRef` helpers |
+| Reuse action | adapt current credential/status concepts into v3 ResourceType DTOs; reuse `OpaqueAzureRef` directly where applicable |
+| Destination | packages/d2b-contracts/src/v3/credential.rs |
+| Detailed design | Contract types: define `CredentialSpec`, `CredentialStatus`, `CredentialLeaseHandle`, `OperationClass`, `PlacementBinding`, `CredentialConditionType`, and serde/validation/redaction helpers. Reuse `OpaqueAzureRef` from the v3 baseline. Full detail remains in `ADR-046-resources-credential` §Implementation work items. |
+| Integration | Nix compiler emits these DTOs; ResourceAPI stores them; credential-secret-service controller/service consumes them; CLI and conformance tests validate base Credential spec/status behavior. |
+| Data migration | Full d2b 3.0 reset; no v2 CredentialProvider status/config import |
+| Validation | Credential ResourceType schema/serde/redaction tests from `ADR-046-resources-credential`; credential-secret-service conformance consumes the shared types |
+| Removal proof | Old `d2b-realm-provider:CredentialProvider` trait and `CredentialStatus` enum are removed only after all three v3 Credential Provider controllers reach full reconcile parity |
 
 Defines `CredentialSpec`, `CredentialStatus`, `CredentialLeaseHandle`,
 `OperationClass`, `PlacementBinding`, `CredentialConditionType`, and all
@@ -1224,21 +1236,57 @@ serde/validation/redaction helpers in
 directly from v3 `d2b-realm-provider/src/credential.rs`. Full detail in
 `ADR-046-resources-credential` §Implementation work items.
 
-### ADR046-credential-002 (dependency: service proto)
+### ADR046-cred-ss-002 (dependency: service proto)
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Dependency for ADR046-cred-ss-003; owner: credential service contract/codegen |
+| Current source | None — net-new v3 `d2b.credential.v3` service; no pre-ADR45 baseline service proto equivalent |
+| Reuse action | net-new service contract replacing the v2 in-process `CredentialProvider` trait |
+| Destination | packages/d2b-contracts/proto/v3/credential.proto; packages/d2b-credential-service/ |
+| Detailed design | Service proto: define the `d2b.credential.v3` protobuf/ttrpc service and generate typed client/server code. Full detail remains in `ADR-046-resources-credential` §Implementation work items. |
+| Integration | d2b-bus routes Credential service calls to credential-secret-service Process instances; generated client/server types bind the controller/service implementation to ComponentSession delivery. |
+| Data migration | Full d2b 3.0 reset; no v2 service state import |
+| Validation | Generated-code compile tests and credential service contract tests from `ADR-046-resources-credential`; credential-secret-service lifecycle/delivery tests consume the generated service |
+| Removal proof | V2 `CredentialProvider` trait calls are superseded by `d2b.credential.v3` only after all credential providers reach parity |
 
 Defines `d2b.credential.v3` protobuf/ttrpc service in
 `packages/d2b-contracts/proto/v3/credential.proto` and generates typed
 client/server in `packages/d2b-credential-service/`. Full detail in
 `ADR-046-resources-credential` §Implementation work items.
 
-### ADR046-credential-006 (dependency: controller toolkit)
+### ADR046-cred-ss-004 (dependency: controller toolkit)
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Dependency for ADR046-cred-ss-003; owner: common Credential controller/reconciliation toolkit |
+| Current source | ADR-only controller pattern from `ADR-046-resource-reconciliation`; no concrete secret-service baseline controller to import |
+| Reuse action | net-new shared controller handler pattern specialized by each Credential Provider |
+| Destination | packages/d2b-provider-credential-<impl>/src/controller.rs |
+| Detailed design | Controller toolkit: implement the common Credential controller handler conforming to the `ADR-046-resource-reconciliation` async loop. Secret-service-specific controller code plugs into this handler while keeping provider bytes out of status/store/audit. |
+| Integration | Resource watches and Operation ledger drive the controller loop; credential-secret-service handler uses the toolkit to reconcile Credential status, finalizers, Process health, and service lifecycle. |
+| Data migration | None — controller toolkit code only; no runtime state migration |
+| Validation | Shared reconciliation tests from `ADR-046-resources-credential`; credential-secret-service lifecycle/fault tests verify the handler integration |
+| Removal proof | None — shared toolkit is additive; v2 trait removal is tracked by ADR046-cred-ss-003/001 parity |
 
 Implements the common Credential controller handler conforming to the
 `ADR-046-resource-reconciliation` async loop in
 `packages/d2b-provider-credential-<impl>/src/controller.rs`. Full detail in
 `ADR-046-resources-credential` §Implementation work items.
 
-### ADR046-credential-007 (dependency: Nix compiler)
+### ADR046-cred-ss-005 (dependency: Nix compiler)
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Dependency for ADR046-cred-ss-003; owner: Nix resource compiler and activation cleanup |
+| Current source | None — net-new v3 `d2b.zones.<zone>.resources.<name>` Credential/Provider authoring surface; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new Nix resource emission and cleanup contract |
+| Destination | nixos-modules/options-resources.nix; nixos-modules/activation-nixos-cleanup.nix |
+| Detailed design | Nix compiler: implement `d2b.zones.<zone>.resources.<name>` authoring, eval-time assertions, canonical JSON emission, artifact catalog, bundle digest, and generation cleanup contract. Full detail remains in `ADR-046-resources-credential` §Implementation work items. |
+| Integration | Nix emits Provider/Credential resource JSON and artifact catalog entries; ResourceAPI admission and credential-secret-service controller consume the rendered resources; activation cleanup issues async Delete/finalizer flow on generation removal. |
+| Data migration | Full d2b 3.0 reset; no old credential config is imported into v3 resources |
+| Validation | Nix eval/assertion/golden tests from `ADR-046-resources-credential`; credential-secret-service cleanup rollback integration fixture |
+| Removal proof | None — new v3 Nix resource surface; old trait removal waits for controller parity |
 
 Implements `d2b.zones.<zone>.resources.<name>` Nix authoring, eval-time
 assertions, canonical JSON emission, artifact catalog, bundle digest, and
@@ -1246,7 +1294,19 @@ generation cleanup contract in `nixos-modules/options-resources.nix` and
 `nixos-modules/activation-nixos-cleanup.nix`. Full detail in
 `ADR-046-resources-credential` §Implementation work items.
 
-### ADR046-credential-008 (dependency: audit/OTEL)
+### ADR046-cred-ss-006 (dependency: audit/OTEL)
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | Dependency for ADR046-cred-ss-003; owner: credential-secret-service audit and telemetry implementation |
+| Current source | `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; secret-service main reuse canary tests listed in §14 |
+| Reuse action | adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces |
+| Destination | packages/d2b-provider-credential-secret-service/src/{audit.rs,telemetry.rs} |
+| Detailed design | Audit/OTEL: emit audit records and OTEL spans/metrics for all credential service methods and controller events, with canary enforcement and no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. |
+| Integration | Controller and service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded event/span/metric records; canary tests verify every public observable surface stays secret-free. |
+| Data migration | None — audit/telemetry only; no runtime state migration |
+| Validation | Credential audit/OTEL tests from `ADR-046-resources-credential`; `tests/canary.rs` and `tests/delivery.rs` for credential-secret-service |
+| Removal proof | None — audit/telemetry helpers are new; no prior owner to remove |
 
 Implements audit record and OTEL span/metric emission for all credential
 service methods and controller events in

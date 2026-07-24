@@ -102,7 +102,32 @@ controller relists its children and restores the complete desired child set and
 configuration. Owner cycles fail, deletion is child-first/finalizer-aware, and
 immutable UIDs prevent delete/recreate name confusion.
 
-Every resource uses native `ResourceType`/`ResourceSpec` terminology and has:
+### Standard ResourceTypes
+
+The frozen catalog (D035) has **17 standard, unqualified, Zone-unique
+ResourceTypes**:
+
+- control plane: `Zone`, `ZoneLink`, `Provider`, `Role`, `RoleBinding`,
+  `Quota`, `EmergencyPolicy`;
+- execution: `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`;
+- primitives: `Volume`, `Network`, `Device`, `Credential`;
+- connectivity: `Endpoint` (added by **D092**).
+
+`Endpoint` promotes stable managed endpoint identities (TPM/GPU/Wayland/vhost/
+QMP/guest-control/service/listener endpoints) from opaque IDs to first-class
+resources referenced by `Endpoint/<name>` refs; `ProcessSpec` no longer carries
+an inline `endpoints` field, and per-session/high-churn handles
+(pidfd, fd index, named-stream id, transport byte-stream handle) stay internal.
+A general promotion test (D092) decides ResourceType vs opaque handle for every
+entity.
+
+Every ResourceType is **layered**: a Provider implements the ResourceType
+**base spec plus a strict provider extension** (**D089**), and status is the
+**three-layer** common/base/provider shape (**D088**). Vendor ResourceTypes and
+every Provider spec/status extension schema are qualified on the project's
+public domain **`d2bus.org`** — `<provider>.d2bus.org.<Type>` and
+`<provider>.d2bus.org/<Type>/spec` (**D080**); there is no legacy
+project-domain alias (clean reset). API binding rejects ResourceType collisions.
 
 ```yaml
 apiVersion: ...
@@ -141,9 +166,35 @@ starting, deleting, retrying, and other transition detail.
 ### Providers and controllers
 
 A Provider must be installed as a Zone-local `Provider/<name>` resource before
-it can be selected. Every Provider is one independently buildable crate and
-signed package. It may contain several separately sandboxed controller,
-service, and worker binaries, but it declares one Provider identity.
+it can be selected; a `providerRef` resolves only a `Ready` `Provider` resource
+in the same Zone, and package presence alone is not installation. Provider
+ResourceSpec is exactly `{ artifactId, config }`: `artifactId` selects a signed
+Nix artifact-catalog/manifest entry, and `config` is validated against the
+Provider's generated settings schema. The set defines **27 Providers**, each an
+independently buildable crate and signed, separately-built multi-process
+package that may contain several separately sandboxed controller, service, and
+worker binaries but declares one Provider identity. They are indexed in
+[`docs/specs/providers/README.md`](../specs/providers/README.md).
+
+Component state is core-governed and **status-first** (**D086/D087**): bounded,
+non-secret Provider/controller state lives in the owning resource's `status`
+subresource by default (revisioned, size/cardinality bounded). A component
+declares a separate `Volume` — created and deleted by **core ProviderDeployment**,
+never by the semantic controller — only when its state is secret/sensitive
+private data, large or binary/file content, or otherwise unsuitable for
+revisioned API/status churn. Stateless and status-sufficient components declare
+no state Volume. When one is declared it is `Provider/volume-local`-backed,
+`persistent`, carries a nonzero quota and identity marker, and is `Ready` before
+the component Process starts. `Provider/volume-local` is the sole `Volume`
+reconciler and owns Host source-side storage; `Provider/volume-virtiofs` owns
+the virtiofsd Process and the qualified `virtiofs.d2bus.org.Export` attachment
+and never adds `Volume` to its exported ResourceTypes.
+
+Semantic Provider controllers compose behavior by creating owned primitive
+resources and by calling typed `EffectPort` interfaces whose host-mutating
+implementations are resolved by core and executed through the privileged
+broker; controllers never call spawn, systemd, minijail, broker, filesystem,
+network, or device effects directly.
 
 Controller processes own their watch/coalescing queues and retry decisions.
 Core validates signed watch plans, filters by API/scope/ownership/dependencies,
@@ -152,9 +203,11 @@ delivers bounded reconcile hints immediately after durable commit. All
 reconciliation APIs are asynchronous. A dedicated watch task keeps reading
 while per-resource tasks reconcile; independent resources run in parallel and
 long-running Process effects do not block the next ready Process. There is no
-fixed poll, debounce, or inter-resource sleep. All controllers implement the
-standard reconciliation contract and commit optimistic
-`ResourceMutationBatch` values.
+fixed poll, debounce, or inter-resource sleep. A committed UX-affecting mutation
+gets a commit-gated **expedited reconcile** (**D090**). All controllers
+implement the standard reconciliation contract and commit optimistic
+`ResourceMutationBatch` values. Every resource carries a currency/disruptive
+upgrade/recycle lifecycle with CLI projections (**D091**).
 
 ### Hosts, Guests, and process placement
 
@@ -273,7 +326,19 @@ Provider/component. Bus/Zone/relay intermediaries authorize and forward opaque
 protected records without decrypting them. Tokens never enter resource
 spec/status/store/revision/audit/telemetry, NN, or bootstrap sessions.
 
-### Primitive ResourceSpecs
+The `selected d2b transport` is supplied by a transport-only Provider that owns
+no Zone ResourceType: `Provider/transport-unix` (same-host),
+`Provider/transport-vsock` (host↔Guest and delegation), and
+`Provider/transport-azure-relay` (remote). A parent reaches a child Zone only
+through its local `ZoneLink/<name>` resource, which carries the ComponentSession
+over the selected transport; ordinary resource references never cross Zones.
+Consistent with [ADR 0032](0032-d2b-v2-constellation-control-plane.md), realm
+relay/provider credentials, remote node registries, and realm audit stay in a
+per-realm gateway Guest and never enter the host daemon, broker, or host
+bundle; a relay-authenticated peer is never mapped to a local lifecycle role.
+`Provider/credential-entra` is a Guest-resident adapter to an Entrablau-enabled
+identity Guest `Endpoint` (**D093**): login/token/TPM state stays in the Guest,
+login is a typed CLI flow, and there is no Host ambient authentication.
 
 A primitive is a complete standard low-level ResourceSpec. The model is kept
 small: Host; Guest; Process/EphemeralProcess; Volume; and only independently
@@ -352,9 +417,80 @@ Costs:
 
 ## Normative specifications
 
-The authoritative set is indexed by
-[`docs/specs/README.md`](../specs/README.md). The decision register is
-[`ADR-046-decision-register.md`](../specs/ADR-046-decision-register.md).
+The authoritative set has **55 members** — 28 foundation, resource,
+cross-cutting, and closing specs plus 27 Provider dossiers — indexed by
+[`docs/specs/README.md`](../specs/README.md) and bound by the generated
+`docs/specs/ADR-046-spec-set.json` and `docs/specs/ADR-046-work-items.json`
+manifests. This decision and every member are `Proposed` and reviewed as one
+atomic unit; the PR delivers documentation only.
+
+Foundation and platform (15): resource object model / three-layer status
+([`ADR-046-resource-object-model`](../specs/ADR-046-resource-object-model.md)),
+async embedded redb resource plane
+([`ADR-046-resource-store-redb`](../specs/ADR-046-resource-store-redb.md)), API
+and native Role/RoleBinding authorization
+([`ADR-046-resource-api-and-authorization`](../specs/ADR-046-resource-api-and-authorization.md)),
+asynchronous owner-driven reconciliation with commit-gated expedited reconcile
+([`ADR-046-resource-reconciliation`](../specs/ADR-046-resource-reconciliation.md)),
+primitive composition
+([`ADR-046-primitive-resource-composition`](../specs/ADR-046-primitive-resource-composition.md)),
+ComponentSession/Noise/d2b-bus
+([`ADR-046-componentsession-and-bus`](../specs/ADR-046-componentsession-and-bus.md)),
+Zone-link routing
+([`ADR-046-zone-routing`](../specs/ADR-046-zone-routing.md)), Provider model and
+`{artifactId,config}` packaging
+([`ADR-046-provider-model-and-packaging`](../specs/ADR-046-provider-model-and-packaging.md)),
+status-first Provider state
+([`ADR-046-provider-state`](../specs/ADR-046-provider-state.md)), fixed core
+controllers
+([`ADR-046-core-controllers`](../specs/ADR-046-core-controllers.md)), the
+component/process/sandbox model
+([`ADR-046-components-processes-and-sandbox`](../specs/ADR-046-components-processes-and-sandbox.md)),
+Nix direct-ResourceSpec authoring
+([`ADR-046-nix-configuration`](../specs/ADR-046-nix-configuration.md)),
+terminology
+([`ADR-046-terminology-and-identities`](../specs/ADR-046-terminology-and-identities.md)),
+the current-code migration map
+([`ADR-046-current-code-migration-map`](../specs/ADR-046-current-code-migration-map.md)),
+and the resolved decision register
+([`ADR-046-decision-register`](../specs/ADR-046-decision-register.md)).
+
+Resource catalog (6): the 17 standard ResourceTypes (including `Endpoint`) are
+specified in
+[`ADR-046-resources-zone-control`](../specs/ADR-046-resources-zone-control.md),
+[`ADR-046-resources-host-guest-process-user`](../specs/ADR-046-resources-host-guest-process-user.md),
+[`ADR-046-resources-volume`](../specs/ADR-046-resources-volume.md),
+[`ADR-046-resources-network`](../specs/ADR-046-resources-network.md),
+[`ADR-046-resources-device`](../specs/ADR-046-resources-device.md), and
+[`ADR-046-resources-credential`](../specs/ADR-046-resources-credential.md).
+
+Cross-cutting (3):
+[`ADR-046-cli-and-operations`](../specs/ADR-046-cli-and-operations.md),
+[`ADR-046-telemetry-audit-and-support`](../specs/ADR-046-telemetry-audit-and-support.md),
+and the threat model
+[`ADR-046-security-and-threat-model`](../specs/ADR-046-security-and-threat-model.md).
+
+Closing (4): destructive reset/cutover
+([`ADR-046-reset-and-cutover`](../specs/ADR-046-reset-and-cutover.md)),
+pre-acceptance feasibility proofs/spikes
+([`ADR-046-feasibility-and-spikes`](../specs/ADR-046-feasibility-and-spikes.md)),
+validation and delivery waves with fast hermetic tests and integration-only
+slow coverage (**D094**)
+([`ADR-046-validation-and-delivery`](../specs/ADR-046-validation-and-delivery.md)),
+and the efficiency/streamline contract
+([`ADR-046-streamline`](../specs/ADR-046-streamline.md)).
+
+Provider dossiers (27): one dossier per installed `Provider/<name>`, indexed
+with owned/exported ResourceTypes and component placement in
+[`docs/specs/providers/README.md`](../specs/providers/README.md).
+
+The resolved decisions include the status-first state default (D086/D087),
+three-layer status (D088), layered base spec + strict provider extension (D089),
+commit-gated expedited reconcile (D090), resource currency/disruptive
+upgrade/recycle with CLI projections (D091), the `Endpoint` ResourceType and
+promotion criterion (D092), Guest-resident Entrablau identity custody (D093),
+fast-test/legacy-retirement delivery (D094), and the global `d2bus.org`
+public-contract namespace (D080).
 
 Foundation specs are authored first. Once stable, all ready file-disjoint
 resource, core-controller, cross-cutting, and Provider dossier specs are

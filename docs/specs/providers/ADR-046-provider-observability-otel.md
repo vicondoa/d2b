@@ -1704,7 +1704,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-observability-otel/src/nix/journald.nix`; `packages/d2b-provider-observability-otel/src/journald.rs` |
 | Detailed design | Per `ADR-046-telemetry-audit-and-support` §journald stdout/stderr ingestion: cgroup filter `z-<zone-id>/*` and `s-<execution-id>/*`; redaction: drop `MESSAGE` bodies matching credential/secret/path patterns, `_CMDLINE`, `_EXE`, `INVOCATION_ID`; retain `_SYSTEMD_CGROUP`, `PRIORITY`, `SYSLOG_IDENTIFIER`, and structured `KEY=VALUE` from declared allow-set. `d2b.zones.<name>.observability.journald.enable = false` Nix option (default disabled). |
 | Integration | Collector binary journald receiver config path → cgroup filter expression → OTel Collector journald receiver → redaction filter → OTLP export |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Nix eval test: filter expression set when enabled; assert `_CMDLINE` and `INVOCATION_ID` in drop list; `tests/redaction.rs` for journald field redaction |
 | Removal proof | Not applicable |
 
@@ -1719,7 +1719,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-contract-tests/tests/policy_observability.rs` (updated); `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new, per ADR046-telem-008); `packages/d2b-provider-observability-otel/tests/no_vm_label_in_metrics.rs` |
 | Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add gate: `no_isolation` must not appear in any Provider `MetricDescriptor` label or span attribute catalog. (3) Adapt `minijail_relay_otel.rs` shape test for Provider-managed runner (no broker `RunnerRole::OtelHostBridge`). (4) Add metric inventory gates for `d2b_otel_*` instruments from this spec. (5) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. |
 | Integration | Contract-tests run in workspace `make test-drift` and `make test-lint` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All contract-tests pass after update; existing allowlist test does not regress |
 | Removal proof | Not applicable |
 

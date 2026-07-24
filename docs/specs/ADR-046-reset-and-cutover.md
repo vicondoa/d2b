@@ -1649,7 +1649,7 @@ applies here exactly as everywhere else in the repository).
 | Destination | `packages/d2b-cutover/src/{bundle_validate,trust_preflight}.rs` |
 | Detailed design | Independent legacy-flake-check gate; candidate v3 bundle schema/cross-ref/determinism validation per [Config/artifact/schema validation](#configartifactschema-validation); Provider trust preflight per `ADR-046-provider-model-and-packaging` "Trust" |
 | Integration | Invoked by `preflight` before the snapshot is written; failures block `plan` from being offered |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cutover-candidate-bundle-validation.nix`; trust-preflight rejection tests for each of digest/publisher/signature/deny/provenance/conformance failure modes |
 | Removal proof | Not applicable |
 
@@ -1729,7 +1729,7 @@ applies here exactly as everywhere else in the repository).
 | Destination | `packages/d2b-cutover/src/{verify,doctor,degraded}.rs` |
 | Detailed design | The ten `verify` checks in [Post-cutover verification](#post-cutover-verification); the `cutover-quarantined` degraded class and `doctor` reporting in [Failure/quarantine/manual recovery](#failurequarantinemanual-recovery); audit chain closure/genesis-record cross-check (check 9) |
 | Integration | `d2b host cutover verify`/`doctor` CLI commands; consumed by the Phase 10 finalize gate table |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Injected-digest-mismatch test for TPM/durable-Volume verify checks; audit-genesis-cross-check test; `cutover-full-rehearsal.nix` |
 | Removal proof | Not applicable |
 
@@ -1761,7 +1761,7 @@ applies here exactly as everywhere else in the repository).
 | Destination | `packages/d2b-cutover/src/{journal,rollback,hold}.rs` |
 | Detailed design | Append-only journal per [Crash/power-loss/retry/idempotency journals](#crashpower-lossretryidempotency-journals); [Rollback boundary](#rollback-boundary) enforcement (`cutover-rollback-window-closed` past phase 4); cutover-wide incident hold per [Incident hold (cutover-wide)](#incident-hold-cutover-wide) |
 | Integration | `d2b host cutover rollback`/`hold` CLI commands; consulted by ADR046-reset-003's disposition executor and ADR046-reset-008's finalize gate before every mutating step |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cutover_rollback_window_closes_after_phase_5`; incident-hold-blocks-destructive-step test |
 | Removal proof | Not applicable |
 

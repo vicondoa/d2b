@@ -1426,7 +1426,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/{seqpacket,identity,socket}.rs` |
 | Detailed design | Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup — that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available |
 | Integration | `portal.rs::open_transport` calls `SeqpacketSocket::getsockopt(SO_TYPE)` and `setsockopt(SO_PASSCRED)`, constructs `UnixSeqpacketTransport`, hands OwnedTransport FD back to caller |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here` |
 | Removal proof | `d2b-realm-transport` seqpacket path retired after ZoneLink sessions migrate |
 
@@ -1444,7 +1444,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/{stream,socket}.rs` |
 | Detailed design | Copy verbatim; add `attachment_support: false` in `TransportDescriptor` (stream never carries SCM_RIGHTS regardless of route class); `admission.rs::validate_route_class` rejects `attachments_enabled=true` for stream |
 | Integration | Same path as seqpacket but without SCM_RIGHTS paths |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::stream_open_transport_forces_no_attachments`; `tests/identity.rs::stream_transport_reassembles_partial_and_coalesced_records` |
 | Removal proof | No current stream ZoneLink path exists; stream is net-new |
 
@@ -1462,7 +1462,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/credit.rs` |
 | Detailed design | Copy all five types verbatim; import scope-capacity constants from v3 contract; add `#[derive(Debug)]` with redacted Display (no raw counts in Debug output) |
 | Integration | `CreditScopeSet` created per active ComponentSession; `CreditBundle` per packet receive; credits released in `UnixAttachmentPayload::close()` |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 4 credit test functions; add `credit_released_on_attachment_close` and `emergency_headroom_constant_across_fd_counts` |
 | Removal proof | No current code path uses this crate directly; new |
 
@@ -1480,7 +1480,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/descriptor.rs` |
 | Detailed design | Copy verbatim; adapt `DescriptorPolicy::verify` to produce `AcceptedAttachment` carrying `ObjectIdentity` binding for v3 ComponentSession attachment descriptor model; `pid` not stored beyond liveness check |
 | Integration | Called by seqpacket transport after decrypting attachment descriptor |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` and `duplicate_kernel_objects_are_rejected_and_cleaned_up` |
 | Removal proof | Broker pidfd-open path in `d2b-priv-broker/src/sys.rs` serves different purpose (process supervision); no removal dependency |
 
@@ -1498,7 +1498,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/admission.rs` |
 | Detailed design | `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)` calls `getsockopt(SO_TYPE)` (blocking adapter) on `received_fd`: `SOCK_SEQPACKET` must match `"seqpacket"`, `SOCK_STREAM` must match `"stream"`, any other type fails `invalid-socket-fd`; if `route_class == RouteClass::ZoneLink && attachments_enabled == true` fail `attachment-policy-conflict` with detail `cross-zone-attachments-forbidden`; if `socket_kind == "stream" && attachments_enabled == true` fail `attachment-policy-conflict`; no Noise profile enforcement (that is ComponentSession's responsibility); returns `Ok(RouteAdmission { route_class, socket_kind, attachments_enabled })` |
 | Integration | Called by `portal.rs::open_transport` before the monitoring dup and handle allocation |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`; `stream_fd_passes_stream_kind`; `seqpacket_fd_rejects_stream_kind_declaration`; `zone_link_with_attachments_enabled_fails`; `local_portal_seqpacket_with_attachments_accepted`; `stream_with_attachments_enabled_rejected` |
 | Removal proof | No current code has this gate; new path |
 
@@ -1516,7 +1516,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/{portal,service}.rs` |
 | Detailed design | `portal.rs`: `PortalHandler` struct owns a bounded `HashMap<TransportHandle, MonitorState>` (capacity `MAX_OPEN_TRANSPORTS=256`); `open_transport(req, attachment_fd)` validates via `admission.rs`, dups FD, allocates handle, stores `MonitorState { dup_fd, observation_senders: Vec<NamedStreamSender> }`; `close_transport(handle)` closes dup FD, half-closes all observation senders, removes entry; `observe_transport(handle)` registers a new `NamedStreamSender` and spawns an async epoll-watcher task on the dup FD; `TransportHandle` is a `[u8; 16]` random token; redacted in all Debug impls; `service.rs` is the binary entry: accepts the allocator-issued portal endpoint FD at launch, runs `GeneratedTransportServiceServer` over it, dispatches to `PortalHandler` |
 | Integration | Core ZoneLink controller calls the three methods via d2b-bus; portal endpoint FD is supplied by Zone runtime/allocator at Process spawn, not SD_LISTEN_FDS |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::open_transport_zone_link_validates_and_returns_ownedtransport`; `open_transport_local_portal_seqpacket_with_attachments_accepted`; `open_transport_zone_link_attachments_enabled_rejected`; `close_transport_is_idempotent_after_handle_removed`; `observe_transport_delivers_pollhup_as_peer_disconnected`; `handle_table_rejects_at_max_capacity`; `restart_clears_all_handles` |
 | Removal proof | Ad-hoc IPC stubs in `d2bd/src/` retired after portal migration |
 
@@ -1588,6 +1588,6 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/integration/` and `integration/README.md` |
 | Detailed design | Four scenarios: `transport_open.rs` (fake Zone portal, allocator-socketpair FD attachment in → OwnedTransport attachment out → verify socket kind, CLOEXEC, SO_PASSCRED enabled; p95 latency assertion ≤2 ms); `fd_transfer.rs` (seqpacket `SCM_RIGHTS` transfer through opened transport, credit accounting, scavenge on error injection); `reconnect.rs` (CloseTransport + re-OpenTransport with fresh socketpair, verify previous handle is unknown, verify monitoring dup closed); `observation_stream.rs` (ObserveTransport stream receives `PEER_DISCONNECTED` event when peer closes socketpair end within 5 ms p95). `integration/README.md` documents prerequisites (no KVM required; all scenarios use in-process socketpairs and fake Zone API endpoint stub), invocation (`cargo test -p d2b-provider-transport-unix --test integration`), environment variables, and expected output |
 | Integration | Invoked by `make test-integration`; no host mutation; each scenario creates its own socketpairs |
-| Data migration | None |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All four scenarios pass in CI; latency assertions enforced using monotonic timestamps; scavenge correctness verified by open-FD count before/after error injection |
 | Removal proof | Ad-hoc IPC test stubs retired after scenario parity |

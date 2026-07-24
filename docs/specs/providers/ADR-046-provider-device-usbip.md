@@ -1280,11 +1280,15 @@ assert settings.networkRef zone == device zone;
 
 | Field | Value |
 | --- | --- |
-| Title | Define `UsbipEffectPort` trait in `d2b-contracts` |
-| Destination | `packages/d2b-contracts/src/usbip_effect_port.rs` |
-| Depends on | `d2b-contracts` crate shape stabilised (shared root contract) |
-| Source | New |
-| Evidence class | ADR-only → design + implement |
+| Dependency/owner | d2b-contracts crate shape stabilised by shared root contract; d2b-contracts owner |
+| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new trait definition |
+| Destination | packages/d2b-contracts/src/usbip_effect_port.rs |
+| Detailed design | Define UsbipEffectPort trait in d2b-contracts with DeviceUid, NetworkUid, LeaseToken, FirewallToken, KernelModuleClass, DeviceProbeResult, and UsbipEffectError; export the trait and types only with no implementation in d2b-contracts; add conformance tests in d2b-contracts/tests/usbip_effect_port.rs. |
+| Integration | Provider/device-usbip controller depends on this trait for injected semantic effects; the framework core adapter implements it in ADR046-usbip-002. |
+| Data migration | None — docs/tooling only; no runtime state |
+| Validation | d2b-contracts tests for trait object safety, redacted Debug behavior, method signatures, and no implementation leakage. |
+| Removal proof | None — net-new; no prior owner to remove |
 
 Define the `UsbipEffectPort` async trait with the method set in § UsbipEffectPort.
 Define `DeviceUid`, `NetworkUid`, `LeaseToken`, `FirewallToken`, `KernelModuleClass`,
@@ -1297,11 +1301,15 @@ in `d2b-contracts`; trait only. Add conformance tests in `d2b-contracts/tests/us
 
 | Field | Value |
 | --- | --- |
-| Title | Implement `UsbipEffectPort` in framework core adapter |
-| Destination | `packages/d2b-core/src/device_usbip_adapter.rs` |
-| Depends on | ADR046-usbip-001; `UsbipBindFirewallRule` broker op; `usbip_argv.rs` in `d2b-host` |
-| Source | Adapt: `packages/d2bd/src/usbip_state_machine.rs`, `usbip_reconcile_state.rs`, `packages/d2b-host/src/usbip_argv.rs`, `packages/d2b-priv-broker/src/ops/usbip_firewall.rs`, `usbip_host.rs`, `usbip_lock.rs` |
-| Evidence class | implemented-but-unwired → adapt and wire |
+| Dependency/owner | ADR046-usbip-001; UsbipBindFirewallRule broker op; d2b-host usbip argv support; framework core adapter owner |
+| Current source | packages/d2bd/src/usbip_state_machine.rs, packages/d2bd/src/usbip_reconcile_state.rs, packages/d2b-host/src/usbip_argv.rs, packages/d2b-priv-broker/src/ops/usbip_firewall.rs, usbip_host.rs, and usbip_lock.rs |
+| Reuse action | extract and adapt into framework-internal adapter |
+| Destination | packages/d2b-core/src/device_usbip_adapter.rs |
+| Detailed design | Implement UsbipEffectPort in the core adapter: signed-bundle busid lookup, same-Zone validation, OFD lock management, broker dispatch for UsbipBindFirewallRule, sysfs withhold, anti-spoof probe, and post-effect audit emission while never exposing raw busid, lock path, nftables body, audit structs, or broker wire types to the Provider caller. |
+| Integration | Reconcile framework injects the adapter into Provider/device-usbip; adapter calls privileged broker and d2b-host argv helpers behind the semantic trait. |
+| Data migration | Full d2b 3.0 reset; adapter resumes from Device status rather than importing daemon-coupled USBIP reconciler state |
+| Validation | packages/d2b-core/tests/device_usbip_adapter.rs for same-Zone gate, anti-spoof logic, redaction, broker call mapping, and no raw busid exposure. |
+| Removal proof | Old daemon-coupled adapter call sites are removed by ADR046-usbip-009 after Provider wiring and adapter tests pass. |
 
 Implement the adapter: busid lookup from signed bundle, same-Zone check, OFD lock
 management, broker dispatch for `UsbipBindFirewallRule`, sysfs withhold, post-effect
@@ -1315,11 +1323,15 @@ type to the trait caller. Add unit tests for same-Zone gate and anti-spoof logic
 
 | Field | Value |
 | --- | --- |
-| Title | Create `d2b-provider-device-usbip` crate with required layout |
-| Destination | `packages/d2b-provider-device-usbip/` |
-| Depends on | ADR046-usbip-001; Provider model crate structure |
-| Source | New |
-| Evidence class | ADR-only → implement |
+| Dependency/owner | ADR046-usbip-001; Provider model crate structure; device-usbip provider owner |
+| Current source | None — net-new Provider crate; no pre-ADR45 baseline equivalent |
+| Reuse action | net-new crate skeleton with contract reuse |
+| Destination | packages/d2b-provider-device-usbip/ |
+| Detailed design | Create d2b-provider-device-usbip crate with src, tests, integration, and README; implement lib.rs, validation.rs with bus-ID corpus from d2b-contracts::usbip, and a stub controller with compile-checked UsbipEffectPort dependency injection. Declare the controller user and User resource in Nix activation. Core ProviderDeployment creates the controller state Volume before controller Process start; Volume is not exported by this Provider. |
+| Integration | Workspace manifests, Provider artifact catalog, Nix module, and ProviderDeployment consume the crate and component descriptor. |
+| Data migration | None — docs/tooling only; no runtime state |
+| Validation | make test-policy passes for required layout; Cargo.toml contains no d2b-priv-broker dependency; compile checks validate trait injection. |
+| Removal proof | None — net-new; no prior owner to remove |
 
 Create the crate with the layout in § Crate layout. Implement `lib.rs`, `validation.rs`
 (bus-id corpus from `d2b-contracts::usbip`), and stub controller with compile-checked
@@ -1339,11 +1351,15 @@ of this Provider.
 
 | Field | Value |
 | --- | --- |
-| Title | Implement Device controller and async reconcile loop |
-| Destination | `packages/d2b-provider-device-usbip/src/controller.rs`, `reconcile.rs` |
-| Depends on | ADR046-usbip-001, ADR046-usbip-003 |
-| Source | Adapt: `packages/d2bd/src/usbip_state_machine.rs`, `usbip_reconcile_state.rs` |
-| Evidence class | implemented-but-unwired → adapt |
+| Dependency/owner | ADR046-usbip-001 and ADR046-usbip-003; device-usbip controller owner |
+| Current source | packages/d2bd/src/usbip_state_machine.rs and packages/d2bd/src/usbip_reconcile_state.rs |
+| Reuse action | extract and adapt step machine into Provider reconcile loop |
+| Destination | packages/d2b-provider-device-usbip/src/controller.rs and packages/d2b-provider-device-usbip/src/reconcile.rs |
+| Detailed design | Implement Device controller and async reconcile loop consuming UsbipEffectPort, mapping desired, carrier, bind, and proxy states to status.provider.details.usbip.completedSteps, adding and clearing finalizer, skipping completed steps on restart, keeping the watch receiver non-blocking while effect tasks run, and branching declared versus explicit claim mode. |
+| Integration | Controller watches Device and Network resources through ResourceClient, calls injected EffectPorts, creates ResourceMutationBatch updates, and coordinates child Process resources from ADR046-usbip-005. |
+| Data migration | Full d2b 3.0 reset; no direct import of d2bd usbip_reconcile_state snapshots |
+| Validation | tests/controller_state_machine.rs, tests/async_loop.rs, tests/finalizer.rs, and tests/wrong_zone.rs covering full bring-up, teardown, concurrent dispatch, finalizer progress, and WrongZone degradation. |
+| Removal proof | packages/d2bd/src/usbip_state_machine.rs and usbip_reconcile_state.rs are deleted by ADR046-usbip-009 once Provider parity tests pass. |
 
 Implement the full bring-up/teardown step machine consuming `UsbipEffectPort`.
 Map `usbip_reconcile_state.rs` desired/carrier/bind/proxy states to
@@ -1364,11 +1380,15 @@ Tests required:
 
 | Field | Value |
 | --- | --- |
-| Title | Implement daemon and proxy Process resource lifecycle |
-| Destination | `packages/d2b-provider-device-usbip/src/reconcile.rs` |
-| Depends on | ADR046-usbip-003; Process ResourceType schema |
-| Source | New; templates derived from Provider package descriptor |
-| Evidence class | ADR-only → implement |
+| Dependency/owner | ADR046-usbip-003; Process ResourceType schema; device-usbip process lifecycle owner |
+| Current source | None — net-new Process resources; templates derive from the Provider package descriptor |
+| Reuse action | net-new daemon and proxy Process management |
+| Destination | packages/d2b-provider-device-usbip/src/reconcile.rs |
+| Detailed design | Implement creation and deletion of device-<uid-short>-daemon and device-<uid-short>-proxy Process resources with canonical Process specs, system-minijail providerRef, Host executionRef, system domain, template IDs, sandbox classes, nested budget, networkUsage ports, owned Endpoint resources, provider-defined readiness, restart policies, no command, argv, binary path, or raw bind address, and no Guest Process for attach or detach. |
+| Integration | Device controller creates Process and Endpoint resources; Process controller launches workers; guest attach and detach use UsbipGuestEffectPort only. |
+| Data migration | Full d2b 3.0 reset; old per-env usbipd runners are replaced by per-Device Process resources |
+| Validation | Process spec tests for daemon/proxy shape, endpoint ownership, no raw bind address, no argv fields, Guest-side no-Process assertion, and readiness gating before bind. |
+| Removal proof | Old per-env usbipd autostart and ProcessRole::Usbip paths are removed by ADR046-usbip-009 after Process resource lifecycle tests pass. |
 
 Implement creation/deletion of `device-<uid-short>-daemon` and
 `device-<uid-short>-proxy` Process resources using `ResourceMutationBatch`.
@@ -1386,11 +1406,15 @@ calls; no Process resource is created in the Guest.
 
 | Field | Value |
 | --- | --- |
-| Title | Define and implement typed `status.provider.details.usbip` status extension |
-| Destination | `packages/d2b-provider-device-usbip/src/status.rs` |
-| Depends on | ADR046-usbip-003; Device status extension schema |
-| Source | Adapt: `packages/d2bd/src/usbip_reconcile_state.rs` state fields |
-| Evidence class | implemented-but-unwired → adapt |
+| Dependency/owner | ADR046-usbip-003; Device status extension schema owner |
+| Current source | packages/d2bd/src/usbip_reconcile_state.rs state fields |
+| Reuse action | adapt state fields to typed status.provider.details |
+| Destination | packages/d2b-provider-device-usbip/src/status.rs |
+| Detailed design | Define UsbipProviderStatus with currentStep, completedSteps, lastStepOutcome, lastStepError, leaseHeld, firewallApplied, daemonProcessRef, proxyProcessRef, claimerRef, attachedAt, and labelDigest, ensuring no raw busid, lock path, or broker wire type appears and labelDigest is a stable bounded hash of the logical label. |
+| Integration | Controller writes the status extension atomically with common Device status; API, CLI, and tests read step detail from status.provider.details.usbip. |
+| Data migration | Full d2b 3.0 reset; current d2bd reconcile state is not imported |
+| Validation | tests/status_serde.rs for JSON serialization, unknown-field denial, nonempty labelDigest, and no raw busid in output. |
+| Removal proof | Old d2bd USBIP reconcile-state structs are removed by ADR046-usbip-009 after status extension coverage passes. |
 
 Define the `UsbipProviderStatus` struct with `currentStep`, `completedSteps`,
 `lastStepOutcome`, `lastStepError`, `leaseHeld`, `firewallApplied`,
@@ -1405,11 +1429,15 @@ Tests: `tests/status_serde.rs`.
 
 | Field | Value |
 | --- | --- |
-| Title | Container and host integration test suite |
-| Destination | `packages/d2b-provider-device-usbip/integration/` |
-| Depends on | ADR046-usbip-004, ADR046-usbip-005 |
-| Source | Adapt: `packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs`; new |
-| Evidence class | partially ADR-only → new integration scenarios |
+| Dependency/owner | ADR046-usbip-004 and ADR046-usbip-005; device-usbip integration owner |
+| Current source | packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs plus new integration scenarios |
+| Reuse action | adapt existing network-scoping assertion and add new scenarios |
+| Destination | packages/d2b-provider-device-usbip/integration/ |
+| Detailed design | Build required integration suite: wrong_zone_exposure, declared_vs_explicit, backend_ready_probe, proxy_listener, and guest_side_effects. integration/README.md documents local run commands, required privileges, scenario addition process, and wrong-zone required assertions. |
+| Integration | Provider integration lane exercises controller, EffectPort adapter fakes or containers, Process resources, Endpoint resolution, Network scoping, and Guest supervisor UsbipGuestEffectPort path. |
+| Data migration | None — docs/tooling only; no runtime state |
+| Validation | All listed integration tests pass; wrong_zone_exposure is required and blocks merge. |
+| Removal proof | Old usbip_policy_network_scoping test coverage is retired only after wrong_zone_exposure successor coverage passes. |
 
 Required tests:
 
@@ -1433,11 +1461,15 @@ Required tests:
 
 | Field | Value |
 | --- | --- |
-| Title | Nix module updates and eval assertions |
-| Destination | `nixos-modules/components/usbip.nix`, `nixos-modules/options-zones.nix`, `nixos-modules/assertions.nix` |
-| Depends on | ADR046-usbip-003; ADR 0046 Nix config spec |
-| Source | Adapt: `nixos-modules/components/usbip.nix` (guest keeps, host-side removed); new Zone resource declarations |
-| Evidence class | partially implemented → adapt + extend |
+| Dependency/owner | ADR046-usbip-003; ADR-046-nix-configuration; Nix integrator |
+| Current source | nixos-modules/components/usbip.nix guest wiring and new Zone resource declarations |
+| Reuse action | adapt guest module, remove host-side option surface, and extend eval assertions |
+| Destination | nixos-modules/components/usbip.nix, nixos-modules/options-zones.nix, nixos-modules/assertions.nix |
+| Detailed design | Add d2b.zones.<zone>.providers.device-usbip.config.controllerExecutionRef, remove d2b.vms.<vm>.usbip.yubikey at v3 reset with deprecation until removal, add d2b.zones.<zone>.resources.<name> Device/device-usbip shape with claims, assert USBIP/security-key label mutual exclusion, Host controllerExecutionRef resolution, and networkRef same-Zone match, while retaining guest vhci_hcd and usbip tools under runtime-cloud-hypervisor. |
+| Integration | Nix eval compiler emits Provider and Device resources consumed by resource store and device-usbip controller; guest runtime module supplies guest-side USBIP tools. |
+| Data migration | Full d2b 3.0 reset; operators reauthor old per-VM usbip options as Zone Device resource and claim declarations |
+| Validation | tests/unit/nix/cases/usbip-*.nix cover each assertion, deprecation or removal path, resource shape, and guest module retention. |
+| Removal proof | d2b.vms.<vm>.usbip.yubikey and host-side USBIP module paths are removed at reset once Zone resource emitter coverage passes. |
 
 - Add `d2b.zones.<zone>.providers.device-usbip.config.controllerExecutionRef` option.
 - Remove `d2b.vms.<vm>.usbip.yubikey` at v3 reset; add deprecation warning until removal.
@@ -1452,11 +1484,15 @@ Required tests:
 
 | Field | Value |
 | --- | --- |
-| Title | Remove daemon-coupled USBIP from v3 d2bd and network.nix |
-| Destination | `packages/d2bd/src/`, `nixos-modules/network.nix` |
-| Depends on | ADR046-usbip-004, ADR046-usbip-008; Provider fully wired and validated |
-| Source | `packages/d2bd/src/usbipd_perenv_autostart.rs` (delete); `nixos-modules/network.nix` lines 444–461 (remove USBIP firewall block) |
-| Evidence class | implemented-and-reachable → delete after Provider replaces |
+| Dependency/owner | ADR046-usbip-004 and ADR046-usbip-008; Provider fully wired and validated; daemon cleanup owner |
+| Current source | packages/d2bd/src/usbipd_perenv_autostart.rs, packages/d2bd/src/usbip_state_machine.rs, packages/d2bd/src/usbip_reconcile_state.rs, nixos-modules/network.nix USBIP firewall block, and ProcessRole::Usbip in packages/d2b-core/src/processes.rs |
+| Reuse action | delete after Provider replacement reaches parity |
+| Destination | packages/d2bd/src/, nixos-modules/network.nix, packages/d2b-core/src/processes.rs |
+| Detailed design | Remove daemon-coupled USBIP after Provider tests and integration tests pass: delete per-env autostart, state machine, and reconcile state modules after migration; remove USBIP firewall block from network.nix; remove ProcessRole::Usbip; run Layer-1 gates and confirm no d2bd or network.nix references remain outside the adapter and contracts. |
+| Integration | Provider/device-usbip, d2b-core adapter, Nix resource emitter, and Device Process resources are the sole USBIP lifecycle path after deletion. |
+| Data migration | Full d2b 3.0 reset; no daemon-coupled USBIP runtime state import |
+| Validation | make test-unit and make test-flake plus grep or contract checks for removed symbols and no residual d2bd/network.nix USBIP lifecycle references. |
+| Removal proof | usbipd_perenv_autostart.rs, usbip_state_machine.rs, usbip_reconcile_state.rs, network.nix USBIP firewall block, and ProcessRole::Usbip are deleted after parity. |
 
 Deletion sequence:
 1. Confirm Provider tests and integration tests pass.

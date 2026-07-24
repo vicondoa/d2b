@@ -2,13 +2,13 @@
 
 | Field | Value |
 | --- | --- |
-| Dossier ID | `ADR-046-provider-credential-entra` |
+| Spec ID | `ADR-046-provider-credential-entra` |
 | Parent | ADR 0046 |
 | Status | Proposed |
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owner | `packages/d2b-provider-credential-entra/` |
+| Owners | `packages/d2b-provider-credential-entra/` |
 | Depends on | `ADR-046-resources-credential`, `ADR-046-provider-model-and-packaging`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resources-host-guest-process-user` |
 | Decisions applied | D087 status-first state, D088/D089 status/spec layering, D090 expedited reconcile, D091 currency/upgrade, D092 Endpoint ResourceType, **D093 Entrablau identity Guest credential flow** |
 | Supersedes | No Host login/token chains; no direct `EntraCredentialClient` production egress; no `DefaultAzureCredential`, environment, DBus, browser, or path discovery |
@@ -542,7 +542,7 @@ DBus names, tokens, refresh tokens, or cookies.
 
 ## 12. Work item
 
-### ADR046-credential-004
+### ADR046-cred-entra-001
 
 | Field | Value |
 | --- | --- |
