@@ -40,7 +40,7 @@ baseline symbols named below.
 | `WorkloadIdentity` / `WorkloadTarget` / `RealmTarget` (`d2b-core/src/workload_identity.rs`) | Zone self-resource reference `Zone/<zone_name>` | implemented-and-reachable |
 | `d2b.realms` Nix option (`nixos-modules/options-realms.nix`) | `d2b.zones` Nix option (ADR-only target) | generated-or-eval-contract |
 | `realm-controllers.json` bundle artifact | Zone runtime config (new generated artifact; existing file is retired) | generated-or-eval-contract |
-| `d2b_daemon_vm_*` metrics with `vm` label (`packages/d2bd/src/metrics.rs`) | `vm` label (VM name) removed from v3 metric labels; VM-identity carried only in OTEL resource attributes and trace context | implemented-and-reachable |
+| `d2b_daemon_vm_*` metrics with `vm` label (`packages/d2bd/src/metrics.rs`) | `vm` label (VM name) removed from v3 metric labels; VM identity carried only in bounded OTEL resource attributes and permitted audit fields | implemented-and-reachable |
 | `vm.name`, `vm.env`, `vm.role` OTEL resource attributes (`nixos-modules/components/observability/{host,stack,guest}.nix`) | Preserved in v3 (advisory from edge collector; re-stamped at ingress boundary). Extended with `d2b.zone`, `d2b.provider`, `d2b.component` (ADR-only additions) | implemented-and-reachable |
 | `d2b.observability.vmName` / `identityName` Nix options | `d2b.zones.<name>.observability.*` Nix options (ADR-only target) | generated-or-eval-contract |
 | `config_source = "realm-controllers"` tracing field (`d2b-priv-broker/src/runtime.rs`) | `config_source = "zone-config"` in v3 startup tracing | implemented-and-reachable |
@@ -540,7 +540,7 @@ attributes (they are opaque digests).
 | `d2b.process.launch` | Internal | `provider`, `domain`, `outcome` | Commit-to-Ready → launch attempt |
 | `d2b.process.stop` | Internal | `provider`, `domain`, `stop_class`, `outcome` | |
 | `d2b.provider.reconcile` | Internal | `resource_type`, `outcome` | Per Provider instance |
-| `d2b.provider.install` | Internal | `provider_name`, `outcome` | |
+| `d2b.provider.install` | Internal | `provider_class`, `outcome` | Fixed implementation class, not Provider resource identity |
 
 ### Trace context propagation
 

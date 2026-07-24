@@ -1229,8 +1229,8 @@ The controller emits OTEL spans for its own reconcile operations:
 
 | Span name | Attributes |
 | --- | --- |
-| `device-usbip.service.reconcile` | `zone`, `service.name_digest`, `mode`, `phase`, `trigger_reason` |
-| `device-usbip.binding.reconcile` | `zone`, `binding.name_digest`, `phase`, `trigger_reason` |
+| `device-usbip.service.reconcile` | `mode`, `phase`, `trigger_reason` |
+| `device-usbip.binding.reconcile` | `phase`, `trigger_reason` |
 | `device-usbip.effect.ensure_kernel_module` | `outcome`, `error_class` |
 | `device-usbip.effect.acquire_lease` | `outcome`, `error_class` |
 | `device-usbip.effect.withhold_device` | `outcome`, `error_class` |
@@ -1243,10 +1243,11 @@ The controller emits OTEL spans for its own reconcile operations:
 | `device-usbip.process.binding_proxy_start` | `outcome`, `error_class` |
 
 Attributes must never carry raw busids, lock paths, nftables text, binary
-paths, Endpoint addresses, import/export keys, session/transfer identifiers, or
-operator/user identifiers. Cardinality is bounded: `error_class` is a closed
-enum; resource names are fixed-length digests; `zone` is bounded by Zone
-cardinality.
+paths, Endpoint addresses, import/export keys, session/transfer identifiers,
+operator/user identifiers, Zone identity, or resource-name-derived identity.
+Cardinality is bounded: `error_class`, `mode`, `phase`, `trigger_reason`, and
+`outcome` are closed semantic enums. Zone identity is retained only as the
+`d2b.zone` OTEL resource attribute and in the authorized audit record.
 
 ---
 

@@ -32,7 +32,7 @@ Core control:
 | ResourceType | Responsibility |
 | --- | --- |
 | Zone | Zone self identity, policy, API/store status |
-| ZoneLink | Parent/child delegation, transport, cursor/health |
+| ZoneLink | Child-local uplink delegation, transport, cursor/health; compiler-only `parentZone` selects the parent allocator |
 | Provider | Installed package/config/controllers/schemas/services/status |
 | Role | Bounded native RBAC rules |
 | RoleBinding | Subjects to Role with narrowing; no time-based expiry |

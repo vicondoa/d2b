@@ -2015,13 +2015,14 @@ direction transitions; it does not record the level value.
 ### Span attributes
 
 Controller spans carry:
-- `d2b.zone`: Zone name
 - `d2b.provider`: `audio-pipewire`
 - `d2b.component`: `audio-binding-controller` or `audio-mediator`
 - `d2b.resource.type`: `AudioService`, `AudioBinding`, `Process`, or `Endpoint`
 - `d2b.resource.generation`: current `metadata.generation`
 - `d2b.outcome`: outcome code
 
+Zone/resource identity is available only in bounded OTEL resource attributes
+and permitted audit fields, never as a span attribute.
 Spans must not carry socket paths, PipeWire paths, PipeWire node IDs, level
 values, gain values, or guest workload usernames.
 

@@ -428,9 +428,9 @@ A parent:
 The child commits to its own store. The parent receives no database handle,
 credential, token, or cross-Zone ResourceRef.
 
-A disconnected parent may record a local ZoneLink intent but cannot claim the
-child resource changed. On reconnect the child reauthorizes and applies/rejects
-against current revision.
+A disconnected child may record a bounded outbound intent in its child-local
+ZoneLink but cannot claim the parent resource changed. On reconnect the parent
+reauthorizes and applies/rejects against current revision.
 
 ## Limits
 

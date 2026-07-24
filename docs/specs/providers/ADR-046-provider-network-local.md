@@ -1934,8 +1934,6 @@ Root span per reconcile attempt:
 
 ```
 d2b.network.reconcile
-  network.name: <ResourceName>        # plain name; NOT hostname
-  network.zone: <ZoneName>
   network.generation: <n>
   reconcile.trigger: <reason-set>
   reconcile.attempt: <n>
@@ -1961,8 +1959,8 @@ d2b.network.observe.drift_check
 
 Metric labels use closed semantic cardinality and carry no Zone or Network
 identity. Zone identity remains in the `d2b.zone` OTEL resource attribute.
-`network.name` is a ResourceName (bounded `^[a-z][a-z0-9-]*$`), never a
-hostname or FQDN, and is never copied into a metric label.
+Network identity is likewise available only as a bounded OTEL resource
+attribute and permitted audit field, never as a span attribute or metric label.
 
 Metrics:
 
@@ -2365,7 +2363,7 @@ On controller binary upgrade:
 | Current source | None — net-new v3 provider controller; v1 behavior lived in `nixos-modules/network.nix` and `nixos-modules/net.nix` static NixOS module logic. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/src/{controller.rs,metrics.rs}`. |
-| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection and the §21 metric descriptors with closed semantic labels. No descriptor may carry `vm`, `zone`, `zone_id`, `zone_uid`, `network`, or another resource-name-derived key; Network/Zone identity stays in trace/resource attributes. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership. |
+| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection and the §21 metric descriptors with closed semantic labels. No descriptor may carry `vm`, `zone`, `zone_id`, `zone_uid`, `network`, or another resource-name-derived key; Network/Zone identity stays only in OTEL resource attributes and permitted audit fields. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership. |
 | Integration | Controller watches Network, Guest, Volume, Process, User, Host, and Zone resources; creates child resources, writes status, invokes `NetworkEffectPort`, and drives finalizers. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values. |

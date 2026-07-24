@@ -1085,13 +1085,14 @@ Traces are created at notification record admission (root span on
 
 | Attribute | Value |
 | --- | --- |
-| `d2b.zone` | Zone name |
 | `d2b.provider` | `notification-desktop` |
 | `d2b.component` | `host-sink` \| `guest-source` |
 | `d2b.notification.category` | stable category token |
 | `d2b.notification.urgency` | `low` \| `normal` \| `critical` |
 | `d2b.notification.request_digest` | `sha256:<hex>` of the opaque request handle |
 
+Zone/resource identity is available only in bounded OTEL resource attributes
+and permitted audit fields, never as a span attribute.
 No span carries summary, body, action label, icon ref, or content-derived
 values.  The `correlationId` from the request is carried as the W3C TraceContext
 `tracestate` join key only, never as a span attribute containing content bytes.

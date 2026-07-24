@@ -1777,10 +1777,10 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/telemetry.rs |
-| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with structural closed-label enforcement and no Zone/VM/resource name, user identity, path, or other sensitive value in any metric label; retain Zone/resource identity only in bounded OTEL attributes and permitted audit fields. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
+| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with structural closed-label enforcement and no Zone/VM/resource name, user identity, path, or other sensitive value in any metric label; retain Zone/resource identity only in bounded OTEL resource attributes and permitted audit fields. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
 | Integration | Controller, QMP, hotplug, and dependency-watch paths call telemetry helpers; OTEL/metrics exporters consume only closed, bounded labels for support dashboards. |
 | Data migration | None — telemetry-only work; no runtime state import |
-| Validation | `tests/metrics_label_cardinality.rs` asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; `tests/otel_span_attributes.rs` preserves allowed identity attributes |
+| Validation | `tests/metrics_label_cardinality.rs` asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; `tests/otel_span_attributes.rs` preserves allowed OTEL resource identity attributes and rejects identity span attributes |
 | Removal proof | None — telemetry helpers are new for this Provider; no prior owner to remove |
 
 ---

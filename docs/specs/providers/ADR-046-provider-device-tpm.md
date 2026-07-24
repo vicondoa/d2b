@@ -1060,8 +1060,9 @@ UID, GID, PID, or socket address. Zone identity remains in the bounded
 | `device-tpm.endpoint-ready` | TPM EndpointRef resolution |
 | `device-tpm.finalize` | Finalizer execution |
 
-Span attributes: `zone` (string), `device_uid` (opaque ≤ 64 chars),
-`outcome` (bounded stable label). No path, argv, socket, UID, GID, or PID.
+Span attributes contain only `outcome` (bounded stable value). Zone and Device
+identity remain in bounded OTEL resource attributes and permitted audit fields.
+No path, argv, socket, UID, GID, or PID appears in a span attribute.
 
 ---
 

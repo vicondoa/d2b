@@ -1131,7 +1131,7 @@ processes):
 | `d2b.otel.collector.drain` | Internal | `signal`, `frame_count`, `outcome` | Per drain cycle |
 | `d2b.otel.collector.export` | Client | `signal`, `batch_size`, `outcome` | Per OTLP export call |
 | `d2b.otel.collector.startup` | Internal | `outcome`, `socket_ready` | Provider startup |
-| `d2b.otel.forwarder.session` | Internal | `outcome`, `guest_uid_digest` | Per vsock session; no guest name |
+| `d2b.otel.forwarder.session` | Internal | `outcome` | Per vsock session; no guest identity |
 | `d2b.otel.journald.cycle` | Internal | `records_total`, `redacted`, `dropped`, `outcome` | Journald batch |
 
 Forbidden span attributes: path, socket path, endpoint address, argv, pid,

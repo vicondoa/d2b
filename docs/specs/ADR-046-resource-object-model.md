@@ -649,7 +649,7 @@ means cross-Zone sharing via D096.
 | ResourceType | Default `authorityScope` | Default `cardinality` | Typical `arbitration` | Exportability |
 | --- | --- | --- | --- | --- |
 | `Zone` | zone | exactly-one (self) | exclusive | forbidden (singleton, not cross-Zone) |
-| `ZoneLink` | zone (parent edge) | zero-or-one per edge | exclusive | forbidden |
+| `ZoneLink` | child zone (local uplink edge) | zero-or-one per edge | exclusive | forbidden |
 | `Provider` | zone | bounded-many (per controller cardinality) | partitioned | forbidden |
 | `Role` / `RoleBinding` | zone | bounded-many | n/a (policy) | forbidden |
 | `Quota` | zone/scope | exactly-one per scope | exclusive (scope uniqueness) | forbidden |

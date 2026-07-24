@@ -31,9 +31,11 @@ Every Zone store contains exactly one authoritative:
 Zone/<zone-name>
 ```
 
-The resource's metadata.zone equals `<zone-name>`. A parent represents a child
-with a parent-local `ZoneLink/<name>` resource. Parent access uses the child
-Zone API; resources and ordinary refs are not copied across Zones.
+The resource's metadata.zone equals `<zone-name>`. Each non-root child stores
+one child-local `ZoneLink/<name>` uplink. Its compiler-only `parentZone`
+setting selects the parent allocator and is never emitted as a resource.
+Parent access uses the child Zone API; resources and ordinary refs are not
+copied across Zones.
 
 `Realm` remains current v3 baseline terminology and migration evidence. New d2b
 3.0 public schemas, CLI, APIs, errors, and docs use `Zone`.

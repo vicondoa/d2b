@@ -954,12 +954,12 @@ The controller emits one span per generation reconcile cycle. Attributes:
 
 | Attribute | Type | Notes |
 | --- | --- | --- |
-| `d2b.zone` | string | Zone name |
-| `d2b.activation.target` | string | `executionRef` resource name (no store path) |
 | `d2b.activation.mode` | string | `switch\|boot\|test\|adopt` |
 | `d2b.activation.detail` | string | Current `activationDetail` value |
 | `d2b.activation.outcome` | string | `succeeded\|failed\|timeout` on terminal transition |
 
+Zone and target identity are available only in bounded OTEL resource attributes
+and permitted audit fields, never as span attributes.
 No `systemArtifactId` value, store path, digest, or artifact catalog field
 appears as a span attribute.
 

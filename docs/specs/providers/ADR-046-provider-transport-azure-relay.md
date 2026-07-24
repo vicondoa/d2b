@@ -373,12 +373,13 @@ Before a ZoneLink becomes Ready, both Zone controllers must complete an
 out-of-band enrollment exchange that establishes:
 
 - **Parent** (listener side): the parent's controller enrolls its own static
-  25519 key pair. The public key fingerprint is committed in the parent's
-  Zone config and pinned in `ZoneLink.spec.childStaticKeyFingerprint` for the
-  reverse direction.
+  25519 key pair. The public key fingerprint is sealed into the selected-parent
+  allocator binding delivered to the child controller; it is not stored in a
+  reciprocal parent ZoneLink.
 - **Child** (sender side): the child's controller enrolls its own static
-  25519 key pair. Its public key fingerprint is committed in
-  `ZoneLink.spec.childStaticKeyFingerprint` on the parent's ZoneLink spec.
+  25519 key pair. Its public key fingerprint is committed in the child-local
+  `ZoneLink.spec.childStaticKeyFingerprint` and verified by the parent
+  allocator when it admits the session.
 
 The enrollment record carries the static public keys in an opaque, bounded
 format. No private key material enters any resource spec, status, bundle

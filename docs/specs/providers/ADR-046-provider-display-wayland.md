@@ -1304,14 +1304,13 @@ enums; no Zone UID or resource name is a metric dimension.
 OTEL spans are emitted for the following controller operations:
 
 - `display_wayland.session.reconcile` — reconcile a single `WaylandSession`;
-  attributes: `d2b.zone`, `d2b.provider`, `d2b.component`;
 - `display_wayland.proxy.start` — proxy Process spawn ticket issue;
-  attributes: `d2b.zone`, `d2b.provider`, `d2b.component`;
-- `display_wayland.policy.compile` — policy compilation from `WaylandPolicy`;
-  attributes: `d2b.zone`, `d2b.provider`, `d2b.component`.
+- `display_wayland.policy.compile` — policy compilation from `WaylandPolicy`.
 
-No span carries socket paths, guest names (beyond the stable Zone/Provider/
-component attributes), user identities, window titles, or clipboard content.
+Zone, Provider, component, and resource identity remain only in the OTEL
+resource attributes below and permitted audit fields. No span carries those
+identities, socket paths, guest names, user identities, window titles, or
+clipboard content.
 
 ### 14.4 OTEL resource attributes
 

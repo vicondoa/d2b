@@ -14,6 +14,8 @@ The graph maps every member spec and every work item exactly once to a
 dependency-ordered launch wave (`W0`–`W7`) and a file-disjoint parallel group.
 It includes every resolved security-key work-item dependency; no lexical
 tie-break or omitted dependency is used.
+Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
+`validation` text byte-for-byte.
 
 ## Counts
 

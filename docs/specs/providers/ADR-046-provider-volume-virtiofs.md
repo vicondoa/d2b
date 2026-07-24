@@ -1032,8 +1032,8 @@ no host paths, no socket paths, no guest names beyond a stable opaque digest.
 The `zone` and `execution` resource attributes are set at the OTEL resource level (from the
 Process resource context) and are not repeated as metric labels.
 
-VM name / Guest name is never a metric label. It may appear in OTEL trace context resource
-attributes only, re-stamped at ingress boundary.
+VM name / Guest name is never a metric label or span attribute. It may appear
+only in bounded OTEL resource attributes, re-stamped at the ingress boundary.
 
 ### 15.3 Key metrics
 

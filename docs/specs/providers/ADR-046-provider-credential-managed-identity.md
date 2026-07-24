@@ -1336,15 +1336,16 @@ d2b.credential.provider_health_check
 
 | Attribute | Value |
 | --- | --- |
-| `d2b.zone` | Zone name |
-| `d2b.credential.name` | Credential resource name |
 | `d2b.credential.provider` | `credential-managed-identity` (literal) |
 | `d2b.credential.operation_class` | Closed enum string |
 | `d2b.credential.placement_binding` | `host-system` or `guest-agent` |
 | `d2b.credential.outcome` | Stable closed outcome code |
 | `d2b.credential.rotation_generation` | Numeric rotation generation |
 
-### Forbidden from spans and attributes
+Zone and Credential identity use the `d2b.zone` and `d2b.credential.name`
+OTEL resource attributes only. They are forbidden as span attributes.
+
+### Forbidden from spans and resource attributes
 
 Token bytes, audience literal, IMDS URL fragments, `clientId` value,
 `imdsEndpointAlias` value, provider-internal diagnostics, host filesystem paths,
@@ -1838,7 +1839,7 @@ item.
 | Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit; emit OTEL spans and metrics per §OTEL and metrics with no Zone/Credential/resource-name-derived label; report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential `metadata.name`, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces. |
 | Integration | Controller and agent service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded redacted records; contract tests validate credential audit shape across providers. |
 | Data migration | None — audit/telemetry only; no runtime state import |
-| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived label key, reject Credential/Zone-name label canaries, preserve allowed OTEL identity attributes, and reject sensitive shapes |
+| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived label key, reject Credential/Zone-name label canaries, preserve allowed OTEL resource identity attributes, reject identity span attributes, and reject sensitive shapes |
 | Removal proof | None — audit/telemetry helpers are additive; no prior owner to remove |
 
 ---
@@ -1940,7 +1941,7 @@ audit record field set conformance, delivery session binding contract, RBAC
 | `clientId` value absent from audit records, metric labels, OTEL spans, error messages, and log lines | Config field exclusion |
 | `imdsEndpointAlias` value absent from OTEL span attributes, audit records, and error messages | Alias exclusion |
 | IMDS response-shaped string absent from status, audit, OTEL, and logs | IMDS response content exclusion |
-| Metric descriptors contain no `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, or resource-name-derived key; Credential/Zone-name canaries are absent from emitted label values while allowed OTEL identity attributes remain | Structural metric identity-label exclusion |
+| Metric descriptors contain no `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, or resource-name-derived key; Credential/Zone-name canaries are absent from emitted label values while allowed OTEL resource identity attributes remain and identity span attributes are absent | Structural metric identity-label exclusion |
 
 #### `delivery.rs`
 
