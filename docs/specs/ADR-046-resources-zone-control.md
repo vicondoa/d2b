@@ -1981,6 +1981,69 @@ device/socket/token crosses a Zone (bytes are ciphertext to intermediaries).
 
 ---
 
+## 8B. Core and singleton authorities (D097)
+
+Per D097, every scarce or singleton backing declares a signed
+`AuthorityDescriptor` (schema in
+[`ADR-046-resource-object-model` §Authority and cardinality](ADR-046-resource-object-model.md)),
+and **core owns the authority index** keyed by `(Zone/scope, authorityClass,
+opaqueKeyDigest)`. Core rejects a conflicting authority Resource or Process with
+the typed `duplicateConflict` before any external effect; config activation that
+would create a second authority goes `Degraded` naming the exact incumbent owner
+digest, and restart adopts the exact authority by `ownerProof` (ambiguity
+quarantines).
+
+The core/singleton control-plane authorities and their classification:
+
+| Authority | Scope | Cardinality | Owning Resource/service | Exportability |
+| --- | --- | --- | --- | --- |
+| Zone self runtime / resource store (redb) / resource API / bus / core controller | zone | exactly-one | `Zone` self-resource + core controller | forbidden (singleton, **not** cross-Zone exportable) |
+| Privileged broker | host | exactly-one | fixed local-root broker | forbidden |
+| Audit chain / audit authority | zone | exactly-one | core audit writer | forbidden (Zone-local system of record) |
+| Configuration publisher | zone | exactly-one | core configuration controller | forbidden |
+| Artifact catalog | zone | exactly-one | Nix-emitted catalog | forbidden |
+| Host substrate allocator / effect authority | host | exactly-one | `Host` + `Provider/system-core` | forbidden |
+| Net-VM DHCP/DNS/NAT authority | zone | exactly-one **per `Network`** | `Network` net-VM authority | forbidden |
+| `Quota` / `EmergencyPolicy` scope | zone/scope | exactly-one per scope | the `Quota`/`EmergencyPolicy` resource | forbidden |
+| Provider controller | zone | bounded-many (declared cardinality) | `Provider` | forbidden |
+
+These are `exportability: forbidden` singletons: an audit chain, broker, or
+resource store is never shared cross-Zone by D096 — a Zone that needs another
+Zone's telemetry uses an explicit observability export (D096) that copies data
+and transfers no authority. `Quota` and `EmergencyPolicy` scope uniqueness is an
+`exactly-one`-per-scope authority: a second policy claiming the same scope is a
+`duplicateConflict`. The net-VM DHCP/DNS/NAT authority is `exactly-one` per
+`Network`; a second DHCP/DNS/NAT owner on the same Network is rejected.
+
+Physical/scarce and per-user/session authorities (mic/speaker, security key,
+GPU/render-node, video decoder, TPM/swtpm, NIC/uplink/macvtap, Wayland portal,
+clipboard, notification sink, PipeWire mediator, Secret Service, systemd-user
+manager, Entra login authority, shell supervisor, SigNoz ingest, cloud
+subscription control) carry their qualified `AuthorityDescriptor` in the owning
+Provider dossier; those per-Provider classifications are refined by evidence with
+conservative existing-behavior defaults.
+
+### 8B.1 Authority conformance tests
+
+Hermetic (fake clock/index/adapter) fast tests and slower integration tests MUST
+cover, provider-neutrally: a **duplicate race** (two concurrent authority
+claimants → exactly one wins, the other gets `duplicateConflict`, no second
+effect); a **config collision** (a second configuration-managed authority for the
+same `(scope, authorityClass, opaqueKeyDigest)` → hard eval error / `Degraded`
+activation naming the incumbent owner digest); each `arbitration` mode
+(`exclusive` denies a second holder; `shared`/`multiplexed` admit bounded holders
+through the single owner; `partitioned` isolates partitions); **adoption
+ambiguity** (restart with two candidate owners or an unverifiable index entry →
+quarantine, no open); **cross-Zone import** binds through the single owner with
+no duplicate open; **non-exportable rejection** (an `exportability: forbidden`
+authority declared as a `ResourceExport` target is rejected); **update drain**
+(D091 upgrade drains consumers before recycling the authority); and **each
+initial singleton** (Zone/store/API/bus/controller/broker/audit/config
+publisher/allocator/net-VM-per-Network/`Quota`/`EmergencyPolicy` scope) admits
+exactly one owner and rejects a second.
+
+---
+
 ## 9. Bootstrap authorization
 
 Before any Role/RoleBinding resources exist, the Zone runtime has one compiled

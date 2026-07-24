@@ -184,6 +184,21 @@ an export may reference only local `resourceRef`/`endpointRef`, and an import
 may reference only a local `zoneLinkRef` plus bounded `exportKey`. Admission also
 rejects `requestedCapabilities` that exceed the export's capability ceiling.
 
+### Authority index admission (D097)
+
+Core keeps a unique **authority index** keyed by `(Zone/scope, authorityClass,
+opaqueKeyDigest)` derived from each authority Resource/Process's signed
+`AuthorityDescriptor`. On `Create`/`UpdateSpec` of an authority-bearing Resource
+(or launch of an authority owner Process), admission consults the index **before
+any external effect** and rejects a second claimant for an `exactly-one`/
+`zero-or-one` authority — or one exceeding a `bounded-many` bound — with the
+typed `duplicateConflict` error naming the exact incumbent owner digest. The
+`authorityKey` is internal and non-authorizing: it is never an authorization
+principal and never appears as a locator in spec/status/audit. Authorization for
+authority operations still flows through native Role/RoleBinding; the
+`resource authorities` read surface (list authorities/holders and any conflict)
+requires ordinary `get`/`list` verbs on the owning ResourceType.
+
 ## Native RBAC resources
 
 ### Bootstrap authorization

@@ -893,6 +893,21 @@ Ordinary consumers reference the local projection core creates
 (`metadata.ownerRef: ResourceImport/<name>`), not `ResourceImport/<name>` itself
 where a typed resource ref is expected.
 
+**Authority descriptors (D097).** A resource that owns a scarce or singleton
+backing carries its signed `AuthorityDescriptor` (schema in
+`ADR-046-resource-object-model` §Authority and cardinality) — either as base
+fields the ResourceTypeSchema declares or through the owning Provider's signed
+schema; the Nix compiler renders it verbatim (no bespoke vocabulary). The
+`authorityKey` is authored only as an opaque key **class**/selector, never a raw
+path/serial/address. Eval-time admission enforces the authority index at build
+time within a Zone bundle: two configuration-managed authority resources that
+resolve to the same `(Zone/scope, authorityClass, opaqueKeyDigest)` for an
+`exactly-one`/`zero-or-one` authority (or exceed a `bounded-many` bound) are a
+hard eval error naming the incumbent, mirroring the runtime `duplicateConflict`;
+an `exportability: forbidden` authority declared as a `ResourceExport` target is
+rejected. The requested share mode in a resource's base/provider spec may not
+exceed or contradict its `AuthorityDescriptor`.
+
 **Entra identity Guest composition (D093).** `credential-entra` login/token
 acquisition is grounded in an Entrablau-enabled identity `Guest`, never a Host
 login. The consumer declares the identity Guest (with a `systemArtifactId` whose

@@ -84,6 +84,32 @@ In Host, the no-isolation `isolationPosture` semantic is a promoted Host base
 field at top-level `spec.isolationPosture`; it is never carried in the
 `spec.provider` extension.
 
+## Authority and cardinality (D097)
+
+Host, Guest, Process, EphemeralProcess, and User carry D097 authority semantics
+(schema in
+[`ADR-046-resource-object-model` §Authority and cardinality](ADR-046-resource-object-model.md)):
+
+- **Host** is an `exactly-one` host-scoped substrate **allocator/effect
+  authority** (`authorityScope: host`, `arbitration: exclusive`, reconciled by
+  `Provider/system-core`); it is the single owner of host allocation/effect for
+  its node and is `exportability: forbidden`.
+- **Guest** is `exactly-one` per Guest; **Process**/**EphemeralProcess** are
+  `bounded-many` partitioned workloads placed under a Host/Guest authority.
+- **User** is a per-user (`authorityScope: user`, `exactly-one` per user)
+  authority; genuinely per-seat services (a Wayland portal, clipboard, or
+  notification sink) are `authorityScope: seat|user` authorities owned by the
+  relevant interaction Provider, not by this base type.
+- Per-user/session Provider services (PipeWire mediator, Secret Service/keyring,
+  systemd user manager, and a **shell supervisor per `ShellSession`** — never a
+  global one) declare their qualified `AuthorityDescriptor` in the owning
+  Provider dossier; this base spec only declares the requested share mode and
+  cannot bypass the descriptor.
+
+Core's authority index rejects a second authority for the same
+`(Zone/scope, authorityClass, opaqueKeyDigest)` with `duplicateConflict` before
+any effect; restart adopts by `ownerProof` and ambiguity quarantines.
+
 ## Shared field schemas
 
 ### ResourceName constraints

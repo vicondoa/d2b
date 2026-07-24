@@ -516,6 +516,93 @@ public `*Id`/`Handle` documents its rationale. The frozen permitted-opaque set:
 Stable cross-boundary endpoint identities do **not** qualify as opaque and are
 the `Endpoint` ResourceType.
 
+## Authority and cardinality (D097)
+
+Every scarce or singleton backing — a physical device, a singleton external
+service, a per-Zone runtime service, a per-Host/user/seat service, a fixed
+listener/store, or a globally-unique policy — is governed by a signed
+**`AuthorityDescriptor`**. It is a provider-neutral declaration attached to the
+owning typed Resource and its owning Provider (not a new opaque public ID, and
+**not** a new ResourceType unless an audit proves no existing type can own the
+lifecycle). Exactly one authority owns/opens each backing; duplicate opens or
+effects are rejected before they happen.
+
+**`AuthorityDescriptor` schema:**
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `authorityScope` | enum | `global\|zone\|host\|guest\|user\|seat\|physical-device\|external-service` |
+| `authorityKey` | opaque class | Canonical opaque key **class** (a digest input); never a raw path/serial/address; internal and non-authorizing (never a locator or authz principal) |
+| `cardinality` | enum + bound | `exactly-one\|zero-or-one\|bounded-many` (with numeric bound for bounded-many) |
+| `arbitration` | enum | `exclusive\|shared\|multiplexed\|partitioned` |
+| `authorityRef` | ResourceRef | The single authority Resource / owner service Process that opens the backing |
+| `duplicateConflict` | error class | Typed, deterministic conflict returned to a second claimant |
+| `ownerProof` | opaque | Adoption/restart owner proof by process/resource identity |
+| `updateStrategy` | object | Drain-then-recycle policy (D091) |
+| `exportability` | enum | `forbidden\|explicit-export` (cross-Zone only via D096) |
+| `quota` | object | Quota/fairness policy for shared/multiplexed/partitioned arbitration |
+
+**Core authority index.** Core maintains an authority index keyed by
+`(Zone/scope, authorityClass, opaqueKeyDigest)` and rejects a conflicting
+authority Resource or Process **before any external effect**. `authorityKey` is
+internal; the stable authority itself is the existing typed Resource
+(`Device`/`Network`/`Provider`/`Endpoint`/`Host`/`Guest`/`User`/`Zone`/…). One
+authority service opens/owns the physical/singleton backing; consumers get local
+refs/projections/leases/streams, and cross-Zone sharing is only via D096
+ResourceExport/ResourceImport (a shared/multiplexed backing still has exactly one
+authority owner; no duplicate direct opens).
+
+**Status/spec base.** The universal status base exposes bounded provider-neutral
+authority state — `available`, current holder count, queue depth, arbitration,
+and update currency — with **no raw identity**; provider extension carries
+implementation detail only. The spec base (or provider capability) declares the
+requested share mode and **cannot bypass** the descriptor.
+
+**Lifecycle.** Duplicate config/API requests produce a deterministic conflict
+with no second effect; config activation goes `Degraded` naming the exact owner
+digest. Restart adopts the exact authority by process/resource identity;
+ambiguity quarantines. D091 upgrade drains consumers then recycles the authority;
+reset preserves or destroys the underlying state per an explicit per-authority
+disposition.
+
+### Standard ResourceType authority classification
+
+Provider-neutral classification for the 19 standard ResourceTypes (per-Provider
+qualified authorities are classified in each Provider dossier; conservative
+existing-behavior defaults apply until refined by evidence). "Exportability"
+means cross-Zone sharing via D096.
+
+| ResourceType | Default `authorityScope` | Default `cardinality` | Typical `arbitration` | Exportability |
+| --- | --- | --- | --- | --- |
+| `Zone` | zone | exactly-one (self) | exclusive | forbidden (singleton, not cross-Zone) |
+| `ZoneLink` | zone (parent edge) | zero-or-one per edge | exclusive | forbidden |
+| `Provider` | zone | bounded-many (per controller cardinality) | partitioned | forbidden |
+| `Role` / `RoleBinding` | zone | bounded-many | n/a (policy) | forbidden |
+| `Quota` | zone/scope | exactly-one per scope | exclusive (scope uniqueness) | forbidden |
+| `EmergencyPolicy` | zone/scope | exactly-one per scope | exclusive (scope uniqueness) | forbidden |
+| `Host` | host | exactly-one substrate authority | exclusive (allocator/effect) | forbidden |
+| `Guest` | guest | exactly-one per Guest | exclusive | forbidden |
+| `Process` | host/guest | bounded-many | partitioned | forbidden |
+| `EphemeralProcess` | host/guest | bounded-many | partitioned | forbidden |
+| `Volume` | zone | zero-or-one writer authority | exclusive-write / shared-read | forbidden (state stays local) |
+| `Network` | zone | exactly-one net-VM DHCP/DNS/NAT authority per Network | exclusive | forbidden |
+| `Device` | physical-device | zero-or-one per physical backing | exclusive (full/DRM/TPM/key/USB) or shared (render-node) | explicit-export (D096) |
+| `User` | user/seat | exactly-one per user | exclusive | forbidden |
+| `Credential` | zone | zero-or-one | exclusive | forbidden (D093 default) |
+| `Endpoint` | scope of producer | zero-or-one per stable listener/port | exclusive (fixed listener) | explicit-export (D096) |
+| `ResourceExport` | owner Zone | zero-or-one per exported backing | per exported arbitration | n/a (is the export) |
+| `ResourceImport` | consumer Zone | bounded-many consumers | per lease | n/a (is the import) |
+
+Singleton-but-not-cross-Zone-exportable core authorities (audit chain, broker,
+resource store, resource API, bus, core controller, config publisher, artifact
+catalog) are `exportability: forbidden` and are detailed in the Zone-control
+spec; physical/scarce and per-user/session Provider authorities (mic/speaker,
+security key, GPU/render-node, video decoder, TPM/swtpm, NIC/uplink, Wayland
+portal, clipboard, notification sink, PipeWire mediator, Secret Service,
+systemd-user manager, Entra login authority, shell supervisor, SigNoz ingest,
+cloud subscription control) carry their qualified `AuthorityDescriptor` in the
+owning Provider dossier.
+
 ## Folded implementation detail
 
 The following are not standalone ResourceTypes:

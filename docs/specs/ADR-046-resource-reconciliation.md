@@ -277,6 +277,27 @@ removal or ZoneLink loss revokes the lease, marks the import degraded/revoked,
 and triggers the D091 dependency-aware planner so the projection and its owners
 degrade or upgrade in topological order rather than observing stale authority.
 
+### Authority adoption, quarantine, and drain-recycle (D097)
+
+An authority owner (Resource or owner service Process for a scarce/singleton
+backing) is adopted across a restart by its signed `ownerProof` (process/resource
+identity), never by re-opening the backing speculatively. The reconciler
+revalidates the authority index entry `(Zone/scope, authorityClass,
+opaqueKeyDigest)` against the recovered owner:
+
+- exact identity match → adopt in place, no re-open, no second effect;
+- ambiguity (two candidates, or an index entry with no verifiable owner) →
+  **quarantine** the authority (no effect, `Degraded` naming the incumbent owner
+  digest) until an operator or a deterministic tiebreak resolves it;
+- a duplicate config/API claimant → deterministic `duplicateConflict`, no
+  second open.
+
+A D091 upgrade of an authority **drains its consumers first** (leases/projections
+released or migrated in topological order) and then recycles the authority owner;
+it never recycles a backing while consumers still hold live leases. Reset
+preserves or destroys the underlying backing state per the authority's explicit
+per-authority disposition.
+
 ## Process fast path
 
 When a Process or EphemeralProcess durable commit completes and dependencies

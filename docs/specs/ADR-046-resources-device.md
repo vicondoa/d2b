@@ -22,6 +22,26 @@ contract for the four frozen Device Provider families: `device-tpm`,
 Audio (`device-audio`) is not part of this spec. The `audio-pipewire` Provider
 is in the interaction Provider catalog and is independently specified.
 
+### Physical-device authority (D097)
+
+Every physical backing a `Device` represents is a D097 authority: the Device (and
+its owning Device Provider) declares a signed `AuthorityDescriptor` with
+`authorityScope: physical-device`, an **opaque** `authorityKey` class (a digest
+of vendor/product/bus selectors — never a raw path/serial/address),
+`cardinality: zero-or-one` per physical backing, and the appropriate
+`arbitration`: `exclusive` for a full-device/DRM-primary/VFIO GPU, a physical
+TPM, a security key's hidraw, or an exclusive USB/USBIP passthrough; `shared`
+for a render-node or other genuinely multiplexable engine. Even a `shared` device
+has exactly **one** authority owner (the Device Provider's authority service that
+opens the backing and issues per-holder grants); consumers never open the
+physical node directly. Core's authority index rejects a second authority for the
+same `(Zone, physical-device, opaqueKeyDigest)` with the typed `duplicateConflict`
+before any open; restart adopts the exact authority by `ownerProof`, and
+ambiguity quarantines. Cross-Zone sharing of a device is only via D096
+ResourceExport/ResourceImport (`exportability: explicit-export`), which still
+routes through the single owner. `maxConcurrentClaims`/`arbitration` in the base
+spec is the requested share mode and cannot bypass the descriptor.
+
 ## Device ResourceType spec
 
 ### Three-layer spec shape (D089)

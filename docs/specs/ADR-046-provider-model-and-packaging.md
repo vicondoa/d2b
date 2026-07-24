@@ -90,6 +90,22 @@ ownership, and layered status writes. D096 does not require a new Provider; it
 adds optional adapter capabilities to the Provider that already owns the
 resource semantics.
 
+**Authority descriptors (D097).** For every scarce or singleton backing it owns
+(a physical device, singleton external service, per-Zone/Host/user/seat service,
+fixed listener/store, or globally-unique policy), a Provider descriptor MUST
+declare a signed `AuthorityDescriptor` on the owning typed Resource:
+`authorityScope`, an opaque non-authorizing `authorityKey` class,
+`cardinality`, `arbitration`, the single `authorityRef` owner service, a typed
+`duplicateConflict`, an adoption/restart `ownerProof`, an update/recycle
+strategy, `exportability` (`forbidden`/`explicit-export`, cross-Zone only via
+D096), and a quota/fairness policy (see
+[`ADR-046-resource-object-model` §Authority and cardinality](ADR-046-resource-object-model.md)).
+The descriptor is not a new opaque public ID and adds no new ResourceType unless
+an audit proves no existing type can own the lifecycle. Core rejects a
+conflicting authority Resource/Process against its authority index before any
+external effect; a shared/multiplexed backing still has exactly one authority
+owner.
+
 **Currency, upgrade, and expedited reconcile (D090/D091).** Every controller
 component implements, alongside ordinary reconcile, the toolkit methods
 `assess_update`, `plan_upgrade`, and `execute_upgrade`, and populates the

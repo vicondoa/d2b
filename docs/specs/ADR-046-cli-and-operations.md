@@ -1387,6 +1387,30 @@ schema-fingerprint mismatch, or `requestedCapabilities` outside the export
 capability ceiling. `delete` releases the remote lease and deletes the local
 projection child-first.
 
+## `d2b resource authorities` — authority index (D097)
+
+Reports the D097 authority index: which authority owns each scarce or singleton
+backing, its holders, and any conflict.
+
+```
+d2b resource authorities [--zone <zone>] [--scope <authorityScope>] [--json | --human]
+d2b resource authorities holders <ResourceRef> [--zone <zone>] [--json | --human]
+d2b resource authorities conflict <ResourceRef> [--zone <zone>] [--json | --human]
+```
+
+- `d2b resource authorities` lists every authority-bearing Resource with its
+  `authorityScope`, `cardinality`, `arbitration`, `available`, current holder
+  count, and queue depth (the provider-neutral status base). No raw identity is
+  shown — the `authorityKey` appears only as a bounded opaque digest.
+- `holders <ResourceRef>` lists the current holders/leases of one authority
+  (bounded summaries only: consumer scope, lease state — no raw locator/token).
+- `conflict <ResourceRef>` shows whether a create/activation was rejected with
+  `duplicateConflict` and prints the incumbent **owner digest** (the same digest
+  a `Degraded` config activation reports), with no raw path/serial/address.
+
+Read verbs require ordinary `get`/`list` authorization on the owning
+ResourceType. This surface never creates or mutates an authority.
+
 ## `d2b user` — User resource commands
 
 Maps to the `User` ResourceType.

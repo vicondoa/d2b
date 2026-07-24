@@ -248,6 +248,20 @@ resource grant crosses a Zone. Intermediate Zone controllers route only the
 encrypted stream records and see ciphertext, never plaintext payload bytes,
 device handles, paths, or tokens.
 
+### Fixed listener/endpoint authority (D097)
+
+A fixed listener binding (a stable Unix/vsock/TCP socket or a stable
+`Endpoint`/port) is a D097 authority: exactly one authority service owns the
+bind. The owning Provider/Resource declares an `AuthorityDescriptor`
+(`authorityScope` matching the listener's reach, `cardinality: zero-or-one` per
+`(scope, opaque bind-key digest)`, `arbitration: exclusive`), and core's
+authority index rejects a second binder of the same listener with the typed
+`duplicateConflict` before the bind. The `authorityKey` digests the bind
+selector and is never a raw address/path/CID/port in status or audit. The d2b-bus
+itself is an `exactly-one` per-Zone singleton authority (see the Zone-control
+core authority table). Per-session named-stream and `OwnedTransport` handles
+stay internal/high-churn (D092) and are not authorities.
+
 ## d2b-bus
 
 d2b-bus is an exact addressed router, not pub/sub.

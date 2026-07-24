@@ -1479,6 +1479,14 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
   link-failure/revocation paths; reconnect revalidates the remote generation and
   fingerprint before rebinding, so no stale authority survives. D091 currency
   propagates remote → import → projection/owners.
+- **Single authority (D097).** The exported backing has exactly one authority
+  owner in the owner Zone (its signed `AuthorityDescriptor`, tracked in that
+  Zone's core authority index). Cross-Zone import never creates a second
+  authority or a duplicate open in the consumer Zone — the import binds a local
+  projection/lease that routes back to the single owner. `exportability` in the
+  descriptor gates whether a backing may be shared cross-Zone at all
+  (`forbidden` authorities such as the audit chain, broker, and resource store
+  are never advertised over a ZoneLink).
 
 ## Nearest-common-ancestor (NCA) algorithm
 
