@@ -23,7 +23,7 @@ purpose, independently buildable crate, bootstrap exception, implemented
 ResourceTypes, binaries and component inventory, root config schema, compiled
 SandboxSpec contract (namespaces, capability classes, seccomp, mounts, cgroup
 placement, user namespace pre-establishment), Process and EphemeralProcess
-lifecycle, pidfd ownership and d2b wait/reap, adoption and quarantine rules,
+lifecycle, pidfd ownership and broker-parent wait/reap, adoption and quarantine rules,
 restart and stop/finalize, effect port surface (MinijailProcessEffectPort),
 d2b-bus RBAC, errors, status additions, audit events, telemetry labels, Nix
 authoring examples, hard bounds and performance gates, current-code reuse
@@ -63,14 +63,26 @@ capability matrix plus provider-neutral `unsupported-capability`.
 | Supported Host/Guest Provider capabilities | `pidfd`, `cgroup-v2`, `user-namespace`, `minijail-seccomp` |
 | Supported domains | `system` on any Host or Guest; `user` domain only if the Provider descriptor's conformance extension declares `user-domain-supported: true` for that Host/Guest placement |
 | Bootstrap role | Fixed bootstrap controller — one of the two Providers without a Process resource |
-| Wait/reap ownership | `d2b` (the Provider controller); not systemd |
+| Wait/reap ownership | `d2b` (the privileged broker that called `clone3` and is the process's parent); not the non-parent ProviderSupervisor/controller and not systemd |
 | Artifact catalog type | `provider` |
+
+### Linux platform gate
+
+Provider/system-minijail requires Linux **5.14 or newer**. Linux 5.14 is the
+first supported baseline because intentional teardown depends on the cgroup v2
+`cgroup.kill` file. Host reconciliation must verify the kernel release, a
+delegated cgroup v2 leaf, and writable `cgroup.kill` semantics before this
+Provider becomes Ready or any Process is placed on it. This mandatory platform
+gate applies even when `Host.spec.provider.settings.kernelVersionMin` is null;
+an operator may raise that minimum but cannot lower the Provider baseline.
+Failure is `kernel-too-old` or `cgroup-kill-unavailable`, and no launch is
+attempted. There is no PID/PGID fallback on older kernels.
 
 The Provider crate mandatory layout:
 
 ```
 packages/d2b-provider-system-minijail/
-  src/                  # controller logic, sandbox_compiler, launch, adoption, pidfd, wait, user_ns
+  src/                  # controller logic, sandbox_compiler, launch, adoption, pidfd observation/status relay, user_ns
   tests/                # hermetic Cargo integration tests
   integration/          # container/Host/Guest/broker integration scenarios
   README.md             # required Provider dossier — this file's canonical prose summary
@@ -305,7 +317,9 @@ spec:
       mappingClass: process-principal-root
 ```
 
-`waitReapOwner` in status is always `"d2b"` for processes under this Provider.
+`waitReapOwner` in status is always `"d2b"` for processes under this Provider;
+the value means the process's privileged-broker parent, not the Provider
+controller.
 
 ### 6.2 `EphemeralProcess`
 
@@ -314,15 +328,19 @@ Provider/system-minijail implements the full `EphemeralProcess` ResourceType.
 as defined in `ADR-046-resources-host-guest-process-user`. This section
 documents only minijail-specific behavior.
 
-`waitReapOwner` in status is always `"d2b"`.
+`waitReapOwner` in status is always `"d2b"` and identifies the
+privileged-broker parent as the sole wait/reap owner.
 
 EphemeralProcess does not use `adoptionPolicy` or `adoptionState`. On a
-controller restart, the controller attempts **continuation recovery**: it
-locates the running one-shot by cgroup leaf membership, reverifies its identity,
-opens a fresh pidfd, and attaches a waiter to observe the exact exit. If
-identity verification passes, the EphemeralProcess remains in `Running` phase
-and the fresh pidfd is used to await the real exit (no relaunch). If the
-candidate is ambiguous or identity verification fails, the EphemeralProcess is
+controller restart, the controller attempts **continuation recovery** through
+ProviderSupervisor. It locates the running one-shot by cgroup leaf membership,
+reverifies its identity, and obtains a fresh duplicate pidfd from the still-live
+broker parent. ProviderSupervisor may poll that pidfd for readability as a
+liveness hint, but only the broker calls `waitid(P_PIDFD, ...)`, collects the
+exit status, and reaps the child. The controller consumes the broker-relayed
+terminal status. If identity verification and broker-parent ownership pass, the
+EphemeralProcess remains in `Running` phase (no relaunch). If the candidate,
+parent ownership, or terminal status is ambiguous, the EphemeralProcess is
 written to `Unknown` phase and quarantined; it is never auto-TTL-cleaned while
 the process may still be live or ambiguous. The operator resolves ambiguity
 through normal resource management or a full Zone reset.
@@ -354,7 +372,7 @@ spawned process. An empty list inherits all parent namespaces.
 | `uts` | `CLONE_NEWUTS` | Isolates hostname and NIS domain. |
 | `network` | `CLONE_NEWNET` | Isolates network interfaces; used only for fully network-isolated workers. Not used when the Process has a `networkUsage` ref to an active Network resource. |
 | `cgroup` | `CLONE_NEWCGROUP` | New cgroup namespace. Not used when the broker must place the process into a pre-delegated cgroup leaf. |
-| `time` | `CLONE_NEWTIME` | New time namespace. Supported on kernel ≥5.6. |
+| `time` | `CLONE_NEWTIME` | New time namespace. Available throughout this Provider's Linux ≥5.14 platform baseline. |
 
 Combinations that the compiler rejects at spec admission:
 
@@ -564,8 +582,11 @@ remains the sole executor and audit owner of all privileged effects. The broker:
 5. For user-namespace processes: additionally passes `CLONE_NEWUSER` and
    performs the uid_map/gid_map pre-establishment (§7.7) before releasing
    the pipe sync.
-6. Returns the pidfd to ProviderSupervisor via the effect port. The pidfd FD
-   number is never written to any log, status, audit record, or metric.
+6. Retains its parent-held pidfd and the sole wait/reap record. It returns a
+   duplicate pidfd to ProviderSupervisor through the private, local effect-port
+   attachment path for readiness polling and exact-main-process signaling. No
+   raw pidfd reaches the Provider controller, d2b-bus, ComponentSession, ttrpc,
+   status, audit, logs, or metrics.
 
 The broker rejects any request that does not match the precompiled and
 broker-verified plan digest. No environment variable, mount, capability, or
@@ -574,50 +595,72 @@ through this compilation step.
 
 ### 8.3 Pidfd ownership and wait/reap
 
-d2b (the Provider controller) owns wait/reap for all processes spawned under
-this Provider.
+d2b's privileged broker owns wait/reap for every process it spawns under this
+Provider. The broker is the `clone3` caller and therefore the kernel parent; it
+alone may call `waitid(P_PIDFD, ...)`, collect `siginfo_t`/exit status, and reap
+the child. ProviderSupervisor and the Provider controller are non-parents.
 
 Pidfd rules (invariant across all Process Providers; violation is a
 `runtime-security-violation` audit event):
 
-1. Every launched process has a local verified pidfd obtained atomically from
-   `clone3(CLONE_PIDFD)`.
+1. Every launched process has a broker-parent pidfd obtained atomically from
+   `clone3(CLONE_PIDFD)`. The broker keeps it until the child has been reaped
+   exactly once.
 2. The pidfd is acquired only after the effect port (via the broker) verifies
    stable process identity: executable hash, template generation, cgroup
    placement, and provider-specific identity attributes.
 3. The pidfd is never serialized to disk, never written to the resource store,
-   never sent over d2b-bus, and never exposed in public status or audit payload.
-4. The pidfd is closed and reopened (with full re-verification) after every
-   controller restart. No pidfd is valid across a controller process restart.
-5. On adoption, the controller locates the candidate process by cgroup leaf and
-   verifies all stable identity fields against the stored
-   `processIdentityDigest`, then opens a new pidfd with `pidfd_open(2)`. See §8.5.
-6. The PID contained within the pidfd is used internally only for
-   `pidfd_send_signal` and process group management. It is never written to any
-   log, status, audit record, or metric with a resource-name label.
+   never sent over d2b-bus, ComponentSession, or ttrpc, and never exposed in
+   public status or audit payload.
+4. ProviderSupervisor may hold a duplicate pidfd. It may use `AsyncFd`, `poll`,
+   or an equivalent readiness mechanism to observe readability, but readability
+   is only a terminal-liveness hint: it is not a wait, reap, or exit-status
+   result. ProviderSupervisor never calls `waitid`/`waitpid` for this child.
+5. The broker relays one typed terminal result, bound to the Process identity
+   and operation, after its successful `waitid(P_PIDFD, ...)`. Only that result
+   supplies `lastExitClass` or `outcome.exitCode`; the controller never derives
+   either from pidfd readability.
+6. A holder of a currently verified pidfd (the broker or ProviderSupervisor)
+   may call `pidfd_send_signal` for the exact main process without being its
+   parent. The Provider controller requests that effect through its opaque
+   handle and never receives the raw fd. There is no PID, process-group, or PGID
+   signaling fallback.
+7. On ProviderSupervisor restart, its duplicate is closed and reacquired only
+   after full re-verification. A Provider-controller restart does not transfer
+   or invalidate the broker's parent-held pidfd; the controller merely
+   reconnects to the broker-relayed status stream.
+8. On continuation recovery, ProviderSupervisor locates the candidate process
+   by cgroup leaf, verifies all stable identity fields against the stored
+   `processIdentityDigest`, and requests a fresh duplicate pidfd from the
+   still-live broker parent. See §8.5. A replacement broker that is not the
+   child's parent cannot assume wait/reap ownership.
 
-The controller calls `waitid(P_PIDFD, ...)` on the pidfd to receive the terminal
-event. There is no polling interval. The wait is driven by the async runtime's
-fd readability notification via `AsyncFd` (or equivalent); the controller
-never calls a blocking `waitid` variant directly on the watch-loop task.
+The broker drives `waitid(P_PIDFD, ...)` outside the Provider watch loop and
+relays completion without a controller polling interval. ProviderSupervisor
+may independently poll its duplicate to promptly request the broker result, but
+must tolerate readability before the relay arrives and must not synthesize an
+exit status.
 
 All operations that involve blocking or latency-unbounded syscalls — including
-`pidfd_open(2)`, `/proc/<pid>/stat` reads, executable hash computation, and
-cgroup filesystem enumeration (leaf existence, occupant detection) — are
-dispatched through a bounded blocking adapter (`spawn_blocking` or equivalent)
-with an explicit timeout, so the controller watch loop is never blocked.
-Adapter timeouts are treated as adoption failures or launch errors, not
-silent hangs.
+pidfd duplication/re-verification, `/proc/<pid>/stat` reads, executable hash
+computation, cgroup filesystem enumeration (leaf existence, occupant
+detection), and broker terminal-status retrieval — are dispatched through a
+bounded blocking adapter (`spawn_blocking` or equivalent) with an explicit
+timeout, so the controller watch loop is never blocked. Adapter timeouts are
+treated as adoption failures or launch errors, not silent hangs.
 
-On wait completion:
+On broker-relayed wait completion:
 
 - Exit code is recorded internally as the basis for `lastExitClass` and
   `outcome.exitCode` (EphemeralProcess).
-- The cgroup leaf is released.
-- The pidfd is closed.
+- The cgroup leaf is released only after it is observed unpopulated. A
+  lingering owned descendant is drained through §8.6 before restart or rmdir.
+- ProviderSupervisor closes its duplicate; the broker closes its pidfd only
+  after successful reap.
 - The restart or finalize path is dispatched.
 
-systemd does not own wait/reap for any process under this Provider.
+Neither ProviderSupervisor, the Provider controller, nor systemd owns wait/reap
+for any process under this Provider.
 
 ### 8.4 Restart and backoff
 
@@ -645,7 +688,9 @@ For `restartPolicy: never`: no restart. Write final phase `Succeeded` (if
 ### 8.5 Adoption after controller restart
 
 When the controller restarts, it performs adoption for each `Process` resource
-whose `adoptionPolicy: adopt-on-restart` and current phase is non-terminal.
+whose `adoptionPolicy: adopt-on-restart` and current phase is non-terminal. A
+controller restart is not a parent change: the still-live broker remains the
+spawned process's parent and sole wait/reap owner.
 
 Adoption algorithm:
 
@@ -658,14 +703,19 @@ Adoption algorithm:
    match the `processIdentityDigest` stored in the resource status.
 4. Via a bounded blocking adapter: compute the executable content hash and
    verify it against the Provider template/bundle digest.
+5. Verify that the broker serving the operation is the original recorded
+   `clone3` parent and still owns the unreaped child record.
 
-All steps 2–4 run outside the watch-loop task. A blocking-adapter timeout is
+All steps 2–5 run outside the watch-loop task. A blocking-adapter timeout is
 treated as an adoption failure (ambiguous result), not a clean success.
 
-If all checks pass: via a bounded blocking adapter, call `pidfd_open(2)` to
-open a fresh pidfd. Set `adoptionState: adopted`. Continue supervising.
+If all checks pass, ProviderSupervisor obtains a fresh duplicate pidfd from the
+broker through the private effect-port attachment path. It may poll that
+duplicate and use it for `pidfd_send_signal`; the broker remains the only
+wait/reap owner. Set `adoptionState: adopted`. Continue supervising.
 
-If any check fails or is ambiguous:
+If any check fails, the broker-parent relationship is lost, or the result is
+ambiguous:
 
 - Set `adoptionState: quarantined`.
 - Do **not** attempt to kill the process.
@@ -700,23 +750,38 @@ manages.
 
 Finalizer algorithm on `deletion-requested`:
 
-1. Send `SIGTERM` via `pidfd_send_signal`. Wait up to `drainTimeout` (Process
-   spec field; default `"10s"`; maximum `"300s"`).
-2. If the process has not exited: send `SIGKILL` via `pidfd_send_signal`.
-3. Confirm process exit via `waitid(P_PIDFD, ...)`.
-4. Release the cgroup leaf: remove the leaf directory under the delegated
-   subtree.
-5. Release any OFD locks/leases held by this process (through the Volume
+1. Reverify the exact main-process pidfd, broker-parent record, and anchored
+   cgroup leaf identity. If any ownership proof is ambiguous, take the
+   quarantine path below without signaling or writing `cgroup.kill`.
+2. Request `SIGTERM` for the exact main process through
+   `pidfd_send_signal`. The verified broker or ProviderSupervisor pidfd holder
+   may perform the syscall; parenthood is not required for signaling. Wait up
+   to `drainTimeout` (Process spec field; default `"10s"`; maximum `"300s"`) for
+   the broker-relayed terminal status and graceful subtree drain.
+3. After the main process exits or the grace deadline expires, the broker
+   writes `1` to the anchored leaf's cgroup v2 `cgroup.kill`. This is mandatory
+   for an intentional stop/finalize, including the case where the main process
+   exited but left descendants. It terminates the owned subtree regardless of
+   `setsid(2)` or process-group changes and creates no PGID-reuse race.
+4. Wait boundedly for `cgroup.events` to report `populated 0` and for the
+   original broker parent to relay its successful `waitid(P_PIDFD, ...)`
+   result for the main child. Pidfd readability alone is not exit proof.
+5. Only after both proofs, remove the leaf directory under the delegated
+   subtree. No PID/PGID SIGKILL fallback is permitted.
+6. Release any OFD locks/leases held by this process (through the Volume
    Provider, not directly by this Provider).
-6. Clear the finalizer.
+7. Clear the finalizer.
 
-On ambiguous state (pidfd closed unexpectedly, cgroup leaf empty, exit not
-confirmed): the finalizer is **retained**; the resource is written to `Degraded`
-or `Unknown` phase with condition `process-exit-unconfirmed`. The finalizer is
-never cleared without exact exit proof confirmed via pidfd. The resource remains
-in this state until exact exit is confirmed or the operator performs a full Zone
-reset. Recording a success-shape finalized result without exit proof is
-prohibited.
+On ambiguous state (pidfd closed unexpectedly, broker no longer the parent,
+cgroup identity mismatch, `cgroup.kill` unavailable/failing, leaf not becoming
+unpopulated, or broker wait/reap status not confirmed), the finalizer is
+**retained**; the resource is written to `Degraded` or `Unknown` phase with
+condition `process-exit-unconfirmed`. No signal and no `cgroup.kill` write is
+issued to an ambiguously owned candidate. The finalizer is never cleared
+without both exact broker-relayed main-process exit proof and empty-leaf proof.
+The resource remains in this state until ownership/exit is confirmed or the
+operator performs a full Zone reset. Recording a success-shape finalized result
+without those proofs is prohibited.
 
 ---
 
@@ -741,8 +806,10 @@ One-shot lifecycle:
    - killed by signal → `outcome.code: process-crashed`.
 6. `startDeadline` exceeded without start: phase `Failed`,
    `outcome.code: start-deadline-exceeded`.
-7. `runtimeDeadline` exceeded while running: SIGTERM then SIGKILL; phase
-   `Failed`, `outcome.code: runtime-deadline-exceeded`.
+7. `runtimeDeadline` exceeded while running: use the §8.6 intentional-stop
+   sequence (exact-main `SIGTERM`, bounded grace, mandatory leaf
+   `cgroup.kill`, broker wait/reap, empty-leaf proof); phase `Failed`,
+   `outcome.code: runtime-deadline-exceeded`.
 8. After terminal phase: cleanup controller computes `cleanupEligibleAt`:
    - `Succeeded`: `completedAt + successfulTtl`.
    - `Failed`: `completedAt + failedTtl`.
@@ -753,14 +820,17 @@ One-shot lifecycle:
     final observable event, appended after removal, not the trigger for removal).
 
 Controller restart during a running EphemeralProcess triggers **continuation
-recovery**: the controller locates the one-shot by cgroup leaf membership,
-reverifies its process identity, opens a fresh pidfd, and attaches a waiter to
-observe the exact exit. The EphemeralProcess remains in `Running` phase while
-verification succeeds (no relaunch). If the candidate is ambiguous or
-verification fails, the EphemeralProcess is written to `Unknown` phase and
-quarantined; it is **never** auto-TTL-cleaned while the process may still be
-live or ambiguous. `adoptionPolicy`/`adoptionState` do not apply; the term for
-this recovery is **continuation recovery**, not adoption.
+recovery**: ProviderSupervisor locates the one-shot by cgroup leaf membership,
+reverifies its process identity and original broker-parent record, and obtains
+a fresh duplicate pidfd from that broker. ProviderSupervisor may poll
+readability; the broker alone waits/reaps and relays the exact exit status. The
+EphemeralProcess remains in `Running` phase while verification succeeds (no
+relaunch). If the candidate or parent relationship is ambiguous, verification
+fails, or broker-relayed terminal status cannot be obtained, the
+EphemeralProcess is written to `Unknown` phase and quarantined; it is **never**
+auto-TTL-cleaned while the process may still be live or ambiguous.
+`adoptionPolicy`/`adoptionState` do not apply; the term for this recovery is
+**continuation recovery**, not adoption.
 
 ---
 
@@ -856,8 +926,10 @@ broker remains the sole executor and audit owner:
 | Operation | Purpose | Authority |
 | --- | --- | --- |
 | `SpawnRunner` | Clone3-spawn of a Process/EphemeralProcess with a pre-compiled sandbox plan | Scoped to the zone-delegated cgroup subtree and pre-verified plan digest |
+| Broker wait/reap and terminal-status relay | Parent-only `waitid(P_PIDFD, ...)`, exact-once reap, and typed exit-status delivery to ProviderSupervisor | Only for the broker's own `clone3` children; non-parent callers cannot invoke wait/reap |
 | User namespace uid_map/gid_map write | Write UID/GID mapping for user-namespace processes | Broker-internal; always part of SpawnRunner when `userNamespace` is set |
 | Cgroup leaf create/observe | Create and manage the cgroup leaf for each process | Delegated cgroup subtree only; broker validates path against `z-<zone-id>/` prefix |
+| Cgroup leaf kill | Write `1` to the anchored leaf's `cgroup.kill` after graceful exact-main signaling for an unambiguous intentional stop | Exact verified owned leaf only; Linux ≥5.14; forbidden for ambiguous/quarantined candidates |
 | Cgroup leaf release | Remove cgroup leaf on process exit | Same delegation scope |
 
 No direct path exists from the Provider crate to the broker socket. The
@@ -900,6 +972,8 @@ description.
 | `execution-ref-not-ready` | `executionRef` target is not in Ready phase at admission time |
 | `provider-not-ready` | `Provider/system-minijail` is not in Ready phase |
 | `template-not-found` | `template` ID does not resolve in the owning Provider's component descriptor |
+| `kernel-too-old` | Host kernel is older than the mandatory Linux 5.14 baseline |
+| `cgroup-kill-unavailable` | The delegated cgroup v2 leaf does not expose writable `cgroup.kill`; Provider remains not Ready and no launch is attempted |
 
 ### 12.2 Launch errors
 
@@ -927,7 +1001,9 @@ description.
 | `adoption-identity-mismatch` | Process identity does not match stored `processIdentityDigest` |
 | `adoption-failed` | Adoption attempted but could not open pidfd after verification |
 | `runtime-security-violation` | Pidfd invariant violated; emits audit event and quarantines |
-| `process-exit-unconfirmed` | Process exit could not be confirmed via pidfd during finalize; finalizer retained; resource reports `Degraded`/`Unknown` pending operator resolution or full Zone reset |
+| `broker-wait-owner-lost` | The original `clone3` broker parent cannot provide the exact wait/reap result; replacement broker/non-parent observation cannot substitute |
+| `cgroup-kill-failed` | An unambiguous intentional teardown could not write `1` to the anchored leaf's `cgroup.kill` or the leaf did not become unpopulated |
+| `process-exit-unconfirmed` | Process exit could not be confirmed by the original broker parent's relayed `waitid(P_PIDFD, ...)` result during finalize; finalizer retained; resource reports `Degraded`/`Unknown` pending operator resolution or full Zone reset |
 
 ---
 
@@ -1018,7 +1094,7 @@ payloads.
 | `ProcessExited` | Wait-confirmed process exit | `zone`, `resource_ref`, `resource_uid`, `provider`, `operation_id`, `exit_class`, `restart_count` |
 | `ProcessAdopted` | Successful adoption after controller restart | `zone`, `resource_ref`, `resource_uid`, `provider`, `operation_id`, `subject_digest`, `adoption_state: adopted` |
 | `ProcessQuarantined` | Ambiguous or mismatched adoption | `zone`, `resource_ref`, `resource_uid`, `provider`, `operation_id`, `reason` (one of `adoption-ambiguous`, `adoption-identity-mismatch`) |
-| `ProcessFinalized` | Finalizer cleared after SIGTERM/SIGKILL/wait sequence | `zone`, `resource_ref`, `resource_uid`, `provider`, `operation_id`, `exit_confirmed: bool` |
+| `ProcessFinalized` | Finalizer cleared after exact-main SIGTERM, anchored cgroup.kill, broker wait/reap, and empty-leaf proof | `zone`, `resource_ref`, `resource_uid`, `provider`, `operation_id`, `exit_confirmed: bool` |
 | `EphemeralProcessLaunched` | EphemeralProcess transitions to Running | Same fields as `ProcessLaunched` |
 | `EphemeralProcessCompleted` | EphemeralProcess reaches terminal phase | `zone`, `resource_ref`, `resource_uid`, `provider`, `operation_id`, `outcome_code`, `exit_code?` (only when `outcome_code: process-exited`) |
 | `EphemeralProcessCleanupInitiated` | EphemeralProcess cleanup controller calls Delete | `zone`, `resource_ref`, `resource_uid`, `operation_id`, `cleanup_eligible_at` |
@@ -1315,6 +1391,7 @@ The build:
 
 | Bound | Value | Enforced by |
 | --- | --- | --- |
+| Minimum Linux version | 5.14 | Host platform gate before Provider Ready/placement; verifies delegated cgroup v2 `cgroup.kill` |
 | Maximum concurrent inflight LaunchTickets per Zone | 64 (fixed manifest bound; not operator-configurable) | Controller semaphore; excess queued |
 | LaunchTicket TTL | `spec.startDeadline` (1s..3600s; default 60s) | Controller ticker |
 | Maximum runtimeDeadline | `spec.runtimeDeadline` max 86400s | Spec admission |
@@ -1368,12 +1445,14 @@ Every module in `src/` includes `#[cfg(test)]` unit tests for:
 - `adoption.rs`: fresh adoption, successful identity match, ambiguous/multiple
   candidates, identity mismatch, quarantine path; blocking-adapter timeout →
   adoption-failed; quarantine reuse rejected without externally established proof.
-- `pidfd.rs`: pidfd close/reopen on controller restart; never-serialized
-  invariant assertion; mock broker pidfd return; `pidfd_open` via blocking
-  adapter with timeout.
-- `wait.rs`: async wait completion via `AsyncFd` fd readability; no blocking
-  `waitid` on watch-loop task; clean-exit/crash/signal classification; SIGKILL
-  fallback on SIGTERM timeout.
+- `pidfd.rs`: ProviderSupervisor duplicate close/reacquire on supervisor
+  restart; controller never holds a raw pidfd; never-serialized invariant;
+  verified holders retain `pidfd_send_signal` exact-main semantics; no
+  PID/PGID signaling fallback.
+- `wait.rs`: `AsyncFd` readability is only a liveness hint; a non-parent cannot
+  call `waitid`/`waitpid` or derive exit status; typed broker-relayed
+  wait/reap result drives clean-exit/crash/signal classification; duplicate and
+  mismatched relay results fail closed.
 - `user_ns.rs`: uid_map/gid_map write sequence; pipe sync ordering; host UID 0
   rejection.
 - `metrics.rs`: no `zone` label in any emitted metric; closed label set
@@ -1386,7 +1465,7 @@ Files:
 ```
 tests/
   sandbox_compilation.rs    # full SandboxSpec → plan round-trips against golden vectors
-  lifecycle.rs              # Process: start → ready → crash → restart → stop
+  lifecycle.rs              # Process: start → ready → crash → broker-reaped status → restart → cgroup.kill stop
   ephemeral_lifecycle.rs    # EphemeralProcess: start → succeed/fail → ttl → cleanup
   conformance.rs            # shared conformance matrix (run against fake broker/supervisor)
   fault_injection.rs        # broker failures, pidfd errors, cgroup errors, user-ns errors
@@ -1396,7 +1475,10 @@ tests/
   adoption_quarantine.rs    # adoption identity mismatch → quarantine, no kill; blocking-adapter timeout → adoption-failed; quarantine reuse rejected without external proof
   bootstrap_authz.rs        # bootstrap authorization scope; no widening; wrong subject fails
   status_state.rs           # status-first operational state: controller declares no state Volume; bounded observations written to status/core ledger within status bounds; no secret/path/argv/PID/unit content; restart re-derives observed state from cgroup leaves + fresh pidfds
-  blocking_adapter.rs       # /proc reads, pidfd_open, cgroup ops via bounded blocking adapter; timeout → error, not hang
+  blocking_adapter.rs       # /proc reads, pidfd duplication/status relay, cgroup ops via bounded blocking adapter; timeout → error, not hang
+  broker_wait_contract.rs   # clone3 broker parent alone calls waitid/reaps; non-parent readability is not status
+  cgroup_kill_finalize.rs   # graceful exact-main signal then cgroup.kill; setsid/PGID escape and reuse fixtures
+  platform_gate.rs          # Linux <5.14 or missing/unwritable cgroup.kill fails before launch
 ```
 
 All tests pass under `cargo test -p d2b-provider-system-minijail`.
@@ -1415,7 +1497,10 @@ integration/
   concurrent_launch/        # fixed concurrency bound semaphore; 100 parallel launches
   latency_gate/             # ≤20 ms p95 launch-attempt start gate with real broker
   user_domain/              # user-domain Process via user supervisor (if descriptor declares support)
-  status_state_restart/     # controller starts with no state Volume; reaches Ready from status/core ledger; restart re-derives observed process state from declared cgroup leaves + fresh pidfds; no state-Volume mount
+  status_state_restart/     # controller starts with no state Volume; reaches Ready from status/core ledger; restart re-derives observed state and gets fresh supervisor duplicates from the still-parent broker; no state-Volume mount
+  broker_parent_reap/       # broker clone3 parent reaps exactly once and relays exit status; controller restart preserves parent
+  cgroup_kill_subtree/      # setsid descendant + recycled-PGID fixture is killed only through anchored leaf cgroup.kill
+  kernel_platform_gate/     # Linux >=5.14/cgroup.kill positive probe and fail-closed unsupported-kernel fixture
 ```
 
 Each integration scenario:
@@ -1434,10 +1519,10 @@ is run against both system-minijail and system-systemd providers:
 | Scenario | system-minijail assertion |
 | --- | --- |
 | Start → Ready | pidfd obtained atomically via `clone3(CLONE_PIDFD)` |
-| Crash → restart | `waitReapOwner: "d2b"`; backoff applies |
-| Drain: SIGTERM → exit | drainTimeout enforced; pidfd-confirmed exit |
-| Drain: SIGTERM → SIGKILL | SIGKILL via pidfd after timeout |
-| Adoption: matching identity | `adoptionState: adopted`; new pidfd opened via blocking adapter |
+| Crash → restart | `waitReapOwner: "d2b"` means broker parent; broker-relayed wait/reap status drives backoff |
+| Drain: SIGTERM → exit | drainTimeout enforced; broker wait/reap result plus empty-leaf proof required |
+| Drain: SIGTERM → forced subtree stop | broker writes `1` to anchored `cgroup.kill`; no PID/PGID SIGKILL fallback |
+| Adoption: matching identity | `adoptionState: adopted`; ProviderSupervisor gets a verified duplicate from the still-parent broker |
 | Adoption: mismatched identity | `adoptionState: quarantined`; no signal; external proof required before reuse |
 | EphemeralProcess: Succeeded TTL | `cleanupEligibleAt` set; row removed on Delete |
 | EphemeralProcess: Failed TTL | `failedTtl` applied |
@@ -1447,7 +1532,11 @@ is run against both system-minijail and system-systemd providers:
 | PID never in status | No PID/pidfd in any status/audit/log |
 | No static template units | No PID1 unit for any process |
 | No zone metric labels | No `zone` label on any emitted metric; Zone is OTEL resource attribute only |
-| Blocking-adapter isolation | `/proc` read, executable hash, cgroup enum, `pidfd_open` never block watch loop |
+| Blocking-adapter isolation | `/proc` read, executable hash, cgroup enum, pidfd duplicate re-verification, and broker-status retrieval never block watch loop |
+| Parent-only wait/reap | Only the `clone3` broker parent calls `waitid(P_PIDFD)` and reaps; ProviderSupervisor poll readability is not accepted as exit status |
+| Pidfd signaling holder | Verified broker/ProviderSupervisor duplicate can `pidfd_send_signal` the exact main process; controller holds only an opaque handle |
+| Descendant escape resistance | A descendant that calls `setsid(2)` and a recycled-PGID decoy cannot evade or be hit by teardown; only the verified leaf's `cgroup.kill` is used |
+| Platform gate | Linux <5.14 or absent/unwritable leaf `cgroup.kill` keeps Provider not Ready and launches zero processes |
 | Effect port boundary | Provider crate imports no broker service/client/DTO; all spawn effects via `MinijailProcessEffectPort` with opaque IDs |
 | Provider status by core | Minijail controller writes no `Provider` resource status; core aggregates from checkpoint/health events |
 | No state Volume | The minijail controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); no bootstrap state Volume, no bootstrap storage mechanism, and no bootstrap-storage exception (D086 superseded by D087); running units re-adopted from cgroup leaves + fresh pidfds on restart |
@@ -1467,7 +1556,7 @@ The baseline is `b5ddbed67867d9244bf33390868101bd9b053e49`.
 | `packages/d2b-core/src/minijail_profile.rs` — `MinijailProfile`, `UserNamespaceProfile`, `NamespaceSet`, `MountPolicy`, `BindMount`, `CgroupPlacement` | production-reachable | EXTRACT/ADAPT | `packages/d2b-provider-system-minijail/src/sandbox_compiler.rs` — compiled plan types; preserve typed fail-closed profile verification |
 | `packages/d2b-core/src/process_builder.rs` | production-reachable | ADAPT | `packages/d2b-provider-system-minijail/src/launch.rs` — LaunchTicket builder adapted to v3 ticket contract |
 | `packages/d2b-priv-broker/src/ops/spawn_runner.rs` | production-reachable | ADAPT | Broker-side: retained as internal broker op invoked by `MinijailProcessEffectPort` implementation (owned by core/ProviderSupervisor); Provider-side: `packages/d2b-provider-system-minijail/src/launch.rs` calls `MinijailProcessEffectPort` with opaque IDs; Provider crate imports no broker service/client/DTO |
-| `packages/d2bd/src/supervisor/pidfd_table.rs` — `PidfdTable`, `PidfdEntry`, `PidfdRegistration`, `WaitTermination`, `BrokerReapLog` | production-reachable | EXTRACT/ADAPT | `packages/d2b-provider-system-minijail/src/pidfd.rs`, `wait.rs` — pidfd ownership, async wait, never-serialized invariant |
+| `packages/d2bd/src/supervisor/pidfd_table.rs` — `PidfdTable`, `PidfdEntry`, `PidfdRegistration`, `WaitTermination`, `BrokerReapLog` | production-reachable | EXTRACT/ADAPT | Broker-side wait/reap implementation remains in `d2b-priv-broker`; `packages/d2b-provider-system-minijail/src/{pidfd,wait}.rs` only poll a verified duplicate, request exact-main signaling, and consume the typed broker-relayed terminal result |
 | `packages/d2bd/src/supervisor/*.rs` — `DagExecutor`, `NodeOutcome`, `NodeHistory`, `NodeBudget`, `SplitReadinessMode` | production-reachable | ADAPT | `packages/d2b-provider-system-minijail/src/adoption.rs` — adoption/quarantine algorithm adapted from DAG supervisor restart logic |
 | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` — user namespace uid_map/gid_map write sequence | production-reachable | ADAPT | `packages/d2b-provider-system-minijail/src/user_ns.rs` — pre-establishment sequence; preserve pipe sync, O_NOFOLLOW, re-validation |
 | `packages/d2b-realm-core/src/ids.rs` — `RealmId`, `WorkloadId`, `PrincipalId` | production-reachable | ADAPT | Use v3 `ZoneId`, `ResourceRef`, `UserRef` from `d2b-contracts/src/v3/identity.rs` (ADR046-identities-001) |
@@ -1524,10 +1613,10 @@ delivery assumptions are not copied.
 | Current source | `d2b-priv-broker/src/ops/spawn_runner.rs`; `d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`, user namespace setup) |
 | Reuse action | ADAPT |
 | Destination | Broker-side: `d2b-priv-broker` retains `SpawnRunner` op, invoked by the `MinijailProcessEffectPort` implementation owned by core/ProviderSupervisor; Provider-side: `packages/d2b-provider-system-minijail/src/launch.rs` calls `MinijailProcessEffectPort` with opaque Process/LaunchTicket/profile IDs; `user_ns.rs` implements the user namespace pre-establishment protocol |
-| Detailed design | `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `MinijailProcessEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO |
+| Detailed design | Linux ≥5.14 and delegated-leaf `cgroup.kill` platform gate; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `MinijailProcessEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO |
 | Integration | ADR046-minijail-002 (LaunchTicket); real cgroup/broker fixture in `integration/clone3_pidfd/` and `integration/user_namespace/` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/fault_injection.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/` |
+| Validation | `tests/fault_injection.rs`; `tests/platform_gate.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/` |
 | Removal proof | Old broker `SpawnRunner` direct-caller paths in `d2bd` removed after system-minijail Provider integration |
 
 ### ADR046-minijail-004 (Dependency: ADR046-minijail-003)
@@ -1537,11 +1626,11 @@ delivery assumptions are not copied.
 | Dependency/owner | ADR046-minijail-003; wait/pidfd owner |
 | Current source | `d2bd/src/supervisor/pidfd_table.rs` (PidfdTable, WaitTermination, BrokerReapLog) |
 | Reuse action | EXTRACT/ADAPT |
-| Destination | `packages/d2b-provider-system-minijail/src/pidfd.rs`; `packages/d2b-provider-system-minijail/src/wait.rs` |
-| Detailed design | Async `waitid(P_PIDFD)` via `AsyncFd` fd readability; no blocking `waitid` on watch-loop task; `pidfd_open(2)` dispatched through bounded blocking adapter with explicit timeout; pidfd never serialized; pidfd close/reopen after controller restart; exit class classification (clean-exit/crash/signal/timeout/unknown); SIGTERM/SIGKILL via pidfd_send_signal; drainTimeout enforcement |
+| Destination | Broker-side parent wait/reap and typed terminal relay in `packages/d2b-priv-broker/src/`; non-parent observation/status consumption in `packages/d2b-provider-system-minijail/src/{pidfd,wait}.rs` |
+| Detailed design | Broker that called `clone3` alone calls `waitid(P_PIDFD)`, collects exit status, and reaps exactly once; ProviderSupervisor `AsyncFd` readability is a hint only and never a wait/status source; controller consumes the identity-bound broker relay and holds no raw pidfd; ProviderSupervisor duplicate reacquisition is dispatched through a bounded blocking adapter with explicit timeout; pidfd never serialized; verified broker/ProviderSupervisor holder retains exact-main `pidfd_send_signal`; no PID/PGID fallback; graceful deadline followed by mandatory anchored leaf `cgroup.kill`; empty-leaf proof before rmdir; exit class classification (clean-exit/crash/signal/timeout/unknown) |
 | Integration | Controller restart → adoption (ADR046-minijail-005); finalize (§8.6) |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/lifecycle.rs`; `tests/redaction.rs` (PID never in log/status/audit); `tests/blocking_adapter.rs` (pidfd_open via adapter; timeout → error) |
+| Validation | `tests/lifecycle.rs`; `tests/broker_wait_contract.rs` (only clone3 parent calls waitid/reaps; poll readability cannot supply status); `tests/cgroup_kill_finalize.rs` (setsid descendant and PGID reuse); `tests/redaction.rs` (PID never in log/status/audit); `tests/blocking_adapter.rs` (duplicate/status relay via adapter; timeout → error) |
 | Removal proof | Old `PidfdTable` in `d2bd` supervisor removed after Provider integration |
 
 ### ADR046-minijail-005 (Dependency: ADR046-minijail-002, ADR046-minijail-004, ADR046-session-001, ADR046-bus-001)
@@ -1552,10 +1641,10 @@ delivery assumptions are not copied.
 | Current source | `d2bd/src/supervisor/*.rs` (DagExecutor, NodeOutcome); `d2bd/src/supervisor/pidfd_table.rs`; `d2b-realm-core/src/allocator_engine.rs` (adoption/identity concepts) |
 | Reuse action | ADAPT |
 | Destination | `packages/d2b-provider-system-minijail/src/` — controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize |
-| Detailed design | Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `MinijailProcessEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) with `/proc` reads and cgroup enumeration via bounded blocking adapters; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no signal to quarantined/ambiguous identity; restart/backoff; finalize (§8.6); EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; the controller declares no Provider state Volume and mounts none — its bounded non-secret operational state lives in `status`/the core Operation ledger (§5.1, D087) and running units are re-adopted from cgroup leaves + fresh pidfds on restart |
+| Detailed design | Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `MinijailProcessEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) with `/proc` reads, cgroup enumeration, and original-broker-parent verification via bounded blocking adapters; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no signal or cgroup.kill write to quarantined/ambiguous identity; restart/backoff driven only by broker-relayed terminal status; finalize (§8.6) with exact-main SIGTERM, bounded grace, mandatory cgroup.kill, broker wait/reap, empty-leaf proof, and no PGID ownership; EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; the controller declares no Provider state Volume and mounts none — its bounded non-secret operational state lives in `status`/the core Operation ledger (§5.1, D087) and running units are re-adopted from cgroup leaves + fresh pidfds on restart |
 | Integration | Zone runtime startup (bootstrap); all v3 ResourceClient/bus/session paths |
 | Data migration | Full reset; current DAG/role snapshot import not required |
-| Validation | `tests/lifecycle.rs`; `tests/ephemeral_lifecycle.rs`; `tests/conformance.rs`; `tests/adoption_quarantine.rs`; `tests/bootstrap_authz.rs`; `tests/fast_path.rs`; `tests/blocking_adapter.rs`; `integration/adoption_restart/`; `integration/quarantine_scenario/`; `integration/latency_gate/`; shared conformance suite in `d2b-process-conformance` |
+| Validation | `tests/lifecycle.rs`; `tests/ephemeral_lifecycle.rs`; `tests/conformance.rs`; `tests/adoption_quarantine.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `tests/platform_gate.rs`; `tests/bootstrap_authz.rs`; `tests/fast_path.rs`; `tests/blocking_adapter.rs`; `integration/adoption_restart/`; `integration/quarantine_scenario/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/`; `integration/latency_gate/`; shared conformance suite in `d2b-process-conformance` |
 | Removal proof | Current `d2bd` DAG executor and direct spawn paths removed only after all ProcessRoles in the role-disposition table (ADR-046-components-processes-and-sandbox, §Representative baseline mapping) reach parity under system-minijail or system-systemd |
 
 ### ADR046-minijail-006 (Dependency: ADR046-minijail-005)
@@ -1584,7 +1673,7 @@ is integrated and tested.
 | `d2bd` DAG executor direct minijail spawn paths | After ADR046-minijail-005 full lifecycle test parity (all ProcessRoles in disposition table) |
 | `d2b-core/src/minijail_profile.rs` module | After ADR046-minijail-001 SandboxSpec compilation covers all current `MinijailProfile` callers |
 | `d2b-core/src/process_builder.rs` | After ADR046-minijail-002 LaunchTicket builder replaces all current callers |
-| `d2bd/src/supervisor/pidfd_table.rs` | After ADR046-minijail-004 wait/pidfd replaces all current callers |
+| `d2bd/src/supervisor/pidfd_table.rs` | After ADR046-minijail-004 broker-parent wait/reap plus non-parent observation/status relay replaces all current callers |
 | `nixos-modules/processes-json.nix` | After ADR046-minijail-006 Nix Process resource authoring replaces all ProcessRole Nix emissions |
 | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles) | After virtiofsd Process resources (Provider/volume-virtiofs) are fully validated under system-minijail |
 | `d2b-realm-router` session implementation types | After ComponentSession (ADR046-session-001) replaces all Realm PeerSession routes |
@@ -1699,3 +1788,20 @@ process termination.
     Live pidfds and FDs are process-local and non-persistent; they must not be
     serialized, stored, or re-used across controller restarts without full
     re-verification.
+
+13. **The `clone3` broker parent alone waits and reaps.** The broker retains
+    the parent-held pidfd and alone calls `waitid(P_PIDFD, ...)`, collects the
+    exit status, and reaps exactly once. ProviderSupervisor may poll a verified
+    duplicate for readability and may use `pidfd_send_signal` on the exact main
+    process, but it never waits/reaps or converts readability into an exit
+    result. The Provider controller holds only an opaque handle and consumes
+    the identity-bound broker relay. A replacement non-parent broker cannot
+    claim wait/reap ownership.
+
+14. **Intentional teardown uses the owned cgroup, never PGID ownership.** On
+    Linux 5.14 or newer, after exact-main `SIGTERM` and the bounded graceful
+    phase, the broker writes `1` to the reverified leaf's `cgroup.kill`, waits
+    for `cgroup.events` `populated 0` and its own wait/reap result, and only then
+    removes the leaf. This closes `setsid(2)` escape and PGID-reuse races. No
+    PID/PGID SIGKILL fallback exists. An ambiguous/quarantined candidate is
+    never signaled or subjected to `cgroup.kill`; its finalizer remains.

@@ -483,6 +483,17 @@ top-level `spec.isolationPosture` (see the base spec table above); it is never a
 | `tpm2` | TPM 2.0 device present |
 | `usbip` | USBIP kernel module loadable |
 
+`Provider/system-minijail` has a mandatory platform floor independent of the
+optional Host setting: Linux **5.14 or newer**, cgroup v2 delegation, and a
+writable `cgroup.kill` file on a delegated test leaf. Linux 5.14 is required
+because intentional teardown uses `cgroup.kill` rather than PID/PGID ownership.
+When any Process selects system-minijail, Host reconciliation performs this
+probe before placement; `kernelVersionMin = null` cannot waive it, while a
+higher configured minimum still applies. An older kernel fails with
+`kernel-too-old`; missing or unusable `cgroup.kill` fails with
+`cgroup-kill-unavailable`. Both keep the Provider/placement not Ready and
+launch zero processes.
+
 ### Status schema
 
 #### Three-layer status shape (D088)
@@ -602,7 +613,11 @@ Provider/system-core reconcile loop for Host:
 1. Receive trigger: `spec-generation-changed`, `dependency-changed`, `startup-relist`, or `scheduled-observe`.
 2. Read fresh spec snapshot.
 3. Validate spec invariants (domains, defaultUserRef, budget, capabilities claim).
-4. Probe local OS availability: `uname(2)`, cgroup v2 mount, user namespace check, requested HostCapabilityClass probes.
+4. Probe local OS availability: `uname(2)`, cgroup v2 mount, user namespace
+   check, requested HostCapabilityClass probes. If system-minijail is installed
+   or selected by a targeting Process, also enforce Linux ≥5.14 and probe a
+   delegated leaf's writable `cgroup.kill`; failure is a platform-gate error,
+   not a feature downgrade.
 5. If `allowedDomains` contains `user`: contact fixed user supervisor to verify `defaultUserRef`'s user manager availability.
 6. Compute aggregate Budget reservation from all non-terminal Processes targeting this Host via `List(executionRef=Host/<name>)`.
 7. Check aggregate budget against Zone capacity policy.
@@ -902,7 +917,7 @@ Process-specific fields:
 | `readiness` | ReadinessSpec | no | see below | — | Readiness probe settings. |
 | `healthCheck` | HealthCheckSpec | no | disabled | — | Health check settings. |
 | `adoptionPolicy` | `adopt-on-restart\|never-adopt` | no | `adopt-on-restart` | — | Whether the controller attempts to adopt a running process after controller restart. |
-| `drainTimeout` | duration string | no | `"30s"` | `"0s".."3600s"` | Time to wait for graceful SIGTERM drain before SIGKILL. |
+| `drainTimeout` | duration string | no | `"30s"` | `"0s".."3600s"` | Time to wait after exact-main SIGTERM before an unambiguous system-minijail subtree is terminated through its cgroup v2 `cgroup.kill`; no PGID fallback. |
 
 `RestartPolicySpec`:
 
@@ -991,7 +1006,7 @@ Process-specific status fields:
 | --- | --- | --- |
 | `providerImplementation` | string | Stable Provider name that started this process (e.g., `system-systemd`). Max 64 chars. |
 | `processIdentityDigest` | string | Opaque hex digest of the verified process identity material at last start (executable hash, template generation, cgroup path digest). Max 128 chars. Not the PID. |
-| `waitReapOwner` | string | `"d2b"` for system-minijail; `"systemd"` for system-systemd. |
+| `waitReapOwner` | string | `"d2b"` for system-minijail means the privileged broker that called `clone3` and is the child parent; `"systemd"` for system-systemd. It never means the non-parent Provider controller. |
 | `executionRef` | string | The resolved executionRef at last reconcile start. |
 | `domain` | string | The resolved domain (`system` or `user`) at last reconcile. |
 | `userRef` | string? | The resolved userRef used at last reconcile, if applicable. |
@@ -1026,8 +1041,8 @@ These rules are invariant for all Process Providers. Violation is a
 `runtime-security-violation` audit event and the process is quarantined.
 
 1. Every launched process has a local verified pidfd acquired by
-   ProviderSupervisor immediately after exec/launch and handed back to the
-   controller as an opaque identity/lease handle.
+   its lifecycle owner immediately after exec/launch; the Provider controller
+   receives only an opaque identity/lease handle.
 2. Pidfd is acquired only after ProviderSupervisor verifies the process's
    stable identity: executable hash, template generation, cgroup/scope
    placement, and provider-specific identity attributes. Any mismatch before
@@ -1036,25 +1051,40 @@ These rules are invariant for all Process Providers. Violation is a
    never sent over d2b-bus, and never exposed in public status or API. No
    Process Provider controller ever holds or imports a raw pidfd; it holds
    only the opaque handle ProviderSupervisor returns.
-4. Pidfd is closed and reopened (with full re-verification) after every
-   ProviderSupervisor restart. No pidfd is valid across a restart.
+4. A ProviderSupervisor-held duplicate is closed and reacquired (with full
+   re-verification) after every ProviderSupervisor restart. A Provider
+   controller restart transfers no raw fd. For system-minijail, the still-live
+   broker parent retains its original pidfd and wait/reap record until it reaps
+   the child.
 5. On adoption after restart, ProviderSupervisor locates the candidate
    process through the cgroup leaf, verifies all stable identity fields
-   against the stored processIdentityDigest, and only then opens a new pidfd
-   and reports the outcome to the controller.
+   against the stored processIdentityDigest, and only then obtains a fresh
+   verified pidfd handle and reports the outcome to the controller. For
+   system-minijail, the original broker parent supplies a fresh duplicate; for
+   system-systemd, ProviderSupervisor uses `pidfd_open(2)`.
    Ambiguous identity → `adoptionState: quarantined`.
-6. For system-minijail: `clone3(CLONE_PIDFD)` is preferred; ProviderSupervisor
-   dispatches this to the broker, and the pidfd is obtained atomically at
-   spawn. The broker performs wait/reap.
+6. For system-minijail: the broker calls
+   `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)`, obtains the pidfd atomically, and
+   remains the child's kernel parent. It alone calls `waitid(P_PIDFD, ...)`,
+   collects exit status, and reaps. It may provide ProviderSupervisor a
+   duplicate through a private local attachment for polling and signaling; the
+   Provider controller never receives the raw fd.
 7. For system-systemd: ProviderSupervisor reads the unit's MainPID after
    InvocationID + cgroup + start-time verification and calls `pidfd_open(2)`
    on that PID. systemd performs wait/reap.
-8. The PID contained in the pidfd is used internally only for `pidfd_send_signal`
-   and process group management. It is never written to any log, status, audit,
-   or metric with a resource-name label.
-9. Process group management: ProviderSupervisor maintains one PGID entry for
-   SIGKILL of descendants when pidfd signaling is insufficient. It is
-   ephemeral process-local state, not a resource.
+8. A non-parent ProviderSupervisor may poll pidfd readability, but readability
+   is only a terminal-liveness hint: it is not `waitid`, reap, or exit-status
+   collection. For system-minijail, only the identity-bound terminal result
+   relayed after the broker parent's successful wait/reap supplies
+   `lastExitClass` or `outcome.exitCode`.
+9. Any holder of a currently verified pidfd may use `pidfd_send_signal` for the
+   exact main process; this syscall does not require parenthood. The Provider
+   controller requests the effect through its opaque handle. The PID is never
+   written to logs, status, audit, or metrics.
+10. ProviderSupervisor maintains no PID/PGID ownership record and never sends
+    descendant SIGKILL by process group. An unambiguous system-minijail subtree
+    is terminated only by writing `1` to its anchored cgroup v2 `cgroup.kill`
+    after the graceful exact-main signal/deadline.
 
 ### system-systemd conformance
 
@@ -1094,8 +1124,12 @@ A process launched under `Provider/system-minijail` must satisfy all of:
   broker via `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)`, placing the process
   directly into its declared cgroup leaf.
 - The process is born in its declared cgroup before any instruction executes.
-- The broker performs wait/reap via the pidfd obtained from `clone3`;
-  ProviderSupervisor relays exit/adoption state back to the controller.
+- The broker that called `clone3` remains the process's parent and alone
+  performs `waitid(P_PIDFD)`, exit-status collection, and reap via its retained
+  pidfd. ProviderSupervisor may poll a verified duplicate for readability and
+  use it for exact-main `pidfd_send_signal`, but polling is not wait/reap and
+  cannot produce exit status. ProviderSupervisor relays only the broker's typed
+  terminal result and adoption state back to the controller.
 - The SandboxSpec's `namespaceClasses`, `capabilityClasses`, `seccompClass`,
   and `userNamespace` are compiled by the broker from the trusted bundle
   into a minijail/seccomp/namespace plan. The compiled plan digest is stored
@@ -1111,7 +1145,16 @@ A process launched under `Provider/system-minijail` must satisfy all of:
   state, to the host UID/GID mapped to in-namespace UID/GID 0.
 - On adoption after restart: ProviderSupervisor locates the process by cgroup
   leaf and verifies cgroup/PID/start-time/executable identity against
-  processIdentityDigest. Ambiguity → quarantine, never broad kill.
+  processIdentityDigest, verifies the original broker-parent record, and
+  obtains a fresh duplicate from that broker. Ambiguity or lost parent
+  ownership → quarantine, never broad kill.
+- Intentional stop/finalize sends SIGTERM to the exact main process, waits the
+  bounded grace, then has the broker write `1` to the anchored leaf's
+  `cgroup.kill`; it waits for broker-reaped main status and
+  `cgroup.events: populated 0` before rmdir. There is no PID/PGID SIGKILL
+  fallback.
+- Linux ≥5.14 plus writable delegated-leaf `cgroup.kill` is a mandatory
+  placement gate, not an optional capability downgrade.
 
 ### Fast path contract (D030)
 
@@ -1158,7 +1201,10 @@ Process Provider reconcile loop:
 2. Validate ExecutionSpec fields: executionRef, domain, userRef, providerRef, template, sandbox, budget, mounts, dependencies.
 3. Compile sandbox from SandboxSpec to provider-specific plan; compute sandboxRevisionDigest.
 4. Compile all mounts from MountSpec array; verify all volumeRef targets are Ready.
-5. If desiredLifecycle=stopped: stop running process if any; write Pending+stopped status; return converged.
+5. If desiredLifecycle=stopped: stop any running process through the same
+   provider-specific intentional-stop contract used by Finalize (including
+   system-minijail `cgroup.kill` and broker wait/reap proofs); write
+   Pending+stopped status; return converged.
 6. If no running process: dispatch LaunchTicket to ProviderSupervisor asynchronously; write Launching condition.
 7. ProviderSupervisor: verify ticket/resource/controller lease; spawn process via broker or systemd; obtain pidfd; return identity digest.
 8. Record processIdentityDigest in status; write Ready condition via UpdateStatus.
@@ -1172,17 +1218,30 @@ Owning Provider controller registers finalizer `process.<provider-name>/cleanup`
 
 Finalizer algorithm on `deletion-requested`:
 
-1. Signal process: SIGTERM, wait drainTimeout (bounded per spec).
-2. If still running: SIGKILL via pidfd.
-3. Wait for process exit (confirmed via pidfd or systemd unit transition).
-4. Release cgroup leaf (system-minijail) or unit (system-systemd).
-5. Release any OFD locks/leases from this process.
-6. Clear finalizer.
-7. Return `finalized`.
+1. Reverify the exact process/unit and its owned cgroup leaf. Ambiguity takes
+   the quarantine path without a signal or subtree kill.
+2. Signal the exact main process with SIGTERM and wait `drainTimeout`.
+   A verified pidfd holder may use `pidfd_send_signal`; parenthood is not
+   required. systemd-owned processes use the verified unit stop path.
+3. For system-minijail, after main exit or the grace deadline, have the original
+   broker parent write `1` to the anchored leaf's cgroup v2 `cgroup.kill`. This
+   mandatory subtree operation replaces PID/PGID SIGKILL ownership and catches
+   descendants that called `setsid(2)`.
+4. Confirm system-minijail main exit only from the broker parent's relayed
+   `waitid(P_PIDFD, ...)` result; pidfd poll readability is not proof. Also wait
+   for `cgroup.events` to report `populated 0`. For system-systemd, require the
+   verified unit's terminal transition and manager-owned subtree drain.
+5. Release cgroup leaf (system-minijail) or unit (system-systemd) only after the
+   applicable exit/subtree proofs.
+6. Release any OFD locks/leases from this process.
+7. Clear finalizer and return `finalized`.
 
-On ambiguous state (pidfd closed, cgroup empty, systemd unit gone but exit
-not confirmed): record `finalized` with audit condition `process-exit-unconfirmed`
-rather than blocking deletion indefinitely.
+On ambiguous state (pidfd closed, broker-parent ownership lost, cgroup identity
+mismatch, `cgroup.kill` unavailable/failing, leaf still populated, or systemd
+unit gone without a verified terminal transition), retain the finalizer and
+write `Degraded`/`Unknown` with `process-exit-unconfirmed`. No broad kill,
+signal, or `cgroup.kill` write targets an ambiguously owned candidate. A
+success-shaped `finalized` result without the required proofs is prohibited.
 
 ---
 
@@ -1233,7 +1292,7 @@ EphemeralProcess-specific fields:
 | Field | Type | Required | Default | Bound | Description |
 | --- | --- | --- | --- | --- | --- |
 | `startDeadline` | duration string | no | `"60s"` | `"1s".."3600s"` | Maximum time from spec commit to process start. Expiry moves phase to Failed with `reason: start-deadline-exceeded`. |
-| `runtimeDeadline` | duration string | no | `"300s"` | `"1s".."86400s"` | Maximum process wall-clock runtime after start. Expiry sends SIGTERM then SIGKILL. |
+| `runtimeDeadline` | duration string | no | `"300s"` | `"1s".."86400s"` | Maximum process wall-clock runtime after start. For system-minijail, expiry uses exact-main SIGTERM, bounded grace, then anchored leaf `cgroup.kill`; no PGID fallback. |
 | `successfulTtl` | duration string | no | `"1h"` | `"0s".."7d"` | (D034) How long to retain the resource after Succeeded. TTL begins at `status.completedAt`. |
 | `failedTtl` | duration string | no | `"24h"` | `"0s".."30d"` | (D034) How long to retain the resource after Failed. TTL begins at `status.completedAt`. |
 | `incidentHold` | bool | no | `false` | — | If true, cleanup is blocked regardless of TTL until an authorized caller sets this to false. |
@@ -1369,17 +1428,26 @@ EphemeralProcess Provider reconcile loop:
 4. Dispatch LaunchTicket to ProviderSupervisor; write Launching condition.
 5. ProviderSupervisor spawns process; obtains pidfd; returns identity digest.
 6. Write Running condition and startedAt.
-7. Monitor process exit via pidfd or systemd unit.
+7. Monitor process exit via broker-relayed wait/reap status (system-minijail)
+   or the verified systemd unit transition. Pidfd readability alone is not exit
+   status.
 8. On exit: classify exit code/class; write Succeeded/Failed phase, completedAt, outcome.
 9. Compute cleanupEligibleAt and write it via UpdateStatus.
-10. If runtimeDeadline exceeded before exit: send SIGTERM; wait bounded drain; send SIGKILL; wait exit; write Failed(runtime-deadline-exceeded).
+10. If runtimeDeadline exceeded before exit: run the Process finalizer's
+    provider-specific intentional-stop sequence. For system-minijail this is
+    exact-main SIGTERM, bounded grace, mandatory anchored-leaf `cgroup.kill`,
+    broker wait/reap, and empty-leaf proof; then write
+    Failed(runtime-deadline-exceeded).
 11. If startDeadline exceeded before launch: write Failed(start-deadline-exceeded).
 
 ### Finalize
 
-Same pidfd teardown as Process. EphemeralProcess finalizers are cleared only
-after process exit is confirmed. The resource is never force-deleted while
-the process is still running.
+Same provider-specific teardown as Process. For system-minijail that includes
+the broker-parent wait/reap result and mandatory cgroup v2 `cgroup.kill` for an
+unambiguous intentional stop before empty-leaf proof and rmdir. EphemeralProcess
+finalizers are cleared only after process exit and subtree drain are confirmed.
+The resource is never force-deleted while the process may still be running or
+ownership is ambiguous.
 
 ---
 
@@ -1659,14 +1727,24 @@ When `Host.spec.isolationPosture = "none"`:
 
 ### Pidfd non-exportability
 
-The pidfd file descriptor is strictly process-local controller authority:
+The pidfd file descriptor is strictly local lifecycle authority. A Provider
+controller holds only an opaque handle. For system-minijail, the broker parent
+retains the original pidfd and ProviderSupervisor may hold a verified duplicate:
 
 - It is never stored in the resource store.
 - It is never sent over d2b-bus, ComponentSession, or any ttrpc call.
 - It is never written to any log, metric (with a name/PID label), audit record, or status field.
 - It is never inferred from status by a caller.
 - No API method accepts a pidfd from a caller.
-- Every controller restart acquires a fresh pidfd through re-verification.
+- Every ProviderSupervisor restart reacquires its duplicate through
+  re-verification; a Provider-controller restart transfers no raw fd and does
+  not change the broker's parenthood.
+- A non-parent holder may poll readability and call `pidfd_send_signal` for the
+  exact process, but cannot call wait/reap or derive exit status from
+  readability.
+- Only the system-minijail broker that called `clone3` performs
+  `waitid(P_PIDFD)`, collects exit status, and reaps; it relays a typed terminal
+  result to ProviderSupervisor/controller.
 
 ### Process isolation rule
 
@@ -2200,6 +2278,21 @@ The zone configuration controller retains the N most recently activated, cleanup
 21. New generation removes a Guest owning Processes → Guest Delete issued; Guest controller cascades Delete to all resources with `metadata.ownerRef = "Guest/<name>"`; Processes stop; each Process deletion atomically commits `Deleted` revision event + row/index removal; audit append follows committed revision with dedup/exactly-once recovery; Guest finalizer released; Guest deletion atomically commits `Deleted` revision event + row/index removal; audit append follows; `Deleted` Watch events observed for all.
 22. New generation removes a User referenced by an active Process → Delete blocked; `cleanup-owner-blocked` error; after operator updates Process, Delete completes.
 23. Controller-created EphemeralProcess (`metadata.managedBy = "controller"`) absent from new bundle → NOT deleted by generation cleanup; still present after activation.
+24. system-minijail spawn → the broker that called `clone3` alone performs
+    `waitid(P_PIDFD)` and reaps exactly once; ProviderSupervisor poll
+    readability cannot supply `lastExitClass`/`outcome.exitCode`; the controller
+    receives the broker-relayed typed status; a verified duplicate holder can
+    still `pidfd_send_signal` the exact main process.
+25. system-minijail intentional stop with a descendant that calls `setsid(2)`
+    and an unrelated recycled-PGID decoy → exact-main SIGTERM/grace is followed
+    by writing `1` to the anchored leaf's `cgroup.kill`; the owned leaf reaches
+    `populated 0`, the decoy is untouched, and rmdir/finalizer clearing occurs
+    only after broker-reaped main status. Ambiguous adoption performs no signal
+    or `cgroup.kill`.
+26. Linux <5.14 or a delegated cgroup v2 leaf without writable `cgroup.kill` →
+    Host/system-minijail placement remains not Ready with
+    `kernel-too-old`/`cgroup-kill-unavailable`, and the broker receives zero
+    spawn requests.
 
 ---
 
@@ -2270,11 +2363,11 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Dependency/owner | ADR046-exec-001; `d2b-contracts` |
 | Current source | `packages/d2b-core/src/processes.rs`: `ReadinessPredicate`, `VmProcessInvariants`; `packages/d2b-core/src/processes.rs`: `SpawnRunnerPlanOp`; `packages/d2b-priv-broker/src/ops/` SpawnRunner |
 | Reuse action | extract and adapt |
-| Destination | `packages/d2b-contracts/src/v3/process_provider.rs`: LaunchTicket, ProcessIdentityDigest, AdoptionCandidate, PidfdEvidence, WaitReapOwner, ProcessOutcome, ExitClass |
-| Detailed design | LaunchTicket (Process/EphemeralProcess ref/UID/revision/generation, owner Provider/component/template, executionRef/domain/userRef, providerRef, compiled sandbox/budget/mount/device/network/endpoint digest, inherited FD table, operation/deadline/cancellation, expected identity/readiness); ProcessIdentityDigest (opaque bounded hex string); AdoptionCandidate (cgroup leaf path relative to controller root, start-time token, executable hash); all types zeroizing where credential-adjacent |
+| Destination | `packages/d2b-contracts/src/v3/process_provider.rs`: LaunchTicket, ProcessIdentityDigest, AdoptionCandidate, PidfdEvidence, WaitReapOwner, BrokerTerminalResult, ProcessOutcome, ExitClass |
+| Detailed design | LaunchTicket (Process/EphemeralProcess ref/UID/revision/generation, owner Provider/component/template, executionRef/domain/userRef, providerRef, compiled sandbox/budget/mount/device/network/endpoint digest, inherited FD table, operation/deadline/cancellation, expected identity/readiness); ProcessIdentityDigest (opaque bounded hex string); AdoptionCandidate (cgroup leaf path relative to controller root, start-time token, executable hash); BrokerTerminalResult binds process identity/operation to the clone3 parent's exact-once wait/reap status and cannot be constructed from pidfd readability; all types zeroizing where credential-adjacent |
 | Integration | ProviderSupervisor adapter; system-systemd and system-minijail Process Providers |
 | Data migration | Full reset |
-| Validation | Golden LaunchTicket vectors; field redaction test; digest-binding test |
+| Validation | Golden LaunchTicket and BrokerTerminalResult vectors; field redaction test; digest-binding test; duplicate/mismatched/non-parent terminal relay rejection |
 | Removal proof | None — net-new types; no prior owner to remove |
 
 ### ADR046-exec-003
@@ -2286,10 +2379,10 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Current source | `packages/d2b-core/src/host_check.rs`: `HostCheckReport`, `HostCheckSummary`, `HostCheckFinding`, `HostCheckSeverity`; `packages/d2bd/src/pidfs_probe.rs`; `packages/d2bd/src/kernel_module_check.rs`; `packages/d2b-core/src/provider_capabilities.rs`; `packages/d2b-realm-core/src/ids.rs`: `HostResourceId` (current host-identity handle), `NodeId` (execution node identity); `packages/d2b-realm-core/src/node.rs`: `NodeKind::FullHost`, `NodeSummary` (host node's capability advertisement — direct reuse model for Host status `capabilities[]`) |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-system-core/src/host.rs`: HostReconciler; status/conditions/capability probe implementation; `packages/d2b-provider-system-core/tests/`: hermetic reconcile/conformance/fault tests; `packages/d2b-provider-system-core/integration/`: Host probe and lifecycle integration scenarios; `packages/d2b-provider-system-core/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
-| Detailed design | Async Host reconcile loop per this spec's Reconcile section; HostCapabilityClass probe set (kvm/pidfd/cgroup-v2/user-namespace/wayland/audio-pipewire/gpu-render/tpm2/usbip); bounded OS probes with timeout; `isolationPosture` validation and status; aggregate budget reservation tracking via List; status write with expected revision |
+| Detailed design | Async Host reconcile loop per this spec's Reconcile section; HostCapabilityClass probe set (kvm/pidfd/cgroup-v2/user-namespace/wayland/audio-pipewire/gpu-render/tpm2/usbip); bounded OS probes with timeout; mandatory system-minijail placement gate for Linux ≥5.14 plus writable delegated-leaf `cgroup.kill` independent of optional `kernelVersionMin`; `isolationPosture` validation and status; aggregate budget reservation tracking via List; status write with expected revision |
 | Integration | Provider/system-core fixed bootstrap process; ResourceClient Get/List/UpdateStatus |
 | Data migration | New Host resources from Nix; no v2 state import |
-| Validation | Multiple Hosts per Zone; system-only and user-only Hosts; capability probe mocks; `isolationPosture="none"` rejection of system processes; budget overcommit rejection; `tests/` all pass under `cargo test`; `integration/` scenario passes in container fixture; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
+| Validation | Multiple Hosts per Zone; system-only and user-only Hosts; capability probe mocks; Linux <5.14 and missing/unwritable `cgroup.kill` reject system-minijail before spawn; Linux ≥5.14 positive probe; `isolationPosture="none"` rejection of system processes; budget overcommit rejection; `tests/` all pass under `cargo test`; `integration/` scenario passes in container fixture; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
 | Removal proof | Current host capability checks in `d2bd` removed after Host reconcile parity |
 
 ### ADR046-exec-004
@@ -2346,10 +2439,10 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Current source | `packages/d2b-core/src/processes.rs`: `ProcessNode`, `RoleProfile`, `NamespaceSet`, `MountPolicy`, `CgroupPlacement`; `packages/d2b-core/src/minijail_profile.rs`: full; `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (if present at baseline); `packages/d2bd/src/supervisor/` pidfd/wait; `packages/d2b-core/src/process_builder.rs` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-system-minijail/src/`: sandbox_compiler.rs, launch.rs, adoption.rs, pidfd.rs, wait.rs, user_ns.rs; `packages/d2b-provider-system-minijail/tests/`: hermetic sandbox-compilation/lifecycle/conformance/fault tests; `packages/d2b-provider-system-minijail/integration/`: clone3/user-namespace and broker-spawn integration scenarios; `packages/d2b-provider-system-minijail/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture (capabilities, namespaces, seccomp), telemetry labels, build/test commands (provider crate standard layout — see §Provider crate standard layout) |
-| Detailed design | system-minijail Process/EphemeralProcess provider conformance per this spec's system-minijail conformance section; SandboxSpec-to-minijail plan compilation; broker clone3(CLONE_PIDFD|CLONE_INTO_CGROUP); user namespace pre-establishment (ADR 0021); d2b-owned wait/reap; adoption via cgroup leaf + process identity verification; runtimeDeadline enforcement; drainTimeout; EphemeralProcess one-shot launch |
+| Detailed design | system-minijail Process/EphemeralProcess provider conformance per this spec's system-minijail conformance section; SandboxSpec-to-minijail plan compilation; Linux ≥5.14/cgroup.kill placement gate; broker clone3(CLONE_PIDFD|CLONE_INTO_CGROUP) parent retains sole waitid(P_PIDFD)/reap/exit-status ownership and relays a typed terminal result; ProviderSupervisor polls a verified duplicate and retains exact-main pidfd_send_signal semantics but never waits/reaps; adoption verifies original broker parent; runtimeDeadline/drainTimeout use graceful main signal then anchored leaf cgroup.kill, broker wait/reap, and empty-leaf proof; no PID/PGID fallback; EphemeralProcess one-shot launch |
 | Integration | Zone-installed Provider/system-minijail fixed bootstrap process; ProviderSupervisor LaunchTicket; privileged broker effect adapter |
 | Data migration | Current RoleProfile/NamespaceSet/MountPolicy/CgroupPlacement adapted to SandboxSpec/BudgetSpec |
-| Validation | Shared process conformance test matrix; minijail-specific sandbox compilation tests; user namespace tests; clone3 pidfd tests; adoption quarantine tests; `tests/` all pass under `cargo test`; `integration/` scenario passes; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
+| Validation | Shared process conformance test matrix; minijail-specific sandbox compilation tests; user namespace tests; clone3 parent-only wait/reap and broker-relay tests; poll-readability-not-status test; pidfd_send_signal duplicate-holder test; setsid descendant/recycled-PGID cgroup.kill teardown test; Linux 5.14/cgroup.kill platform-gate tests; adoption quarantine asserts no signal/cgroup.kill; `tests/` all pass under `cargo test`; `integration/` scenario passes; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
 | Removal proof | ProcessRole roles using minijail (Virtiofsd, Swtpm, SecurityKeyFrontend, etc.) removed per disposition table after system-minijail parity |
 
 ### ADR046-exec-008
@@ -2361,7 +2454,7 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Current source | `packages/d2b-core/src/processes.rs` test coverage; `packages/d2bd/src/supervisor/` tests; minijail/seccomp test vectors |
 | Reuse action | adapt |
 | Destination | `packages/d2b-process-conformance/src/`: shared conformance test matrix run against both system-systemd and system-minijail providers |
-| Detailed design | Full process lifecycle tests: start/ready/crash/restart/maxRestarts/drain/stop/delete; EphemeralProcess start/succeed/fail/ttl/cleanup; adoption after controller restart (fresh/quarantine); sandboxSpec compilation contract; pidfd rules (never-serialized/never-exported/re-verified-after-restart); user domain (system-systemd only); desiredLifecycle=stopped; fast path latency gate (<=5ms/<=20ms p95); 1/10/100 concurrent Process start |
+| Detailed design | Full process lifecycle tests: start/ready/crash/restart/maxRestarts/drain/stop/delete; EphemeralProcess start/succeed/fail/ttl/cleanup; adoption after controller restart (fresh/quarantine); sandboxSpec compilation contract; pidfd rules (never-serialized/never-exported/re-verified-after-supervisor-restart; clone3 broker parent alone waits/reaps; non-parent readability is not status; verified duplicate holder may pidfd_send_signal exact main); system-minijail intentional teardown uses anchored cgroup.kill against setsid descendant and recycled-PGID fixtures, with no kill on ambiguity; Linux ≥5.14/cgroup.kill platform gate; user domain (system-systemd only); desiredLifecycle=stopped; fast path latency gate (<=5ms/<=20ms p95); 1/10/100 concurrent Process start |
 | Integration | system-systemd and system-minijail providers must both pass all shared tests |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Hard pass/fail per-test; latency gates enforced; no exception for partial conformance |

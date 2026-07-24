@@ -831,22 +831,36 @@ Sandbox defaults (`ADR-046-resources-host-guest-process-user`, D079):
   surface — resolution happens exclusively inside the private
   effect-adapter state at launch time.
 
-**Nine pidfd non-exportability invariants** (`ADR-046-resources-host-guest-process-user`
-lines 764-794, 1280-1290), verbatim:
+**Eleven pidfd lifecycle/non-exportability invariants**
+(`ADR-046-resources-host-guest-process-user`), verbatim:
 
 1. Pidfd is never stored in the resource store.
 2. Pidfd is never sent over d2b-bus, ComponentSession, or any ttrpc call.
 3. Pidfd is never written to any log, metric, audit record, or status field.
 4. Pidfd is never inferred from status by a caller.
 5. No API method accepts a pidfd from a caller.
-6. Every controller restart acquires a fresh pidfd through re-verification —
-   a pidfd is never persisted across restarts.
+6. Every ProviderSupervisor restart reacquires its duplicate through
+   re-verification. A Provider-controller restart transfers no raw pidfd.
 7. An ambiguous pidfd identity (suspected PID reuse) results in quarantine,
    never a broad kill of all processes in a cgroup.
-8. A controller crash while holding a pidfd must be detectable; orphan
-   recovery uses PID re-verification from the cgroup leaf, not the stale
-   pidfd.
-9. Pidfd is closed (not just leaked) before the holding controller restarts.
+8. For system-minijail, the broker that called `clone3` remains the child
+   parent and alone calls `waitid(P_PIDFD)`, collects exit status, and reaps.
+9. A non-parent ProviderSupervisor may poll pidfd readability, but readability
+   is a liveness hint, not wait/reap or exit status; the controller consumes
+   only the broker-relayed typed terminal result.
+10. A verified broker/ProviderSupervisor pidfd holder may use
+    `pidfd_send_signal` for the exact main process without being its parent;
+    the controller holds only an opaque handle.
+11. ProviderSupervisor owns no PID/PGID kill record. An unambiguous
+    system-minijail subtree uses anchored cgroup v2 `cgroup.kill` after the
+    graceful main-process signal/deadline; an ambiguous candidate is
+    quarantined without any signal or cgroup kill.
+
+The system-minijail placement gate therefore requires Linux ≥5.14 and a
+writable `cgroup.kill` on a delegated cgroup v2 leaf. This floor is mandatory
+even when the Host's optional `kernelVersionMin` is unset; unsupported hosts
+fail before launch with `kernel-too-old` or `cgroup-kill-unavailable`. There is
+no older-kernel PID/PGID fallback.
 
 `Provider/system-systemd` binds process identity to
 `InvocationID`+cgroup+`MainPID`/start-time rather than the pidfd primitive
@@ -1455,6 +1469,17 @@ candidate process), never a broad kill:
 - `Provider/volume-local`: a partially removed Volume with a valid marker is
   quarantined rather than silently re-provisioned.
 
+This rule does not weaken intentional teardown of an **unambiguously owned**
+system-minijail process subtree. After exact-main `SIGTERM` and the bounded
+graceful phase, the original broker parent writes `1` to the reverified cgroup
+v2 leaf's `cgroup.kill`, waits for `cgroup.events` `populated 0`, performs and
+relays its parent-only `waitid(P_PIDFD)` result, and only then permits leaf rmdir
+and finalizer clearing. This is the required Linux ≥5.14 path: it terminates
+descendants despite `setsid(2)` and avoids PGID-reuse attacks. A non-parent's
+pidfd readability remains only a hint, and no PID/PGID SIGKILL fallback exists.
+If ownership is ambiguous, `cgroup.kill` is not written and the finalizer
+remains.
+
 This is the direct v3 continuation of ADR 0034's restart-adoption contract
 ("D2b re-adopts live runner processes when it can prove identity,
 quarantines ... otherwise") and the pidfd non-exportability invariants in
@@ -1642,7 +1667,7 @@ section with the full control description.
 | `EmergencyPolicy` | Reason field leaking into telemetry; policy silently deleting Processes instead of pausing | `reason` confined to spec/audit body, never OTEL/status; `stopProviderProcesses` never sets `deletionRequestedAt` | §23 |
 | `Host` | Silent isolation-guarantee downgrade for user-domain execution | Non-suppressible three-surface `isolationPosture: "none"` propagation | §16 |
 | `Guest` | Compromised Guest escalating via network/device/credential ambient authority | Guest-agent capability confinement to guest netns; ComponentSession KK enrollment; per-attachment Volume/Network/Device scoping | §3 (AC2) |
-| `Process` | pidfd/identity confusion enabling signal-based attack on the wrong process | Nine pidfd non-exportability invariants; quarantine-not-kill on ambiguous adoption | §15/§22 |
+| `Process` | pidfd/identity confusion enabling signal-based attack on the wrong process; setsid/PGID escape or reuse during teardown | Eleven pidfd lifecycle/non-exportability invariants; broker-parent-only wait/reap; anchored cgroup.kill for unambiguous teardown; quarantine-not-kill on ambiguity | §15/§22 |
 | `EphemeralProcess` | Terminal-result retention becoming an unbounded secret/output store | Bounded `successfulTtl`/`failedTtl`; forbidden-field list identical to Process | §15 |
 | `Volume` | Identity-marker tamper / silent re-provisioning after tamper or deletion race | HMAC identity marker, fail-closed `missing`/`replaced` status, quarantine on partial destruction | §17 |
 | `Network` | Firewall/IPv6/east-west drift silently reopening isolation | Dual-point IPv6 suppression enforcement; `hostBlocklist` additive-only; `firewallDigest` drift detection | Cross-cutting network invariants (`ADR-046-resources-network`) |
@@ -1728,6 +1753,12 @@ time rejection, not an operational recommendation.
   (§15).
 - Pidfd serialized, stored, sent over d2b-bus, exposed in status, or used to
   infer identity across a restart (§15).
+- A non-parent ProviderSupervisor/controller calling `waitid`/`waitpid` for a
+  system-minijail child or treating pidfd readability as exit status; only the
+  `clone3` broker parent waits/reaps and relays status (§15).
+- PID/PGID SIGKILL ownership for a system-minijail subtree, or an
+  older-kernel fallback that omits the Linux ≥5.14 anchored `cgroup.kill`
+  sequence (§15/§22).
 - A `LaunchTicket` executed after its compiled sandbox plan digest has
   changed since issue (§15).
 - virtiofsd spawned with any non-empty host capability set, `startRoot:
@@ -2162,3 +2193,19 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Checklist sign-off recorded in the release's validation evidence, not a CI gate (matches `D2b_LIVE=1` manual-tier precedent in `AGENTS.md`) |
 | Removal proof | Not applicable |
+
+### ADR046-security-019
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-security-019` |
+| Dependency/owner | `ADR046-exec-003`/`ADR046-exec-007` and `ADR046-minijail-003` through `ADR046-minijail-005`; system-minijail/broker integration owner |
+| Current source | `packages/d2bd/src/supervisor/pidfd_table.rs` (`BrokerReapLog`) and `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`) |
+| Reuse source | Same v3 paths, adapted to the corrected ownership contract |
+| Reuse action | extract and adapt |
+| Destination | `packages/d2b-contract-tests/tests/minijail_process_ownership.rs`; `tests/host-integration/minijail-cgroup-kill.nix` |
+| Detailed design | Hermetic contract test proves only the broker that called `clone3` can produce the identity-bound `BrokerTerminalResult`; a non-parent poll-readable pidfd cannot be converted to status, while a verified duplicate holder can still request exact-main `pidfd_send_signal`. Host integration launches an owned descendant that calls `setsid(2)` plus an unrelated recycled-PGID decoy, performs graceful exact-main stop followed by anchored leaf `cgroup.kill`, and proves the owned leaf reaches `populated 0`, the broker reaps exactly once, the decoy survives, and rmdir/finalizer clearing wait for both proofs. Negative cases prove ambiguous adoption emits no signal/`cgroup.kill`, and Linux <5.14 or missing/unwritable `cgroup.kill` fails before spawn. |
+| Integration | Hermetic contract test in `make test-rust`; real pidfd/cgroup scenario in `make test-host-integration` |
+| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Validation | Parent-only wait/reap, poll-readability-not-status, duplicate-holder signaling, setsid/PGID-reuse resistance, quarantine no-kill, exact-once reap, and Linux ≥5.14 platform-gate assertions all pass |
+| Removal proof | Old ProviderSupervisor/controller wait/reap and PGID-kill paths are removed only after this gate passes against the replacement |
