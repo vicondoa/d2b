@@ -1548,7 +1548,7 @@ delivery assumptions are not copied.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | All ADR046-minijail-00{1..4}; ComponentSession/d2b-bus (ADR046-session-001, ADR046-bus-001); bootstrap authz |
+| Dependency/owner | All of ADR046-minijail-001 through ADR046-minijail-004; ComponentSession/d2b-bus (ADR046-session-001, ADR046-bus-001); bootstrap authz |
 | Current source | `d2bd/src/supervisor/*.rs` (DagExecutor, NodeOutcome); `d2bd/src/supervisor/pidfd_table.rs`; `d2b-realm-core/src/allocator_engine.rs` (adoption/identity concepts) |
 | Reuse action | ADAPT |
 | Destination | `packages/d2b-provider-system-minijail/src/` — controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize |

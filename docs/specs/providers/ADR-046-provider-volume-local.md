@@ -2453,7 +2453,7 @@ Documents:
 | --- | --- |
 | Work item ID | `ADR046-vl-012` |
 | Dependency/owner | ADR046-vl-001; ADR046-vl-002; Zone broker/core owner |
-| Depends on | `ADR046-pstate-003`; `ADR046-provider-008` (generic effect-port injection contract) |
+| Depends on | `ADR046-pstate-003`; `ADR-046-provider-model-and-packaging` (generic effect-port injection contract) |
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract,swtpm_dir,store_sync,store_view_posture}.rs`; `d2b-host/src/hardlink_farm.rs` |
 | Reuse action | adapt into adapter |
 | Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner); implements the `VolumeEffectPort` trait defined in `d2b-contracts` |
@@ -2469,7 +2469,7 @@ Documents:
 | --- | --- |
 | Work item ID | `ADR046-vl-013` |
 | Dependency/owner | ADR046-vl-001; ADR046-vl-012; Zone broker/core owner |
-| Depends on | `ADR046-provider-008` (Provider install sequencing) |
+| Depends on | `ADR-046-provider-model-and-packaging` (Provider install sequencing) |
 | Current source | No equivalent; new |
 | Reuse action | new |
 | Destination | Zone core ProviderDeployment controller-start path (outside `d2b-provider-volume-local`) |

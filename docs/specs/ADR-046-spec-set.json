@@ -68,7 +68,7 @@
       "version": 1,
       "dependsOn": [],
       "supersedes": null,
-      "sha256": "30a9984a1e1f2a714d0beedc0cf1cd2d595a5ca9f5f5c3c997e6ebaed9224250"
+      "sha256": "efcbbabba718ca595ea58785ff9ee229d34df61856fd9d334c1ec9b9fec4b84f"
     },
     {
       "specId": "ADR-046-decision-register",
@@ -77,7 +77,7 @@
       "version": 1,
       "dependsOn": [],
       "supersedes": null,
-      "sha256": "d16f26e0b0864e9efc75421eceb611d066d48dbd4598450bb7cb72bd6d03a143"
+      "sha256": "140e11b1107071b3443acb5ae21e88458ca815547cf2105f27421d778a866ca4"
     },
     {
       "specId": "ADR-046-feasibility-and-spikes",
@@ -410,7 +410,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "`ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
-      "sha256": "f06fc5fa01bf2996b749d9b44139225b3c3df4cbc3e12dd4429bb5cfaaddfc90"
+      "sha256": "423ddaad100ad31e7cb3f215395976075cbadefd38490998da4fdea899b2ec01"
     },
     {
       "specId": "ADR-046-provider-runtime-azure-container-apps",
@@ -476,7 +476,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "supersedes": "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
-      "sha256": "7d99c39b3ad83b67dec0417af087600fa3ceb6ef3dc5c158bf61760d556e15ba"
+      "sha256": "ec6c6fa964d18d9bc8658120065e8e267500b1aff7c29a65ef5257f8a38057b5"
     },
     {
       "specId": "ADR-046-provider-runtime-qemu-media",
@@ -579,7 +579,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
-      "sha256": "e9d012001422db4fc1851c5f813c0fe51d40a0829a4592593627a5575c9697f8"
+      "sha256": "ae05f8e582f221ab430c4ca5a9db62299f2ec7bc49773419988e229838aad310"
     },
     {
       "specId": "ADR-046-provider-system-systemd",
@@ -652,7 +652,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "`packages/d2bd/src/guest_control_vsock.rs` transport probe (→ allocator-issued endpoint via VsockEffectPort); `packages/d2b-host/src/vsock_relay_argv.rs` socat relay (→ native FramedVsockTransport in Provider service); `NativeVsock`/`CloudHypervisorVsock` in `d2b-session-unix/src/vsock.rs` (→ FramedVsockTransport implementing OwnedTransport adapted as service-Provider transport bridge)",
-      "sha256": "166df175d6ec4cd5984155981de344fe5042c31de12333ea5e53ee58853251b5"
+      "sha256": "fdbbfb4d0e3a33c49ef8d10069431414772a3da924395dec32e807ff6f43fb2f"
     },
     {
       "specId": "ADR-046-provider-volume-local",
@@ -670,7 +670,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "supersedes": "`d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation",
-      "sha256": "8591735d3dcda581aa7b1221292fec8310d8837e01192dd4c6b737dd394f2398"
+      "sha256": "1becd5d13ad4118bdce758899e5a4bd3aa555d0700d5a09c7b43c07a69f11147"
     },
     {
       "specId": "ADR-046-provider-volume-virtiofs",
@@ -723,7 +723,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "[ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) \"Migration decision\" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` \"v2 command surface removed at 3.0 clean break\": it served the one-time v1→v2 storage layout cutover only and has no v3 successor)",
-      "sha256": "b35c45e4982b3a32e1367e4effaece1980e46476c70a5c170d8b674aced0eed3"
+      "sha256": "dec2484e2a0dc34d396adc9f527b976d6c8e33f30b2628da10ca7bb01bdac510"
     },
     {
       "specId": "ADR-046-resource-api-and-authorization",

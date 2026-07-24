@@ -886,7 +886,7 @@ expression.
 ### ADR046-vsock-004
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Implement `LiveVsockEffectPort` in Zone runtime; Phase 2; Priority P0; Depends on ADR046-vsock-001 and ADR046-alloc-001 (Zone allocator); Owner crate `d2b-core-controller`. |
+| Dependency/owner | Title: Implement `LiveVsockEffectPort` in Zone runtime; Phase 2; Priority P0; Depends on ADR046-vsock-001 and the Zone allocator (`ADR-046-resources-zone-control`); Owner crate `d2b-core-controller`. |
 | Current source | Evidence class `ADR-only`; baseline has guest-control and relay vsock paths, but no allocator-backed `LiveVsockEffectPort` for ZoneLink transport. |
 | Reuse action | net-new core adapter; keep raw AF_VSOCK syscalls outside Provider crate |
 | Destination | `d2b-core-controller` Zone runtime `LiveVsockEffectPort`; Provider receives it by dependency injection at startup. |
@@ -899,7 +899,7 @@ expression.
 ### ADR046-vsock-005
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Core ProviderDeployment creates/deletes service component state Volume; Phase 1; Priority P0; Depends on ADR046-vol-001 (volume-local Provider); Owner crate `d2b-provider-transport-vsock`. |
+| Dependency/owner | Title: Core ProviderDeployment creates/deletes service component state Volume; Phase 1; Priority P0; Depends on the volume-local Provider (`ADR-046-provider-volume-local`); Owner crate `d2b-provider-transport-vsock`. |
 | Current source | Evidence class `test-only-or-preview`; no operator-authored v3 state Volume exists for transport-vsock in baseline. |
 | Reuse action | net-new ProviderDeployment/Volume integration and tests |
 | Destination | ProviderDeployment Volume creation/deletion path plus `packages/d2b-provider-transport-vsock/tests/state_volume.rs`. |
@@ -925,7 +925,7 @@ expression.
 ### ADR046-vsock-007
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Delete legacy socat OTLP relay and CONNECT-proxy guest-control vsock; Phase 3; Priority P2; Depends on ADR046-obs-001 (observability-otel Provider) and ADR046-guest-001 (Guest resource lifecycle); Owner crates `d2b-host`, `d2bd`. |
+| Dependency/owner | Title: Delete legacy socat OTLP relay and CONNECT-proxy guest-control vsock; Phase 3; Priority P2; Depends on the observability-otel Provider (`ADR-046-provider-observability-otel`) and the Guest resource lifecycle (`ADR-046-resources-host-guest-process-user`); Owner crates `d2b-host`, `d2bd`. |
 | Current source | Evidence class `implemented-and-reachable`; legacy sources are `packages/d2b-host/src/vsock_relay_argv.rs` socat OTLP relay and `packages/d2bd/src/guest_control_vsock.rs` CONNECT-proxy guest-control path. |
 | Reuse action | delete after replacement parity; preserve reserved guest-control/OTLP port exclusions until replacements own them |
 | Destination | Remove legacy paths from `d2b-host` and `d2bd`; replacement lives in `observability-otel` Provider native vsock relay and Guest resource lifecycle/bootstrap. |

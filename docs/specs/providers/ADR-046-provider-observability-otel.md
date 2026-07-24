@@ -1683,7 +1683,7 @@ Old and new suites never run in parallel indefinitely.
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-otel-002` |
-| Dependency/owner | ADR046-otel-001 + ADR046-telem-001 + ADR046-provider-001 (Provider toolkit) + ADR046-transport-001 (transport Provider); W2; observability owner |
+| Dependency/owner | ADR046-otel-001 + ADR046-telem-001 + ADR046-provider-001 (Provider toolkit) + a transport Provider (`ADR-046-provider-transport-unix`); W2; observability owner |
 | Current source | `nixos-modules/components/observability/host.nix` (`otelRuntimeDir`, `hostEgressSocket`, `setfacl` ACL pattern, `scrapeJournal` option, `identityName`); `nixos-modules/components/observability/stack.nix` (`ingressSources`, `vmName`, `receiverGrpcPort`, loopback binding, `signoz.listenPort`) |
 | Reuse action | adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone name; replace socat runner with vsock-forwarder long-lived Process; adapt `ingressSources` per-Zone entry) |
 | Destination | `packages/d2b-provider-observability-otel/src/collector_bin.rs`; `packages/d2b-provider-observability-otel/src/emitter_socket.rs`; `packages/d2b-provider-observability-otel/src/exporter.rs`; `packages/d2b-provider-observability-otel/src/controller.rs` (forwarder management only); updated `nixos-modules/components/observability/{host,stack}.nix` |

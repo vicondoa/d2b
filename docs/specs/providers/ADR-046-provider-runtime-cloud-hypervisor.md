@@ -1706,7 +1706,7 @@ per-test budget.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-001; ComponentSession/d2b-bus (`ADR046-componentsession-001`) |
+| Dependency/owner | ADR046-ch-001; ComponentSession/d2b-bus (`ADR046-session-001`) |
 | Current source | `packages/d2bd/src/provider_shutdown.rs::GracefulVmShutdown`; `packages/d2b-host/src/runtime_provider.rs::RuntimeProvider::plan_guest_update` |
 | Reuse action | ADAPT |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
@@ -1720,7 +1720,7 @@ per-test budget.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-001; telemetry foundation (`ADR046-telemetry-001`) |
+| Dependency/owner | ADR046-ch-001; telemetry foundation (`ADR046-telem-001`) |
 | Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*`); `packages/d2b-contract-tests/tests/policy_observability.rs` |
 | Reuse action | REPLACE |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/metrics.rs`; `src/audit.rs` |

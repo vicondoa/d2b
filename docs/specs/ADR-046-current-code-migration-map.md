@@ -384,7 +384,7 @@ Documents the Provider dossier. Must include all of:
 | `workload_identity.rs` — `WorkloadIdentity` | production-reachable | `workload_id: WorkloadId`, `realm_id: RealmId`, `workload_name`; used in public wire types | ADAPT | `ResourceRef<Guest>` in `d2b-contracts/src/v3/identity.rs`; `WorkloadId` → label-shaped `ResourceName` within Zone | `ADR046-identities-001` |
 | `workload_identity.rs` — `WorkloadTarget` (`= RealmTarget`) | production-reachable | DNS-label address `<workload>.<realmPath>.d2b`; callers: CLI, daemon dispatch | ADAPT | `ResourceRef` with Zone path + resource name; canonical address format changes | `ADR046-identities-001` |
 | `workload_identity.rs` — `WorkloadBackend` / `LocalVmBackendConfig` / `LocalQemuMediaBackendConfig` / `WorkloadRuntimeIntent` | production-reachable | Per-workload runtime config (backend kind, VM path, QEMU media slot); callers: bundle_resolver | ADAPT | `Guest.spec.providerRef` + Provider-specific runtime config in private bundle | `ADR046-primitives-002` |
-| `realm_controller_config.rs` | production-reachable | `RealmControllerConfig` read by realm controller init; allocator socket ref | ADAPT | Zone runtime bootstrap config; realm controller config → Zone runtime config | `ADR046-core-controllers-001` |
+| `realm_controller_config.rs` | production-reachable | `RealmControllerConfig` read by realm controller init; allocator socket ref | ADAPT | Zone runtime bootstrap config; realm controller config → Zone runtime config | `ADR046-core-001` |
 | `realm_workloads_launcher.rs` | production-reachable | `LauncherWorkloadSummary`, launcher item catalog; callers: `d2b-clipd`, launcher verbs | ADAPT | `Guest` resource launcher items in Provider catalog | `ADR046-provider-001` |
 | `host_json.nix` (emitter) | nix-emitted | Emits `/etc/d2b/host.json`; read by broker and d2bd | ADAPT | Zone resource store bootstrap inputs; rename/split per Host/Guest/Network split | `ADR046-primitives-002` |
 | All other `d2b-core` modules | production-reachable | Error types, audit, tracing, security checks | RETAIN / ADAPT | Keep in `d2b-core`; update import paths | — |
@@ -393,13 +393,13 @@ Documents the Provider dossier. Must include all of:
 
 | Symbol / File | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |--------------|----------|------------------------------|-------------|--------|-----------|
-| `lib.rs` — daemon entry, `AdminRequest` dispatch | production-reachable | `SO_PEERCRED`-gated admin socket; dispatches `ExecOp`, `ShellOp`, `ConsoleOp`, `KeysOp`, `UserdOp` | ADAPT | Zone runtime public socket; add `ResourceOp` dispatch path per resource-API spec | `ADR046-resource-api-001` |
-| `realm_stubs.rs` | production-reachable | Thin stubs for `WorkloadProvider` and `ProtocolCodec` (codec for vsock); callers: realm connection path | REPLACE | Provider process worker; codec moves to `d2b-bus` transport | `ADR046-componentsession-001` |
-| `workload_target_index.rs` | production-reachable | Index of `WorkloadTarget` → provider route; callers: admin dispatch for workload ops | ADAPT | Zone-local resource index; target becomes `ResourceRef`-keyed | `ADR046-core-controllers-001` |
-| `realm_access_resolver.rs` | production-reachable | Resolves realm access tokens for workload connection; callers: `d2bd` exec/shell paths | ADAPT | Zone resource authz resolver; token format changes to ComponentSession bootstrap | `ADR046-componentsession-001` |
-| `supervisor/` module set | production-reachable | Pidfd supervision of VM/runner processes; `RunnerRole` from `d2b-contracts`; callers: VM lifecycle | ADAPT | `Process`/`EphemeralProcess` lifecycle supervisor in Zone runtime | `ADR046-core-controllers-001` |
-| `exec_session*.rs` | production-reachable | Detached exec session table; guest-control vsock exec; `SO_PEERCRED` admin gate | RETAIN/ADAPT | Keep semantics; replace vsock transport with ComponentSession bootstrap | `ADR046-componentsession-001` |
-| `console_session.rs` | production-reachable | Console stream; callers: `ConsoleOp` handler | ADAPT | Replace with ComponentSession `Console` service | `ADR046-componentsession-001` |
+| `lib.rs` — daemon entry, `AdminRequest` dispatch | production-reachable | `SO_PEERCRED`-gated admin socket; dispatches `ExecOp`, `ShellOp`, `ConsoleOp`, `KeysOp`, `UserdOp` | ADAPT | Zone runtime public socket; add `ResourceOp` dispatch path per resource-API spec | `ADR046-api-001` |
+| `realm_stubs.rs` | production-reachable | Thin stubs for `WorkloadProvider` and `ProtocolCodec` (codec for vsock); callers: realm connection path | REPLACE | Provider process worker; codec moves to `d2b-bus` transport | `ADR046-session-001` |
+| `workload_target_index.rs` | production-reachable | Index of `WorkloadTarget` → provider route; callers: admin dispatch for workload ops | ADAPT | Zone-local resource index; target becomes `ResourceRef`-keyed | `ADR046-core-001` |
+| `realm_access_resolver.rs` | production-reachable | Resolves realm access tokens for workload connection; callers: `d2bd` exec/shell paths | ADAPT | Zone resource authz resolver; token format changes to ComponentSession bootstrap | `ADR046-session-001` |
+| `supervisor/` module set | production-reachable | Pidfd supervision of VM/runner processes; `RunnerRole` from `d2b-contracts`; callers: VM lifecycle | ADAPT | `Process`/`EphemeralProcess` lifecycle supervisor in Zone runtime | `ADR046-core-001` |
+| `exec_session*.rs` | production-reachable | Detached exec session table; guest-control vsock exec; `SO_PEERCRED` admin gate | RETAIN/ADAPT | Keep semantics; replace vsock transport with ComponentSession bootstrap | `ADR046-session-001` |
+| `console_session.rs` | production-reachable | Console stream; callers: `ConsoleOp` handler | ADAPT | Replace with ComponentSession `Console` service | `ADR046-session-001` |
 | `shell_handler.rs` (if present) | production-reachable | Shell op handler; delegates to unsafe-local helper via `d2bd/src/unsafe_local_helper.rs`; `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` protocol; metric label `provider = "unsafe-local"` in current tracing | ADAPT | Route `ShellOp` to user-only `Host` resource under `Provider/system-core`; preserve no-isolation posture in authoritative audit only; remove/redact `provider="unsafe-local"` from OTEL metrics, spans, and logs | `ADR046-primitives-003` |
 | All test fixtures (realm JSON stubs) | test-only | Hardcoded `/run/d2b/allocator.sock`, controller configs | UPDATE | Update paths to Zone-scoped layout | — |
 
@@ -414,34 +414,34 @@ Documents the Provider dossier. Must include all of:
 | `ids.rs` — `GatewayId`, `ExecutionId`, `StreamId`, `PrincipalId` | production-reachable | Opaque session/stream identifiers; callers: session routing | EXTRACT/ADAPT | Corresponding types in `d2b-contracts/src/v3/identity.rs` | `ADR046-identities-001` |
 | `ids.rs` — `AllocatorLeaseId`, `HostResourceId` | schema-only | Used only in xtask schema generation; no d2bd caller | EXTRACT/ADAPT | Zone resource provisioning lease identifiers; move to `d2b-contracts/src/v3/` | `ADR046-identities-001` |
 | `realm.rs` — `RealmPath` | production-reachable | `Vec<RealmId>` path labels for nested realms; callers: realm routing, config | EXTRACT/ADAPT | Zone path in `ZoneRef`; same structural shape, rename | `ADR046-identities-001` |
-| `realm.rs` — `EntrypointMode` | production-reachable | Realm controller entrypoint variant; callers: realm config | ADAPT | Zone runtime entrypoint config | `ADR046-core-controllers-001` |
-| `realm.rs` — `RealmControllerPlacement` | production-reachable | `HostLocal` / remote placement; callers: realm controller config | ADAPT | Zone placement in Zone ResourceSpec; `HostLocal` → Zone runtime on `Host` | `ADR046-core-controllers-001` |
+| `realm.rs` — `EntrypointMode` | production-reachable | Realm controller entrypoint variant; callers: realm config | ADAPT | Zone runtime entrypoint config | `ADR046-core-001` |
+| `realm.rs` — `RealmControllerPlacement` | production-reachable | `HostLocal` / remote placement; callers: realm controller config | ADAPT | Zone placement in Zone ResourceSpec; `HostLocal` → Zone runtime on `Host` | `ADR046-core-001` |
 | `workload.rs` — `WorkloadProviderKind` | production-reachable | Enum `LocalVm \| QemuMedia \| ProviderManaged \| UnsafeLocal`; callers: `d2b-clipd`, `realm_workloads_launcher.rs`, `d2b-contracts/public_wire.rs` | ADAPT | **`UnsafeLocal` variant → `Host` ResourceSpec** (not Guest) with `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`, reconciled by `Provider/system-core`; `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.spec.providerRef` per D050 | `ADR046-primitives-002` |
 | `workload.rs` — `IsolationPosture` | production-reachable | Enum `VirtualMachine \| ProviderManaged \| UnsafeLocal`; callers: `WorkloadExecutionPosture`, public wire; test fixture `workload-execution-posture-v1.json`; `IsolationPosture::UnsafeLocal` serializes as `"isolation":"unsafe-local"` | ADAPT | `VirtualMachine`/`ProviderManaged` → Provider-specific isolation field in `Guest.spec`; **`UnsafeLocal` → preserved as explicit no-isolation posture in `Host.status`, `Host` resource conditions, CLI/UI warnings, and authoritative audit events (`isolation:"unsafe-local"`) — must NOT be silently dropped or generalized; must NOT appear as an OTEL metric label, span attribute, or log field** | `ADR046-primitives-002` |
 | `workload.rs` — `WorkloadExecutionPosture` | production-reachable | Five posture fields (isolation, environment, display, identity, session_persistence); callers: `WorkloadPublicSummary`, clipd; `unsafe_local_posture_round_trips_as_closed_typed_fields` test (`workload.rs:205`) validates `isolation:"unsafe-local"` round-trip | ADAPT | `ExecutionPolicy` fields shared by `Host` and `Guest` ResourceSpec; **`IsolationPosture::UnsafeLocal` in posture is the primary no-isolation signal: preserved verbatim in `Host` status surface, CLI warning display, and authoritative audit events; callers must not remap it to a generic "unmanaged" label in those surfaces; OTEL metrics, span attributes, and logs must not carry `isolation` or `provider="unsafe-local"` labels** | `ADR046-primitives-002` |
-| `workload.rs` — `WorkloadState` | production-reachable | Enum (`Running`, `Stopped`, `Starting`, etc.) used in `WorkloadPublicSummary` / `d2b-contracts/src/public_wire.rs:266` | ADAPT | Maps to `Guest.status.runtimeState` (running/stopped/starting/etc.) and associated `Guest.status.detail` / `Guest.status.conditions`; current enum values become `runtimeState` values, NEVER `status.phase` values; common Resource `status.phase` uses standard Ready/Pending/Degraded/Failed phases only | `ADR046-resource-reconciliation-001` |
-| `workload.rs` — `WorkloadSummary` | dead-reachable | Used in `WorkloadProvider.list()` trait method and mock; no live production path in d2bd | ADAPT | `Guest.status` (runtimeState + detail + conditions); common `status.phase` is standard Ready/Pending/Degraded/Failed — not workload-specific running/stopped values; handler wiring in Zone runtime required | `ADR046-resource-api-001` |
-| `workload.rs` — `WorkloadSelector` | dead-reachable | `All \| ByTarget` selector; callers: mock and conformance only | ADAPT | `ResourceListFilter` in resource-API; no current production caller | `ADR046-resource-api-001` |
+| `workload.rs` — `WorkloadState` | production-reachable | Enum (`Running`, `Stopped`, `Starting`, etc.) used in `WorkloadPublicSummary` / `d2b-contracts/src/public_wire.rs:266` | ADAPT | Maps to `Guest.status.runtimeState` (running/stopped/starting/etc.) and associated `Guest.status.detail` / `Guest.status.conditions`; current enum values become `runtimeState` values, NEVER `status.phase` values; common Resource `status.phase` uses standard Ready/Pending/Degraded/Failed phases only | `ADR046-reconcile-001` |
+| `workload.rs` — `WorkloadSummary` | dead-reachable | Used in `WorkloadProvider.list()` trait method and mock; no live production path in d2bd | ADAPT | `Guest.status` (runtimeState + detail + conditions); common `status.phase` is standard Ready/Pending/Degraded/Failed — not workload-specific running/stopped values; handler wiring in Zone runtime required | `ADR046-api-001` |
+| `workload.rs` — `WorkloadSelector` | dead-reachable | `All \| ByTarget` selector; callers: mock and conformance only | ADAPT | `ResourceListFilter` in resource-API; no current production caller | `ADR046-api-001` |
 | `workload.rs` — `LauncherItemKind` / `LauncherIcon` / `LauncherItemSummary` | production-reachable | Per-workload launcher item metadata; callers: public_wire, clipd, launcher | ADAPT | Provider catalog item in Zone resource store | `ADR046-provider-001` |
 | `workload.rs` — `WorkloadPlacement` / `WorkloadPlacementSummary` | schema-only | Used only in xtask schema; no production caller outside xtask | DELETE | Fold into `Guest.spec.providerRef` / provider-specific `Guest.spec.*` fields / `Guest.status` and `ZoneLink` routing; delete old schema after migration to Guest resource model | `ADR046-primitives-002` |
 | `registry.rs` — `ProviderRegistryEntry` | schema-only | Used only in xtask schema generation | ADAPT | Provider resource registry entry in Zone store | `ADR046-provider-001` |
 | `allocator.rs` — `HostResourceKind` | schema-only | Enum: Bridge, Tap, VethPair, NftablesTable, NftablesPartition, CgroupSubtree, HostFilePartition, NamespaceBoundary; callers: xtask schema only | ADAPT | Zone bootstrap resource provisioning kinds; maps to `Network`/`Device`/`Volume` resource pre-requisites | `ADR046-primitives-002` |
-| `allocator_engine.rs` — `AllocatorEngine` | schema-only | Lease decision engine with `HostResourceKind` leases; callers: xtask only; socket at `/run/d2b/allocator.sock` is config-referenced but engine not live in d2bd at `b5ddbed6` | ADAPT | Functionality integrates into fixed core controllers and Zone runtime resource contracts; no separate allocator service or socket; Network/Volume/Device provisioning handled by respective Providers (`Provider/network-local`, `Provider/volume-local`, `Provider/device-*`) | `ADR046-core-controllers-001` |
-| `allocator.rs` — `AllocatorLease` / `LeaseAllocationRequest` / `LeaseAllocationResult` | schema-only | Lease allocation request/response types; callers: xtask schema only | ADAPT | Zone resource lease protocol types | `ADR046-core-controllers-001` |
-| `capability.rs` — `Capability` / `CapabilitySet` / `CapabilityNegotiation` | production-reachable | Protocol capability negotiation between realm router and workload; callers: session handshake | ADAPT | ComponentSession capability negotiation; reuse shape from main `a1cc0b2d` | `ADR046-componentsession-001` |
-| `route_engine.rs` — `RouteEngine` | production-reachable | Realm router routing decisions; callers: `d2b-realm-router` | REPLACE | Zone-local resource routing in Zone runtime | `ADR046-core-controllers-001` |
-| `routing.rs` | production-reachable | Route types (`RouteEntry`, `RouteTarget`); callers: route_engine, realm-router | REPLACE | Resource routing in Zone runtime | `ADR046-core-controllers-001` |
+| `allocator_engine.rs` — `AllocatorEngine` | schema-only | Lease decision engine with `HostResourceKind` leases; callers: xtask only; socket at `/run/d2b/allocator.sock` is config-referenced but engine not live in d2bd at `b5ddbed6` | ADAPT | Functionality integrates into fixed core controllers and Zone runtime resource contracts; no separate allocator service or socket; Network/Volume/Device provisioning handled by respective Providers (`Provider/network-local`, `Provider/volume-local`, `Provider/device-*`) | `ADR046-core-001` |
+| `allocator.rs` — `AllocatorLease` / `LeaseAllocationRequest` / `LeaseAllocationResult` | schema-only | Lease allocation request/response types; callers: xtask schema only | ADAPT | Zone resource lease protocol types | `ADR046-core-001` |
+| `capability.rs` — `Capability` / `CapabilitySet` / `CapabilityNegotiation` | production-reachable | Protocol capability negotiation between realm router and workload; callers: session handshake | ADAPT | ComponentSession capability negotiation; reuse shape from main `a1cc0b2d` | `ADR046-session-001` |
+| `route_engine.rs` — `RouteEngine` | production-reachable | Realm router routing decisions; callers: `d2b-realm-router` | REPLACE | Zone-local resource routing in Zone runtime | `ADR046-core-001` |
+| `routing.rs` | production-reachable | Route types (`RouteEntry`, `RouteTarget`); callers: route_engine, realm-router | REPLACE | Resource routing in Zone runtime | `ADR046-core-001` |
 | `execution.rs` | production-reachable | Execution context types for running workloads | ADAPT | `EphemeralProcess` execution context | `ADR046-primitives-002` |
 | `shell.rs` | dead-reachable | Shell session types (persistent shell); callers: mock only for `PersistentShellProvider` | REPLACE | Persistent shell under `Provider/system-core` user-only Host per D042/D051 | `ADR046-primitives-003` |
 | `node.rs` — `NodeKind` / `NodeSummary` | production-reachable | Constellation node kinds; callers: router, constellation | ADAPT | Host/Zone resource node summary | `ADR046-identities-001` |
-| `frame.rs` / `payload.rs` / `mux.rs` / `stream.rs` | production-reachable | Transport framing types; callers: realm-router, session | REPLACE | ComponentSession transport framing from main `a1cc0b2d` | `ADR046-componentsession-001` |
-| `access.rs` | production-reachable | Access token types; callers: realm-router, daemon | REPLACE | ComponentSession bootstrap credentials | `ADR046-componentsession-001` |
+| `frame.rs` / `payload.rs` / `mux.rs` / `stream.rs` | production-reachable | Transport framing types; callers: realm-router, session | REPLACE | ComponentSession transport framing from main `a1cc0b2d` | `ADR046-session-001` |
+| `access.rs` | production-reachable | Access token types; callers: realm-router, daemon | REPLACE | ComponentSession bootstrap credentials | `ADR046-session-001` |
 | `audit.rs` | production-reachable | Audit event types; callers: broker, daemon | RETAIN/ADAPT | Keep audit types; update realm→Zone field names | `ADR046-identities-001` |
-| `token.rs` | production-reachable | Token types; callers: session handshake | REPLACE | ComponentSession handshake tokens from main | `ADR046-componentsession-001` |
+| `token.rs` | production-reachable | Token types; callers: session handshake | REPLACE | ComponentSession handshake tokens from main | `ADR046-session-001` |
 | `trace_context.rs` | production-reachable | W3C TraceContext propagation | RETAIN | Keep as-is | — |
-| `migration.rs` | production-reachable | Workload state migration helpers | ADAPT | Guest resource state migration | `ADR046-resource-reconciliation-001` |
-| `enrollment.rs` | production-reachable | Realm enrollment / gateway credential types | ADAPT | Zone gateway enrollment; update realm→Zone | `ADR046-core-controllers-001` |
-| `identity_store.rs` / `identity_config.rs` | production-reachable | Realm controller identity; callers: realm controller init | ADAPT | Zone runtime identity store | `ADR046-core-controllers-001` |
+| `migration.rs` | production-reachable | Workload state migration helpers | ADAPT | Guest resource state migration | `ADR046-reconcile-001` |
+| `enrollment.rs` | production-reachable | Realm enrollment / gateway credential types | ADAPT | Zone gateway enrollment; update realm→Zone | `ADR046-core-001` |
+| `identity_store.rs` / `identity_config.rs` | production-reachable | Realm controller identity; callers: realm controller init | ADAPT | Zone runtime identity store | `ADR046-core-001` |
 
 ### 1.4 `d2b-realm-provider` — Trait Definitions
 
@@ -451,33 +451,33 @@ Evidence class applies to **implementations** found outside the trait file and `
 | Trait | Evidence | Implementations Found | Disposition | Target | Work Item |
 |-------|----------|-----------------------|-------------|--------|-----------|
 | `WorkloadProvider` | production-reachable | `d2b-provider-aca/src/lib.rs` (`AcaWorkloadProvider`); `d2bd/src/realm_stubs.rs` (stub) | REPLACE | `Provider` controller process behavior; replace stub with typed Resource operation | `ADR046-provider-001` |
-| `GuestControlEndpointProvider` | production-reachable | `d2b-provider-aca/src/lib.rs:1310` | REPLACE | ComponentSession server-side bootstrap in Provider Process worker | `ADR046-componentsession-001` |
+| `GuestControlEndpointProvider` | production-reachable | `d2b-provider-aca/src/lib.rs:1310` | REPLACE | ComponentSession server-side bootstrap in Provider Process worker | `ADR046-session-001` |
 | `HostSubstrateProvider` | production-reachable | `d2b-host-providers/src/lib.rs:16` | REPLACE | `Provider/system-core` Host substrate provisioning | `ADR046-primitives-003` |
 | `RuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs:16` | REPLACE | Guest execution lifecycle in `Provider/runtime-cloud-hypervisor` controller | `ADR046-provider-001` |
 | `DisplayProvider` | production-reachable | `d2b-host-providers/src/lib.rs:16` | REPLACE | Wayland cross-domain display in `Provider/display-wayland`; GPU device resource in `Provider/device-gpu` | `ADR046-provider-001` |
 | `TransportProvider` | production-reachable | `d2b-provider-relay/src/lib.rs:446` (`AzureRelayTransportProvider implements TransportProvider`) | REPLACE | Zone-link transport Provider; Azure Relay → `Provider/transport-azure-relay` | `ADR046-provider-001` |
 | `TransportListener` | production-reachable | `d2b-realm-transport` implements it | REPLACE | Zone-link inbound listener in `Provider/transport-vsock` or `Provider/transport-unix` | `ADR046-provider-001` |
-| `ProtocolCodec` | production-reachable | `d2b-realm-codec-protobuf` implements it; `d2bd/src/realm_stubs.rs` stub | REPLACE | ComponentSession codec; replace with d2b-bus framing from main | `ADR046-componentsession-001` |
-| `StreamMux` | production-reachable | `d2b-realm-router` session mux | REPLACE | ComponentSession stream multiplexing from main `a1cc0b2d` | `ADR046-componentsession-001` |
-| `DaemonAccessTransport` / `DaemonAccessApi` | production-reachable | `d2b-daemon-access/src/lib.rs:869` implements `DaemonAccessApi` | ADAPT | Zone runtime client access API; reuse shape, update to ResourceOp dispatch | `ADR046-resource-api-001` |
+| `ProtocolCodec` | production-reachable | `d2b-realm-codec-protobuf` implements it; `d2bd/src/realm_stubs.rs` stub | REPLACE | ComponentSession codec; replace with d2b-bus framing from main | `ADR046-session-001` |
+| `StreamMux` | production-reachable | `d2b-realm-router` session mux | REPLACE | ComponentSession stream multiplexing from main `a1cc0b2d` | `ADR046-session-001` |
+| `DaemonAccessTransport` / `DaemonAccessApi` | production-reachable | `d2b-daemon-access/src/lib.rs:869` implements `DaemonAccessApi` | ADAPT | Zone runtime client access API; reuse shape, update to ResourceOp dispatch | `ADR046-api-001` |
 | `PersistentShellProvider` | dead-reachable | **Mock only** in `d2b-realm-provider/src/mock.rs`; no other implementation | REPLACE | Persistent shell under `Provider/system-core` user-only Host per D042/D051 | `ADR046-primitives-003` |
 | `DurableExecutionProvider` | dead-reachable | No live implementation outside mock | DELETE | Replaced by `EphemeralProcess` ResourceType + resource/controller API; no separate Provider family; delete trait file after `EphemeralProcess` controller is operational | `ADR046-provider-001` |
 | `CredentialProvider` | dead-reachable | No live implementation outside mock | DELETE | Replaced by frozen Credential Provider families `Provider/credential-secret-service`, `Provider/credential-entra`, `Provider/credential-managed-identity` (D048); delete old trait after Provider/credential-* migration; not system-core | `ADR046-provider-001` |
 | `ObservabilitySinkProvider` | dead-reachable | No live implementation outside mock | DELETE | Replaced by `Provider/observability-otel` (D049); not Zone runtime; delete trait after `Provider/observability-otel` is operational | `ADR046-provider-001` |
 | `InfrastructureProvider` | dead-reachable | No live implementation outside mock | DELETE | Semantics map to Guest runtime Providers, principally `Provider/runtime-azure-virtual-machine`; delete trait after Guest runtime Provider mapping is complete | `ADR046-provider-001` |
-| `NodeProvider` | dead-reachable | No live implementation outside mock | DELETE | Node discovery/status handled by `Host`/`Guest`/`ZoneLink` resource status and their controllers; no separate Provider family; delete trait | `ADR046-core-controllers-001` |
+| `NodeProvider` | dead-reachable | No live implementation outside mock | DELETE | Node discovery/status handled by `Host`/`Guest`/`ZoneLink` resource status and their controllers; no separate Provider family; delete trait | `ADR046-core-001` |
 | `RelayProvider` (d2b-realm-provider trait) | dead-reachable | **No implementation found**; `AzureRelayTransportProvider` implements `TransportProvider`, not `RelayProvider` | DELETE | Dead trait; relay behavior covered by `TransportProvider` | — |
 
 ### 1.5 Provider Crates
 
 | Crate / Symbol | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |---------------|----------|------------------------------|-------------|--------|-----------|
-| `d2b-provider-aca` — `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | production-reachable | ACA-managed VM lifecycle; guest-control vsock connect; callers: realm connection path | REPLACE | `Provider/runtime-azure-container-apps` controller Process; ComponentSession replaces vsock direct; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-componentsession-001` |
+| `d2b-provider-aca` — `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | production-reachable | ACA-managed VM lifecycle; guest-control vsock connect; callers: realm connection path | REPLACE | `Provider/runtime-azure-container-apps` controller Process; ComponentSession replaces vsock direct; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-session-001` |
 | `d2b-provider-aca` — `AcaRelayTransportConfig` | production-reachable | ACA relay transport config | ADAPT | ZoneLink transport config under `Provider/runtime-azure-container-apps` | `ADR046-provider-001` |
 | `d2b-provider-relay` — `AzureRelayTransportProvider` | production-reachable | Implements `TransportProvider` for Azure Relay; callers: realm relay path | REPLACE | `Provider/transport-azure-relay` Zone-link transport Process | `ADR046-provider-001` |
 | `d2b-host-providers` | production-reachable | Thin adapter: `HostSubstrateProvider`, `RuntimeProvider`, `DisplayProvider`; caller: d2bd host-local setup | REPLACE | `Provider/system-core` (substrate), `Provider/runtime-cloud-hypervisor` (VM execution lifecycle), and `Provider/display-wayland` (Wayland cross-domain) controllers | `ADR046-primitives-003` |
-| `d2b-daemon-access` | production-reachable | `DaemonAccessApi` implementation; used by d2b CLI and external clients to reach d2bd | ADAPT | Zone runtime access client; update to ResourceOp dispatch | `ADR046-resource-api-001` |
-| `d2b-realm-codec-protobuf` | production-reachable | Protobuf `ProtocolCodec` impl; callers: realm-router codec path | REPLACE | ComponentSession wire codec from main `a1cc0b2d` | `ADR046-componentsession-001` |
+| `d2b-daemon-access` | production-reachable | `DaemonAccessApi` implementation; used by d2b CLI and external clients to reach d2bd | ADAPT | Zone runtime access client; update to ResourceOp dispatch | `ADR046-api-001` |
+| `d2b-realm-codec-protobuf` | production-reachable | Protobuf `ProtocolCodec` impl; callers: realm-router codec path | REPLACE | ComponentSession wire codec from main `a1cc0b2d` | `ADR046-session-001` |
 
 ### 1.6 `d2b-realm-router` — Session Types (REPLACE all)
 
@@ -486,42 +486,42 @@ They are the replacement target, not a reuse source. ComponentSession copies fro
 
 | File | Evidence | Disposition | Removal Proof |
 |------|----------|-------------|---------------|
-| `session.rs` | production-reachable | REPLACE | Remove after ComponentSession passes `ADR046-componentsession-001` integration test |
+| `session.rs` | production-reachable | REPLACE | Remove after ComponentSession passes `ADR046-session-001` integration test |
 | `secure_session.rs` | production-reachable | REPLACE | Same |
 | `mux_session.rs` | production-reachable | REPLACE | Same |
 | `session_lifecycle.rs` | production-reachable | REPLACE | Same |
-| `router.rs` / `realm_router.rs` | production-reachable | REPLACE | Zone runtime replaces realm router; remove after `ADR046-core-controllers-001` |
+| `router.rs` / `realm_router.rs` | production-reachable | REPLACE | Zone runtime replaces realm router; remove after `ADR046-core-001` |
 
 ### 1.7 `d2b-realm-transport`
 
 | Symbol | Evidence | Disposition | Target | Work Item |
 |--------|----------|-------------|--------|-----------|
 | `TransportListener` impl | production-reachable | REPLACE | Zone-link inbound socket in `Provider/transport-vsock` or `Provider/transport-unix` | `ADR046-provider-001` |
-| Other transport types | production-reachable | REPLACE | ComponentSession transport framing from main | `ADR046-componentsession-001` |
+| Other transport types | production-reachable | REPLACE | ComponentSession transport framing from main | `ADR046-session-001` |
 
 ### 1.8 `d2b-contracts`
 
 | Symbol / File | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |--------------|----------|------------------------------|-------------|--------|-----------|
-| `public_wire.rs` — `WorkloadOp` / `WorkloadOpResponse` / `WorkloadPublicSummary` / `WorkloadListResult` | dead-reachable | Wire types exist; **no `WorkloadOp` handler found in d2bd** at `b5ddbed6` | DELETE | Deleted at clean v3 cutover; no compatibility window; `ResourceOp{list,get,watch}` for `Guest` resource type replaces; removal proof: handler-wire integration test passes via `ResourceOp` path | `ADR046-resource-api-001` |
+| `public_wire.rs` — `WorkloadOp` / `WorkloadOpResponse` / `WorkloadPublicSummary` / `WorkloadListResult` | dead-reachable | Wire types exist; **no `WorkloadOp` handler found in d2bd** at `b5ddbed6` | DELETE | Deleted at clean v3 cutover; no compatibility window; `ResourceOp{list,get,watch}` for `Guest` resource type replaces; removal proof: handler-wire integration test passes via `ResourceOp` path | `ADR046-api-001` |
 | `public_wire.rs` — `ShellOp` / `ShellOpResponse` / `ShellListResult` / `ShellName` | production-reachable | Callers: `d2bd/src/wire.rs:720` | ADAPT | Shell operations under `Provider/system-core` user-only Host per D042 | `ADR046-primitives-003` |
 | `public_wire.rs` — `ConsoleProviderKind` / `ConsoleReadOutputResult` | production-reachable | Callers: `d2bd/src/console_session.rs:30` | ADAPT | Console service under Provider Process | `ADR046-provider-001` |
-| `public_wire.rs` — `ExecOp` / `ExecOpResponse` | production-reachable | Guest-control exec; callers: d2bd exec_session | ADAPT | ComponentSession `Exec` service bootstrap | `ADR046-componentsession-001` |
-| `broker_wire.rs` — `RunnerRole` / `ChildExitStatus` / `ChildReapedNotification` | production-reachable | Callers: `d2bd/src/supervisor/` | ADAPT | Process lifecycle protocol in Zone runtime; `RunnerRole` → ProcessRole classification below | `ADR046-core-controllers-001` |
+| `public_wire.rs` — `ExecOp` / `ExecOpResponse` | production-reachable | Guest-control exec; callers: d2bd exec_session | ADAPT | ComponentSession `Exec` service bootstrap | `ADR046-session-001` |
+| `broker_wire.rs` — `RunnerRole` / `ChildExitStatus` / `ChildReapedNotification` | production-reachable | Callers: `d2bd/src/supervisor/` | ADAPT | Process lifecycle protocol in Zone runtime; `RunnerRole` → ProcessRole classification below | `ADR046-core-001` |
 | `provider_registry_v2.rs` | production-reachable | Current provider registry (canonical IDs and opaque bundle intents); callers: Nix bundle emitter, broker | ADAPT | Zone-local Provider registry; extend for frozen Provider family per D043–D049 | `ADR046-provider-001` |
 
 ### 1.9 `d2b-state`
 
 | Symbol | Evidence | Disposition | Target | Work Item |
 |--------|----------|-------------|--------|-----------|
-| Atomic state / OFD locks / leases | production-reachable | RETAIN/ADAPT | Zone resource store state backend; D006 embeds redb store | `ADR046-resource-store-001` |
-| Audit segment writer | production-reachable | RETAIN | Keep audit segment append; update Zone-scoped paths | `ADR046-core-controllers-001` |
+| Atomic state / OFD locks / leases | production-reachable | RETAIN/ADAPT | Zone resource store state backend; D006 embeds redb store | `ADR046-store-001` |
+| Audit segment writer | production-reachable | RETAIN | Keep audit segment append; update Zone-scoped paths | `ADR046-core-001` |
 
 ### 1.10 `d2b-guestd` / `d2b-userd`
 
 | Symbol / Binary | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |----------------|----------|------------------------------|-------------|--------|-----------|
-| `d2b-guestd` — PAM login, workload user exec, `ExecOp` handler | production-reachable | Guest-control ttrpc/vsock server; callers: d2bd exec_session via guest-control | REPLACE | ComponentSession `Exec` service inside Guest; vsock transport → ComponentSession bootstrap | `ADR046-componentsession-001` |
+| `d2b-guestd` — PAM login, workload user exec, `ExecOp` handler | production-reachable | Guest-control ttrpc/vsock server; callers: d2bd exec_session via guest-control | REPLACE | ComponentSession `Exec` service inside Guest; vsock transport → ComponentSession bootstrap | `ADR046-session-001` |
 | `d2b-guestd` — detached runner / unit lifecycle | production-reachable | Detached exec jobs under transient user scope | ADAPT | `EphemeralProcess` worker inside Guest; keep PAM login semantics | `ADR046-primitives-002` |
 | `d2b-userd` — `main.rs` exits 78 for service mode; `lib.rs`: `UserExecSession` trait (attach/resize), `UserSocketPolicy`/`UserdTransport`, `UserdConfig`, `UserSessionIdentity`, `UserAttachRequest`, `UserOutputCursor`, `UserdError`; `USERD_LISTENS_ON_VSOCK = false` | production-reachable | Main exits 78 (`"service mode is not implemented"`); lib defines user exec/session traits consumed by d2bd attach path; callers: d2bd user attach handler | REPLACE | Fixed user supervisor Process (`Provider/system-systemd` user domain) + `Provider/system-systemd` user Process effects; remove public `d2b userd` verb and stub after parity | `ADR046-primitives-003` |
 
@@ -566,7 +566,7 @@ catalog; `RunnerRole` is the supervisor-side enum).
 | `NetRunner` | production-reachable | Per-env tap/bridge/nft setup runner | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
 | `StoreSync` | production-reachable | Per-VM `/nix/store` hardlink farm sync; broker `store_view_farm` op | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
 | `ActivationHelper` | production-reachable | Per-host activation; broker `HostPrepare` | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
-| `GuestControlForwarder` | production-reachable | Guest-control vsock bridge | REPLACE | ComponentSession guest-control bootstrap replaces this role; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-componentsession-001` |
+| `GuestControlForwarder` | production-reachable | Guest-control vsock bridge | REPLACE | ComponentSession guest-control bootstrap replaces this role; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-session-001` |
 | `RealmController` | production-reachable | Per-realm controller process; d2bd spawns via broker | `Process` (Zone runtime controller) | Zone runtime bootstrap |
 | `RealmBroker` | production-reachable | Per-realm broker process; socket-activated PID1 unit at `b5ddbed6` → REPLACE with parent-spawned Zone process per ADR 0046 | `Process` (Zone broker) | Zone runtime bootstrap |
 | `KeyRotation` | production-reachable | SSH key rotation; broker `KeyRotation` op | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
@@ -627,9 +627,9 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 | `store.nix` | nix-emitted | Per-VM `/nix/store` hardlink farm; `virtiofsd --shared-dir` | RETAIN/ADAPT | `Volume` resource (store-view farm) per Guest; keep security semantics | `ADR046-primitives-002` |
 | `manifest.nix` | nix-emitted | `manifestVersion`-pinned JSON manifest; emits `/etc/d2b/manifest.json` | RETAIN | Keep manifest contract; bump `manifestVersion` on field changes | — |
 | `realm-controller-config-json.nix` | nix-emitted | Emits `realm-controllers.json` for each enabled realm; includes allocator socket ref | ADAPT | Emit `zones.json` Zone resource entries; rename artifact | `ADR046-identities-002` |
-| `allocator-json.nix` | nix-emitted | Emits `/etc/d2b/allocator.json` (`rootSocket`, `configPath`) | DELETE | No separate allocator service; remove artifact; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-controllers-001` |
-| `host-broker.nix` | nix-emitted | Declares local-root broker socket+service units; per-realm socket units (`d2b-r-<realm>-broker.socket`) as socket-activated PID1 units at `b5ddbed6` | ADAPT | Per-Zone socket units → parent-spawned Zone broker `Process`; per ADR 0046 D006 remove per-realm PID1 socket units; keep local-root `d2b-priv-broker.socket` only | `ADR046-core-controllers-001` |
-| `host-controller.nix` | nix-emitted | Declares `d2bd.socket`, `d2bd.service` (local-root controller) | RETAIN/ADAPT | Keep local-root `d2bd.service`; update to Zone runtime entrypoint | `ADR046-core-controllers-001` |
+| `allocator-json.nix` | nix-emitted | Emits `/etc/d2b/allocator.json` (`rootSocket`, `configPath`) | DELETE | No separate allocator service; remove artifact; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-001` |
+| `host-broker.nix` | nix-emitted | Declares local-root broker socket+service units; per-realm socket units (`d2b-r-<realm>-broker.socket`) as socket-activated PID1 units at `b5ddbed6` | ADAPT | Per-Zone socket units → parent-spawned Zone broker `Process`; per ADR 0046 D006 remove per-realm PID1 socket units; keep local-root `d2b-priv-broker.socket` only | `ADR046-core-001` |
+| `host-controller.nix` | nix-emitted | Declares `d2bd.socket`, `d2bd.service` (local-root controller) | RETAIN/ADAPT | Keep local-root `d2bd.service`; update to Zone runtime entrypoint | `ADR046-core-001` |
 | `host-activation.nix` | nix-emitted | Activation helper setup; key generation; polkit rules | RETAIN/ADAPT | Keep activation; update to Zone resource model | `ADR046-primitives-003` |
 | `host-users.nix` | nix-emitted | `d2b` group; per-VM users (`d2b-<vm>-*`); polkit surface | RETAIN/ADAPT | Keep `d2b` group authz surface; per-Guest principal generation | `ADR046-primitives-002` |
 | `host-keys.nix` | nix-emitted | Framework-owned SSH keys `${keysDir}/<vm>_ed25519` | RETAIN/ADAPT | Per-Guest key in Zone key store | — |
@@ -720,17 +720,17 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 
 | Current CLI Verb | Evidence | Current Handler | Disposition | Target ResourceOp / Notes |
 |-----------------|----------|-----------------|-------------|--------------------------|
-| `d2b vm list` | production-reachable | `WorkloadOp::List` in wire; **no d2bd handler** at `b5ddbed6` | ADAPT | `resource list Guest` — wire handler wiring required | `ADR046-resource-api-001` |
-| `d2b vm status <workload>.<realm>.d2b` | production-reachable | `WorkloadOp::Status`; **no d2bd handler** | ADAPT | `resource get Guest/<name>` in Zone scope | `ADR046-resource-api-001` |
-| `d2b vm up/down/switch` | production-reachable | VM lifecycle; d2bd admin handler | ADAPT | `resource apply/delete Guest/<name>` | `ADR046-resource-api-001` |
-| `d2b vm exec [-d] <vm> -- <cmd>` | production-reachable | `ExecOp`; `exec_session.rs` | ADAPT | ComponentSession `Exec` service; keep admin gate | `ADR046-componentsession-001` |
+| `d2b vm list` | production-reachable | `WorkloadOp::List` in wire; **no d2bd handler** at `b5ddbed6` | ADAPT | `resource list Guest` — wire handler wiring required | `ADR046-api-001` |
+| `d2b vm status <workload>.<realm>.d2b` | production-reachable | `WorkloadOp::Status`; **no d2bd handler** | ADAPT | `resource get Guest/<name>` in Zone scope | `ADR046-api-001` |
+| `d2b vm up/down/switch` | production-reachable | VM lifecycle; d2bd admin handler | ADAPT | `resource apply/delete Guest/<name>` | `ADR046-api-001` |
+| `d2b vm exec [-d] <vm> -- <cmd>` | production-reachable | `ExecOp`; `exec_session.rs` | ADAPT | ComponentSession `Exec` service; keep admin gate | `ADR046-session-001` |
 | `d2b shell <vm>` | production-reachable | `ShellOp`; routes to unsafe-local helper via `d2bd/src/unsafe_local_helper.rs` | ADAPT | Shell `Process` child of user-only `Host`; no-isolation warning preserved in CLI output; `isolation:"unsafe-local"` in audit event | `ADR046-primitives-003` |
-| `d2b console <vm>` | production-reachable | `ConsoleOp`; `console_session.rs` | ADAPT | Console ComponentSession service | `ADR046-componentsession-001` |
+| `d2b console <vm>` | production-reachable | `ConsoleOp`; `console_session.rs` | ADAPT | Console ComponentSession service | `ADR046-session-001` |
 | `d2b launch <item>` | production-reachable | Launcher item from private bundle; admin gate | ADAPT | `EphemeralProcess` launch via Provider catalog | `ADR046-provider-001` |
 | `d2b keys rotate [<vm>]` | production-reachable | `KeysOp`; broker `KeyRotation` | RETAIN/ADAPT | Keep; route through `Provider/system-core` key resource | `ADR046-primitives-003` |
 | `d2b host prepare [--apply]` | production-reachable | `HostPrepare` broker op; nftables/bridge/cgroup setup | ADAPT | `Host` resource initialize; Zone bootstrap | `ADR046-primitives-002` |
 | `d2b op inspect` | production-reachable | Operation trace/status | RETAIN | Keep bounded inspect per observability spec | — |
-| `d2b realm list` / `d2b realm inspect` | production-reachable | Lists realm controller status | ADAPT | `resource list Zone` / `resource get Zone/<name>` | `ADR046-resource-api-001` |
+| `d2b realm list` / `d2b realm inspect` | production-reachable | Lists realm controller status | ADAPT | `resource list Zone` / `resource get Zone/<name>` | `ADR046-api-001` |
 | `d2b userd *` | production-reachable | Stub exits 78; lib has `UserExecSession`/`UserSocketPolicy` traits | DELETE | Remove public `d2b userd` verb and service stub after parity with fixed user supervisor Process under `Provider/system-systemd` user domain | `ADR046-primitives-003` |
 | `d2b wayland-proxy *` | production-reachable | Wayland cross-domain proxy verbs | ADAPT | Provider process worker in graphics Provider | `ADR046-provider-001` |
 
@@ -746,9 +746,9 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `/var/lib/d2b/swtpm-markers/<vm>` | broker provisioning | ADAPT | Per-Guest Volume marker | Keep previously-provisioned fail-closed |
 | `/run/d2b/d2bd.sock` | `d2bd.socket` | RETAIN | Zone runtime public socket | |
 | `/run/d2b/broker.sock` | `d2b-priv-broker.socket` | RETAIN | Local-root broker socket | |
-| `/run/d2b/allocator.sock` | config ref; engine not live at `b5ddbed6` | DELETE | No separate allocator socket; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-controllers-001` |
+| `/run/d2b/allocator.sock` | config ref; engine not live at `b5ddbed6` | DELETE | No separate allocator socket; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-001` |
 | `/run/d2b/r-<realm>/` | per-realm runtime directory | ADAPT | `/run/d2b/z-<zone-id>/` — rename | |
-| `/run/d2b/r-<realm>/broker.sock` | per-realm broker socket | ADAPT | Pre-bound by Zone runtime allocator per ADR 0046; move to Zone runtime directory | `ADR046-core-controllers-001` |
+| `/run/d2b/r-<realm>/broker.sock` | per-realm broker socket | ADAPT | Pre-bound by Zone runtime allocator per ADR 0046; move to Zone runtime directory | `ADR046-core-001` |
 | `/sys/fs/cgroup/d2b.slice/` | broker cgroup delegation | RETAIN | Zone-scoped cgroup leaves; no top-level rename needed | |
 | `${XDG_RUNTIME_DIR}/d2b-runtime-systemd-user.sock` | `d2b-unsafe-local-helper` (user-owned) | ADAPT | user-only `Host` runtime socket; ComponentSession replaces helper protocol per D042/D051; no-isolation posture label preserved in all socket-level audit | |
 | `/tmp/d2b-heavy-gates-$UID/` | `cargo xtask heavy-gate` semaphore | RETAIN | Keep semaphore; not a Zone resource | |
@@ -1130,7 +1130,7 @@ Every Zone runtime endpoint must have a static Noise keypair. Key generation:
 - Must NOT be stored in Nix config or bundle (private key is never in a Nix store path)
 - Provisioned through `d2b keys rotate` equivalent for Zone runtime identity
 - Main uses `d2b-realm-core/src/identity_store.rs` + `identity_config.rs` for this path — copy/adapt those files alongside the session crates
-- Exact key storage path and rotation mechanism → `ADR046-componentsession-001`
+- Exact key storage path and rotation mechanism → `ADR046-session-001`
 
 ---
 

@@ -125,6 +125,8 @@ must be added here before an author selects a normative answer.
 This decision register has no future production implementation owner. Its
 authoring work item is:
 
+### ADR046-decisions-001
+
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-decisions-001` |
