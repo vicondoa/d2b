@@ -2619,7 +2619,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-nix-005; ADR046-nix-001; `d2b-contracts` schema generation (ADR046-nix-027) |
+| Dependency/owner | ADR046-nix-005; ADR046-nix-001; ADR046-cli-011 assertions/resource-option shape; `d2b-contracts` schema generation (ADR046-nix-027) |
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, mode/ownership); `nixos-modules/bundle.nix` (digest chain, SHA256SUMS); `packages/xtask/src/main.rs` (`gen-schemas`); no current per-ResourceType JSON Schema under `docs/reference/schemas/v3/` |
 | Reuse action | adapt |
 | Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `spec.provider.settings` where declared in schema, and Provider `config`, against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |

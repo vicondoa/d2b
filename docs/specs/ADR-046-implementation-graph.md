@@ -23,7 +23,7 @@ tie-break or omitted dependency is used.
 | Spec nodes | 55 |
 | Work-item nodes | 543 |
 | Total nodes | 598 |
-| Edges | 1896 |
+| Edges | 1902 |
 | Max topological rank | 22 |
 
 ## Waves (W0–W7)
@@ -34,9 +34,9 @@ tie-break or omitted dependency is used.
 | W1 | componentsession-and-bus, resource-reconciliation | 2 | 6 | W1-reconcile-and-bus |
 | W2 | primitive-resource-composition, zone-routing | 2 | 19 | W2-composition-and-routing |
 | W3 | provider-model-and-packaging | 1 | 4 | W3-provider-contract |
-| W4 | components-processes-and-sandbox, core-controllers, provider-state, resources-credential, resources-network | 5 | 33 | W4-parallel-specs |
+| W4 | components-processes-and-sandbox, core-controllers, provider-state, resources-credential, resources-network | 5 | 32 | W4-parallel-specs |
 | W5 | cli-and-operations, nix-configuration, resources-device, resources-host-guest-process-user, resources-volume, resources-zone-control, telemetry-audit-and-support | 7 | 141 | W5-parallel-specs |
-| W6 | provider-activation-nixos, provider-audio-pipewire, provider-clipboard-wayland, provider-credential-entra, provider-credential-managed-identity, provider-credential-secret-service, provider-device-gpu, provider-device-security-key, provider-device-tpm, provider-device-usbip, provider-display-wayland, provider-network-local, provider-notification-desktop, provider-observability-otel, provider-runtime-azure-container-apps, provider-runtime-azure-virtual-machine, provider-runtime-cloud-hypervisor, provider-runtime-qemu-media, provider-shell-terminal, provider-system-core, provider-system-minijail, provider-system-systemd, provider-transport-azure-relay, provider-transport-unix, provider-transport-vsock, provider-volume-local, provider-volume-virtiofs | 27 | 256 | W6-credentials, W6-interaction, W6-storage-network-device, W6-system-host-guest, W6-transport-observability-activation |
+| W6 | provider-activation-nixos, provider-audio-pipewire, provider-clipboard-wayland, provider-credential-entra, provider-credential-managed-identity, provider-credential-secret-service, provider-device-gpu, provider-device-security-key, provider-device-tpm, provider-device-usbip, provider-display-wayland, provider-network-local, provider-notification-desktop, provider-observability-otel, provider-runtime-azure-container-apps, provider-runtime-azure-virtual-machine, provider-runtime-cloud-hypervisor, provider-runtime-qemu-media, provider-shell-terminal, provider-system-core, provider-system-minijail, provider-system-systemd, provider-transport-azure-relay, provider-transport-unix, provider-transport-vsock, provider-volume-local, provider-volume-virtiofs | 27 | 257 | W6-credentials, W6-interaction, W6-storage-network-device, W6-system-host-guest, W6-transport-observability-activation |
 | W7 | feasibility-and-spikes, reset-and-cutover, security-and-threat-model, streamline, validation-and-delivery | 5 | 74 | W7-closing |
 
 ## Dependency DAG (waves and prep barriers)
@@ -138,10 +138,12 @@ fully represented in the JSON.
 
 | Prerequisite | Consumer | Type |
 | --- | --- | --- |
+| `ADR046-nix-014` | `ADR046-cli-011` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-device-007` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-exec-013` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-exec-015` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-network-008` | file-overlap-order |
+| `ADR046-cli-011` | `ADR046-nix-019` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-telem-011` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-zone-control-016` | file-overlap-order |
 | `ADR046-core-001` | `ADR046-zone-control-021` | file-overlap-order |
@@ -163,7 +165,9 @@ Only the listed `file-overlap-order` edges constrain shared files. Provider
 integration ordering that touches disjoint crate trees is not represented as
 file overlap. The former `wi:core-config-hub` is split into
 `wi:core-config-hub:w4` and `wi:core-config-hub:w5`; each parallel group is
-single-wave while the exact seven ordering edges above remain unchanged.
+single-wave. The two `assertions.nix` edges order only
+`ADR046-nix-014` → `ADR046-cli-011` → `ADR046-nix-019`; all other files in
+those work items retain their existing parallelism.
 
 ## Parallel groups
 
@@ -185,7 +189,7 @@ single-wave while the exact seven ordering edges above remain unchanged.
 | `wi:ADR-046-cli-and-operations` | W5 | 13 |
 | `wi:ADR-046-components-processes-and-sandbox` | W4 | 2 |
 | `wi:ADR-046-componentsession-and-bus` | W1 | 3 |
-| `wi:ADR-046-core-controllers` | W4 | 2 |
+| `wi:ADR-046-core-controllers` | W4 | 1 |
 | `wi:ADR-046-decision-register` | W0 | 1 |
 | `wi:ADR-046-feasibility-and-spikes` | W7 | 11 |
 | `wi:ADR-046-nix-configuration` | W5 | 35 |
@@ -238,6 +242,7 @@ single-wave while the exact seven ordering edges above remain unchanged.
 | `wi:ADR-046-zone-routing` | W2 | 16 |
 | `wi:core-config-hub:w4` | W4 | 1 |
 | `wi:core-config-hub:w5` | W5 | 6 |
+| `wi:core-controller-coordination:w6` | W6 | 1 |
 
 ## Critical path (longest dependency chain)
 
@@ -271,8 +276,9 @@ single-wave while the exact seven ordering edges above remain unchanged.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
 - `ADR046-zone-control-024` owns the shared Core-derived `physical-usb-backing` tuple; both the security-key and USB effect DAGs depend on it.
 - Every `ADR046-security-key-*` dependency in `Dependency/owner` is encoded. The dependency subgraph is acyclic and uses no generator tie-break.
-- Seven file-overlap barriers cover only the shared core
-  configuration/cleanup files. Each appears both as a
+- Nine file-overlap barriers cover only the shared core
+  configuration/cleanup files and `nixos-modules/assertions.nix`. Each appears
+  both as a
   `file-overlap-order` edge and in the dependent node's `prerequisites`, so the
   ready-wave query enforces it. Soft cross-Provider integration order remains
   file-disjoint and concurrent.

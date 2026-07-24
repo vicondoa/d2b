@@ -1518,7 +1518,7 @@ d2b.zones.dev.resources.work-token-import = {
     projectionName = "work-token";
     requestedCapabilities = [ "usbip-control" "usbip-data" ];
     requestedQuota = { maxConsumers = 1; };
-    disconnectPolicy = { behavior = "degrade"; };
+    disconnectPolicy = { mode = "degrade"; };
   };
 };
 

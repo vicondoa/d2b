@@ -13,7 +13,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-cli-and-operations.md",
-      "sha256" : "90ed48fa2062e1580eb5c063f4c6c6fbbdf2dc6bc9db422013a3a57efbbc0e41",
+      "sha256" : "c5b81aa9ce9638020f6991d4a1d9793f9f51659d1ecd16f720beacb33cb7ea6a",
       "specId" : "ADR-046-cli-and-operations",
       "status" : "Proposed",
       "supersedes" : "Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline)",
@@ -62,7 +62,7 @@
         "ADR-046-resource-store-redb"
       ],
       "path" : "docs/specs/ADR-046-core-controllers.md",
-      "sha256" : "66cd76546c32adf160515b194f8a55a2df6243950f59a86f18060c380e7be0b8",
+      "sha256" : "f118cb0b4f1852ab54cbee3a85ebf257acc6d38bf69161a259428a772078ca62",
       "specId" : "ADR-046-core-controllers",
       "status" : "Proposed",
       "supersedes" : "Current daemon-global hard-coded orchestration ownership",
@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "c6f82e63c4b7b76865510fcf151813e7feb66c2c72e85717c0e8d41b2b6ebf4e",
+      "sha256" : "a06ee4f34b96459d014db53f218e6d0dc9e45cf65a63ae32050bc9d6f6df21da",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Proposed",
       "supersedes" : null,
@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "47ff8244dec4c6579af3b2740122ccb18e374e844f37f41dd7bd353bbdd6ab43",
+      "sha256" : "049cfb964da600de8aed072425a870cdec84e749c14f177cc473b1b61d5e611c",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Proposed",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -321,7 +321,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-security-key.md",
-      "sha256" : "40dcc4733e13ef47905a36759f97e8ac9ec22e0b9c9c378443f8e551e3f792d1",
+      "sha256" : "81f67a57285dfce25ce55eb3163025d2071cdc0ed6f7c18422b6b39216968fdc",
       "specId" : "ADR-046-provider-device-security-key",
       "status" : "Proposed",
       "supersedes" : "`ProcessRole::SecurityKeyFrontend` daemon-internal accept loop (`packages/d2bd/src/security_key.rs`), `nixos-modules/components/security-key-guest.nix` untracked guest `d2b-sk-frontend.service` unit",
@@ -367,7 +367,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-usbip.md",
-      "sha256" : "a88ee0635abc5feb93a028bb428fceb52430e6d5a6323962f1e62769a1fa03a9",
+      "sha256" : "7b01ffa56a0132639a19452656bfe45d97552e68ae4e8a970b12fe9e1acf6750",
       "specId" : "ADR-046-provider-device-usbip",
       "status" : "Proposed",
       "supersedes" : "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
@@ -449,7 +449,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-notification-desktop.md",
-      "sha256" : "9e886c51a12d25ab771019e2001c7e134c277be3f18576ecbdcedf54c1a4db1a",
+      "sha256" : "e6c7e56fd23920a53a5f1308cd750a79d283ef2415420d0ed2871d3e1bdd7333",
       "specId" : "ADR-046-provider-notification-desktop",
       "status" : "Proposed",
       "supersedes" : null,
@@ -833,7 +833,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-reset-and-cutover.md",
-      "sha256" : "22beccd8ef43db1474b3b8ceb7564e072d5ab7f1eaf1bcc093eb87655e7a4439",
+      "sha256" : "8b9968dd5479cf7d26183beb8e146b91ee5f10b6ab36b0048a8578b4c08803cf",
       "specId" : "ADR-046-reset-and-cutover",
       "status" : "Proposed",
       "supersedes" : "[ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) \"Migration decision\" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` \"v2 command surface removed at 3.0 clean break\": it served the one-time v1→v2 storage layout cutover only and has no v3 successor)",
@@ -1181,7 +1181,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "ef2412e7d995a880d3a23e79e16d3f22f898f5da8eeacda93fa966ccb51677c8",
+      "sha256" : "671aae07fa95d66ea3b7e7588868cec460aad9008a433a7499b4e59c952fb174",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Proposed",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
@@ -1199,7 +1199,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "8059eb4ef018db992cca53e07b0b29afd70d132a8bb13531b439dc5755683ef4",
+      "sha256" : "06d3ebfaae8849a009e74b9652925ed4fa8b42bddf68248d2365eb95c6885455",
       "specId" : "ADR-046-zone-routing",
       "status" : "Proposed",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + capability ceiling)",

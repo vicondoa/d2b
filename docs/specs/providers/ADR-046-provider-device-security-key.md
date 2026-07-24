@@ -1751,7 +1751,11 @@ d2b.zones.devices.resources."yubikey-primary-export" = {
     factoryFingerprint = "sha256:<security-key-projection-factory>";
     arbitration = "exclusive";
     operations = [ "security-key-ceremony" ];
-    consumerZonePolicy = { zones = [ "work" ]; };
+    consumerZonePolicy = {
+      zones = [ "Zone/work" ];
+      capabilityCeiling = [ "security-key-ceremony" ];
+    };
+    visibility = "named-zones";
   };
 };
 

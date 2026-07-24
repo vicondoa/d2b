@@ -1552,8 +1552,6 @@ owns the destination.
 | --- | --- | --- | --- | --- |
 | `d2b vm *`, `d2b realm *`, `d2b up/down/restart/list/status`, `d2b usb *`, `d2b keys *`, `d2b build/switch/boot/test/rollback/gc/migrate/config *` | `ADR-046-cli-and-operations` "v2 command surface removed at 3.0 clean break" | Preserve (compiled dispatch) until v3 successor is wired, then Destroy at Phase 10 (compile-time removal, verified by policy lint) | `d2b guest/zone/device/exec/shell/activation *` | `ADR-046-cli-and-operations` per-verb work items |
 | `d2b host migrate-storage` | `ADR-046-cli-and-operations` "Removal notes" | Destroy at Phase 10 with **no v3 successor** — the layout cutover it served (v1→v2) is unrelated to this cutover and is not re-implemented | None (retired) | N/A |
-| `d2b migrate-check` | `ADR-046-cli-and-operations` diagnostic | Preserve (retained diagnostic explaining v2→v3 verb replacements) | Same | N/A |
-
 Any current-baseline path, unit, or artifact not named in any table above is,
 per [Authoritative inventories](#authoritative-inventories), classified
 **Preserve by default** and surfaced in the `plan` output's `unclassified`

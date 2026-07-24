@@ -1327,7 +1327,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 
 ### 17.2 Work items
 
-#### ADR046-notify-001
+### ADR046-notify-001
 
 | Field | Value |
 | --- | --- |
@@ -1341,7 +1341,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Validation | `tests/stream_record.rs` — DTO schema vectors; `tests/action_nonce.rs` — single-use/TTL/capacity/replay |
 | Removal proof | v2 `d2b.notify.v2` generated stubs removed after v3 service established |
 
-#### ADR046-notify-002
+### ADR046-notify-002
 
 | Field | Value |
 | --- | --- |
@@ -1355,7 +1355,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Validation | `tests/stream_admission.rs` — all rejection vectors |
 | Removal proof | Old `DesktopServices` session admitted under v2 contract removed when v3 session established |
 
-#### ADR046-notify-003
+### ADR046-notify-003
 
 | Field | Value |
 | --- | --- |
@@ -1369,7 +1369,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Validation | Unit tests for placement FSM in `tests/stream_record.rs`; Volume creation/deletion lifecycle in `tests/volume_lifecycle.rs`; see also `integration/cross_zone_source.rs` end-to-end |
 | Removal proof | Not applicable (new controller) |
 
-#### ADR046-notify-004
+### ADR046-notify-004
 
 | Field | Value |
 | --- | --- |
@@ -1383,7 +1383,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Validation | `integration/dbus_sink.rs`, `integration/observer_client.rs`, `integration/action_invoke.rs` |
 | Removal proof | `nixos-modules/notifications.nix` state-dir tmpfiles rule retired; all notification state is in-memory per-session with no Volume replacement |
 
-#### ADR046-notify-005
+### ADR046-notify-005
 
 | Field | Value |
 | --- | --- |
@@ -1397,7 +1397,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Validation | `integration/cross_zone_source.rs` |
 | Removal proof | v3 baseline security-key notification path in `d2b-notify` is superseded; clipd direct `notify_rust` call superseded |
 
-#### ADR046-notify-006
+### ADR046-notify-006
 
 | Field | Value |
 | --- | --- |

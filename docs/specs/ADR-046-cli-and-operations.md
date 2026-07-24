@@ -235,16 +235,19 @@ a matching schema is installed.
 # Derivations are declared in d2b.artifacts; ResourceSpecs reference them by id only.
 d2b.artifacts."cloud-hv-pkg" = { package = pkgs.d2b-provider-cloud-hv; type = "provider"; };
 
-d2b.zones.main.resources = {
-  "main"         = { type = "Zone";            spec = {}; };  # Zone.spec is empty
-  "work-vm"      = { type = "Guest";           spec = { providerRef = "Provider/cloud-hv"; executionPolicy = { cores = 4; memoryMiB = 8192; }; networkRefs = [ "Network/default" ]; }; };
-  "local-user"   = { type = "Host";            spec.defaultUserRef = "User/alice"; };
-  "default"      = { type = "Network";         spec = { cidr = "10.100.0.0/24"; gatewayAddress = "10.100.0.1"; }; };
-  "cloud-hv"     = { type = "Provider";        spec.artifactId = "cloud-hv-pkg"; };  # plain id, no derivation in spec
-  "ssh-host-key" = { type = "Credential";      spec = { credentialType = "ssh-ed25519-host-key"; credentialSource = "systemd-credential:d2b-ssh-key"; }; };
-  "alice"        = { type = "User";            spec = { uid = 1001; homeDir = "/home/alice"; }; };
-  "default"      = { type = "Quota";           spec = { /* quota fields per Quota schema */ }; };
-  "lockdown"     = { type = "EmergencyPolicy"; spec = { /* policy fields per EmergencyPolicy schema */ }; };
+d2b.zones.local-root = {};
+d2b.zones.main = {
+  parentZone = "local-root";
+  resources = {
+    "work-vm"        = { type = "Guest";           spec = { providerRef = "Provider/cloud-hv"; executionPolicy = { cores = 4; memoryMiB = 8192; }; networkRefs = [ "Network/default-network" ]; }; };
+    "local-user"     = { type = "Host";            spec.defaultUserRef = "User/alice"; };
+    "default-network" = { type = "Network";        spec = { cidr = "10.100.0.0/24"; gatewayAddress = "10.100.0.1"; }; };
+    "cloud-hv"       = { type = "Provider";        spec.artifactId = "cloud-hv-pkg"; };  # plain id, no derivation in spec
+    "ssh-host-key"   = { type = "Credential";      spec = { credentialType = "ssh-ed25519-host-key"; credentialSource = "systemd-credential:d2b-ssh-key"; }; };
+    "alice"          = { type = "User";            spec = { uid = 1001; homeDir = "/home/alice"; }; };
+    "default-quota"  = { type = "Quota";           spec = { /* quota fields per Quota schema */ }; };
+    "lockdown"       = { type = "EmergencyPolicy"; spec = { /* policy fields per EmergencyPolicy schema */ }; };
+  };
 };
 ```
 
@@ -281,7 +284,7 @@ exact shape (all fields always present; null where empty):
   "spec": {
     "providerRef": "Provider/cloud-hv",
     "executionPolicy": { "cores": 4, "memoryMiB": 8192 },
-    "networkRefs": ["Network/default"],
+    "networkRefs": ["Network/default-network"],
     "provider": { "schemaId": "runtime-cloud-hypervisor.d2bus.org/Guest/spec", "schemaVersion": "1.0", "settings": {} }
   },
   "status": {
@@ -1569,7 +1572,7 @@ callsite keeps a separate reserved-name list. The registry is:
 `reconcile`, `host`, `guest`, `process`, `exec`, `shell`, `volume`, `network`,
 `device`, `endpoint`, `export`, `import`, `resource`, `user`, `credential`,
 `provider`, `zone`, `quota`, `emergency-policy`, `activation`, `audit`, `op`,
-`auth`, `complete`, and `migrate-check`.
+`auth`, and `complete`.
 
 Adding or removing a built-in command updates this registry; projection binding
 therefore inherits the change without a second reserved-name edit.
@@ -1910,10 +1913,9 @@ class: `ADR-only`.
 ## v2 command surface removed at 3.0 clean break
 
 All v2 aliases and predecessor commands are deleted at the d2b 3.0 clean break.
-There are no executable aliases in 3.0. The `d2b migrate-check` diagnostic
-command explains replacements, but it does not dispatch to v2 behavior.
-The table below records each removed command and its v3 successor for
-documentation and test-removal tracking only.
+There are no executable aliases or migration-diagnostic command in 3.0.
+Migration guidance is documentation-only. The table below records each removed
+command and its v3 successor for documentation and test-removal tracking only.
 
 | Removed v2 command | v3 successor |
 | --- | --- |
@@ -2341,7 +2343,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::lifecycle()` (line 210), `DaemonClient::list_workloads()` (line 148), `DaemonClient::inspect()` (line 179); `DaemonMethod::Apply/Start/Stop/Restart/ListWorkloads` variants (lines 31-46) — adapt: replace `WorkloadLifecycleRequest`/`WorkloadName` with `Guest/<name>` ResourceRef; replace `TargetInput::Workload`-scoped calls with zone-root resource API calls; (2) `packages/d2b-contracts/src/generated_v2_services/daemon.rs` `WorkloadLifecycleProjection`, `DeploymentProjection`, `RuntimeProjection` — adapt field mapping to Guest resource spec/status; (3) `packages/d2b/src/lib.rs` `cmd_launch` (`LaunchArgs`) — adapt: the typed ComponentSession target resolution pattern applies but realm/workload-model types (`RealmPath`, `WorkloadName`) are excluded; behavior selected: idempotent apply with dry-run/apply precondition |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/guest.rs` (`d2b guest start/stop/restart/list/status`); unsafe-local workloads go to `packages/d2b/src/host.rs` (`d2b host list/status/get`), NOT guest.rs |
-| Detailed design | Route Guest lifecycle (WorkloadProviderKind: LocalVm/QemuMedia/ProviderManaged) through `d2b.resource.v3` Get/UpdateSpec/Watch; map dry-run/apply to resource API precondition; `--no-wait-ready` exits on accepted; with-wait uses `d2b status --watch` loop. WorkloadProviderKind::UnsafeLocal entries MUST route to `d2b host` commands only; any code path that would return an unsafe-local entry from `d2b guest list` is a correctness violation. v2 commands (`d2b up/down/restart/list/status`, `d2b vm start/stop/restart/list/status`) are deleted at 3.0; `d2b migrate-check` explains replacements. |
+| Detailed design | Route Guest lifecycle (WorkloadProviderKind: LocalVm/QemuMedia/ProviderManaged) through `d2b.resource.v3` Get/UpdateSpec/Watch; map dry-run/apply to resource API precondition; `--no-wait-ready` exits on accepted; with-wait uses `d2b status --watch` loop. WorkloadProviderKind::UnsafeLocal entries MUST route to `d2b host` commands only; any code path that would return an unsafe-local entry from `d2b guest list` is a correctness violation. v2 commands (`d2b up/down/restart/list/status`, `d2b vm start/stop/restart/list/status`) are deleted at 3.0; replacement guidance remains documentation-only, with no migration-diagnostic command. |
 | Integration | ZoneContext → resource API client → Guest resource; status watch uses Watch stream |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Dry-run/apply/wait/no-wait-ready tests; zone-unavailable degraded path; JSON output schema tests; confirm v2 command paths are absent (compilation failure if any cmd_vm_start/stop alias re-introduced) |
@@ -2480,7 +2482,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-cli-011` |
-| Dependency/owner | ADR046-identities-002, ADR046-cli-001, ADR046-cli-002, ADR046-cli-007; Nix module owner + Zone runtime owner |
+| Dependency/owner | ADR046-identities-002, ADR046-cli-001, ADR046-cli-002, ADR046-cli-007, ADR046-nix-014; Nix module owner + Zone runtime owner; `nixos-modules/assertions.nix` base migration precedes this item's unified-resource update |
 | Current source | Nix emitters: `nixos-modules/options-realms-workloads.nix` (current `d2b.envs.<e>.vms.<v>.*`), `nixos-modules/options-realms.nix` (`d2b.realms.*`), `nixos-modules/unsafe-local-workloads-json.nix` (unsafe-local source), `nixos-modules/bundle-artifacts.nix`, `nixos-modules/manifest.nix`, `nixos-modules/assertions.nix`; JSON output: `/etc/d2b/processes.json` (old bundle), `/etc/d2b/realm-entrypoints.json` (static realm index); Zone runtime apply path: `packages/d2bd/src/` (activation apply handler — pre-ADR 0046 path through `cmd_host_prepare`/broker; no live resource bundle apply); cleanup: no current resource-deletion-on-bundle-apply path at baseline |
 | Reuse source | None (new implementation; no main `a1cc0b2d` reuse — this is the Nix/Zone side, not the CLI client side) |
 | Reuse action | replace |

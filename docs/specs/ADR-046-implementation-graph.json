@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1896,
+    "edges" : 1902,
     "maxTopologicalRank" : 22,
     "nodes" : 598,
     "specNodes" : 55,
@@ -43,6 +43,11 @@
   ],
   "edges" : [
     {
+      "from" : "ADR046-cli-011",
+      "to" : "ADR046-nix-014",
+      "type" : "file-overlap-order"
+    },
+    {
       "from" : "ADR046-device-007",
       "to" : "ADR046-core-001",
       "type" : "file-overlap-order"
@@ -60,6 +65,11 @@
     {
       "from" : "ADR046-network-008",
       "to" : "ADR046-core-001",
+      "type" : "file-overlap-order"
+    },
+    {
+      "from" : "ADR046-nix-019",
+      "to" : "ADR046-cli-011",
       "type" : "file-overlap-order"
     },
     {
@@ -5770,6 +5780,26 @@
     {
       "from" : "ADR046-core-002",
       "to" : "ADR046-core-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-core-002",
+      "to" : "ADR046-exec-003",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-core-002",
+      "to" : "ADR046-exec-004",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-core-002",
+      "to" : "ADR046-exec-005",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-core-002",
+      "to" : "ADR046-system-core-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -12759,17 +12789,18 @@
       "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-cli-011",
       "kind" : "work-item",
-      "owner" : "ADR046-identities-002, ADR046-cli-001, ADR046-cli-002, ADR046-cli-007; Nix module owner + Zone runtime owner",
+      "owner" : "ADR046-identities-002, ADR046-cli-001, ADR046-cli-002, ADR046-cli-007, ADR046-nix-014; Nix module owner + Zone runtime owner; `nixos-modules/assertions.nix` base migration precedes this item's unified-resource update",
       "parallelGroup" : "wi:ADR-046-cli-and-operations",
       "prerequisites" : [
         "ADR-046-cli-and-operations",
         "ADR046-cli-001",
         "ADR046-cli-002",
         "ADR046-cli-007",
-        "ADR046-identities-002"
+        "ADR046-identities-002",
+        "ADR046-nix-014"
       ],
       "specId" : "ADR-046-cli-and-operations",
-      "topologicalRank" : 12,
+      "topologicalRank" : 13,
       "wave" : "W5"
     },
     {
@@ -13122,23 +13153,27 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-system-core/src/{host,user}.rs` linked into fixed core controller"
+        "`packages/d2b-core-controller/tests/system_core_coordination.rs`"
       ],
       "entryContracts" : [
         "ADR-046-core-controllers"
       ],
-      "exitGate" : "ADR046-W4 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-core-002",
       "kind" : "work-item",
-      "owner" : "ADR046-core-001; system-core Provider owner",
-      "parallelGroup" : "wi:ADR-046-core-controllers",
+      "owner" : "ADR046-core-001, ADR046-exec-003, ADR046-exec-004, ADR046-exec-005, ADR046-system-core-001; coordination-only owner",
+      "parallelGroup" : "wi:core-controller-coordination:w6",
       "prerequisites" : [
         "ADR-046-core-controllers",
-        "ADR046-core-001"
+        "ADR046-core-001",
+        "ADR046-exec-003",
+        "ADR046-exec-004",
+        "ADR046-exec-005",
+        "ADR046-system-core-001"
       ],
       "specId" : "ADR-046-core-controllers",
-      "topologicalRank" : 10,
-      "wave" : "W4"
+      "topologicalRank" : 14,
+      "wave" : "W6"
     },
     {
       "blockers" : [],
@@ -16063,10 +16098,11 @@
       "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-nix-019",
       "kind" : "work-item",
-      "owner" : "ADR046-nix-005; ADR046-nix-001; `d2b-contracts` schema generation (ADR046-nix-027)",
+      "owner" : "ADR046-nix-005; ADR046-nix-001; ADR046-cli-011 assertions/resource-option shape; `d2b-contracts` schema generation (ADR046-nix-027)",
       "parallelGroup" : "wi:ADR-046-nix-configuration",
       "prerequisites" : [
         "ADR-046-nix-configuration",
+        "ADR046-cli-011",
         "ADR046-nix-001",
         "ADR046-nix-005",
         "ADR046-nix-027"
@@ -18773,7 +18809,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`nixos-modules/options-zones.nix` (new structural base), `nixos-modules/generated/options-zones-<Type>.nix` (generated per ResourceType by `xtask gen-zone-nix-options`), `nixos-modules/assertions.nix` (new Zone assertions)"
+        "`nixos-modules/options-zones.nix` (new structural base), `nixos-modules/generated/resource-types.nix` (generated registry), `nixos-modules/generated/options-zones-<Type>.nix` (generated per ResourceType by `xtask gen-zone-nix-options`), `nixos-modules/assertions.nix` (new Zone assertions)"
       ],
       "entryContracts" : [
         "ADR-046-zone-routing"
@@ -23256,7 +23292,7 @@
       ],
       "specCount" : 5,
       "wave" : "W4",
-      "workItemCount" : 33
+      "workItemCount" : 32
     },
     {
       "parallelGroups" : [
@@ -23307,11 +23343,12 @@
         "wi:ADR-046-provider-transport-unix",
         "wi:ADR-046-provider-transport-vsock",
         "wi:ADR-046-provider-volume-local",
-        "wi:ADR-046-provider-volume-virtiofs"
+        "wi:ADR-046-provider-volume-virtiofs",
+        "wi:core-controller-coordination:w6"
       ],
       "specCount" : 27,
       "wave" : "W6",
-      "workItemCount" : 256
+      "workItemCount" : 257
     },
     {
       "parallelGroups" : [

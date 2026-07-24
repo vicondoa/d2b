@@ -55,7 +55,7 @@ manifests, and the generated implementation-graph artifacts
 
 **Resource catalog (6)** — the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
 `Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `Host`, `Guest`,
-`Process`, `EphemeralProcess`, `User`, `Volume`, `Network`, `Device`,
+`Process`, `EphemeralProcess`, `Volume`, `Network`, `Device`, `User`,
 `Credential`, `Endpoint`, `ResourceExport`, `ResourceImport`) have the
 following exclusive ResourceType owners. Foundation specs define shared
 contracts but do not co-own these types:
@@ -296,7 +296,7 @@ Each spec contains an **Implementation work items** section. Every item has:
 
 | Field | Requirement |
 | --- | --- |
-| Work item ID | Declared by the heading as `ADR046-<registered-prefix>-<ordinal>`; an optional table row must match it exactly |
+| Work item ID | Declared by an exact level-three heading `### ADR046-<registered-prefix>-<ordinal>`; an optional table row must match it exactly |
 | Dependency/owner | Prerequisites, future wave, crate/component, shared owner |
 | Current source | Exact v3 paths, symbols, call sites, artifacts, and tests |
 | Reuse source | Optional exact main commit/paths/symbols/tests used for copy/adaptation; explicit `None` serializes as `null` |
@@ -399,8 +399,9 @@ separate items.
 Generation and validation fail closed unless every normative member's
 Implementation work items section is complete:
 
-- every work-item heading matches the ID regex, uses one prefix registered by
-  its owning member, and is unique across the set;
+- every work-item heading is exactly level three (`###`), matches the ID regex,
+  uses one prefix registered by its owning member, and is unique across the
+  set; `##` and `####` item declarations fail closed;
 - every item has exactly one nonempty `Dependency/owner`, `Current source`,
   `Reuse action`, `Destination`, `Detailed design`, `Integration`,
   `Data migration`, `Validation`, and `Removal proof` field, with no duplicate
