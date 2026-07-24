@@ -7445,6 +7445,21 @@
       "removalProof": "Not applicable (new surface)"
     },
     {
+      "workItemId": "W-N22",
+      "specId": "ADR-046-provider-device-security-key",
+      "specPath": "docs/specs/providers/ADR-046-provider-device-security-key.md",
+      "dependencyOwner": "W-N21, ADR046-zone-control-019, ADR046-zone-control-020; security-key relay/session owner",
+      "currentSource": "`packages/d2bd/src/security_key.rs` (`CidTranslator`, `SecurityKeyState`, `LeaseId`/`LeaseState`, `CEREMONY_TIMEOUT` 120 s, `QUEUE_WAIT_TIMEOUT` 15 s, `parse_ctaphid_report`/`build_cancel_packet`); `packages/d2b-priv-broker/src/ops/security_key.rs` (`live_open_hidraw_security_key`, double `fstat` + FIDO usage-page 0xF1D0 + HID raw-info revalidation, `O_RDWR|O_NONBLOCK|O_NOFOLLOW`); `packages/d2b-sk-frontend/src/{main,uhid,vsock,framing}.rs` (UHID FIDO2 CTAPHID frontend, 64-byte report relay)",
+      "reuseSource": "Same baseline daemon/broker/frontend symbols",
+      "reuseAction": "adapt (relay becomes the D097 hidraw authority; transport moves to Endpoint/named-stream)",
+      "destination": "`packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs`; `AuthorityDescriptor` on the relay `Endpoint`/`Device`",
+      "detailedDesign": "The relay is the single D097 hidraw authority: `AuthorityDescriptor` with `authorityScope: physical-device`, opaque `authorityKey` class (digest of the trusted bundle `device_token`/FIDO selector — never a raw path/serial), `cardinality: zero-or-one`, `arbitration: exclusive`; core's authority index rejects a duplicate relay with `duplicateConflict` before any open; restart adopts by `ownerProof`; ambiguity quarantines; D091 drains the consumer then recycles the relay. Preserves the exact reusable semantics: sole hidraw opener (Core `SecurityKeyOpenDevice`/`live_open_hidraw_security_key` with double-`fstat`+FIDO+HID revalidation), async cancellation-safe fd I/O, per-session `CidTranslator`, `LeaseId` stale-release guard, cancel of all active CIDs on disconnect, one ceremony (120 s), bounded fair wait (15 s → `ERR_CHANNEL_BUSY`), UHID frontend. Transport is D096/D092: per-import bounded encrypted named stream over the relay `Endpoint` (credit backpressure, per-import session generation, deadline, cancel) replaces the fixed `SK_VSOCK_PORT` accept loop and raw framing. No new `ProcessRole`, no direct broker path, no state file: hidraw/UHID fds via D077 EffectPort/LaunchTicket DeviceGrant, observed state D087 status-first.",
+      "integration": "Relay authority owns the hidraw fd and the `Endpoint/<device-uid>-sk-ctaphid-relay`; export/import adapter (W-N21) and controller call it; core authority index (ADR046-zone-control-019) admits exactly one relay authority; USBIP mutual-exclusion assertion (`!(usbip.yubikey && usb.securityKey.enable)`) remains.",
+      "dataMigration": "Full d2b 3.0 reset; no per-session/lease state persisted",
+      "validation": "Fast hermetic tests adapt the existing `CidTranslator`/lease/cancel/UHID/broker-revalidation suites: CID alloc/translate/release, `LeaseId` stale-release, cancel-all-CIDs on disconnect, one-ceremony + 120 s timeout, 15 s fair-wait `ERR_CHANNEL_BUSY`, UHID frame round-trip, and broker double-`fstat`+FIDO+HID revalidation — all with fakes/`FakeEffectPort`, no real hidraw. Integration proves cross-Zone CTAP ceremony serialization over the encrypted named stream; the USBIP-vs-security-key conflict assertion/test remains.",
+      "removalProof": "The legacy daemon accept loop, raw CTAPHID framing, fixed `SK_VSOCK_PORT`, and broker sysfs `/sys/class/hidraw/` scan fallback are deleted only after the relay `Endpoint`/named-stream successor and the `device_token`-only broker open are green (coordinated with W-X05 `ProcessRole` removal and the W-R broker-op revalidation item)."
+    },
+    {
       "workItemId": "W-R01",
       "specId": "ADR-046-provider-device-security-key",
       "specPath": "docs/specs/providers/ADR-046-provider-device-security-key.md",

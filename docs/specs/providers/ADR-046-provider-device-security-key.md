@@ -1263,27 +1263,63 @@ Constraints specific to this Provider:
 - OTEL emitter: lightweight bounded ring (no OTEL SDK in the Provider process;
   tracing crate only). The `observability-otel` Provider drains and forwards.
 
-## Cross-Zone security-key sharing (D096)
+## Security-key authority and cross-Zone sharing (D096/D097)
 
-The owner-Zone `device-security-key` **relay** is the sole holder of the hidraw
-FD; no other Zone opens the device and no USBIP or direct hidraw access crosses a
-Zone. The owner Zone declares a `ResourceExport` referencing the local relay
-`Endpoint` and the exported `Device` (security-key) type with `arbitration:
-exclusive`.
+**One hidraw authority relay (D097).** The owner-Zone `device-security-key`
+**relay** is the sole holder of the physical hidraw FD (invariant I-1); no other
+Zone opens the device and no USBIP or direct hidraw access crosses a Zone. The
+relay declares a D097 `AuthorityDescriptor` with `authorityScope:
+physical-device`, an **opaque** `authorityKey` class (a digest of the trusted
+bundle `device_token`/FIDO selector — never a raw hidraw path, sysfs path, or
+serial), `cardinality: zero-or-one` per physical token, and `arbitration:
+exclusive`. Core's authority index rejects a second relay authority for the same
+`(Zone, physical-device, opaqueKeyDigest)` with `duplicateConflict` before any
+open; restart adopts the exact authority by `ownerProof` (the relay Process
+identity holding the DeviceGrant), and ambiguity quarantines.
 
-- The export **serializes CTAP ceremonies**: one exclusive per-device lease at a
-  time, a fair queue, and per-ceremony deadline/cancel. A child Zone declares a
-  `ResourceImport` binding its local `ZoneLink` + `exportKey` to a local `Device`
-  projection/frontend; ordinary consumers use that local `Device` Ref.
-- CTAPHID bytes flow over the bounded encrypted named stream and are visible only
-  to the trusted authority relay and the exact child frontend; intermediate
-  controllers see ciphertext only. Only bounded audit metadata (Zone, lease
-  state, ceremony outcome) is recorded — never CTAP payload bytes.
-- The security-key Provider's signed export/import adapter enforces the exclusive
-  lease/fair-queue/deadline/cancel and builds the local `Device` projection; core
-  owns `ResourceExport`/`ResourceImport` routing and base lifecycle. Export
-  removal or ZoneLink loss revokes the lease and degrades the local projection;
-  reconnect revalidates generation/fingerprint.
+**Preserved reusable semantics** (grounded in
+`packages/d2bd/src/security_key.rs` and
+`packages/d2b-priv-broker/src/ops/security_key.rs`): sole hidraw opener (Core via
+`SecurityKeyOpenDevice`/`live_open_hidraw_security_key`); post-open double
+`fstat` + FIDO usage-page (0xF1D0) + HID raw-info revalidation on the pre-opened
+`O_RDWR|O_NONBLOCK|O_NOFOLLOW` fd; async cancellation-safe fd relay I/O;
+per-session `CidTranslator` (`alloc_host_cid`/`guest_to_host`/`host_to_guest`/
+`release_guest_cid`); `LeaseId` stale-release guard; cancel of **all** active
+CIDs (`build_cancel_packet`) on disconnect; exactly one CTAP ceremony at a time
+(`CEREMONY_TIMEOUT` 120 s); a bounded fair wait for a busy lease
+(`QUEUE_WAIT_TIMEOUT` 15 s, then `ERR_CHANNEL_BUSY`); and the guest-side UHID
+frontend (`packages/d2b-sk-frontend/`: `/dev/uhid` virtual FIDO2 CTAPHID device,
+64-byte report relay).
+
+**Transport change (D096).** Cross-Zone, the fixed vsock accept path is replaced
+by the D096/D092 mechanism: the owner Zone declares a `ResourceExport`
+referencing only the local relay `Endpoint` and the exported `Device`
+(security-key) type (`exportability: explicit-export`, `arbitration: exclusive`);
+a child Zone declares a `ResourceImport` binding its local `ZoneLink` +
+`exportKey` to a local `Device` projection/frontend (ordinary consumers use that
+local `Device` Ref). CTAPHID reports flow over a **per-import bounded encrypted
+named stream** with credit backpressure, per-import session generation, deadline,
+and cancel; they are visible only to the trusted authority relay and the exact
+child frontend — intermediate controllers see ciphertext only. Only bounded audit
+metadata (Zone, lease state, ceremony outcome) is recorded, never CTAP payload
+bytes. The export **serializes CTAP ceremonies** across Zones (one exclusive
+per-device lease, fair queue, deadline/cancel). The Provider's signed
+export/import adapter enforces the lease/fair-queue/deadline/cancel and builds the
+local `Device` projection; **core** owns `ResourceExport`/`ResourceImport`
+routing and base lifecycle. Export removal or ZoneLink loss revokes the lease and
+degrades the local projection; reconnect revalidates generation/fingerprint; a
+D091 upgrade drains the consumer before recycling the relay authority.
+
+**No legacy shortcuts; legacy removed after successor.** The relay adds **no**
+new `ProcessRole`, no direct broker path, and no per-VM state file: the hidraw fd
+arrives via the D077 EffectPort/LaunchTicket DeviceGrant, observed state is D087
+status-first, the relay endpoint is a D092 `Endpoint`, and cross-Zone sharing is
+D096. The legacy daemon-internal accept loop (`ProcessRole::SecurityKeyFrontend`
+in `packages/d2bd/src/security_key.rs`), the raw CTAPHID framing over a fixed
+vsock port (`SK_VSOCK_PORT`), and the broker sysfs `/sys/class/hidraw/` scan
+fallback are removed only after the successor relay/`Endpoint`/named-stream path
+and the `device_token`-only broker open are green (see the work items and removal
+schedule).
 
 ## Nix configuration
 
@@ -1868,6 +1904,21 @@ class.
 | Data migration | Full d2b 3.0 reset; no cross-Zone sharing state |
 | Validation | CTAP ceremony serialization with one exclusive per-device lease/fair-queue/deadline/cancel; child `Device` projection reachable; CTAP bytes ciphertext to intermediaries; no hidraw FD/USBIP crosses a Zone; reconnect revalidation and revocation degrade the projection; audit metadata only (fake-stream hermetic + real-device integration) |
 | Removal proof | Not applicable (new surface) |
+
+### W-N22
+
+| Field | Value |
+| --- | --- |
+| Dependency/owner | W-N21, ADR046-zone-control-019, ADR046-zone-control-020; security-key relay/session owner |
+| Current source | `packages/d2bd/src/security_key.rs` (`CidTranslator`, `SecurityKeyState`, `LeaseId`/`LeaseState`, `CEREMONY_TIMEOUT` 120 s, `QUEUE_WAIT_TIMEOUT` 15 s, `parse_ctaphid_report`/`build_cancel_packet`); `packages/d2b-priv-broker/src/ops/security_key.rs` (`live_open_hidraw_security_key`, double `fstat` + FIDO usage-page 0xF1D0 + HID raw-info revalidation, `O_RDWR|O_NONBLOCK|O_NOFOLLOW`); `packages/d2b-sk-frontend/src/{main,uhid,vsock,framing}.rs` (UHID FIDO2 CTAPHID frontend, 64-byte report relay) |
+| Reuse source | Same baseline daemon/broker/frontend symbols |
+| Reuse action | `adapt` — relay becomes the D097 hidraw authority; transport moves to Endpoint/named-stream |
+| Destination | `packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs`; `AuthorityDescriptor` on the relay `Endpoint`/`Device` |
+| Detailed design | The relay is the single D097 hidraw **authority**: `AuthorityDescriptor` with `authorityScope: physical-device`, opaque `authorityKey` class (digest of the trusted bundle `device_token`/FIDO selector — never a raw path/serial), `cardinality: zero-or-one`, `arbitration: exclusive`; core's authority index rejects a duplicate relay with `duplicateConflict` before any open; restart adopts by `ownerProof`; ambiguity quarantines; D091 drains the consumer then recycles the relay. Preserves the exact reusable semantics: sole hidraw opener (Core `SecurityKeyOpenDevice`/`live_open_hidraw_security_key` with double-`fstat`+FIDO+HID revalidation), async cancellation-safe fd I/O, per-session `CidTranslator`, `LeaseId` stale-release guard, cancel of all active CIDs on disconnect, one ceremony (120 s), bounded fair wait (15 s → `ERR_CHANNEL_BUSY`), UHID frontend. Transport is D096/D092: per-import bounded **encrypted named stream** over the relay `Endpoint` (credit backpressure, per-import session generation, deadline, cancel) replaces the fixed `SK_VSOCK_PORT` accept loop and raw framing. No new `ProcessRole`, no direct broker path, no state file: hidraw/UHID fds via D077 EffectPort/LaunchTicket DeviceGrant, observed state D087 status-first. |
+| Integration | Relay authority owns the hidraw fd and the `Endpoint/<device-uid>-sk-ctaphid-relay`; export/import adapter (W-N21) and controller call it; core authority index (ADR046-zone-control-019) admits exactly one relay authority; USBIP mutual-exclusion assertion (`!(usbip.yubikey && usb.securityKey.enable)`) remains. |
+| Data migration | Full d2b 3.0 reset; no per-session/lease state persisted |
+| Validation | Fast hermetic tests adapt the existing `CidTranslator`/lease/cancel/UHID/broker-revalidation suites: CID alloc/translate/release, `LeaseId` stale-release, cancel-all-CIDs on disconnect, one-ceremony + 120 s timeout, 15 s fair-wait `ERR_CHANNEL_BUSY`, UHID frame round-trip, and broker double-`fstat`+FIDO+HID revalidation — all with fakes/`FakeEffectPort`, no real hidraw. Integration proves cross-Zone CTAP ceremony **serialization** over the encrypted named stream; the USBIP-vs-security-key conflict assertion/test remains. |
+| Removal proof | The legacy daemon accept loop, raw CTAPHID framing, fixed `SK_VSOCK_PORT`, and broker sysfs `/sys/class/hidraw/` scan fallback are deleted only after the relay `Endpoint`/named-stream successor and the `device_token`-only broker open are green (coordinated with W-X05 `ProcessRole` removal and the W-R broker-op revalidation item). |
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
