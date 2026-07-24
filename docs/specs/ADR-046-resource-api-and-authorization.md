@@ -182,12 +182,15 @@ the ZoneLink relationship, and the export capability ceiling must all allow the
 operation.
 
 For every exportable capability, the installed Provider descriptor supplies a
-signed projection factory binding the exact qualified `*Service` and `*Binding`
-types, allowed owner-Service backing ref types, allowed Binding target ref types,
-the strict projection-Service schema/fingerprint, and an aggregate factory
-fingerprint. Admission fails closed when the metadata is absent, unsigned, or
-mismatched. `*State`, `stateType`, and `allowedStateTargetRefTypes` are not
-compatibility aliases; strict schema admission rejects them.
+signed projection factory binding the exact qualified semantic/provider-neutral
+`*Service` and `*Binding` types, allowed owner-Service backing ref types, allowed
+Binding target ref types, the strict projection-Service schema/fingerprint, and
+an aggregate semantic factory fingerprint. Admission fails closed when the
+metadata is absent, unsigned, or mismatched. Provider/adapter identity is not
+part of the semantic fingerprint: local `providerRef` independently selects the
+implementation, while a strict `spec.provider` contains only its extension.
+`*State`, `stateType`, and `allowedStateTargetRefTypes` are not compatibility
+aliases; strict schema admission rejects them.
 
 Core enforces all of these rules before advertisement, lease creation, or local
 projection:
@@ -199,7 +202,8 @@ projection:
    expected qualified Service type, and expected projection/factory
    fingerprints; it contains no remote Ref.
 3. The advertised, expected, and locally installed factory values match exactly,
-   and `requestedCapabilities` is within the export ceiling.
+   the Provider accepts the canonical minimal base without `spec.provider`, and
+   `requestedCapabilities` is within the export ceiling.
 4. Core creates exactly one same-qualified-type local projection Service with
    `ownerRef: ResourceImport/<name>`. It never creates a Device, Endpoint, or
    Binding projection.
@@ -214,6 +218,12 @@ creation, and target use. Possessing a local projection-Service Ref does not
 grant access to its remote authority or stream; the current lease/capability
 check remains mandatory. Leases, ceremonies, sessions, and streams are internal
 records rather than API resources.
+
+Admission also rejects a semantic base schema/status, condition, error, or
+fingerprint containing implementation-specific behavior or protocol fields.
+The base `providerRef` is the sole opaque implementation selector; PipeWire,
+CTAPHID, OTEL, and USBIP details belong only to that selected Provider's
+registered strict extension, never the base API.
 
 ### Authority index admission (D097)
 

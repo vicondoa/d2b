@@ -842,7 +842,8 @@ not redefine the types: `type = "ResourceExport"` and `type = "ResourceImport"`
 emit the exact `ADR-046-resources-zone-control` §8A base fields plus the strict
 `spec.provider` extension when declared by the Provider schema. They bring the
 standard ResourceType catalog to 19 entries; `Endpoint` remains standard.
-Qualified Provider `*Service` and `*Binding` types are not standard types.
+Qualified semantic/provider-neutral `*Service` and `*Binding` types are not
+standard types or Provider implementation namespaces.
 
 The Provider's signed projection factory binds the exact Service/Binding pair,
 allowed owner-Service backing refs, allowed Binding target refs, projection
@@ -857,13 +858,13 @@ There is no `*State` or metadata-key compatibility alias; those spellings fail
 schema validation rather than lowering to Binding.
 
 ```nix
-# Local-root owner Zone: the audio dossier owns these qualified names and
-# validates backingRefs against its signed factory.
+# Local-root owner Zone: the semantic type is implementation-independent; the
+# selected Provider validates backingRefs against its signed factory.
 d2b.zones.local-root.resources.host-audio = {
-  type = "audio-pipewire.d2bus.org/AudioService";
+  type = "audio.d2bus.org/AudioService";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    backingRefs = [ "Device/host-mic" "Endpoint/pipewire-local" ];
+    backingRefs = [ "Device/host-mic" "Endpoint/audio-local" ];
   };
 };
 
@@ -872,8 +873,8 @@ d2b.zones.local-root.resources.mic-export = {
   type = "ResourceExport";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    resourceRef = "audio-pipewire.d2bus.org/AudioService/host-audio";
-    serviceType = "audio-pipewire.d2bus.org/AudioService";
+    resourceRef = "audio.d2bus.org/AudioService/host-audio";
+    serviceType = "audio.d2bus.org/AudioService";
     projectionSchemaFingerprint = "sha256:...";
     factoryFingerprint = "sha256:...";
     operations = [ "capture" ];
@@ -896,7 +897,7 @@ d2b.zones.work.resources.mic-import = {
     providerRef = "Provider/audio-pipewire";
     zoneLinkRef = "ZoneLink/work-uplink";
     exportKey = "host/mic-export";
-    expectedServiceType = "audio-pipewire.d2bus.org/AudioService";
+    expectedServiceType = "audio.d2bus.org/AudioService";
     expectedProjectionSchemaFingerprint = "sha256:...";
     expectedFactoryFingerprint = "sha256:...";
     projectionName = "host-audio";
@@ -909,10 +910,10 @@ d2b.zones.work.resources.mic-import = {
 
 # Authored local consumption Binding. The import controller never creates it.
 d2b.zones.work.resources.work-mic = {
-  type = "audio-pipewire.d2bus.org/AudioBinding";
+  type = "audio.d2bus.org/AudioBinding";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    serviceRef = "audio-pipewire.d2bus.org/AudioService/host-audio";
+    serviceRef = "audio.d2bus.org/AudioService/host-audio";
     targetRef = "Guest/workstation";
     mode = "capture";
   };
@@ -932,6 +933,16 @@ Ordinary Binding resources reference the local projection Service
 (`metadata.ownerRef: ResourceImport/<name>`), never the ResourceImport itself.
 The Binding controller owns any Process/Endpoint children. High-churn
 sessions/streams are internal and are not emitted as Nix resources.
+
+This is the canonical minimal base: it remains valid without
+`spec.provider`. That strict extension may carry PipeWire-specific settings,
+but PipeWire and all other implementation/protocol details stay out of the
+base behavior, status, fingerprints, and generated semantic ResourceType names;
+`providerRef` is the sole opaque implementation selector. The other frozen
+pairs follow the same rule:
+`security-key.d2bus.org.SecurityKeyService/SecurityKeyBinding`,
+`telemetry.d2bus.org.TelemetryService/TelemetryBinding`, and
+`usb.d2bus.org.UsbService/UsbBinding`.
 
 **Authority descriptors (D097).** A resource that owns a scarce or singleton
 backing carries its signed `AuthorityDescriptor` (schema in

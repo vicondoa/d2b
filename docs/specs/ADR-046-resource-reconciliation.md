@@ -271,9 +271,11 @@ Propagation to ancestors is acyclic, depth/budget bounded, and coalesced.
 
 A `ResourceImport` owns exactly one local projection **Service** through
 `metadata.ownerRef: ResourceImport/<name>`. Its ResourceType is the same
-qualified Provider `*Service` type as the remote owner Service, as bound by the
-signed projection factory. Core rejects a missing/mismatched factory and never
-projects a Device, Endpoint, or `*Binding`.
+qualified semantic/provider-neutral `*Service` type as the remote owner Service,
+as bound by the signed projection factory. The consumer's local `providerRef`
+selects the conformant implementation; the projection does not copy the
+owner's `spec.provider`. Core rejects a missing/mismatched factory or any
+semantic-type rewrite and never projects a Device, Endpoint, or `*Binding`.
 
 Operator/Nix-authored matching same-Zone `*Binding` resources reference the
 projection's `serviceRef` and an allowed consuming Guest/User/Zone. They are not
@@ -291,6 +293,12 @@ all referencing Bindings to be deleted or retargeted. It then releases the remot
 lease, deletes the projection Service and remaining provider-owned children, and
 clears its own finalizer. `BindingReferencesRemain` is visible pending cleanup;
 there is no implicit Binding cascade.
+
+Service and Binding base reconcile inputs and status are
+implementation-independent, and every selected Provider accepts the canonical
+minimal base. PipeWire, CTAPHID, OTEL, and USBIP observations may appear only in
+their registered bounded `status.provider` extension; they never affect the
+semantic dependency keys or base conditions/errors.
 
 ### Authority adoption, quarantine, and drain-recycle (D097)
 

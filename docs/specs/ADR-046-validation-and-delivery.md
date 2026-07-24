@@ -763,10 +763,11 @@ Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
 (real bounded encrypted streams) tests cover, per
 [`ADR-046-resources-zone-control.md` §8A.7](ADR-046-resources-zone-control.md):
 
-- signed projection factory binds qualified Service type, Binding type, allowed
-  owner-Service backing refs, allowed Binding target refs, projection schema/
-  fingerprint, and factory fingerprint; absent/unsigned/tampered/mismatched
-  metadata fails closed at Provider install, Nix build, and API admission;
+- signed projection factory binds qualified semantic/provider-neutral Service
+  type, Binding type, allowed owner-Service backing refs, allowed Binding target
+  refs, projection schema/fingerprint, and factory fingerprint; absent/unsigned/
+  tampered/mismatched metadata fails closed at Provider install, Nix build, and
+  API admission;
 - `ResourceExport.resourceRef` accepts only the owner Service; Device, Endpoint,
   Binding, Credential, backend, and cross-Zone targets reject;
 - one import creates exactly one same-qualified-type projection Service with
@@ -777,6 +778,18 @@ Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
   never exports, auto-creates, or auto-deletes Binding;
 - opt-in required on both sides; unauthorized Zone and capability/fingerprint
   mismatches reject;
+- exact frozen type/Provider mapping:
+  `audio.d2bus.org.AudioService/AudioBinding` with `audio-pipewire`,
+  `security-key.d2bus.org.SecurityKeyService/SecurityKeyBinding` with
+  `device-security-key`,
+  `telemetry.d2bus.org.TelemetryService/TelemetryBinding` with
+  `observability-otel`, and policy-gated
+  `usb.d2bus.org.UsbService/UsbBinding` with `device-usbip`;
+- canonical minimal Service/Binding base admission succeeds without
+  `spec.provider`; export/import preserves semantic type across independently
+  selected conformant implementations, while mismatched semantic factories and
+  PipeWire/CTAPHID/OTEL/USBIP detail in base spec/status/conditions/errors/
+  fingerprints reject;
 - quota/fairness/deadline enforcement; reconnect revalidation and revocation
   degrade the projection Service; D091 update propagation owner Service →
   export → import → projection Service → Binding → children; finalizer waits

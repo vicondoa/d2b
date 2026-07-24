@@ -81,6 +81,14 @@ implementations of a ResourceType are promoted to the ResourceType base
 § Status). The `spec.provider` and `status.provider` schemas align for the same
 Provider.
 
+This rule applies unchanged to D096 Service/Binding types: their qualified
+namespaces and base spec/status are semantic and provider-neutral. `providerRef`
+selects the implementation, strict `spec.provider` carries only that
+implementation's settings, and every implementation MUST accept the canonical
+minimal base without `spec.provider`. PipeWire, OTEL, USBIP, CTAPHID, package,
+binary, and adapter details never enter the semantic base; `providerRef` remains
+the sole opaque implementation selector.
+
 **Export/import adapters and projection factories (D096).** A Provider that
 marks a capability cross-Zone exportable MUST advertise signed `ExportAdapter`,
 `ImportAdapter`, and `ProjectionFactory` metadata. Each factory is immutable
@@ -88,13 +96,13 @@ within a Provider artifact and binds:
 
 | Field | Contract |
 | --- | --- |
-| `serviceType` | One qualified Provider `*Service` ResourceType; this is both the owner authority type and the consumer projection type |
-| `bindingType` | One qualified Provider `*Binding` ResourceType expressing local consumer intent |
-| `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified backend types the owner Service may reference |
+| `serviceType` | One qualified semantic/provider-neutral `*Service` ResourceType; this is both the owner authority type and consumer projection type |
+| `bindingType` | Its qualified semantic/provider-neutral `*Binding` ResourceType expressing local consumer intent |
+| `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified semantic backend types the owner Service may reference |
 | `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` that a Binding may target |
-| `projectionSchema` | Signed, strict, deny-unknown schema for the projection Service; it contains no raw locator, path, credential, secret, FD, or bytes |
+| `projectionSchema` | Signed, strict, deny-unknown semantic base schema for the projection Service; excludes `spec.provider` and contains no implementation-specific field beyond standard `providerRef`, raw locator, path, credential, secret, FD, or bytes |
 | `projectionSchemaFingerprint` | SHA-256 of that canonical schema |
-| `factoryFingerprint` | SHA-256 binding all fields above plus adapter identity/version |
+| `factoryFingerprint` | SHA-256 binding all fields above plus the semantic projection-protocol version; never Provider/adapter identity or implementation detail |
 
 The owner `*Service` is the one real authority and references its local backing.
 `ResourceExport.resourceRef` MUST target that Service, never a `Device`,
@@ -114,7 +122,10 @@ layered status writes. Provider install, Nix build, and API admission all fail
 closed if a required factory is absent, its signature is invalid, the Service/
 Binding pair or allowed refs do not match, or either fingerprint differs from
 the advertisement/import expectation. `Service` and `Binding` remain qualified
-Provider types and do not enlarge the 19-type standard catalog. The strict
+semantic types and do not enlarge the 19-type standard catalog. Export/import
+preserves `serviceType` exactly even when owner and consumer select different
+conformant implementations through local `providerRef`. It never copies or
+requires the remote `spec.provider` extension. The strict
 descriptor accepts only `bindingType` and `allowedBindingTargetRefTypes`; the
 former `stateType`/`allowedStateTargetRefTypes` spellings and qualified `*State`
 types are not aliases and are rejected.
@@ -515,8 +526,8 @@ system-core.
 | `volume-virtiofs` | Volume attachment controller | Host source Volume to target Guest virtiofs export/mount; owns virtiofsd Processes and attachment status |
 | `network-local` | Network | Local bridge/namespace/address/DHCP/DNS/NAT/firewall/egress and Host/Guest attachment |
 | `device-tpm` | Device | TPM allocation, swtpm Process, persistent TPM Volume/state and identity |
-| `device-usbip` | Device | USB inventory/arbitration/export/attach/firewall and USBIP Process/EphemeralProcess |
-| `device-security-key` | Device | Security-key inventory/ceremony/CID/lease/session; unprivileged Host relay and Guest frontend Processes; fixed broker only opens/passes hidraw |
+| `device-usbip` | Device; `usb.d2bus.org.UsbService`; `usb.d2bus.org.UsbBinding` | USB inventory/arbitration/export/attach/firewall and USBIP Process/EphemeralProcess; implementation detail stays out of semantic USB base |
+| `device-security-key` | Device; `security-key.d2bus.org.SecurityKeyService`; `security-key.d2bus.org.SecurityKeyBinding` | Security-key inventory/ceremony/CID/lease/session; unprivileged Host relay and Guest frontend Processes; CTAPHID/hidraw details stay out of semantic security-key base |
 | `device-gpu` | Device | Combined GPU/render/VFIO/video/media arbitration and GPU/video worker Processes |
 
 Azure/ACA-specific network remains inside Guest Providers until an
@@ -527,7 +538,7 @@ independently shared Azure Network is required.
 | Provider | Implements | Description/processes |
 | --- | --- | --- |
 | `display-wayland` | Provider-specific display/session types | Wayland/display policy, Host/Guest proxies, window identity/rails and endpoint Processes |
-| `audio-pipewire` | Provider-specific audio/session types | PipeWire policy/session, Host/user components, vhost-user-sound Processes |
+| `audio-pipewire` | `audio.d2bus.org.AudioService`; `audio.d2bus.org.AudioBinding` | Audio policy/session, Host/user components, vhost-user-sound Processes; PipeWire stays an implementation detail |
 | `clipboard-wayland` | Provider-specific clipboard types | Selection/bridge/transfer/presentation and Host/user/Guest Processes |
 | `notification-desktop` | Provider-specific notification types | Observe/project/action/ack/presentation Processes |
 | `shell-terminal` | `shell-terminal.d2bus.org.ShellSession` | Persistent terminal session/supervisor, open/attach/detach/kill and named terminal streams |
@@ -556,7 +567,7 @@ byte-stream handle and observations; it holds no ZoneLink state itself.
 | `transport-unix` | Transport carriage (`OpenTransport`/`CloseTransport`/`ObserveTransport`) | Local Unix/socketpair endpoints, peer evidence, FD-capable local channels |
 | `transport-vsock` | Transport carriage (`OpenTransport`/`CloseTransport`/`ObserveTransport`) | Host/Guest vsock channels, expected CID and no FD transfer |
 | `transport-azure-relay` | Transport carriage (`OpenTransport`/`CloseTransport`/`ObserveTransport`) | Remote Azure Relay reachability; relay identity is carriage only |
-| `observability-otel` | Provider-specific telemetry endpoint/export/status types | OTEL endpoint/export/collector integration and health |
+| `observability-otel` | `telemetry.d2bus.org.TelemetryService`; `telemetry.d2bus.org.TelemetryBinding` | Telemetry endpoint/export/collector integration and health; OTEL stays an implementation detail |
 | `activation-nixos` | Provider-specific activation types | NixOS generation plan/apply/inspect/adopt/rollback |
 
 Cross-resource composition is ordinary controller behavior. There is no
@@ -566,18 +577,19 @@ special orchestrator Provider.
 
 Cross-Zone export is deny-by-default. The initial classification is:
 
-| Provider | D096 classification | Required shape |
+| Semantic Service/Binding pair | Initial Provider | D096 classification |
 | --- | --- | --- |
-| `audio-pipewire` | exportable | Dossier-owned qualified audio `*Service`/`*Binding` pair; owner Service mediates local PipeWire Device/Endpoint/backend |
-| `device-security-key` | exportable | Dossier-owned qualified security-key `*Service`/`*Binding` pair; one owner Service retains physical-device authority and serializes ceremonies |
-| `observability-otel` | exportable | Dossier-owned qualified observability `*Service`/`*Binding` pair; one owner Service retains ingest authority and enforces redaction/cardinality/backpressure |
-| `device-usbip` | policy-gated exportable | Dossier-owned qualified USBIP `*Service`/`*Binding` pair; factory is usable only when Provider, Zone, export, and device policy all opt in |
-| every other frozen initial Provider | forbidden | No export/import adapter or projection factory may be registered |
+| `audio.d2bus.org.AudioService` / `audio.d2bus.org.AudioBinding` | `audio-pipewire` | exportable |
+| `security-key.d2bus.org.SecurityKeyService` / `security-key.d2bus.org.SecurityKeyBinding` | `device-security-key` | exportable |
+| `telemetry.d2bus.org.TelemetryService` / `telemetry.d2bus.org.TelemetryBinding` | `observability-otel` | exportable |
+| `usb.d2bus.org.UsbService` / `usb.d2bus.org.UsbBinding` | `device-usbip` | policy-gated exportable; Provider, Zone, export, and device policy all opt in |
+| every other semantic type / frozen initial Provider | — | forbidden unless a later reviewed semantic contract adds a pair and a conformant Provider binds it |
 
 Approval applies to the qualified Service only. A matching Binding, its backing
 Device/Endpoint, Credentials, and internal session/stream records are never
-export targets. Exact type names belong to the Provider dossiers; this
-cross-cutting table does not create or rename them.
+export targets. These semantic names are frozen independently of the initial
+implementations. Provider dossiers bind implementations and extensions but
+cannot alias, rename, or vendor-qualify the base types.
 
 ## Current-code fit
 

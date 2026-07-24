@@ -638,11 +638,11 @@ in the core `LiveVsockEffectPort` adapter, INV-VSOCK-004).
 
 D096 shares capability, not backing authority. Every approved exportable
 Provider declares a signed projection factory that binds one qualified
-`*Service` type, one qualified `*Binding` type, allowed same-Zone owner-Service
-backing ref types, allowed Binding target ref types, and a strict projection
-schema/fingerprint plus aggregate factory fingerprint. Missing, unsigned,
-downgraded, or mismatched metadata fails closed before advertisement, lease, or
-projection creation.
+semantic/provider-neutral `*Service` type, its qualified semantic `*Binding`
+type, allowed same-Zone owner-Service backing ref types, allowed Binding target
+ref types, and a strict projection schema/fingerprint plus aggregate semantic
+factory fingerprint. Missing, unsigned, downgraded, or mismatched metadata
+fails closed before advertisement, lease, or projection creation.
 
 The security boundary is structural:
 
@@ -663,15 +663,30 @@ The security boundary is structural:
   FDs, credentials, secrets, raw paths/locators, payload bytes, or remote refs.
   High-churn session, stream, ceremony, transfer, and lease handles remain
   internal and are never resources or authority evidence.
+- The semantic base is not an implementation side channel. `providerRef`
+  selects a local implementation and strict `spec.provider` contains only its
+  settings; canonical minimal base admission works without that extension.
+  Export/import never copies the remote extension or changes semantic type.
+  PipeWire, CTAPHID, OTEL, USBIP, package, binary, adapter, and protocol details
+  are rejected from base spec/status, conditions, errors, fingerprints,
+  advertisements, and graph identity. The base `providerRef` is the sole opaque
+  implementation selector and is not advertised across the ZoneLink.
 - Revocation first prevents new sessions and degrades the projection Service.
   Binding controllers stop owned Process/Endpoint children. Import finalization
   waits for operator-owned Bindings to be deleted/retargeted and never cascades
   them, preventing a controller from erasing policy intent.
 
-The initial allowlist is audio, security-key, and observability; USBIP requires
-Provider, Zone, export, and physical-device policy opt-in. All other Providers
-remain non-exportable. Approval applies only to the qualified Service; the
-matching Binding and all backing resources remain non-exportable.
+The initial allowlist is `audio.d2bus.org.AudioService`,
+`security-key.d2bus.org.SecurityKeyService`, and
+`telemetry.d2bus.org.TelemetryService`;
+`usb.d2bus.org.UsbService` requires Provider, Zone, export, and physical-device
+policy opt-in. Their matching `AudioBinding`, `SecurityKeyBinding`,
+`TelemetryBinding`, and `UsbBinding` types and all backing resources remain
+non-exportable. The initial implementations are respectively
+`Provider/audio-pipewire`, `Provider/device-security-key`,
+`Provider/observability-otel`, and `Provider/device-usbip`; those Provider names
+do not confer authority and are not semantic type namespaces. All other
+Providers remain non-exportable.
 
 ## Gateway Guest custody
 

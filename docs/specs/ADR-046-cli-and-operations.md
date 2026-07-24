@@ -161,7 +161,7 @@ Short form rules:
 Validation:
 
 - `resource_name` matches `^[a-z][a-z0-9-]*$`.
-- `ResourceType` is a known Zone-registered type or a qualified vendor name.
+- `ResourceType` is a known Zone-registered type or a qualified API name.
 - Validation failure yields exit code 2 with a `ref-invalid` error class.
 
 ResourceRef values that name resources that do not exist return exit code 1 with
@@ -174,7 +174,8 @@ ResourceImport, Quota, EmergencyPolicy) is
 validated locally at compile time against the names defined in this spec
 (19 standard types; `Endpoint` added by D092; `ResourceExport` and
 `ResourceImport` added by D096). A syntactically
-valid type name that contains a vendor qualifier (e.g. `acme.corp/FooResource`)
+valid type name that contains an API qualifier (e.g.
+`widgets.example.org.WidgetResource`)
 is passed through to the live Zone catalog; the API returns
 `resource-schema-invalid` if the Zone does not recognize it. Any other
 unrecognized type name fails locally with exit code 2 and class `ref-invalid`
@@ -182,8 +183,8 @@ without a Zone round-trip. `Endpoint/<name>` is accepted by the local
 ResourceRef parser exactly like every other standard type; consumers reference
 endpoints only through the `Endpoint/<name>` ResourceRef and never through a raw
 transport locator. `ResourceExport/<name>` and `ResourceImport/<name>` are
-likewise accepted by the local parser. Qualified Provider `*Service` and
-`*Binding` refs pass through the live Zone catalog and do not enlarge the
+likewise accepted by the local parser. Qualified semantic/provider-neutral
+`*Service` and `*Binding` refs pass through the live Zone catalog and do not enlarge the
 19-standard-type set. A `ResourceExport.resourceRef` must resolve to the
 factory-bound local owner Service; Device/Endpoint/Binding targets reject. A
 `ResourceImport` names only a local `zoneLinkRef` plus bounded `exportKey`; the
@@ -1339,8 +1340,10 @@ All accept `[--zone <zone>] [--json | --human]`.
 
 Maps to the `ResourceExport` ResourceType. Runs in the owner/authority Zone. A
 `ResourceExport` shares one qualified owner `*Service` with child Zones through
-a single Provider authority. `resourceRef` MUST target that local Service, never
-its Device/Endpoint/backend, a Binding, or a remote Ref.
+a single Provider authority. The Service/Binding namespace is semantic and
+provider-neutral; `providerRef` separately selects its implementation.
+`resourceRef` MUST target that local Service, never its Device/Endpoint/backend,
+a Binding, or a remote Ref.
 
 ```
 d2b export get <name>
@@ -1393,8 +1396,8 @@ count, and `status.update` currency — no remote Ref or raw locator.
 
 ```text
 ResourceImport/mic-import
-└─ audio-pipewire.d2bus.org/AudioService/host-audio  [projection, ownerRef=ResourceImport/mic-import]
-   └─ audio-pipewire.d2bus.org/AudioBinding/work-mic [authored, targetRef=Guest/workstation]
+└─ audio.d2bus.org/AudioService/host-audio  [projection, ownerRef=ResourceImport/mic-import]
+   └─ audio.d2bus.org/AudioBinding/work-mic [authored, targetRef=Guest/workstation]
       ├─ Process/<owned>
       └─ Endpoint/<owned>
 ```
@@ -1404,7 +1407,11 @@ readiness, and bounded generations only. They distinguish the authored Binding
 from controller-owned children and never render backing refs, remote refs,
 session/stream IDs, FDs, secrets, raw paths, locators, or bytes.
 `create`/`update-spec` reject remote refs, missing/mismatched factory metadata,
-or capabilities outside the ceiling. `delete` marks the projection draining and
+semantic-type changes, Provider implementation details in the base, or
+capabilities outside the ceiling. Service and Binding output always uses the
+semantic type preserved by export/import; an implementation selection appears
+only as `providerRef` and a bounded/redacted `status.provider` projection.
+`delete` marks the projection draining and
 waits for Bindings to be deleted/retargeted; it never deletes a Binding. It then
 releases the lease and deletes only the projection Service/provider-owned
 children.
@@ -2498,8 +2505,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Reuse source | ADR046-cli-010 generic resource-verb dispatch; `packages/d2b-client/src/client.rs` `ConnectedClient::invoke`/`open_server_stream` — copy unchanged |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/share.rs` (`d2b export …` and `d2b import …` nouns) |
-| Detailed design | Add `ResourceExport` and `ResourceImport` to the frozen 19-type standard set while leaving qualified Provider Service/Binding types dynamic. Implement export/import generic verbs, `d2b import projection`, and `d2b import graph`. Export accepts only a factory-bound owner Service. Import status exposes the same-type projection Service and verified factory/schema fingerprints. Graph renders import → projection Service → authored Bindings → controller-owned Process/Endpoint children with deterministic ownership/dependency edges. Binding spec is desired intent only and observations are status-only. Reject Device/Endpoint/Binding export targets, cross-Zone refs, absent/mismatched factory/type/fingerprints, forbidden Providers, USBIP policy denial, unauthorized Zones, and capability-ceiling violations. No backing/remote refs, internal sessions/streams, FD, secret, path, locator, or bytes in output. Delete waits for authored Bindings to be removed/retargeted and never cascades them. |
+| Detailed design | Add `ResourceExport` and `ResourceImport` to the frozen 19-type standard set while leaving qualified semantic/provider-neutral Service/Binding types dynamically cataloged. Implement export/import generic verbs, `d2b import projection`, and `d2b import graph`. Export accepts only a factory-bound owner Service. Import status exposes the same-semantic-type projection Service and verified factory/schema fingerprints; local `providerRef` selects the implementation. Graph renders import → projection Service → authored Bindings → controller-owned Process/Endpoint children with deterministic ownership/dependency edges. Binding spec is desired intent only and observations are status-only. Reject Device/Endpoint/Binding export targets, cross-Zone refs, absent/mismatched factory/type/fingerprints, implementation detail in the base, forbidden Providers, USB policy denial, unauthorized Zones, and capability-ceiling violations. No backing/remote refs, internal sessions/streams, FD, secret, path, locator, or bytes in output. Delete waits for authored Bindings to be removed/retargeted and never cascades them. |
 | Integration | ZoneContext → resource API; signed Provider factory catalog; owner/dependency indexes for graph rendering; consumers use authored Binding → local projection Service, never ResourceImport directly |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Both standard types parse locally; qualified Service/Binding resolve dynamically; verbs route; Service-only export and factory/type/fingerprint/policy/capability rejections; projection returns same-type Service; graph shape exact and bounded; Binding never auto-created/deleted; Binding spec intent-only/status observations; no backing/remote-ref/session/stream/FD/secret/path/locator/bytes leakage |
+| Validation | Both standard types parse locally; qualified semantic Service/Binding resolve dynamically; verbs route; Service-only export and factory/type/fingerprint/policy/capability rejections; projection preserves semantic Service type across local implementation selection; canonical minimal base works without `spec.provider`; graph shape exact and bounded; Binding never auto-created/deleted; Binding spec intent-only/status observations; no implementation detail/backing/remote-ref/session/stream/FD/secret/path/locator/bytes leakage |
 | Removal proof | Not applicable (new surface) |

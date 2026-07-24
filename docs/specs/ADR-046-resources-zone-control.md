@@ -1777,12 +1777,14 @@ three-layer status like every other standard type.
 
 ### 8A.1 General model
 
-- Every exportable capability has a Provider-dossier-owned qualified
-  `*Service` ResourceType and matching qualified `*Binding` ResourceType. These
-  are Provider types, not additions to the 19 standard ResourceTypes.
+- Every exportable capability has a qualified semantic/provider-neutral
+  `*Service` ResourceType and matching qualified semantic `*Binding`
+  ResourceType. These are not Provider implementation namespaces and are not
+  additions to the 19 standard ResourceTypes.
 - The owner-Zone `*Service` is the one real authority. Its same-Zone spec
-  references the local `Device`, `Endpoint`, or qualified backend allowed by
-  the Provider's signed projection factory. No consumer Zone opens that backing.
+  references the local `Device`, `Endpoint`, or qualified semantic backend
+  allowed by the Provider's signed projection factory. No consumer Zone opens
+  that backing.
 - There is **no cross-Zone `ResourceRef`**. The owner Zone declares
   `ResourceExport/<name>` whose `resourceRef` targets only the local owner
   `*Service`. It never targets a `Device`, `Endpoint`, or `*Binding`. The consumer
@@ -1824,18 +1826,24 @@ descriptor:
 
 | Field | Contract |
 | --- | --- |
-| `serviceType` | Exact qualified `*Service` type used by owner and projection |
-| `bindingType` | Exact qualified `*Binding` type permitted to consume that Service |
-| `allowedBackingRefTypes` | Closed same-Zone types the owner Service may reference (`Device`, `Endpoint`, or qualified backend types) |
+| `serviceType` | Exact qualified semantic/provider-neutral `*Service` type used by owner and projection |
+| `bindingType` | Exact qualified semantic/provider-neutral `*Binding` type permitted to consume that Service |
+| `allowedBackingRefTypes` | Closed same-Zone types the owner Service may reference (`Device`, `Endpoint`, or qualified semantic backend types) |
 | `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` |
-| `projectionSchema` | Strict deny-unknown local projection-Service schema; no FD, secret, raw path/locator, credential, or payload bytes |
+| `projectionSchema` | Strict deny-unknown semantic base schema for the local projection Service; excludes `spec.provider` and has no implementation-specific field beyond standard `providerRef`, FD, secret, raw path/locator, credential, or payload bytes |
 | `projectionSchemaFingerprint` | SHA-256 of the canonical projection schema |
-| `factoryFingerprint` | SHA-256 binding all fields above and adapter identity/version |
+| `factoryFingerprint` | SHA-256 binding all fields above and the semantic projection-protocol version, never Provider/adapter identity |
 
 Provider install, Nix build, and API admission verify this metadata. The export's
 Service type and fingerprints, the import's expectations, and the installed
 consumer Provider factory must match exactly. There is no generic fallback and
-no "project the exported resource's type" behavior.
+no "project the exported resource's type" behavior. The selected implementation
+remains the local `providerRef`; strict `spec.provider` contains only
+implementation-specific settings. Every conformant Provider MUST accept the
+canonical minimal Service/Binding base without `spec.provider`. Base spec/status,
+conditions, errors, and fingerprints never contain PipeWire, OTEL, USBIP,
+CTAPHID, package, binary, or adapter details; `providerRef` is the sole opaque
+implementation selector.
 
 ### 8A.2 ResourceExport
 
@@ -1893,7 +1901,7 @@ remote resource; it names its local `ZoneLink` and a bounded `exportKey`.
 
 | Field | Type | Required | Default | Bounds/notes |
 | --- | --- | --- | --- | --- |
-| `providerRef` | ResourceRef | yes | — | **Local** semantic Provider whose import adapter builds the projection |
+| `providerRef` | ResourceRef | yes | — | **Local** Provider implementation whose import adapter builds the semantic projection |
 | `zoneLinkRef` | ResourceRef | yes | — | **Local** `ZoneLink/<name>` to the parent/authority Zone; the only routing anchor |
 | `exportKey` | string | yes | — | Bounded opaque key naming the remote export (not a Ref); ≤128 chars |
 | `expectedServiceType` | string | yes | — | Expected qualified `*Service`; must equal both factories' `serviceType` |
@@ -1961,23 +1969,30 @@ Credential/token resources are **non-exportable by default**. Per D093, Entra ID
 identity stays a same-Zone identity Guest; there is no `ResourceExport` for it
 unless a future, explicitly reviewed export capability is added.
 
-The initial exportable Provider families are `audio-pipewire`,
-`device-security-key`, and `observability-otel`; `device-usbip` is exportable
-only when its Provider, Zone, ResourceExport, and physical-device policy all opt
-in. Every other frozen Provider remains non-exportable. Exact qualified
-Service/Binding names belong to each Provider dossier. A matching Binding is always
-non-exportable even when its Service is approved.
+The frozen semantic pairs and initial implementing Providers are:
+
+| Semantic pair | Initial Provider | Export policy |
+| --- | --- | --- |
+| `audio.d2bus.org.AudioService` / `audio.d2bus.org.AudioBinding` | `Provider/audio-pipewire` | exportable |
+| `security-key.d2bus.org.SecurityKeyService` / `security-key.d2bus.org.SecurityKeyBinding` | `Provider/device-security-key` | exportable |
+| `telemetry.d2bus.org.TelemetryService` / `telemetry.d2bus.org.TelemetryBinding` | `Provider/observability-otel` | exportable |
+| `usb.d2bus.org.UsbService` / `usb.d2bus.org.UsbBinding` | `Provider/device-usbip` | policy-gated: Provider, Zone, export, and device policy all opt in |
+
+Every other frozen Provider remains non-exportable. A matching Binding is always
+non-exportable even when its Service is approved. Provider dossiers bind their
+implementation and strict extensions to these names; they do not own or alias
+the semantic namespaces.
 
 ### 8A.6 Nix authoring example
 
 ```nix
-# The audio dossier owns these qualified names. First declare the one real
-# owner Service over local Device/Endpoint backing.
+# The semantic AudioService name is Provider-independent. First declare the one
+# real owner Service over local Device/Endpoint backing.
 d2b.zones.local-root.resources.host-audio = {
-  type = "audio-pipewire.d2bus.org/AudioService";
+  type = "audio.d2bus.org.AudioService";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    backingRefs = [ "Device/host-mic" "Endpoint/pipewire-local" ];
+    backingRefs = [ "Device/host-mic" "Endpoint/audio-local" ];
   };
 };
 
@@ -1986,8 +2001,8 @@ d2b.zones.local-root.resources.mic-export = {
   type = "ResourceExport";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    resourceRef = "audio-pipewire.d2bus.org/AudioService/host-audio";
-    serviceType = "audio-pipewire.d2bus.org/AudioService";
+    resourceRef = "audio.d2bus.org/AudioService/host-audio";
+    serviceType = "audio.d2bus.org/AudioService";
     projectionSchemaFingerprint = "sha256:...";
     factoryFingerprint = "sha256:...";
     operations = [ "capture" ];
@@ -2004,7 +2019,7 @@ d2b.zones.work.resources.mic-import = {
     providerRef = "Provider/audio-pipewire";
     zoneLinkRef = "ZoneLink/work-uplink";
     exportKey = "host/mic-export";
-    expectedServiceType = "audio-pipewire.d2bus.org/AudioService";
+    expectedServiceType = "audio.d2bus.org/AudioService";
     expectedProjectionSchemaFingerprint = "sha256:...";
     expectedFactoryFingerprint = "sha256:...";
     projectionName = "host-audio";
@@ -2015,17 +2030,17 @@ d2b.zones.work.resources.mic-import = {
 # Operator-authored local consumption Binding. The import controller never
 # creates this resource; its controller owns the resulting Process/Endpoint.
 d2b.zones.work.resources.work-mic = {
-  type = "audio-pipewire.d2bus.org/AudioBinding";
+  type = "audio.d2bus.org/AudioBinding";
   spec = {
     providerRef = "Provider/audio-pipewire";
-    serviceRef = "audio-pipewire.d2bus.org/AudioService/host-audio";
+    serviceRef = "audio.d2bus.org/AudioService/host-audio";
     targetRef = "Guest/workstation";
     mode = "capture";
   };
 };
 ```
 
-Both examples serialize to the canonical ResourceEnvelope with only local refs;
+These declarations serialize to canonical ResourceEnvelopes with only local refs;
 the resource compiler rejects a non-Service export target, cross-Zone Ref,
 factory/schema mismatch, unauthorized consumer Zone, disallowed backing or Binding
 target ref, or capability outside the export ceiling. Optional Nix sugar may
@@ -2041,11 +2056,13 @@ Binding is neither exported nor auto-created; Binding spec is intent-only and
 observations are status-only; backing/target allowlists; stable canonical Nix
 lowering; finalizer waiting on authored Bindings; update propagation;
 classification (audio/security-key/observability approved, USBIP policy-gated,
-all others forbidden); quota/fairness/deadline/reconnect/revocation; and no
-FD/secret/path/raw locator. Slower integration tests use real bounded encrypted
-streams for audio, security-key, observability, and policy-gated USBIP, proving
-that intermediaries see ciphertext and high-churn sessions/streams remain
-internal records.
+all others forbidden); canonical minimal base acceptance; semantic-type
+preservation across independently selected implementations; rejection of
+implementation detail in the base; quota/fairness/deadline/reconnect/revocation;
+and no FD/secret/path/raw locator. Slower integration tests use real bounded
+encrypted streams for audio, security-key, observability, and policy-gated
+USBIP, proving that intermediaries see ciphertext and high-churn sessions/
+streams remain internal records.
 
 ---
 

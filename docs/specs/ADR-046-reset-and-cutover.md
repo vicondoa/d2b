@@ -1228,6 +1228,14 @@ All reset scopes tear down cross-Zone sharing child-first:
    generation survives. Owner Service backing follows its own explicit reset
    disposition; no backing is silently wiped.
 
+Reset/recreate preserves the qualified semantic Service/Binding type exactly;
+it does not derive a type from the selected Provider or persist/copy a remote
+`spec.provider` extension. A replacement Provider must accept the canonical
+minimal base and bind the same semantic factory metadata. PipeWire, CTAPHID,
+OTEL, and USBIP implementation state is disposed only under that Provider's
+explicit reset policy and never becomes semantic base status or surviving
+remote authority.
+
 ### Comparison table
 
 | Property | Full Zone reset | Provider reset | Guest reset |

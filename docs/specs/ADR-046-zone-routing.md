@@ -1472,8 +1472,9 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
 - **Advertisement.** The owner Zone's core export/import controller advertises a
   `ResourceExport` to the exact `consumerZonePolicy` selector over the existing
   authenticated advertisement envelope, carrying only the bounded `exportKey`,
-  qualified Service type, signed projection-schema and factory fingerprints, the
-  closed operation set, arbitration, and capability ceiling — never the local
+  qualified semantic/provider-neutral Service type, signed projection-schema
+  and factory fingerprints, the closed operation set, arbitration, and
+  capability ceiling — never Provider/adapter identity, `spec.provider`, the local
   owner-Service `resourceRef`, its Device/Endpoint/backend refs, a path, address,
   secret, or bytes. Withdrawal and renewal reuse the withdrawal/renewal
   machinery; export removal or ceiling narrowing issues a new generation.
@@ -1482,7 +1483,10 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
   `expectedServiceType` + the projection-schema/factory fingerprints against the
   advertisement and local installed Provider factory. Missing metadata, a
   mismatch, unauthorized Zone, or absent advertisement fails closed. This
-  preserves the "No cross-Zone resource references" invariant.
+  preserves the "No cross-Zone resource references" invariant. The consumer's
+  local `providerRef` independently selects a conformant implementation; route
+  matching preserves the semantic Service type exactly and never copies the
+  owner's implementation extension.
 - **Capability/RBAC ceiling.** Every hop applies the ceiling-propagation and
   RBAC-narrowing rules; `requestedCapabilities` is clamped to the export
   capability ceiling and to the ZoneLink allocation. No import can exceed the
@@ -1515,6 +1519,14 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
 High-churn leases, sessions, ceremonies, transfers, named streams, and stream
 handles remain controller/session-internal records; routing never promotes them
 to resources or advertises them.
+
+The frozen routeable pairs are
+`audio.d2bus.org.AudioService/AudioBinding`,
+`security-key.d2bus.org.SecurityKeyService/SecurityKeyBinding`,
+`telemetry.d2bus.org.TelemetryService/TelemetryBinding`, and the policy-gated
+`usb.d2bus.org.UsbService/UsbBinding`. PipeWire, CTAPHID, OTEL, and USBIP are
+implementation details and never route keys, base fields, conditions, errors,
+or advertised status.
 
 ## Nearest-common-ancestor (NCA) algorithm
 

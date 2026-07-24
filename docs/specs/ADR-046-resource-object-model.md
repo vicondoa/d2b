@@ -483,22 +483,31 @@ Cross-Zone sharing (D096):
 - ResourceImport.
 
 There are 19 standard ResourceTypes (Endpoint added by D092; ResourceExport and
-ResourceImport added by D096). Provider-specific
-semantic ResourceTypes may extend the set through signed schemas/API bindings.
-They use this same envelope/status/ownership contract.
+ResourceImport added by D096). Qualified semantic ResourceTypes and other
+Provider-bound extension types may extend the set through signed schemas/API
+bindings. They use this same envelope/status/ownership contract.
 
 ### Qualified Service/Binding pairs for cross-Zone capabilities (D096)
 
-`Service` and `Binding` are semantic suffixes for **qualified Provider
-ResourceTypes**, not additional standard ResourceTypes. Every Provider capability
-that is exportable across a Zone boundary declares exactly one qualified
-`*Service` type and its matching qualified `*Binding` type in that Provider's
-signed descriptor and dossier. Exact type names and schemas are Provider-owned;
-the cross-cutting contract fixes their roles:
+`Service` and `Binding` are suffixes for **qualified semantic, provider-neutral
+ResourceTypes**, not Provider/implementation namespaces and not additional
+standard ResourceTypes. Every exportable semantic capability declares exactly
+one `*Service` type and matching `*Binding` type in the shared API contract.
+Provider descriptors bind implementations to those types; Providers do not
+rename or vendor-qualify them. The frozen initial semantic pairs are:
+
+| Semantic capability | Service type | Binding type | Initial Provider implementation |
+| --- | --- | --- | --- |
+| audio | `audio.d2bus.org.AudioService` | `audio.d2bus.org.AudioBinding` | `Provider/audio-pipewire` |
+| security key | `security-key.d2bus.org.SecurityKeyService` | `security-key.d2bus.org.SecurityKeyBinding` | `Provider/device-security-key` |
+| telemetry | `telemetry.d2bus.org.TelemetryService` | `telemetry.d2bus.org.TelemetryBinding` | `Provider/observability-otel` |
+| USB | `usb.d2bus.org.UsbService` | `usb.d2bus.org.UsbBinding` | `Provider/device-usbip` (policy-gated) |
+
+The cross-cutting contract fixes their roles:
 
 - the owner-Zone `*Service` is the one real authority. Its Provider schema may
-  reference only same-Zone backing `Device`, `Endpoint`, or qualified backend
-  resources allowed by the signed projection factory;
+  reference only same-Zone backing `Device`, `Endpoint`, or qualified semantic
+  backend resources allowed by the signed projection factory;
 - `ResourceExport.resourceRef` MUST reference that owner `*Service`. A
   `Device`, `Endpoint`, `*Binding`, or other backing is never an export target;
 - one `ResourceImport` causes core to create exactly one same-qualified-type
@@ -521,6 +530,17 @@ fingerprint mismatch fails closed. There is no `*State` compatibility spelling
 or alias: a Provider type ending in `State` does not satisfy this pattern, and
 the obsolete `stateType`/`allowedStateTargetRefTypes` metadata keys are unknown
 fields rejected by strict admission.
+
+Every semantic Service and Binding base spec/status is implementation-independent
+and D089-conformant. `providerRef` selects an installed implementation and the
+optional strict `spec.provider` envelope carries only implementation-specific
+settings. The canonical minimal base spec MUST work without `spec.provider`.
+Export/import preserves the semantic Service ResourceType exactly; it never
+rewrites it to an implementation namespace. PipeWire, OTEL, USBIP, CTAPHID, and
+other implementation/protocol details are forbidden in semantic base behavior,
+conditions, errors, fingerprints, and status. The base `providerRef` is the one
+opaque implementation selector; it does not change the semantic type or base
+contract.
 
 ## Entity promotion test and opaque-ID classification (D092)
 
@@ -629,10 +649,10 @@ means cross-Zone sharing via D096.
 | `EphemeralProcess` | host/guest | bounded-many | partitioned | forbidden |
 | `Volume` | zone | zero-or-one writer authority | exclusive-write / shared-read | forbidden (state stays local) |
 | `Network` | zone | exactly-one net-VM DHCP/DNS/NAT authority per Network | exclusive | forbidden |
-| `Device` | physical-device | zero-or-one per physical backing | exclusive (full/DRM/TPM/key/USB) or shared (render-node) | forbidden as a direct target; an approved Provider `*Service` may mediate it (D096) |
+| `Device` | physical-device | zero-or-one per physical backing | exclusive (full/DRM/TPM/key/USB) or shared (render-node) | forbidden as a direct target; an approved semantic `*Service` may mediate it (D096) |
 | `User` | user/seat | exactly-one per user | exclusive | forbidden |
 | `Credential` | zone | zero-or-one | exclusive | forbidden (D093 default) |
-| `Endpoint` | scope of producer | zero-or-one per stable listener/port | exclusive (fixed listener) | forbidden as a direct target; an approved Provider `*Service` may mediate it (D096) |
+| `Endpoint` | scope of producer | zero-or-one per stable listener/port | exclusive (fixed listener) | forbidden as a direct target; an approved semantic `*Service` may mediate it (D096) |
 | `ResourceExport` | owner Zone | zero-or-one per exported backing | per exported arbitration | n/a (is the export) |
 | `ResourceImport` | consumer Zone | bounded-many consumers | per lease | n/a (is the import) |
 
@@ -646,7 +666,7 @@ systemd-user manager, Entra login authority, shell supervisor, SigNoz ingest,
 cloud subscription control) carry their qualified `AuthorityDescriptor` in the
 owning Provider dossier.
 
-Qualified Provider `*Service` types carry the `explicit-export` descriptor when
+Qualified semantic `*Service` types carry the `explicit-export` descriptor when
 approved. Their matching `*Binding` types are always non-exportable. The initial
 approved families are audio, security-key, observability, and policy-gated
 USBIP; every other Provider family remains non-exportable unless a later
