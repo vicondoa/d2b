@@ -32,6 +32,17 @@ process. Both fixed processes start before any other Process resource exists.
 Every other Provider controller is a Process resource launched after
 `Provider/system-core` creates the first Host.
 
+This is only a **Process-resource bootstrap exception**. It is not a state
+storage, status-ownership, or process-effect exception:
+`Provider/system-core` declares no Provider state Volume, its
+`ProviderStateSet` is empty, and its bounded non-secret operational state is
+reconstructible from resource status, the core Operation ledger, and a resource
+store relist. There is no hidden bootstrap store or bootstrap-state Volume.
+Core-controller infrastructure creates the runtime-owned Provider resource and
+writes `Provider.status`; the system-core handlers write only `Host.status` and
+`User.status`. Process Providers remain the sole owners of Process launch,
+stop, adoption, quarantine, and their `ProcessEffect` records.
+
 `Provider/system-core` does **not** own:
 
 | ResourceType | Owner |
@@ -1293,14 +1304,14 @@ not carried into v3.
 The following current artifacts must be retired before work items in this dossier
 are considered complete:
 
-| Artifact | Retirement condition |
-| --- | --- |
-| `nixos-modules/unsafe-local-helper.nix` service unit | After Process Provider supervisor ticket migration complete; all user-domain Processes launch via normal Process Provider |
-| `packages/d2b-unsafe-local-helper/` binary | Same condition as above |
-| `packages/d2b-contracts/src/unsafe_local_wire.rs` | After no live caller remains |
-| `d2bd` `HelperRegistry::dispatch_launch` path | After Process Provider supervisor ticket migration complete |
-| `d2b_daemon_vm_*` metrics with `vm=<name>` label | After v3 controller metrics are verified in integration tests |
-| `provider="unsafe-local"` metric/span label | After shell_handler.rs migrated to Host-aware audit |
+| Artifact | Retirement condition | Canonical owner |
+| --- | --- | --- |
+| `nixos-modules/unsafe-local-helper.nix` service unit | After Process Provider supervisor ticket migration complete; all user-domain Processes launch via normal Process Provider | `ADR046-nix-010` |
+| `packages/d2b-unsafe-local-helper/` binary | Same condition as above | `ADR046-exec-009` |
+| `packages/d2b-contracts/src/unsafe_local_wire.rs` | After no live caller remains | `ADR046-exec-009` |
+| `d2bd` `HelperRegistry::dispatch_launch` path | After Process Provider supervisor ticket migration complete | `ADR046-exec-009` |
+| `d2b_daemon_vm_*` metrics with `vm=<name>` label | After v3 controller metrics are verified in integration tests | `ADR046-telem-002` and `ADR046-telem-005` own their respective metric replacements; `ADR046-telem-008` owns the absence proof |
+| `provider="unsafe-local"` metric/span label | After shell_handler.rs migrated to Host-aware audit | `ADR046-telem-008` |
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
@@ -1315,89 +1326,38 @@ Old and new suites never run in parallel indefinitely.
 
 ## 15. Implementation work items
 
-### SC-001: Host and User ResourceType schemas and contracts
+The former `SC-001` through `SC-006` labels were dossier-local aliases, not
+canonical work-item IDs. They are retired and MUST NOT be emitted into the
+work-item graph. The following table is normative. An ID in the owner column is
+the exclusive owner of the stated destination or proof; dependencies and parent
+items do not acquire co-ownership.
+
+| Retired declaration | Canonical implementation ownership | Exact scope and non-ownership boundary | Removal/migration ownership |
+| --- | --- | --- | --- |
+| `SC-001` | `ADR046-exec-001` | Owns the Host/User DTOs, schemas, bounds, admission vectors, and shared execution-policy extraction. `ADR046-core-002` is the coordination parent only; it owns no duplicate contract destination. | `ADR046-exec-001` owns removal of the Host/User/ExecutionPolicy portions of `HostJson`, `VmRuntimeRow`, and `WorkloadExecutionPosture` after all consuming resource slices reach parity. |
+| `SC-002` | `ADR046-exec-003` (Host), `ADR046-exec-004` (User), `ADR046-exec-005` (bootstrap ordering), and `ADR046-system-core-001` (Provider-specific manifest and audit boundary) | `ADR046-core-001` owns only the fixed core-controller process frame. Host and User handlers remain library code in their `ADR046-exec-*` destinations; the parent frame does not reimplement them. | `ADR046-exec-003` and `ADR046-exec-004` own host/group and UID/NSS parity; `ADR046-exec-005` owns retirement of the old daemon initialization sequence. |
+| `SC-003` | `ADR046-exec-009` (user-only Host migration and status posture), `ADR046-exec-006`/`ADR046-exec-007` (Process Provider `ProcessEffect` emission), `ADR046-host-posture-001` (CLI/doctor warning), and `ADR046-telem-008` (OTEL absence gate) | system-core owns `Host.status.isolationPosture` and `NoIsolation`, but never emits `ProcessEffect`. The Process Providers query that status and own launch/stop/adopt/quarantine records. The telemetry gate owns no runtime emitter. | `ADR046-exec-009` owns helper binary/wire/dispatch retirement; `ADR046-nix-010` owns unsafe-local-specific Nix removal. |
+| `SC-004` | `ADR046-exec-012` (Nix resource authoring and eval rules) and `ADR046-exec-014` (schema-generated option modules and Zone bundle emission) | These items own the Nix destinations. system-core consumes the emitted Host/User resources and does not maintain a second emitter or schema vocabulary. | `ADR046-exec-012` owns Realm/Workload option removal; `ADR046-nix-010` owns the unsafe-local-specific Nix migration gate. |
+| `SC-005` | `ADR046-provider-002` (Provider package shape), `ADR046-exec-003`/`ADR046-exec-004` (system-core crate tests and conformance invocation), `ADR046-exec-020` (shared conformance toolkit), and `ADR046-pstate-011` (workspace layout gate) | The toolkit and policy gate are shared infrastructure. They are not reimplemented in `d2b-provider-system-core`; this crate only supplies its Host/User fixtures and required package paths. | `ADR046-pstate-011` owns the permanent layout gate; there is no system-core removal destination. |
+| `SC-006` | `ADR046-telem-004` (core-controller instruments), `ADR046-telem-008` (allowlist/cardinality/redaction policy), `ADR046-audit-001` (shared audit sink and record machinery), and `ADR046-system-core-001` (Host/User `ResourceReconciled` adapter) | system-core contributes only the two closed handler values and its reconcile events. It does not own shared telemetry machinery, policy tests, or `ProcessEffect`. | `ADR046-telem-002` and `ADR046-telem-005` own replacement of their legacy metric families; `ADR046-telem-008` owns the final no-`vm`/no-`unsafe-local` label proof. |
+
+Test ownership is enumerated per test in §16. The §14.3 table and the final
+column above are the complete removal-proof assignment for this dossier.
+
+### ADR046-system-core-001 — Provider boundary, manifest, and reconcile audit adapter
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | W0/ADR046-core-001; system-core Provider owner |
-| Current source | `d2b-realm-core/src/{node,workload}.rs`; `d2b-core/src/host.rs`; `nixos-modules/options-realms*.nix` |
-| Reuse action | extract and adapt |
-| Destination | `packages/d2b-contracts/src/v3/resources/{host,user}.rs` |
-| Detailed design | Host/User full spec/status/condition/phase schemas; all field bounds; BudgetSpec; ExecutionPolicy; HostCapabilityClass enum; SandboxSpec exclusions; ResourceRef rules; ProviderStateSet model for system-core: empty — system-core declares no Provider state Volume, and its bounded non-secret operational state lives in `status`/the core Operation ledger with handler checkpoints reconstructible from a resource-store relist (D087); no bootstrap-state exception (fixed bootstrap components reach Ready without a state Volume; D086 superseded by D087) |
-| Integration | Resource API admission, core-controller handlers, Nix emitter, ResourceTypeSchema emitter |
-| Data migration | Full reset |
-| Validation | JSON Schema round-trip; spec admission tests for all invariants including isolationPosture bidirectional constraints; golden resource vectors |
-| Removal proof | Old `HostJson`/`VmRuntimeRow`/`WorkloadExecutionPosture` removed only after resource parity |
-
-### SC-002: system-core handler implementation
-
-| Field | Value |
-| --- | --- |
-| Dependency/owner | SC-001; ADR046-core-001 (core-controller process frame); ADR046-session-001 (bus connection) |
-| Current source | `packages/d2bd/src/lib.rs` host grouping paths; `d2b-realm-core/src/workload.rs` `IsolationPosture`; `d2b-core/src/host.rs` |
-| Reuse action | extract and adapt; copy toolkit reconciler from main `a1cc0b2d` |
-| Destination | `packages/d2b-provider-system-core/src/{host,user}.rs` (no `src/main.rs`; library only, linked into `packages/d2b-core-controller`) |
-| Detailed design | Host/User reconcile loops (§4.1.4, §4.2.4); HostCapabilityClass probes in bounded blocking adapters; NSS lookup wrapper in bounded blocking adapter; userManagerAvailable check; isolationPosture validation; budget aggregation; NoIsolation condition; scheduled-observe path |
-| Integration | d2b-bus ResourceClient; core-controller handler registration (via `packages/d2b-core-controller`); bootstrap authorization; Zone startup sequence (§11.1) |
-| Data migration | New v3 Host/User resources from Nix; no prior Host/User resource state |
-| Validation | All conditions in §4.1.3 and §4.2.3; isolationPosture invariants (§9.2); performance bounds (§13); blocking adapter timeout behavior; capability probe mock and timeout tests |
-| Removal proof | Current host-grouping / unsafe-local helper dispatch paths removed after parity |
-
-### SC-003: No-isolation posture preservation
-
-| Field | Value |
-| --- | --- |
-| Dependency/owner | SC-002; telemetry/audit owner |
-| Current source | `packages/d2bd/src/unsafe_local_helper.rs` dispatch_launch; `packages/d2b-contracts/src/unsafe_local_wire.rs`; `nixos-modules/unsafe-local-workloads-json.nix`; `nixos-modules/unsafe-local-helper.nix` |
-| Reuse action | adapt (posture preservation logic); retire helper binary and wire protocol |
-| Destination | `packages/d2b-provider-system-core/src/host.rs` (NoIsolation condition + isolationPosture accuracy); CLI layer (warning rendering); audit cardinality gate (no_isolation must not be a metric label) |
-| Detailed design | NoIsolation condition always-True on user-only Hosts (§4.1.3); `Host.status.isolationPosture` kept accurate so Process Providers can query it at launch time and embed `no_isolation: true` in their `ProcessEffect` records (§12.3); CLI warning non-suppressible (§9.1); OTEL cardinality enforcement (no_isolation not a metric label). system-core does NOT emit ProcessEffect records; that is owned by Process Providers. |
-| Integration | d2b CLI `zone list`/`zone inspect`; telemetry cardinality gate |
-| Data migration | No migration; user-only Hosts created fresh at v3 cutover |
-| Validation | NoIsolation condition set on user-only Host after reconcile; isolationPosture=none exposed in Host.status for Process Provider consumption; metric label cardinality test asserting `no_isolation` absent from all label dimensions; CLI warning rendering test; test that system-core emits no ProcessEffect records |
-| Removal proof | `d2b-unsafe-local-helper` binary and `unsafe_local_wire.rs` retired after Process Provider supervisor ticket covers all user-domain launch paths |
-
-### SC-004: Nix Host/User emitter and eval assertions
-
-| Field | Value |
-| --- | --- |
-| Dependency/owner | SC-001; Nix integrator; ADR046-identities-002 |
-| Current source | `nixos-modules/options-realms.nix`; `nixos-modules/options-realms-workloads.nix`; `nixos-modules/unsafe-local-workloads-json.nix` |
-| Reuse action | adapt |
-| Destination | `nixos-modules/options-zones.nix` (Host/User option paths); `nixos-modules/resources.nix` (emitter); `nixos-modules/resource-compiler.nix` (eval assertions) |
-| Detailed design | `d2b.zones.<z>.resources.<n> = { type="Host"|"User"; spec={...}; }` authoring shape; eval assertions for isolationPosture, allowedDomains, defaultUserRef, osUsername, credential ref fields; schema drift gate integration |
-| Integration | Zone bundle emitter; ResourceTypeSchema drift gate (`make test-drift`) |
-| Data migration | Full reset; new Zone declarations replace `d2b.realms.*` declarations |
-| Validation | nix-unit vectors: valid Host/User configs emit correct JSON; invalid configs produce exact expected error messages with source location; unsafe-local Host invariants enforced at eval time |
-| Removal proof | `options-realms-workloads.nix` unsafe-local paths removed only after all users migrate to Zone-resource model |
-
-### SC-005: Package layout and conformance
-
-| Field | Value |
-| --- | --- |
-| Dependency/owner | SC-001 (schemas must exist first) |
-| Current source | None; new crate |
-| Reuse action | copy/adapt toolkit conformance kit from main `a1cc0b2d` |
-| Destination | `packages/d2b-provider-system-core/{src,tests,integration,README.md}` |
-| Detailed design | Workspace policy gate (`make test-policy`) verifies all four paths exist and are non-empty; `tests/` runs `check_provider_conformance` against Host/User axes and verifies the ProviderStateSet model: empty (system-core declares no Provider state Volume), bounded non-secret operational state in `status`/the core Operation ledger, handler checkpoints reconstructible from a relist, no state-Volume mount; no bootstrap-state exception (D086 superseded by D087); `integration/` contains container scenario for Host reconcile under real Zone runtime |
-| Integration | `make test-policy`; `make test-integration`; `make test-host-integration` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Workspace policy test catches missing/empty paths; conformance kit asserts zero `ConformanceError`; ProviderStateSet asserted empty (system-core declares no Provider state Volume); operational state asserted in `status`/the core Operation ledger with handler checkpoints reconstructible from a relist; no state-Volume mount on either controller Process; no bootstrap-state exception |
-| Removal proof | No removal; gate added permanently |
-
-### SC-006: OTEL and audit compliance
-
-| Field | Value |
-| --- | --- |
-| Dependency/owner | SC-002, SC-003; telemetry crate owner |
-| Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` `loki_native_otel_resource_attributes`; `packages/d2bd/src/metrics.rs` |
-| Reuse action | adapt |
-| Destination | `packages/d2b-telemetry/src/attributes.rs` (allowlist extension); `packages/d2b-contract-tests/tests/policy_observability.rs` (updated gate) |
-| Detailed design | Add `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version` to OTEL resource attribute allowlist; add `system_core_host`, `system_core_user` to `handler` closed set in metric label gate; assert `no_isolation` absent from all metric/span/log label dimensions; assert `provider="unsafe-local"` label absent from all OTEL surfaces |
-| Integration | Existing `policy_observability.rs` contract test gate |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Updated `loki_native_otel_resource_attributes` test; cardinality gate asserts no resource-name labels in system-core metrics |
-| Removal proof | Old `d2b_daemon_vm_*` metrics with `vm=<name>` label verified absent in v3 telemetry contract test before d2bd daemon is retired |
+| Work item ID | `ADR046-system-core-001` |
+| Dependency/owner | `ADR046-provider-001`, `ADR046-exec-003`, `ADR046-exec-004`, `ADR046-exec-005`, `ADR046-pstate-012`, `ADR046-telem-001`, and `ADR046-audit-001`; `Provider/system-core` owner |
+| Current source | No canonical v3 equivalent. Adapt the Provider descriptor pattern from `packages/d2b-realm-provider/src/provider.rs` and the bounded audit-envelope pattern from `packages/d2bd/src/daemon_audit.rs`; do not carry forward daemon topology or unsafe-local helper protocol types. |
+| Reuse action | adapt descriptor/audit patterns; implement the v3 Provider-specific boundary |
+| Destination | `packages/d2b-provider-system-core/src/manifest.rs`, `packages/d2b-provider-system-core/src/audit.rs`, and `packages/d2b-provider-system-core/tests/provider_boundary.rs` |
+| Detailed design | Compile the system-core Provider manifest, empty closed config schema, Host/User component descriptors, and empty state-namespace declaration. The manifest binds both library handlers to the fixed `d2b-core-controller` bootstrap process without declaring either handler as a Process resource. The audit adapter emits one bounded, redacted `ResourceReconciled` record after each Host/User reconcile. The boundary rejects Provider config fields and proves that handler call paths neither write `Provider.status` nor emit `ProcessEffect`; core-controller infrastructure owns the former and `ADR046-exec-006`/`ADR046-exec-007` own the latter. `ADR046-pstate-012` remains the owner of generic optional-state admission; this item only declares system-core's empty state set. |
+| Integration | `ADR046-exec-003` and `ADR046-exec-004` call the audit adapter after reconcile; `ADR046-exec-005` and core-controller infrastructure load the manifest and derive the runtime-owned `Provider/system-core` resource/status. |
+| Data migration | Full d2b 3.0 reset; no Provider config, handler checkpoint, or audit state is imported. |
+| Validation | `config_schema_empty_only`, `provider_status_not_written_by_handlers`, `provider_state_set_empty`, `host_no_process_effect_emitted`, `host_resource_reconciled_audit`, and `user_resource_reconciled_audit`; manifest golden vector proves no Process descriptor and no state namespace for either handler. |
+| Removal proof | No independent destination removal. `ADR046-exec-009` owns unsafe-local helper/wire retirement, and `ADR046-telem-008` owns removal proofs for legacy unsafe-local and VM-name telemetry labels. |
 
 ---
 
@@ -1422,55 +1382,58 @@ per-test budget.
 
 ### 16.1 `tests/` (hermetic Cargo integration, invoked by `cargo test`)
 
-| Test | Assertion |
-| --- | --- |
-| `host_spec_admission_valid` | All valid Host spec combinations pass admission without error |
-| `host_spec_admission_isolation_posture_bidirectional` | All six invalid isolationPosture combinations in §9.2 produce the exact expected error code and message |
-| `host_spec_admission_capability_class_bounds` | Unknown HostCapabilityClass rejected; each known class accepted |
-| `host_reconcile_converged` | Fake OS probes → all conditions True → phase Ready |
-| `host_reconcile_capability_absent` | Probe returns absent → `capability-absent-<class>` condition |
-| `host_reconcile_user_manager_unavailable` | User manager IPC fails → `UserManagerReady=False`, phase Degraded (not Failed) for system-only Host |
-| `host_reconcile_user_manager_unavailable_user_domain` | User manager IPC fails → phase Failed for user-domain Host after threshold |
-| `host_reconcile_noisolution_condition_always_set` | User-only Host always has NoIsolation condition True after reconcile |
-| `host_reconcile_budget_overcommit` | Aggregate Process budget exceeds Host budget → `budget-overcommit` condition |
-| `host_reconcile_performance_bounds` | Reconcile completes under 5 s on fake probes; hint-to-handler under 5 ms |
-| `user_spec_admission_valid` | Valid User specs pass admission |
-| `user_spec_admission_os_username_invalid` | NUL byte, slash, control char in osUsername rejected |
-| `user_reconcile_converged` | Fake NSS → uid/gid/home/shell all valid → phase Ready |
-| `user_reconcile_nss_failure_degraded` | NSS timeout → `nss-lookup-timeout`; accumulates to Failed after threshold |
-| `user_reconcile_group_membership_missing` | Missing group → GroupsVerified=False, phase Degraded |
-| `user_reconcile_session_manager_unavailable` | Fake user manager IPC fails → SessionManagerReady=False, phase Degraded |
-| `user_reconcile_structural_check_blocks_delete` | User with active Process userRef cannot be deleted |
-| `host_isolation_posture_set_for_user_only` | User-only Host: reconcile sets `isolationPosture="none"` and `NoIsolation=True` in Host.status |
-| `host_isolation_posture_absent_for_system_host` | System-domain Host: reconcile does not set `isolationPosture="none"` or `NoIsolation` condition |
-| `host_isolation_posture_available_for_lookup` | `Host.status.isolationPosture` field is present and accurate after reconcile for Process Provider consumption |
-| `host_no_process_effect_emitted` | system-core reconcile emits no `ProcessEffect` audit records for any Host reconcile scenario |
-| `otel_no_isolation_not_a_label` | Metric/span labels for user-only Host reconcile contain no `no_isolation` dimension |
-| `provider_state_set_empty` | `Provider/system-core` declares no Provider state Volume; `ProviderStateSet(zone, "system-core")` is empty; neither controller Process mounts a state Volume; bounded non-secret operational state is written to `status`/the core Operation ledger and handler checkpoints are reconstructible from a resource-store relist; no bootstrap-state pre-provisioning path exists |
-| `provider_status_not_written_by_handlers` | system-core handler code paths contain no `update_status(Provider/system-core, ...)` calls; Provider.status updates are absent from the handler call graph |
-| `provider_conformance_host` | `d2b-provider-toolkit::conformance::check_provider_conformance(Host)` returns zero errors |
-| `provider_conformance_user` | `d2b-provider-toolkit::conformance::check_provider_conformance(User)` returns zero errors |
-| `config_schema_empty_only` | Non-empty Provider config rejected with exact error |
-| `nix_schema_roundtrip_host` | Rendered Host JSON passes ResourceTypeSchema validation |
-| `nix_schema_roundtrip_user` | Rendered User JSON passes ResourceTypeSchema validation |
-| `nix_eval_unsafe_local_host_invariants` | nix-unit: unsafe-local Host Nix authoring emits correct JSON; invalid isolationPolicy rejected at eval |
+| Test | Assertion | Canonical owner |
+| --- | --- | --- |
+| `host_spec_admission_valid` | All valid Host spec combinations pass admission without error | `ADR046-exec-001` |
+| `host_spec_admission_isolation_posture_bidirectional` | All six invalid isolationPosture combinations in §9.2 produce the exact expected error code and message | `ADR046-exec-009` |
+| `host_spec_admission_capability_class_bounds` | Unknown HostCapabilityClass rejected; each known class accepted | `ADR046-exec-001` |
+| `host_reconcile_converged` | Fake OS probes → all conditions True → phase Ready | `ADR046-exec-003` |
+| `host_reconcile_capability_absent` | Probe returns absent → `capability-absent-<class>` condition | `ADR046-exec-003` |
+| `host_reconcile_user_manager_unavailable` | User manager IPC fails → `UserManagerReady=False`, phase Degraded (not Failed) for system-only Host | `ADR046-exec-003` |
+| `host_reconcile_user_manager_unavailable_user_domain` | User manager IPC fails → phase Failed for user-domain Host after threshold | `ADR046-exec-003` |
+| `host_reconcile_noisolution_condition_always_set` | User-only Host always has NoIsolation condition True after reconcile | `ADR046-exec-009` |
+| `host_reconcile_budget_overcommit` | Aggregate Process budget exceeds Host budget → `budget-overcommit` condition | `ADR046-exec-003` |
+| `host_reconcile_performance_bounds` | Reconcile completes under 5 s on fake probes; hint-to-handler under 5 ms | `ADR046-exec-003` |
+| `user_spec_admission_valid` | Valid User specs pass admission | `ADR046-exec-001` |
+| `user_spec_admission_os_username_invalid` | NUL byte, slash, control char in osUsername rejected | `ADR046-exec-001` |
+| `user_reconcile_converged` | Fake NSS → uid/gid/home/shell all valid → phase Ready | `ADR046-exec-004` |
+| `user_reconcile_nss_failure_degraded` | NSS timeout → `nss-lookup-timeout`; accumulates to Failed after threshold | `ADR046-exec-004` |
+| `user_reconcile_group_membership_missing` | Missing group → GroupsVerified=False, phase Degraded | `ADR046-exec-004` |
+| `user_reconcile_session_manager_unavailable` | Fake user manager IPC fails → SessionManagerReady=False, phase Degraded | `ADR046-exec-004` |
+| `user_reconcile_structural_check_blocks_delete` | User with active Process userRef cannot be deleted | `ADR046-exec-004` |
+| `host_isolation_posture_set_for_user_only` | User-only Host: reconcile sets `isolationPosture="none"` and `NoIsolation=True` in Host.status | `ADR046-exec-009` |
+| `host_isolation_posture_absent_for_system_host` | System-domain Host: reconcile does not set `isolationPosture="none"` or `NoIsolation` condition | `ADR046-exec-009` |
+| `host_isolation_posture_available_for_lookup` | `Host.status.isolationPosture` field is present and accurate after reconcile for Process Provider consumption | `ADR046-exec-009` |
+| `host_no_process_effect_emitted` | system-core reconcile emits no `ProcessEffect` audit records for any Host reconcile scenario | `ADR046-system-core-001` |
+| `host_resource_reconciled_audit` | Host reconcile emits one bounded, redacted `ResourceReconciled` record with the canonical handler value | `ADR046-system-core-001` |
+| `user_resource_reconciled_audit` | User reconcile emits one bounded, redacted `ResourceReconciled` record with the canonical handler value | `ADR046-system-core-001` |
+| `otel_no_isolation_not_a_label` | Metric/span labels for user-only Host reconcile contain no `no_isolation` dimension | `ADR046-telem-008` |
+| `provider_state_set_empty` | `Provider/system-core` declares no Provider state Volume; `ProviderStateSet(zone, "system-core")` is empty; neither controller Process mounts a state Volume; bounded non-secret operational state is written to `status`/the core Operation ledger and handler checkpoints are reconstructible from a resource-store relist; no bootstrap-state pre-provisioning path exists | `ADR046-system-core-001` |
+| `provider_status_not_written_by_handlers` | system-core handler code paths contain no `update_status(Provider/system-core, ...)` calls; Provider.status updates are absent from the handler call graph | `ADR046-system-core-001` |
+| `provider_conformance_host` | `d2b-provider-toolkit::conformance::check_provider_conformance(Host)` returns zero errors | `ADR046-exec-003` |
+| `provider_conformance_user` | `d2b-provider-toolkit::conformance::check_provider_conformance(User)` returns zero errors | `ADR046-exec-004` |
+| `config_schema_empty_only` | Non-empty Provider config rejected with exact error | `ADR046-system-core-001` |
+| `nix_schema_roundtrip_host` | Rendered Host JSON passes ResourceTypeSchema validation | `ADR046-exec-014` |
+| `nix_schema_roundtrip_user` | Rendered User JSON passes ResourceTypeSchema validation | `ADR046-exec-014` |
+| `nix_eval_unsafe_local_host_invariants` | nix-unit: unsafe-local Host Nix authoring emits correct JSON; invalid isolationPolicy rejected at eval | `ADR046-exec-012` |
 
 > **Note**: Tests asserting that `ProcessEffect` records carry `no_isolation: true`
 > belong to the `Provider/system-systemd` and `Provider/system-minijail` test
-> suites, not this crate's `tests/`. Those providers own `ProcessEffect` emission
-> and must verify they correctly query `Host.status.isolationPosture`.
+> suites under `ADR046-exec-006` and `ADR046-exec-007`, not this crate's
+> `tests/`. Those providers own `ProcessEffect` emission and must verify they
+> correctly query `Host.status.isolationPosture`.
 
 ### 16.2 `integration/` (invoked by `make test-integration` / `make test-host-integration`)
 
-| Test | Assertion |
-| --- | --- |
-| `host_reconcile_real_zone` | Provider/system-core controller reconciles a real Host resource in a container Zone runtime; phase reaches Ready |
-| `host_capability_probes_real_host` | Real `kvm`, `pidfd`, `cgroup-v2` capability probes succeed on a KVM-capable test host |
-| `user_reconcile_real_nss` | Real NSS getpwnam lookup for a declared test user; User reaches Ready |
-| `unsafe_local_host_warning_cli` | `d2b zone inspect` renders the no-isolation warning for a user-only Host; warning absent for system-domain Host |
-| `user_only_host_isolation_posture_stable` | Under a real Zone runtime, a user-only Host consistently reports `isolationPosture="none"` in status after restart and reconcile cycles |
-| `provider_system_core_bootstrap_failure_blocks_readiness` | If core cannot create or verify the runtime-owned `Provider/system-core` bootstrap resource, Zone reports Failed with a mandatory-provider condition; no Nix bundle declaration is expected |
-| `generation_cleanup_host_deleted` | Removing Host from Nix config triggers async Delete; ResourceDeletionRequested audit event present; store transaction removes row/index and writes Deleted revision; ResourceDeleted audit event appended with exactly-once recovery |
+| Test | Assertion | Canonical owner |
+| --- | --- | --- |
+| `host_reconcile_real_zone` | Provider/system-core controller reconciles a real Host resource in a container Zone runtime; phase reaches Ready | `ADR046-exec-003` |
+| `host_capability_probes_real_host` | Real `kvm`, `pidfd`, `cgroup-v2` capability probes succeed on a KVM-capable test host | `ADR046-exec-003` |
+| `user_reconcile_real_nss` | Real NSS getpwnam lookup for a declared test user; User reaches Ready | `ADR046-exec-004` |
+| `unsafe_local_host_warning_cli` | `d2b zone inspect` renders the no-isolation warning for a user-only Host; warning absent for system-domain Host | `ADR046-host-posture-001` |
+| `user_only_host_isolation_posture_stable` | Under a real Zone runtime, a user-only Host consistently reports `isolationPosture="none"` in status after restart and reconcile cycles | `ADR046-exec-009` |
+| `provider_system_core_bootstrap_failure_blocks_readiness` | If core cannot create or verify the runtime-owned `Provider/system-core` bootstrap resource, Zone reports Failed with a mandatory-provider condition; no Nix bundle declaration is expected | `ADR046-exec-005` |
+| `generation_cleanup_host_deleted` | Removing Host from Nix config triggers async Delete; ResourceDeletionRequested audit event present; store transaction removes row/index and writes Deleted revision; ResourceDeleted audit event appended with exactly-once recovery | `ADR046-exec-015` |
 
 ---
 
