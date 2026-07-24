@@ -286,10 +286,13 @@ pub trait NetworkEffectPort: Send + Sync {
         intent: &TapIntent,
     ) -> Result<AttachmentHandle, EffectError>;
 
-    /// Revoke a previously declared tap attachment.  Removes the tap device.
+    /// Revoke a previously declared persistent tap attachment. The generation
+    /// fence prevents a stale finalizer from deleting a replacement attachment.
+    /// Absence is success only after ownership validation.
     async fn revoke_attachment_tap(
         &self,
         handle: &AttachmentHandle,
+        expected: &AttachmentGenerationFence,
     ) -> Result<(), EffectError>;
 
     /// Set the isolation flag on a tap's bridge port.
@@ -390,6 +393,7 @@ serialized to JSON or transmitted over the resource API wire.
 | `FabricIntent` | `mtu`, `stp_disabled`, `multicast_snooping_disabled`, `ipv6_suppress` | All fields from declared spec |
 | `TapIntent` | `attachment_index`, `neigh_suppress` | Index from declared spec |
 | `AttachmentHandle` | opaque seal over internal `(network_uid, attachment_uid)` | Redacted Debug; not Clone/Copy/Serialize |
+| `AttachmentGenerationFence` | `expected_network_generation`, `expected_attachment_generation` | Both are non-zero resource generations captured from the current realization; stale values fail closed |
 | `FabricHandle` | opaque seal over internal `network_uid` | Redacted Debug; not Clone/Copy/Serialize |
 | `FirewallIntent` | `rules: Vec<FirewallRule>` (rules reference attachment handles, not IfNames) | No raw IfNames and no USBIP/TCP-3240 rule |
 | `FirewallDigest` | opaque `[u8; 32]` SHA-256 of the Network-UID ownership projection | Stored in status for Network-owned drift comparison only; excludes device-usbip |
@@ -411,7 +415,7 @@ provider crate.
 | `create_fabric` | `CreateBridge` (new v3 op) | none (v3 new) |
 | `delete_fabric` | `DeleteBridge` (new v3 op) | none (v3 new) |
 | `declare_attachment_tap` | `CreatePersistentTap` + `SetBridgePortFlags` | `d2b-priv-broker/src/runtime.rs` tap ops |
-| `revoke_attachment_tap` | `DeleteTap` | existing v3 baseline |
+| `revoke_attachment_tap` | `DeletePersistentTap` (planned closed op paired with `CreatePersistentTap`) | new v3 op |
 | `set_attachment_isolation` | `SetBridgePortFlags` | `d2b-host/src/bridge_port.rs` |
 | `apply_host_firewall` | `ApplyNftables` | `d2b_contracts::broker_wire::ApplyNftablesRequest` |
 | `remove_host_firewall` | `ApplyNftables` (empty set) | same |
@@ -424,6 +428,36 @@ provider crate.
 | `read_firewall_digest` | `ReadNftablesDigest` (new v3 op) | `d2b-host/src/nftables.rs:hash_inet_d2b_table` |
 | `read_sysctl_state` | `ReadSysctlState` (new v3 op) | `d2b-host/src/netlink.rs` |
 | `read_attachment_isolation` | `ReadBridgePortFlags` (new v3 op) | `d2b-host/src/bridge_port.rs` |
+
+`DeletePersistentTapRequest` is a closed broker request containing only the
+opaque attachment ID resolved from `AttachmentHandle`,
+`expected_network_generation`, and `expected_attachment_generation`. It has no
+IfName, path, or caller-supplied ownership-marker field. The broker resolves the
+private realization record, validates both generations and the d2b ownership
+marker, and then deletes only that persistent tap. An already-absent tap is
+success when the trusted realization record and marker state prove that no
+foreign object occupies the attachment; an ownership-marker conflict fails
+closed. A generation mismatch never deletes anything and makes the controller
+refresh status before retrying.
+
+```rust
+#[serde(deny_unknown_fields)]
+pub struct DeletePersistentTapRequest {
+    pub attachment_id: OpaqueAttachmentId,
+    pub expected_network_generation: u64,
+    pub expected_attachment_generation: u64,
+}
+```
+
+The broker appends a post-effect, path-free audit record with
+`op: DeletePersistentTap`, an opaque attachment digest, both expected
+generations, `outcome`, `error_class`, and `correlation_id`. It never records an
+IfName, path, marker body, or attachment-handle bytes. Retryable kernel failures
+map to `AttachmentDeleteFailed`; stale fences map to
+`AttachmentGenerationMismatch` and requeue after a fresh read; marker conflicts
+map to terminal `AttachmentOwnershipConflict`. The finalizer retains the
+attachment handle and does not advance until the broker confirms success,
+including validated already-absent success.
 
 ### 5.5 Runtime Provider attachment FD path
 
@@ -1276,7 +1310,10 @@ A NixOS generation switch is NOT required to create or remove a Network.
   before returning (closes race between creation and subsequent sysctl step).
 
 `delete_fabric` (via core adapter `DeleteBridge` broker op):
-- removes the kernel bridge device and all tap ports still attached;
+- removes only the kernel bridge device after every persistent tap has been
+  confirmed removed through `DeletePersistentTap`;
+- never cascades deletion to an attached tap; a remaining owned tap is
+  retryable and a foreign port/marker fails closed;
 - idempotent (returns success if already absent).
 
 ### 12.2 IPv6 suppression (defense-in-depth)
@@ -1291,15 +1328,25 @@ bridges are created dynamically.
 
 ### 12.3 Tap lifecycle
 
-Tap creation for workload Guests is performed by **`Provider/runtime-cloud-hypervisor`**,
-not by the network-local controller.  The network-local controller:
+Persistent-tap creation is declared by the network-local controller through
+`NetworkEffectPort`; Core maps that declaration to `CreatePersistentTap` and
+supplies the resulting FD privately to
+**`Provider/runtime-cloud-hypervisor`** through LaunchTicket. The
+network-local controller:
 1. Calls `NetworkEffectPort.declare_attachment_tap()` to record the attachment intent
    and receive an `AttachmentHandle`;
 2. Stores the handle in `Network.status.resource.attachments[]`;
 3. Calls `NetworkEffectPort.set_attachment_isolation()` to apply isolated/
    neigh-suppress bridge port flags when the tap is created.
 
-The runtime calls `revoke_attachment_tap()` during Guest deletion.
+Core resolves the handle privately when the runtime Provider needs the tap FD;
+the runtime does not own persistent-tap deletion. On attachment removal or
+Network finalization, the network-local controller waits until the Guest/VMM no
+longer owns the FD, then calls `revoke_attachment_tap(handle,
+AttachmentGenerationFence { expected_network_generation,
+expected_attachment_generation })`. The core adapter maps that call only to
+`DeletePersistentTap`; the handle/fence never becomes an IfName or path input
+from the Provider.
 
 ### 12.4 NM unmanaged and /etc/hosts
 
@@ -1602,9 +1649,15 @@ using a bounded priority lane.
 
 11. Set_attachment_isolation for each workload tap via NetworkEffectPort
 
-12. Commit ResourceMutationBatch with all child resource mutations + status
+12. For each attachment removed from the current spec, wait for its Guest/VMM FD
+    ownership to close, then call revoke_attachment_tap with the retained opaque
+    handle and current Network/attachment generation fence
+    └─ DeletePersistentTap absent success is accepted only after ownership validation
+    └─ generation mismatch refreshes status and requeues; marker conflict is terminal
 
-13. Evaluate conditions; report phase
+13. Commit ResourceMutationBatch with all child resource mutations + status
+
+14. Evaluate conditions; report phase
     └─ all conditions True → phase: Ready
     └─ any terminal error → phase: Failed
     └─ partial → phase: Degraded
@@ -1621,22 +1674,28 @@ network.d2bus.org/fabric-cleanup finalizer
 
 3. Wait for all attachment phases to become non-Ready (workload Guests stopped)
 
-4. Delete mDNS Process resources (if any); wait for each Deleted watch event
+4. For each retained attachment handle, call revoke_attachment_tap with the
+   current expected Network and attachment generations
+   └─ core dispatches DeletePersistentTap; no IfName/path crosses the port
+   └─ retain handle and retry transient failures before advancing
+   └─ stale generation refreshes/requeues; foreign ownership marker blocks cleanup
+
+5. Delete mDNS Process resources (if any); wait for each Deleted watch event
    └─ Deleted event: single atomic store transaction (row+index removed); no
       persistent phase=Deleted row; audit record separate from deletion tx
 
-5. Delete Process/net-<networkName>-agent; wait for Deleted event
+6. Delete Process/net-<networkName>-agent; wait for Deleted event
 
-6. Delete Process/net-<networkName>-dnsmasq; wait for Deleted event
+7. Delete Process/net-<networkName>-dnsmasq; wait for Deleted event
 
-7. Update Volume attachments to [] (remove Guest attachment); wait for removal
+8. Update Volume attachments to [] (remove Guest attachment); wait for removal
 
-8. Delete Guest/<netVmName>; wait for Deleted event
+9. Delete Guest/<netVmName>; wait for Deleted event
    └─ confirms the VMM and macvtap FD owner are gone
 
-9. Delete Volume/net-<networkName>-config; wait for Deleted event
+10. Delete Volume/net-<networkName>-config; wait for Deleted event
 
-10. [background tasks, independent]:
+11. [background tasks, independent]:
     remove_host_firewall(network_uid)
     remove_host_routes(network_uid)
     update_hosts_file(network_uid, empty)
@@ -1645,11 +1704,11 @@ network.d2bus.org/fabric-cleanup finalizer
     apply_nm_unmanaged(empty pattern for this network)
     Each is idempotent; failure is retried before clearing finalizer
 
-11. Release the Host-global external-NIC authority claim, if present
+12. Release the Host-global external-NIC authority claim, if present
     └─ release is forbidden until Guest/VMM/macvtap ownership is closed
     └─ multiplexed owner transfer is an atomic Core authority-index operation
 
-12. Clear finalizer
+13. Clear finalizer
 ```
 
 Each step is driven by `owned-resource-changed` hints rather than polling.
@@ -1852,11 +1911,15 @@ the network-local controller is authorized to resolve and call this service
 | `network-cidr-conflict` | Failed | CIDR overlap detected |
 | `ifname-collision` | Failed | Derived IfName collision; terminal |
 | `bridge-create-error` | Degraded | create_fabric failed |
+| `bridge-delete-error` | Degraded | delete_fabric failed or an owned persistent tap remains; retry after tap cleanup |
 | `sysctl-error` | Degraded | apply_host_sysctls failed |
 | `nftables-error` | Degraded | apply_host_firewall failed |
 | `nftables-drift` | Degraded | Firewall digest mismatch detected at observe |
 | `nm-unmanaged-error` | Degraded | apply_nm_unmanaged failed |
 | `route-error` | Degraded | apply_host_routes failed |
+| `attachment-delete-failed` | Degraded | `DeletePersistentTap` failed transiently; retry with the same fence |
+| `attachment-generation-mismatch` | Degraded | stale Network/attachment generation fence; refresh realization and requeue without deleting |
+| `attachment-ownership-conflict` | Failed | persistent tap ownership marker does not match; fail closed without deleting |
 | `config-volume-error` | Degraded | Volume create failed |
 | `volume-backing-error` | Degraded | Volume backing not Ready |
 | `attachment-not-ready` | Degraded | Volume Guest attachment not Ready |
@@ -1916,6 +1979,7 @@ Network-specific audit payload:
 | `firewallDigest` | Yes | drift evidence (opaque hex; no rule text) |
 | Bridge/tap drift reason | Yes (stable code; no raw IfName) | diagnostic |
 | `network.attachments[].attachmentHandle` | Yes (opaque; no IfName) | fabric identity |
+| `DeletePersistentTap` expected generations and opaque attachment digest | Yes | deletion fence and effect correlation; no handle bytes |
 | Workload hostname, IP, MAC | **No** | redacted from API-level audit |
 | nftables rule text | **No** | redacted |
 | DHCP lease data | **No** | never written to audit |
@@ -1926,7 +1990,10 @@ Network-specific audit payload:
 | Error message body | **No** (error code only) | no kernel output |
 
 Broker operations emit their own audit records (path-free outcome codes) from within
-the core adapter.
+the core adapter. `DeletePersistentTap` audit uses the exact op name and carries
+only the opaque attachment digest, expected Network/attachment generations,
+outcome, error class, and correlation ID; it never carries an IfName, path, or
+ownership-marker body.
 
 ### 21.2 OTEL spans and metrics
 
@@ -1945,6 +2012,7 @@ Child spans (no raw IfName, IP, MAC, rule text, or lease data in any attribute):
 ```
 d2b.network.effect.create_fabric
 d2b.network.effect.delete_fabric
+d2b.network.effect.delete_persistent_tap
 d2b.network.effect.apply_firewall
 d2b.network.effect.apply_routes
 d2b.network.effect.apply_sysctls
@@ -2297,7 +2365,7 @@ On controller binary upgrade:
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent for a provider-neutral `NetworkEffectPort` core adapter. |
 | Reuse action | create |
 | Destination | `d2b-contracts` trait plus `d2b-core` core adapter; maps to broker wire operations and audit emission. |
-| Detailed design | Implement `NetworkEffectPort` core adapter in `d2b-core`; map to broker wire ops; emit audit records. Versioning: minor releases may add methods with default impls; major releases require Provider upgrade. The trait lives in `d2b-contracts`; the adapter in `d2b-core`. |
+| Detailed design | Implement `NetworkEffectPort` core adapter in `d2b-core`; map to broker wire ops; emit audit records. `revoke_attachment_tap` accepts only an opaque `AttachmentHandle` plus `AttachmentGenerationFence { expected_network_generation, expected_attachment_generation }` and maps to `DeletePersistentTap`; no IfName/path or caller-authored marker crosses the trait. Versioning: minor releases may add methods with default impls; major releases require Provider upgrade. The trait lives in `d2b-contracts`; the adapter in `d2b-core`. |
 | Integration | `Provider/network-local` reconcile calls injected `NetworkEffectPort`; the core adapter resolves opaque Network intents to closed broker wire ops and emits broker-level audit records. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-network-local/tests/fault_injection.rs` verifies fake `NetworkEffectPort` behavior, error mapping, no broker socket in provider context, and audit-safe adapter boundaries. |
@@ -2307,13 +2375,13 @@ On controller binary upgrade:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Core; broker/core contract work consumed by ADR046-nl-001. |
-| Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, and SeedDnsmasqLease operations, but no `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, or `ReadBridgePortFlags` v3 ops. |
+| Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, SeedDnsmasqLease, and `CreatePersistentTap` operations, but no paired `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, or `ReadBridgePortFlags` v3 ops. |
 | Reuse action | adapt |
-| Destination | Broker wire contract and broker/core adapter operation table for `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, and `ReadBridgePortFlags`. |
-| Detailed design | Add `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags` broker ops. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape. |
-| Integration | `NetworkEffectPort` core adapter invokes these broker ops for bridge lifecycle and observe/drift checks; `Provider/network-local` receives only typed results and opaque digests/handles. |
+| Destination | Broker wire contract and broker/core adapter operation table for `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, and `ReadBridgePortFlags`. |
+| Detailed design | Add canonical closed `DeletePersistentTap` paired with `CreatePersistentTap`, plus `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, and `ReadBridgePortFlags`. `DeletePersistentTapRequest` contains only an opaque attachment ID and expected Network/attachment generations. The broker resolves trusted realization state, validates generations and ownership marker, treats validated absence as success, rejects foreign markers without deletion, and emits path-free post-effect audit. No request accepts an IfName or path. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape. |
+| Integration | `NetworkEffectPort` core adapter invokes these broker ops for attachment/fabric lifecycle and observe/drift checks; `Provider/network-local` receives only typed results and opaque digests/handles. Attachment removal and Network finalization retain the handle until `DeletePersistentTap` confirms deletion or validated absence. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
-| Validation | `integration/host_fabric.rs` covers bridge create/delete, nftables apply/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation. |
+| Validation | Broker tests cover `DeletePersistentTap` success, validated already-absent idempotency, stale Network/attachment generations, foreign-marker fail-closed behavior, path-free audit, and rejection of any IfName/path field; `integration/host_fabric.rs` covers persistent-tap deletion, bridge create/delete, nftables apply/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation. |
 | Removal proof | None — net-new broker ops; remove only if no Provider consumes them per the removal checklist. |
 
 ### ADR046-nl-003
@@ -2323,10 +2391,10 @@ On controller binary upgrade:
 | Current source | None — net-new v3 work; no public pre-ADR45 baseline equivalent for opaque `AttachmentHandle` or `FabricHandle`. |
 | Reuse action | create |
 | Destination | `d2b-contracts` opaque byte-array newtypes; core-held HMAC key and provider-facing redacted handle types. |
-| Detailed design | Implement `AttachmentHandle` and `FabricHandle` as opaque byte-array newtypes (32 bytes of HMAC-SHA-256 over internal identity material; key held by core). Each handle is single-use; revocation is implicit when the owning Network is deleted. These types are declared in `d2b-contracts`, not in the provider crate. |
+| Detailed design | Implement `AttachmentHandle` and `FabricHandle` as opaque byte-array newtypes (32 bytes of HMAC-SHA-256 over internal identity material; key held by core). Each attachment handle identifies one generation-fenced realization and is retained until explicit `DeletePersistentTap` confirmation during attachment removal or Network finalization. These types are declared in `d2b-contracts`, not in the provider crate. |
 | Integration | Core creates handles from Network and attachment identity, stores them only in internal state/status-resource attachment realization, and supplies resolved tap FDs through LaunchTicket without exposing IfNames or MACs. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
-| Validation | `tests/fault_injection.rs` and `tests/controller_state.rs` cover opaque-handle mismatch, revocation-on-delete, and no raw IfName/IP/MAC public surface. |
+| Validation | `tests/fault_injection.rs` and `tests/controller_state.rs` cover opaque-handle mismatch, generation-fenced `DeletePersistentTap`, retained handle until confirmation, and no raw IfName/IP/MAC/path public surface. |
 | Removal proof | None — net-new; no prior owner to remove. |
 
 ### ADR046-nl-004
@@ -2363,7 +2431,7 @@ On controller binary upgrade:
 | Current source | None — net-new v3 provider controller; v1 behavior lived in `nixos-modules/network.nix` and `nixos-modules/net.nix` static NixOS module logic. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/src/{controller.rs,metrics.rs}`. |
-| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection and the §21 metric descriptors with closed semantic labels. No descriptor may carry `vm`, `zone`, `zone_id`, `zone_uid`, `network`, or another resource-name-derived key; Network/Zone identity stays only in OTEL resource attributes and permitted audit fields. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership. |
+| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection and the §21 metric descriptors with closed semantic labels. Attachment removal and finalization wait for Guest/VMM FD ownership to close, then call `revoke_attachment_tap` with the retained opaque handle and current Network/attachment generation fence; transient deletion retries retain the handle, stale generations refresh/requeue, and ownership conflict blocks finalizer clearing. No descriptor may carry `vm`, `zone`, `zone_id`, `zone_uid`, `network`, or another resource-name-derived key; Network/Zone identity stays only in OTEL resource attributes and permitted audit fields. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership. |
 | Integration | Controller watches Network, Guest, Volume, Process, User, Host, and Zone resources; creates child resources, writes status, invokes `NetworkEffectPort`, and drives finalizers. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values. |
@@ -2470,10 +2538,10 @@ On controller binary upgrade:
 | Current source | None — net-new v3 controller state-machine test; v1 shell/Nix gates are not a controller-reconcile equivalent. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-network-local/tests/controller_state.rs`. |
-| Detailed design | Controller state-machine unit tests with fake `NetworkEffectPort` (from d2b-contracts mock) and deterministic clock. |
+| Detailed design | Controller state-machine unit tests with fake `NetworkEffectPort` (from d2b-contracts mock) and deterministic clock, including attachment removal/finalizer calls to generation-fenced `DeletePersistentTap`. |
 | Integration | Hermetic fake effect port drives reconcile, observe, finalizer, and adoption transitions without real broker, systemd, container, or network dependencies. |
 | Data migration | None — docs/tooling only; no runtime state. |
-| Validation | `tests/controller_state.rs` covers normal path, CIDR conflict, User not Ready, Volume error, Guest timeout, agent reload failure, finalizer sequence, adoption, and drift. |
+| Validation | `tests/controller_state.rs` covers normal path, CIDR conflict, User not Ready, Volume error, Guest timeout, agent reload failure, finalizer sequence, `DeletePersistentTap` validated absence, transient retry with retained handle, stale-generation refresh, foreign-marker block, adoption, and drift. |
 | Removal proof | None — net-new; no prior owner to remove. |
 
 ### ADR046-nl-015
@@ -2483,7 +2551,7 @@ On controller binary upgrade:
 | Current source | Existing Layer-1 eval and shell gates cover fragments; no v3 provider lifecycle integration test exists. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/integration/host_fabric.rs`, `guest_lifecycle.rs`, `agent_reload.rs`, and `delete_sequence.rs`. |
-| Detailed design | Integration tests: full Network lifecycle (create, config update, agent Reload, delete sequence) in container environment. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt reusable semantic assertions into v3 integration coverage. |
+| Detailed design | Integration tests: full Network lifecycle (create, config update, agent Reload, generation-fenced persistent-tap deletion, delete sequence) in container environment. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt reusable semantic assertions into v3 integration coverage. |
 | Integration | Integration tests exercise resource publication, host fabric effects, config Volume updates, ComponentSession reload, Process lifecycle, and finalizer cleanup through the provider stack. |
 | Data migration | None — docs/tooling only; no runtime state. |
 | Validation | `make test-integration` for container tests and `make test-host-integration` where guest lifecycle requires host/KVM coverage. |
@@ -2598,22 +2666,22 @@ budget.
 | `state_schema_roundtrip.rs` | Provider descriptor has no stateNamespace for `controller-main`; no Provider state Volume, state mount, identity marker, migration worker, or state-layout principal is emitted; ProviderStateSet query returns empty; bounded operational observations live in status/core Operation ledger and pass redaction/size-bound checks; per-Network config Volumes are excluded from ProviderStateSet (ownerRef mismatch) |
 | `ifname_derive.rs` | IfName derivation determinism; collision detection; 15-byte constraint; all role prefixes |
 | `cidr_overlap.rs` | CIDR overlap matrix: same Network, cross-Network, external CIDR; all boundaries; no-false-positive at adjacent CIDRs |
-| `controller_state.rs` | Full reconcile state machine: Normal path; CIDR conflict; User not Ready; Volume error; Guest timeout; agent reload failure; finalizer sequence (all child ordering, external authority release after VMM/macvtap close); adoption on restart; Network-owned drift detection |
+| `controller_state.rs` | Full reconcile state machine: Normal path; CIDR conflict; User not Ready; Volume error; Guest timeout; agent reload failure; attachment removal and finalizer issue generation-fenced `DeletePersistentTap` only after Guest/VMM FD closure, retain handles across transient retry, refresh on stale generation, block on foreign marker, and accept validated absence; all remaining child ordering; external authority release after VMM/macvtap close; adoption on restart; Network-owned drift detection |
 | `external_nic_authority.rs` | Core-derived Host-global identity; same-/cross-Zone exclusive collision; non-bridge multiplex denial; explicit compatible bridge multiplex; mixed-policy conflict; no effect before admission; owner-proof adoption/ambiguity; owner transfer; update/release ordering; no raw identity in status |
 | `firewall_ownership.rs` | Host and net-VM intents contain no TCP/3240/USBIP rule; device-usbip marker/rule churn does not alter Network digest or `FirewallReady` |
 | `conformance.rs` | Provider toolkit black-box conformance suite; descriptor validation; ResourceType schema fingerprint |
-| `fault_injection.rs` | `NetworkEffectPort` returns each `EffectError` variant; each step fails independently; retry/requeue classification; reconcile context has no broker socket; provider crate has no broker import |
+| `fault_injection.rs` | `NetworkEffectPort` returns each `EffectError` variant; `DeletePersistentTap` transient/generation/ownership errors have exact retry/terminal classification; each step fails independently; reconcile context has no broker socket; provider crate has no broker import |
 | `metrics_labels.rs` | Every metric descriptor uses only closed semantic labels; exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `network`, and resource-name-derived keys; Network-name canary absent from emitted labels; `d2b.zone` retained as an OTEL resource attribute |
 
 ### 26.3 Integration tests (`integration/`)
 
 | Test file | Coverage | Runner |
 | --- | --- | --- |
-| `host_fabric.rs` | Bridge create/delete; Network-owned nftables apply; no USBIP/TCP-3240 allow; IPv6 suppression; NM unmanaged; ownership-scoped drift detection; NetworkEffectPort real impl | `make test-integration` (container) |
+| `host_fabric.rs` | Persistent tap create/delete pairing; opaque attachment ID and generation fences; validated absent success; foreign-marker fail-closed; no IfName/path request or audit; bridge create/delete; Network-owned nftables apply; no USBIP/TCP-3240 allow; IPv6 suppression; NM unmanaged; ownership-scoped drift detection; NetworkEffectPort real impl | `make test-integration` (container) |
 | `guest_lifecycle.rs` | net-VM Guest create/delete; opaque attachment handle resolution; systemArtifactId binding | `make test-host-integration` |
 | `agent_reload.rs` | Agent service Reload() call; nft-applied + routes-applied predicates; config digest match | `make test-host-integration` |
 | `mdns_reflector.rs` | mDNS reflector Process lifecycle; create when mdns.enable; delete on Network delete | `make test-integration` (container) |
-| `delete_sequence.rs` | Full finalizer ordering: Process Deleted events, Volume attachment removal, Guest Deleted, Volume Deleted, fabric cleanup | `make test-host-integration` |
+| `delete_sequence.rs` | Full finalizer ordering: workload Guest/VMM FD closure, generation-fenced `DeletePersistentTap` confirmation, Process Deleted events, Volume attachment removal, net-VM Guest Deleted, Volume Deleted, fabric cleanup; transient delete retry retains the handle | `make test-host-integration` |
 | `external_nic_lifecycle.rs` | Fake physical NIC: Host-global claim before SpawnRunner; cross-Zone conflict has no effect; explicit bridge multiplex; update drain/reacquire; delete closes macvtap before claim release | `make test-host-integration` |
 
 ### 26.4 Eval tests (Layer-1, `tests/unit/nix/cases/`)
@@ -2652,8 +2720,11 @@ When `Provider/network-local` is retired (superseded or removed):
 - [ ] `provider-network-local` artifact catalog entry must be removed.
 - [ ] `d2b-provider-network-local` crate must be removed from workspace members and
   the members list must remain alphanumerically sorted.
-- [ ] Broker ops `CreateBridge` and `DeleteBridge` may be retired if no other
-  Provider uses them; consult the broker op table in `docs/reference/privileges.md`.
+- [ ] Broker ops `CreatePersistentTap` and `DeletePersistentTap` are retired as
+  a pair only if no other Provider uses them and no retained attachment
+  realization exists; `CreateBridge` and `DeleteBridge` may be retired if no
+  other Provider uses them. Consult the broker op table in
+  `docs/reference/privileges.md`.
 - [ ] `NetworkEffectPort` trait declaration in `d2b-contracts` must be removed or
   marked `#[deprecated]` when no other Provider uses it; the core adapter
   implementation is removed alongside the Provider.
