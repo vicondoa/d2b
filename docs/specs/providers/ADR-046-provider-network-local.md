@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-network-local` |
 | Parent | ADR 0046 |
 | Status | Proposed |
-| Version | 2 |
+| Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-provider-network-local` crate, `d2b-host` IfName/nftables/bridge/routes modules |
@@ -301,8 +301,9 @@ pub trait NetworkEffectPort: Send + Sync {
 
     // ── Firewall ──────────────────────────────────────────────────────────────
     /// Apply or replace the inet-d2b table entries owned by this Network.
-    /// Returns the SHA-256 digest of the applied ruleset (opaque; used for drift
-    /// detection in status).  No rule text is stored in status or audit.
+    /// Returns the SHA-256 digest of this Network UID's ownership projection
+    /// (opaque; used for drift detection in status). USBIP-owned rules are
+    /// excluded. No rule text is stored in status or audit.
     async fn apply_host_firewall(
         &self,
         network_uid: &Uid,
@@ -390,8 +391,8 @@ serialized to JSON or transmitted over the resource API wire.
 | `TapIntent` | `attachment_index`, `neigh_suppress` | Index from declared spec |
 | `AttachmentHandle` | opaque seal over internal `(network_uid, attachment_uid)` | Redacted Debug; not Clone/Copy/Serialize |
 | `FabricHandle` | opaque seal over internal `network_uid` | Redacted Debug; not Clone/Copy/Serialize |
-| `FirewallIntent` | `rules: Vec<FirewallRule>` (rules reference attachment handles, not IfNames) | No raw IfNames |
-| `FirewallDigest` | opaque `[u8; 32]` SHA-256 | Stored in status for drift comparison only |
+| `FirewallIntent` | `rules: Vec<FirewallRule>` (rules reference attachment handles, not IfNames) | No raw IfNames and no USBIP/TCP-3240 rule |
+| `FirewallDigest` | opaque `[u8; 32]` SHA-256 of the Network-UID ownership projection | Stored in status for Network-owned drift comparison only; excludes device-usbip |
 | `RouteIntent` | `destinations: Vec<IpNet>`, `via: Option<RouteViaHint>` | CIDRs from declared spec |
 | `SysctlIntent` | `ipv6_suppress: bool` | — |
 | `NmUnmanagedPattern` | `prefix_pattern: &'static str` (the `"d2b-*"` glob) | Compile-time constant; no runtime string |
@@ -475,18 +476,22 @@ spec:
   # ── External physical attachment ────────────────────────────────────────────
   externalAttachment: null             # null or ExternalAttachmentSpec
   # ExternalAttachmentSpec:
-  #   hostInterface: eth0              # host physical NIC; macvtap created by runtime
-  #   mode: bridge                     # bridge|private|vepa|passthrough
+  #   mode: macvtap                     # only initial attachment type
+  #   parentInterface: eth0            # requested Host inventory selector
+  #   macvtapMode: bridge              # bridge|private|vepa|passthru
+  #   sharingPolicy: exclusive         # exclusive|multiplexed; explicit
+  #                                    # multiplexing valid only for bridge
   #   mac: null                        # null → derived; static or null
   #   ipv4:
-  #     mode: dhcp                     # dhcp|static
+  #     method: dhcp                   # dhcp|static
   #     address: null                  # static address/prefix
   #     gateway: null                  # static gateway
   #   egress:
-  #     masquerade: false
+  #     enable: false
   #     allowedCidrs: []               # egress CIDRs for forward chain
+  #     masquerade: true
   #   portForwards: []
-  #   # PortForwardSpec: {protocol, externalPort, sourceCidrs, targetIndex, targetPort}
+  #   # PortForwardSpec: {protocol, listenPort, targetRef|targetIp, targetPort, sourceCidrs}
 
   # ── Isolation ────────────────────────────────────────────────────────────────
   isolation:
@@ -520,11 +525,22 @@ spec:
 | `lanCidr`, `uplinkCidr` ↔ peers | No overlap with any other Network in Zone | `network-cidr-conflict` |
 | `attachments[].index` | 2..250; unique within Network | `attachment-index-invalid`, `attachment-index-duplicate` |
 | `netVmNameOverride` | If set: `^[a-z][a-z0-9-]*$`; not `launcher`; not `sys-*` | `net-vm-name-reserved` |
+| `externalAttachment.mode` | `macvtap` | `external-attachment-mode-invalid` |
+| `externalAttachment.parentInterface` | Linux IfName syntax; resolves through trusted Host inventory to one physical NIC | `external-parent-interface-invalid`, `external-parent-interface-not-found` |
+| `externalAttachment.macvtapMode` | `bridge\|private\|vepa\|passthru` | `external-macvtap-mode-invalid` |
+| `externalAttachment.sharingPolicy` | defaults `exclusive`; `multiplexed` must be explicitly authored, requires `macvtapMode=bridge`, and is bounded by the signed Provider quota | `external-sharing-policy-invalid`, `external-physical-nic-conflict` |
 | `externalAttachment.egress.allowedCidrs` | No overlap with any Network CIDR | `network-cidr-conflict` |
 | IfName collision | All derived IfNames unique across Hosts | `ifname-collision` |
 
 IfName collision is terminal: the controller sets `ReconcileError{reason: ifname-collision}`
 and halts reconciliation until the operator adjusts `networkName`.
+
+Core resolves `parentInterface` to a non-reversible
+`external-physical-nic/v1` identity and preflights the Host-global authority
+index before any Provider or broker effect. A second same- or cross-Zone
+exclusive claim, a mixed exclusive/multiplexed claim, or any multiplexed
+non-bridge claim fails with `external-physical-nic-conflict` and no macvtap or
+VMM spawn.
 
 ### 6.3 Network status schema
 
@@ -552,15 +568,22 @@ status:
       - executionRef: Guest/corp-vm
         phase: Ready                          # Pending|Ready|Degraded|Absent
     fabricReady: true                         # bridges created and Ready
+    externalAttachment: null                  # or bounded phase + D097 authority state
   provider:
     providerRef: Provider/network-local
     schemaId: network-local.d2bus.org/Network/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
-      firewallDigest: "<hex-sha256>"          # SHA-256 of applied inet-d2b table; drift reference
+      firewallDigest: "<hex-sha256>"          # Network-owned rules only; USBIP excluded
       configVolumeRevisionDigest: "<hex>"     # digest of last committed config Volume content
 ```
+
+When configured, `status.resource.externalAttachment` contains only `phase`
+and universal D097 authority observations:
+`available`, `holderCount`, `queueDepth`, `arbitration`, and
+`updateCurrency`. It contains no `parentInterface`, opaque key/digest,
+owner proof, host/guest IfName, MAC, or address.
 
 **No** raw `ifName`, `bridgeName`, `tapIfName`, `hostUplinkIp`, `netVmUplinkIp`,
 `netVmLanIp`, MAC address, attachment handle, FD reference, or kernel path appears
@@ -583,6 +606,7 @@ never stored in or read from the public resource store.
 | `FirewallReady` (guest) | Guest-agent reports `nft-applied` readiness predicate | `nft-not-applied` |
 | `DnsReady` | Guest-agent reports `routes-applied` and dnsmasq DNS socket bound | `dns-not-ready` |
 | `CidrConflict` | No CIDR overlap detected | `network-cidr-conflict` |
+| `ExternalNicAuthorityReady` | Core admitted/adopted the Host-global physical-NIC claim, or no external attachment is configured | `external-physical-nic-claimed`, `external-physical-nic-conflict`, `external-nic-owner-ambiguous`, `not-required` |
 | `ExternalAttachmentReady` | macvtap interface in net VM Ready (if externalAttachment≠null) | `macvtap-not-ready` |
 | `MdnsReady` | mDNS Process(es) in Ready phase (if mdns.enable) | `mdns-process-not-ready` |
 
@@ -651,16 +675,9 @@ spec:
     schemaVersion: 1.0.0
     settings:
       vsockCid: 1024                  # assigned from the Network's CIDR allocation
-  # When spec.externalAttachment is non-null, the controller adds declared-spec
-  # parameters (operator-specified, not kernel-observed) for the macvtap under
-  # spec.provider.settings:
-  # provider:
-  #   schemaId: runtime-cloud-hypervisor.d2bus.org/Guest/spec
-  #   schemaVersion: 1.0.0
-  #   settings:
-  #     vsockCid: 1024
-  #     externalHostInterface: eth0       # declared by operator in Network.spec.externalAttachment
-  #     externalMode: bridge              # same
+  # When spec.externalAttachment is non-null, Core resolves its admitted
+  # Host-global authority privately and supplies the macvtap FD through the
+  # LaunchTicket. parentInterface and authority identity are not copied here.
 ```
 
 `systemArtifactId` is a plain bounded ID (`^[a-z][a-z0-9-]*$`); it is **not** a
@@ -1327,15 +1344,16 @@ Config update flow:
 The controller calls `NetworkEffectPort.apply_host_firewall()` with a
 `FirewallIntent` at each reconcile cycle.  The `inet d2b` table:
 - blocks all traffic on LAN bridges (host has no IP there);
-- allows TCP/3240 on uplink bridges (USBIP carve-out; raw IfName resolved internally
-  by core adapter);
 - installs per-rule `comment "d2b managed: <ownership-id>"` markers
   (ownership ID is the Network resource UID — opaque, not the IfName);
 - coexists with other firewall managers per `FirewallCoexistencePolicy`
   (Coexist/Refuse/RequireUnmanaged matrix from `d2b-host/src/nftables.rs`).
 
-The returned `FirewallDigest` is stored in `status.provider.details.firewallDigest` for
-drift detection.  No rule text appears in status, audit, or telemetry.
+Network-local emits no USBIP rule and no TCP/3240 match. The returned
+`FirewallDigest` covers only this Network UID's ownership projection and is
+stored in `status.provider.details.firewallDigest` for drift detection.
+Device-usbip-owned rules and markers are excluded. No rule text appears in
+status, audit, or telemetry.
 
 ### 13.3 Net-VM-side firewall (via config Volume)
 
@@ -1343,13 +1361,18 @@ The controller writes the net VM's nftables ruleset to the `nftables.rules` conf
 Volume entry.  The **net-agent service** reads and applies it via `nft -f` at
 startup and on each `Reload()` call.  The ruleset preserves all semantics from
 `nixos-modules/net.nix` lines 168–296 (see §16 security invariants for the full
-chain).
+chain), except that it contains no USBIP/TCP-3240 carve-out. USBIP Binding
+proxies receive an authorized connected relay stream through Endpoint
+resolution and a LaunchTicket; they do not require a generic net-VM forward
+allow.
 
 ### 13.4 Drift detection (observe)
 
 On each observe cycle (`observeInterval: 60s`):
 - `NetworkEffectPort.read_firewall_digest()` → compare against `status.provider.details.firewallDigest`;
-  if drift, set `FirewallReady=False/nftables-drift` and queue reconcile.
+  compare only Network-UID-owned rules; if drift, set
+  `FirewallReady=False/nftables-drift` and queue reconcile. Ignore
+  device-usbip-owned rules and marker churn.
 - `NetworkEffectPort.read_sysctl_state()` → compare against expected IPv6 suppression;
   if drift, queue reconcile.
 - `NetworkEffectPort.read_attachment_isolation()` per attachment → compare against
@@ -1386,20 +1409,64 @@ Default: `isolation.allowEastWest = false`:
 ### 14.3 External attachment (macvtap)
 
 When `spec.externalAttachment` is non-null:
-1. Controller copies operator-declared external attachment parameters from
-   `Network.spec.externalAttachment` into the net-VM Guest spec's `spec.provider.settings`:
-   `externalHostInterface` (operator-declared NIC name), `externalMode`, and
-   optional static MAC/IP fields.  These are desired spec values specified by the
-   operator, not dynamically derived kernel values.
-2. `Provider/runtime-cloud-hypervisor` reads these typed parameters and calls the
-   broker's `SpawnRunner` path.  The broker creates the macvtap FD internally
+1. Core resolves the operator-declared `parentInterface` through trusted Host
+   inventory, derives the private physical-NIC authority identity, and admits
+   the Host-global claim. The controller receives only success/failure and
+   bounded authority status; it does not receive the key/digest or owner proof.
+2. Core resolves the Network→Guest owner relationship and supplies the admitted
+   attachment through the private dependency resolver and LaunchTicket. The
+   controller does not copy `parentInterface` or an authority key into Guest
+   spec. `Provider/runtime-cloud-hypervisor` calls the broker's `SpawnRunner`
+   path, and the broker creates the macvtap FD internally
    (`live_create_macvtap_fd` in `d2b-priv-broker/src/runtime.rs`) as part of VMM
    spawn dispatch.
 3. Port-forward DNAT rules are written to `nftables.rules` by the controller and
    applied by the net-agent inside the net VM.
 
 The `ExternalAttachmentReady` condition reflects macvtap interface state via the
-net VM's Guest readiness predicates.
+net VM's Guest readiness predicates. `ExternalNicAuthorityReady` independently
+reflects authority admission/adoption.
+
+### 14.4 External physical-NIC AuthorityDescriptor
+
+The signed Provider descriptor classifies every non-null
+`Network.externalAttachment` with this D097 contract:
+
+```yaml
+authorityScope: physical-device            # Host-global index scope
+authorityKey: external-physical-nic/v1     # Core-derived opaque key class
+cardinality: zero-or-one
+arbitration: exclusive                     # multiplexed only for explicit bridge policy
+authorityRef: Network/work-net
+duplicateConflict: external-physical-nic-conflict
+ownerProof: network-resource-and-vmm-process-identity
+updateStrategy: drain-release-reacquire
+exportability: forbidden
+quota:
+  maxHolders: 1                            # exclusive; signed 2..16 for multiplexed
+  fairness: fifo
+```
+
+The selector name is not the authority key. Core resolves it to trusted
+physical-NIC identity, derives the opaque digest, and indexes
+`(Host, external-physical-nic, opaqueKeyDigest)` across all Zones on that Host.
+`passthru`, `private`, and `vepa` are always exclusive. `bridge` defaults
+exclusive and may be multiplexed only when every holder explicitly declares
+`sharingPolicy: multiplexed` and the signed quota admits it. Core retains one
+authority owner and treats additional admitted Networks as bounded holders; no
+holder opens the backing a second time.
+
+Changing `parentInterface`, `macvtapMode`, or `sharingPolicy` reports
+`UpgradeRequired` with disruptive recycle. The planner drains dependent
+attachments and the net VM, closes the old macvtap/VMM ownership, releases the
+old claim, admits the new claim, and only then spawns the replacement. Delete
+releases the claim last. Restart adopts only the exact resource/process
+`ownerProof`; ambiguity sets
+`ExternalNicAuthorityReady=False/external-nic-owner-ambiguous` and quarantines
+the attachment. When the owner of a compatible multiplexed authority is
+deleted, Core atomically transfers the owner proof to the oldest admitted
+holder without reopening the NIC; failure to prove that transfer blocks
+release.
 
 ---
 
@@ -1412,16 +1479,21 @@ The `UsbipBindFirewallRule` broker operation stays with `Provider/device-usbip`.
 The network-local controller does **not** install USBIP firewall rules and does
 **not** call `UsbipBindFirewallRule`.
 
-The TCP/3240 carve-out in the host `inet d2b` table is generated by the
-network-local controller as a general allow-rule on the uplink bridge (the rule
-is parameterized by the Network's uplink bridge attachment handle, not by the
-USBIP provider's configuration).  `Network.spec` has no `usbipCarveOut` field
-and must not be mutated by the device-usbip provider.
+Network-local emits **no** USBIP or TCP/3240 rule on the host or in the net-VM
+ruleset. `Network.spec` has no `usbipCarveOut` field and must not be mutated by
+the device-usbip provider. Network `FirewallReady` and
+`status.provider.details.firewallDigest` cover only Network-UID-owned rules and
+ignore device-usbip ownership markers.
 
-`Provider/device-usbip` consumes `Network/work-net` via a `networkRef` dependency
-in its Device resource spec.  It reads only the Network's `AttachmentHandle` for
-the uplink (opaque) and uses it to request a firewall rule through its own broker
-interaction.
+`Provider/device-usbip` consumes `Network/work-net` via a `networkRef`
+dependency, watches only identity/readiness/generation, and owns exactly one
+multiplexed relay `Endpoint` authority per Network. Its typed
+`UsbipEffectPort` is the sole semantic path for all TCP/3240 and
+per-Network/per-busid firewall effects. The Core adapter privately resolves the
+Network UID and dispatches the closed `UsbipBindFirewallRule` broker operation;
+raw attachment handles, IfNames, addresses, and rules never enter either
+Provider controller. USBIP drift and status belong exclusively to the owning
+USB Service's strict provider status.
 
 ---
 
@@ -1466,7 +1538,10 @@ change returns `UpgradeRequired` with `disruption: Recycle` or
 `disruption: Restart` instead of being applied in place; the dependency-aware
 planner drains dependent attachments/Guests, recycles the fabric realization,
 restarts dependents, and preserves Network identity. Non-disruptive changes
-reconcile normally.
+reconcile normally. A change to external `parentInterface`, `macvtapMode`, or
+`sharingPolicy` is always disruptive: the planner closes the old VMM/macvtap,
+releases the old Host-global authority claim, admits the replacement claim, and
+only then restarts dependents.
 
 **Expedited reconcile (D090).** For `Create`, `UpdateSpec`, or `Delete` with
 `waitForReconcile`, the controller performs no external effect, finalizer
@@ -1484,6 +1559,7 @@ using a bounded priority lane.
 ```text
 1. validateSpec
    └─ CIDR, attachment index, IfName collision, netVmSystemArtifactId format
+   └─ external parent/mode/sharing policy + Host-global authority preflight
    └─ fail → ReconcileError{reason}; set condition; return failed-retryable
 
 2. Check User/net-local-controller status.phase == Ready
@@ -1503,7 +1579,8 @@ using a bounded priority lane.
 6. Create or update Guest/<netVmName>
    └─ systemArtifactId = Network.spec.netVmSystemArtifactId (plain bounded ID)
    └─ spec.provider.settings.vsockCid from Network CIDR allocation
-   └─ when externalAttachment non-null: add declared-spec external params only
+   └─ when externalAttachment non-null: require ExternalNicAuthorityReady=True;
+      Core supplies the admitted macvtap attachment privately via LaunchTicket
 
 7. Wait for Guest Ready (via DependenciesReady hint)
    └─ pending → set NetVmReady=False; return pending
@@ -1555,6 +1632,7 @@ network.d2bus.org/fabric-cleanup finalizer
 7. Update Volume attachments to [] (remove Guest attachment); wait for removal
 
 8. Delete Guest/<netVmName>; wait for Deleted event
+   └─ confirms the VMM and macvtap FD owner are gone
 
 9. Delete Volume/net-<networkName>-config; wait for Deleted event
 
@@ -1567,7 +1645,11 @@ network.d2bus.org/fabric-cleanup finalizer
     apply_nm_unmanaged(empty pattern for this network)
     Each is idempotent; failure is retried before clearing finalizer
 
-11. Clear finalizer
+11. Release the Host-global external-NIC authority claim, if present
+    └─ release is forbidden until Guest/VMM/macvtap ownership is closed
+    └─ multiplexed owner transfer is an atomic Core authority-index operation
+
+12. Clear finalizer
 ```
 
 Each step is driven by `owned-resource-changed` hints rather than polling.
@@ -1577,13 +1659,17 @@ The handler does not block the watch receiver while waiting for child Deleted ev
 
 On controller restart (continuation event):
 1. List all Network resources in Zone.
-2. For each, read current host bridge state via `NetworkEffectPort.read_firewall_digest()`
+2. For each external attachment, ask Core to adopt its exact Host-global
+   physical-NIC authority owner proof; ambiguity quarantines and sets
+   `ExternalNicAuthorityReady=False`.
+3. Read current host bridge state via `NetworkEffectPort.read_firewall_digest()`
    and `read_sysctl_state()`.
-3. If the controller's internally-held fabric handles are consistent and digests
+4. If the controller's internally-held fabric handles are consistent and digests
    match: mark adopted (no re-application).
-4. If bridges absent: normal reconcile creates them.
+5. If bridges absent: normal reconcile creates them.
 
-Adoption never deletes or restarts running state.
+Adoption never deletes or restarts unambiguous running state and never opens a
+second physical NIC attachment.
 
 ---
 
@@ -1782,6 +1868,12 @@ the network-local controller is authorized to resolve and call this service
 | `dnsmasq-not-bound` | Degraded | dnsmasq process not Ready; DNS/DHCP unavailable |
 | `nft-not-applied` | Degraded | Agent reports nft_applied=false |
 | `macvtap-not-ready` | Degraded | External attachment macvtap not ready |
+| `external-attachment-mode-invalid` | Failed | External attachment type is not macvtap |
+| `external-parent-interface-invalid` | Failed | Declared parentInterface fails IfName syntax |
+| `external-parent-interface-not-found` | Failed | Trusted Host inventory cannot resolve parentInterface |
+| `external-sharing-policy-invalid` | Failed | Multiplexing requested for a non-bridge mode or policy is incomplete |
+| `external-physical-nic-conflict` | Failed | Same Host physical NIC has an incompatible same- or cross-Zone authority claim |
+| `external-nic-owner-ambiguous` | Degraded | Restart could not prove the prior physical-NIC authority owner |
 | `mdns-process-not-ready` | Degraded | mDNS reflector or bridge not Ready |
 | `net-vm-artifact-missing` | Failed | netVmSystemArtifactId absent from artifact catalog |
 | `net-vm-artifact-type-mismatch` | Failed | Artifact type is not nixos-system |
@@ -2083,21 +2175,46 @@ case).
 
 ### INV-NET-009: no raw IfName/IP/MAC on public surface
 
-**Invariant**: no raw kernel interface name, host bridge name, tap interface
-name, workload IP address, DHCP MAC address, or host uplink IP address appears
-in any of:
-- `Network.spec` fields;
+**Invariant**: except for the operator-declared
+`Network.spec.externalAttachment.parentInterface` Host inventory selector, no
+raw kernel interface name, host bridge name, tap interface name, workload IP
+address, DHCP MAC address, or host uplink IP address appears in any of:
 - `Network.status` fields;
 - `Guest.spec.provider.settings`;
 - OTEL span attributes;
 - metric label values;
 - audit record payload fields.
 
-Raw IfNames are internal to the core adapter and are never exposed through the
-provider crate's API boundary.
+The declared selector may appear in spec-mutation audit but is never reused as
+the authority key. Runtime IfNames, the Core-derived opaque NIC digest, and
+owner proof are internal to Core adapters and never exposed through the
+Provider crate's API boundary.
 
 **Rationale**: prevents information-disclosure about the host kernel interface
 topology through the resource API surface.
+
+### INV-NET-010: no network-local USBIP firewall ownership
+
+**Invariant**: network-local host and net-VM firewall intents contain no USBIP
+rule and no TCP/3240 match. Its firewall digest and `FirewallReady` condition
+cover only rules bearing that Network UID's ownership. Device-usbip rules are
+created, observed, reported, and removed only through `UsbipEffectPort` and the
+closed `UsbipBindFirewallRule` broker operation.
+
+**Rationale**: one semantic owner prevents a generic uplink opening from
+outliving a USB claim or bypassing per-Network/per-busid authorization.
+
+### INV-NET-011: Host-global external physical-NIC authority
+
+**Invariant**: Core admits `(Host, external-physical-nic,
+opaqueKeyDigest)` before any macvtap/VMM effect. `passthru`, `private`, and
+`vepa` are exclusive; `bridge` is exclusive unless all holders explicitly
+request compatible multiplexing. The rule spans Zones on a Host. Update/delete
+closes the VMM/macvtap before releasing the claim; restart requires exact owner
+proof.
+
+**Rationale**: a Zone-local interface-name check cannot prevent two Zones from
+opening the same physical NIC or silently weakening exclusive modes.
 
 ---
 
@@ -2402,14 +2519,14 @@ On controller binary upgrade:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Broker plus device provider boundary; `UsbipBindFirewallRule` remains owned by `Provider/device-usbip`. |
-| Current source | Existing `UsbipBindFirewallRule` broker operation and USBIP provider boundary; network-local supplies only the generic TCP/3240 host firewall carve-out. |
-| Reuse action | preserve ownership separation; do not move USBIP broker op into network-local |
-| Destination | Integration/boundary tests for `Provider/network-local` and `Provider/device-usbip`; no new network-local broker op destination. |
-| Detailed design | `UsbipBindFirewallRule` broker op stays with `Provider/device-usbip`; verify separation in integration tests. |
-| Integration | `Provider/device-usbip` consumes `Network/<name>` via `networkRef`, while `Provider/network-local` emits only generic uplink bridge allow-rule semantics and never calls `UsbipBindFirewallRule`. |
+| Current source | Existing `UsbipBindFirewallRule` owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows. |
+| Reuse action | preserve the typed closed broker op; remove both generic network-local USBIP allows |
+| Destination | Device-usbip EffectPort/adapter owns USBIP rules, drift, and strict provider status; network-local host/net-VM renderers and status cover only Network-owned policy. |
+| Detailed design | `UsbipBindFirewallRule` remains the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. |
+| Integration | `Provider/device-usbip` watches only Network identity/readiness/generation; Core privately resolves the Network attachment for the one relay Endpoint authority and firewall op. Binding proxies receive authorized connected streams through LaunchTickets. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
-| Validation | Integration tests assert the network-local controller does not call `UsbipBindFirewallRule` and that USBIP attach/firewall behavior remains under device-usbip ownership. |
-| Removal proof | None — existing USBIP owner remains; proof is absence of network-local calls and unchanged device-usbip ownership. |
+| Validation | Network-local host and net-VM firewall intent tests assert no TCP/3240/USBIP rule; USBIP rule churn leaves Network digest/`FirewallReady` unchanged; device-usbip tests own exact scoping, drift, status, and release. |
+| Removal proof | Legacy generic `network.nix` and `net.nix` USBIP allow fragments and any golden expectation for them are removed after device-usbip host integration passes. |
 
 ### ADR046-network-019
 | Field | Value |
@@ -2423,6 +2540,19 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/state_schema_roundtrip.rs` and `tests/unit/nix/cases/provider-state-volume-eval.nix` validate empty ProviderStateSet, status bounds/redaction, and config Volume exclusion. |
 | Removal proof | None — net-new; no Provider state Volume or prior owner to remove. |
+
+### ADR046-network-020
+| Field | Value |
+| --- | --- |
+| Dependency/owner | D097 Core authority index, Network contracts, runtime-cloud-hypervisor private attachment path |
+| Current source | Current macvtap spawn resolves a raw parent interface but has no Host-global duplicate admission, sharing policy, authority status, or owner-proof lifecycle. |
+| Reuse action | adapt the existing broker-internal macvtap-FD creation path behind mandatory Core authority admission |
+| Destination | Network schema/Provider descriptor, Core authority index, Network reconcile/update/finalizer, runtime LaunchTicket resolver, and authority tests |
+| Detailed design | Register the external physical-NIC `AuthorityDescriptor`: Host-global `external-physical-nic/v1` Core-derived identity, `zero-or-one` authority, exclusive `passthru`/`private`/`vepa`, exclusive-by-default `bridge`, explicitly compatible bounded multiplexing only for bridge, `external-physical-nic-conflict`, exact owner proof, drain-release-reacquire update, forbidden export, and bounded FIFO holder policy. |
+| Integration | Core preflight gates every runtime LaunchTicket/`SpawnRunner`; status reports bounded authority state and conditions; D091 update and finalizer close macvtap ownership before release. |
+| Data migration | Full d2b 3.0 reset; no legacy authority import. |
+| Validation | `external_nic_authority.rs` covers Core-derived identity, same-/cross-Zone conflicts, explicit bridge multiplexing, incompatible policy, non-bridge multiplex denial, no-effect rejection, adoption ambiguity, owner transfer, disruptive update, release ordering, and redaction; Nix eval and host integration cover declared configuration and lifecycle. |
+| Removal proof | The old direct macvtap spawn path is unreachable unless Core supplies an admitted authority claim in the LaunchTicket. |
 
 ---
 
@@ -2464,11 +2594,13 @@ budget.
 
 | Test file | Coverage |
 | --- | --- |
-| `schema_roundtrip.rs` | `NetworkSpec` and `NetworkStatus` JSON serialize/deserialize; all optional fields; all enum variants |
+| `schema_roundtrip.rs` | `NetworkSpec` and `NetworkStatus` JSON serialize/deserialize; external `parentInterface`/mode/sharing policy; bounded authority status; all optional fields and enum variants |
 | `state_schema_roundtrip.rs` | Provider descriptor has no stateNamespace for `controller-main`; no Provider state Volume, state mount, identity marker, migration worker, or state-layout principal is emitted; ProviderStateSet query returns empty; bounded operational observations live in status/core Operation ledger and pass redaction/size-bound checks; per-Network config Volumes are excluded from ProviderStateSet (ownerRef mismatch) |
 | `ifname_derive.rs` | IfName derivation determinism; collision detection; 15-byte constraint; all role prefixes |
 | `cidr_overlap.rs` | CIDR overlap matrix: same Network, cross-Network, external CIDR; all boundaries; no-false-positive at adjacent CIDRs |
-| `controller_state.rs` | Full reconcile state machine: Normal path; CIDR conflict; User not Ready; Volume error; Guest timeout; agent reload failure; finalizer sequence (all child ordering); adoption on restart; drift detection cycle |
+| `controller_state.rs` | Full reconcile state machine: Normal path; CIDR conflict; User not Ready; Volume error; Guest timeout; agent reload failure; finalizer sequence (all child ordering, external authority release after VMM/macvtap close); adoption on restart; Network-owned drift detection |
+| `external_nic_authority.rs` | Core-derived Host-global identity; same-/cross-Zone exclusive collision; non-bridge multiplex denial; explicit compatible bridge multiplex; mixed-policy conflict; no effect before admission; owner-proof adoption/ambiguity; owner transfer; update/release ordering; no raw identity in status |
+| `firewall_ownership.rs` | Host and net-VM intents contain no TCP/3240/USBIP rule; device-usbip marker/rule churn does not alter Network digest or `FirewallReady` |
 | `conformance.rs` | Provider toolkit black-box conformance suite; descriptor validation; ResourceType schema fingerprint |
 | `fault_injection.rs` | `NetworkEffectPort` returns each `EffectError` variant; each step fails independently; retry/requeue classification; reconcile context has no broker socket; provider crate has no broker import |
 
@@ -2476,11 +2608,12 @@ budget.
 
 | Test file | Coverage | Runner |
 | --- | --- | --- |
-| `host_fabric.rs` | Bridge create/delete; nftables apply; IPv6 suppression; NM unmanaged; drift detection; NetworkEffectPort real impl | `make test-integration` (container) |
+| `host_fabric.rs` | Bridge create/delete; Network-owned nftables apply; no USBIP/TCP-3240 allow; IPv6 suppression; NM unmanaged; ownership-scoped drift detection; NetworkEffectPort real impl | `make test-integration` (container) |
 | `guest_lifecycle.rs` | net-VM Guest create/delete; opaque attachment handle resolution; systemArtifactId binding | `make test-host-integration` |
 | `agent_reload.rs` | Agent service Reload() call; nft-applied + routes-applied predicates; config digest match | `make test-host-integration` |
 | `mdns_reflector.rs` | mDNS reflector Process lifecycle; create when mdns.enable; delete on Network delete | `make test-integration` (container) |
 | `delete_sequence.rs` | Full finalizer ordering: Process Deleted events, Volume attachment removal, Guest Deleted, Volume Deleted, fabric cleanup | `make test-host-integration` |
+| `external_nic_lifecycle.rs` | Fake physical NIC: Host-global claim before SpawnRunner; cross-Zone conflict has no effect; explicit bridge multiplex; update drain/reacquire; delete closes macvtap before claim release | `make test-host-integration` |
 
 ### 26.4 Eval tests (Layer-1, `tests/unit/nix/cases/`)
 
@@ -2492,6 +2625,7 @@ budget.
 | `net-vm-artifact-id-eval.nix` | `net-vm-base` artifact ID format; `nixos-system` type; no path separator |
 | `user-no-managed-by-eval.nix` | `User/net-local-controller` spec contains no `managedBy`; `ownerRef` is in metadata |
 | `provider-state-volume-eval.nix` | ProviderStateSet query-time membership returns empty for `Provider/network-local`; per-Network config Volumes (ownerRef: `Network/<name>`) are excluded and remain runtime/config operational Volumes |
+| `network-external-nic-authority-eval.nix` | parent/mode/sharing schema; non-bridge multiplex rejection; declared same-/cross-Zone conflicts; explicit compatible bridge multiplex policy |
 
 ### 26.5 Drift gates (Layer-1)
 
