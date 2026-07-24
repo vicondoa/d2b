@@ -1040,13 +1040,14 @@ store-assigned UIDs — not human names, filesystem paths, or socket addresses.
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `d2b_device_tpm_phase` | gauge | `zone`, `phase` | Device count per phase |
-| `d2b_device_tpm_flush_duration_seconds` | histogram | `zone`, `outcome` | Pre-start flush wall-clock duration |
-| `d2b_device_tpm_swtpm_restart_count` | counter | `zone` | swtpm restart events |
-| `d2b_device_tpm_marker_status` | gauge | `zone`, `status` | TPM state Volume marker status |
+| `d2b_device_tpm_phase` | gauge | `phase` | Device count per phase |
+| `d2b_device_tpm_flush_duration_seconds` | histogram | `outcome` | Pre-start flush wall-clock duration |
+| `d2b_device_tpm_swtpm_restart_count` | counter | (none) | swtpm restart events |
+| `d2b_device_tpm_marker_status` | gauge | `status` | TPM state Volume marker status |
 
-No label carries a device name, VM name, path, process name, UID, GID,
-PID, or socket address.
+No label carries a Zone name/UID, device name, VM name, path, process name,
+UID, GID, PID, or socket address. Zone identity remains in the bounded
+`d2b.zone` OTEL resource attribute.
 
 ### 14.2 Traces
 
@@ -1291,10 +1292,10 @@ Implement `TpmEffectPort` trait, typed TPM EndpointRef handoff, and
 | Current source | Current direct daemon/broker swtpm lifecycle call sites in `packages/d2bd/src/*` are superseded; controller algorithm is specified in §11.1 |
 | Reuse action | replace |
 | Destination | packages/d2b-provider-device-tpm/src/controller.rs; packages/d2b-provider-device-tpm/tests/controller_fsm.rs |
-| Detailed design | Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, covering happy path, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained. Primary reuse disposition: `replace`. Preserved source-plan detail: replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status. |
+| Detailed design | Controller reconcile state machine: implement the Device reconcile algorithm from §11.1 against `FakeTpmEffectPort`, covering happy path, Volume not-ready, marker fail-closed, flush failure, swtpm maxRestarts, and finalizer behavior where Process is deleted and Volume retained; emit §14 metrics with only closed `phase`/`outcome`/`status` semantics and no Zone/resource-name-derived label. Primary reuse disposition: `replace`. Preserved source-plan detail: replace direct daemon lifecycle with Provider reconcile against `FakeTpmEffectPort` and resource status. |
 | Integration | Resource watches drive the controller; controller creates/observes Volume, Process, EphemeralProcess, and Endpoint resources through `TpmEffectPort`; Device status/finalizers expose outcomes to the ResourceAPI. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
-| Validation | `tests/controller_fsm.rs` covering happy path, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior |
+| Validation | `tests/controller_fsm.rs` covering happy path, Volume not-ready, marker fail-closed, flush failed, swtpm maxRestarts, and finalizer behavior; `tests/metrics_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and Device/Zone-name canary absence |
 | Removal proof | Direct daemon swtpm lifecycle logic is removable after this Provider reconcile FSM reaches parity and ADR046-device-tpm-013 removes the old call sites |
 
 Implement Device reconcile algorithm (§11.1) against `FakeTpmEffectPort`.
@@ -1545,6 +1546,7 @@ budget.
 | `marker_fail_closed.rs` | Marker replaced/missing → Device Failed; no auto-recovery; no second `ensure_state_volume` |
 | `finalizer.rs` | Process deleted; Volume retained; Deleted emitted by core |
 | `redaction.rs` | No path/UID/socket/pidfd in status, audit span attrs, or log records |
+| `metrics_labels.rs` | Closed semantic metric descriptors; exact identity-key absence; Device/Zone-name canaries absent from label values; `d2b.zone` resource attribute retained |
 | `schema.rs` | Device spec admission round-trip through JSON schema |
 | `nix_roundtrip.rs` | Nix form emits no Volume/Process/EphemeralProcess resources |
 

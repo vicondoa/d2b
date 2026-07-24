@@ -2193,14 +2193,17 @@ Metric labels use closed low-cardinality sets:
 | --- | --- |
 | `d2b.zone_route.decision.total` | `outcome` (allowed/denied), `operation_kind`, `hop_count_bucket`, `reason_code` |
 | `d2b.zone_route.advertisement.total` | `outcome` (accepted/denied/withdrawn/replayed), `reason_code` |
-| `d2b.zone_link.session.state` | `link_name_hash` (truncated sha256), `phase` (pending/ready/degraded/failed/unknown) |
-| `d2b.zone_link.reconnect.total` | `link_name_hash`, `reason` |
-| `d2b.zone_link.intent.queued` | `link_name_hash` |
+| `d2b.zone_link.session.state` | `phase` (pending/ready/degraded/failed/unknown) |
+| `d2b.zone_link.reconnect.total` | `reason` |
+| `d2b.zone_link.intent.queued` | (none) |
 | `d2b.zone_link.relay.total` | `outcome`, `operation_kind` |
 | `d2b.zone_route.shortcut.total` | `outcome` (authorized/denied/torn-down), `teardown_reason` |
 
-Prohibited labels: Zone tree path strings, resource names, subject refs,
-provider diagnostics, host paths, session keys, or advertisement payload.
+Prohibited labels: Zone names/UIDs, ZoneLink names or hashes/digests derived
+from them, resource names, subject refs, provider diagnostics, host paths,
+session keys, or advertisement payload. Zone identity remains the `d2b.zone`
+OTEL resource attribute; ZoneLink identity remains available in authorized
+audit records, never metric labels.
 
 ### OTEL spans
 
@@ -2441,10 +2444,10 @@ The following transitions are NOT simple textual renames:
 | Reuse source | Same v3 baseline commit `b5ddbed6` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/zone_links.rs` |
-| Detailed design | Child-local ZoneLink handler in core-controller: manages local ResourceSpec→allocator-bound session→advertisement lifecycle; session state machine (Pending/Established/Disconnected/Reconnecting/Revoked); reconnect backoff per `reconnectPolicy`; advertisement issuance/renewal/withdrawal using enrolled KK ComponentSession; child-store route cursor and outbound intent queue; capability ceiling change handling; status writer; no copied parent/child resource content; Nix-compiled `parentZone` selects the parent allocator, which alone owns privileged listeners, placement, and route namespace and creates no reciprocal resource Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Child-local ZoneLink handler in core-controller: manages local ResourceSpec→allocator-bound session→advertisement lifecycle; session state machine (Pending/Established/Disconnected/Reconnecting/Revoked); reconnect backoff per `reconnectPolicy`; advertisement issuance/renewal/withdrawal using enrolled KK ComponentSession; child-store route cursor and outbound intent queue; capability ceiling change handling; status writer; aggregate metrics use only closed semantic phase/reason/outcome labels and never `link_name_hash` or another ZoneLink/Zone/resource identity label; Nix-compiled `parentZone` selects the parent allocator, which alone owns privileged listeners, placement, and route namespace and creates no reciprocal resource. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Child core-controller process → local transport Provider → sealed binding for the allocator selected by `parentZone` → d2b-bus ComponentSession; child ZoneLink handler exchanges advertisements while that parent ZoneRouteEngine admits/withdraws them |
 | Data migration | New ZoneLink resources from Nix configuration; no prior enrollment compatibility |
-| Validation | Session lifecycle tests; reconnect/revocation/ceiling-change; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests |
+| Validation | Session lifecycle tests; reconnect/revocation/ceiling-change; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
 | Removal proof | `RemoteNodeRegistry` retired after all enrolled peer routing moves to ZoneLink handler |
 
 ### ADR046-routing-005

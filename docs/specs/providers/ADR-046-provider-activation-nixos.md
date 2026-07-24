@@ -983,11 +983,13 @@ material appears in any audit record.
 
 | Metric | Type | Labels (closed enumerations only) |
 | --- | --- | --- |
-| `d2b_activation_nixos_generations_total` | Counter | zone, mode, outcome |
-| `d2b_activation_nixos_generation_duration_seconds` | Histogram | zone, mode |
-| `d2b_activation_nixos_runner_total` | Counter | zone, mode, outcome |
+| `d2b_activation_nixos_generations_total` | Counter | mode, outcome |
+| `d2b_activation_nixos_generation_duration_seconds` | Histogram | mode |
+| `d2b_activation_nixos_runner_total` | Counter | mode, outcome |
 
-No guest name, artifact ID, store path, or file path appears as a metric label.
+No Zone/guest/resource name, artifact ID, store path, or file path appears as
+a metric label. Zone identity remains in the bounded `d2b.zone` OTEL resource
+attribute.
 
 ---
 
@@ -1089,10 +1091,10 @@ Define JSON schema and Rust DTOs. Enforce:
 | Current source | Current top-level activation behavior in packages/d2b/src/lib.rs and hardlink-farm/store ownership split described in this dossier |
 | Reuse action | replace |
 | Destination | packages/d2b-provider-activation-nixos/src/controller/ |
-| Detailed design | Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical startRoot=true shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic. |
+| Detailed design | Implement the reconcile loop for activation-nixos.d2bus.org.NixosGeneration: validate executionRef, systemArtifactId, and priorGenerationRef; dispatch one activation-runner EphemeralProcess with canonical startRoot=true shape; observe runner status; mark superseded generations; prune by retainedGenerations through the finalizer protocol; emit §12.3 metrics with fixed `mode`/`outcome` semantics and no Zone or resource-name-derived labels; never perform direct store-path operations, nix-collect-garbage, explicit VolumeGcRequest, raw argv composition, or store path writes to resources. Primary reuse disposition: `replace`. Preserved source-plan detail: replace top-level imperative activation flow with resource controller logic. |
 | Integration | Controller watches NixosGeneration resources through Zone resource API, creates activation-runner EphemeralProcesses, releases ownership references for Provider/volume-local, and writes bounded status. |
 | Data migration | Full d2b 3.0 reset; adopt mode records an existing active generation but does not import v2 controller state |
-| Validation | Controller tests for retention, finalizer sequence, no TTL retention, no direct store ops, no store path in status, deleted event-only removal, and runner shape. |
+| Validation | Controller tests for retention, finalizer sequence, no TTL retention, no direct store ops, no store path in status, deleted event-only removal, runner shape, and a structural metric descriptor assertion that `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys are absent and a generation/Zone-name canary never enters labels. |
 | Removal proof | Direct hardlink-farm and garbage-collection calls from activation-nixos reachable paths are absent after controller and runner tests pass. |
 
 **Scope:** `packages/d2b-provider-activation-nixos/src/controller/`
@@ -1214,6 +1216,7 @@ Gated on ADR046-activation-005 passing integration tests.
 | `state::test_provider_state_set_empty` | Provider declares no Provider state Volume; ProviderStateSet query returns empty for `Provider/activation-nixos` |
 | `state::test_no_state_layout_principal` | No dedicated state-layout `User/<name>` or ComponentPrincipal reference is emitted for controller state |
 | `state::test_status_first_operational_state` | Bounded non-secret controller operational observations are stored in revisioned status/core Operation ledger and re-verified after restart |
+| `metrics::test_identity_labels_absent` | Metric descriptors use only closed `mode`/`outcome` semantics; exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys; Zone/generation-name canaries absent from values; `d2b.zone` resource attribute retained |
 
 ### 16.2 Integration tests (`integration/`)
 

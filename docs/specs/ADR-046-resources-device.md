@@ -1257,13 +1257,13 @@ and any credential material.
 ### OTEL spans
 
 Device reconcile telemetry attribute placement — including span vs resource
-attribute classification, `d2b.device.zone` cardinality, `d2b.device.provider`
-label level, and full label set boundaries — is specified in
-`ADR-046-telemetry-audit-and-support`. This spec does not define competing
-telemetry decisions. Device Provider implementations must cross-reference that
-spec for all OTEL label and span attribute constraints. No device path, busid,
-serial, vendor/product string, session content, or process PID may appear in
-any OTEL attribute or metric label.
+attribute classification and full label-set boundaries — is specified in
+`ADR-046-telemetry-audit-and-support`. `d2b.zone` and `d2b.provider` are
+bounded OTEL resource attributes, never metric labels. This spec does not
+define competing telemetry decisions. Device Provider implementations must
+cross-reference that spec for all OTEL label and span attribute constraints.
+No Zone/resource name or UID, device path, busid, serial, vendor/product
+string, session content, or process PID may appear in a metric label.
 
 ## Errors
 
@@ -2041,10 +2041,10 @@ error listing the missing paths. There is no opt-out mechanism.
 | Current source | `packages/d2b-contracts/src/security_key.rs` (SecurityKeyStatusResponse, SecurityKeySession, SecurityKeyLeaseState, SecurityKeyVmSessionState DTOs; implemented-and-reachable), `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule — implemented-and-reachable); `packages/d2b-core/src/manifest_v04.rs` VmEntry device fields (tpm, usbip_yubikey, security_key, graphics — old Workload manifest, generated-or-eval-contract) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/device.rs` |
-| Detailed design | Device ResourceType schema (spec/status/conditions/claims/inventory); closed-set error codes; Device RBAC verbs; broker operation effect-limit constants Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Device ResourceType schema (spec/status/conditions/claims/inventory); closed-set error codes; Device RBAC verbs; broker operation effect-limit constants; shared Device telemetry contract requires fixed semantic metric labels with no Zone/resource-name-derived identity and retains `d2b.zone`/`d2b.provider` only as OTEL resource attributes. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider dossiers, resource API/store, CLI status surfaces |
 | Data migration | Full reset; no v2 device object import |
-| Validation | Schema golden vectors; unknown-field denial; exclusive/shared conflict rejection; arbitration/maxClaims invariant |
+| Validation | Schema golden vectors; unknown-field denial; exclusive/shared conflict rejection; arbitration/maxClaims invariant; cross-Provider structural descriptor test asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Device/Zone-name canary absence while preserving `d2b.zone` resource attributes |
 | Removal proof | Old ProcessRole/DTO branches retained until Provider integrations are live |
 
 ### ADR046-device-002

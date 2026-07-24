@@ -281,11 +281,28 @@ span attributes for Host processes.
 
 ### Cardinality rules
 
-All metric label values must come from a **closed set enumerated in this spec**.
-The following are unconditionally forbidden as metric label values:
+Every metric descriptor MUST use only fixed semantic label keys from the
+closed `METRIC_LABEL_POLICY` registry, and every value domain MUST be a closed
+enum or an explicitly bounded semantic classifier from this spec. Free-form
+resource identity is never a metric dimension. The structural policy lint
+rejects descriptor keys that are absent from the registry before inspecting
+any emitted value.
 
-- VM names, Zone names, Provider names, resource names (`metadata.name` values)
-  — these appear only in OTEL resource attributes
+The exact label keys `vm`, `zone`, `zone_id`, and `zone_uid` are
+unconditionally forbidden. So are bare resource-kind identity keys such as
+`network`, `credential`, `guest`, `host`, `user`, `volume`, `device`, and
+`process`, plus every resource-name-derived key (`credential_name`,
+`resource_name`, `network_name`, `link_name_hash`, any `*_name`,
+`*_name_hash`, `*_name_digest`, or `*_uid`). Fixed semantic keys such as
+`resource_type`, `provider`, `handler`, `operation`, `phase`, and `outcome`
+remain allowed only with their closed value domains; for example, `provider`
+identifies a fixed implementation class, never `Provider.metadata.name`.
+
+The following values are also unconditionally forbidden in metric labels:
+
+- VM names, Zone names, Provider resource names, and all resource names
+  (`metadata.name` values) — these appear only in bounded OTEL resource
+  attributes
 - Zone/Provider/Process UIDs
 - Host/Guest/User/Volume/Network/Device names
 - Filesystem paths, socket paths, executable paths
@@ -297,6 +314,10 @@ The following are unconditionally forbidden as metric label values:
 - Endpoint addresses, port numbers, or IP addresses
 - ResourceExport `exportKey` values, raw stream bytes, device serials, token
   values, and any path/device/socket locator
+
+Zone identity remains available as the bounded `d2b.zone` OTEL resource
+attribute. Removing identity labels MUST NOT remove that resource attribute or
+the Zone/resource identity fields permitted by the audit contract.
 
 Note: the current `d2b_daemon_vm_*` metrics in `packages/d2bd/src/metrics.rs`
 use `vm` labels with VM name values (e.g. labels `["vm", "state"]`,
@@ -1590,8 +1611,17 @@ Adapt `packages/d2b-contract-tests/tests/policy_metrics.rs`:
 
 - Assert every metric declared in this spec is present in the closed
   `METRIC_INVENTORY` table in its owning crate.
-- Assert no metric label value from the forbidden list (`vm`, name-shaped
-  strings) appears in any `MetricDescriptor` label set.
+- Parse every v3 `MetricDescriptor` and assert every label key/value domain is
+  present in the closed `METRIC_LABEL_POLICY` registry.
+- Assert the exact keys `vm`, `zone`, `zone_id`, and `zone_uid` are absent from
+  every v3 descriptor.
+- Assert resource-name-derived keys are absent, including exact regression
+  cases `credential_name`, `network`, `network_name`, and `link_name_hash`, and
+  reject the structural suffixes `*_name`, `*_name_hash`, `*_name_digest`, and
+  `*_uid`.
+- Feed a canary `metadata.name` value through every metric emitter fixture and
+  assert it is absent from every emitted label value while `d2b.zone` remains
+  present in the OTEL resource-attribute fixture.
 - Assert `d2b_controller_hint_to_handler_seconds` bucket list includes a
   5 ms bucket (0.005).
 - Assert `d2b_process_launch_duration_seconds` bucket list includes a 20 ms
@@ -1616,6 +1646,8 @@ New test `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs`:
 - Assert the OTEL resource attribute initialization uses only the allowlist
   from this spec (extends `loki_native_otel_resource_attributes` test from
   `packages/d2b-contract-tests/tests/policy_observability.rs`).
+- Parse the metric descriptor registry structurally and fail any label key not
+  declared by `METRIC_LABEL_POLICY`; grep-only checks are insufficient.
 - Assert `config_source = "realm-controllers"` string literal does not appear
   in any v3 component source; only `config_source = "zone-config"` is allowed.
 
@@ -2040,7 +2072,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (`loki_native_otel_resource_attributes` allowlist: `["deployment.environment","host.name","service.name","service.namespace","source","vm.env","vm.name","vm.role"]`; `tempo_stack_signoz_backend_and_collector` SigNoz-only assertion; `startup_tracing_avoids_host_path_fields` forbidden fields); `packages/d2b-contract-tests/tests/policy_metrics.rs` (`EXPECTED_METRICS` table parity with `docs/reference/daemon-metrics.md`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new); updated `policy_observability.rs`; updated `policy_metrics.rs` |
-| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add metric label gate: assert no v3 `MetricDescriptor` carries a `vm` label. (4) Add bucket boundary gates for 5 ms and 20 ms. (5) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates. |
+| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add structural metric-label policy lint: parse every v3 `MetricDescriptor`, require each label key and value domain to exist in the closed `METRIC_LABEL_POLICY`, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `network`, `network_name`, and `link_name_hash`, reject resource-name-derived key suffixes `*_name`, `*_name_hash`, `*_name_digest`, and `*_uid`, and prove a `metadata.name` canary never enters label values. Fixed semantic labels remain allowed only with closed domains. (4) Assert the `d2b.zone` resource attribute remains present. (5) Add bucket boundary gates for 5 ms and 20 ms. (6) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates. |
 | Integration | Contract-tests run in workspace check and `make test-drift` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | These tests are their own validation artifact |

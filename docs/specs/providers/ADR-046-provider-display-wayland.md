@@ -1288,16 +1288,16 @@ a guest name, Zone name, socket path, interface name, or window title.
 
 | Metric name | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `d2b_display_wayland_session_total` | counter | `zone_id`, `outcome` | Total WaylandSession create/delete events |
-| `d2b_display_wayland_session_ready` | gauge | `zone_id` | Current Ready session count |
-| `d2b_display_wayland_proxy_start_total` | counter | `zone_id`, `outcome` | Proxy process start events |
-| `d2b_display_wayland_proxy_exit_total` | counter | `zone_id`, `exit_class` | Proxy process exit events |
-| `d2b_display_wayland_policy_warning_total` | counter | `zone_id`, `warning_code` | Policy advisory events |
-| `d2b_display_wayland_policy_compile_total` | counter | `zone_id`, `outcome` | Policy compile events |
+| `d2b_display_wayland_session_total` | counter | `outcome` | Total WaylandSession create/delete events |
+| `d2b_display_wayland_session_ready` | gauge | (none) | Current Ready session count |
+| `d2b_display_wayland_proxy_start_total` | counter | `outcome` | Proxy process start events |
+| `d2b_display_wayland_proxy_exit_total` | counter | `exit_class` | Proxy process exit events |
+| `d2b_display_wayland_policy_warning_total` | counter | `warning_code` | Policy advisory events |
+| `d2b_display_wayland_policy_compile_total` | counter | `outcome` | Policy compile events |
 
-`zone_id` is a stable opaque short ID (not the Zone name string) to avoid
-metric cardinality explosion. `outcome` and `exit_class` are closed bounded
-enums.
+Zone identity is carried only in the bounded `d2b.zone` OTEL resource
+attribute. `outcome`, `exit_class`, and `warning_code` are closed bounded
+enums; no Zone UID or resource name is a metric dimension.
 
 ### 14.3 OTEL spans
 
@@ -1771,10 +1771,10 @@ produces the guest binary (see §19 removal table).
 | Current source | `packages/d2b-wayland-proxy/src/diag.rs` (rate-limited bounded diagnostics) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-display-wayland/src/audit.rs`, `packages/d2b-provider-display-wayland/src/metrics.rs` |
-| Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed label sets; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed semantic label sets with no Zone UID/name or resource-name-derived key; retain Zone identity in `d2b.zone` resource attributes; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Providers emit via Zone telemetry emitter; audit records committed before operation completion |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Redaction contract tests (`policy_observability.rs` pattern), audit record schema tests, label-cardinality tests |
+| Validation | Redaction contract tests (`policy_observability.rs` pattern), audit record schema tests, structural label-policy tests asserting exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus WaylandSession/Zone-name canary absence |
 | Removal proof | N/A (new code) |
 
 ### ADR046-display-004
@@ -1857,7 +1857,7 @@ per-test budget.
 | `virgl_video_unsupported_condition` | `virglVideo: true` with GPU Device not advertising video decode sets `VirglVideoUnsupported` condition |
 | `conformance_display_fails_closed_when_unsupported` | Provider without `window-forwarding` capability returns `CapabilityDenied`; no fallback |
 | `audit_record_no_paths` | All audit record types contain no socket paths, user identities, or window titles |
-| `metric_labels_closed` | All metric label values are members of the closed pre-declared label sets |
+| `metric_labels_closed` | All descriptors use closed semantic labels; exact identity-key absence; WaylandSession/Zone-name canaries absent from values; `d2b.zone` resource attribute retained |
 | `readiness_event_bounded` | `ProxyReadinessEvent` serialization contains no socket paths |
 | `principal_pool_exhausted_fails_closed` | All pool slots occupied → new dynamic session transitions to `Failed` with `NoPrincipalAvailable`; no OS user creation attempted |
 | `opaque_principal_name_derived` | `principalFor(zone, sessionName)` produces `d2b-wlp-<hex12>` with correct SHA-256 derivation; two sessions with different names produce different accounts; pool slots produce `d2b-wlp-p<N>` |

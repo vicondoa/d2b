@@ -1374,14 +1374,15 @@ environment variables.
 in `ProcessEffect` records, forbidden in any metric label, span attribute, or
 log field.
 
-**OTEL forbidden metric-label values** (lines 283-303): VM/Zone/Provider/
-resource names; user or resource UIDs; Host/Guest/User/Volume/Network/
-Device names; filesystem paths, `argv`, environment variables; status detail
-messages; subject names; PIDs, pidfds, cgroup paths; operation IDs, endpoint
-addresses. `d2b.zone` is allowed in resource attributes but never in a
-metric label value. Cardinality is enforced by policy tests
-(`policy_observability.rs`, and the new cross-spec
-`policy_telemetry_redaction.rs` under `ADR046-telem-008`).
+**OTEL forbidden metric dimensions** (telemetry spec §Cardinality rules):
+the exact keys `vm`, `zone`, `zone_id`, and `zone_uid`; every
+resource-name-derived key; VM/Zone/Provider-resource/resource names and UIDs;
+filesystem paths, `argv`, environment variables; status detail messages;
+subject names; PIDs, pidfds, cgroup paths; operation IDs; and endpoint
+addresses. `d2b.zone` is allowed in resource attributes but never in a metric
+label. Structural closed-label policy tests parse every descriptor and enforce
+both key and value-domain rules in `policy_telemetry_redaction.rs` under
+`ADR046-telem-008`.
 
 **Audit record types** (lines 914-1170): `ResourceMutation`, `RBACChange`,
 `SessionConnect`, `RouteAdmission`, `BrokerEffect`, `ProcessEffect`,

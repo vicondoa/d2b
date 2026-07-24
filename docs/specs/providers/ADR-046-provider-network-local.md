@@ -1959,25 +1959,27 @@ d2b.network.dnsmasq.restart
 d2b.network.observe.drift_check
 ```
 
-Labels use closed cardinality.  `network.name` is a ResourceName (bounded
-`^[a-z][a-z0-9-]*$`), never a hostname or FQDN.
+Metric labels use closed semantic cardinality and carry no Zone or Network
+identity. Zone identity remains in the `d2b.zone` OTEL resource attribute.
+`network.name` is a ResourceName (bounded `^[a-z][a-z0-9-]*$`), never a
+hostname or FQDN, and is never copied into a metric label.
 
 Metrics:
 
 | Metric | Labels |
 | --- | --- |
-| `d2b_network_reconcile_total` | `zone`, `outcome` |
-| `d2b_network_phase` | `zone`, `phase` |
-| `d2b_network_attachment_count` | `zone`, `network` |
-| `d2b_nftables_apply_total` | `zone`, `outcome` |
-| `d2b_nftables_drift_total` | `zone` |
-| `d2b_bridge_create_total` | `zone`, `outcome` |
-| `d2b_bridge_delete_total` | `zone`, `outcome` |
-| `d2b_network_volume_sync_total` | `zone`, `outcome` |
-| `d2b_network_agent_reload_total` | `zone`, `outcome` |
-| `d2b_network_agent_restart_total` | `zone`, `outcome` |
-| `d2b_network_dnsmasq_restart_total` | `zone`, `outcome` |
-| `d2b_network_observe_drift_total` | `zone`, `surface` |
+| `d2b_network_reconcile_total` | `outcome` |
+| `d2b_network_phase` | `phase` |
+| `d2b_network_attachment_count` | (none) |
+| `d2b_nftables_apply_total` | `outcome` |
+| `d2b_nftables_drift_total` | (none) |
+| `d2b_bridge_create_total` | `outcome` |
+| `d2b_bridge_delete_total` | `outcome` |
+| `d2b_network_volume_sync_total` | `outcome` |
+| `d2b_network_agent_reload_total` | `outcome` |
+| `d2b_network_agent_restart_total` | `outcome` |
+| `d2b_network_dnsmasq_restart_total` | `outcome` |
+| `d2b_network_observe_drift_total` | `surface` |
 
 ---
 
@@ -2362,11 +2364,11 @@ On controller binary upgrade:
 | Dependency/owner | Provider; depends on ADR046-nl-001 through ADR046-nl-005 and owns the Network reconcile/observe/finalize handlers. |
 | Current source | None — net-new v3 provider controller; v1 behavior lived in `nixos-modules/network.nix` and `nixos-modules/net.nix` static NixOS module logic. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-network-local/src/controller.rs`. |
-| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership. |
+| Destination | `packages/d2b-provider-network-local/src/{controller.rs,metrics.rs}`. |
+| Detailed design | Implement `controller.rs` reconcile/observe/finalize handlers with `NetworkEffectPort` injection and the §21 metric descriptors with closed semantic labels. No descriptor may carry `vm`, `zone`, `zone_id`, `zone_uid`, `network`, or another resource-name-derived key; Network/Zone identity stays in trace/resource attributes. Primary reuse disposition: `adapt`. Preserved source-plan detail: port semantics into provider reconcile state machine; do not reuse static per-env systemd/Nix ownership. |
 | Integration | Controller watches Network, Guest, Volume, Process, User, Host, and Zone resources; creates child resources, writes status, invokes `NetworkEffectPort`, and drives finalizers. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
-| Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock. |
+| Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values. |
 | Removal proof | Supersedes static per-env lifecycle in `nixos-modules/network.nix` and `nixos-modules/net.nix`; removal proof is successor controller coverage plus deletion of duplicate old gates when this provider lands. |
 
 ### ADR046-nl-007
@@ -2603,6 +2605,7 @@ budget.
 | `firewall_ownership.rs` | Host and net-VM intents contain no TCP/3240/USBIP rule; device-usbip marker/rule churn does not alter Network digest or `FirewallReady` |
 | `conformance.rs` | Provider toolkit black-box conformance suite; descriptor validation; ResourceType schema fingerprint |
 | `fault_injection.rs` | `NetworkEffectPort` returns each `EffectError` variant; each step fails independently; retry/requeue classification; reconcile context has no broker socket; provider crate has no broker import |
+| `metrics_labels.rs` | Every metric descriptor uses only closed semantic labels; exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `network`, and resource-name-derived keys; Network-name canary absent from emitted labels; `d2b.zone` retained as an OTEL resource attribute |
 
 ### 26.3 Integration tests (`integration/`)
 

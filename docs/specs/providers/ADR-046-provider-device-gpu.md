@@ -1158,20 +1158,20 @@ video socket paths, and any credential material.
 
 ## OTEL telemetry
 
-All telemetry placement — span vs resource attribute classification,
-`d2b.device.zone` cardinality, `d2b.device.provider` label level, and full
-label set boundaries — is defined in `ADR-046-telemetry-audit-and-support`.
-This dossier does not compete with those constraints.
+All telemetry placement — span vs resource attribute classification and full
+label-set boundaries — is defined in
+`ADR-046-telemetry-audit-and-support`. `d2b.zone` and
+`d2b.provider="device-gpu"` are bounded OTEL resource attributes, never metric
+labels. This dossier does not compete with those constraints.
 
 GPU-specific label rules:
 
 - No device path, DRM card node, render node path, PCI slot, GPU socket path,
   video socket path, or process PID may appear in any OTEL span attribute or
   metric label.
-- `d2b.device.provider = device-gpu` is a fixed string label.
-- `d2b.gpu.mode` ∈ `{full, render-node}` is a closed-set label (low cardinality).
-- `d2b.gpu.video_sidecar` ∈ `{enabled, disabled}` is a closed-set label.
-- `d2b.gpu.arbitration` ∈ `{exclusive, shared}` is a closed-set label.
+- `mode` ∈ `{full, render-node}` is a closed semantic metric label.
+- `video_sidecar` ∈ `{enabled, disabled}` is a closed semantic metric label.
+- `arbitration` ∈ `{exclusive, shared}` is a closed semantic metric label.
 - No `vm_name`, `guest_name`, or human-readable VM identifier appears in metric
   labels; VM identity is carried only in OTEL resource attributes and trace context.
 
@@ -1650,11 +1650,11 @@ disposition contract test passes.
 | Current source | `packages/d2bd/src/usbip_state_machine.rs` (implemented-and-reachable) as reconcile loop pattern reference. GPU/video reconcile state is `ADR-only`. |
 | Reuse source | Pattern only: `packages/d2bd/src/usbip_state_machine.rs` (baseline). No code copy. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-device-gpu/src/controller.rs` |
-| Detailed design | Five triggers: `spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed`. Each trigger handler writes optimistic `ResourceMutationBatch`. Status writer in `status.rs`. Async watch task + per-resource reconcile tasks. Independent resources in parallel. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — implement the five-trigger reconcile loop using Provider toolkit async reconciler. |
+| Destination | `packages/d2b-provider-device-gpu/src/{controller.rs,telemetry.rs}` |
+| Detailed design | Five triggers: `spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed`. Each trigger handler writes optimistic `ResourceMutationBatch`. Status writer in `status.rs`. Async watch task + per-resource reconcile tasks. Independent resources in parallel. Telemetry uses only closed `mode`/`video_sidecar`/`arbitration` semantics; `d2b.zone` and `d2b.provider` remain resource attributes and no Zone/resource-name-derived key is a metric label. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — implement the five-trigger reconcile loop using Provider toolkit async reconciler. |
 | Integration | Resource API (ADR046 store) must be present; fake ResourceClient available from Provider toolkit; `tests/combined_reconcile.rs` validates trigger dispatch |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `cargo test -p d2b-provider-device-gpu --test combined_reconcile`; all five trigger handlers must reach their expected output state |
+| Validation | `cargo test -p d2b-provider-device-gpu --test combined_reconcile`; all five trigger handlers must reach their expected output state; structural metric descriptor test asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus GPU Device/Zone-name canary absence while preserving `d2b.zone` resource attributes |
 | Removal proof | Current ProcessRole::Gpu/Video/GpuRenderNode retained until this test passes; see ProcessRole disposition table |
 
 ### ADR046-gpu-003: DRM sysfs probe and observe scheduler

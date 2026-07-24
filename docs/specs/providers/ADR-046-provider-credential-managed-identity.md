@@ -1356,7 +1356,7 @@ embed secret shapes.
 | Metric | Type | Labels |
 | --- | --- | --- |
 | `d2b_credential_operations_total` | Counter | `provider="credential-managed-identity"`, `operation_class`, `placement_binding`, `outcome` |
-| `d2b_credential_lease_expiry_seconds` | Gauge | `provider`, `credential_name`, `placement_binding` |
+| `d2b_credential_lease_expiry_seconds` | Gauge | `provider`, `placement_binding` |
 | `d2b_credential_rotation_total` | Counter | `provider`, `policy`, `outcome` |
 | `d2b_credential_provider_health` | Gauge (0/1) | `provider`, `placement_binding` |
 | `d2b_credential_active_leases` | Gauge | `provider`, `placement_binding` |
@@ -1364,9 +1364,10 @@ embed secret shapes.
 
 `alias` in `d2b_credential_imds_calls_total` uses only the closed alias string
 (`azure-imds`, `azure-imds-aca`); no resolved endpoint URL appears in this label.
-Label cardinality is bounded. `credential_name` appears only in expiry gauges
-where per-resource precision is required; it is omitted from high-cardinality
-counters.
+Label cardinality is bounded and semantic. The expiry gauge reports the
+minimum seconds remaining across active leases in each provider/placement
+aggregate (0 when none). Credential and Zone identity remain in the bounded
+OTEL attributes above and permitted audit fields, never metric labels.
 
 ---
 
@@ -1834,10 +1835,10 @@ item.
 | Current source | `packages/d2b-realm-provider/src/error.rs:contains_sensitive_shape`; `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; main `a1cc0b2d` managed-identity canary tests listed in §Source reuse |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-credential-managed-identity/src/{audit.rs,telemetry.rs}; packages/d2b-contract-tests/tests/credential_audit.rs |
-| Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit; emit OTEL spans and metrics per §OTEL and metrics; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, and `imds-endpoint-canary` in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces. |
+| Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit; emit OTEL spans and metrics per §OTEL and metrics with no Zone/Credential/resource-name-derived label; report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential `metadata.name`, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces. |
 | Integration | Controller and agent service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded redacted records; contract tests validate credential audit shape across providers. |
 | Data migration | None — audit/telemetry only; no runtime state import |
-| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests for labels and sensitive-shape rejection |
+| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived label key, reject Credential/Zone-name label canaries, preserve allowed OTEL identity attributes, and reject sensitive shapes |
 | Removal proof | None — audit/telemetry helpers are additive; no prior owner to remove |
 
 ---
@@ -1939,6 +1940,7 @@ audit record field set conformance, delivery session binding contract, RBAC
 | `clientId` value absent from audit records, metric labels, OTEL spans, error messages, and log lines | Config field exclusion |
 | `imdsEndpointAlias` value absent from OTEL span attributes, audit records, and error messages | Alias exclusion |
 | IMDS response-shaped string absent from status, audit, OTEL, and logs | IMDS response content exclusion |
+| Metric descriptors contain no `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, or resource-name-derived key; Credential/Zone-name canaries are absent from emitted label values while allowed OTEL identity attributes remain | Structural metric identity-label exclusion |
 
 #### `delivery.rs`
 

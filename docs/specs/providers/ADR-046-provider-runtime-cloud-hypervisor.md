@@ -1465,17 +1465,17 @@ emitter (no OTEL SDK; frames forwarded by `Provider/observability-otel`):
 
 | Metric name | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `d2b_runtime_ch_guest_total` | Counter | `zone`, `outcome: provisioned|failed|deleted` | Guest lifecycle events |
-| `d2b_runtime_ch_guest_phase` | Gauge | `zone`, `phase` | Current Guests by phase |
-| `d2b_runtime_ch_vmm_restarts_total` | Counter | `zone` | VMM Process restart count |
-| `d2b_runtime_ch_reconcile_duration_seconds` | Histogram | `zone`, `result: converged|pending|failed` | Per-reconcile duration |
-| `d2b_runtime_ch_adoption_total` | Counter | `zone`, `outcome: adopted|failed|ambiguous` | Controller restart adoption events |
-| `d2b_runtime_ch_health_check_duration_seconds` | Histogram | `zone`, `result: passed|failed|timeout` | Guest health check duration |
+| `d2b_runtime_ch_guest_total` | Counter | `outcome: provisioned|failed|deleted` | Guest lifecycle events |
+| `d2b_runtime_ch_guest_phase` | Gauge | `phase` | Current Guests by phase |
+| `d2b_runtime_ch_vmm_restarts_total` | Counter | (none) | VMM Process restart count |
+| `d2b_runtime_ch_reconcile_duration_seconds` | Histogram | `result: converged|pending|failed` | Per-reconcile duration |
+| `d2b_runtime_ch_adoption_total` | Counter | `outcome: adopted|failed|ambiguous` | Controller restart adoption events |
+| `d2b_runtime_ch_health_check_duration_seconds` | Histogram | `result: passed|failed|timeout` | Guest health check duration |
 
 Cardinality rules:
-- `zone` is allowed in metric labels (bounded by Zone count per host).
-- Guest name (`vm.name`), guest-specific IDs, and endpoint locators are **not** metric
-  label values; they may appear only in OTEL resource attributes (advisory).
+- Zone name/UID, Guest name (`vm.name`), guest-specific IDs, and endpoint
+  locators are **not** metric label keys or values; identity appears only in
+  bounded OTEL resource attributes (advisory).
 - No path, socket name, CID, PID, or runtime detail appears in any metric label.
 
 ### 18.4 OTEL resource attributes
@@ -1724,10 +1724,10 @@ per-test budget.
 | Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*`); `packages/d2b-contract-tests/tests/policy_observability.rs` |
 | Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/metrics.rs`; `src/audit.rs` |
-| Detailed design | `d2b_runtime_ch_*` metrics from §18.3; bounded durable audit records from §17.3; no `vm=` metric label; no path/argv/socket in any field; closed OTEL attribute allowlist extended per §18.4 |
+| Detailed design | `d2b_runtime_ch_*` metrics from §18.3 with closed semantic labels and no `vm`, `zone`, `zone_id`, `zone_uid`, or resource-name-derived key; bounded durable audit records from §17.3; no path/argv/socket in any field; identity retained in the closed OTEL resource-attribute allowlist extended per §18.4 |
 | Integration | Zone lightweight bounded emitter; `Provider/observability-otel` forwarding |
 | Data migration | `d2b_daemon_vm_*` metrics retired; consumers must update dashboards |
-| Validation | `policy_observability.rs` updated with v3 allowlist; cardinality tests; bounded message/field tests; audit record schema golden vectors |
+| Validation | `policy_observability.rs` updated with v3 allowlist; structural descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; bounded message/field tests; audit record schema golden vectors |
 | Removal proof | Hand-rolled Prometheus registry (`d2bd/src/metrics.rs` `d2b_daemon_vm_*` section) deleted after migration |
 
 ### ADR046-ch-007 (controller status-first operational state)
@@ -1771,7 +1771,7 @@ packages/d2b-provider-runtime-cloud-hypervisor/
     adoption_property_test.rs    # pidfd adoption: gone/ambiguous/stale-pid property tests
     health_check_test.rs         # fake guest-control server; timeout/failure/retry (observe handler)
     finalize_ordering_test.rs    # finalizer algorithm, single VMM Process teardown, ambiguity
-    metrics_cardinality_test.rs  # no vm= label; bounded audit fields; no path/argv in output
+    metrics_cardinality_test.rs  # no VM/Zone/resource-name labels; exact forbidden-key and canary absence
     schema_golden_test.rs        # spec.provider.settings JSON Schema golden vector (no cmdlineExtra/seccompOverride)
     redaction_test.rs            # no store path in Debug, status, or audit output
     state_status_test.rs         # status projection round-trip; bound enforcement;

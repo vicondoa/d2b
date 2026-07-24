@@ -1056,27 +1056,27 @@ content.
 ### 13.1 Separation invariant
 
 Telemetry (OTEL) and authoritative audit are distinct subsystems per
-`ADR-046-telemetry-audit-and-support` §"Separation invariant".  No OTEL field
-ever carries notification content, action text, or source identity beyond
-opaque resource UID digests.
+`ADR-046-telemetry-audit-and-support` §"Separation invariant". No OTEL field
+ever carries notification content or action text. Metric labels carry no
+source identity; bounded OTEL resource attributes retain `d2b.zone`.
 
 ### 13.2 OTEL metrics (closed labels only)
 
 | Metric | Type | Labels | Notes |
 | --- | --- | --- | --- |
-| `d2b_notification_created_total` | counter | `zone`, `category`, `urgency` | Count by category/urgency only |
-| `d2b_notification_delivered_total` | counter | `zone`, `category`, `urgency`, `sink_result` | Terminal delivery outcome |
-| `d2b_notification_action_invoked_total` | counter | `zone`, `category` | Action invoked; no action ID label |
-| `d2b_notification_drop_total` | counter | `zone`, `reason` | `reason`: `capacity` \| `observer-backpressure` \| `sink-unavailable` |
-| `d2b_notification_dbus_duration_seconds` | histogram | `zone`, `outcome` | D-Bus call latency |
-| `d2b_notification_action_nonce_issued_total` | counter | `zone` | — |
-| `d2b_notification_action_nonce_expired_total` | counter | `zone` | — |
-| `d2b_notification_stream_sessions_active` | gauge | `zone`, `stream_kind` | Active named stream sessions |
+| `d2b_notification_created_total` | counter | `category`, `urgency` | Count by category/urgency only |
+| `d2b_notification_delivered_total` | counter | `category`, `urgency`, `sink_result` | Terminal delivery outcome |
+| `d2b_notification_action_invoked_total` | counter | `category` | Action invoked; no action ID label |
+| `d2b_notification_drop_total` | counter | `reason` | `reason`: `capacity` \| `observer-backpressure` \| `sink-unavailable` |
+| `d2b_notification_dbus_duration_seconds` | histogram | `outcome` | D-Bus call latency |
+| `d2b_notification_action_nonce_issued_total` | counter | (none) | — |
+| `d2b_notification_action_nonce_expired_total` | counter | (none) | — |
+| `d2b_notification_stream_sessions_active` | gauge | `stream_kind` | Active named stream sessions |
 
-**Labels that are explicitly excluded:**  summary, body, action label, action
-ID, icon ref, source VM name, notification ResourceRef name, correlationId,
-idempotency key, D-Bus notification ID, and any string derived from
-notification content.
+**Labels that are explicitly excluded:** Zone name/UID, summary, body, action
+label, action ID, icon ref, source VM name, notification ResourceRef name,
+correlationId, idempotency key, D-Bus notification ID, and any string derived
+from notification content.
 
 ### 13.3 OTEL traces
 
@@ -1405,10 +1405,10 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Current source | `nixos-modules/notifications.nix`; `packages/d2bd/src/metrics.rs` |
 | Reuse action | adapt |
 | Destination | Nix: Zone resource authoring in `nixos-modules/`; metrics: `packages/d2b-provider-notification-desktop/src/` |
-| Detailed design | Zone Provider resource and RoleBinding Nix compiler output; `spec.config.guestSources` authoring and eval-time assertions; OTEL metric emitters with closed labels; audit record emitters |
+| Detailed design | Zone Provider resource and RoleBinding Nix compiler output; `spec.config.guestSources` authoring and eval-time assertions; OTEL metric emitters with closed semantic labels and no Zone/resource-name-derived dimensions while retaining `d2b.zone` as a resource attribute; audit record emitters |
 | Integration | Nix configuration compiler; OTEL emitter ring; authoritative audit |
 | Data migration | `d2b.notifications.*` Nix options retired; `d2b.zones.<z>.resources.notification-desktop` with `spec.config.guestSources` replaces |
-| Validation | Eval tests for category enforcement, displayWaylandRef assertion, guestRef resolution; `tests/stream_redaction.rs` for content-free telemetry |
+| Validation | Eval tests for category enforcement, displayWaylandRef assertion, guestRef resolution; `tests/stream_redaction.rs` for content-free telemetry; `tests/metrics_labels.rs` for structural exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus notification/Zone-name canary absence |
 | Removal proof | `nixos-modules/notifications.nix` removed after Zone resource equivalence confirmed by eval test |
 
 ### 17.3 Removal items
@@ -1461,6 +1461,7 @@ per-test budget.
 | `tests/status_lifecycle.rs` | The Provider declares no state Volume; `ProviderStateSet(zone, "notification-desktop")` is empty; no component Process mounts a state Volume; bounded non-secret operational state (component readiness, reconcile stage, closed-enum error/health detail) is written to `status`/the core Operation ledger within the status bounds; no notification summary/body/action-label/icon/nonce byte is ever persisted; on restart the controller re-derives component readiness from live `status` observation and reverifies against running processes, treating status as observation, never authority |
 | `tests/stream_record.rs` | `NotificationRequest`/`NotificationResult` DTO schema validation (all fields, closed category values, out-of-bound values, unknown fields rejected); category filter enforcement; `NotificationResult` `actionNonces` present only when actions declared; no content in error messages |
 | `tests/stream_redaction.rs` | Inject requests with distinguishable content bytes; assert zero occurrences in collected tracing events, OTEL span attributes, metric label values, audit record fields, error messages, and Debug output |
+| `tests/metrics_labels.rs` | Every descriptor uses only fixed category/urgency/outcome/reason/stream semantics; exact identity-key absence; notification and Zone-name canaries absent from values; `d2b.zone` resource attribute retained |
 | `tests/action_nonce.rs` | Single-use consumption; expired TTL consumed-and-cleared; capacity at `MAX_STORE_SIZE`; replay after consume; nonce opaque in Debug; notification action key round trip |
 | `tests/stream_admission.rs` | All six rejection cases from §6.5; exact stable error codes |
 | `tests/observer_projection.rs` | In-memory projection state machine: request admitted → delivered → evicted on close; TTL-based eviction; bounded projection size; no content in projection status codes |

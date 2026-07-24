@@ -1496,10 +1496,10 @@ deleted.
 | Current source | packages/d2b-clipd/src/audit.rs and policy types from packages/d2b-clipd/src/policy.rs |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-clipboard-wayland/src/service/audit.rs and packages/d2b-provider-clipboard-wayland/src/service/metrics.rs |
-| Detailed design | Implement ClipboardAuditEvent and fail-closed Zone audit queue by porting baseline audit code, renaming realm fields to source_zone_id and dest_zone_id, making ReasonCode a closed enum with unknown protobuf fields rejected, replacing exact byte counts with SizeBucket, emitting to d2b.audit.v3, and adding closed-label OTEL metrics and spans from the dossier tables. Primary reuse disposition: `adapt`. Preserved source-plan detail: port and adapt audit plus metrics with zone names and redaction changes. |
+| Detailed design | Implement ClipboardAuditEvent and fail-closed Zone audit queue by porting baseline audit code, renaming realm fields to source_zone_id and dest_zone_id, making ReasonCode a closed enum with unknown protobuf fields rejected, replacing exact byte counts with SizeBucket, emitting to d2b.audit.v3, and adding closed-semantic-label OTEL metrics and spans from the dossier tables. Metric descriptors carry no Zone/resource-name-derived identity; `d2b.zone` remains a resource attribute. Primary reuse disposition: `adapt`. Preserved source-plan detail: port and adapt audit plus resource-name-free metrics and redaction changes. |
 | Integration | clipd-host emits audit events to the Zone audit sink and OTEL metrics/spans to the observability Provider pipeline during clipboard operations. |
 | Data migration | Full d2b 3.0 reset; audit stream is v3 Zone-local and no v2 audit records are imported |
-| Validation | Audit tests for no bytes in events, closed ReasonCode deserialization, fail-closed queue rejection, SizeBucket discretization, allowed metric labels, and excluded span attributes. |
+| Validation | Audit tests for no bytes in events, closed ReasonCode deserialization, fail-closed queue rejection, SizeBucket discretization, excluded span attributes, and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus clipboard/Zone-name canary absence while preserving `d2b.zone` resource attributes. |
 | Removal proof | Old audit shape with realm field names and exact byte counts is absent after ported tests assert the v3 ClipboardAuditEvent schema. |
 
 **Type:** implementation  

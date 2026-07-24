@@ -1166,27 +1166,27 @@ Rules:
 
 ### Metrics
 
-All metric labels are closed sets. No label carries credential bytes, relay
-token shapes, private key fragments, connection-string substrings, store paths,
-or internal provider diagnostics.
+All metric labels are closed semantic sets. No label carries Zone/resource
+identity, credential bytes, relay token shapes, private key fragments,
+connection-string substrings, store paths, or internal provider diagnostics.
+Zone identity remains in the bounded `d2b.zone` OTEL resource attribute.
 
 | Metric name | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `d2b_relay_transport_connect_total` | Counter | `zone`, `outcome` (`success`/`failed`), `error_code` | Relay WebSocket connect attempts |
-| `d2b_relay_transport_disconnect_total` | Counter | `zone`, `reason` (stable bounded code) | Relay WebSocket disconnects |
-| `d2b_relay_transport_reconnect_total` | Counter | `zone`, `outcome` | Reconnect attempts |
-| `d2b_relay_transport_session_seconds` | Histogram | `zone` | Duration of relay WebSocket sessions |
-| `d2b_relay_transport_bytes_sent_total` | Counter | `zone` | Bytes sent over relay (post-encryption; opaque payload size) |
-| `d2b_relay_transport_bytes_received_total` | Counter | `zone` | Bytes received over relay |
-| `d2b_relay_transport_frames_sent_total` | Counter | `zone` | Frames sent |
-| `d2b_relay_transport_frames_received_total` | Counter | `zone` | Frames received |
-| `d2b_relay_transport_send_queue_bytes` | Gauge | `zone` | Current outbound frame queue depth (bytes) |
-| `d2b_relay_transport_credential_expiry_seconds` | Gauge | `zone` | Seconds until listener credential expiry; 0 when no active lease |
-| `d2b_relay_transport_backpressure_events_total` | Counter | `zone` | Times outbound send blocked on WebSocket write backpressure |
+| `d2b_relay_transport_connect_total` | Counter | `outcome` (`success`/`failed`), `error_code` | Relay WebSocket connect attempts |
+| `d2b_relay_transport_disconnect_total` | Counter | `reason` (stable bounded code) | Relay WebSocket disconnects |
+| `d2b_relay_transport_reconnect_total` | Counter | `outcome` | Reconnect attempts |
+| `d2b_relay_transport_session_seconds` | Histogram | (none) | Duration of relay WebSocket sessions |
+| `d2b_relay_transport_bytes_sent_total` | Counter | (none) | Bytes sent over relay (post-encryption; opaque payload size) |
+| `d2b_relay_transport_bytes_received_total` | Counter | (none) | Bytes received over relay |
+| `d2b_relay_transport_frames_sent_total` | Counter | (none) | Frames sent |
+| `d2b_relay_transport_frames_received_total` | Counter | (none) | Frames received |
+| `d2b_relay_transport_send_queue_bytes` | Gauge | (none) | Current outbound frame queue depth (bytes) |
+| `d2b_relay_transport_credential_expiry_seconds` | Gauge | (none) | Seconds until listener credential expiry; 0 when no active lease |
+| `d2b_relay_transport_backpressure_events_total` | Counter | (none) | Times outbound send blocked on WebSocket write backpressure |
 
-Permitted label keys: `zone` (Zone name; max 63 chars, same regex as Zone name),
-`outcome`, `reason`, `error_code`. The `zone` label carries the Zone name, not a
-workload name, IP, or store path.
+Permitted label keys: `outcome`, `reason`, `error_code`. Their values are
+closed semantic codes.
 
 Forbidden label keys: namespace FQDN, entity name, relay region, credential ref,
 token shape, connection string, or any credential material.
@@ -1384,10 +1384,10 @@ download, or PATH scan.
 | Current source | `packages/d2bd/src/metrics.rs` (hand-rolled Prometheus; baseline) |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}` |
-| Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed label sets; never label secret bytes; provider audit covers **carriage authentication and health observations only** — Azure auth events, WebSocket lifecycle, credential acquisition outcomes — and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
+| Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed semantic label sets with no Zone/resource-name-derived keys; retain Zone identity only in the `d2b.zone` OTEL resource attribute; never label secret bytes; provider audit covers **carriage authentication and health observations only** — Azure auth events, WebSocket lifecycle, credential acquisition outcomes — and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
 | Integration | `Provider/observability-otel` receives emitter ring frames; audit log via Zone runtime `d2b.audit.transport` category |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/fake_relay_transport.rs` asserts audit record fields against schema |
+| Validation | `tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/metric_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and that a Zone-name canary never enters label values; `tests/fake_relay_transport.rs` asserts audit record fields against schema |
 | Removal proof | N/A; new module |
 
 ### ADR046-transport-relay-007 (integration README)
@@ -1420,6 +1420,7 @@ wave:
 | `fake_relay_transport.rs` | `listener_accepts_sender_connection`, `framing_is_length_prefixed`, `send_receive_roundtrip_over_fake_relay`, `attachment_support_is_false`, `locality_is_remote`, `transport_descriptor_contract` | Named byte-stream contract; framing; transport descriptor |
 | `reconnect_open_transport.rs` | `websocket_starts_on_open_transport`, `websocket_closes_on_close_transport`, `observe_transport_reports_connect_result`, `reconnect_clears_generation`, `reconnect_triggers_new_kk` | Relay responds to CloseTransport/OpenTransport cycle; named stream closes on WebSocket loss |
 | `backpressure_credit.rs` | `slow_relay_stalls_credit`, `aggregate_queue_bounded`, `source_never_buffers_beyond_limit`, `backpressure_event_counter_increments` | Backpressure and credit invariants |
+| `metric_labels.rs` | `identity_keys_absent`, `zone_name_canary_absent`, `semantic_domains_closed`, `zone_resource_attribute_retained` | Structural metric-label policy; no Zone/resource identity labels; `d2b.zone` remains a resource attribute |
 | `idempotency_key.rs` | `idempotency_key_carried_in_noise_record`, `idempotency_key_not_in_relay_frame_metadata`, `replay_at_relay_level_does_not_deduplicate`, `dedup_at_child_zone_resource_api` | Idempotency is child-Zone-owned; relay carries opaquely |
 | `listener_sender_conformance.rs` | `conformance_vectors_listener`, `conformance_vectors_sender`, `noise_kk_prologue_binds_transport_settings`, `mismatched_fingerprint_fails_closed`, `relay_identity_not_in_subject_context` | Named stream contract; Noise KK binding; relay identity exclusion |
 

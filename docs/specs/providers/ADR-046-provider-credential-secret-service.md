@@ -1032,14 +1032,15 @@ embedding secret shapes.
 | Metric | Type | Labels |
 | --- | --- | --- |
 | `d2b_credential_operations_total` | Counter | `provider=credential-secret-service`, `operation_class`, `placement_binding=user-agent`, `outcome` |
-| `d2b_credential_lease_expiry_seconds` | Gauge | `provider=credential-secret-service`, `credential_name`, `placement_binding=user-agent` |
+| `d2b_credential_lease_expiry_seconds` | Gauge | `provider=credential-secret-service`, `placement_binding=user-agent` |
 | `d2b_credential_rotation_total` | Counter | `provider=credential-secret-service`, `policy`, `outcome` |
 | `d2b_credential_provider_health` | Gauge (0/1) | `provider=credential-secret-service` |
 | `d2b_credential_active_leases` | Gauge | `provider=credential-secret-service`, `placement_binding=user-agent` |
 
-`credential_name` appears only in the expiry gauge; it is omitted from
-high-cardinality counters. Label cardinality is bounded; secret-shape
-assertions run on all label values.
+The expiry gauge reports the minimum seconds remaining across active
+user-agent leases (0 when none). Label cardinality is bounded and semantic;
+Credential and Zone identity remain in bounded OTEL attributes and permitted
+audit fields, never labels. Secret-shape assertions run on all label values.
 
 ---
 
@@ -1301,10 +1302,10 @@ generation cleanup contract in `nixos-modules/options-resources.nix` and
 | Current source | `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; secret-service main reuse canary tests listed in §14 |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-credential-secret-service/src/{audit.rs,telemetry.rs} |
-| Detailed design | Audit/OTEL: emit audit records and OTEL spans/metrics for all credential service methods and controller events, with canary enforcement and no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces. |
+| Detailed design | Audit/OTEL: emit audit records and OTEL spans/metrics for all credential service methods and controller events, with canary enforcement, expiry aggregated across user-agent leases, no Zone/Credential/resource-name-derived metric label, and no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces. |
 | Integration | Controller and service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded event/span/metric records; canary tests verify every public observable surface stays secret-free. |
 | Data migration | None — audit/telemetry only; no runtime state migration |
-| Validation | Credential audit/OTEL tests from `ADR-046-resources-credential`; `tests/canary.rs` and `tests/delivery.rs` for credential-secret-service |
+| Validation | Credential audit/OTEL tests from `ADR-046-resources-credential`; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived metric key plus Credential/Zone-name label canary absence while preserving allowed OTEL identity attributes; `tests/delivery.rs` for credential-secret-service |
 | Removal proof | None — audit/telemetry helpers are new; no prior owner to remove |
 
 Implements audit record and OTEL span/metric emission for all credential
@@ -1377,6 +1378,7 @@ All `check_provider_conformance` arms pass for `d2b-provider-credential-secret-s
 | `object_path_absent_all_responses` | `object_path_canary` absent from all response DTOs |
 | `canary_absent_audit_records` | `credential_canary` and `object_path_canary` absent from all audit record JSON |
 | `canary_absent_span_attributes` | Neither canary present in any OTEL span attribute captured by test subscriber |
+| `metric_identity_labels_absent` | No descriptor key is `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, or resource-name-derived; Credential/Zone-name canaries are absent from values; allowed OTEL identity attributes remain |
 | `canary_absent_delivery_binding` | Neither canary present in delivery session binding parameters |
 
 #### `tests/delivery.rs`

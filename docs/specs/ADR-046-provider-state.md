@@ -674,16 +674,19 @@ No bytes of Volume content, credential material, migration data, raw paths, or p
 
 ### OTEL metrics
 
-Cardinality-bounded metric labels are: `zone`, `provider`, `schema_id`, `schema_version`, `persistence_class`, `operation`, `outcome`.
+Cardinality-bounded metric labels are: `provider`, `schema_id`,
+`schema_version`, `persistence_class`, `operation`, `trigger`, and `outcome`.
+Zone identity is carried only by the bounded `d2b.zone` OTEL resource
+attribute, never by a metric label.
 
 | Metric | Unit | Labels |
 | --- | --- | --- |
-| `d2b_volume_state_size_bytes` | Gauge, bytes | zone, provider, schema_id |
-| `d2b_volume_state_migration_total` | Counter | zone, provider, schema_id, outcome |
-| `d2b_volume_state_migration_duration_ms` | Histogram | zone, provider, schema_id |
-| `d2b_volume_state_snapshot_total` | Counter | zone, provider, schema_id, trigger |
-| `d2b_volume_state_marker_check_total` | Counter | zone, provider, outcome |
-| `d2b_volume_state_quota_exceeded_total` | Counter | zone, provider |
+| `d2b_volume_state_size_bytes` | Gauge, bytes | provider, schema_id |
+| `d2b_volume_state_migration_total` | Counter | provider, schema_id, outcome |
+| `d2b_volume_state_migration_duration_ms` | Histogram | provider, schema_id |
+| `d2b_volume_state_snapshot_total` | Counter | provider, schema_id, trigger |
+| `d2b_volume_state_marker_check_total` | Counter | provider, outcome |
+| `d2b_volume_state_quota_exceeded_total` | Counter | provider |
 
 No schema content, raw path, instance ID, process arguments, or credential identifier enters any metric label.
 
@@ -915,9 +918,9 @@ The following metrics extend the OTEL metric table in [Status, audit, and OTEL](
 
 | Metric | Unit | Labels |
 | --- | --- | --- |
-| `d2b_zone_generation_activation_total` | Counter | zone, outcome (`applied` \| `integrity-failure`) |
-| `d2b_zone_generation_cleanup_pending_resources` | Gauge | zone |
-| `d2b_zone_generation_cleanup_duration_ms` | Histogram | zone |
+| `d2b_zone_generation_activation_total` | Counter | outcome (`applied` \| `integrity-failure`) |
+| `d2b_zone_generation_cleanup_pending_resources` | Gauge | (none) |
+| `d2b_zone_generation_cleanup_duration_ms` | Histogram | (none) |
 
 ### Required tests for removed-resource cleanup
 
@@ -931,6 +934,10 @@ Required by ADR046-pstate-010:
 6. **Finalizer timeout**: Provider controller does not remove finalizer within `maxFinalizerDurationSeconds` → `Degraded/finalizer-timeout` condition set; `provider-finalizer-timeout` audit event. Timeout is stall detection only; no finalizer is force-cleared; operator intervention resolves the stall.
 7. **Eval credential-ref guard**: `config` field with `credentialRef: true` receives a raw string → NixOS eval fails with `credential-value-must-be-ref`; no bundle is emitted; build derivation is never entered.
 8. **Name conflict**: new bundle contains a resource `(type, name)` that collides with an existing `managedBy: controller` or `managedBy: api` resource → that activation item is `Degraded/name-conflict`; the existing resource and its `managedBy` are unchanged; a `configuration-name-conflict` audit event is emitted; all non-conflicting resources in the same generation activate normally.
+9. **Metric identity absence**: every Volume-state and generation metric
+   descriptor rejects `vm`, `zone`, `zone_id`, `zone_uid`, and every
+   resource-name-derived label key; a Zone/resource-name canary is absent from
+   emitted label values while `d2b.zone` remains in OTEL resource attributes.
 
 ## Current-code fit
 
@@ -1134,10 +1141,10 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-local/src/audit.rs`; `packages/d2b-provider-volume-local/src/otel.rs`; `packages/d2b-provider-volume-local/tests/audit_unit.rs` (hermetic audit golden records, OTEL cardinality label tests) |
 | Crate layout | See [Provider crate layout](#provider-crate-layout). Hermetic golden-record and cardinality tests → `tests/audit_unit.rs`; live Zone audit stream emission and OTEL export against a running observability Provider → `integration/audit.rs` (added by ADR046-pstate-009) |
-| Detailed design | Volume-state audit event types and Zone audit emission; OTEL metric definitions with closed cardinality label sets |
+| Detailed design | Volume-state audit event types and Zone audit emission; OTEL metric definitions with closed semantic label sets and no Zone or resource-name-derived label keys; Zone identity remains in the `d2b.zone` OTEL resource attribute |
 | Integration | Every state lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Audit event golden records; no content/path/credential in audit payload; OTEL cardinality label tests |
+| Validation | Audit event golden records; no content/path/credential in audit payload; structural OTEL label-policy tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and preserve `d2b.zone` as a resource attribute |
 | Removal proof | Not applicable |
 
 ### ADR046-pstate-009

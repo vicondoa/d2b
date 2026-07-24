@@ -1546,12 +1546,12 @@ controller, not Core; uses the Zone runtime audit stream):
 OTEL span attributes and metric labels follow `ADR-046-telemetry-audit-and-support`.
 Constraints specific to this Provider:
 
-- **`d2b.device.provider`** label value: `"device-security-key"` (closed literal).
-- **`d2b.device.zone`** label: Zone name. Cardinality ≤ number of Zones.
-- **`d2b.device.phase`** label: `"Ready"` | `"Pending"` | `"Degraded"` | `"Failed"` | `"Unknown"`.
-- Metric `d2b_device_sk_session_total{zone, outcome}`: counter; `outcome` ∈ `{success, timeout, cancelled, busy, conflict, error}`.
-- Metric `d2b_device_sk_ceremony_duration_seconds{zone}`: histogram; bucketed 0–120 s.
-- Metric `d2b_device_sk_relay_restarts_total{zone}`: counter.
+- OTEL resource attributes include `d2b.provider="device-security-key"` and
+  `d2b.zone=<Zone name>`; neither is copied into metric labels.
+- **`phase`** metric label: `"Ready"` | `"Pending"` | `"Degraded"` | `"Failed"` | `"Unknown"`.
+- Metric `d2b_device_sk_session_total{outcome}`: counter; `outcome` ∈ `{success, timeout, cancelled, busy, conflict, error}`.
+- Metric `d2b_device_sk_ceremony_duration_seconds`: histogram; bucketed 0–120 s.
+- Metric `d2b_device_sk_relay_restarts_total`: counter.
 - No metric or span attribute carries device name (only `resource_name_digest`),
   session ID, guest name, hidraw path, or serial.
 - OTEL emitter: lightweight bounded ring (no OTEL SDK in the Provider process;
@@ -2194,10 +2194,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | Provider/controller bounded telemetry emitter and observability-otel handoff for security-key metrics |
-| Detailed design | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring |
+| Detailed design | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring; descriptors use only closed semantic labels and never Zone/resource-name-derived identity, while `d2b.zone` and `d2b.provider` remain OTEL resource attributes |
 | Integration | Relay/controller write metric events to the bounded ring; observability-otel Provider drains and exports; dashboards/CLI consume closed labels and bounded histograms. |
 | Data migration | Full d2b 3.0 reset; no v2 telemetry import |
-| Validation | Metrics tests assert closed label sets, no device/session/guest/path labels, bounded ring behavior, and correct session/ceremony/restart counters. |
+| Validation | Metrics tests structurally assert closed label sets, exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys, Device/Zone-name canary absence, retained `d2b.zone` resource attributes, bounded ring behavior, and correct session/ceremony/restart counters. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 ### ADR046-security-key-023

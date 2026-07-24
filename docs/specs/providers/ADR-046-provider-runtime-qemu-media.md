@@ -1251,21 +1251,23 @@ addresses, or argv.
 
 ## 18 Telemetry and metrics
 
-All metric labels use closed sets. Cardinality is bounded; no label value
-may contain VM name, user identity, executable path, or VM memory content.
+All metric labels use closed semantic sets. Cardinality is bounded; no label
+key or value may contain Zone/VM/resource identity, user identity, executable
+path, or VM memory content. Zone identity remains in the bounded `d2b.zone`
+OTEL resource attribute.
 
 | Metric | Type | Labels | Notes |
 | --- | --- | --- | --- |
-| `d2b_guest_reconcile_total` | counter | zone, provider, outcome (success/failure) | Reconcile loop outcomes |
-| `d2b_guest_reconcile_duration_seconds` | histogram | zone, provider | Reconcile latency |
-| `d2b_guest_phase_transitions_total` | counter | zone, provider, from_phase, to_phase | Phase machine |
-| `d2b_guest_runner_launches_total` | counter | zone, provider, outcome | Launch attempts |
-| `d2b_guest_qmp_ready_seconds` | histogram | zone, provider | Time from runner spawn to QMP greeting |
-| `d2b_guest_qmp_operations_total` | counter | zone, provider, operation, outcome | Per-operation QMP results |
-| `d2b_guest_media_hotplug_total` | counter | zone, provider, operation (attach/detach), outcome | |
-| `d2b_guest_dependency_wait_seconds` | histogram | zone, provider, dep_type | Time waiting for dependency |
-| `d2b_guest_active` | gauge | zone, provider, phase | Active Guest count per phase |
-| `d2b_guest_runner_restart_total` | counter | zone, provider | Runner exits (controller re-creates) |
+| `d2b_guest_reconcile_total` | counter | provider, outcome (success/failure) | Reconcile loop outcomes |
+| `d2b_guest_reconcile_duration_seconds` | histogram | provider | Reconcile latency |
+| `d2b_guest_phase_transitions_total` | counter | provider, from_phase, to_phase | Phase machine |
+| `d2b_guest_runner_launches_total` | counter | provider, outcome | Launch attempts |
+| `d2b_guest_qmp_ready_seconds` | histogram | provider | Time from runner spawn to QMP greeting |
+| `d2b_guest_qmp_operations_total` | counter | provider, operation, outcome | Per-operation QMP results |
+| `d2b_guest_media_hotplug_total` | counter | provider, operation (attach/detach), outcome | |
+| `d2b_guest_dependency_wait_seconds` | histogram | provider, dep_type | Time waiting for dependency |
+| `d2b_guest_active` | gauge | provider, phase | Active Guest count per phase |
+| `d2b_guest_runner_restart_total` | counter | provider | Runner exits (controller re-creates) |
 
 OTEL trace spans:
 
@@ -1775,10 +1777,10 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/telemetry.rs |
-| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with label cardinality enforcement and no VM name, user identity, path, or other sensitive value in any label or attribute. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
+| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with structural closed-label enforcement and no Zone/VM/resource name, user identity, path, or other sensitive value in any metric label; retain Zone/resource identity only in bounded OTEL attributes and permitted audit fields. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
 | Integration | Controller, QMP, hotplug, and dependency-watch paths call telemetry helpers; OTEL/metrics exporters consume only closed, bounded labels for support dashboards. |
 | Data migration | None — telemetry-only work; no runtime state import |
-| Validation | `tests/metrics_label_cardinality.rs`; `tests/otel_span_attributes.rs` |
+| Validation | `tests/metrics_label_cardinality.rs` asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; `tests/otel_span_attributes.rs` preserves allowed identity attributes |
 | Removal proof | None — telemetry helpers are new for this Provider; no prior owner to remove |
 
 ---
@@ -1887,7 +1889,7 @@ per-test budget.
 | `condition_reason_codes.rs` | All reason codes in §16.3 |
 | `audit_event_shapes.rs` | Golden shape for every event in §17 |
 | `audit_no_sensitive_fields.rs` | Property test: no path/argv/fd/socket-path in payload |
-| `metrics_label_cardinality.rs` | All metric label values; no VM name or path |
+| `metrics_label_cardinality.rs` | Structural closed-label policy; exact identity-key absence; no Guest/Zone/resource-name canary or path in values; `d2b.zone` resource attribute retained |
 | `otel_span_attributes.rs` | No sensitive attribute in any span |
 | `provider_layout.rs` | Workspace layout conformance invocation |
 | `conformance_guest.rs` | d2b-provider-toolkit conformance suite |

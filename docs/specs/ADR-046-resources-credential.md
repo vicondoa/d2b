@@ -882,14 +882,16 @@ correlation IDs that embed secret shapes.
 | Metric | Type | Labels |
 | --- | --- | --- |
 | `d2b_credential_operations_total` | Counter | `provider`, `operation_class`, `placement_binding`, `outcome` |
-| `d2b_credential_lease_expiry_seconds` | Gauge | `provider`, `credential_name`, `placement_binding` |
+| `d2b_credential_lease_expiry_seconds` | Gauge | `provider`, `placement_binding` |
 | `d2b_credential_rotation_total` | Counter | `provider`, `policy`, `outcome` |
 | `d2b_credential_provider_health` | Gauge (0/1) | `provider` |
 | `d2b_credential_active_leases` | Gauge | `provider`, `placement_binding` |
 
-Label cardinality is bounded. `credential_name` is used only in expiry gauges
-where per-resource precision is required; it is omitted from high-cardinality
-counters.
+Label cardinality is bounded and semantic. The expiry gauge reports the
+minimum seconds remaining across active leases in each provider/placement
+aggregate (0 when none); it carries no Credential resource name. Zone and
+Credential identity remain available in bounded OTEL attributes and permitted
+audit fields, never metric labels.
 
 ## Nix configuration
 
@@ -1997,8 +1999,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Current source | `packages/d2b-core/src/privileges.rs:SecretAccess` (implemented-and-reachable); `d2b-realm-provider/src/error.rs:ProviderDiagnostic`/`contains_sensitive_shape` (implemented-and-reachable); `packages/d2b-contract-tests/tests/policy_observability.rs` (reachable audit policy tests) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-<impl>/src/audit.rs`, `telemetry.rs`; `packages/d2b-contract-tests/tests/credential_audit.rs` |
-| Detailed design | Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit; implement OTEL span/metric emission using the closed label set in §OTEL and metrics; implement `contains_sensitive_shape` check in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `"secret-canary"`, `"entra-token-canary"`, and `"managed-identity-canary"` values never appear in any audit record, metric label, span attribute, log line, or status field across all Provider test suites |
+| Detailed design | Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential/Zone/resource-name-derived label; implement `contains_sensitive_shape` check in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `"secret-canary"`, `"entra-token-canary"`, `"managed-identity-canary"`, Credential `metadata.name`, and Zone name values never appear in any audit record, metric label, span attribute, log line, or status field except identity in allowed OTEL/audit fields |
 | Integration | Credential controller and service handlers emit audit records and telemetry through Zone audit/OTEL paths |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Canary tests across all three Provider crates; audit record field-presence tests; metric label cardinality tests; span attribute absence tests for forbidden fields |
+| Validation | Canary tests across all three Provider crates; audit record field-presence tests; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived key plus Credential/Zone-name canary absence; span attribute tests preserve allowed `d2b.zone`/`d2b.credential.name` identity and reject forbidden fields |
 | Removal proof | Not applicable |

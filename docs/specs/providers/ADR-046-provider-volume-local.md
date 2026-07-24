@@ -1882,30 +1882,32 @@ status field, log line, OTEL span attribute, or metric label:
 
 ## OTEL metrics
 
-All metric labels are closed at a bounded, fixed set:
-`zone`, `provider` (`volume-local`), `schema_id`, `schema_version`,
-`persistence_class`, `source_kind`, `operation`, `outcome`.
+All metric labels are closed at a bounded, fixed semantic set:
+`provider` (`volume-local`), `schema_id`, `schema_version`,
+`persistence_class`, `source_kind`, `operation`, `trigger`, `view`, `access`,
+and `outcome`.
 
 No schema content, raw path, instance ID, process arguments, or credential
-identifier enters any metric label.
+identifier enters any metric label. Zone identity is carried only in the
+bounded `d2b.zone` OTEL resource attribute.
 
 | Metric | Unit | Labels |
 | --- | --- | --- |
-| `d2b_volume_provision_total` | Counter | zone, provider, persistence_class, source_kind, outcome |
-| `d2b_volume_provision_duration_ms` | Histogram | zone, provider, source_kind |
-| `d2b_volume_layout_repair_total` | Counter | zone, provider, outcome |
-| `d2b_volume_state_size_bytes` | Gauge | zone, provider, schema_id |
-| `d2b_volume_state_migration_total` | Counter | zone, provider, schema_id, outcome |
-| `d2b_volume_state_migration_duration_ms` | Histogram | zone, provider, schema_id |
-| `d2b_volume_state_snapshot_total` | Counter | zone, provider, schema_id, trigger |
-| `d2b_volume_state_marker_check_total` | Counter | zone, provider, outcome |
-| `d2b_volume_state_quota_exceeded_total` | Counter | zone, provider |
-| `d2b_volume_store_sync_total` | Counter | zone, provider, outcome |
-| `d2b_volume_store_sync_duration_ms` | Histogram | zone, provider |
-| `d2b_volume_relocation_total` | Counter | zone, provider, outcome |
-| `d2b_volume_sealing_rotation_total` | Counter | zone, provider, outcome |
-| `d2b_volume_unclaimed_gc_total` | Counter | zone, provider, persistence_class |
-| `d2b_volume_fd_handoff_total` | Counter | zone, provider, view, access, outcome |
+| `d2b_volume_provision_total` | Counter | provider, persistence_class, source_kind, outcome |
+| `d2b_volume_provision_duration_ms` | Histogram | provider, source_kind |
+| `d2b_volume_layout_repair_total` | Counter | provider, outcome |
+| `d2b_volume_state_size_bytes` | Gauge | provider, schema_id |
+| `d2b_volume_state_migration_total` | Counter | provider, schema_id, outcome |
+| `d2b_volume_state_migration_duration_ms` | Histogram | provider, schema_id |
+| `d2b_volume_state_snapshot_total` | Counter | provider, schema_id, trigger |
+| `d2b_volume_state_marker_check_total` | Counter | provider, outcome |
+| `d2b_volume_state_quota_exceeded_total` | Counter | provider |
+| `d2b_volume_store_sync_total` | Counter | provider, outcome |
+| `d2b_volume_store_sync_duration_ms` | Histogram | provider |
+| `d2b_volume_relocation_total` | Counter | provider, outcome |
+| `d2b_volume_sealing_rotation_total` | Counter | provider, outcome |
+| `d2b_volume_unclaimed_gc_total` | Counter | provider, persistence_class |
+| `d2b_volume_fd_handoff_total` | Counter | provider, view, access, outcome |
 
 ---
 
@@ -2186,7 +2188,7 @@ Required test files and minimum coverage:
 | `tests/sealing_unit.rs` | Seal on write; read sealed payload; rotation state machine via `RotateSealingKey` effect op: `rotation-pending` → op success → `sealed`; op failure → `rotation-failed`; no raw key in any output; no EphemeralProcess dispatch |
 | `tests/snapshot_unit.rs` | `snapshotPolicy` enforcement; retention count; retention TTL; `triggerOnMigration` auto-snapshot; snapshot EphemeralProcess dispatch; list in Volume status |
 | `tests/relocation_unit.rs` | Finalizer set; EphemeralProcess created; commit: source deleted; failure: source retained; state machine round-trip |
-| `tests/audit_unit.rs` | Golden audit record for each event kind; no paths in any record; no credential material; cardinality check for OTEL labels |
+| `tests/audit_unit.rs` | Golden audit record for each event kind; no paths in any record; no credential material; structural OTEL label-policy check with exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys |
 | `tests/error_messages.rs` | Every error code emitted with bounded (≤512 byte) message; no host path in any error message |
 
 ### `integration/`
@@ -2411,10 +2413,10 @@ Documents:
 | Current source | `d2b-state/src/audit.rs` (main `6faa5256`); OTEL cardinality model from `d2b-provider-observability-local/src/` (main `a1cc0b2d`) |
 | Reuse action | adapt |
 | Destination | `src/audit.rs`; `src/otel.rs`; `src/error.rs`; `tests/audit_unit.rs`; `integration/audit.rs` |
-| Detailed design | Event types and Zone audit emission per §Audit events; OTEL metric definitions per §OTEL metrics; error catalog per §Error catalog; no-path invariant enforced in all outputs |
+| Detailed design | Event types and Zone audit emission per §Audit events; OTEL metric definitions per §OTEL metrics with closed semantic labels and no Zone/resource-name-derived dimensions; Zone identity remains in `d2b.zone` resource attributes; error catalog per §Error catalog; no-path invariant enforced in all outputs |
 | Integration | Every lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/audit_unit.rs` golden records; `tests/error_messages.rs` bounded messages; OTEL label cardinality; `integration/audit.rs` live stream |
+| Validation | `tests/audit_unit.rs` golden records and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus resource-name canary absence; `tests/error_messages.rs` bounded messages; `integration/audit.rs` live stream |
 | Removal proof | Not applicable |
 
 ### ADR046-vl-010 — Nix configuration and resource compiler integration
