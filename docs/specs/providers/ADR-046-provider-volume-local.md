@@ -870,17 +870,59 @@ crate. The Provider crate depends only on `d2b-contracts`, `d2b-provider`, and
 `d2b-provider-toolkit`.
 
 All opaque ID newtypes carry a custom redacted `Debug` implementation; they must
-not derive `Debug` or print internal content:
+not derive `Debug` or print internal content. The two IDs carried by
+`RotateSealingKeyRequest` use the same newtypes as the trait methods, derive the
+wire traits directly, and deserialize through a shared bounded validator.
+Their string fields remain crate-private. The canonical encoding is one
+non-empty ASCII-graphic string of at most 128 bytes; rejection errors never echo
+the input:
 
 ```rust
 // Defined in d2b-contracts::v3::effect_port
 // All IDs are opaque newtypes with custom redacted Debug.
+const MAX_VOLUME_EFFECT_WIRE_ID_BYTES: usize = 128;
+
+fn validate_volume_effect_wire_id(value: &str) -> Result<(), &'static str> {
+    if value.is_empty() {
+        return Err("opaque effect ID must not be empty");
+    }
+    if value.len() > MAX_VOLUME_EFFECT_WIRE_ID_BYTES {
+        return Err("opaque effect ID exceeds 128 bytes");
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("opaque effect ID contains an invalid byte");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct VolumeId(pub(crate) String);
 pub struct SourcePolicyId(pub(crate) String);
 pub struct LayoutEntryId(pub(crate) String);
 pub struct UserId(pub(crate) String);     // resolves from User/<name> resource
 pub struct ViewId(pub(crate) String);     // bounded view name; max 63 chars
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct SealingPolicyId(pub(crate) String);
+
+impl TryFrom<String> for VolumeId {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        validate_volume_effect_wire_id(&value)?;
+        Ok(Self(value))
+    }
+}
+
+impl TryFrom<String> for SealingPolicyId {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        validate_volume_effect_wire_id(&value)?;
+        Ok(Self(value))
+    }
+}
 
 impl fmt::Debug for VolumeId      { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("VolumeId([redacted])") } }
 impl fmt::Debug for SourcePolicyId{ fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("SourcePolicyId([redacted])") } }
@@ -2408,9 +2450,10 @@ Required test files and minimum coverage:
 | `tests/symlink.rs` | Valid relative target; `..` component rejected; absolute target rejected; null byte rejected; target resolves outside Volume root rejected |
 | `tests/domain_isolation.rs` | `private` Volume: concurrent mount from different domain rejected; `internal` Volume: cross-Provider mount rejected; `shared-read` Volume: read-only cross-Provider permitted; `shared-read` write rejected |
 | `tests/view_rights.rs` | Mount with rights subset of View: admitted; mount with extra right: `volume-view-rights-exceeded`; `read-write` access on `read-only` View: rejected; single-writer constraint: second `read-write` rejected |
+| `tests/effect_port_contract.rs` | Compile-time bounds prove `VolumeId` and `SealingPolicyId` are `Clone + Serialize + DeserializeOwned` and `RotateSealingKeyRequest` is `Serialize + DeserializeOwned`; a complete request JSON round-trip is byte-equivalent; each ID uses the canonical string encoding; manual `Debug` is exactly redacted; empty, over-128-byte, non-ASCII, whitespace, and control-byte IDs fail deserialization without echoing input; unknown request fields fail |
 | `tests/state.rs` | Ported `d2b-state/tests/state.rs` scenarios under v3 StateEnvelope: atomic write, fsync ordering, crash between rename steps, OFD lock acquire/release, quarantine record, generation bound, state-envelope digest |
 | `tests/migration_unit.rs` | Pre-launch migration dispatch; staging Volume create/destroy; EphemeralProcess succeeded → commit; EphemeralProcess failed → rollback; N-Volume cross-component prepare/commit/rollback protocol; roll-forward on restart detection |
-| `tests/sealing_unit.rs` | Initial seal/read without exposing a key lease; status CAS commits `rotation-pending` before the first effect; exact request fields and generation/revision/policy preconditions; operation ID comes from committed proof; deterministic idempotency vector; byte-identical timeout/restart retry; duplicate success → `AlreadyCommitted`; recovered commit → `RecoveredCommitted`; changed bytes under one key → `IdempotencyConflict`; concurrent different rotation → `RotationConflict`; retryable/terminal error table; new generation re-plan; success → `sealed`; integrity failure → Failed; no key/path/handle in DTO, status, error, Debug, log, audit, or OTEL; no direct rewrite/generic broker/EphemeralProcess dispatch |
+| `tests/sealing_unit.rs` | Initial seal/read without exposing a key lease; status CAS commits `rotation-pending` before the first effect; exact request fields and generation/revision/policy preconditions using the canonical validated effect-port ID newtypes; operation ID comes from committed proof; deterministic idempotency vector; byte-identical timeout/restart retry; duplicate success → `AlreadyCommitted`; recovered commit → `RecoveredCommitted`; changed bytes under one key → `IdempotencyConflict`; concurrent different rotation → `RotationConflict`; retryable/terminal error table; new generation re-plan; success → `sealed`; integrity failure → Failed; no key/path/handle in DTO, status, error, Debug, log, audit, or OTEL; no direct rewrite/generic broker/EphemeralProcess dispatch |
 | `tests/snapshot_unit.rs` | `snapshotPolicy` enforcement; retention count; retention TTL; `triggerOnMigration` auto-snapshot; snapshot EphemeralProcess dispatch; list in Volume status |
 | `tests/relocation_unit.rs` | Finalizer set; EphemeralProcess created; commit: source deleted; failure: source retained; state machine round-trip |
 | `tests/audit_unit.rs` | Golden audit record for each event kind; no paths in any record; no credential material; structural OTEL label-policy check with exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys |
@@ -2516,11 +2559,11 @@ Documents:
 | Depends on | `ADR046-pstate-001` (VolumeStateSchema/PersistenceClass/SensitivityClass/StateEnvelope in `d2b-contracts/src/v3/volume_state.rs`) |
 | Current source | `d2b-core/src/storage.rs` (`StoragePathSpec`, `StoragePathKind`, policy enums); `d2b-core/src/sync.rs` (`SyncJson`, `LockSpec`) |
 | Reuse action | adapt |
-| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId`/`SealingPolicyId` each with custom redacted Debug, `VolumeMountToken`, and canonical `RotateSealingKeyRequest`/`Result`/`Error` types) |
-| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage`; deny-unknown sealing-rotation request contains only opaque Volume/policy/operation IDs and generation/revision preconditions, with no key bytes/path/handle Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId`/`SealingPolicyId` each with custom redacted Debug, `VolumeId` and `SealingPolicyId` with the exact `Clone`/serde wire derives and bounded `TryFrom<String>` deserialization required by the canonical request, `VolumeMountToken`, and canonical `RotateSealingKeyRequest`/`Result`/`Error` types) |
+| Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage`; deny-unknown sealing-rotation request contains only opaque Volume/policy/operation IDs and generation/revision preconditions, with no key bytes/path/handle; its crate-private `VolumeId` and `SealingPolicyId` strings serialize canonically and deserialize only when non-empty, ASCII-graphic, and at most 128 bytes, while retaining manual redacted Debug Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Volume spec and status structs; Provider descriptor component stateNamespace; Nix resource compiler schema validation |
 | Data migration | Full v3 reset; no row-level import |
-| Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract; sealing-rotation request deny-unknown/round-trip and redacted-Debug tests; compile-time trait conformance includes `rotate_sealing_key` |
+| Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract; compile-time assertions for the exact `Clone + Serialize + DeserializeOwned` ID bounds and `Serialize + DeserializeOwned` request bounds; sealing-rotation request canonical-string/round-trip and deny-unknown tests; exact redacted-Debug assertions; deserialization rejects empty, over-128-byte, non-ASCII, whitespace, and control-byte IDs without echoing input; compile-time trait conformance includes `rotate_sealing_key` |
 | Removal proof | `d2b-core/src/storage.rs` StoragePathSpec/policy enums removed only after all Provider descriptor consumers are on v3 Volume spec |
 
 ### ADR046-vl-002 — Crate scaffold and filesystem primitives
