@@ -101,6 +101,7 @@ packages/d2b-provider-observability-otel/
     collector_bin.rs        collector binary entry point (full OTEL SDK)
     forwarder_bin.rs        vsock-forwarder long-lived Process entry point
     emitter_socket.rs       datagram socket drain loop
+    ingress_policy.rs       structural metric-frame admission for every ingress
     exporter.rs             OTLP/gRPC exporter setup, retry, backpressure
     metrics.rs              self-metrics (d2b_otel_*) definitions
     journald.rs             optional journald receiver (disabled by default)
@@ -111,6 +112,7 @@ packages/d2b-provider-observability-otel/
     emitter_socket_receive.rs
     emitter_ring_drains_on_socket_available.rs
     emitter_ring_drop_on_overflow.rs
+    ingress_metric_policy.rs
     no_vm_label_in_metrics.rs
     zone_startup_proceeds_without_provider.rs
     exporter_outage.rs
@@ -162,12 +164,14 @@ OTEL SDK and sends only through the Binding's same-Zone `serviceRef`.
    compact telemetry frames from authorized `BoundedEmitter` instances.
 2. Owns the Binding-private `otlp.sock` Endpoint for Provider processes that
    embed the full SDK.
-3. Decodes frames and reconstructs the selected OTEL metrics/traces/logs.
+3. Decodes frames and sends metrics from the Unix emitter, OTLP Unix socket,
+   OTLP/vsock forwarder, and imported named stream through the same structural
+   `METRIC_LABEL_POLICY` admission gate before aggregation or queueing.
 4. Resolves the same-Zone `TelemetryService` named by
    `TelemetryBinding.spec.serviceRef` and exports only through its authorized
    route. It never resolves a remote ResourceRef.
-5. Enforces the Binding's quotas, redaction/cardinality policy, and
-   drop/backpressure behavior before sending.
+5. Enforces the Binding's quotas, redaction/cardinality policy, bounded
+   quarantine, and drop/backpressure behavior before batching or sending.
 6. Upserts source identity from the trusted `producerRef` observation;
    incoming self-asserted Zone/Guest identity never overrides that stamp.
 7. Runs optional journald ingestion only when enabled by the strict
@@ -1087,6 +1091,59 @@ d2b.zone, d2b.provider, d2b.component, service.version
 
 Frames with extra keys are **dropped** (not forwarded); `d2b_otel_frames_decoded_total{outcome="error"}` increments.
 
+### Structural metric ingress policy
+
+Every metrics ingress calls the single `src/ingress_policy.rs` admission path:
+
+1. compact metric frames from the Binding-private `emitter.sock` Unix datagram
+   receiver;
+2. OTLP metrics received on the Binding-private `otlp.sock` Unix socket;
+3. OTLP metrics received through the Guest forwarder's private vsock Endpoint;
+4. OTLP metrics received through a D096 import named stream.
+
+After bounded size/decode checks and trusted OTEL Resource stamping, but before
+SDK aggregation, queue insertion, batching, retry, or export, the gate parses
+every metric descriptor, data-point attribute map, and exemplar attribute map.
+It requires every key and value domain to exist in the closed
+`METRIC_LABEL_POLICY`. A whole frame is rejected and dropped if a metric label:
+
+- uses exact key `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`,
+  `network`, `network_name`, or `link_name_hash`;
+- ends in `_name`, `_name_hash`, `_name_digest`, or `_uid`;
+- contains a producer/resource `metadata.name`, UID, ResourceRef, or other
+  resource-identity canary value supplied by the trusted Binding observation.
+
+This is structural admission, not a grep or post-export redaction pass. No
+adapter may enqueue an unchecked frame, and splitting one OTLP request into
+frames cannot preserve its valid subset after any frame violates the policy.
+Valid identity is preserved only in the separate allow-listed OTEL Resource
+attributes; the gate never moves Resource identity into metric attributes.
+Audit remains a separate sink and is never inspected or forwarded here.
+
+An invalid Unix datagram is silently dropped. An invalid stream frame receives
+only the bounded protocol error `invalid-telemetry-frame`; three violations on
+one connection quarantine that connection for at most 30 seconds. Quarantine
+state is in-memory, capped at 64 connections per Binding, and retains only an
+opaque connection handle, expiry, ingress class, and closed error class—not the
+frame, forbidden key/value, or producer/resource identity. Import credits are
+zero while that stream is quarantined.
+
+The non-recursive self-metric is:
+
+```text
+d2b_otel_ingress_policy_total{
+  ingress = emitter_unix | otlp_unix | otlp_vsock | import_stream,
+  outcome = accepted | rejected | quarantined,
+  error_class = none | key_not_allowlisted | key_forbidden |
+                key_suffix_forbidden | value_identity | malformed | oversize
+}
+```
+
+Those are the complete label domains. Diagnostics, status, logs, spans,
+metrics, and protocol errors never echo the rejected key or value.
+`d2b_telemetry_drop_total{reason="policy_violation"}` counts rejected frames;
+`reason="ingress_quarantine"` counts frames refused while quarantined.
+
 ### Forbidden metric label values
 
 All of the following are unconditionally forbidden as metric label values in
@@ -1114,9 +1171,10 @@ any data processed or forwarded by this Provider (per
 - Any OTEL data emitted or forwarded by this Provider
 
 This invariant applies to data originating from this Provider's own processes
-and to ingested data from the emitter socket and OTLP socket. The redaction
-filter (`src/redaction.rs`) drops any span attribute, log body field, or metric
-exemplar field named `no_isolation` from forwarded data.
+and to data ingested through the Unix emitter, OTLP Unix, OTLP/vsock, and import
+stream adapters. The redaction filter (`src/redaction.rs`) drops any span
+attribute or log body field named `no_isolation`; the structural metric gate
+rejects a frame carrying it in any label or exemplar map.
 
 ---
 
@@ -1193,13 +1251,18 @@ When the OTLP SDK queue reaches the lesser of the Binding's common quota and the
 extension `maxQueueSize`:
 
 1. `d2b_otel_backpressure_active` gauge is set to 1.
-2. New incoming frames from `emitter.sock` that cannot be enqueued are dropped
-   from the emitter ring in FIFO order.
-3. `d2b_telemetry_drop_total{reason="buffer_full"}` increments per dropped frame.
-4. Controller sets `BackpressureActive=True` (`QueueFull`) on the Binding; import
+2. Every ingress continues to run structural admission before observing queue
+   capacity. Invalid frames are dropped as policy violations and never consume
+   queue space, retry budget, or an export batch.
+3. Valid new frames from `emitter.sock` that cannot be enqueued are dropped
+   from the emitter ring in FIFO order. OTLP Unix/vsock and import streams
+   receive zero credits/resource-exhausted backpressure without closing the
+   policy gate; quarantined streams remain at zero credits.
+4. `d2b_telemetry_drop_total{reason="buffer_full"}` increments per dropped valid frame.
+5. Controller sets `BackpressureActive=True` (`QueueFull`) on the Binding; import
    credit exhaustion also sets `QuotaSaturated=True` on the projected Service.
-5. The affected Binding becomes `Degraded` (not `Failed`).
-6. When queue depth drops below `maxQueueSize * 0.75` (75% watermark):
+6. The affected Binding becomes `Degraded` (not `Failed`).
+7. When queue depth drops below `maxQueueSize * 0.75` (75% watermark):
    - `d2b_otel_backpressure_active` is reset to 0.
    - Controller clears the Binding/Service backpressure conditions.
    - The Binding returns to `Ready` if no other degraded condition remains.
@@ -1827,6 +1890,25 @@ integration-only.
 - Assert `d2b_otel_*` label keys are all from the closed set enumerated in this spec.
 - Assert `no_isolation` does not appear as a label key in any descriptor.
 
+#### `tests/ingress_metric_policy.rs`
+
+- Run the same table-driven frame corpus through the Unix emitter, OTLP Unix,
+  OTLP/vsock, and D096 import-stream adapters.
+- For every adapter, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`,
+  `credential_name`, `network`, `network_name`, and `link_name_hash`, every
+  `_name`/`_name_hash`/`_name_digest`/`_uid` suffix, and
+  `metadata.name`/ResourceRef/UID/resource-identity canary values.
+- Assert rejection occurs before queue insertion and batching, no valid sibling
+  from a rejected OTLP frame is exported, and no forbidden key/value is echoed
+  in an error, self-metric, span, log, status, or quarantine record.
+- Assert the bounded `ingress`, `outcome`, and `error_class` domains exactly,
+  stream quarantine after three violations, the 64-entry/30-second bounds,
+  datagram drop behavior, zero import credits while quarantined, and continued
+  structural checks during exporter backpressure.
+- Assert a valid frame passes every ingress unchanged while trusted
+  `d2b.zone`/`d2b.provider` and other allow-listed identity remain only in OTEL
+  Resource attributes. Audit fixtures remain byte-identical and separate.
+
 #### `tests/zone_startup_proceeds_without_provider.rs`
 
 **Source:** specified in `ADR-046-telemetry-audit-and-support` §OTEL endpoint tests.
@@ -2134,11 +2216,11 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-otel-001 + ADR046-telem-001 + ADR046-provider-001 (Provider toolkit) + ADR046-provider-004 (common telemetry Service/Binding base) + resource/Endpoint/Volume contracts; W2; observability owner |
 | Current source | `nixos-modules/components/observability/host.nix` (`otelRuntimeDir`, `hostEgressSocket`, `setfacl` ACL pattern, `scrapeJournal` option, `identityName`); `nixos-modules/components/observability/stack.nix` (`ingressSources`, `vmName`, `receiverGrpcPort`, loopback binding, `signoz.listenPort`) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,exporter,controller,service,binding}.rs`; updated Nix observability modules |
-| Detailed design | Register the initial implementation of both provider-neutral qualified ResourceTypes by binding the exact ADR046-provider-004 base versions/fingerprints, then define only strict observability-otel Service/Binding spec and status extensions. Reconcile each Binding into an edge collector, private Endpoints, runtime Volume, and optional forwarder. Collector links the full OTEL SDK, resolves `serviceRef`, stamps trusted producer identity, and enforces common signals/quota/policy plus strict batching extension. Write generic Service/Binding observations to `status.resource` and SigNoz/OTLP/OTEL observations only to `status.provider`; no state file or Provider state Volume. Provider root config remains installation-only. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone name; replace socat runner with vsock-forwarder long-lived Process; adapt `ingressSources` per-Zone entry). |
+| Destination | `packages/d2b-provider-observability-otel/src/{collector_bin,emitter_socket,ingress_policy,exporter,controller,service,binding}.rs`; updated Nix observability modules |
+| Detailed design | Register the initial implementation of both provider-neutral qualified ResourceTypes by binding the exact ADR046-provider-004 base versions/fingerprints, then define only strict observability-otel Service/Binding spec and status extensions. Reconcile each Binding into an edge collector, private Endpoints, runtime Volume, and optional forwarder. Collector links the full OTEL SDK, resolves `serviceRef`, stamps trusted producer identity into allow-listed OTEL Resource attributes, and routes Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream metrics through one structural `METRIC_LABEL_POLICY` gate before aggregation, queueing, batching, retry, or export. The gate rejects exact/suffix identity keys and trusted `metadata.name`/resource-identity canary values, applies bounded non-echoing error classes and connection quarantine, and never consumes audit. Write generic Service/Binding observations to `status.resource` and SigNoz/OTLP/OTEL observations only to `status.provider`; no state file or Provider state Volume. Provider root config remains installation-only. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone name; replace socat runner with vsock-forwarder long-lived Process; adapt `ingressSources` per-Zone entry). |
 | Integration | `BoundedEmitter` → Binding-private Endpoint → edge collector/OTEL SDK → same-Zone authority or projected Service → SigNoz |
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh per Zone |
-| Validation | Common-fixture/fingerprint and canonical-minimal-base conformance (including a fake alternate telemetry Provider); `tests/emitter_socket_receive.rs`; `tests/exporter_outage.rs`; `tests/exporter_backpressure.rs`; `integration/scenario_full_pipeline.rs`; adapted `policy_observability.rs` (retain all existing assertions; add new `d2b.zone`, `d2b.provider` allowlist entries) |
+| Validation | Common-fixture/fingerprint and canonical-minimal-base conformance (including a fake alternate telemetry Provider); `tests/emitter_socket_receive.rs`; table-driven `tests/ingress_metric_policy.rs` across all four ingress adapters; `tests/exporter_outage.rs`; `tests/exporter_backpressure.rs`; `integration/scenario_full_pipeline.rs`; adapted `policy_observability.rs` (retain all existing assertions; add new `d2b.zone`, `d2b.provider` allowlist entries) |
 | Removal proof | `guest.nix` per-VM guest collector retired after `integration/scenario_obs_zone_forwarding.rs` passes |
 
 ### ADR046-otel-003
@@ -2164,8 +2246,8 @@ Old and new suites never run in parallel indefinitely.
 | Dependency/owner | ADR046-otel-002; policy/contract-tests owner |
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (`loki_native_otel_resource_attributes` allowlist; `tempo_stack_signoz_backend_and_collector`; `startup_tracing_avoids_host_path_fields`); `packages/d2b-contract-tests/tests/policy_metrics.rs` (`EXPECTED_METRICS` table); `packages/d2b-contract-tests/tests/minijail_relay_otel.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/policy_observability.rs` (updated); `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new, per ADR046-telem-008); `packages/d2b-provider-observability-otel/tests/no_vm_label_in_metrics.rs` |
-| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add gate: `no_isolation` must not appear in any Provider `MetricDescriptor` label or span attribute catalog. (3) Adapt `minijail_relay_otel.rs` shape test for Provider-managed runner (no broker `RunnerRole::OtelHostBridge`). (4) Add metric inventory gates for `d2b_otel_*` instruments from this spec. (5) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend existing tests; keep existing test assertions. |
+| Destination | `packages/d2b-contract-tests/tests/policy_observability.rs` (updated); `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new, per ADR046-telem-008); `packages/d2b-provider-observability-otel/tests/{no_vm_label_in_metrics,ingress_metric_policy}.rs` |
+| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add gate: `no_isolation` must not appear in any Provider `MetricDescriptor` label or span attribute catalog. (3) Adapt `minijail_relay_otel.rs` shape test for Provider-managed runner (no broker `RunnerRole::OtelHostBridge`). (4) Add metric inventory gates for `d2b_otel_*` instruments from this spec. (5) Structurally prove that all four metrics ingress adapters call the shared pre-batch policy gate; run exact forbidden-key, suffix, `metadata.name`, ResourceRef, UID, and resource-identity canaries through each adapter; assert bounded non-echoing outcomes/quarantine/backpressure and valid OTEL Resource identity preservation. (6) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend existing tests; keep existing test assertions. |
 | Integration | Contract-tests run in workspace `make test-drift` and `make test-lint` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All contract-tests pass after update; existing allowlist test does not regress |

@@ -319,6 +319,51 @@ Zone identity remains available as the bounded `d2b.zone` OTEL resource
 attribute. Removing identity labels MUST NOT remove that resource attribute or
 the Zone/resource identity fields permitted by the audit contract.
 
+### Collector ingress enforcement
+
+`METRIC_LABEL_POLICY` is both a descriptor registry and a runtime admission
+contract. The `observability-otel` collector MUST run one shared structural
+validator over metrics from every ingress: compact frames on the Unix emitter,
+OTLP on the private Unix socket, OTLP forwarded over vsock, and the D096 import
+stream. Validation runs after bounded decode and trusted OTEL Resource stamping,
+but before SDK aggregation, queue insertion, batching, retry, or export. It
+parses descriptor labels plus every data-point and exemplar attribute map.
+
+The whole frame is rejected and dropped when a key is outside
+`METRIC_LABEL_POLICY`; is exactly `vm`, `zone`, `zone_id`, `zone_uid`,
+`credential_name`, `network`, `network_name`, or `link_name_hash`; ends in
+`_name`, `_name_hash`, `_name_digest`, or `_uid`; or when a value equals a
+trusted producer/resource `metadata.name`, UID, ResourceRef, or other
+resource-identity canary. No adapter may enqueue an unchecked frame, and a
+rejected OTLP frame cannot export its otherwise-valid siblings.
+
+Unix datagrams are dropped without a response. Stream ingress returns only
+`invalid-telemetry-frame`; three violations quarantine the connection for at
+most 30 seconds and set its credits to zero. Quarantine is in-memory, capped at
+64 connections per Binding, and retains only an opaque connection handle,
+expiry, ingress class, and the closed error class—not payload, rejected
+key/value, or producer/resource identity. Structural validation remains ahead
+of queue capacity during exporter backpressure; invalid frames never consume
+queue or retry capacity.
+
+The collector reports only:
+
+```text
+d2b_otel_ingress_policy_total{
+  ingress = emitter_unix | otlp_unix | otlp_vsock | import_stream,
+  outcome = accepted | rejected | quarantined,
+  error_class = none | key_not_allowlisted | key_forbidden |
+                key_suffix_forbidden | value_identity | malformed | oversize
+}
+```
+
+These fixed domains are themselves registered by `METRIC_LABEL_POLICY`.
+`d2b_telemetry_drop_total` uses only the additional closed reasons
+`policy_violation` and `ingress_quarantine`. No metric, span, log, status,
+protocol error, or quarantine record echoes a forbidden key or value. Valid
+identity remains only in allow-listed OTEL Resource attributes. Authoritative
+audit remains a separate writer, payload, and export path.
+
 Note: the current `d2b_daemon_vm_*` metrics in `packages/d2bd/src/metrics.rs`
 use `vm` labels with VM name values (e.g. labels `["vm", "state"]`,
 `["vm", "outcome"]`, `["vm", "vmm", "outcome"]`, `["vm", "reason"]`).
@@ -487,8 +532,9 @@ Target crates: individual Provider crates (ADR-only).
 
 | Metric | Type | Labels | Buckets |
 | --- | --- | --- | --- |
-| `d2b_telemetry_drop_total` | counter | `signal={metric,trace,log}`, `reason={buffer_full,export_error}` | — |
+| `d2b_telemetry_drop_total` | counter | `signal={metric,trace,log}`, `reason={buffer_full,export_error,policy_violation,ingress_quarantine}` | — |
 | `d2b_telemetry_export_total` | counter | `signal`, `outcome={ok,error}` | — |
+| `d2b_otel_ingress_policy_total` | counter | `ingress={emitter_unix,otlp_unix,otlp_vsock,import_stream}`, `outcome={accepted,rejected,quarantined}`, `error_class={none,key_not_allowlisted,key_forbidden,key_suffix_forbidden,value_identity,malformed,oversize}` | — |
 | `d2b_audit_write_total` | counter | `record_class`, `outcome={ok,rate_limited,error}` | — |
 | `d2b_audit_drop_total` | counter | `record_class={privileged,unprivileged}` | — |
 
@@ -625,6 +671,10 @@ Zone runtime, core-controller, and all other core processes use a
 - serializes metric increments and span events into compact frames;
 - writes frames over a private Unix datagram socket to the `observability-otel`
   Provider process;
+- relies on the collector's mandatory structural metric admission at every
+  Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream ingress before any
+  batching or export; emitter-side validation is defense in depth, never a
+  substitute for the collector gate;
 - holds a bounded in-process ring (default 4 MiB metrics, 4 MiB traces, 2 MiB
   logs per process — configurable via the observability-otel Provider spec);
 - drops oldest frames on ring-full, incrementing `d2b_telemetry_drop_total`.
@@ -1737,6 +1787,18 @@ New `packages/d2b-provider-observability-otel/tests/`:
   datagram socket; Provider drains and forwards; assert spans arrive at the
   mock OTLP sink with correct `d2b.zone` resource attribute and no forbidden
   labels.
+- `ingress_metric_policy`: run one table-driven corpus through the Unix
+  emitter, OTLP Unix, OTLP/vsock, and D096 import-stream adapters. Every adapter
+  rejects exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`,
+  `network`, `network_name`, `link_name_hash`, structural suffixes
+  `*_name`/`*_name_hash`/`*_name_digest`/`*_uid`, and
+  `metadata.name`/UID/ResourceRef/resource-identity canary values before queue
+  insertion or batching. Assert no valid sibling of a rejected frame exports.
+- The same ingress test asserts exact bounded outcome/error-class domains, no
+  rejected key/value echo, datagram drop, stream quarantine and bounds, zero
+  import credits while quarantined, policy-before-capacity under backpressure,
+  valid-frame passage, OTEL Resource identity preservation, and audit
+  separation.
 - `emitter_ring_drains_on_socket_available`: emitter writes frames before socket
   exists; socket appears; assert buffered frames arrive in FIFO order.
 - `emitter_ring_drop_on_overflow`: fill ring past capacity; assert
@@ -1876,11 +1938,11 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | W0/W1a; telemetry crate owner |
 | Current source | `packages/d2b-realm-core/src/trace_context.rs` (`TraceContext`, `MAX_TRACE_FIELD_LEN`); `packages/d2b-realm-core/src/audit.rs` (`AuditHash`, `AuditHashError`, `AuditChainLink`, `AuditChainRecord`); `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`); `packages/d2b-realm-codec-protobuf/src/lib.rs` (`encode_trace_context`, `decode_trace_context`); `packages/d2b-contract-tests/tests/policy_observability.rs::startup_tracing_avoids_host_path_fields` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,redaction_guard.rs}` |
-| Detailed design | `d2b-telemetry` provides: (1) `TraceContext` / `AuditHash` / `AuditChainLink` extracted unchanged; (2) `BoundedEmitter`: `tracing`-subscriber layer that serializes span/metric events into compact frames and writes them over a private Unix datagram socket to the `observability-otel` Provider — no `opentelemetry_sdk` dependency; (3) `RedactionGuard` span wrapper that asserts the v3 resource attribute allowlist at span creation. No OTEL SDK in this crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged (`TraceContext`, `AuditHash`, `AuditChainLink`); adapt (`OperationId`/`CorrelationId` for v3 record contract); add bounded emitter. |
+| Destination | `packages/d2b-telemetry/src/{trace_context.rs,audit_hash.rs,emitter.rs,meter_registry.rs,metric_label_policy.rs,redaction_guard.rs}` |
+| Detailed design | `d2b-telemetry` provides: (1) `TraceContext` / `AuditHash` / `AuditChainLink` extracted unchanged; (2) `BoundedEmitter`: `tracing`-subscriber layer that serializes span/metric events into compact frames and writes them over a private Unix datagram socket to the `observability-otel` Provider — no `opentelemetry_sdk` dependency; (3) the canonical closed `METRIC_LABEL_POLICY`, structural descriptor/data-point/exemplar validator, exact forbidden-key/suffix predicates, and non-serializable resource-identity canary matcher used by emitter defense in depth and the mandatory collector ingress gate; (4) `RedactionGuard` span wrapper that asserts the v3 resource attribute allowlist at span creation. No OTEL SDK in this crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged (`TraceContext`, `AuditHash`, `AuditChainLink`); adapt (`OperationId`/`CorrelationId` for v3 record contract); add bounded emitter. |
 | Integration | Every v3 core process initializes a `BoundedEmitter` pointing at `$ZONE_STATE/telemetry/emitter.sock`; v3 audit records use `AuditHash`/`AuditChainLink` from this crate |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | Unit test for `RedactionGuard` attribute gate; unit test for `BoundedEmitter` ring-full drop and FIFO drain; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = "realm-controllers"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml |
+| Validation | Unit test for `RedactionGuard` attribute gate; unit test for `BoundedEmitter` ring-full drop and FIFO drain; table tests for `METRIC_LABEL_POLICY` exact keys, suffixes, and `metadata.name`/UID/ResourceRef identity canaries; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = "realm-controllers"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml |
 | Removal proof | None — net-new; no prior owner to remove |
 
 ### ADR046-telem-002
@@ -1952,10 +2014,10 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `nixos-modules/components/observability/host.nix` (`otelRuntimeDir = "/run/d2b/otel"`, `hostEgressSocket`, ACL `setfacl` pattern, `scrapeJournal`, `hostCfg.identityName`); `nixos-modules/components/observability/stack.nix` (SigNoz stack, `ingressSources`, per-source `vmName`, `receiverGrpcPort`/`receiverHttpPort`, loopback binding, `cfg.signoz.listenPort`); `nixos-modules/components/observability/guest.nix` (`vm.name`/`vm.env`/`vm.role` identity stamping, guest collector); `packages/d2b-host/src/otel_host_bridge_argv.rs` (`OtelHostBridgeArgvInputs`; vsock forwarding); `packages/d2bd/src/otel_host_bridge_readiness.rs` (readiness gate pattern: `OtelHostBridgeReadiness::{Ready,Pending,Failed}`); `packages/d2b-core/src/processes.rs::ProcessRole::OtelHostBridge`; `packages/d2b-contracts/src/broker_wire.rs::RunnerRole::OtelHostBridge`; `packages/d2b-contract-tests/tests/{policy_observability.rs,minijail_relay_otel.rs}` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-observability-otel/src/`, `nixos-modules/components/observability/` (adapted files) |
-| Detailed design | `Provider/observability-otel` is an **ordinary optional non-bootstrap Process** (not counted toward the ≤64 MiB mandatory core aggregate). It owns: (1) per-Zone datagram receiver socket at `$ZONE_STATE/telemetry/emitter.sock` (drains frames from core emitters) and OTLP/gRPC Unix socket at `$ZONE_STATE/telemetry/otlp.sock`; (2) the full OTEL SDK with OTLP exporter — only this process links `opentelemetry_sdk`; (3) OTel Collector pipeline per Zone and per Host; (4) vsock OTLP forwarding to obs Zone (replaces socat-based `OtelHostBridgeArgvInputs`); (5) SigNoz stack Nix adapted from `stack.nix` with per-Zone `ingressSources` replacing per-VM `vmName`; (6) journald scrape (optional, disabled by default); (7) self-metrics endpoint. Zone/controller startup does not wait for this Provider. If absent or unready, Zone health is `Degraded` (not `Failed`). Readiness: socket exists and first drain cycle completes successfully. `d2b.observability.host.identityName` option preserved; `vmName` in `ingressSources` populated from Zone name. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone naming); adapt `OtelHostBridgeArgvInputs` vsock forwarding to native OTLP/gRPC-over-vsock; adapt readiness gate pattern (`OtelHostBridgeReadiness::Ready` → Provider phase `Ready`); adapt `ingressSources` per-VM → per-Zone. |
+| Detailed design | `Provider/observability-otel` is an **ordinary optional non-bootstrap Process** (not counted toward the ≤64 MiB mandatory core aggregate). It owns: (1) per-Zone datagram receiver socket at `$ZONE_STATE/telemetry/emitter.sock` (drains frames from core emitters) and OTLP/gRPC Unix socket at `$ZONE_STATE/telemetry/otlp.sock`; (2) the full OTEL SDK with OTLP exporter — only this process links `opentelemetry_sdk`; (3) OTel Collector pipeline per Zone and per Host; (4) vsock OTLP forwarding to obs Zone (replaces socat-based `OtelHostBridgeArgvInputs`); (5) D096 import-stream ingest; (6) one structural `METRIC_LABEL_POLICY` gate shared by Unix emitter, OTLP Unix, OTLP/vsock, and import-stream metrics before aggregation, queueing, batching, retry, or export, with bounded non-echoing errors/quarantine/backpressure; (7) SigNoz stack Nix adapted from `stack.nix` with per-Zone `ingressSources` replacing per-VM `vmName`; (8) journald scrape (optional, disabled by default); (9) self-metrics endpoint. Trusted producer identity is stamped only into allow-listed OTEL Resource attributes; audit remains separate. Zone/controller startup does not wait for this Provider. If absent or unready, Zone health is `Degraded` (not `Failed`). Readiness: socket exists and first drain cycle completes successfully. `d2b.observability.host.identityName` option preserved; `vmName` in `ingressSources` populated from Zone name. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt Nix pipeline shape (replace per-VM `vmName` with per-Zone naming); adapt `OtelHostBridgeArgvInputs` vsock forwarding to native OTLP/gRPC-over-vsock; adapt readiness gate pattern (`OtelHostBridgeReadiness::Ready` → Provider phase `Ready`); adapt `ingressSources` per-VM → per-Zone. |
 | Integration | Core process `BoundedEmitter` → `emitter.sock` → observability-otel collector → `otlp.sock` → vsock → obs Zone SigNoz; Zone startup independent of Provider readiness |
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh |
-| Validation | `emitter_socket_receive`, `emitter_ring_drains_on_socket_available`, `emitter_ring_drop_on_overflow`, `no_vm_label_in_metrics`, `zone_startup_proceeds_without_provider` tests; adapted `policy_observability.rs` tests (retain `loki_native_otel_resource_attributes` and SigNoz-only backend assertions); adapted `minijail_relay_otel.rs` shape test for Provider-managed runner |
+| Validation | `emitter_socket_receive`, `emitter_ring_drains_on_socket_available`, `emitter_ring_drop_on_overflow`, table-driven `ingress_metric_policy` across all four ingress adapters, `no_vm_label_in_metrics`, and `zone_startup_proceeds_without_provider` tests; adapted `policy_observability.rs` tests (retain `loki_native_otel_resource_attributes` and SigNoz-only backend assertions); adapted `minijail_relay_otel.rs` shape test for Provider-managed runner |
 | Removal proof | `otel_host_bridge_argv.rs` socat runner and `otel_host_bridge_readiness.rs` retired after `observability-otel` Provider delivers native OTLP/vsock and passes conformance; `ProcessRole::OtelHostBridge` and `RunnerRole::OtelHostBridge` retired from `d2b-core/src/processes.rs` and `d2b-contracts/src/broker_wire.rs` after Provider migration |
 
 ### ADR046-audit-001
@@ -2072,7 +2134,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (`loki_native_otel_resource_attributes` allowlist: `["deployment.environment","host.name","service.name","service.namespace","source","vm.env","vm.name","vm.role"]`; `tempo_stack_signoz_backend_and_collector` SigNoz-only assertion; `startup_tracing_avoids_host_path_fields` forbidden fields); `packages/d2b-contract-tests/tests/policy_metrics.rs` (`EXPECTED_METRICS` table parity with `docs/reference/daemon-metrics.md`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new); updated `policy_observability.rs`; updated `policy_metrics.rs` |
-| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add structural metric-label policy lint: parse every v3 `MetricDescriptor`, require each label key and value domain to exist in the closed `METRIC_LABEL_POLICY`, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `network`, `network_name`, and `link_name_hash`, reject resource-name-derived key suffixes `*_name`, `*_name_hash`, `*_name_digest`, and `*_uid`, and prove a `metadata.name` canary never enters label values. Fixed semantic labels remain allowed only with closed domains. (4) Assert the `d2b.zone` resource attribute remains present. (5) Add bucket boundary gates for 5 ms and 20 ms. (6) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates. |
+| Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add structural metric-label policy lint: parse every v3 `MetricDescriptor`, require each label key and value domain to exist in the closed `METRIC_LABEL_POLICY`, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `network`, `network_name`, and `link_name_hash`, reject resource-name-derived key suffixes `*_name`, `*_name_hash`, `*_name_digest`, and `*_uid`, and prove `metadata.name`, UID, ResourceRef, and resource-identity canaries never enter label values. Fixed semantic labels remain allowed only with closed domains. (4) Prove the observability Provider's Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream adapters all invoke that validator before queue/batch/export; assert whole-frame rejection, bounded non-echoing error classes/quarantine, and policy-before-capacity backpressure. (5) Assert the `d2b.zone` Resource attribute remains present and audit is unchanged. (6) Add bucket boundary gates for 5 ms and 20 ms. (7) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates. |
 | Integration | Contract-tests run in workspace check and `make test-drift` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | These tests are their own validation artifact |

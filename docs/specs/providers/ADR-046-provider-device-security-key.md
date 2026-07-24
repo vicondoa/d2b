@@ -1119,8 +1119,10 @@ the relay does not accept in-band identity claims from the peer.
 
 Raw CTAP payloads, PINs, CBOR assertions, credential IDs, WebAuthn responses,
 and signature bytes are never logged, audited, or included in OTEL spans or
-metrics. Only target identity (opaque digest), Service/Binding digests, high-level
-op type (acquire/release/timeout/cancel), and lease lifecycle events are emitted.
+metrics. Authorized bounded audit records may carry the target,
+Service/Binding, and session digests specified below. OTEL spans and metrics
+carry only fixed semantic operation, phase, outcome, and error-class values;
+they carry no target or resource identity, including opaque digests.
 
 ### I-8: Relay has narrow ComponentSession service authority
 
@@ -1519,6 +1521,11 @@ the Provider controller; path-free):
 }
 ```
 
+`resource_name_digest` is permitted only in this bounded Core audit record,
+after the caller has already been authorized for the DeviceGrant operation. It
+is not a telemetry field and must never be copied into a metric label, span
+attribute, OTEL log, collector diagnostic, or support summary.
+
 Excluded: hidraw node path, sysfs bus ID, vendor/product string, serial, device
 file descriptor number, CTAP payload, guest VM name. The Provider controller does
 not emit this record; Core emits it at DeviceGrant resolution time.
@@ -1552,8 +1559,11 @@ Constraints specific to this Provider:
 - Metric `d2b_device_sk_session_total{outcome}`: counter; `outcome` ∈ `{success, timeout, cancelled, busy, conflict, error}`.
 - Metric `d2b_device_sk_ceremony_duration_seconds`: histogram; bucketed 0–120 s.
 - Metric `d2b_device_sk_relay_restarts_total`: counter.
-- No metric or span attribute carries device name (only `resource_name_digest`),
-  session ID, guest name, hidraw path, or serial.
+- No metric label or span attribute carries a device/resource/Service/Binding
+  name, UID, ref, digest (including `resource_name_digest`), session ID, guest
+  name, hidraw path, serial, or derived identity token. Spans use only fixed
+  semantic operation, phase, outcome, and closed error-class attributes.
+- `resource_name_digest` remains audit-only under the authorization rule above.
 - OTEL emitter: lightweight bounded ring (no OTEL SDK in the Provider process;
   tracing crate only). The `observability-otel` Provider drains and forwards.
 
@@ -2180,7 +2190,7 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | Core `device-grant` audit and Provider controller Service/Binding ceremony lifecycle audit |
-| Detailed design | Path-free authority-grant records from Core and bounded Service/Binding/session digests/outcomes from controller; no path, raw target identity, LeaseId, session content, or CTAP bytes. |
+| Detailed design | Path-free authority-grant records from Core and bounded Service/Binding/session digests/outcomes from controller; no path, raw target identity, LeaseId, session content, or CTAP bytes. `resource_name_digest` is admitted only in the Core authority-grant audit after DeviceGrant authorization and is never copied to OTEL. |
 | Integration | Core emits grant audit; controller emits Service/Binding lifecycle audit; Zone stream stores bounded records; CLI/support consumes digests/outcomes. |
 | Data migration | Full d2b 3.0 reset; no v2 audit import |
 | Validation | Audit tests assert path-free fields, bounded digests, no guest name/session content/CTAP bytes, grant emitted by Core not Provider controller, and lifecycle emitted by controller. |
@@ -2194,10 +2204,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | Provider/controller bounded telemetry emitter and observability-otel handoff for security-key metrics |
-| Detailed design | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring; descriptors use only closed semantic labels and never Zone/resource-name-derived identity, while `d2b.zone` and `d2b.provider` remain OTEL resource attributes |
+| Detailed design | OTEL metrics: `d2b_device_sk_session_total`, `d2b_device_sk_ceremony_duration_seconds`, `d2b_device_sk_relay_restarts_total` via bounded emitter ring; descriptors use only closed semantic labels and never Zone/resource-name-derived identity. Provider spans use only fixed operation/phase/outcome/error-class attributes. Neither metrics nor spans admit a resource name, UID, ref, digest (including `resource_name_digest`), session ID, or derived identity token, while `d2b.zone` and `d2b.provider` remain OTEL Resource attributes. |
 | Integration | Relay/controller write metric events to the bounded ring; observability-otel Provider drains and exports; dashboards/CLI consume closed labels and bounded histograms. |
 | Data migration | Full d2b 3.0 reset; no v2 telemetry import |
-| Validation | Metrics tests structurally assert closed label sets, exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys, Device/Zone-name canary absence, retained `d2b.zone` resource attributes, bounded ring behavior, and correct session/ceremony/restart counters. |
+| Validation | `telemetry_identity_canaries.rs` and metric inventory tests structurally assert closed label/span-attribute sets; exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, resource-name-derived keys, and `resource_name_digest`; Device/Service/Binding/Guest/Zone name, UID, ref, and digest canary absence from metrics and spans; retained `d2b.zone` Resource attributes; bounded ring behavior; and correct session/ceremony/restart counters. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 ### ADR046-security-key-023
@@ -2418,6 +2428,7 @@ per-test budget.
 | `cid_isolation.rs` | Different Bindings/ceremonies do not share CID maps; round trip and cancel-all-CIDs; canonical Service/Binding subject only |
 | `descriptor_validation.rs` | Relay-control and Service/Binding Noise identities, fingerprints, encrypted stream bounds, SO_PEERCRED, no ambient path/raw CID, and opaque-ID Debug redaction |
 | `status_binding.rs` | Empty ProviderStateSet; authority/import/attachment observations occur only in `status.resource`, while shared-backing implementation state and relay/frontend/queue/ceremony observations remain in `status.provider`; no semantic field appears directly under `status`; ceremony rows are not resources/status history; CTAP, fd, LeaseId, CID, and session keys absent |
+| `telemetry_identity_canaries.rs` | Exact semantic metric/span allowlists; `resource_name_digest` and Device/Service/Binding/Guest/Zone name, UID, ref, and digest canaries never enter metric labels or span attributes; allow-listed OTEL Resource identity remains |
 
 ### Integration (in `integration/`)
 

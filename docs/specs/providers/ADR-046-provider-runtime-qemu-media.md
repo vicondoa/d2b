@@ -1273,16 +1273,20 @@ OTEL trace spans:
 
 | Span | Parent | Attributes |
 | --- | --- | --- |
-| `guest.reconcile` | — | zone, provider, guest_uid_short, phase |
-| `guest.runner.launch` | `guest.reconcile` | zone, provider, process_ref_uid_short |
-| `guest.qmp.connect` | `guest.runner.launch` | zone, provider |
-| `guest.qmp.command` | `guest.reconcile` | zone, provider, command (closed set) |
-| `guest.media.hotplug` | `guest.reconcile` | zone, provider, operation |
-| `guest.finalize` | `guest.reconcile` | zone, provider |
+| `guest.reconcile` | — | phase, outcome |
+| `guest.runner.launch` | `guest.reconcile` | outcome |
+| `guest.qmp.connect` | `guest.runner.launch` | outcome |
+| `guest.qmp.command` | `guest.reconcile` | command (closed set), outcome |
+| `guest.media.hotplug` | `guest.reconcile` | operation (attach/detach), outcome |
+| `guest.finalize` | `guest.reconcile` | outcome |
 
-No span attribute may carry: argv, executable paths, VM memory, host fs
-paths, fds, socket paths, raw process output, or user-supplied opaque data.
-`guest_uid_short` = first 12 hex chars of Guest UID (not human name).
+Span attributes are fixed semantic classifiers and outcomes only. No span
+attribute may carry Zone, Guest, Process, Provider-resource, or other resource
+identity in any form, including a name, UID, short UID, digest, ResourceRef, or
+derived token. Identity belongs only in allow-listed OTEL Resource attributes
+such as `d2b.zone` and `d2b.provider`, or in an authorized bounded audit record.
+Spans also exclude argv, executable paths, VM memory, host filesystem paths,
+fds, socket paths, raw process output, and user-supplied opaque data.
 
 ---
 
@@ -1777,10 +1781,10 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-runtime-qemu-media/src/telemetry.rs |
-| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with structural closed-label enforcement and no Zone/VM/resource name, user identity, path, or other sensitive value in any metric label; retain Zone/resource identity only in bounded OTEL resource attributes and permitted audit fields. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
+| Detailed design | Metrics and OTEL spans: implement all metrics from §18 and OTEL trace spans with structural closed-label enforcement and no Zone/VM/resource name, user identity, path, or other sensitive value in any metric label. Span attributes use only the exact fixed semantic fields and `outcome` listed in §18; no resource name, UID, shortened UID, digest, ref, or derived identity is admitted. Retain identity only in allow-listed OTEL Resource attributes and permitted bounded audit fields. Primary reuse disposition: `create`. Preserved source-plan detail: net-new telemetry emission for the Provider metrics and spans in §18. |
 | Integration | Controller, QMP, hotplug, and dependency-watch paths call telemetry helpers; OTEL/metrics exporters consume only closed, bounded labels for support dashboards. |
 | Data migration | None — telemetry-only work; no runtime state import |
-| Validation | `tests/metrics_label_cardinality.rs` asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; `tests/otel_span_attributes.rs` preserves allowed OTEL resource identity attributes and rejects identity span attributes |
+| Validation | `tests/metrics_label_cardinality.rs` asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; `tests/otel_span_attributes.rs` asserts the exact per-span semantic allowlist, preserves allowed OTEL Resource identity attributes, and rejects Zone/Guest/Process/Provider-resource names, refs, UIDs, shortened UIDs, digests, and identity canary values in span attributes |
 | Removal proof | None — telemetry helpers are new for this Provider; no prior owner to remove |
 
 ---
@@ -1890,7 +1894,7 @@ per-test budget.
 | `audit_event_shapes.rs` | Golden shape for every event in §17 |
 | `audit_no_sensitive_fields.rs` | Property test: no path/argv/fd/socket-path in payload |
 | `metrics_label_cardinality.rs` | Structural closed-label policy; exact identity-key absence; no Guest/Zone/resource-name canary or path in values; `d2b.zone` resource attribute retained |
-| `otel_span_attributes.rs` | No sensitive attribute in any span |
+| `otel_span_attributes.rs` | Exact fixed semantic attribute allowlist per span; Zone/Guest/Process/Provider-resource names, refs, UIDs, shortened UIDs, digests, and identity canaries rejected; allow-listed OTEL Resource identity retained |
 | `provider_layout.rs` | Workspace layout conformance invocation |
 | `conformance_guest.rs` | d2b-provider-toolkit conformance suite |
 
