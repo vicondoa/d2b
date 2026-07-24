@@ -355,9 +355,9 @@ finalizer is present. Canonical sequence: revoke/drain → delete scoped Process
      `expiresAtUnixMs` passes.
 3. If `leaseState=Revoked` or `leaseState=Expired`: proceed without further
    network calls (terminal state satisfies the finalizer).
-4. Emit bounded revoke outcome audit record (Zone, credential ResourceRef,
-   operation class, rotationGeneration, revocation outcome code; no token bytes,
-   paths, or provider diagnostics). The controller MUST NOT emit a
+4. Emit bounded revoke outcome audit record (Zone, `resource_name_digest`,
+   operation class, rotationGeneration, revocation outcome code; no token
+   bytes, paths, or provider diagnostics). The controller MUST NOT emit a
    resource-deleted closure audit; that is appended by the audit subsystem after
    the core event-only `Deleted` revision with dedup/exactly-once recovery.
 5. Issue a controller-initiated Delete for the scoped `Process` resource owned
@@ -463,8 +463,8 @@ For `rotation.policy = "proactive"`:
    `sha256(credential_uid || (rotation_generation + 1).to_le_bytes() || b"acquire")`.
 3. On grant: increment `rotationGeneration`; store new `leaseHandle` and
    `expiresAtUnixMs`; clear `RotationDue`; commit status; emit rotation audit
-   record (Zone, credential ResourceRef, trigger reason, old rotationGeneration,
-   new rotationGeneration, outcome code).
+   record (Zone, `resource_name_digest`, trigger reason, old
+   rotationGeneration, new rotationGeneration, outcome code).
 4. Old lease remains valid until the new lease is confirmed active.
 5. A duplicate `issue_lease` with the same idempotency key returns the same
    grant without double-issuing.
@@ -619,7 +619,7 @@ spec:
   purpose: credential-secret-service.d2bus.org/credential-service
   serviceFingerprint: credential.d2bus.org/CredentialService.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
   consumerPolicy: same-zone-authorized
   lifecyclePolicy: recycle-with-producer
@@ -985,15 +985,22 @@ host paths, or connection string shapes.
 
 | Event | Retained fields |
 | --- | --- |
-| Credential resource create/update/delete | Zone, subject digest, ResourceRef, verb, revision result, authorization decision |
-| `AcquireToken` | Zone, subject digest, credential ResourceRef, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RefreshToken` | Zone, subject digest, credential ResourceRef, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RevokeToken` | Zone, subject digest, credential ResourceRef, operation class, `rotationGeneration`, revocation result code |
-| Rotation | Zone, credential ResourceRef, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
-| Provider generation change revocation | Zone, credential ResourceRef, policy applied, outcome code |
-| Finalize (`provider-revoke`) | Zone, credential ResourceRef, revocation outcome, `revokedAtUnixMs` |
+| Credential resource create/update/delete | Zone, subject digest, `resource_name_digest`, verb, revision result, authorization decision |
+| `AcquireToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
+| `RefreshToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
+| `RevokeToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, revocation result code |
+| Rotation | Zone, `resource_name_digest`, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
+| Provider generation change revocation | Zone, `resource_name_digest`, policy applied, outcome code |
+| Finalize (`provider-revoke`) | Zone, `resource_name_digest`, revocation outcome, `revokedAtUnixMs` |
 | Bundle activated | Zone, `activationGeneration`, digest, create/update/skip/removed counts |
-| Cleanup complete *(audit subsystem only; appended post-core-deletion; not emitted by controller)* | Zone, credential ResourceRef, event-only Deleted revision committed and row/indexes removed atomically, `activationGeneration`, `cleanupLatencyMs` |
+| Cleanup complete *(audit subsystem only; appended post-core-deletion; not emitted by controller)* | Zone, `resource_name_digest`, event-only Deleted revision committed and row/indexes removed atomically, `activationGeneration`, `cleanupLatencyMs` |
+
+`resource_name_digest` is SHA-256 of the Credential resource name, never the
+raw name. It is admitted only to the authorization-controlled bounded Zone
+audit stream and, for caller-initiated operations, after the authorization
+decision. Raw Credential name, ResourceRef, and UID are excluded. The digest
+is never copied to telemetry, logs, collector diagnostics, or support
+summaries.
 
 Excluded from all audit records: token bytes, key material, passwords, bearer
 strings, provider-internal diagnostics, host paths, connection strings, audience
@@ -1021,11 +1028,23 @@ Required span attributes (closed set):
 | `d2b.credential.outcome` | Stable closed outcome code |
 | `d2b.credential.rotation_generation` | Numeric rotation generation |
 
-Zone and Credential identity use the `d2b.zone` and `d2b.credential.name`
-OTEL resource attributes only. They are forbidden as span attributes. Also
-forbidden: token bytes, audience literals, provider diagnostics, host paths,
-Secret Service object paths, collection names, resource IDs, and correlation
-IDs embedding secret shapes.
+Credential telemetry uses only applicable generic OTEL Resource attributes from
+the collector's closed allowlist:
+
+| Resource attribute | Value |
+| --- | --- |
+| `d2b.zone` | Zone name, re-stamped at trusted ingress |
+| `d2b.provider` | `credential-secret-service` |
+| `d2b.component` | Signed controller/service component ID |
+| `service.name` | Fixed controller/service name |
+| `service.namespace` | Fixed service namespace |
+| `service.version` | Build version |
+
+No OTEL Resource attribute or span attribute carries a Credential resource
+name, ResourceRef, UID, digest (including `resource_name_digest`), or derived
+identity token. Also forbidden: token bytes, audience literals, provider
+diagnostics, host paths, Secret Service object paths, collection names,
+resource IDs, and correlation IDs embedding secret shapes.
 
 ### 11.5 Metrics
 
@@ -1039,9 +1058,13 @@ IDs embedding secret shapes.
 
 The expiry gauge reports the minimum seconds remaining across active
 user-agent leases (0 when none). Label cardinality is bounded and semantic;
-Credential and Zone identity remain in bounded OTEL resource attributes and
-permitted audit fields, never metric labels or span attributes. Secret-shape
-assertions run on all label values.
+metric labels carry no Credential resource name, ResourceRef, UID, digest, or
+derived identity token. Credential identity is available only as
+`resource_name_digest` in authorized bounded audit records, never telemetry.
+Generic allowlisted OTEL Resource attributes such as `d2b.zone`,
+`d2b.provider`, and `d2b.component` remain available and are not copied into
+metric labels or span attributes. Secret-shape assertions run on all label
+values.
 
 ---
 
@@ -1303,10 +1326,10 @@ generation cleanup contract in `nixos-modules/options-resources.nix` and
 | Current source | `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; secret-service main reuse canary tests listed in §14 |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-credential-secret-service/src/{audit.rs,telemetry.rs} |
-| Detailed design | Audit/OTEL: emit audit records and OTEL spans/metrics for all credential service methods and controller events, with canary enforcement, expiry aggregated across user-agent leases, no Zone/Credential/resource-name-derived metric label, and no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces. |
+| Detailed design | Audit/OTEL: emit authorized bounded audit records with Credential identity represented only by `resource_name_digest`, and emit OTEL spans/metrics for all credential service methods and controller events with canary enforcement, expiry aggregated across user-agent leases, no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/Credential/resource-name-derived metric label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces. |
 | Integration | Controller and service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded event/span/metric records; canary tests verify every public observable surface stays secret-free. |
 | Data migration | None — audit/telemetry only; no runtime state migration |
-| Validation | Credential audit/OTEL tests from `ADR-046-resources-credential`; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived metric key plus Credential/Zone-name label canary absence while preserving allowed OTEL resource identity attributes and rejecting identity span attributes; `tests/delivery.rs` for credential-secret-service |
+| Validation | Credential audit/OTEL tests from `ADR-046-resources-credential` require `resource_name_digest` in authorized audit records and reject raw Credential name/ResourceRef/UID; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived metric key; Credential name/ref/UID/digest canaries are absent from all OTEL Resource attributes, span attributes, and metric labels; Zone-name canaries are absent from spans and labels while generic collector-allowlisted Resource attributes remain; complete secret-service metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame; `tests/delivery.rs` covers credential-secret-service delivery |
 | Removal proof | None — audit/telemetry helpers are new; no prior owner to remove |
 
 Implements audit record and OTEL span/metric emission for all credential
@@ -1378,8 +1401,9 @@ All `check_provider_conformance` arms pass for `d2b-provider-credential-secret-s
 | `canary_absent_status_json` | `credential_canary` absent from status JSON serialization |
 | `object_path_absent_all_responses` | `object_path_canary` absent from all response DTOs |
 | `canary_absent_audit_records` | `credential_canary` and `object_path_canary` absent from all audit record JSON |
-| `canary_absent_span_attributes` | Neither canary present in any OTEL span attribute captured by test subscriber |
-| `metric_identity_labels_absent` | No descriptor key is `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, or resource-name-derived; Credential/Zone-name canaries are absent from values; allowed OTEL resource identity attributes remain and identity span attributes are absent |
+| `canary_absent_telemetry_attributes` | Neither secret canary nor any Credential name/ref/UID/digest canary is present in OTEL Resource or span attributes; generic collector-allowlisted Resource attributes remain |
+| `metric_identity_labels_absent` | No descriptor key is `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, or resource-name-derived; Credential name/ref/UID/digest and Zone-name canaries are absent from label values; Zone-name canaries are also absent from span attributes |
+| `collector_allowlist_frame_accepted` | Complete metric/span frames with only generic allowlisted Resource attributes are accepted; injecting `d2b.credential.name` or any Credential name/ref/UID/digest key or value rejects the whole frame |
 | `canary_absent_delivery_binding` | Neither canary present in delivery session binding parameters |
 
 #### `tests/delivery.rs`

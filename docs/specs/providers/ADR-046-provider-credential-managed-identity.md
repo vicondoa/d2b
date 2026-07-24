@@ -899,7 +899,7 @@ spec:
   purpose: credential-managed-identity.d2bus.org/credential-service
   serviceFingerprint: credential.d2bus.org/CredentialService.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
   consumerPolicy: same-zone-authorized
   lifecyclePolicy: recycle-with-producer
@@ -1281,17 +1281,24 @@ All error messages:
 
 | Event | Fields retained |
 | --- | --- |
-| Credential resource create/update/delete | Zone, subject digest, `Credential/<name>`, verb, revision result, authorization decision |
-| `AcquireToken` | Zone, subject digest, `Credential/<name>`, `operation_class="acquire-token"`, `rotationGeneration`, outcome code, idempotency key digest |
-| `RefreshToken` | Zone, subject digest, `Credential/<name>`, `operation_class="refresh-token"`, `rotationGeneration`, outcome code, idempotency key digest |
-| `RevokeToken` | Zone, subject digest, `Credential/<name>`, `operation_class="revoke-token"`, `rotationGeneration`, revocation result code |
-| `InspectMetadata` | Zone, subject digest, `Credential/<name>`, `operation_class="inspect-metadata"`, outcome code |
-| Proactive rotation | Zone, `Credential/<name>`, trigger `proactive-window`, old `rotationGeneration`, new `rotationGeneration`, outcome code |
-| Provider generation change revocation | Zone, `Credential/<name>`, policy applied (`immediate` or `drain-leases`), outcome code |
-| IMDS unavailability onset | Zone, `Credential/<name>`, consecutive-failure count, outcome code `credential-provider-unavailable` |
-| Agent spawn | Zone, `Credential/<name>`, agent Process name, `executionRef`, outcome code |
-| Agent Process failure | Zone, `Credential/<name>`, agent Process name, failure reason (closed code), failure count |
-| **Deleted-phase closure** | Zone, `Credential/<name>`, `phase=Deleted`, `finalizer=credential.d2bus.org/provider-revoke`, `cleanupLatencyMs`, final `rotationGeneration`, outcome `resource-deleted` |
+| Credential resource create/update/delete | Zone, subject digest, `resource_name_digest`, verb, revision result, authorization decision |
+| `AcquireToken` | Zone, subject digest, `resource_name_digest`, `operation_class="acquire-token"`, `rotationGeneration`, outcome code, idempotency key digest |
+| `RefreshToken` | Zone, subject digest, `resource_name_digest`, `operation_class="refresh-token"`, `rotationGeneration`, outcome code, idempotency key digest |
+| `RevokeToken` | Zone, subject digest, `resource_name_digest`, `operation_class="revoke-token"`, `rotationGeneration`, revocation result code |
+| `InspectMetadata` | Zone, subject digest, `resource_name_digest`, `operation_class="inspect-metadata"`, outcome code |
+| Proactive rotation | Zone, `resource_name_digest`, trigger `proactive-window`, old `rotationGeneration`, new `rotationGeneration`, outcome code |
+| Provider generation change revocation | Zone, `resource_name_digest`, policy applied (`immediate` or `drain-leases`), outcome code |
+| IMDS unavailability onset | Zone, `resource_name_digest`, consecutive-failure count, outcome code `credential-provider-unavailable` |
+| Agent spawn | Zone, `resource_name_digest`, agent Process name, `executionRef`, outcome code |
+| Agent Process failure | Zone, `resource_name_digest`, agent Process name, failure reason (closed code), failure count |
+| **Deleted-phase closure** | Zone, `resource_name_digest`, `phase=Deleted`, `finalizer=credential.d2bus.org/provider-revoke`, `cleanupLatencyMs`, final `rotationGeneration`, outcome `resource-deleted` |
+
+`resource_name_digest` is SHA-256 of the Credential resource name, never the
+raw name. It is admitted only to the authorization-controlled bounded Zone
+audit stream and, for caller-initiated operations, after the authorization
+decision. Raw Credential name, ResourceRef, and UID are excluded. The digest
+is never copied to telemetry, logs, collector diagnostics, or support
+summaries.
 
 The **Deleted-phase closure** audit record is written by the **audit subsystem**,
 not by the controller. The controller's only deletion-time action is to clear
@@ -1342,8 +1349,21 @@ d2b.credential.provider_health_check
 | `d2b.credential.outcome` | Stable closed outcome code |
 | `d2b.credential.rotation_generation` | Numeric rotation generation |
 
-Zone and Credential identity use the `d2b.zone` and `d2b.credential.name`
-OTEL resource attributes only. They are forbidden as span attributes.
+Credential telemetry uses only applicable generic OTEL Resource attributes from
+the collector's closed allowlist:
+
+| Resource attribute | Value |
+| --- | --- |
+| `d2b.zone` | Zone name, re-stamped at trusted ingress |
+| `d2b.provider` | `credential-managed-identity` |
+| `d2b.component` | Signed controller/agent component ID |
+| `service.name` | Fixed controller or agent service name |
+| `service.namespace` | Fixed service namespace |
+| `service.version` | Build version |
+
+No OTEL Resource attribute or span attribute carries a Credential resource
+name, ResourceRef, UID, digest (including `resource_name_digest`), or derived
+identity token.
 
 ### Forbidden from spans and resource attributes
 
@@ -1367,8 +1387,12 @@ embed secret shapes.
 (`azure-imds`, `azure-imds-aca`); no resolved endpoint URL appears in this label.
 Label cardinality is bounded and semantic. The expiry gauge reports the
 minimum seconds remaining across active leases in each provider/placement
-aggregate (0 when none). Credential and Zone identity remain in the bounded
-OTEL attributes above and permitted audit fields, never metric labels.
+aggregate (0 when none). Metric labels carry no Credential resource name,
+ResourceRef, UID, digest, or derived identity token. Credential identity is
+available only as `resource_name_digest` in authorized bounded audit records,
+never telemetry. Generic allowlisted OTEL Resource attributes such as
+`d2b.zone`, `d2b.provider`, and `d2b.component` remain available and are not
+copied into metric labels or span attributes.
 
 ---
 
@@ -1836,10 +1860,10 @@ item.
 | Current source | `packages/d2b-realm-provider/src/error.rs:contains_sensitive_shape`; `packages/d2b-core/src/realm_workloads_launcher.rs:LauncherMetadataInvariants.no_secrets_or_credentials`; main `a1cc0b2d` managed-identity canary tests listed in §Source reuse |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-credential-managed-identity/src/{audit.rs,telemetry.rs}; packages/d2b-contract-tests/tests/credential_audit.rs |
-| Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit; emit OTEL spans and metrics per §OTEL and metrics with no Zone/Credential/resource-name-derived label; report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential `metadata.name`, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces. |
+| Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest`; emit OTEL spans and metrics per §OTEL and metrics with no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/Credential/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential name/ref/UID/digest, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces. |
 | Integration | Controller and agent service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded redacted records; contract tests validate credential audit shape across providers. |
 | Data migration | None — audit/telemetry only; no runtime state import |
-| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived label key, reject Credential/Zone-name label canaries, preserve allowed OTEL resource identity attributes, reject identity span attributes, and reject sensitive shapes |
+| Validation | `packages/d2b-contract-tests/tests/credential_audit.rs` requires `resource_name_digest` in authorized audit records and rejects raw Credential name/ResourceRef/UID; managed-identity `canary.rs` and audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived label key; reject Credential name/ref/UID/digest canaries from all OTEL Resource attributes, span attributes, and metric labels; preserve generic collector-allowlisted Resource attributes including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; reject Zone-name span/label canaries and sensitive shapes; pass complete managed-identity metric/span frames through the shared collector ingress validator and prove that adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
 | Removal proof | None — audit/telemetry helpers are additive; no prior owner to remove |
 
 ---
@@ -1935,13 +1959,14 @@ audit record field set conformance, delivery session binding contract, RBAC
 
 | Test | Validates |
 | --- | --- |
-| `"managed-identity-canary"` absent from every `FakeClient` response DTO field, status field, audit record field, metric label value, OTEL span attribute, and delivery record outer header | Zero-secret-bytes invariant |
+| `"managed-identity-canary"` absent from every `FakeClient` response DTO field, status field, audit record field, metric label value, OTEL Resource attribute, OTEL span attribute, and delivery record outer header | Zero-secret-bytes invariant |
 | `"credential_canary"` absent from same surfaces | Cross-provider canary consistency |
 | `"imds-endpoint-canary"` (a value that looks like an IMDS endpoint URL) absent from all output surfaces | Endpoint URL exclusion |
 | `clientId` value absent from audit records, metric labels, OTEL spans, error messages, and log lines | Config field exclusion |
 | `imdsEndpointAlias` value absent from OTEL span attributes, audit records, and error messages | Alias exclusion |
 | IMDS response-shaped string absent from status, audit, OTEL, and logs | IMDS response content exclusion |
-| Metric descriptors contain no `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, or resource-name-derived key; Credential/Zone-name canaries are absent from emitted label values while allowed OTEL resource identity attributes remain and identity span attributes are absent | Structural metric identity-label exclusion |
+| Metric descriptors contain no `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, or resource-name-derived key; Credential name/ref/UID/digest canaries are absent from OTEL Resource attributes, span attributes, and metric labels; Zone-name canaries are absent from spans and labels while generic collector-allowlisted Resource attributes remain | Structural telemetry identity exclusion |
+| Complete metric/span frames with only generic allowlisted Resource attributes are accepted by the shared collector ingress validator; injecting `d2b.credential.name` or any Credential name/ref/UID/digest key or value rejects the whole frame | Closed collector allowlist gate |
 
 #### `delivery.rs`
 

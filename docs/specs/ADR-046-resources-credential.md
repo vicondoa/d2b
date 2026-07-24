@@ -834,13 +834,21 @@ Audit records for Credential operations:
 
 | Event | Fields retained |
 | --- | --- |
-| Credential resource create/update/delete | Zone, subject digest, ResourceRef, verb, revision result, authorization decision |
-| `AcquireToken` | Zone, subject digest, credential ResourceRef, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RefreshToken` | Zone, subject digest, credential ResourceRef, operation class, `rotationGeneration`, outcome code, idempotency key digest |
-| `RevokeToken` | Zone, subject digest, credential ResourceRef, operation class, `rotationGeneration`, revocation result code |
-| `SignChallenge` | Zone, subject digest, credential ResourceRef, operation class, outcome code (no signature bytes) |
-| Rotation | Zone, credential ResourceRef, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
-| Provider generation change revocation | Zone, credential ResourceRef, policy applied, outcome code |
+| Credential resource create/update/delete | Zone, subject digest, `resource_name_digest`, verb, revision result, authorization decision |
+| `AcquireToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
+| `RefreshToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, outcome code, idempotency key digest |
+| `RevokeToken` | Zone, subject digest, `resource_name_digest`, operation class, `rotationGeneration`, revocation result code |
+| `SignChallenge` | Zone, subject digest, `resource_name_digest`, operation class, outcome code (no signature bytes) |
+| Rotation | Zone, `resource_name_digest`, trigger reason, old `rotationGeneration`, new `rotationGeneration`, outcome code |
+| Provider generation change revocation | Zone, `resource_name_digest`, policy applied, outcome code |
+
+`resource_name_digest` is the existing bounded audit identity: SHA-256 of the
+Credential resource name, never the raw name. It is emitted only into the
+authorization-controlled Zone audit stream and, for caller-initiated
+operations, after the authorization decision. Raw Credential name, ResourceRef,
+and UID are excluded even from these records. The digest is audit-only and is
+never copied to OTEL Resource attributes, span attributes, metric labels, logs,
+collector diagnostics, or support summaries.
 
 Excluded from all audit records: token bytes, key material, passwords, bearer
 strings, provider-internal diagnostics, host paths, connection strings,
@@ -871,11 +879,23 @@ Required span attributes (closed set):
 | `d2b.credential.outcome` | Stable closed outcome code |
 | `d2b.credential.rotation_generation` | Numeric rotation generation |
 
-Zone and Credential identity use the `d2b.zone` and `d2b.credential.name`
-OTEL resource attributes only. They are forbidden as span attributes.
-Also forbidden from spans/resource attributes: token bytes, audience literals,
-provider diagnostics, host paths, resource IDs, tenant/subscription IDs,
-endpoint URIs, and correlation IDs that embed secret shapes.
+Credential telemetry uses only applicable generic OTEL Resource attributes from
+the collector's closed allowlist:
+
+| Resource attribute | Value |
+| --- | --- |
+| `d2b.zone` | Zone name, re-stamped at trusted ingress |
+| `d2b.provider` | Closed Provider name |
+| `d2b.component` | Signed component ID |
+| `service.name` | Fixed service name |
+| `service.namespace` | Fixed service namespace |
+| `service.version` | Build version |
+
+No OTEL Resource attribute or span attribute carries a Credential resource
+name, ResourceRef, UID, digest (including `resource_name_digest`), or derived
+identity token. Also forbidden: token bytes, audience literals, provider
+diagnostics, host paths, resource IDs, tenant/subscription IDs, endpoint URIs,
+and correlation IDs that embed secret shapes.
 
 ### Metrics
 
@@ -889,8 +909,12 @@ endpoint URIs, and correlation IDs that embed secret shapes.
 
 Label cardinality is bounded and semantic. The expiry gauge reports the
 minimum seconds remaining across active leases in each provider/placement
-aggregate (0 when none); it carries no Credential resource name. Zone and Credential identity remain available in bounded OTEL resource
-attributes and permitted audit fields, never metric labels or span attributes.
+aggregate (0 when none). Metric labels carry no Credential resource name,
+ResourceRef, UID, digest, or derived identity token. Credential identity is
+available only as `resource_name_digest` in the authorized bounded audit
+records above; it never appears in telemetry. Generic allowlisted OTEL Resource
+attributes such as `d2b.zone`, `d2b.provider`, and `d2b.component` remain
+available and are not copied into metric labels or span attributes.
 
 ## Nix configuration
 
@@ -1998,8 +2022,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Current source | `packages/d2b-core/src/privileges.rs:SecretAccess` (implemented-and-reachable); `d2b-realm-provider/src/error.rs:ProviderDiagnostic`/`contains_sensitive_shape` (implemented-and-reachable); `packages/d2b-contract-tests/tests/policy_observability.rs` (reachable audit policy tests) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-credential-<impl>/src/audit.rs`, `telemetry.rs`; `packages/d2b-contract-tests/tests/credential_audit.rs` |
-| Detailed design | Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential/Zone/resource-name-derived label; implement `contains_sensitive_shape` check in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `"secret-canary"`, `"entra-token-canary"`, `"managed-identity-canary"`, Credential `metadata.name`, and Zone name values never appear in any metric label, span attribute, log line, or status field; identity remains only in allowed OTEL resource attributes and permitted audit fields |
+| Detailed design | Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest`; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); implement `contains_sensitive_shape` checks in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `"secret-canary"`, `"entra-token-canary"`, `"managed-identity-canary"`, Credential name/ref/UID/digest canaries, and Zone name values never appear in any metric label, span attribute, log line, or status field, and that Credential identity canaries are also absent from OTEL Resource attributes |
 | Integration | Credential controller and service handlers emit audit records and telemetry through Zone audit/OTEL paths |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | Canary tests across all three Provider crates; audit record field-presence tests; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived key plus Credential/Zone-name canary absence; resource attribute tests preserve allowed `d2b.zone`/`d2b.credential.name` identity while span attribute tests reject identity and forbidden fields |
+| Validation | Canary tests across all three Provider crates; authorized audit record field-presence tests require `resource_name_digest` and reject raw Credential name/ResourceRef/UID; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived key; Credential name/ref/UID/digest canaries are absent from every OTEL Resource attribute, span attribute, and metric label; Zone-name canaries are absent from spans and labels while resource-attribute tests preserve the generic collector allowlist including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; complete Credential metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
 | Removal proof | Not applicable |
