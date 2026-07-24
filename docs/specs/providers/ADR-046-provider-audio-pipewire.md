@@ -1531,29 +1531,82 @@ All steps are asynchronous. Steps 4–11 run concurrently for independent
 `AudioState` resources. Each task holds its own optimistic revision
 precondition; a conflict causes a retry.
 
-## Cross-Zone audio sharing (D096)
+## Audio authority and cross-Zone sharing (D096/D097)
 
-One owner-Zone `audio-pipewire` **authority/mediator** service connects to the
-physical PipeWire microphone and speakers; it is the sole holder of that
-connection. Child Zones never open the physical device or receive a PipeWire
-FD/socket — that FD never crosses a Zone.
+**One audio authority service (D097).** Exactly one `audio-pipewire` authority
+service per owner Zone holds the real PipeWire connection to the physical
+microphone and speakers and is the single arbiter of every consumer. It is
+grounded in the current host controller
+(`packages/d2bd/src/audio_host_controller.rs`: the dyn-safe `HostAudioController`
+trait, `PipeWireHostController::{from_audio_node,find_audio_node}`, with
+`QemuAudioController`/`FakeHostController` as the QEMU and test doubles) and the
+argv generator (`packages/d2b-host/src/audio_argv.rs`: `AudioBackend`,
+`AudioArgvInput`, `generate_audio_argv`, and the
+`tests/golden/runner-shape/audio-argv-minimal.txt` golden). The authority
+declares a D097 `AuthorityDescriptor` with `authorityScope: physical-device`, an
+**opaque** `authorityKey` class (never a raw PipeWire node name/path/serial),
+`cardinality: zero-or-one` per physical backing, and split-path `arbitration`:
 
-- The owner Zone declares a `ResourceExport` referencing the local audio
-  authority `Endpoint` and the exported `audio-pipewire.d2bus.org/AudioState`
-  type. The **speaker** path is `multiplexed`: the authority mixes all consumer
-  Zones with per-Zone volume and quota. The **microphone** path is explicit
-  `exclusive` OR approved `multiplexed` capture, arbitrated with consent,
-  priority, and a fair queue.
-- Each child Zone declares a `ResourceImport` that binds its local `ZoneLink` and
-  `exportKey` to a local `AudioState`/proxy **projection** resource; ordinary
-  consumers use that local projection Ref. Audio frames stream over the bounded,
-  encrypted named stream (per-import session generation, credits/backpressure,
-  cancel, deadline) — intermediaries see ciphertext.
-- The audio Provider's signed **export/import adapter** performs mix/consent/
-  arbitration and builds the projection; core owns `ResourceExport`/
-  `ResourceImport` routing and base lifecycle. Export removal or ZoneLink loss
-  revokes leases and degrades the local `AudioState` projection; reconnect
-  revalidates generation/fingerprint.
+- **Speaker: `multiplexed`.** The authority runs a speaker **mixer**: every
+  consumer Zone/Guest is a mixed stream with a per-Zone volume/quota. Levels are
+  the current `packages/d2b-core/src/audio_policy.rs` `LevelPercent`/`AudioGrant`
+  applied through `HostAudioController` node/grant/level operations; no consumer
+  opens the physical sink.
+- **Microphone: explicit `exclusive` OR approved `multiplexed` capture.** A
+  mic **arbiter** enforces one active capturer by default (exclusive) and admits
+  approved concurrent capture only with consent, priority, and a **fair queue**;
+  a second unapproved capturer is denied, never a second device open.
+
+Core's authority index rejects a second audio authority for the same
+`(Zone, physical-device, opaqueKeyDigest)` with `duplicateConflict` before any
+open; restart adopts the exact authority by `ownerProof` (the authority owner
+Process identity), and ambiguity quarantines.
+
+**Cross-Zone sharing (D096).** No PipeWire FD or socket crosses a Zone. The owner
+Zone declares a `ResourceExport` referencing only the local audio authority
+`Endpoint` and the exported `audio-pipewire.d2bus.org.AudioState` type
+(`exportability: explicit-export`). Each child Zone declares a `ResourceImport`
+binding its local `ZoneLink` + `exportKey` to a local `AudioState`/proxy
+**projection** resource; ordinary consumers use that projection Ref. Audio frames
+flow over **per-import bounded encrypted named streams** — grounded in
+`packages/d2b-realm-core/src/stream.rs`
+(`StreamKind::{AudioPlayback,AudioCapture}` → `Capability::{AudioPlayback,
+AudioCapture}`, `StreamAuthz`, and the one-stream/two-`StreamChannel`
+split-direction rule) and `packages/d2b-realm-core/src/mux.rs` credit-based flow
+(a sender spends only receiver-granted credit) — with a per-import session
+generation, cancel, deadline, and backpressure; intermediaries see ciphertext.
+The Provider's signed export/import adapter performs mix/consent/arbitration and
+builds the projection; **core** owns `ResourceExport`/`ResourceImport` routing,
+base lifecycle, and layered status. Export removal or ZoneLink loss revokes
+leases and degrades the local `AudioState` projection; reconnect revalidates
+generation/fingerprint; a D091 upgrade drains consumers before recycling the
+authority.
+
+**Guest control is concurrent.** Guest audio operations
+(`packages/d2bd/src/guest_control_bridge.rs`: `audio_set_authenticated`/
+`audio_status_authenticated`, `GuestAudioSetRequest`/`GuestAudioStatus`,
+`AudioChannel`/`AudioSetKind`) are issued to all active guests concurrently; the
+authority aggregates per-guest results and never serializes one slow guest behind
+another.
+
+**Selected invariants.**
+
+- **vhost-device-sound v0.3.0** is required (`pkgs/vhost-device-sound/`,
+  `nixos-modules/components/audio/host.nix`); nixpkgs v0.2.0 has the known
+  PipeWire-backend format-negotiation bug and MUST NOT be used.
+- **No `monitor.rules`.** WirePlumber split-direction enforcement MUST NOT use
+  `monitor.rules` (the wrong section, which broke host audio output per
+  `host.nix`); use a `client.conf.d`/stream-rules or scripts approach only.
+- **Volume/gain redaction.** `LevelPercent` speaker level and mic gain, and any
+  raw node identity, are redacted from audit records, OTEL labels, and logs;
+  status carries only bounded provider-neutral state.
+- **Encrypted credit streams.** All cross-Zone audio bytes use the bounded
+  encrypted credit streams above; no plaintext, FD, or socket crosses a Zone.
+
+**No legacy shortcuts.** The audio authority adds **no** new `ProcessRole`, no
+direct broker path, and no per-VM state file. Privileged effects go through the
+D077 EffectPort/LaunchTicket, observed state is D087 status-first, and cross-Zone
+sharing is only D096 ResourceExport/ResourceImport/Endpoint.
 
 ## Nix authoring and configuration
 
@@ -1803,7 +1856,7 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Integration | Provider-local contract tests run in `d2b-provider-audio-pipewire`; retained cross-bundle greps in `d2b-contract-tests` ensure bundle-wide invariants still hold. |
 | Data migration | None — test migration only; no runtime state. |
 | Validation | `cargo test -p d2b-provider-audio-pipewire -- minijail` must pass; existing cross-bundle tests must continue to pass |
-| Removal proof | None — net-new provider-local test file; cross-bundle tests are retained |
+| Removal proof | The superseded duplicate shell validator `tests/minijail-validator-audio.sh` is deleted only after the successor Rust gate (`minijail_audio_usbip.rs` cross-bundle + provider-local `minijail_contract.rs`) is green and its removal-proof check passes; the `seccomp_policy_ref == "w1-audio"` assertion migrates to `spec.sandbox.seccompClass == "audio-pipewire-worker"` before removal. Cross-bundle Rust tests are retained. |
 
 ### ADR046-audio-010: OTEL telemetry and audit emitters
 
@@ -1851,6 +1904,38 @@ When an `AudioState` resource is removed from the Nix configuration:
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
 | Data migration | None — full d2b 3.0 reset |
 | Validation | Speaker mix with per-Zone volume/quota; microphone exclusivity and approved multiplexed capture with consent/priority/fair queue; reconnect revalidation and revocation degrade the projection; no PipeWire FD/socket crosses a Zone (fake-stream hermetic + real-stream integration) |
+| Removal proof | Not applicable (new surface) |
+
+### ADR046-audio-013: Audio authority service — speaker mixer and mic arbiter (D096/D097)
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-audio-013` |
+| Dependency/owner | Depends on `ADR046-audio-001`, `ADR046-audio-004`, `ADR046-zone-control-019`; audio Provider owner |
+| Current source | `packages/d2bd/src/audio_host_controller.rs` (`HostAudioController` trait, `PipeWireHostController::{from_audio_node,find_audio_node}`, `QemuAudioController`, `FakeHostController`); `packages/d2b-core/src/audio_policy.rs` (`LevelPercent`, `AudioGrant`, `AudioPolicyState`) |
+| Reuse source | Same baseline controller/policy symbols |
+| Reuse action | `adapt` — the host controller becomes the single authority service; no daemon `Mutex`/state-file wrapping |
+| Destination | `packages/d2b-provider-audio-pipewire/src/authority.rs` (speaker mixer + mic arbiter); `AuthorityDescriptor` on the `AudioState`/authority `Endpoint` |
+| Detailed design | Exactly one audio authority service per owner Zone holds the real PipeWire connection and declares a D097 `AuthorityDescriptor` (`authorityScope: physical-device`, opaque `authorityKey` class, `cardinality: zero-or-one`, split `arbitration`). Speaker path is `multiplexed`: a mixer applies per-consumer `LevelPercent` volume/quota through `HostAudioController` node/grant/level operations. Microphone path is `exclusive` by default or approved `multiplexed` capture through a **mic arbiter** with consent, priority, and a fair queue; a second unapproved capturer is denied (no second device open). Core's authority index rejects a duplicate authority with `duplicateConflict` before any open; restart adopts by `ownerProof`; ambiguity quarantines. Adapts the controller through the D077 EffectPort/LaunchTicket and D087 status — **no** new `ProcessRole`, no direct broker path, no per-VM state file. |
+| Integration | Authority service owns the physical connection and the `Endpoint/audio-pipewire-service`; the export/import adapter (ADR046-audio-012) and `audio-state-controller` (ADR046-audio-006) call it; core authority index (ADR046-zone-control-019) admits exactly one authority. |
+| Data migration | None — full d2b 3.0 reset; grants are authoritative in `AudioState.spec` (no state file). |
+| Validation | `tests/authority.rs`: single-authority admission + `duplicateConflict` on a second claimant; speaker mix with per-consumer volume/quota; mic exclusivity; approved multiplexed capture with consent/priority/fair-queue ordering; adoption by `ownerProof` and quarantine on ambiguity; drain-then-recycle on D091 upgrade; all with the deterministic fake clock and `FakeHostController` (no real PipeWire). |
+| Removal proof | `audio_host_controller.rs` daemon-side controller deleted after the authority service reaches parity; confirmed by `cargo check`. |
+
+### ADR046-audio-014: Per-import encrypted audio credit streams (D096)
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-audio-014` |
+| Dependency/owner | Depends on `ADR046-audio-013`, `ADR046-zone-control-019`; audio Provider owner |
+| Current source | `packages/d2b-realm-core/src/stream.rs` (`StreamKind::{AudioPlayback,AudioCapture}` → `Capability::{AudioPlayback,AudioCapture}`, `StreamAuthz`, `StreamChannel` split-direction); `packages/d2b-realm-core/src/mux.rs` (credit-based flow); `packages/d2bd/src/guest_control_bridge.rs` (`audio_set_authenticated`/`audio_status_authenticated`, `GuestAudioSetRequest`/`GuestAudioStatus`) |
+| Reuse source | Same baseline stream/mux/bridge symbols |
+| Reuse action | `adapt` — audio frames ride the existing ComponentSession named-stream credit machinery |
+| Destination | `packages/d2b-provider-audio-pipewire/src/streams.rs` |
+| Detailed design | Per-import audio frames flow only over bounded encrypted named streams: one stream with two `StreamChannel`s for playback/capture split direction and a single `StreamAuthz` (a consumer never opens two authz contexts to split direction), credit-based backpressure (a sender spends only receiver-granted credit), per-import session generation, cancel, and deadline. `StreamKind::AudioPlayback`/`AudioCapture` require `Capability::AudioPlayback`/`AudioCapture`. No PipeWire FD/socket crosses a Zone; intermediaries see ciphertext. Guest audio calls (`audio_set`/`audio_status`) are issued to all active guests concurrently and results aggregated. Volume/gain (`LevelPercent`) and node identity are redacted from audit/OTEL/logs. |
+| Integration | Authority service (ADR046-audio-013) and export/import adapter (ADR046-audio-012) allocate per-import streams over ComponentSession; core routes encrypted stream records only. |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | `tests/streams.rs`: split-direction single-authz stream; credit backpressure and blocked-sender release; per-import generation isolation; cancel/deadline; concurrent guest-call aggregation; ciphertext-only intermediary; volume/gain redaction; all with fake streams (fast hermetic) plus a slower real-encrypted-stream integration test. |
 | Removal proof | Not applicable (new surface) |
 
 ## Required crate layout
