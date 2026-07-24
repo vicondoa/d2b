@@ -337,9 +337,11 @@ spec:
   purpose: volume-virtiofs.d2bus.org/export
   serviceFingerprint: volume-virtiofs.d2bus.org/export.v1
   locality: cross-domain
-  visibility: zone-private
+  visibility: zone
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [guest-runtime.d2bus.org/virtiofs]
+  consumerPolicy:
+    allowedProviderComponents: [guest-runtime.d2bus.org/virtiofs]
+    allowedOperations: [resolve]
   lifecyclePolicy: owner-ref-child
 status:
   phase: Ready

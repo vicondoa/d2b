@@ -702,9 +702,10 @@ spec:
   purpose: display-wayland.d2bus.org/wayland-cross-domain
   serviceFingerprint: display-wayland.d2bus.org/wayland-data.v3
   locality: cross-domain
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: launch-ticket
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -730,9 +731,10 @@ spec:
   purpose: display-wayland.d2bus.org/guest-cross-domain
   serviceFingerprint: display-wayland.d2bus.org/guest-frontend.v3
   locality: cross-domain
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: launch-ticket
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready

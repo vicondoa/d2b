@@ -514,9 +514,11 @@ spec:
   purpose: d2b.aca.v3.deployment
   serviceFingerprint: runtime-azure-container-apps.d2bus.org/deployment/v1
   locality: guest-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-azure-container-apps]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-azure-container-apps]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 
@@ -538,9 +540,11 @@ spec:
   purpose: aca-sandbox-agent
   serviceFingerprint: runtime-azure-container-apps.d2bus.org/sandbox-agent/v1
   locality: cross-domain
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-azure-container-apps]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-azure-container-apps]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

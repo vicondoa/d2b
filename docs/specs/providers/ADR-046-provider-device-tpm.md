@@ -622,9 +622,11 @@ spec:
   purpose: swtpm-tpm-socket
   serviceFingerprint: device-tpm.d2bus.org/tpm/v1
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-cloud-hypervisor]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ---
 apiVersion: resources.d2bus.org/v3
@@ -641,9 +643,11 @@ spec:
   purpose: swtpm-control-socket
   serviceFingerprint: device-tpm.d2bus.org/control/v1
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/device-tpm]
+  consumerPolicy:
+    allowedSubjects: [Provider/device-tpm]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

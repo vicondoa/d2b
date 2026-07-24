@@ -458,9 +458,11 @@ spec:
   purpose: gpu-sidecar
   serviceFingerprint: device-gpu.d2bus.org/gpu-sidecar/v1
   locality: cross-domain
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-cloud-hypervisor]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 
@@ -767,9 +769,11 @@ spec:
   purpose: video-sidecar
   serviceFingerprint: device-gpu.d2bus.org/video-sidecar/v1
   locality: cross-domain
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-cloud-hypervisor]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

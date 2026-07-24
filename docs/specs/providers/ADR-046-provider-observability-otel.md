@@ -841,9 +841,10 @@ spec:
   purpose: observability-otel.d2bus.org/bounded-emitter-drain
   serviceFingerprint: observability-otel.d2bus.org/bounded-emitter.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -869,9 +870,10 @@ spec:
   purpose: observability-otel.d2bus.org/otlp-grpc-ingest
   serviceFingerprint: observability-otel.d2bus.org/otlp-grpc.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: telemetry-producer-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -897,9 +899,10 @@ spec:
   purpose: observability-otel.d2bus.org/private-guest-ingest
   serviceFingerprint: observability-otel.d2bus.org/guest-otlp-ingest.v3
   locality: cross-domain
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: launch-ticket
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready

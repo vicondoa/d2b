@@ -1643,11 +1643,20 @@ EffectPort/LaunchTicket path.
 | `purpose` | string | required | Bounded stable purpose label; max 63 chars. |
 | `serviceFingerprint` | string? | `null` | Bounded service/schema fingerprint or capability class; no raw schema bytes. |
 | `locality` | `host-local\|guest-local\|cross-domain\|zone-local` | required | Closed locality/visibility class. |
-| `visibility` | `owner\|provider\|zone` | `provider` | Closed visibility scope for consumers. |
+| `visibility` | `owner\|provider\|zone` | `provider` | Closed visibility scope for consumers. These are the only accepted values; there are no aliases such as `private`, `provider-internal`, `zone-private`, or `authorized-consumers`. |
 | `attachmentPolicy` | object | `{ supported: false }` | Bounded attachment support/policy (supported, max attachments); no locator. |
-| `consumerPolicy` | object | `{}` | Bounded consumer policy / allowed consumer ref bounds. |
+| `consumerPolicy` | object | `{}` | The only finer-grained consumer gate: bounded `allowedSubjects` (exact same-Zone ResourceRefs), `allowedProviderComponents` (exact signed component IDs), and `allowedOperations` (`resolve\|attach\|observe`). Omitted lists add no restriction beyond `visibility`; a present list is an allowlist, and all present dimensions must match. |
 | `lifecyclePolicy` | `pinned\|recycle-with-producer\|recreate-on-generation` | `recycle-with-producer` | Closed lifecycle/recycle policy. |
 | `provider` | ProviderExtension? | `null` | Optional canonical `spec.provider = { schemaId, schemaVersion, settings }` (D089); implementation-only, no locator. |
+
+`visibility` is only the coarse candidate scope: `owner` admits the exact
+`metadata.ownerRef` subject, `provider` admits authenticated Provider subjects
+and signed Provider components in the Zone, and `zone` admits all other
+same-Zone subjects. It never grants
+resolution by itself. Normal Role/RoleBinding authorization and every
+`consumerPolicy` allowlist still apply. `consumerPolicy` is strict and
+deny-unknown; providers may not add visibility values or string/array policy
+aliases.
 
 ### Endpoint base status (Layer 2)
 
@@ -1683,6 +1692,11 @@ Provider-specific implementation extension uses the optional `status.provider`
   consumer's `dependency-changed` reconcile trigger.
 - Resolving an `Endpoint` to a live transport/FD requires authorization; an
   unauthorized resolve is denied with a typed error and no locator is returned.
+- Core admission first applies the closed `visibility` scope, then normal
+  Role/RoleBinding authorization, then every present `consumerPolicy`
+  allowlist. It authenticates the subject and signed Provider component rather
+  than accepting either identity from the request body. A mismatch at any
+  layer returns `endpoint-resolve-denied`.
 - The virtiofs `Export` resource remains the attachment lifecycle owner and
   references its `Endpoint` where the exported endpoint is independently
   consumed (`ADR-046-resources-volume`).
@@ -2348,11 +2362,11 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Current source | `packages/d2b-core/src/processes.rs`: `ProcessRole` (18 variants), `ProcessNode`, `RoleProfile`, `NamespaceSet`, `MountPolicy`, `CgroupPlacement`, `ReadinessPredicate`; `packages/d2b-core/src/minijail_profile.rs`: `MinijailProfile`, `UserNamespaceProfile`, `NamespaceSet`, `MountPolicy`, `BindMount`, `CgroupPlacement`; `packages/d2b-core/src/storage.rs`: `StoragePathSpec`, `AclGrant`, `CleanupPolicy`, `RepairPolicy`; `packages/d2b-realm-core/src/ids.rs`: `RealmId`, `WorkloadId` (→ GuestRef), `NodeId` (→ HostRef), `ProviderId` (→ Provider ResourceRef), `ExecutionId` (→ EphemeralProcess exec identity), `PrincipalId` (→ User ResourceRef), `AllocatorLeaseId`, `ControllerGenerationId`; `packages/d2b-realm-core/src/workload.rs`: `WorkloadProviderKind` (`LocalVm`→runtime-cloud-hypervisor Provider, `QemuMedia`→runtime-qemu-media Provider, `ProviderManaged`→ACA/relay Providers, `UnsafeLocal`→user-only Host `isolationPosture="none"`), `IsolationPosture` (`VirtualMachine`→Guest, `ProviderManaged`→Guest, `UnsafeLocal`→Host `isolationPosture="none"`), `WorkloadExecutionPosture`, `WorkloadSummary`, `WorkloadState`; `packages/d2b-realm-core/src/target.rs`: `RealmTarget`, `TargetName`, `RealmTargetParser` (current analog for `<ResourceType>/<name>` ResourceRef parsing); `packages/d2b-realm-core/src/realm.rs`: `RealmPath`, `RealmControllerPlacement`, `EntrypointMode` (current Zone hierarchy analog); `packages/d2b-core/src/workload_identity.rs`: `WorkloadIdentity`, `WorkloadTarget` (= `RealmTarget`), `WorkloadBackend`, `WorkloadRuntimeIntent` (identity/backend separation reuse model for Host/Guest ResourceType split) |
 | Reuse source | `packages/d2b-contracts/src/v3/` as destination; no equivalent main source for Host/Guest/Process ResourceType contracts |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/host.rs`, `packages/d2b-contracts/src/v3/guest.rs`, `packages/d2b-contracts/src/v3/execution_policy.rs`, `packages/d2b-contracts/src/v3/process.rs`, `packages/d2b-contracts/src/v3/ephemeral_process.rs`, `packages/d2b-contracts/src/v3/user.rs` |
-| Detailed design | Implement strict typed Rust structs for HostSpec, GuestSpec, ExecutionPolicy, ExecutionSpec, SandboxSpec, BudgetSpec, MountSpec, NetworkUsageSpec, DeviceUsageSpec, EndpointSpec, TelemetrySpec, ProcessSpec, EphemeralProcessSpec, UserSpec; strict serde deny_unknown_fields; bounds/redaction on all string fields; stable error types; `UserSpec.osUsername` validated as OS username (1..255 bytes, no NUL/control/path-separator), not ResourceName grammar Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `packages/d2b-contracts/src/v3/host.rs`, `packages/d2b-contracts/src/v3/guest.rs`, `packages/d2b-contracts/src/v3/execution_policy.rs`, `packages/d2b-contracts/src/v3/process.rs`, `packages/d2b-contracts/src/v3/ephemeral_process.rs`, `packages/d2b-contracts/src/v3/user.rs`, `packages/d2b-contracts/src/v3/endpoint.rs` |
+| Detailed design | Implement strict typed Rust structs for HostSpec, GuestSpec, ExecutionPolicy, ExecutionSpec, SandboxSpec, BudgetSpec, MountSpec, NetworkUsageSpec, DeviceUsageSpec, EndpointSpec, EndpointConsumerPolicy, TelemetrySpec, ProcessSpec, EphemeralProcessSpec, UserSpec; EndpointSpec accepts exactly `owner\|provider\|zone`, and EndpointConsumerPolicy owns the only finer gates (`allowedSubjects`, `allowedProviderComponents`, `allowedOperations`) with no schema aliases; strict serde deny_unknown_fields; bounds/redaction on all string fields; stable error types; `UserSpec.osUsername` validated as OS username (1..255 bytes, no NUL/control/path-separator), not ResourceName grammar Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider dossiers, controller descriptors, Zone resource API, Nix resource compiler |
 | Data migration | Full reset; no v2 resource import |
-| Validation | Golden JSON vectors for each ResourceType; serde unknown-field rejection; bounds enforcement; `UserSpec.osUsername` OS-username validation (underscore allowed, NUL rejected) |
+| Validation | Golden JSON vectors for each ResourceType; Endpoint vectors accept only `owner\|provider\|zone`, reject every legacy/private visibility alias, reject scalar/array `consumerPolicy` aliases, and cover each canonical consumer allowlist; a docs drift test parses every `type: Endpoint` YAML/Nix example and fails unless visibility is canonical and finer gates occur only under `consumerPolicy`; serde unknown-field rejection; bounds enforcement; `UserSpec.osUsername` OS-username validation (underscore allowed, NUL rejected) |
 | Removal proof | Old DTO types removed only after owning Resource/Provider integrations are live |
 
 ### ADR046-exec-002

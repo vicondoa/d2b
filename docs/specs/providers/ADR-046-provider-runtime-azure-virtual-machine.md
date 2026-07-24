@@ -616,9 +616,11 @@ spec:
   purpose: d2b-bus-controller-endpoint
   serviceFingerprint: runtime-azure-virtual-machine.d2bus.org/controller/v1
   locality: guest-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-azure-virtual-machine]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-azure-virtual-machine]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ---
 apiVersion: resources.d2bus.org/v3
@@ -635,9 +637,11 @@ spec:
   purpose: d2b-bus-service-endpoint
   serviceFingerprint: runtime-azure-virtual-machine.d2bus.org/bootstrap/v1
   locality: guest-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-azure-virtual-machine]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-azure-virtual-machine]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

@@ -564,9 +564,10 @@ spec:
   purpose: clipboard-wayland.d2bus.org/picker-coordination
   serviceFingerprint: clipboard-wayland.d2bus.org/picker-coord.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -592,9 +593,10 @@ spec:
   purpose: clipboard-wayland.d2bus.org/bridge
   serviceFingerprint: clipboard-wayland.d2bus.org/bridge.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -620,9 +622,11 @@ spec:
   purpose: clipboard-wayland.d2bus.org/management
   serviceFingerprint: clipboard-wayland.d2bus.org/management.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: operator-authorized
+  consumerPolicy:
+    allowedSubjects: [User/alice]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready

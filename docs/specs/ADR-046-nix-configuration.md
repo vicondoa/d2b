@@ -1036,6 +1036,11 @@ d2b.zones.work.resources.entra-login = {
     transport    = "vsock";                        # closed class only; no CID/path
     purpose      = "entra-login-token";
     locality     = "guest-local";
+    visibility   = "zone";
+    consumerPolicy = {
+      allowedSubjects = [ "Provider/credential-entra" ];
+      allowedOperations = [ "resolve" ];
+    };
   };
 };
 
@@ -1186,6 +1191,10 @@ d2b.zones.dev.resources.wayland-host-socket = {
     transport = "unix";
     purpose = "wayland-host-socket";
     locality = "host-local";
+    visibility = "zone";
+    consumerPolicy = {
+      allowedOperations = [ "resolve" ];
+    };
   };
 };
 ```

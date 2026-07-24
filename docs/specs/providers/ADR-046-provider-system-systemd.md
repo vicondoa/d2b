@@ -398,9 +398,11 @@ spec:
   purpose: system-systemd.d2bus.org/process-control
   serviceFingerprint: system-systemd.d2bus.org/ProcessControl.v3
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: component-session
-  consumerPolicy: provider-supervisor-only
+  consumerPolicy:
+    allowedProviderComponents: [system-core.d2bus.org/provider-supervisor]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready

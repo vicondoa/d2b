@@ -705,9 +705,12 @@ d2b.zones.dev.resources.shell-terminal-service-endpoint = {
     purpose = "shell-terminal.d2bus.org/controller-service";
     serviceFingerprint = "shell-terminal.d2bus.org/shell-terminal.v3";
     locality = "host-local";
-    visibility = "authorized-consumers";
+    visibility = "zone";
     attachmentPolicy = "component-session";
-    consumerPolicy = "operator-authorized";
+    consumerPolicy = {
+      allowedSubjects = [ "User/alice" ];
+      allowedOperations = [ "resolve" ];
+    };
     lifecyclePolicy = "recycle-with-producer";
   };
 };
@@ -725,9 +728,12 @@ d2b.zones.dev.resources.shell-session-supervisor-endpoint = {
     purpose = "shell-terminal.d2bus.org/session-supervisor";
     serviceFingerprint = "shell-terminal.d2bus.org/shell-session-supervisor.v1";
     locality = "guest-local";
-    visibility = "authorized-consumers";
+    visibility = "zone";
     attachmentPolicy = "component-session";
-    consumerPolicy = "session-owner-authorized";
+    consumerPolicy = {
+      allowedSubjects = [ "User/alice" ];
+      allowedOperations = [ "resolve" ];
+    };
     lifecyclePolicy = "recycle-with-producer";
   };
 };

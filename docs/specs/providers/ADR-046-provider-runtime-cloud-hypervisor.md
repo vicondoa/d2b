@@ -1073,9 +1073,11 @@ spec:
   purpose: ch-api-socket
   serviceFingerprint: runtime-cloud-hypervisor.d2bus.org/ch-api/v1
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-cloud-hypervisor]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ---
 apiVersion: resources.d2bus.org/v3
@@ -1092,9 +1094,11 @@ spec:
   purpose: guest-control
   serviceFingerprint: d2b.guest-control.d2bus.org/kk/v1
   locality: cross-domain
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-cloud-hypervisor]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-cloud-hypervisor]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

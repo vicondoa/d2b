@@ -661,9 +661,11 @@ spec:
   purpose: transport-unix.d2bus.org/portal
   serviceFingerprint: transport-unix.d2bus.org/portal.v1
   locality: host-local
-  visibility: zone-private
+  visibility: zone
   attachmentPolicy: none
-  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  consumerPolicy:
+    allowedProviderComponents: [core-controller.d2bus.org/zonelink]
+    allowedOperations: [resolve]
   lifecyclePolicy: producer-owned
 status:
   phase: Ready

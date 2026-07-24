@@ -598,9 +598,11 @@ spec:
   purpose: system-core.d2bus.org/host-user-control
   serviceFingerprint: system-core.d2bus.org/HostUserControl.v3
   locality: host-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: component-session
-  consumerPolicy: zone-runtime-only
+  consumerPolicy:
+    allowedProviderComponents: [system-core.d2bus.org/zone-runtime]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -649,7 +651,8 @@ trusted endpoint policy). They use:
 | `d2b.resource.v3` | Receive reconcile hints from store post-commit dispatcher | inbound to handlers |
 
 No public external service endpoint is registered on d2b-bus. The fixed
-host/user control Endpoint above remains provider-internal and does not expose
+host/user control Endpoint above has `visibility: provider` and admits only the
+Zone-runtime component through `consumerPolicy`; it does not expose
 provider-specific methods to operators or other controllers.
 
 ### 6.1 ResourceClient usage

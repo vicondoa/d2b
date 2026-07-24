@@ -378,9 +378,11 @@ spec:
   purpose: transport-vsock.d2bus.org/service
   serviceFingerprint: transport-vsock.d2bus.org/service.v1
   locality: cross-domain
-  visibility: zone-private
+  visibility: zone
   attachmentPolicy: none
-  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  consumerPolicy:
+    allowedProviderComponents: [core-controller.d2bus.org/zonelink]
+    allowedOperations: [resolve]
   lifecyclePolicy: producer-owned
 status:
   phase: Ready

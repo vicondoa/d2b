@@ -1284,9 +1284,10 @@ spec:
   purpose: audio-pipewire.d2bus.org/vhost-user-sound
   serviceFingerprint: audio-pipewire.d2bus.org/vhost-user-sound.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: launch-ticket
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -1312,9 +1313,11 @@ spec:
   purpose: audio-pipewire.d2bus.org/audio-control
   serviceFingerprint: audio-pipewire.d2bus.org/AudioMediator.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-user-authorized
+  consumerPolicy:
+    allowedSubjects: [User/alice]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -1340,9 +1343,10 @@ spec:
   purpose: audio-pipewire.d2bus.org/import-route
   serviceFingerprint: audio-pipewire.d2bus.org/AudioServiceRoute.v3
   locality: zone-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -1373,9 +1377,10 @@ spec:
   purpose: audio-pipewire.d2bus.org/guest-audio-set
   serviceFingerprint: audio-pipewire.d2bus.org/AudioSet.v3
   locality: guest-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready

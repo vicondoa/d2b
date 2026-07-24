@@ -164,12 +164,19 @@ LaunchTicket bound to:
 It:
 
 1. verifies ticket/current resource/controller lease;
-2. resolves only trusted package/template/resource outputs;
-3. asks the local broker/systemd/user/Host/Guest effect owner to launch;
-4. returns provider-specific stable process identity and mandatory pidfd
+2. for every Endpoint, rejects any visibility outside
+   `owner|provider|zone`, applies that coarse scope, authenticates the exact
+   subject and signed Provider component, evaluates Role/RoleBinding, and
+   intersects the canonical `consumerPolicy.allowedSubjects`,
+   `allowedProviderComponents`, and `allowedOperations` allowlists; request
+   fields cannot select those identities, no visibility alias is accepted, and
+   any mismatch is `endpoint-resolve-denied`;
+3. resolves only trusted package/template/resource outputs;
+4. asks the local broker/systemd/user/Host/Guest effect owner to launch;
+5. returns provider-specific stable process identity and mandatory pidfd
    evidence;
-5. observes/adopts/signals/stops only that exact identity;
-6. reports bounded effects/status to the Process controller.
+6. observes/adopts/signals/stops only that exact identity;
+7. reports bounded effects/status to the Process controller.
 
 It never interprets Provider root settings, chooses dependencies, reads sibling
 state, or registers services/commands.

@@ -492,9 +492,10 @@ spec:
   purpose: notification-desktop.d2bus.org/host-sink
   serviceFingerprint: notification-desktop.d2bus.org/DesktopNotificationSink.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -520,9 +521,10 @@ spec:
   purpose: notification-desktop.d2bus.org/observer
   serviceFingerprint: notification-desktop.d2bus.org/DesktopNotificationObserver.v3
   locality: host-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: observer-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -548,9 +550,10 @@ spec:
   purpose: notification-desktop.d2bus.org/guest-source
   serviceFingerprint: notification-desktop.d2bus.org/NotificationSource.v3
   locality: cross-domain
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready

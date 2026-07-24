@@ -720,7 +720,15 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   `operationId` are NOT promoted to resources and stay internal; the
   `ProcessSpec`-has-no-inline-`endpoints` lint; standard ResourceType count is 19
   (Endpoint present in the catalog); every retained public `*Id`/`Handle` has a
-  documented rationale row.
+  documented rationale row; schema vectors accept exactly
+  `visibility=owner|provider|zone` and reject aliases; controller admission
+  tests cover all three scopes plus each
+  `consumerPolicy.allowedSubjects`/`allowedProviderComponents`/
+  `allowedOperations` mismatch; a docs drift test parses every Endpoint
+  example and fails if visibility is outside the enum, if a finer restriction
+  is encoded as another visibility value, or if `consumerPolicy` is a
+  scalar/array alias. ResourceExport visibility is explicitly outside this
+  Endpoint-only drift check.
 - Entra identity-Guest login tests (D093), all against a **fake Entrablau Guest
   login service** (no live Entra in CI; a manual real-Guest login is a separate
   non-CI check): fake Guest login success → `interactionState: Authenticated`

@@ -730,9 +730,11 @@ spec:
   purpose: transport-azure-relay.d2bus.org/listener
   serviceFingerprint: transport-azure-relay.d2bus.org/listener.v1
   locality: cross-domain
-  visibility: zone-private
+  visibility: zone
   attachmentPolicy: none
-  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  consumerPolicy:
+    allowedProviderComponents: [core-controller.d2bus.org/zonelink]
+    allowedOperations: [resolve]
   lifecyclePolicy: producer-owned
 status:
   phase: Ready
@@ -758,9 +760,11 @@ spec:
   purpose: transport-azure-relay.d2bus.org/sender
   serviceFingerprint: transport-azure-relay.d2bus.org/sender.v1
   locality: cross-domain
-  visibility: zone-private
+  visibility: zone
   attachmentPolicy: none
-  consumerPolicy: [core-controller.d2bus.org/zonelink]
+  consumerPolicy:
+    allowedProviderComponents: [core-controller.d2bus.org/zonelink]
+    allowedOperations: [resolve]
   lifecyclePolicy: producer-owned
 status:
   phase: Ready

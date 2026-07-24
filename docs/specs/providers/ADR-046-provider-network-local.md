@@ -1001,9 +1001,11 @@ spec:
   purpose: network-local.d2bus.org/agent
   serviceFingerprint: d2b.network.v3.agent/v1
   locality: cross-domain
-  visibility: zone-private
+  visibility: zone
   attachmentPolicy: none
-  consumerPolicy: [provider-network-local.d2bus.org/controller]
+  consumerPolicy:
+    allowedProviderComponents: [provider-network-local.d2bus.org/controller]
+    allowedOperations: [resolve]
   lifecyclePolicy: producer-owned
 status:
   phase: Ready

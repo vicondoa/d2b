@@ -666,9 +666,11 @@ spec:
   purpose: device-security-key.d2bus.org/ctaphid-relay
   serviceFingerprint: device-security-key.d2bus.org/SecurityKeyCtapRelay.v3
   locality: cross-domain
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: device-security-key.d2bus.org/frontend-only
+  consumerPolicy:
+    allowedProviderComponents: [device-security-key.d2bus.org/frontend]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -744,9 +746,11 @@ spec:
   purpose: device-security-key.d2bus.org/ctaphid-frontend
   serviceFingerprint: device-security-key.d2bus.org/SecurityKeyCtapRelay.v3
   locality: zone-local
-  visibility: provider-internal
+  visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: device-security-key.d2bus.org/service-only
+  consumerPolicy:
+    allowedProviderComponents: [device-security-key.d2bus.org/service]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

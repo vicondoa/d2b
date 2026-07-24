@@ -218,9 +218,10 @@ spec:
   purpose: credential-entra.d2bus.org/entra-login-token
   serviceFingerprint: credential-entra.d2bus.org/EntrablauLoginTokenService/v1
   locality: guest-local
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: component-session
-  consumerPolicy: same-zone-authorized
+  consumerPolicy:
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
   readiness: Ready
@@ -448,9 +449,11 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
       purpose = "credential-entra.d2bus.org/entra-login-token";
       serviceFingerprint = "credential-entra.d2bus.org/EntrablauLoginTokenService/v1";
       locality = "guest-local";
-      visibility = "authorized-consumers";
+      visibility = "zone";
       attachmentPolicy = "component-session";
-      consumerPolicy = "same-zone-authorized";
+      consumerPolicy = {
+        allowedOperations = [ "resolve" ];
+      };
       lifecyclePolicy = "recycle-with-producer";
     };
   };

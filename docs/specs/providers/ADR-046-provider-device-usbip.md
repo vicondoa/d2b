@@ -500,7 +500,7 @@ The controller reconciles three closed worker classes:
 
 | Worker | Cardinality/owner | Endpoint | Network behavior |
 | --- | --- | --- | --- |
-| `usbip-host-<host-uid-short>-backend` | exactly one per Host; Provider-owned Host authority | one provider-internal host-local backend Endpoint | no externally reachable listener; all busids register with this backend |
+| `usbip-host-<host-uid-short>-backend` | exactly one per Host; Provider-owned Host authority | one host-local Endpoint with `visibility: provider` and a controller-only `consumerPolicy` | no externally reachable listener; all busids register with this backend |
 | `usbip-net-<network-uid-short>-relay` | exactly one per Network; Provider-owned relay authority | `Endpoint/<network>-usbip-relay` | binds only that Network's uplink on TCP 3240 and multiplexes all admitted Services |
 | `usbip-binding-<binding-uid-short>-proxy` | one per attached `UsbBinding`; Binding-owned | `Endpoint/<binding>-usbip-private` | runs for the exact Guest and exposes only Guest-private loopback TCP 3240 |
 
@@ -529,9 +529,13 @@ spec:
   purpose: device-usbip.d2bus.org/relay
   serviceFingerprint: device-usbip.d2bus.org/UsbipRelay.v4
   locality: cross-domain
-  visibility: authorized-consumers
+  visibility: zone
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: device-usbip.d2bus.org/leased-service-and-binding-proxy
+  consumerPolicy:
+    allowedProviderComponents:
+      - device-usbip.d2bus.org/service-controller
+      - device-usbip.d2bus.org/binding-proxy
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
   authority:
     authorityScope: host
