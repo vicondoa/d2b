@@ -135,13 +135,17 @@ is consumed from `d2b-session`.
 **Role**: carriage-acquisition service Provider.
 
 `Provider/transport-vsock` acquires AF_VSOCK byte channels on behalf of the
-core Zone-link/delegation controller. It implements no ResourceType and owns
-no reconcile loop, no status writes, no route publication, no finalizer, and
-no session-generation management. Those responsibilities belong exclusively to
-the core ZoneLink/delegation controller (`d2b-core-controller` crate). The
-Provider runs one `service` Process and responds to three typed service method
-invocations from core: `OpenTransport`, `CloseTransport`, and
-`ObserveTransport`.
+child Zone's core Zone-link/delegation controller. The selected Provider and
+ZoneLink are installed in that same child Zone. The Provider implements no
+ResourceType and owns no reconcile loop, no status writes, no route
+publication, no finalizer, and no session-generation management. Those
+responsibilities belong exclusively to the child Zone's core
+ZoneLink/delegation controller (`d2b-core-controller` crate). The Provider runs
+one `service` Process and responds to three typed service method invocations
+from child core: `OpenTransport`, `CloseTransport`, and `ObserveTransport`.
+Compiler-only `parentZone` selects the allocator; the parent keeps only sealed
+allocator/route state and has no reciprocal ZoneLink, Provider, Process,
+Endpoint, or status handler.
 
 **Scope** (what this Provider does):
 - Implements `d2b.transport.vsock.v3.VsockTransportService`.
@@ -158,14 +162,16 @@ invocations from core: `OpenTransport`, `CloseTransport`, and
   on the vsock `TransportDescriptor`).
 
 **Not in scope for this Provider** — owned by other components:
-- ZoneLink reconcile loop, status condition writes, finalizers, route
-  advertisement → core ZoneLink/delegation controller.
+- ZoneLink reconcile loop, status condition writes, finalizers, and local
+  route/session state → child Zone's core ZoneLink/delegation controller.
 - Noise handshake (KK, IKpsk2), ComponentSession lifecycle, credit/flow
   control, stream multiplexing, session-generation management → d2b-bus /
   ComponentSession.
-- Port allocation and the port registry → core Zone allocator state.
-- Reconnect policy and generation increment → core ZoneLink/delegation
-  controller; Provider only acquires the underlying vsock socket on demand.
+- Port allocation and the port registry → selected parent allocator's sealed
+  route state; child code receives only the sealed local binding.
+- Reconnect policy and generation increment → child Zone's core
+  ZoneLink/delegation controller; Provider only acquires the underlying vsock
+  socket on demand.
 - Guest-control ttrpc channel (port 14318) → ADR 0028 guest-control path.
 - OTLP vsock relay (ports 14317/14319) → `observability-otel` Provider.
 - Unix-socket ZoneLinks → `transport-unix` Provider.
@@ -173,7 +179,8 @@ invocations from core: `OpenTransport`, `CloseTransport`, and
 
 ### Currency and upgrade (D091)
 
-The core ZoneLink controller, not the transport-vsock service, implements
+The child Zone's core ZoneLink controller, not the transport-vsock service or
+the parent allocator, implements
 `assess_update`, `plan_upgrade`, and `execute_upgrade`. A Provider generation or
 signed artifact generation/digest change updates universal `status.update` with
 `state: UpdateAvailable` or `state: UpgradeRequired`, `reasons` including
@@ -182,9 +189,9 @@ digest IDs, `disruption: Reload` or `disruption: Restart`, `preserveState:
 true`, bounded `owned`/`dependencies`, and `lastAssessedAt`. Disruptive changes
 MUST return `UpgradeRequired` rather than applying in place; non-disruptive
 changes reconcile normally. Upgrade recycles the transport service realization;
-open byte-stream handles are re-established by core reconnect. ZoneLink session
-state remains owned by the core ZoneLink controller. `status.update` MUST NOT
-contain secrets.
+open byte-stream handles are re-established by child-core reconnect. ZoneLink
+session state remains owned in the child store by the child Zone's core
+ZoneLink controller. `status.update` MUST NOT contain secrets.
 
 ### Expedited reconcile on mutation (D090)
 
@@ -294,10 +301,11 @@ background workers beyond this single service process.
 | --- | --- | --- | --- |
 | `executionRef` | `ResourceRef` | required | `Host/<name>` or `Guest/<name>` in the same Zone; determines where the single service Process runs |
 
-The Provider's controller creates exactly one `Process/transport-vsock-service`
-resource using this `executionRef`. There is one service Process per installed
-Provider instance; all ZoneLink `OpenTransport`/`CloseTransport`/`ObserveTransport`
-calls for the Zone are handled by that single process.
+The child Zone's core ProviderDeployment creates exactly one
+`Process/transport-vsock-service` resource using this `executionRef`. There is
+one service Process per installed child-local Provider instance; all
+`OpenTransport`/`CloseTransport`/`ObserveTransport` calls for that child Zone's
+ZoneLink are handled by that single process.
 
 ### Process resource template
 
@@ -306,6 +314,7 @@ apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-vsock-service
+  zone: k1
   ownerRef: Provider/transport-vsock
 spec:
   providerRef:  Provider/system-minijail
@@ -361,6 +370,7 @@ apiVersion: resources.d2bus.org/v3
 type: Endpoint
 metadata:
   name: transport-vsock-service
+  zone: k1
   ownerRef: Process/transport-vsock-service
 spec:
   providerRef: Provider/transport-vsock
@@ -387,14 +397,17 @@ status:
 
 ### Endpoint resources (D092)
 
-Stable allocator/listener bindings with visible lifecycle are standard
-`Endpoint` resources. Consumers refer to `Endpoint/<name>` and receive no raw
-CID, port, socket address, FD, or credential from `Endpoint.spec` or
-`Endpoint.status`; resolution is through the authorized EffectPort/LaunchTicket
-path, and unauthorized callers fail with `endpoint-resolve-denied`. A producer
-Process restart bumps `endpointGeneration`, which consumers observe as
-`dependency-changed`. ZoneLink session state remains owned by the core ZoneLink
-controller.
+The child-local service binding with visible lifecycle is the standard
+`Endpoint` resource above. Consumers in that child Zone refer to
+`Endpoint/<name>` and receive no raw CID, port, socket address, FD, or credential
+from `Endpoint.spec` or `Endpoint.status`; resolution is through the authorized
+EffectPort/LaunchTicket path, and unauthorized callers fail with
+`endpoint-resolve-denied`. The selected parent allocator's listener/route
+binding remains sealed allocator state and is **not** an Endpoint or any other
+parent-store resource. A producer Process restart bumps the child Endpoint
+`endpointGeneration`, which child-local dependents observe as
+`dependency-changed`. ZoneLink session state remains owned by the child Zone's
+core ZoneLink controller.
 
 ### Retained opaque handles (D092)
 
@@ -414,8 +427,9 @@ Prohibited fields (never present in any Process or EphemeralProcess spec):
 ## Service API
 
 The Provider implements the following service on its ComponentSession with
-d2b-bus. All three methods are invoked exclusively by the core
-Zone-link/delegation controller. No other caller is authorized.
+d2b-bus. All three methods are invoked exclusively by the child Zone's core
+Zone-link/delegation controller over a same-Zone service session. No other
+caller is authorized, and the parent allocator never invokes this Provider.
 
 ### `OpenTransport`
 
@@ -427,9 +441,9 @@ rpc OpenTransport(OpenTransportRequest) -> OpenTransportResponse
 
 | Field | Type | Semantics |
 | --- | --- | --- |
-| `endpoint_id` | `OpaqueEndpointId` | Core-allocated internal endpoint-resolution token (encodes peer CID; opaque to Provider; not an `Endpoint` resource) |
-| `binding_id` | `OpaqueBindingId` | Core-allocated binding identity (encodes allocated port; opaque to Provider) |
-| `role` | `TransportRole` | `Initiator` (parent-to-child connect) or `Responder` (child-side accept) |
+| `endpoint_id` | `OpaqueEndpointId` | Child-local opaque endpoint-resolution token derived from the selected allocator's sealed binding; opaque to Provider; not an `Endpoint` resource |
+| `binding_id` | `OpaqueBindingId` | Child-local opaque binding identity derived from the selected allocator's sealed port allocation; opaque to Provider |
+| `role` | `TransportRole` | `Initiator` (child endpoint connects to the selected parent route endpoint) or `Responder` (child endpoint accepts that parent-facing route); never a parent Provider call |
 | `deadline_ms` | `u32` | Connect/accept deadline in ms from call arrival; range 1 000–60 000 |
 
 **Response fields**:
@@ -526,10 +540,12 @@ pub trait VsockEffectPort: Send + Sync + 'static {
 ```
 
 `OpaqueEndpointId` and `OpaqueBindingId` are newtype wrappers over bounded
-strings with no public CID/port accessors. The Zone runtime provides a
-`LiveVsockEffectPort` implementation that resolves opaque IDs against core
-allocator state and opens the actual AF_VSOCK sockets. Tests inject a
-`MockVsockEffectPort`.
+strings with no public CID/port accessors. The child Zone runtime provides a
+`LiveVsockEffectPort` implementation that consumes its sealed local binding for
+the allocator selected by compiler-only `parentZone` and opens the child
+AF_VSOCK endpoint. The parent allocator retains only its peer binding and route
+allocation as sealed state. Neither a ResourceRef nor an FD crosses the Zone
+boundary. Tests inject a `MockVsockEffectPort`.
 
 The Provider never receives, stores, logs, or emits raw CID (`u32`) or port
 (`u32`) values. Any path that would write a raw CID or port to a log,
@@ -540,16 +556,17 @@ defect and must be caught by the `redaction.rs` test.
 
 ## `spec.provider.settings` schema
 
-The `settings` object inside `ZoneLink.spec.provider` carries Provider-specific
-configuration when `spec.providerRef = Provider/transport-vsock`. Core
-resolves the opaque endpoint and binding IDs from these settings; the Provider
-never receives the raw resolution.
+The `settings` object inside the child-local `ZoneLink.spec.provider` carries
+Provider-specific configuration when
+`spec.providerRef = Provider/transport-vsock`. The child Zone's core resolves
+the opaque endpoint and binding IDs from these settings plus its sealed
+selected-parent allocation; the Provider never receives the raw resolution.
 
 **JSON Schema ID**: `docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json`
 
 | Field | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `guestRef` | `ResourceRef` | required | `Guest/<name>` in the same Zone; core resolves to vsock CID internally |
+| `guestRef` | `ResourceRef` | required | `Guest/<name>` in the same child Zone as the ZoneLink and selected Provider; child core resolves the local endpoint through the sealed allocation |
 | `portClass` | `string` (enum) | `"d2b-link"` | Port class; core allocates a port from the class range; `"d2b-link"` → range `14420–14499` |
 | `connectTimeoutSeconds` | `integer` [1, 60] | `30` | Passed as `deadline_ms` in `OpenTransport` |
 
@@ -578,9 +595,11 @@ declares no state Volume.
 `ProviderStateSet` is empty. Its bounded non-secret operational state — service
 readiness, transport-open/close reconcile stage, bounded connection/port
 observation counters, and closed-enum error detail — lives in the owning
-resource's `status` subresource and the core Operation ledger (D087). Port
-allocation and the port registry are core allocator state; all ZoneLink session
-state is owned by the core ZoneLink controller under the `ZoneLink` resource.
+resource's `status` subresource and the child core Operation ledger (D087).
+Port allocation and the port registry are selected-parent allocator state; the
+parent retains only that sealed allocator/route state. All ZoneLink session
+state is owned by the child Zone's core ZoneLink controller under the child-local
+`ZoneLink` resource.
 The service holds only opaque byte-stream handles in its own process memory
 (`OwnedTransport`, per D081), which are never persisted.
 
@@ -596,15 +615,15 @@ is no empty identity-only Volume.
 
 ### RBAC grants for the core ZoneLink controller (caller)
 
-The core ZoneLink/delegation controller is the only principal authorized to
-invoke the Provider's service methods. No other principal (other Providers,
-operators, end-users) may invoke `OpenTransport`, `CloseTransport`, or
-`ObserveTransport`.
+The child Zone's core ZoneLink/delegation controller is the only principal
+authorized to invoke the Provider's service methods. No other principal (the
+parent allocator, other Providers, operators, or end-users) may invoke
+`OpenTransport`, `CloseTransport`, or `ObserveTransport`.
 
 ```yaml
 RBACPolicy:
   subject: Principal/core-zone-link-controller
-  zone:    <same Zone as Provider/transport-vsock>
+  zone:    <child Zone containing Provider/transport-vsock and its ZoneLink>
   rules:
     - resource: d2b.transport.vsock.v3.VsockTransportService
       verbs: [invoke]
@@ -616,9 +635,10 @@ RBACPolicy:
 
 `Provider/transport-vsock` requires NO verbs on `ZoneLink`, `Guest`, `Zone`,
 `Route`, `Credential`, `Certificate`, or any other ResourceType. All
-ZoneLink resource access is performed exclusively by the core controller. The
-Provider service holds no permissions to read, watch, update, or delete any
-resource.
+ZoneLink resource access is performed exclusively by the child Zone's core
+controller. The Provider service holds no permissions to read, watch, update,
+or delete any resource. The parent allocator has no resource row or RBAC grant
+for this child-local Provider/ZoneLink.
 
 ---
 
@@ -642,64 +662,68 @@ resource.
 ## Lifecycle
 
 Per D088, `Provider/transport-vsock` does not write resource status directly:
-core owns the universal `ResourceStatus` base and the ResourceType-common
+child core owns the universal `ResourceStatus` base and the ResourceType-common
 `status.resource` projection for Provider and ZoneLink resources. Cross-provider
-transport observations returned to core are promoted to `ZoneLink.status.resource`;
-any bounded, non-secret vsock-only observation that core persists for this
+transport observations returned to child core are promoted to the child-local
+`ZoneLink.status.resource`; any bounded, non-secret vsock-only observation that
+child core persists for this
 Provider uses `ZoneLink.status.provider` with `providerRef:
 Provider/transport-vsock`, qualified `schemaId:
 transport-vsock.d2bus.org/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
-redacted `details` schema registered and signed in the Provider manifest. Core
-writes all present layers atomically and never copies shared
+redacted `details` schema registered and signed in the Provider manifest. Child
+core writes all present layers atomically in the child store and never copies shared
 `status.resource` fields into `status.provider`.
 
 ### Provider installation
 
-1. Nix module emits `Provider/transport-vsock` resource into the Zone resource
-   store.
-2. Core ProviderDeployment creates
+1. Nix module emits `Provider/transport-vsock` into the same child Zone store as
+   its ZoneLink. The parent store receives no Provider or ZoneLink row.
+2. The child Zone's core ProviderDeployment creates
    `Volume/transport-vsock--service--empty-state--<executionRef-short>` with
    `ownerRef: Provider/transport-vsock`; waits for Volume `Ready` (reconciled
    by `Provider/volume-local`). The transport-vsock Provider controller does
    not participate in Volume creation.
-3. Provider controller creates `Process/transport-vsock-service` (with `mounts`
-   referencing the pre-created state Volume); waits for Process `Ready`.
+3. The child Zone's core ProviderDeployment creates
+   `Process/transport-vsock-service` (with `mounts` referencing the pre-created
+   state Volume); waits for Process `Ready`.
 4. Service process connects to d2b-bus; receives a dirfd into its `/state` view
    from the volume-local Provider; registers
    `d2b.transport.vsock.v3.VsockTransportService` on the Zone service registry.
-5. Service emits readiness; core ProviderDeployment observes it and sets
-   `Provider/transport-vsock` status to `Ready`.
+5. Service emits readiness; child-local core ProviderDeployment observes it and
+   sets `Provider/transport-vsock` status to `Ready`.
 
 ### Transport open (per ZoneLink session request from core)
 
-1. Core ZoneLink/delegation controller calls `OpenTransport(endpoint_id,
+1. The child Zone's core ZoneLink/delegation controller calls `OpenTransport(endpoint_id,
    binding_id, role, deadline_ms)` on the Provider's ComponentSession.
 2. Provider validates opaque IDs.
 3. Provider calls `VsockEffectPort::open(...)`.
-4. Zone runtime (`LiveVsockEffectPort`) resolves `endpoint_id` → CID and
-   `binding_id` → port from core allocator state; opens or accepts the
-   AF_VSOCK socket.
+4. Child Zone runtime (`LiveVsockEffectPort`) resolves the opaque IDs from its
+   sealed selected-parent binding and opens or accepts the child AF_VSOCK
+   endpoint. The parent endpoint remains sealed allocator/route state; no FD or
+   ResourceRef crosses Zones.
 5. Provider opens a named stream on its ComponentSession and spawns a bridge
    task.
-6. Provider returns `transport_handle` + `stream_id` to core.
-7. Core hands `stream_id` to d2b-bus as the `OwnedTransport` for the ZoneLink.
+6. Provider returns `transport_handle` + `stream_id` to child core.
+7. Child core hands `stream_id` to d2b-bus as the `OwnedTransport` for its local
+   ZoneLink.
 8. d2b-bus runs Noise KK or IKpsk2 handshake on top of the raw bytes.
 
 ### Transport close
 
-1. Core calls `CloseTransport(transport_handle)`.
+1. Child core calls `CloseTransport(transport_handle)`.
 2. Provider signals bridge task to stop; waits up to `CLOSE_GRACE_MS`.
 3. Provider closes named stream and vsock socket.
 4. Provider emits `transport.release` audit event.
 
 ### Provider removal
 
-1. Core calls `CloseTransport` for every open transport handle.
+1. Child core calls `CloseTransport` for every open transport handle.
 2. Zone runtime stops `Process/transport-vsock-service`; Process finalizer
-   completes. The transport-vsock Provider controller does not delete the
-   Volume.
-3. Core ProviderDeployment deletes
+   completes. The child Zone's core ProviderDeployment owns deletion ordering;
+   the transport-vsock service does not delete the Volume.
+3. Child-local core ProviderDeployment deletes
    `Volume/transport-vsock--service--empty-state--*` after the Process
    finalizer; waits for Volume `Deleted` (identity marker removed by broker).
 4. Zone resource store marks `Provider/transport-vsock` `Deleted`.
@@ -780,24 +804,35 @@ identifier beyond the closed enum of label values.
 ## Nix authoring
 
 ```nix
-# Provider resource (authored by the Zone operator):
-d2b.zones.k0.resources.transport-vsock = {
+# local-root is the provisioning parent. It has no ZoneLink or transport
+# Provider resource for this edge; only its allocator's sealed route state exists.
+d2b.zones.local-root = {};
+
+# K1 is the CHILD Zone. parentZone is compiler-only and selects local-root's
+# allocator; it is not emitted into Zone/k1 or any other resource.
+d2b.zones.k1.parentZone = "local-root";
+
+# This focused fragment assumes Guest/k1-vm is declared in K1.
+
+# Selected Provider resource, authored in the same CHILD Zone as the ZoneLink:
+d2b.zones.k1.resources.transport-vsock = {
   type = "Provider";
   spec = {
     artifactId = "transport-vsock";          # resolves to d2b.artifacts entry
     config = {
-      executionRef = "Host/host-system";     # required; Host/<name> or Guest/<name>
+      executionRef = "Guest/k1-vm";          # same-Zone Host/<name> or Guest/<name>
     };
   };
 };
-# The Provider's controller creates Process/transport-vsock-service automatically
-# using spec.config.executionRef. The operator does NOT author that Process resource.
+# K1's core ProviderDeployment creates Process/transport-vsock-service
+# automatically. The operator does NOT author that Process resource.
 
-# Example ZoneLink using this Provider (authored by the Zone operator):
-d2b.zones.k0.resources.link-to-k1 = {
+# K1's sole child-local uplink. childZoneName self-matches; local-root gets no
+# reciprocal ZoneLink or Provider resource.
+d2b.zones.k1.resources.k1-uplink = {
   type = "ZoneLink";
   spec = {
-    childZoneRef          = "Zone/k1";
+    childZoneName         = "k1";
     providerRef  = "Provider/transport-vsock";
     provider = {
       schemaId      = "transport-vsock.d2bus.org/ZoneLink/spec";
@@ -812,9 +847,35 @@ d2b.zones.k0.resources.link-to-k1 = {
 };
 ```
 
+The compiler derives `metadata.zone: k1` for both the Provider and ZoneLink.
+The emitted ZoneLink identity is:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: ZoneLink
+metadata:
+  name: k1-uplink
+  zone: k1
+spec:
+  childZoneName: k1
+  providerRef: Provider/transport-vsock
+  provider:
+    schemaId: transport-vsock.d2bus.org/ZoneLink/spec
+    schemaVersion: "1.0"
+    settings:
+      guestRef: Guest/k1-vm
+      portClass: d2b-link
+      connectTimeoutSeconds: 30
+```
+
+local-root's resource bundle contains no reciprocal ZoneLink or selected Provider.
+
 `spec.config.executionRef` is validated at eval time against declared Zone
-resources; referential existence is verified at bundle activation time. The
-Nix module also validates `spec.provider.settings` against the
+resources in the same child Zone; referential existence is verified at bundle
+activation time. The compiler separately seals
+`k1.parentZone = "local-root"` into
+allocator bootstrap state and emits no parent-store reciprocal resource. The Nix
+module also validates `spec.provider.settings` against the
 `transport-vsock.transport-binding.json` schema and rejects any prohibited
 field (`cid`, `port`, `socketPath`, etc.). Validation is performed by the
 `d2b.zones.<name>.resources` schema checker, not by the Provider's own Nix
@@ -836,7 +897,7 @@ expression.
 | `vsock.rs` v3 stub | `d2b-session-unix/src/vsock.rs` (v3 baseline) | `ADR-only` | Delta: stub becomes `FramedVsockTransport` implementation; entry point is `VsockEffectPort` not raw syscall |
 | Framing tests | `d2b-session-unix/tests/unix_session.rs` vsock subset | `implemented-but-unwired` | Retained in `tests/framing.rs` (Provider crate): `vsock_framing_handles_partial_and_coalesced_records`, `vsock_frame_too_large_rejects_before_allocating`, `vsock_clean_eof_versus_reset_are_distinct` |
 | CID mismatch enforcement | `vsock_cid_mismatch_closes_without_processing` | `implemented-but-unwired` | Adapted in `tests/effect_port_mock.rs` as `OpaqueEndpointId` mismatch case; raw CID variant moves to core adapter tests |
-| ZoneLink resource | `ADR-046-zone-routing.md` | `generated-or-eval-contract` | Retained: ZoneLink base spec shape and `spec.provider.settings`; core controller owns all status/routes/finalizer |
+| ZoneLink resource | `ADR-046-zone-routing.md` | `generated-or-eval-contract` | Retained: child-local ZoneLink base spec shape and `spec.provider.settings`; child core owns local status/routes/finalizer; selected parent retains only sealed allocator/route state with no reciprocal row |
 | ComponentSession / Noise | `ADR-046-componentsession-and-bus.md` | `generated-or-eval-contract` | Retained: owned by d2b-bus; Provider is opaque carriage only |
 
 ---
@@ -851,7 +912,7 @@ expression.
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-vsock/src/effect_port.rs`; test fake in `tests/effect_port_mock.rs`; redaction checks in `tests/redaction.rs`. |
 | Detailed design | Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes. Define `VsockEffectPort` async trait and opaque ID newtypes in `effect_port.rs`; implement `FakeVsockEffectPort` for tests; `redaction.rs` asserts no raw `u32` in any `Debug`/`Display` output of opaque types; no real vsock socket opened. Primary reuse disposition: `create`. Preserved source-plan detail: net-new trait/newtypes with redaction tests; no real vsock socket opened. |
-| Integration | Core ZoneLink/delegation controller calls the Provider service with opaque IDs; Provider calls injected `VsockEffectPort`; live AF_VSOCK resolution remains in core runtime, not the Provider crate. |
+| Integration | Child Zone's core ZoneLink/delegation controller calls its same-Zone Provider with opaque IDs; Provider calls injected `VsockEffectPort`; live AF_VSOCK child-endpoint resolution remains in child core runtime while the selected parent retains only sealed peer/route state. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: hermetic unit + redaction test; `tests/effect_port_mock.rs` and `tests/redaction.rs`. |
 | Removal proof | None — net-new; no prior owner to remove. |
@@ -878,7 +939,7 @@ expression.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-vsock/src/service.rs`; tests `tests/open_close.rs`, `tests/observe.rs`, and conformance kit. |
 | Detailed design | Implement `VsockTransportService` (OpenTransport/CloseTransport/ObserveTransport). Implement all three service methods in `service.rs`; `open_close.rs` and `observe.rs` test full service API against `FakeVsockEffectPort`; conformance kit passes. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new service implementation over ComponentSession and fake effect port tests. |
-| Integration | Core ZoneLink/delegation controller is the only authorized caller; service opens named stream handles for d2b-bus, releases them on close, and streams transport events for observe. |
+| Integration | Child Zone's core ZoneLink/delegation controller is the only authorized caller; service opens named stream handles for child d2b-bus, releases them on close, and streams transport events for observe; no parent-side Provider or handler exists. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: service round-trip test (mock); `tests/open_close.rs`, `tests/observe.rs`, and provider conformance tests. |
 | Removal proof | None — net-new; no prior owner to remove. |
@@ -886,25 +947,25 @@ expression.
 ### ADR046-vsock-004
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Implement `LiveVsockEffectPort` in Zone runtime; Phase 2; Priority P0; Depends on ADR046-vsock-001 and the Zone allocator (`ADR-046-resources-zone-control`); Owner crate `d2b-core-controller`. |
+| Dependency/owner | Title: Implement `LiveVsockEffectPort` in child Zone runtime; Phase 2; Priority P0; Depends on ADR046-vsock-001 and the Zone allocator (`ADR-046-resources-zone-control`); Owner crate `d2b-core-controller`. |
 | Current source | Evidence class `ADR-only`; baseline has guest-control and relay vsock paths, but no allocator-backed `LiveVsockEffectPort` for ZoneLink transport. |
 | Reuse action | adapt |
-| Destination | `d2b-core-controller` Zone runtime `LiveVsockEffectPort`; Provider receives it by dependency injection at startup. |
-| Detailed design | Implement `LiveVsockEffectPort` in Zone runtime. Zone runtime provides `LiveVsockEffectPort` backed by core allocator state; resolves `OpaqueEndpointId` → CID and `OpaqueBindingId` → port; opens AF_VSOCK socket; injects into Provider service at startup; no raw CID/port exposed to Provider. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new core adapter; keep raw AF_VSOCK syscalls outside Provider crate. |
-| Integration | Zone allocator issues endpoint/binding IDs; core runtime resolves them, opens/accepts AF_VSOCK sockets, returns opaque streams to Provider service, and excludes reserved ports. |
+| Destination | `d2b-core-controller` child Zone runtime `LiveVsockEffectPort`; child-local Provider receives it by dependency injection at startup. |
+| Detailed design | Implement `LiveVsockEffectPort` in the child Zone runtime. It consumes the child's sealed binding for the allocator selected by compiler-only `parentZone`, resolves opaque endpoint/binding IDs only inside the effect adapter, opens the child AF_VSOCK endpoint, and injects an opaque stream into the same-Zone Provider service; the selected parent keeps its peer binding and port registry only as sealed allocator/route state; no raw CID/port is exposed to the Provider and no FD or ResourceRef crosses Zones. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new core adapter; keep raw AF_VSOCK syscalls outside Provider crate. |
+| Integration | Selected parent allocator issues a sealed endpoint/binding allocation without creating resources; child core resolves its local side, opens/accepts the AF_VSOCK endpoint, returns an opaque stream to its Provider service, and excludes reserved ports. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
-| Validation | Proof type: integration test; `integration/host_guest.rs` exercises live open/close byte round-trip with the injected effect. |
+| Validation | Proof type: integration test; `integration/host_guest.rs` exercises live open/close byte round-trip with the injected effect and proves the selected parent has only sealed allocator/route state, with no parent-store Provider/ZoneLink row. |
 | Removal proof | None — net-new core adapter; no prior owner to remove. |
 
 ### ADR046-vsock-005
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Title: Core ProviderDeployment creates/deletes service component state Volume; Phase 1; Priority P0; Depends on the volume-local Provider (`ADR-046-provider-volume-local`); Owner crate `d2b-provider-transport-vsock`. |
+| Dependency/owner | Title: Child core ProviderDeployment creates/deletes service component state Volume; Phase 1; Priority P0; Depends on the volume-local Provider (`ADR-046-provider-volume-local`); Owner crate `d2b-provider-transport-vsock`. |
 | Current source | Evidence class `test-only-or-preview`; no operator-authored v3 state Volume exists for transport-vsock in baseline. |
 | Reuse action | create |
 | Destination | ProviderDeployment Volume creation/deletion path plus `packages/d2b-provider-transport-vsock/tests/state_volume.rs`. |
-| Detailed design | Core ProviderDeployment creates/deletes service component state Volume. Core ProviderDeployment creates `Volume/transport-vsock--service--empty-state--*` before the component Process and deletes it after the Process finalizer; transport-vsock Provider controller does not own Volume, does not add Volume to exported ResourceTypes, and does not create its prerequisite; Volume spec: empty schema, `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`, `User/d2b-transport-vsock` owner, minimal nonzero `quota.maxBytes`/`quota.maxInodes` with `enforcement: hard`, `private` sensitivity, `broker-maintained` identity marker; `state_volume.rs` test verifies Volume spec fields against canonical schema; integration test verifies marker written at install and removed at Provider deletion; no operator-authored Volume; component receives dirfd view only. Primary reuse disposition: `create`. Preserved source-plan detail: net-new ProviderDeployment/Volume integration and tests. |
-| Integration | Core ProviderDeployment creates Volume before Process, volume-local reconciles it, Provider process receives only a dirfd view, and Provider deletion removes the Process before deleting the Volume/identity marker. |
+| Detailed design | Child core ProviderDeployment creates/deletes the service component state Volume in the same child Zone. It creates `Volume/transport-vsock--service--empty-state--*` before the component Process and deletes it after the Process finalizer; the transport-vsock service does not own Volume, add Volume to exported ResourceTypes, or create its prerequisite; Volume spec: empty schema, `kind: state`, `persistenceClass: persistent`, `migrationPolicy: none`, `User/d2b-transport-vsock` owner, minimal nonzero `quota.maxBytes`/`quota.maxInodes` with `enforcement: hard`, `private` sensitivity, `broker-maintained` identity marker; `state_volume.rs` tests the canonical schema; installation/removal tests verify marker lifecycle; no operator-authored or parent-store Volume exists; component receives only its child-local dirfd view. Primary reuse disposition: `create`. Preserved source-plan detail: net-new ProviderDeployment/Volume integration and tests. |
+| Integration | Child core ProviderDeployment creates the Volume before Process, volume-local reconciles it, the Provider process receives only a child-local dirfd view, and Provider deletion removes Process before Volume/identity marker; parent state remains allocator/route-only. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import; state Volume is created fresh with `migrationPolicy: none`. |
 | Validation | Proof type: unit + integration test; `tests/state_volume.rs` and Provider install/remove integration tests verify schema, user refs, marker lifecycle, and no ComponentPrincipal. |
 | Removal proof | Remove the state Volume and its broker-maintained identity marker during Provider deletion; no operator-authored Volume remains. |
@@ -916,8 +977,8 @@ expression.
 | Current source | Evidence class `test-only-or-preview`; existing guest-control compile proof and socat relay tests are not full ZoneLink transport coverage. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-vsock/integration/host_guest.rs` and `integration/no_fd_transfer.rs`. |
-| Detailed design | Integration test: real vsock socketpair + full ZoneLink open/close. `integration/host_guest.rs`: real vsock socketpair (Linux); `OpenTransport` + byte round-trip + `CloseTransport`; validates bridge throughput ≥ 512 MiB/s; `no_fd_transfer.rs`: structural rejection of attachment packets over vsock transport. Primary reuse disposition: `create`. Preserved source-plan detail: net-new integration coverage with no FD transfer over vsock. |
-| Integration | Test drives Provider service, LiveVsockEffectPort, d2b-bus `OwnedTransport`, byte bridge, close path, and attachment rejection across the integration lane. |
+| Detailed design | Integration test: fixture declares compiler-only `k1.parentZone = "local-root"`, puts the ZoneLink and selected Provider only in K1, and gives local-root only sealed allocator/route state; `integration/host_guest.rs` opens a real Linux vsock path through K1's `LiveVsockEffectPort`, then exercises `OpenTransport` + byte round-trip + `CloseTransport` and validates bridge throughput ≥ 512 MiB/s; `no_fd_transfer.rs` structurally rejects attachment packets and asserts no FD/ResourceRef crosses the Zone boundary. Primary reuse disposition: `create`. Preserved source-plan detail: net-new integration coverage with no FD transfer over vsock. |
+| Integration | Test drives K1-local Provider service, child `LiveVsockEffectPort`, d2b-bus `OwnedTransport`, byte bridge, close path, absent local-root reciprocal resource row, and attachment rejection across the integration lane. |
 | Data migration | None — docs/tooling only; no runtime state. |
 | Validation | Proof type: integration test; `make test-integration` runs `host_guest.rs` and `no_fd_transfer.rs`. |
 | Removal proof | None — test coverage net-new; old duplicate vsock tests are retired only after successor assertions migrate. |
@@ -951,6 +1012,9 @@ expression.
 | `no_raw_port_in_debug_or_display` | `tests/redaction.rs` | unit | `cargo test` |
 | `transport_settings_schema_rejects_cid_field` | `tests/schema.rs` | unit | `cargo test` |
 | `transport_settings_schema_rejects_port_field` | `tests/schema.rs` | unit | `cargo test` |
+| `provider_and_zonelink_are_child_local` | `tests/topology.rs` | unit | `cargo test` |
+| `child_zone_name_self_matches_and_parent_is_compiler_only` | `tests/topology.rs` | unit | `cargo test` |
+| `parent_store_has_no_reciprocal_resources` | `tests/topology.rs` | unit | `cargo test` |
 | `state_volume_spec_matches_canonical_schema` | `tests/state_volume.rs` | unit | `cargo test` |
 | `state_volume_layout_uses_nix_user_ref_not_component_principal` | `tests/state_volume.rs` | unit | `cargo test` |
 | `conformance_provider_registers_service` | `tests/` (conformance kit) | unit | `cargo test` |
@@ -979,8 +1043,8 @@ budget.
 ## Removal criteria
 
 `Provider/transport-vsock` (and its crate) may not be removed while:
-1. Any `ZoneLink` resource with `spec.providerRef: Provider/transport-vsock`
-   exists in any Zone.
+1. Any child-local `ZoneLink` resource with
+   `spec.providerRef: Provider/transport-vsock` exists in its owning child Zone.
 2. Any `d2b-link` port-class vsock session is active on any Zone runtime.
 3. The state Volume (`Volume/transport-vsock--service--empty-state--*`) has not
    been deleted and its identity marker has not been cleared.
@@ -989,9 +1053,12 @@ budget.
 5. The `guest_control_vsock.rs` CONNECT-proxy path has not been fully replaced
    by the Guest resource lifecycle bootstrap (ADR046-vsock-007).
 
-When all four conditions are clear, the removal commit must delete
+When all five conditions are clear, the removal commit must delete
 `packages/d2b-provider-transport-vsock/` and the `transport-vsock` entry in
-the Provider catalog in `ADR-046-provider-model-and-packaging.md`.
+the Provider catalog in `ADR-046-provider-model-and-packaging.md`. Removal
+proof must also show that topology fixtures contain no parent-store reciprocal
+Provider/ZoneLink row and that no cross-Zone FD/ResourceRef path replaced the
+transport.
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
@@ -1009,13 +1076,18 @@ Old and new suites never run in parallel indefinitely.
 `packages/d2b-provider-transport-vsock/README.md` must document:
 
 - Provider identity: `Provider/transport-vsock`; carriage-acquisition service Provider.
-- Role: `service` component; no ResourceType ownership; core ZoneLink/delegation
-  controller is the sole ZoneLink reconciler and the only caller of this service.
+- Placement: Provider and ZoneLink are in the same child Zone;
+  `spec.childZoneName` self-matches; compiler-only `parentZone` selects the
+  allocator; the parent has only sealed allocator/route state and no reciprocal
+  resource.
+- Role: `service` component; no ResourceType ownership; the child Zone's core
+  ZoneLink/delegation controller is the sole ZoneLink reconciler and the only
+  caller of this service.
 - ProviderStateSet: empty — `Provider/transport-vsock` declares no Provider
   state Volume; its bounded non-secret operational state lives in `status`/the
-  core Operation ledger (D087). All ZoneLink session state is owned by the core
-  ZoneLink controller; the service holds only opaque byte-stream handles in
-  process memory.
+  child core Operation ledger (D087). All ZoneLink session state is owned by the
+  child Zone's core ZoneLink controller; the service holds only opaque
+  byte-stream handles in process memory.
 - `Provider.spec.config.executionRef`: required `Host/<name>` or `Guest/<name>`;
   one service Process per Provider instance, not per ZoneLink.
 - `spec.provider.settings`: `guestRef` / `portClass` fields; what is forbidden.
@@ -1024,7 +1096,8 @@ Old and new suites never run in parallel indefinitely.
   `tokio-vsock` is NOT a Provider crate dependency.
 - Components: `d2b-transport-vsock` binary; one service process per Zone.
 - Dependencies: `d2b-session`, `d2b-contracts`, `d2b-provider`, `tokio` (no `tokio-vsock`).
-- RBAC: only core ZoneLink controller may invoke service methods.
+- RBAC: only the child Zone's core ZoneLink controller may invoke service
+  methods.
 - Build: `cargo build -p d2b-provider-transport-vsock`.
 - Tests: `cargo test -p d2b-provider-transport-vsock`.
 - Integration: `make test-integration`.

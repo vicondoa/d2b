@@ -20,6 +20,12 @@ Hybrid Connections. It is one of three initial ZoneLink transport Providers
 alongside `Provider/transport-unix` (local allocator-issued FD) and
 `Provider/transport-vsock` (local host/guest vsock).
 
+The Provider is installed in the child Zone that owns the ZoneLink. Its
+same-Zone Network, Credential, Guest, Process, and Endpoint refs never cross the
+Zone boundary. The child Zone's compiler-only `parentZone` selects the parent
+allocator; that parent keeps only sealed allocator/route state and never stores
+a reciprocal ZoneLink or selected transport Provider resource.
+
 The Provider's responsibilities are:
 
 - Accept typed `spec.provider.settings` from a `ZoneLink` spec and
@@ -231,13 +237,13 @@ against it before emitting the resource bundle.
     },
     "listenerCredentialAlias": {
       "type": "string",
-      "description": "Alias ID (plain string) resolved against the parent Zone's Provider.spec.config.credentialBindings map to obtain the Listen-role Credential ref.  No Credential ref, SAS key, SAS token, or bearer token byte may appear here.",
+      "description": "Alias ID (plain string) resolved against the child Zone's selected Provider.spec.config.credentialBindings map when the sealed allocation selects the Listen role.  No Credential ref, SAS key, SAS token, or bearer token byte may appear here.",
       "pattern": "^[a-z][a-z0-9-]*$",
       "maxLength": 64
     },
     "senderCredentialAlias": {
       "type": "string",
-      "description": "Alias ID (plain string) resolved against the child Zone's Provider.spec.config.credentialBindings map to obtain the Send-role Credential ref.  Each Zone instance acquires its own credential locally inside its gateway Guest.  No Credential ref, SAS key, or token byte may appear here.",
+      "description": "Alias ID (plain string) resolved against the child Zone's selected Provider.spec.config.credentialBindings map when the sealed allocation selects the Send role.  The credential is acquired locally inside the child gateway Guest.  No Credential ref, SAS key, or token byte may appear here.",
       "pattern": "^[a-z][a-z0-9-]*$",
       "maxLength": 64
     }
@@ -251,8 +257,8 @@ against it before emitting the resource bundle.
 | --- | --- | --- | --- |
 | `relayNamespaceId` | Yes | No | Plain Azure Relay namespace label only; no `.servicebus.windows.net` suffix, no scheme; validated by regex; max 50 chars |
 | `relayEntityId` | Yes | No | Hybrid Connection entity name; lowercase kebab; max 50 chars |
-| `listenerCredentialAlias` | Yes | No | Plain alias ID; resolved by parent Zone's Provider instance against its own `config.credentialBindings` map; never a Credential ref or token |
-| `senderCredentialAlias` | Yes | No | Plain alias ID; resolved by child Zone's Provider instance against its own `config.credentialBindings` map; never a Credential ref or token |
+| `listenerCredentialAlias` | Yes | No | Plain alias ID; resolved by the child Zone's selected Provider against its same-Zone `config.credentialBindings` map when assigned the Listen role; never a Credential ref or token |
+| `senderCredentialAlias` | Yes | No | Plain alias ID; resolved by the child Zone's selected Provider against its same-Zone `config.credentialBindings` map when assigned the Send role; never a Credential ref or token |
 
 The build emitter **rejects** any `spec.provider.settings` field:
 
@@ -272,9 +278,17 @@ is exclusive.
 ### Nix authoring example
 
 ```nix
+# local-root is the provisioning parent. It has no ZoneLink or transport
+# Provider resource for this edge; only its allocator's sealed route state exists.
+d2b.zones.local-root = {};
+
+# K2 is the CHILD Zone. parentZone is compiler-only and selects local-root's
+# allocator; it is absent from every emitted resource.
+d2b.zones.k2.parentZone = "local-root";
+
 # Network resource that governs egress routing to Azure Relay.
 # TLS trust is governed by Network policy; no Credential ref needed.
-d2b.zones.k1.resources.relay-egress = {
+d2b.zones.k2.resources.relay-egress = {
   type = "Network";
   spec = {
     allowEgress = true;
@@ -284,7 +298,7 @@ d2b.zones.k1.resources.relay-egress = {
 
 # Credential for the Listener-role SAS key.
 # scope.executionRef must match Provider config.executionRef.
-d2b.zones.k1.resources.relay-listen-k2 = {
+d2b.zones.k2.resources.relay-listen = {
   type = "Credential";
   spec = {
     providerRef       = "Provider/credential-secret-service";
@@ -297,9 +311,25 @@ d2b.zones.k1.resources.relay-listen-k2 = {
   };
 };
 
+# Credential for the Sender-role SAS key. Both role credentials remain local to
+# K2 and are resolved by K2's selected Provider instance.
+d2b.zones.k2.resources.relay-send = {
+  type = "Credential";
+  spec = {
+    providerRef       = "Provider/credential-secret-service";
+    audience          = "azure-relay-send";
+    allowedOperations = [ "acquire-token" ];
+    consumerRef       = "Provider/transport-azure-relay";
+    scope.executionRef = "Guest/work-gateway";
+    rotation.policy   = "proactive";
+    rotation.proactiveWindowMs = 300000;
+  };
+};
+
 # Provider resource.  config.executionRef gates all component placement;
-# config.networkRef governs egress routing.
-d2b.zones.k1.resources.transport-azure-relay = {
+# config.networkRef governs egress routing. It is in the same CHILD Zone as the
+# ZoneLink and every ref it resolves.
+d2b.zones.k2.resources.transport-azure-relay = {
   type = "Provider";
   spec = {
     artifactId = "provider-transport-azure-relay";
@@ -307,7 +337,8 @@ d2b.zones.k1.resources.transport-azure-relay = {
       executionRef = "Guest/work-gateway";       # required; service components run here
       networkRef   = "Network/relay-egress";     # required; Network governs TLS trust
       credentialBindings = {
-        relay-listen = "Credential/relay-listen-k2";
+        relay-listen = "Credential/relay-listen";
+        relay-send   = "Credential/relay-send";
       };
       maxConcurrentSessions = 32;
       connectTimeoutSeconds = 30;
@@ -315,10 +346,9 @@ d2b.zones.k1.resources.transport-azure-relay = {
   };
 };
 
-# ZoneLink K1→K2 using transport-azure-relay.
-# spec.provider.settings carries plain alias IDs; parent and child each
-# resolve aliases locally inside their respective gateway Guests.
-d2b.zones.k1.resources.k2-guest = {
+# K2's sole child-local uplink. childZoneName self-matches its enclosing Zone;
+# local-root gets no reciprocal resource.
+d2b.zones.k2.resources.k2-uplink = {
   type = "ZoneLink";
   spec = {
     childZoneName        = "k2";
@@ -329,8 +359,8 @@ d2b.zones.k1.resources.k2-guest = {
       settings = {
         relayNamespaceId        = "relns-d2b-prod";  # non-secret namespace label
         relayEntityId           = "hc-d2b-k2";       # non-secret entity name
-        listenerCredentialAlias = "relay-listen";    # alias ID; parent resolves locally
-        senderCredentialAlias   = "relay-send";      # alias ID; child resolves locally
+        listenerCredentialAlias = "relay-listen";    # K2-local alias; selected Provider resolves
+        senderCredentialAlias   = "relay-send";      # K2-local alias; selected Provider resolves
       };
     };
     childStaticKeyFingerprint = "9d2e1f...7f01";   # 64 lower-hex chars
@@ -347,6 +377,30 @@ d2b.zones.k1.resources.k2-guest = {
   };
 };
 ```
+
+The compiler derives `metadata.zone: k2` for both resources. The emitted
+ZoneLink identity is therefore child-local:
+
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: ZoneLink
+metadata:
+  name: k2-uplink
+  zone: k2
+spec:
+  childZoneName: k2
+  providerRef: Provider/transport-azure-relay
+  provider:
+    schemaId: transport-azure-relay.d2bus.org/ZoneLink/spec
+    schemaVersion: "1.0"
+    settings:
+      relayNamespaceId: relns-d2b-prod
+      relayEntityId: hc-d2b-k2
+      listenerCredentialAlias: relay-listen
+      senderCredentialAlias: relay-send
+```
+
+No corresponding object is emitted into local-root's resource bundle.
 
 ---
 
@@ -369,13 +423,15 @@ never authenticates a d2b Zone subject.
 
 ### KK enrollment contract
 
-Before a ZoneLink becomes Ready, both Zone controllers must complete an
-out-of-band enrollment exchange that establishes:
+Before the child-local ZoneLink becomes Ready, the child controller and the
+selected parent allocator's sealed route endpoint complete an out-of-band
+enrollment exchange that establishes:
 
-- **Parent** (listener side): the parent's controller enrolls its own static
-  25519 key pair. The public key fingerprint is sealed into the selected-parent
-  allocator binding delivered to the child controller; it is not stored in a
-  reciprocal parent ZoneLink.
+- **Selected parent route endpoint**: the parent allocator binds its route
+  principal's static 25519 public-key fingerprint into the sealed allocation
+  delivered to the child controller. The parent keeps only that sealed
+  allocator/route state; it has no ZoneLink row, transport Provider resource, or
+  parent-side ZoneLink handler.
 - **Child** (sender side): the child's controller enrolls its own static
   25519 key pair. Its public key fingerprint is committed in the child-local
   `ZoneLink.spec.childStaticKeyFingerprint` and verified by the parent
@@ -416,8 +472,8 @@ from Azure Relay auth material:
 - A managed identity token proving the `Send` Entra claim does not grant access
   to the Zone's resource API beyond what the KK-enrolled child key authorizes.
 - The Provider reports relay auth success/failure only as transport connection
-  status; the ZoneLink controller maps only the KK-enrolled static key to the
-  child Zone subject.
+  status; the child Zone's ZoneLink controller maps only the KK-enrolled static
+  key to the child Zone subject.
 
 This is a load-bearing invariant from ADR 0032 (§Load-bearing invariant:
 relay identity is not local auth) carried forward to d2b 3.0.
@@ -463,20 +519,17 @@ scope does not match is refused by the Credential controller with
 Alias IDs are plain strings carrying no credential bytes.
 
 `ZoneLink.spec.provider.settings` carries `listenerCredentialAlias` and
-`senderCredentialAlias` — plain alias ID strings, not Credential refs:
+`senderCredentialAlias` — plain alias ID strings, not Credential refs. The
+selected Provider and ZoneLink are both in the child Zone. Its gateway Guest
+resolves either alias against that Provider's same-Zone
+`config.credentialBindings` when the sealed allocation assigns the corresponding
+Listen or Send role, and acquires the credential through the local Credential KK
+session.
 
-- **Parent Zone** (`listenerCredentialAlias`): the parent gateway Guest's
-  listener service resolves the alias against its own `config.credentialBindings`
-  to find the Credential ref, then acquires that credential inside the gateway
-  Guest via the Credential KK session.
-- **Child bootstrap**: the child receives `spec.provider.settings` as part of the
-  ZoneLink bootstrap. The child gateway Guest's sender service resolves
-  `senderCredentialAlias` against **its own** `config.credentialBindings` and
-  acquires its credential independently, inside its own gateway Guest.
-
-No cross-Zone credential bytes exist. No parent-minted token is delivered to the
-child. Each Zone's gateway service component is independently responsible for
-credential acquisition and relay authentication.
+No alias, Credential ref, or credential byte crosses the Zone boundary. No
+parent-minted token is delivered to the child, and the parent allocator does not
+resolve child aliases. The parent keeps only sealed allocator/route state for
+its endpoint; it has no Provider or Credential resource for the child edge.
 
 ### Credential acquisition over Noise KK
 
@@ -514,7 +567,7 @@ would make credential acquisition impossible.
 | Type | service |
 | Binary | `d2b-transport-azure-relay-listener` |
 | Execution domain | system |
-| Placement | Gateway Guest identified by `config.executionRef` |
+| Placement | Gateway Guest identified by the child-local Provider's `config.executionRef` |
 | Cardinality | 0/1 per Provider instance; internally multiplexes up to `maxConcurrentSessions` relay sessions across all active ZoneLinks |
 | ResourceTypes owned | none (returns `RelayTransportObservation` to core-controller ZoneLink handler; does not write ZoneLink.status) |
 
@@ -531,8 +584,8 @@ Responsibilities:
 - TLS and WebSocket state remain in this process; only end-to-end Noise record
   bytes traverse the named byte stream. The listener cannot decrypt them.
 - Returns typed `RelayTransportObservation` values to the core-controller
-  ZoneLink handler; the ZoneLink handler is the sole `update-status` writer on
-  ZoneLink resources.
+  child Zone's core-controller ZoneLink handler; that child-local handler is the
+  sole `update-status` writer on the ZoneLink resource.
 - Emits OTEL metrics and spans (see §OTEL).
 - Emits audit records for authentication events (see §Audit).
 
@@ -550,6 +603,7 @@ apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-azure-relay-listener
+  zone: k2
   ownerRef: Provider/transport-azure-relay
 spec:
   template: listener
@@ -609,7 +663,7 @@ spec:
 | Type | service |
 | Binary | `d2b-transport-azure-relay-sender` |
 | Execution domain | system |
-| Placement | Gateway Guest identified by `config.executionRef` of the child Zone's Provider instance |
+| Placement | Gateway Guest identified by `config.executionRef` of the child Zone's selected Provider instance |
 | Cardinality | 0/1 per Provider instance; internally multiplexes bounded send sessions |
 
 Responsibilities:
@@ -621,7 +675,8 @@ Responsibilities:
 - Pumps TLS/WebSocket bytes between the relay connection and the local
   ComponentSession transport; remains alive for the duration of each session.
 - Internally multiplexes active sender sessions up to `maxConcurrentSessions`.
-- Returns typed observations to the core-controller ZoneLink handler.
+- Returns typed observations to the child Zone's core-controller ZoneLink
+  handler.
 
 The sender service does **not**:
 
@@ -635,6 +690,7 @@ apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-azure-relay-sender
+  zone: k2
   ownerRef: Provider/transport-azure-relay
 spec:
   template: sender
@@ -698,6 +754,7 @@ apiVersion: resources.d2bus.org/v3
 type: Endpoint
 metadata:
   name: transport-azure-relay-listener-service
+  zone: k2
   ownerRef: Process/transport-azure-relay-listener
 spec:
   providerRef: Provider/transport-azure-relay
@@ -725,6 +782,7 @@ apiVersion: resources.d2bus.org/v3
 type: Endpoint
 metadata:
   name: transport-azure-relay-sender-service
+  zone: k2
   ownerRef: Process/transport-azure-relay-sender
 spec:
   providerRef: Provider/transport-azure-relay
@@ -753,7 +811,9 @@ Consumers refer to `Endpoint/<name>` and resolve it only through the authorized
 EffectPort/LaunchTicket path; unauthorized callers receive
 `endpoint-resolve-denied`. A listener or sender Process restart bumps the child
 Endpoint `endpointGeneration`, which dependents observe as `dependency-changed`.
-ZoneLink session state remains owned by the core ZoneLink controller.
+ZoneLink session state remains owned by the child Zone's core ZoneLink
+controller. The parent store contains no matching Endpoint, Provider, or
+ZoneLink resource; only sealed allocator/route state exists there.
 
 ### Retained opaque handles (D092)
 
@@ -788,8 +848,9 @@ memory (`OwnedTransport`/WebSocket handles, per D081) and is never persisted.
 Its bounded non-secret operational state — listener/sender readiness,
 transport-open/close reconcile stage, bounded reconnect/connection counters,
 and closed-enum error detail — lives in the owning resource's `status`
-subresource and the core Operation ledger (D087). All ZoneLink session state is
-owned by the core ZoneLink controller under the `ZoneLink` resource.
+subresource and the child Zone's core Operation ledger (D087). All ZoneLink session state is
+owned by the child Zone's core ZoneLink controller under its local `ZoneLink`
+resource.
 
 No relay auth token, WebSocket handle, session key, or credential byte is ever
 persisted; those bytes cross the sensitive KK delivery path in process memory
@@ -805,16 +866,19 @@ state-layout `User/<name>` principal. There is no empty identity-only Volume.
 
 ### Transport service interface
 
-The core ZoneLink controller drives the relay transport lifecycle. The relay
-Provider is a **typed transport service**; it does not read ZoneLink resources,
-own Zone session state, or initiate Zone-level operations. Core calls the
-Provider with already-validated `spec.provider.settings` and receives an opaque
-byte-stream handle in return.
+The child Zone's core ZoneLink controller drives the relay transport lifecycle
+through the selected Provider in that same child Zone. The relay Provider is a
+**typed transport service**; it does not read ZoneLink resources, own Zone
+session state, or initiate Zone-level operations. The child-local controller
+calls the Provider with already-validated `spec.provider.settings` and receives
+an opaque byte-stream handle in return. The parent route endpoint is selected
+only through sealed allocator state and has no reciprocal Provider or ZoneLink
+resource.
 
 #### `OpenTransport(spec.provider.settings) → TransportHandle`
 
-Called by the core ZoneLink controller when it needs a new relay channel. The
-listener service:
+Called by the child Zone's core ZoneLink controller when it needs a new relay
+channel. The child-local service assigned the listener role:
 
 1. Resolves `listenerCredentialAlias` from `config.credentialBindings`, acquires
    the Azure credential via KK inside the gateway Guest, and authenticates to
@@ -834,8 +898,9 @@ reconnect policy and issues a new `OpenTransport` call.
 
 #### `CloseTransport(handle)`
 
-Called by the core ZoneLink controller to tear down the relay channel. The
-relay service closes the WebSocket and releases the carriage session.
+Called by the child Zone's core ZoneLink controller to tear down the relay
+channel. The relay service closes the WebSocket and releases the carriage
+session.
 
 #### `ObserveTransport(handle) → Stream<TransportObservation>`
 
@@ -846,8 +911,9 @@ write ZoneLink status directly.
 
 ### Core ownership
 
-The following are owned exclusively by the core ZoneLink controller. The relay
-transport service has no authority or visibility over them:
+The following are owned exclusively by the child Zone's core ZoneLink
+controller. The relay transport service has no authority or visibility over
+them, and the parent has no ZoneLink handler:
 
 | Concern | Core responsibility |
 | --- | --- |
@@ -855,12 +921,13 @@ transport service has no authority or visibility over them:
 | Session generation counter | Core increments on each reconnect |
 | Reconnect policy and backoff | Core's reconnect policy drives reconnect; core calls `CloseTransport` then `OpenTransport` after applying its own backoff |
 | Idempotency key tracking | Core assigns and deduplicates `ZoneLinkIdempotencyKey` |
-| Route state and Watch cursors | Core manages; relay has no view |
-| ZoneLink resource status and finalizer | Core writes; relay returns observations only |
+| Route state and Watch cursors | Child core manages local session/cursor state; the parent retains only sealed allocator/route state; relay has no view |
+| ZoneLink resource status and finalizer | Child core writes its local resource; relay returns observations only |
 
 ### Currency and upgrade (D091)
 
-The core ZoneLink controller, not the relay transport service, implements
+The child Zone's core ZoneLink controller, not the relay transport service or
+the parent allocator, implements
 `assess_update`, `plan_upgrade`, and `execute_upgrade`. A Provider generation or
 signed artifact generation/digest change updates universal `status.update` with
 `state: UpdateAvailable` or `state: UpgradeRequired`, `reasons` including
@@ -869,9 +936,9 @@ digest IDs, `disruption: Reload` or `disruption: Restart`, `preserveState:
 true`, bounded `owned`/`dependencies`, and `lastAssessedAt`. Disruptive changes
 MUST return `UpgradeRequired` rather than applying in place; non-disruptive
 changes reconcile normally. Upgrade recycles the relay service realization;
-open byte-stream handles are re-established by core reconnect. ZoneLink session
-state remains owned by the core ZoneLink controller. `status.update` MUST NOT
-contain secrets.
+open byte-stream handles are re-established by child-core reconnect. ZoneLink
+session state remains owned in the child store by the child Zone's core
+ZoneLink controller. `status.update` MUST NOT contain secrets.
 
 ### Expedited reconcile on mutation (D090)
 
@@ -964,8 +1031,9 @@ Granted:
 Not held:
 
 - `get`, `watch`, `update-status`, `create`, `update-spec`, or `delete` on any
-  ZoneLink (the core ZoneLink controller owns those; the relay service receives
-  `spec.provider.settings` as a parameter from core, not by reading the resource);
+  ZoneLink (the child Zone's core ZoneLink controller owns its local resource;
+  the relay service receives `spec.provider.settings` as a parameter from that
+  same-Zone controller, not by reading the resource);
 - any ResourceAPI verb on Zone resources other than the above;
 - any relay-forwarding verb for routing calls to child Zones.
 
@@ -1017,26 +1085,28 @@ Credential resource.
 
 ### Core-aggregated transport status
 
-The relay transport service does **not** write ZoneLink status. Core receives
-a `Stream<TransportObservation>` from `ObserveTransport` and aggregates those
-observations into the ZoneLink transport status sub-object.
+The relay transport service does **not** write ZoneLink status. The child
+Zone's core controller receives a `Stream<TransportObservation>` from
+`ObserveTransport` and aggregates those observations into its local ZoneLink
+transport status sub-object. There is no parent-side ZoneLink status or handler.
 
-Per D088, core writes the ZoneLink universal `ResourceStatus` base at top-level
+Per D088, child core writes the ZoneLink universal `ResourceStatus` base at top-level
 `status.*` and cross-provider ZoneLink/transport observation under
 `status.resource`. Azure-specific bounded, non-secret observation belongs in
 `status.provider` with `providerRef: Provider/transport-azure-relay`, qualified
 `schemaId: transport-azure-relay.d2bus.org/ZoneLink/status`, `schemaVersion` (semver MAJOR.MINOR),
 `observedProviderGeneration`, and a strict unknown-field-denied, ≤32 KiB,
-redacted `details` object registered and signed in the Provider manifest. Core
-writes all present layers atomically in one status mutation; shared fields are
-promoted to `status.resource` and never duplicated into `status.provider`.
+redacted `details` object registered and signed in the Provider manifest. Child
+core writes all present layers atomically in one child-store status mutation;
+shared fields are promoted to `status.resource` and never duplicated into
+`status.provider`.
 
 The ZoneLink handler writes the following D088 shape based on observations
 received:
 
 ```yaml
 status:
-  # ZoneLink core status (managed by core ZoneLink controller):
+  # Child-local ZoneLink status (managed by K2's core ZoneLink controller):
   phase: Ready
   conditions: [...]
   resource:
@@ -1098,10 +1168,10 @@ Rules:
 | `Failed` | Core reconnect policy exhausted or credential unrecoverable |
 | `Unknown` | Core cannot determine carriage state from `ObserveTransport` stream |
 
-Core transitions the ZoneLink resource to phase `Failed` after the reconnect
-policy is exhausted or when the listener Credential transitions to `LeaseRevoked`
-with no replacement; the relay service reports the carriage health observation
-and core owns the final status write.
+The child Zone's core controller transitions its ZoneLink resource to phase
+`Failed` after the reconnect policy is exhausted or when the listener Credential
+transitions to `LeaseRevoked` with no replacement; the relay service reports the
+carriage health observation and child core owns the final status write.
 
 ---
 
@@ -1316,7 +1386,7 @@ download, or PATH scan.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs` |
 | Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process — only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Core ZoneLink controller calls `OpenTransport(spec.provider.settings)` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream |
+| Integration | The child Zone's core ZoneLink controller calls its same-Zone selected Provider's `OpenTransport(spec.provider.settings)` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream; the parent has only sealed allocator/route state |
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
 | Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; Noise KK binding; relay identity exclusion |
 | Removal proof | `d2b-provider-relay/src/lib.rs` relay plumbing retained until ACA display migration completes |
@@ -1329,8 +1399,8 @@ download, or PATH scan.
 | Current source | None (new) |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/credential_client.rs` |
-| Detailed design | Async Credential KK session client for service components (service processes have d2b-bus access, enabling Credential KK; workers do not); acquire listener credential via KK inside the gateway Guest using `config.credentialBindings[listenerCredentialAlias]`; acquire sender credential independently inside the child's gateway Guest via the same KK model using `config.credentialBindings[senderCredentialAlias]`; raw credential bytes held in zeroizing memory inside the gateway Guest, presented to Azure Relay, then immediately zeroized; no credential bytes cross process, network, or Guest boundary; redacted Debug; no credential bytes in logs/audit/OTEL; core ProviderDeployment creates a private persistent Volume (per ADR-046-provider-state) for each component before its Process starts — the transport Provider does not own or create these Volumes; `Provider/volume-local` reconciles them; `migrationPolicy: none` means no migration worker is ever spawned; no relay auth token, WebSocket handle, session key, or credential byte is written to that Volume; all relay session state remains transient in-process memory |
-| Integration | Listener service invokes before each relay connect attempt inside gateway Guest; child Zone's sender service acquires its own credential independently inside its own gateway Guest |
+| Detailed design | Async Credential KK session client for service components (service processes have d2b-bus access, enabling Credential KK; workers do not); the child-local selected Provider acquires either listener or sender credential via KK inside its gateway Guest using the corresponding same-Zone `config.credentialBindings` alias; raw credential bytes are held in zeroizing memory inside the gateway Guest, presented to Azure Relay, then immediately zeroized; no credential ref or bytes cross a Zone, process, network, or Guest boundary; the parent allocator receives neither aliases nor credentials and keeps only sealed route state; redacted Debug; no credential bytes in logs/audit/OTEL; the child Zone's core ProviderDeployment creates a private persistent Volume (per ADR-046-provider-state) for each component before its Process starts — the transport Provider does not own or create these Volumes; `Provider/volume-local` reconciles them; `migrationPolicy: none` means no migration worker is ever spawned; no relay auth token, WebSocket handle, session key, or credential byte is written to that Volume; all relay session state remains transient in-process memory |
+| Integration | The selected Provider's role service invokes acquisition inside the child gateway Guest; the parent allocator has only sealed route state and no Provider/Credential/ZoneLink resource |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs`: credential bytes never reach any Debug/log/audit/OTEL path; `src/tests/integration/credential_delivery.rs`: end-to-end credential delivery using injected fake Credential effect port |
 | Removal proof | N/A; new module |
@@ -1339,7 +1409,7 @@ download, or PATH scan.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-transport-relay-001; reconnect contract; ZoneLink handler |
+| Dependency/owner | ADR046-transport-relay-001; reconnect contract; child Zone's ZoneLink handler |
 | Current source | None (new; core drives reconnect, not the transport Provider) |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/reconnect.rs` |
@@ -1357,7 +1427,7 @@ download, or PATH scan.
 | Current source | `docs/specs/ADR-046-zone-routing.md` transport settings Nix example |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs`; `docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json` |
-| Detailed design | `AzureRelayTransportSettings` Rust struct with serde; validation against committed JSON Schema; reject `secret`-annotated fields; enforce `^[a-z][a-z0-9-]*$` pattern for `listenerCredentialAlias`/`senderCredentialAlias` alias ID fields (never `Credential/<name>` refs); xtask `gen-provider-transport-schemas` integration |
+| Detailed design | `AzureRelayTransportSettings` Rust struct with serde; validation against committed JSON Schema; reject `secret`-annotated fields; enforce `^[a-z][a-z0-9-]*$` pattern for `listenerCredentialAlias`/`senderCredentialAlias` alias ID fields (never `Credential/<name>` refs); both aliases resolve only through the selected Provider in the same child Zone as the ZoneLink; xtask `gen-provider-transport-schemas` integration |
 | Integration | `make test-drift` gate: `xtask gen-provider-transport-schemas && git diff --exit-code` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/transport_settings_schema.rs`: valid/invalid schema vectors; eval-time Nix assertion coverage from `nix-unit: transport-settings-secret-key` test (see zone-routing spec) |
@@ -1399,7 +1469,7 @@ download, or PATH scan.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/tests/integration/README` |
-| Detailed design | Required content: fake relay server setup and teardown using the injected fake Relay effect port; how to run hermetic integration tests without a live Azure service; how to configure the injected fake Credential effect port for credential delivery tests; how to run with a real Azure namespace (requires a `Credential` resource declared in `spec.config.credentialBindings`, not environment-variable credential paths); integration test scenarios and expected outcomes; CI/local execution instructions |
+| Detailed design | Required content: fake relay server setup and teardown using the injected fake Relay effect port; how to run hermetic integration tests without a live Azure service; how to configure the injected fake Credential effect port for credential delivery tests; the fixture declares compiler-only `k2.parentZone = "local-root"` and puts the ZoneLink, selected Provider, Network, Credentials, Process, and Endpoint resources only in K2; local-root's store is asserted to contain no reciprocal ZoneLink or Provider; how to run with a real Azure namespace (requires same-child-Zone `Credential` resources declared in `spec.config.credentialBindings`, not environment-variable credential paths); integration test scenarios and expected outcomes; CI/local execution instructions |
 | Integration | `make test-integration` invokes `tests/integration/containers/` scenarios which inject the fake relay and credential port implementations from `src/tests/integration/fake_relay_server.rs` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | File must be present; workspace policy gate enforces `src/tests/integration/README` |
@@ -1424,12 +1494,13 @@ wave:
 | `metric_labels.rs` | `identity_keys_absent`, `zone_name_canary_absent`, `semantic_domains_closed`, `zone_resource_attribute_retained` | Structural metric-label policy; no Zone/resource identity labels; `d2b.zone` remains a resource attribute |
 | `idempotency_key.rs` | `idempotency_key_carried_in_noise_record`, `idempotency_key_not_in_relay_frame_metadata`, `replay_at_relay_level_does_not_deduplicate`, `dedup_at_child_zone_resource_api` | Idempotency is child-Zone-owned; relay carries opaquely |
 | `listener_sender_conformance.rs` | `conformance_vectors_listener`, `conformance_vectors_sender`, `noise_kk_prologue_binds_transport_settings`, `mismatched_fingerprint_fails_closed`, `relay_identity_not_in_subject_context` | Named stream contract; Noise KK binding; relay identity exclusion |
+| `child_local_topology.rs` | `provider_and_zonelink_are_in_child_zone`, `child_zone_name_self_matches`, `parent_zone_is_compiler_only`, `parent_store_has_no_reciprocal_resources`, `credential_aliases_resolve_only_in_child` | K2 owns the ZoneLink and selected Provider; local-root is selected only as allocator and retains sealed route state; no cross-Zone ref or credential path |
 
 ### Integration tests (in `src/tests/integration/`)
 
 | Test | Fixture | What it proves |
 | --- | --- | --- |
-| `zone_link_connect.rs` | `fake_relay_server.rs` (in-process async fake relay via injected effect port) | Full ZoneLink bootstrap over fake relay: connect, Noise KK, resource API ping, Watch |
+| `zone_link_connect.rs` | `fake_relay_server.rs` (in-process async fake relay via injected effect port) | Full child-local ZoneLink bootstrap over fake relay: K2-local Provider/link, compiler-only `k2.parentZone = "local-root"`, no local-root reciprocal row, connect, Noise KK, resource API ping, Watch |
 | `credential_delivery.rs` | Injected fake Credential effect port | Listener credential acquired via KK session; token bytes zeroized; sender credential acquired independently by child Zone instance; no cross-Zone token minting |
 | `reconnect_scenario.rs` | Fake relay server with injected disconnect | Disconnect triggers new relay connect; new Noise KK; Watch resumes from last revision; queued intents replayed |
 | `fake_relay_server.rs` | — | Fake Azure Relay server that accepts listener and sender WebSocket roles; no real Azure service required; controllable inject-disconnect API; passed as constructor argument or injected effect port to test subjects |
@@ -1479,8 +1550,8 @@ are met:
 
 | Existing symbol/crate | Removal condition |
 | --- | --- |
-| `packages/d2b-provider-relay/src/lib.rs` relay WebSocket plumbing | All callers replaced by `d2b-provider-transport-azure-relay`; ACA display path migrated to v3 Provider model (`ADR046-transport-relay-001` complete and ACA Provider dossier integrates relay) |
-| `packages/d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs` | ACA gateway display path migrated to `Provider/runtime-azure-container-apps` + `Provider/transport-azure-relay`; gateway guest ZoneLink bootstrap tested |
+| `packages/d2b-provider-relay/src/lib.rs` relay WebSocket plumbing | All callers replaced by the child-local `d2b-provider-transport-azure-relay`; ACA display path migrated to v3 Provider model; topology tests prove the parent keeps only sealed allocator/route state and has no reciprocal Provider/ZoneLink resource (`ADR046-transport-relay-001` complete and ACA Provider dossier integrates relay) |
+| `packages/d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs` | ACA gateway display path migrated to the child Zone's `Provider/runtime-azure-container-apps` + `Provider/transport-azure-relay`; child-local gateway ZoneLink bootstrap and absent parent-store reciprocal row tested |
 | `d2b-realm-provider` `RelayProvider` / `TransportProvider` traits | All implementations migrated to Provider ResourceType model; `d2b-provider-relay` usage in `d2bd` removed |
 | `D2B_RELAY_NAMESPACE` / `D2B_RELAY_ENTITY` environment variables in `d2b-relay.rs` CLI | Relay CLI replaced by `d2b transport status` and Provider-managed lifecycle; live integration tests updated to use Credential resources in config |
 

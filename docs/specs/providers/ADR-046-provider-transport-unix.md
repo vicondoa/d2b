@@ -120,9 +120,13 @@ implement. They are owned by ADR046-session-001 in `packages/d2b-bus/src/transpo
 ## Overview
 
 `Provider/transport-unix` is a **transport service Provider**. It exposes one
-long-lived `service` Process that the core ZoneLink controller invokes over a
-typed portal to obtain, close, and observe Unix-domain socket transports. It
-owns no ResourceTypes, reconciles no resources, and holds no session state.
+long-lived `service` Process in the child Zone that owns the ZoneLink. That
+child Zone's core ZoneLink controller invokes the Provider over a typed portal
+to obtain, close, and observe Unix-domain socket transports. It owns no
+ResourceTypes, reconciles no resources, and holds no session state. The
+compiler-only child `parentZone` setting selects the allocator that pre-binds
+the edge; the parent retains only sealed allocator/route state and no reciprocal
+ZoneLink, Provider, Process, or Endpoint resource.
 
 Its boundaries:
 
@@ -136,12 +140,14 @@ Its boundaries:
 | Stable transport-layer error codes | Admission of ZoneLink or child Zone identity |
 | `route_class` enforcement: ZoneLink transports are always FD-attachment-free | SCM_RIGHTS grants across Zone boundaries (prohibited by ZoneLink contract) |
 
-The core ZoneLink controller (ADR-046-core-controllers) is the sole reconciler
-for `ZoneLink` resources, including watching, status updates, condition
-transitions, finalizer management, route advertisement, and queued-intent
-lifecycle. It calls `OpenTransport`/`CloseTransport`/`ObserveTransport` on this
-Provider to obtain the transport primitive; everything else is core's and
-ComponentSession/d2b-bus's responsibility.
+The child Zone's core ZoneLink controller (ADR-046-core-controllers) is the sole
+reconciler for its local `ZoneLink` resource, including watching, status
+updates, condition transitions, finalizer management, route advertisement, and
+queued-intent lifecycle. It calls
+`OpenTransport`/`CloseTransport`/`ObserveTransport` on the selected Provider in
+that same child Zone to obtain the transport primitive; everything else is
+child core's and ComponentSession/d2b-bus's responsibility. No parent-side
+ZoneLink handler exists.
 
 ---
 
@@ -152,7 +158,7 @@ ComponentSession/d2b-bus's responsibility.
 | `providerRef` | `Provider/transport-unix` |
 | Crate | `d2b-provider-transport-unix` |
 | Workspace path | `packages/d2b-provider-transport-unix/` |
-| Implements | Transport service for local Unix-socket ZoneLink sessions and within-Zone bus connections |
+| Implements | Child-local transport service for Unix-socket ZoneLink sessions and within-Zone bus connections |
 | Artifact type | `transport` |
 | Component type | `service` |
 | Process domains | `system` only |
@@ -238,7 +244,8 @@ readiness, transport-open/close reconcile stage, bounded connection counters,
 and closed-enum error detail — lives in the owning resource's `status`
 subresource and the core Operation ledger (D087). All ZoneLink session state
 (generation, reconnect count, queued intents, route revision) is owned by the
-core ZoneLink controller in the Zone redb store under the `ZoneLink` resource.
+child Zone's core ZoneLink controller in that child's redb store under its local
+`ZoneLink` resource.
 The transport service holds only opaque byte-stream handles in its own process
 memory (`OwnedTransport`, per D081), which are never persisted.
 
@@ -266,7 +273,7 @@ docs/reference/schemas/v3/providers/transport-unix.transport-binding.json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "UnixTransportSettings",
-  "description": "ZoneLink spec.provider.settings for Provider/transport-unix. Normally empty ({}). The ZoneLink contract prohibits FD/resource grants across Zone boundaries; FD attachment (SCM_RIGHTS) is therefore not a configurable field here. Core always opens ZoneLink transports with attachments_enabled=false. The allocator/core pre-binds the socket and supplies it as an opaque FD attachment to the OpenTransport portal call; no path or credential is needed here.",
+  "description": "ZoneLink spec.provider.settings for Provider/transport-unix. Normally empty ({}). The ZoneLink contract prohibits FD/resource grants across Zone boundaries; FD attachment (SCM_RIGHTS) is therefore not a configurable field here. Child core always opens ZoneLink transports with attachments_enabled=false. The selected parent allocator pre-binds the edge, retains its endpoint only as sealed route state, and injects the child endpoint through sealed bootstrap; child core supplies that endpoint locally to the same-Zone Provider's OpenTransport portal. No parent resource, cross-Zone FD transfer, path, or credential is needed here.",
   "type": "object",
   "properties": {
     "socketKind": {
@@ -301,9 +308,10 @@ glance. Runtime validation also enforces the schema independently of the build s
   is optional and defaults to `"seqpacket"`.
 - **`attachmentsEnabled` is not a ZoneLink `spec.provider.settings` field.** The
   ZoneLink contract prohibits FD and resource grants across Zone boundaries —
-  even for same-kernel parent/child links. Core always opens ZoneLink transports
-  with `attachments_enabled=false`; a cross-Zone SCM_RIGHTS attempt fails
-  structurally at the core level before `OpenTransport` is called.
+  even for same-kernel parent/child links. Child core always opens ZoneLink
+  transports with `attachments_enabled=false`; a cross-Zone SCM_RIGHTS attempt
+  fails structurally at the child-core boundary before `OpenTransport` is
+  called.
 - `socketKind: "seqpacket"` over a ZoneLink provides packet-boundary semantics
   only. No SCM_RIGHTS ancillary data is sent or received; only Noise-protected
   record payloads traverse the link.
@@ -400,13 +408,16 @@ encoded in the allocator-issued FD and never surfaced in the ResourceSpec.
 ### `InheritedSocketpair`
 
 Used when the allocator creates a `socketpair(AF_UNIX, SOCK_SEQPACKET, 0)` and
-passes one end to the parent Zone's transport service (via `OpenTransport`
-attachment) and the other end to the child Zone runtime at spawn. The kernel
-fills `SO_PEERCRED` at `socketpair` time; the transport reads `SO_PEERCRED`
-on the accepted socket end immediately.
+retains the parent route endpoint only in the selected allocator's sealed state
+while injecting the other endpoint into the child runtime's sealed bootstrap.
+The child core passes its endpoint as a **same-Zone portal attachment** to its
+local `Provider/transport-unix`; neither endpoint is represented by a parent
+resource and no FD is transferred across the ZoneLink. The kernel fills
+`SO_PEERCRED` at `socketpair` time; the transport reads `SO_PEERCRED` on the
+child endpoint immediately.
 
-`InheritedSocketpair` is the default policy for ZoneLink sessions between a
-parent Zone and a local child Zone runtime.
+`InheritedSocketpair` is the default policy for a child-local ZoneLink whose
+compiler-only `parentZone` selects a local parent allocator.
 
 ### SO_PASSCRED on first packet
 
@@ -546,7 +557,7 @@ component:
   stateNamespaces: []          # no Provider state Volume; operational state in status/core ledger (D087)
   permissionClaims:
     - verb: receive-attachment  # receives allocator-issued FD attachments via OpenTransport
-    - verb: invoke              # called by core ZoneLink controller over portal
+    - verb: invoke              # called by the child Zone's core handler over its local portal
   readiness:
     class: provider-defined
     initialDelay: "0s"
@@ -560,8 +571,8 @@ component:
       limit: "50m"
 ```
 
-The core ProviderDeployment (not a Provider controller — no such controller
-exists for this Provider) creates the following `Process` resource when
+The child Zone's core ProviderDeployment (not a Provider controller — no such
+controller exists for this Provider) creates the following `Process` resource when
 `Provider/transport-unix` is installed (not authored by Nix; emitted by the
 ProviderDeployment reconciler):
 
@@ -570,7 +581,7 @@ apiVersion: resources.d2bus.org/v3
 type: Process
 metadata:
   name: transport-unix-service
-  zone: k0
+  zone: k1
   ownerRef: Provider/transport-unix   # owned; deleted when Provider is removed
 spec:
   providerRef: Provider/system-minijail
@@ -627,10 +638,10 @@ spec:
   credentialRefs: []
 ```
 
-The `Process` resource has `ownerRef: Provider/transport-unix`. The core
-ProviderDeployment aggregates `Provider/transport-unix` status from the
-Process phase and portal readiness condition. If the Process spec drifts, the
-ProviderDeployment reconciler restores it.
+The `Process` resource has `ownerRef: Provider/transport-unix`. The child Zone's
+core ProviderDeployment aggregates `Provider/transport-unix` status from the
+Process phase and portal readiness condition. If the Process spec drifts, that
+child-local ProviderDeployment reconciler restores it.
 
 The service's stable local portal is not an inline `ProcessSpec` field.
 ProviderDeployment creates this owned standard `Endpoint` child when the
@@ -641,7 +652,7 @@ apiVersion: resources.d2bus.org/v3
 type: Endpoint
 metadata:
   name: transport-unix-portal
-  zone: k0
+  zone: k1
   ownerRef: Process/transport-unix-service
 spec:
   providerRef: Provider/transport-unix
@@ -675,7 +686,9 @@ address, CID, port, FD number, or credential. Authorized resolution occurs only
 through the EffectPort/LaunchTicket path; unauthorized callers receive
 `endpoint-resolve-denied`. A transport service Process restart bumps the
 Endpoint `endpointGeneration`, and dependents observe `dependency-changed`.
-ZoneLink session state remains owned by the core ZoneLink controller.
+ZoneLink session state remains owned by the child Zone's core ZoneLink
+controller. The parent store contains no reciprocal Endpoint, Process,
+Provider, or ZoneLink resource.
 
 ### Retained opaque handles (D092)
 
@@ -696,20 +709,21 @@ Process reaches terminal status. ProviderDeployment clears its own finalizer onl
 after the Process has been fully deleted; the service's `status` disappears with
 the resource row and its revision. The Provider itself
 holds no finalizer on ZoneLink resources; ZoneLink finalizer and status transitions
-remain exclusively with the core ZoneLink controller.
+remain exclusively with the child Zone's core ZoneLink controller.
 
 ---
 
 ## Service API
 
 The transport-unix service process exposes three typed portal methods. All
-methods are invoked by the core ZoneLink controller via d2b-bus over a
-ComponentSession authenticated to the service's enrolled `portal` endpoint.
-No other caller may invoke these methods (see RBAC section).
+methods are invoked by the child Zone's core ZoneLink controller via d2b-bus
+over a same-Zone ComponentSession authenticated to the service's enrolled
+`portal` endpoint. No other caller may invoke these methods (see RBAC section).
 
 ### `OpenTransport`
 
-**Direction**: core ZoneLink controller → transport-unix service
+**Direction**: child Zone's core ZoneLink controller → same-child-Zone
+transport-unix service
 
 **Input**:
 ```text
@@ -720,9 +734,10 @@ OpenTransportRequest {
    // "zone-link": inter-Zone link; cross-Zone FD grants are prohibited
    // "local-portal": within-Zone ComponentSession or portal; seqpacket may carry SCM_RIGHTS
 }
-// Attachment index 0: the pre-bound Unix socket FD from allocator/core.
+// Attachment index 0: the child endpoint from sealed allocator bootstrap.
 // This is a connected socketpair end or a just-accepted listener connection.
-// The FD is supplied as an OwnedAttachment by the core invoker.
+// Child core supplies it locally as an OwnedAttachment to its same-Zone Provider.
+// No FD crosses a Zone boundary.
 ```
 
 **Provider behavior**:
@@ -769,7 +784,8 @@ nothing to it.
 
 ### `CloseTransport`
 
-**Direction**: core ZoneLink controller → transport-unix service
+**Direction**: child Zone's core ZoneLink controller → same-child-Zone
+transport-unix service
 
 **Input**:
 ```text
@@ -786,17 +802,19 @@ CloseTransportRequest { transport_handle: "<opaque>" }
 
 **Output**: `CloseTransportResponse {}`
 
-Core calls `CloseTransport` when:
-- The ZoneLink is deleted: the core ZoneLink controller calls `CloseTransport`
-  to release the transport handle before removing its own ZoneLink transport
-  finalizer. The ProviderDeployment holds no ZoneLink finalizer.
-- The ZoneLink spec changes in a way requiring a new transport FD (core
+Child core calls `CloseTransport` when:
+- The ZoneLink is deleted: the child Zone's core ZoneLink controller calls
+  `CloseTransport` to release the transport handle before removing its own
+  ZoneLink transport finalizer. The ProviderDeployment holds no ZoneLink
+  finalizer.
+- The ZoneLink spec changes in a way requiring a new child endpoint (child core
   re-calls `OpenTransport` after `CloseTransport`).
 - The session engine has permanently failed on the returned FD.
 
 ### `ObserveTransport`
 
-**Direction**: core ZoneLink controller → transport-unix service (named stream)
+**Direction**: child Zone's core ZoneLink controller → same-child-Zone
+transport-unix service (named stream)
 
 **Input**:
 ```text
@@ -855,15 +873,16 @@ from OS-enforced SO_PEERCRED, not a peer-supplied long-term key.
 
 - Both static public keys are known before handshake.
 - The child Zone's enrolled static key is pinned in
-  `ZoneLink.spec.childStaticKeyFingerprint` and verified by the core ZoneLink
-  controller after the handshake — not by this Provider.
+  `ZoneLink.spec.childStaticKeyFingerprint` and verified by the child Zone's
+  core ZoneLink controller after the handshake — not by this Provider.
 - Unix seqpacket or stream carries the handshake bytes; the transport is
   unaware of the Noise content.
 - SO_PEERCRED is still verified by `PeerIdentityPolicy`; for KK sessions its
   role is supplemental provenance, not primary authentication.
 
-The core ZoneLink controller enforces KK on ZoneLink sessions; this Provider
-accepts whichever Noise profile the session engine negotiates on its FD.
+The child Zone's core ZoneLink controller enforces KK on its ZoneLink session;
+this Provider accepts whichever Noise profile the session engine negotiates on
+its FD.
 
 ### IKpsk2 — one-time bootstrap
 
@@ -876,30 +895,34 @@ or validate PSKs.
 ## d2b-bus and core integration
 
 ```text
-core ZoneLink controller
-  -> d2b-bus portal route  ->  transport-unix service Process
+child Zone K1 core ZoneLink controller
+  -> K1 d2b-bus portal route  ->  K1 transport-unix service Process
        OpenTransport(socket_kind, attachments_enabled)
-       + attachment[0]: allocator-issued Unix socket FD
+       + attachment[0]: child endpoint injected by sealed allocator bootstrap
        <-
        OpenTransportResponse(transport_handle, transport_class, ...)
        + attachment[0]: validated OwnedTransport FD
 
-core ZoneLink controller
-  -> d2b-bus
+selected parent allocator (chosen by compiler-only K1.parentZone)
+  -> retains only the peer endpoint and route binding as sealed state
+  -> creates no ZoneLink/Provider/Process/Endpoint row in the parent store
+
+child Zone K1 core ZoneLink controller
+  -> K1 d2b-bus
        hands OwnedTransport to session engine
   -> ComponentSession (KK handshake, record protection, named streams, reconnect)
-  -> child Zone d2b.resource.v3 service
+  -> selected parent allocator's route endpoint
 ```
 
 After `OpenTransport` returns, the transport FD is owned by the session engine.
-d2b-bus:
+K1's d2b-bus:
 - wraps the FD as `UnixSeqpacketTransport` or `UnixStreamTransport`;
 - establishes the KK ComponentSession handshake;
 - owns per-session FD credits, named stream scheduling, reconnect generation;
-- forwards resource API traffic to the child Zone.
+- forwards resource API traffic over K1's allocator-bound uplink.
 
-The core ZoneLink controller:
-- reconciles the `ZoneLink` resource (status, conditions, finalizers);
+The child Zone's core ZoneLink controller:
+- reconciles K1's local `ZoneLink` resource (status, conditions, finalizers);
 - manages reconnect policy and intent queue;
 - publishes/withdraws route advertisements to the `RouteTreeEngine`;
 - calls `CloseTransport` when the ZoneLink is deleted or the transport must be replaced;
@@ -908,7 +931,8 @@ The core ZoneLink controller:
 
 ### Currency and upgrade (D091)
 
-The core ZoneLink controller, not the transport-unix service, implements
+The child Zone's core ZoneLink controller, not the transport-unix service or
+the parent allocator, implements
 `assess_update`, `plan_upgrade`, and `execute_upgrade`. A Provider generation or
 signed artifact generation/digest change updates universal `status.update` with
 `state: UpdateAvailable` or `state: UpgradeRequired`, `reasons` including
@@ -917,9 +941,9 @@ digest IDs, `disruption: Reload` or `disruption: Restart`, `preserveState:
 true`, bounded `owned`/`dependencies`, and `lastAssessedAt`. Disruptive changes
 MUST return `UpgradeRequired` rather than applying in place; non-disruptive
 changes reconcile normally. Upgrade recycles the transport service realization;
-open byte-stream handles are re-established by core reconnect. ZoneLink session
-state remains owned by the core ZoneLink controller. `status.update` MUST NOT
-contain secrets.
+open byte-stream handles are re-established by child-core reconnect. ZoneLink
+session state remains owned in the child store by the child Zone's core
+ZoneLink controller. `status.update` MUST NOT contain secrets.
 
 ### Expedited reconcile on mutation (D090)
 
@@ -942,9 +966,10 @@ resource. Core addresses the handle by the opaque token returned from
 `OpenTransport`.
 
 **No fallback**: if the transport-unix service is not Ready or `OpenTransport`
-returns an error, the core ZoneLink controller sets the `SessionEstablished`
-condition to `False` with the appropriate reason code and retries per the ZoneLink
-reconnect policy. There is no automatic downgrade to stream, vsock, or TCP.
+returns an error, the child Zone's core ZoneLink controller sets its local
+`SessionEstablished` condition to `False` with the appropriate reason code and
+retries per the ZoneLink reconnect policy. There is no automatic downgrade to
+stream, vsock, or TCP.
 
 ---
 
@@ -952,8 +977,8 @@ reconnect policy. There is no automatic downgrade to stream, vsock, or TCP.
 
 ### Role and RoleBinding requirements
 
-The core ZoneLink controller requires one `invoke` permission on the
-transport-unix portal service in its Zone:
+The child Zone's core ZoneLink controller requires one `invoke` permission on
+the transport-unix portal service in that same child Zone:
 
 | Verb | Scope | Notes |
 | --- | --- | --- |
@@ -967,8 +992,13 @@ no resource plane operations.
 The transport-unix service Process requires only the permissions established by
 Provider/system-minijail's process model:
 - Receive its allocator-issued portal endpoint FD at spawn.
-- Receive FD attachments in `OpenTransport` requests from authorized callers.
+- Receive child-endpoint FD attachments in `OpenTransport` requests from its
+  authorized same-Zone child core caller.
 - Emit metrics to the Zone OTEL datagram socket.
+
+The selected parent allocator receives no portal permission and makes no
+Provider call. Its peer endpoint and route binding remain sealed allocator/route
+state; no cross-Zone FD, ResourceRef, or status mutation is permitted.
 
 ### No ambient authority
 
@@ -1012,7 +1042,7 @@ The following values are **never** logged, audited, or emitted as metric labels:
 | No credential bytes in `spec.provider.settings` | JSON Schema + build-time validation |
 | `attachmentsEnabled` not a ZoneLink `spec.provider.settings` field | JSON Schema (`additionalProperties:false` + `not/anyOf`) |
 | `additionalProperties: false` rejects all unknown keys | JSON Schema |
-| ZoneLink transports always have `attachments_enabled=false` | Core ZoneLink controller (structural, pre-call); `admission.rs::validate_route_class` (belt-and-suspenders) |
+| ZoneLink transports always have `attachments_enabled=false` | Child Zone's core ZoneLink controller (structural, pre-call); `admission.rs::validate_route_class` (belt-and-suspenders) |
 | `route_class=zone-link` + `attachments_enabled=true` → `attachment-policy-conflict` | `portal.rs::open_transport` step 3 |
 | CLOEXEC on every received FD | `portal.rs::open_transport` (blocking adapter) |
 | Credit rollback on any validation failure | `CreditBundle` RAII drop |
@@ -1030,10 +1060,11 @@ The following values are **never** logged, audited, or emitted as metric labels:
 
 ### Provider resource status
 
-The Provider resource `spec` contains the `artifactId` and signed descriptor
-digests. Its `status` is managed by the core ProviderDeployment:
+The child-local Provider resource `spec` contains the `artifactId` and signed
+descriptor digests. Its `status` is managed by that child Zone's core
+ProviderDeployment; the parent has no Provider resource or Provider status:
 
-Per D088, core writes the Provider universal `ResourceStatus` base at top-level
+Per D088, child core writes the Provider universal `ResourceStatus` base at top-level
 `status.*` and any Provider ResourceType-common observation in
 `Provider.status.resource` (core-derived per D085). `Provider/transport-unix`
 does not write Provider status directly. If this Provider ever writes bounded,
@@ -1209,10 +1240,19 @@ These targets gate the Provider's integration tests:
 ### Option schema
 
 The Nix option tree mirrors the canonical `ResourceSpec` schema directly. The
-`Provider/transport-unix` resource spec is authored as:
+selected `Provider/transport-unix` is authored in the same child Zone as its
+ZoneLink. The parent Zone has no reciprocal resource:
 
 ```nix
-d2b.zones.k0.resources.transport-unix = {
+# local-root is the distinguished root. parentZone is forbidden and no
+# reciprocal ZoneLink or transport Provider is authored in its store.
+d2b.zones.local-root = {};
+
+# K1 is the CHILD Zone; this compiler-only setting selects local-root's
+# allocator and is not emitted into any resource.
+d2b.zones.k1.parentZone = "local-root";
+
+d2b.zones.k1.resources.transport-unix = {
   type = "Provider";
   spec = {
     artifactId = "provider-transport-unix";  # matches d2b.artifacts.provider-transport-unix
@@ -1233,8 +1273,8 @@ d2b.artifacts.provider-transport-unix = {
 The `ZoneLink` spec is authored in the standard resource syntax:
 
 ```nix
-# Host-local parent→child Zone link (most common case; seqpacket, no FD attachment)
-d2b.zones.k0.resources.k1-link = {
+# K1's sole child-local uplink (seqpacket, no cross-Zone FD attachment).
+d2b.zones.k1.resources.k1-uplink = {
   type = "ZoneLink";
   spec = {
     childZoneName             = "k1";
@@ -1253,8 +1293,18 @@ d2b.zones.k0.resources.k1-link = {
   };
 };
 
-# Stream variant (framed byte stream; no packet boundaries)
-d2b.zones.k0.resources.k3-link = {
+# Independent K3 child using the stream variant. It needs its own same-Zone
+# selected Provider; a Provider ref never resolves across Zones.
+d2b.zones.k3.parentZone = "local-root";
+d2b.zones.k3.resources.transport-unix = {
+  type = "Provider";
+  spec = {
+    artifactId = "provider-transport-unix";
+    config = {};
+  };
+};
+
+d2b.zones.k3.resources.k3-uplink = {
   type = "ZoneLink";
   spec = {
     childZoneName             = "k3";
@@ -1279,7 +1329,7 @@ d2b.zones.k0.resources.k3-link = {
 {
   "apiVersion": "resources.d2bus.org/v3",
   "type": "ZoneLink",
-  "metadata": { "name": "k1-link", "zone": "k0" },
+  "metadata": { "name": "k1-uplink", "zone": "k1" },
   "spec": {
     "childZoneName": "k1",
     "providerRef": "Provider/transport-unix",
@@ -1309,7 +1359,9 @@ d2b.zones.k0.resources.k3-link = {
 `attachmentsEnabled` does not appear in the canonical JSON. Core enforces
 `attachments_enabled=false` for all ZoneLink transports at the OpenTransport
 call site regardless of socket kind. The emitter fills the `socketKind` schema
-default before computing `generationId`.
+default before computing `generationId`. `k1.parentZone` is absent because it
+is compiled only into the selected allocator's sealed bootstrap state; no
+reciprocal local-root resource is emitted.
 
 ### Eval-time assertions
 
@@ -1318,6 +1370,7 @@ These supplement generated per-field option type checks and live in
 
 | Assertion | Error message |
 | --- | --- |
+| ZoneLink and selected Provider are declared in the same child Zone; `spec.childZoneName` equals that Zone; compiler-only `parentZone` resolves to the allocator owner; no reciprocal parent resource is emitted | `zones.<zone>: transport-unix ZoneLink and Provider must be child-local with a self-matching childZoneName` |
 | `spec.provider.settings` must not contain `attachmentsEnabled` | `zones.<zone>.resources.<name>: spec.provider.settings.attachmentsEnabled is not a valid ZoneLink transport field; FD attachment across Zone boundaries is prohibited` |
 | `spec.provider.settings` contains no top-level key `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: spec.provider.settings must not contain host paths, socket paths, or secret material` |
 
@@ -1337,6 +1390,7 @@ The `xtask gen-zone-resources` step adds for `Provider/transport-unix` links:
 
 | Test ID | Kind | What it proves |
 | --- | --- | --- |
+| `nix-unit: transport-unix-child-local-topology` | nix-unit eval | Provider and ZoneLink are in K1, `childZoneName = "k1"`, `k1.parentZone = "local-root"` selects only the allocator, and no local-root reciprocal resource is emitted |
 | `nix-unit: transport-unix-empty-settings` | nix-unit eval | `spec.provider.settings = {}` passes all assertions |
 | `nix-unit: transport-unix-socket-path-rejected` | nix-unit eval | `spec.provider.settings.socketPath = "/run/..."` rejected at eval |
 | `nix-unit: transport-unix-attachments-enabled-rejected` | nix-unit eval | `spec.provider.settings.attachmentsEnabled = false` rejected as unknown field at eval |
@@ -1387,9 +1441,9 @@ Old and new suites never run in parallel indefinitely.
 | Service Process resource with full sandbox/budget/endpoints spec | none in v3 baseline | `ADR-only` | new |
 | ProviderStateSet | ownerRef=Provider/transport-unix Volume query | `ADR-only` | Empty — `Provider/transport-unix` declares no Provider state Volume; its bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
 | ZoneLink `spec.provider.settings` schema | none | `ADR-only` | new in this spec |
-| FD pre-bind pattern (broker FD pre-binding) | `d2b-priv-broker/src/ops/{swtpm_dir,spawn_runner}.rs` (v3 baseline) | `implemented-and-reachable` | allocator/core adapts the pattern; Provider is a passive recipient |
-| Route advertisement / RouteTreeEngine | `d2b-realm-core/src/route_engine.rs` (v3 baseline) | `implemented-but-unwired` | core ZoneLink controller owns; not in this Provider |
-| ZoneLink controller (reconcile/status/finalizer/routes) | none in v3 baseline | `ADR-only` | owned by core-controller (ADR-046-core-controllers); not in this Provider |
+| FD pre-bind pattern (broker FD pre-binding) | `d2b-priv-broker/src/ops/{swtpm_dir,spawn_runner}.rs` (v3 baseline) | `implemented-and-reachable` | selected parent allocator adapts the pattern, retains its peer endpoint as sealed route state, and injects only the child endpoint through sealed bootstrap; the child-local Provider is a passive recipient and no FD crosses the ZoneLink |
+| Route advertisement / RouteTreeEngine | `d2b-realm-core/src/route_engine.rs` (v3 baseline) | `implemented-but-unwired` | child core owns local ZoneLink session/cursor state; selected parent allocator owns only sealed route state; not in this Provider |
+| ZoneLink controller (reconcile/status/finalizer/routes) | none in v3 baseline | `ADR-only` | owned by the child Zone's core-controller (ADR-046-core-controllers); no parent-side handler and not in this Provider |
 | OTEL bounded emitter | v3 `tracing` crate usage (baseline) | `implemented-and-reachable` | extend existing pattern |
 
 ---
@@ -1428,7 +1482,7 @@ Old and new suites never run in parallel indefinitely.
 | Integration | `portal.rs::open_transport` calls `SeqpacketSocket::getsockopt(SO_TYPE)` and `setsockopt(SO_PASSCRED)`, constructs `UnixSeqpacketTransport`, hands OwnedTransport FD back to caller |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here` |
-| Removal proof | `d2b-realm-transport` seqpacket path retired after ZoneLink sessions migrate |
+| Removal proof | `d2b-realm-transport` seqpacket path retired after ZoneLink sessions migrate to child-local Providers and tests prove no reciprocal parent-store resource or cross-Zone FD transfer remains |
 
 ---
 
@@ -1515,9 +1569,9 @@ Old and new suites never run in parallel indefinitely.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/{portal,service}.rs` |
 | Detailed design | `portal.rs`: `PortalHandler` struct owns a bounded `HashMap<TransportHandle, MonitorState>` (capacity `MAX_OPEN_TRANSPORTS=256`); `open_transport(req, attachment_fd)` validates via `admission.rs`, dups FD, allocates handle, stores `MonitorState { dup_fd, observation_senders: Vec<NamedStreamSender> }`; `close_transport(handle)` closes dup FD, half-closes all observation senders, removes entry; `observe_transport(handle)` registers a new `NamedStreamSender` and spawns an async epoll-watcher task on the dup FD; `TransportHandle` is a `[u8; 16]` random token; redacted in all Debug impls; `service.rs` is the binary entry: accepts the allocator-issued portal endpoint FD at launch, runs `GeneratedTransportServiceServer` over it, dispatches to `PortalHandler` Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt dispatch pattern; implement portal methods as new. |
-| Integration | Core ZoneLink controller calls the three methods via d2b-bus; portal endpoint FD is supplied by Zone runtime/allocator at Process spawn, not SD_LISTEN_FDS |
+| Integration | The child Zone's core ZoneLink controller calls the three methods via same-Zone d2b-bus; the selected parent allocator retains its peer endpoint as sealed route state and injects the child endpoint through sealed bootstrap; the child runtime supplies that FD locally at Process spawn, not through a parent Provider, a cross-Zone attachment, or `SD_LISTEN_FDS` |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/portal.rs::open_transport_zone_link_validates_and_returns_ownedtransport`; `open_transport_local_portal_seqpacket_with_attachments_accepted`; `open_transport_zone_link_attachments_enabled_rejected`; `close_transport_is_idempotent_after_handle_removed`; `observe_transport_delivers_pollhup_as_peer_disconnected`; `handle_table_rejects_at_max_capacity`; `restart_clears_all_handles` |
+| Validation | `tests/portal.rs::open_transport_zone_link_validates_and_returns_ownedtransport`; `open_transport_uses_child_bootstrap_endpoint_only`; `parent_endpoint_never_enters_provider_portal`; `open_transport_local_portal_seqpacket_with_attachments_accepted`; `open_transport_zone_link_attachments_enabled_rejected`; `close_transport_is_idempotent_after_handle_removed`; `observe_transport_delivers_pollhup_as_peer_disconnected`; `handle_table_rejects_at_max_capacity`; `restart_clears_all_handles` |
 | Removal proof | Ad-hoc IPC stubs in `d2bd/src/` retired after portal migration |
 
 ---
@@ -1550,10 +1604,10 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | None; new schema file |
 | Reuse action | create |
 | Destination | `docs/reference/schemas/v3/providers/transport-unix.transport-binding.json`; `nixos-modules/assertions.nix` (assertion additions); generated `nixos-modules/generated/options-zones-ZoneLink.nix` provider-settings submodule |
-| Detailed design | Commit the JSON Schema; run `xtask gen-zone-schemas` and `xtask gen-zone-nix-options` to regenerate committed files; add two assertions to `assertions.nix` (stream+attachments conflict; sensitive key names); `xtask gen-zone-resources` adds provider-specific settings validation step |
-| Integration | Build emitter validates `spec.provider.settings` against schema before computing `generationId`; drift gate enforces sync |
+| Detailed design | Commit the JSON Schema; run `xtask gen-zone-schemas` and `xtask gen-zone-nix-options` to regenerate committed files; add assertions for stream+attachments conflict and sensitive key names; reuse the common topology assertions to require the ZoneLink and selected Provider in the same child Zone, self-matching `childZoneName`, compiler-only non-root `parentZone`, and no reciprocal parent resource; `xtask gen-zone-resources` adds provider-specific settings validation step |
+| Integration | Build emitter validates `spec.provider.settings` against schema before computing `generationId`; the topology compiler seals child→parent allocator selection separately and emits only the child-local Provider/ZoneLink resources; drift gate enforces sync |
 | Data migration | `d2b.realms.*` Nix options superseded by `d2b.zones.*`; no compatibility bridge (v3 reset) |
-| Validation | All seven eval/build tests in the Nix section |
+| Validation | All eval/build tests in the Nix section, including `transport-unix-child-local-topology` and a generated-bundle assertion that the parent store has no reciprocal Provider/ZoneLink row |
 | Removal proof | `nixos-modules/options-realms.nix` realm wiring retired after Zone resource bundle activation replaces it |
 
 ---
@@ -1586,8 +1640,8 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | Test scenario shapes from `d2b-session-unix/tests/unix_session.rs` end-to-end test (main `a1cc0b2d`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/integration/` and `integration/README.md` |
-| Detailed design | Four scenarios: `transport_open.rs` (fake Zone portal, allocator-socketpair FD attachment in → OwnedTransport attachment out → verify socket kind, CLOEXEC, SO_PASSCRED enabled; p95 latency assertion ≤2 ms); `fd_transfer.rs` (seqpacket `SCM_RIGHTS` transfer through opened transport, credit accounting, scavenge on error injection); `reconnect.rs` (CloseTransport + re-OpenTransport with fresh socketpair, verify previous handle is unknown, verify monitoring dup closed); `observation_stream.rs` (ObserveTransport stream receives `PEER_DISCONNECTED` event when peer closes socketpair end within 5 ms p95). `integration/README.md` documents prerequisites (no KVM required; all scenarios use in-process socketpairs and fake Zone API endpoint stub), invocation (`cargo test -p d2b-provider-transport-unix --test integration`), environment variables, and expected output |
-| Integration | Invoked by `make test-integration`; no host mutation; each scenario creates its own socketpairs |
+| Detailed design | Four scenarios: `transport_open.rs` (fixture models compiler-only `k1.parentZone = "local-root"`; fake selected allocator retains one socketpair endpoint as sealed route state and injects the other into K1 bootstrap; K1 core passes only that child endpoint to its same-Zone Provider → OwnedTransport out; verify socket kind, CLOEXEC, SO_PASSCRED, K1-local Provider/ZoneLink, and absent local-root reciprocal row; p95 latency assertion ≤2 ms); `fd_transfer.rs` (within-Zone local-portal seqpacket `SCM_RIGHTS` transfer, credit accounting, scavenge on error injection; ZoneLink route rejects the same packet); `reconnect.rs` (CloseTransport + re-OpenTransport with a fresh sealed child endpoint, verify previous handle is unknown and monitoring dup closed); `observation_stream.rs` (ObserveTransport stream receives `PEER_DISCONNECTED` when peer closes within 5 ms p95). `integration/README.md` documents prerequisites (no KVM required; all scenarios use in-process socketpairs and fake Zone API endpoint stub), invocation (`cargo test -p d2b-provider-transport-unix --test integration`), environment variables, and expected output |
+| Integration | Invoked by `make test-integration`; no host mutation; each scenario creates its own socketpair, keeps parent endpoint state outside the resource stores, and exposes only the child endpoint to the child-local Provider |
 | Data migration | None — full d2b 3.0 reset; no prior state to migrate |
 | Validation | All four scenarios pass in CI; latency assertions enforced using monotonic timestamps; scavenge correctness verified by open-FD count before/after error injection |
 | Removal proof | Ad-hoc IPC test stubs retired after scenario parity |
