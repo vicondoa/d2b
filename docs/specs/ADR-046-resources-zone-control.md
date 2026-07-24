@@ -258,27 +258,34 @@ Normal daemon restart, upgrade, or Provider lifecycle changes do not delete Zone
 
 ### 3.1 Role
 
-`ZoneLink/<name>` represents one parent/child Zone delegation. It is stored in
-the **parent** Zone. It carries the child Zone's identity, transport/session
-requirements, cursor tracking for resource synchronization, and connection
-health.
+`ZoneLink/<name>` represents one parent/child Zone delegation as the child
+Zone's local uplink. It is authored and stored in the **child** Zone. It carries
+that local child identity, transport/session requirements, cursor tracking for
+resource synchronization, and connection health. `spec.childZoneName` MUST
+equal the enclosing Zone's self-name.
 
 A parent accesses child Zone resources exclusively through the child's
 `d2b.resource.v3` service over a ComponentSession routed via the transport
 Provider named in ZoneLink. The parent never receives a database handle,
 credential, token, or cross-Zone ResourceRef.
 
-**Controller/owner**: The `zone link/delegation` handler of the fixed
-core-controller process owns ZoneLink reconciliation. No other controller may
-update ZoneLink spec or status.
+The provisioning parent allocator owns privileged listener creation, placement,
+and route-namespace effects. It binds the child-local ZoneLink UID and child
+identity to exactly one parent edge in sealed bootstrap state and keeps only
+allocator/route-engine state in the parent; it does not create a reciprocal
+parent-store resource. **Controller/owner**: the child Zone's `zone
+link/delegation` handler in the fixed core-controller process owns the
+ZoneLink resource and its status. It consumes allocator observations through
+the authenticated session and has no direct privileged-effect path. No other
+controller may update ZoneLink spec or status.
 
 ### 3.2 Metadata
 
 | Field | Rule |
 | --- | --- |
-| `metadata.name` | Operator-assigned; locally unique in the parent Zone; no structural constraint beyond ResourceName regex |
-| `metadata.zone` | Parent Zone name; ZoneLink is always in the parent |
-| `metadata.ownerRef` | Optional; may be owned by a managing Provider (e.g. a runtime Guest that hosts the child Zone) |
+| `metadata.name` | Operator-assigned; locally unique in the child Zone; no structural constraint beyond ResourceName regex |
+| `metadata.zone` | Child Zone self-name; ZoneLink is always local to that child |
+| `metadata.ownerRef` | Optional same-Zone ref to the managing transport/runtime Provider; never a parent-Zone ref |
 | `metadata.finalizers` | Core adds `core.zone-link-drain` before deletion; transport Provider may add its own finalizer |
 | `metadata.deletionRequestedAt` | Normal deletion by operator or owning resource |
 
@@ -288,8 +295,8 @@ update ZoneLink spec or status.
 apiVersion: resources.d2bus.org/v3
 type: ZoneLink
 metadata:
-  name: guest-link
-  zone: parent
+  name: guest-uplink
+  zone: guest
   uid: <store-generated immutable>
   generation: 1
   revision: <opaque>
@@ -315,7 +322,7 @@ spec:
 **`spec.transportProviderRef`** (required; no default):
 
 - Must match `^Provider/transport-[a-z][a-z0-9-]*$`; any other form is rejected at admission.
-- References a Provider installed in the same Zone whose name begins with `transport-`; that Provider must be in `Ready` phase before any connection is attempted.
+- References a Provider installed in the same child Zone whose name begins with `transport-`; that Provider must be in `Ready` phase before any connection is attempted.
 - The named transport Provider exports a ZoneLink schema extension (`transportSettings` schema); the resource compiler validates `spec.transportSettings` against that schema at build time.
 - No transport Provider is pre-installed; an operator must install one before creating ZoneLinks that require it.
 
@@ -365,21 +372,22 @@ ZoneLink.status extends common status with:
 
 | Field | Type | Rules |
 | --- | --- | --- |
-| `childZoneUid` | UID string or null | Observed immutable UID of child Zone resource; null until first successful connection |
-| `connected` | bool | Whether a ComponentSession to the child Zone API is currently established |
+| `childZoneUid` | UID string or null | Immutable UID of this local child Zone as acknowledged by the parent allocation; null until first successful connection |
+| `connected` | bool | Whether the allocator-bound ComponentSession to the parent route endpoint is established |
 | `lastConnectedAt` | RFC 3339 UTC or null | Most recent successful session establishment |
 | `lastDisconnectedAt` | RFC 3339 UTC or null | Most recent disconnect |
-| `lastSentRevision` | u64 or null | Highest parent-applied revision sent to child |
-| `lastAckedRevision` | u64 or null | Highest revision acknowledged by child |
-| `lastReceivedRevision` | u64 or null | Highest child-source revision received |
-| `lastAppliedRevision` | u64 or null | Highest revision applied to parent store |
+| `lastSentRevision` | u64 or null | Highest child advertisement/local intent revision sent to the parent |
+| `lastAckedRevision` | u64 or null | Highest child revision acknowledged by the parent |
+| `lastReceivedRevision` | u64 or null | Highest parent route/export advertisement revision received |
+| `lastAppliedRevision` | u64 or null | Highest parent advertisement revision applied to child-local routing/import state |
 | `linkEpoch` | u64 | Monotonic counter; increments on every reconnect establishing a new session generation |
 | `pendingLocalIntents` | u32 | Count of locally queued intents while disconnected; bounded |
-| `childAuthorized` | bool | Whether parent's mapped subject is authorized in the child Zone |
+| `childAuthorized` | bool | Whether the parent allocator accepted and authorized this child Zone subject |
 
-`childZoneUid` allows the parent to detect that a child Zone was destroyed and
-recreated. If `childZoneUid` changes across reconnects, the ZoneLink handler
-must clear cursor state and relist/rewatch from revision 0 in the child.
+`childZoneUid` lets both ends detect that this child Zone was destroyed and
+recreated. If it changes across reconnects, the child-local ZoneLink handler
+clears local cursor state and the parent allocator discards the corresponding
+route allocation before both sides relist/rewatch from revision 0.
 
 Cursor fields (`lastSentRevision`, `lastAckedRevision`, `lastReceivedRevision`,
 `lastAppliedRevision`) reflect the `zone_link_cursors` redb table entry for
@@ -396,7 +404,8 @@ are defined by the ZoneLink session and cursor protocol.
 | `Failed` | Cannot connect after retry policy exhausted, or child permanently denied |
 | `Unknown` | Transport state cannot be determined |
 
-Zone never participates in ZoneLink phase (ZoneLink belongs to the parent Zone).
+The parent Zone has no ZoneLink resource phase. The child-local ZoneLink alone
+reports the edge's resource phase from authenticated allocator observations.
 
 Closed condition types for ZoneLink:
 
@@ -404,17 +413,17 @@ Closed condition types for ZoneLink:
 | --- | --- |
 | `TransportReachable` | Transport provider reports the endpoint is reachable |
 | `SessionEstablished` | ComponentSession handshake completed successfully |
-| `ChildAuthorized` | Parent subject has required authorization in child Zone |
+| `ChildAuthorized` | Parent allocator accepted the authenticated child subject and route allocation |
 | `CursorSynchronized` | Parent/child revision cursors are within expected bounds |
 | `LocalIntentsDrained` | No pending locally queued intents remain |
 | `DisabledByOperator` | `spec.disabled: true`; link is intentionally inactive |
 
 ### 3.6 Local intents while disconnected
 
-When the child Zone is unreachable, the parent may record bounded local
-ZoneLink intents — operator intent that cannot be applied until reconnection.
-These are not resource writes in the child. They are persisted locally as
-ZoneLink-owned metadata-only entries.
+When the parent route endpoint is unreachable, the child may record bounded
+local ZoneLink intents — operator intent that cannot be forwarded until
+reconnection. These are not resource writes in the parent. They are persisted
+in the child store as ZoneLink-owned metadata-only entries.
 
 Rules:
 
@@ -429,14 +438,16 @@ Rules:
 
 ### 3.7 ownerRef, finalizers, and deletion
 
-`metadata.ownerRef` is optional. A Guest runtime Provider may own the ZoneLink
-for the child Zone it hosts. When owner is deleted, ZoneLink deletion follows
+`metadata.ownerRef` is optional and always same-Zone. A local transport/runtime
+Provider may own the uplink it manages. A parent allocator, parent Provider, or
+parent Zone resource can never be the owner because that would require a
+cross-Zone ref. When the local owner is deleted, ZoneLink deletion follows
 standard child-first finalizer protocol.
 
 Core adds `core.zone-link-drain` to `metadata.finalizers` before processing a
 delete request. The ZoneLink handler:
 
-1. Closes the ComponentSession to the child Zone.
+1. Closes the allocator-bound ComponentSession to the parent route endpoint.
 2. Clears the cursor table entry.
 3. Removes any pending local intents.
 4. Clears `core.zone-link-drain`.
@@ -2016,6 +2027,19 @@ d2b.zones.local-root.resources.mic-export = {
   };
 };
 
+# Consumer child Zone: declare the one local uplink used by imports. The
+# provisioning parent allocator owns privileged listener and routing effects.
+d2b.zones.work.resources.work-uplink = {
+  type = "ZoneLink";
+  spec = {
+    childZoneName = "work";
+    transportProviderRef = "Provider/transport-unix";
+    transportSettings = {};
+    transportCredentials = [];
+    disabled = false;
+  };
+};
+
 # Consumer Zone: import exactly one local AudioService projection.
 d2b.zones.work.resources.mic-import = {
   type = "ResourceImport";
@@ -2358,7 +2382,8 @@ subjectRef: other-zone:User/alice         # REJECTED
 ```
 
 A parent Zone accesses child Zone resources by calling the child Zone's
-`d2b.resource.v3` API over the ZoneLink ComponentSession. The parent's
+`d2b.resource.v3` API over the allocator-bound ComponentSession represented by
+the child-local ZoneLink. The parent's
 local resources (e.g. a local `Process` that represents a child Zone workload)
 do not contain cross-Zone ResourceRefs; they contain only local refs valid in
 the parent Zone.
@@ -2366,12 +2391,11 @@ the parent Zone.
 ### 10.3 ZoneLink parent/child access model
 
 ```
-Parent Zone                              Child Zone
-  ZoneLink/guest-link                       Zone/guest
-  (stores cursor, link state)             (authoritative resource store)
-         |                                         |
-         | ComponentSession                        |
-         | (via transport Provider)                |
+Parent Zone / allocator                 Child Zone
+  private route allocation                Zone/guest
+  (privileged listeners/routes)           ZoneLink/guest-uplink
+         |                                (resource, cursor, intent state)
+         | allocator-bound ComponentSession        |
          |------- d2b.resource.v3 Get ---------->  |
          |<------- response (child data) --------- |
 ```
@@ -2381,15 +2405,18 @@ parent's mapped subject in the child Zone is established through the
 transport Provider's authenticated ComponentSession using
 `spec.transportProviderRef`, `spec.transportSettings`, and resolved
 `spec.transportCredentials`. The parent cannot read child resources it is not
-authorized for; the child authorization engine is the sole arbiter.
+authorized for; the child authorization engine is the sole arbiter. The
+ZoneLink spec and all of its refs resolve in the child store. Parent-side
+allocation/route state is not a resource and is not a reciprocal ZoneLink.
 
-A disconnected parent:
+A disconnected child uplink:
 
-- records local ZoneLink intents but does not claim child resource states
-  changed;
+- records outbound local ZoneLink intents in the child but does not claim
+  parent resource state changed;
 - on reconnect, re-authenticates and applies/rejects pending intents against
-  current child revision;
-- never uses cached child resource state for authorization decisions.
+  the current parent revision;
+- never lets either endpoint use cached remote resource state for authorization
+  decisions.
 
 ---
 
@@ -2419,24 +2446,27 @@ Guest, or Process resources. Those are owned by their respective handlers.
 
 ### 11.2 ZoneLink controller algorithm
 
-The `zone link/delegation` handler reconciles ZoneLink:
+The child Zone's `zone link/delegation` handler reconciles its local uplink:
 
 1. **Startup relist**: List all ZoneLink resources; for each, read cursor from
-   `zone_link_cursors` table; verify `childZoneUid` field against last known
-   child UID.
+   the child-local `zone_link_cursors` table; verify `childZoneName` equals the
+   local Zone self-name and `childZoneUid` against the local Zone UID.
 2. **Transport resolution**: Resolve `spec.transportProviderRef`; wait for
-   that Provider to be `Ready`. Open a ComponentSession to the child Zone's
-   `d2b.resource.v3` service endpoint using the transport Provider's session
-   factory with `spec.transportSettings` and resolved
-   `spec.transportCredentials`.
-3. **Authentication**: Establish ComponentSession using the transport; perform
-   Noise handshake; map to child-local subject/RoleBinding.
-4. **Child authorization check**: Verify the parent's mapped subject has at
-   least `get|list` permissions in the child Zone; set `ChildAuthorized`.
-5. **Cursor recovery**: Compare `childZoneUid` with `last_child_zone_uid`; if
-   changed, reset cursor to 0.
-6. **Watch/relist**: Open watch from `lastAppliedRevision`; if cursor expired,
-   relist and re-watch.
+   that same-child Provider to be `Ready`. Submit the ZoneLink UID, child
+   identity, and transport binding to the provisioning parent allocator. The
+   allocator alone creates privileged listeners/route namespace and returns
+   the pre-bound transport through sealed bootstrap authority.
+3. **Authentication**: Establish the allocator-bound ComponentSession; perform
+   the Noise handshake; authenticate the parent allocator and present the
+   child-local subject.
+4. **Child authorization check**: Require the parent to acknowledge that the
+   child subject and requested ceiling fit the sealed allocation; set
+   `ChildAuthorized`. Parent access to `d2b.resource.v3` is independently
+   checked by the child authorization engine on every call.
+5. **Cursor recovery**: Compare `childZoneUid` with the local Zone UID; if it
+   changed, reset local cursor state and require a fresh parent allocation.
+6. **Watch/relist**: Receive parent route/export advertisements from
+   `lastAppliedRevision`; if the cursor expired, relist and re-watch.
 7. **Status update**: Write connection state, cursor values, link epoch.
 8. **Reconnect loop**: On disconnect, attempt reconnect with exponential backoff;
    write `lastDisconnectedAt`, `connected=false`, `Unknown` phase until
@@ -2444,8 +2474,9 @@ The `zone link/delegation` handler reconciles ZoneLink:
 9. **Drain on delete**: On `deletionRequestedAt`, gracefully close session,
    apply drain finalizer, update status to reflect drain.
 
-ZoneLink does not store child resources in the parent store. Parent caches
-are session-scoped only.
+ZoneLink does not copy parent or child resources across stores. The child store
+contains only the local ZoneLink row/cursors/intents; parent allocator and
+route-engine state is session/allocation scoped.
 
 ### 11.3 Provider lifecycle algorithm
 
@@ -2753,7 +2784,7 @@ Stable error codes for Zone control types:
 | `zone-self-resource-mismatch` | Store zone_name/zone_uid differs from Zone resource |
 | `zone-spec-invalid` | Zone spec is not exactly `{}` |
 | `zone-link-transport-unavailable` | Transport Provider unavailable or unreachable |
-| `zone-link-child-auth-denied` | Parent subject not authorized in child Zone |
+| `zone-link-child-auth-denied` | Parent allocator rejected the authenticated child subject or requested allocation ceiling |
 | `zone-link-child-uid-changed` | Child Zone UID changed; cursor reset required |
 | `provider-package-digest-mismatch` | Package content differs from declared digest |
 | `provider-trust-revoked` | Trust epoch revoked or signature invalid |
@@ -2892,12 +2923,12 @@ d2b.artifacts.transport-unix = {
   type    = "provider";
 };
 
-d2b.zones.parent.resources.transport-unix = {
+d2b.zones.guest.resources.transport-unix = {
   type = "Provider";
   spec = { artifactId = "transport-unix"; config = {}; };
 };
 
-d2b.zones.parent.resources.guest-link = {
+d2b.zones.guest.resources.guest-uplink = {
   type = "ZoneLink";
   spec = {
     childZoneName = "guest";
@@ -2910,10 +2941,12 @@ d2b.zones.parent.resources.guest-link = {
 ```
 
 
-`metadata.name` (`guest-link`) and `metadata.zone` (`parent`) derive from the
+`metadata.name` (`guest-uplink`) and `metadata.zone` (`guest`) derive from the
 attrset keys. Eval-time checks: `spec.childZoneName` matches
-`^[a-z][a-z0-9-]*$`; `spec.childZoneName ≠ "parent"`; `spec.limits.*` within
-bounds.
+`^[a-z][a-z0-9-]*$` and equals the enclosing Zone key; the local root has no
+uplink; at most one ZoneLink resource (enabled or disabled) exists per non-root
+Zone; `spec.limits.*` remain within bounds. The parent edge comes only from the
+provisioning allocator's sealed bootstrap state.
 
 ### 14.3 Provider installation
 
@@ -3190,7 +3223,7 @@ Zone is the self-resource; it is created by the Zone runtime on initialization
   "apiVersion": "resources.d2bus.org/v3",
   "resourceType": "ZoneLink",
   "metadata": {
-    "name": "guest-link", "zone": "parent", "uid": null, "generation": 1,
+    "name": "guest-uplink", "zone": "guest", "uid": null, "generation": 1,
     "revision": null, "labels": {}, "annotations": {},
     "ownerRef": null, "finalizers": [],
     "deletionRequestedAt": null, "createdAt": null, "updatedAt": null
@@ -3212,8 +3245,9 @@ Zone is the self-resource; it is created by the Zone runtime on initialization
 }
 ```
 
-`childZoneUid` is `null` in the bundle; the ZoneLink controller writes it on
-first successful connection and uses it to detect UID changes.
+`childZoneUid` is `null` in the bundle; the child-local ZoneLink controller
+writes the local Zone UID after the parent allocator acknowledges it and uses
+it to detect replacement across reconnects.
 
 #### Provider canonical envelope
 
@@ -3408,7 +3442,8 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | No cross-Zone refs anywhere in `spec` (no `<Zone>/ResourceType/name` form) | Nix `assert` | eval error |
 | `type = "Provider"` and name `system-core` or `system-minijail` rejected | Nix `assert` | eval error with message |
 | `type = "Zone"` and name ≠ Zone attrset key rejected | Nix `assert` | eval error |
-| ZoneLink: `spec.childZoneName ≠` Zone attrset key | Nix `assert` | eval error |
+| ZoneLink: `spec.childZoneName ==` Zone attrset key | Nix `assert` | eval error |
+| Non-root Zone has at most one ZoneLink resource; local root has none | Nix `assert` | eval error |
 | `spec.transportProviderRef` matches `^Provider/transport-[a-z][a-z0-9-]*$` — ZoneLink only | Nix `assert` | eval error |
 | `$credentialRef` target in any `spec.*` string must name a `type = "Credential"` resource in the same Zone | Nix `assert` | eval error |
 | No `$`-prefixed keys in `spec` other than `$credentialRef` | Nix `assert` | eval error |
@@ -3659,15 +3694,18 @@ Rollback atomically:
 
 | Test | Assertion |
 | --- | --- |
-| `zonelink-reconnect-child-uid-change` | On reconnect with changed child UID, cursor resets to 0 and `childZoneUid` updates |
+| `zonelink-reconnect-child-uid-change` | On reconnect after local child Zone UID replacement, local cursor resets to 0, the parent allocation is recreated, and `childZoneUid` updates |
 | `zonelink-disconnect-unknown-phase` | On transport disconnect ZoneLink phase becomes Unknown within one reconcile |
 | `zonelink-intent-queue-limit` | Queuing more than 256 local intents returns `backpressure` |
 | `zonelink-disabled-no-reconnect` | `spec.disabled=true` prevents reconnection and sets `DisabledByOperator` condition |
-| `zonelink-child-auth-denied-failed` | Child Zone rejecting parent subject sets `Failed` phase and `ChildAuthorizationDenied` condition |
+| `zonelink-child-auth-denied-failed` | Parent allocator rejecting the child subject/allocation sets `Failed` phase and `ChildAuthorizationDenied` condition |
 | `zonelink-drain-closes-session` | Deletion drains local intents and closes session before removing resource |
 | `zonelink-transport-provider-ref-required` | ZoneLink without `spec.transportProviderRef` fails admission |
 | `zonelink-transport-ref-pattern-enforced` | `spec.transportProviderRef = "Provider/network-local"` fails admission because it does not match the required `transport-*` pattern |
 | `zonelink-transport-credentials-max` | ZoneLink with 9 `transportCredentials` entries fails admission |
+| `zonelink-child-name-matches-store` | ZoneLink whose `childZoneName` differs from its enclosing child Zone is rejected |
+| `zonelink-one-child-local-uplink` | A second ZoneLink (even disabled) in one child Zone and any uplink in local root are rejected |
+| `zonelink-parent-has-no-reciprocal-row` | Reconcile creates parent allocator/route state but no parent-store ZoneLink resource |
 
 ### 15.3 Provider tests
 
@@ -3759,7 +3797,8 @@ Rollback atomically:
 | `nix-eval-artifact-id-format` | `spec.artifactId = "Bad_ID"` fails eval with label regex assertion |
 | `nix-eval-credentialref-declared` | `d2b.zones.dev.credentialRef "missing"` for undeclared Credential fails eval |
 | `nix-eval-dollar-key-rejected` | Config `{ "$secret" = "x"; }` fails eval |
-| `nix-eval-zonelink-self-loop-rejected` | ZoneLink with `childZoneName` equal to parent Zone name fails eval |
+| `nix-eval-zonelink-child-name-mismatch-rejected` | Child-local ZoneLink with `childZoneName` unequal to its enclosing Zone key fails eval |
+| `nix-eval-zonelink-second-uplink-rejected` | A second child-local uplink (even disabled), or any local-root uplink, fails eval |
 | `nix-eval-zonelink-limits-maxpendingintents-bound` | `maxPendingIntents = 1025` fails eval |
 
 #### Phase 2 — Build tests
@@ -3943,7 +3982,7 @@ Evidence classes:
 
 | Symbol | File | Evidence class | ADR-0046 mapping |
 | --- | --- | --- | --- |
-| `RealmControllersJson`, `RealmControllerConfig`, `RealmControllerPlacement`, `RealmControllerLocalRuntime`, `RealmControllerLocalWorkload`, `RealmAllocatorBinding`, `RealmDaemonConfig`, `RealmBrokerConfig` | `d2b-core/src/realm_controller_config.rs:144,190,256,278,434,541,497,511` | `implemented-and-reachable` | Loaded in live daemon startup at `d2bd/src/lib.rs:1408` and in serve path at line `16741`; `WorkloadTargetIndex::build_from_controllers` is called live. Contains per-realm socket/state paths, placement, providers, workloads. Maps to: Zone self resource (the realm metadata row); ZoneLink (per-realm parent socket ref); Provider (per-realm provider config rows); NOT replaced by a single file — replaced by resource store entries |
+| `RealmControllersJson`, `RealmControllerConfig`, `RealmControllerPlacement`, `RealmControllerLocalRuntime`, `RealmControllerLocalWorkload`, `RealmAllocatorBinding`, `RealmDaemonConfig`, `RealmBrokerConfig` | `d2b-core/src/realm_controller_config.rs:144,190,256,278,434,541,497,511` | `implemented-and-reachable` | Loaded in live daemon startup at `d2bd/src/lib.rs:1408` and in serve path at line `16741`; `WorkloadTargetIndex::build_from_controllers` is called live. Contains per-realm socket/state paths, placement, providers, workloads. Maps to: Zone self resource (the realm metadata row); child-local ZoneLink plus private parent allocator binding (per-realm parent socket/edge data); Provider (per-realm provider config rows); NOT replaced by a single file — replaced by resource store entries plus sealed allocator state |
 | `WorkloadTargetIndex`, `TargetResolution`, `TargetResolutionError` | `d2bd/src/workload_target_index.rs:93,28,56` | `implemented-and-reachable` | Built from `RealmControllersJson` in live serve path (`d2bd/src/lib.rs:16745`); resolves `<workload>.<realm>.d2b` to VM name. Maps to resource API `resourceRef` lookup table in ADR 0046 API layer |
 
 #### Allocator types
@@ -3985,7 +4024,7 @@ Evidence classes:
 | `d2b.realms.<realm>.*`, `providerType` submodule, `providerKind = "^[a-z][a-z0-9-]*$"`, `placementProvider`, `providerSpecificPlacement` | `nixos-modules/options-realms.nix:26,39,55,65,170` | `generated-or-eval-contract` | Authoring interface for realm/provider declarations. Label regex identical to `LABEL_PATTERN` in `ids.rs`. Adapted to `d2b.zones.<zone>.providers.*` in ADR046-zone-control-007 |
 | `d2b.realms.<realm>.workloads.*`, `kind`, `placement`, `legacyVmName` | `nixos-modules/options-realms-workloads.nix` | `generated-or-eval-contract` | Workload authoring submodule; `kind = "local-vm"` / `"qemu-media"` → Guest resource Nix options; **`kind = "unsafe-local"` → Host resource Nix options** (`defaultDomain=user`, `allowedDomains=[user]`); `kind = "provider-placeholder"` → Guest/Host per provider semantics |
 | `d2b.realms.<realm>.network.*` | `nixos-modules/options-realms-network.nix` | `generated-or-eval-contract` | Network/bridge authoring; maps to Network resource (not Zone control types) |
-| `realm-controllers.json` (`RealmControllersJson`), `schemaVersion = "v2"`, `runtimeState = "metadata-only"`, per-realm rows | `nixos-modules/realm-controller-config-json.nix` (emitter); `d2b-core/src/realm_controller_config.rs:144` (deserializer) | `generated-or-eval-contract` (Nix); `implemented-and-reachable` (consumption in daemon) | **Loaded live in daemon** at `d2bd/src/lib.rs:1408,16741`. Runtime routing "remains inert" but `WorkloadTargetIndex` is built from it. Maps to: Zone self resource (identity/path row); ZoneLink (parent socket ref); Provider (provider config rows). The bundle artifact is **replaced** by resource store entries; until then, the schema is the live authority |
+| `realm-controllers.json` (`RealmControllersJson`), `schemaVersion = "v2"`, `runtimeState = "metadata-only"`, per-realm rows | `nixos-modules/realm-controller-config-json.nix` (emitter); `d2b-core/src/realm_controller_config.rs:144` (deserializer) | `generated-or-eval-contract` (Nix); `implemented-and-reachable` (consumption in daemon) | **Loaded live in daemon** at `d2bd/src/lib.rs:1408,16741`. Runtime routing "remains inert" but `WorkloadTargetIndex` is built from it. Maps to: Zone self resource (identity/path row); child-local ZoneLink plus private parent allocator binding (parent socket/edge data); Provider (provider config rows). The bundle artifact is replaced by child resource-store entries and sealed allocator state; until then, the schema is the live authority |
 | `realm-identity.json` (`RealmIdentityConfigJson`), identity refs, fingerprints | `nixos-modules/realm-identity-config-json.nix` (emitter); `d2b-realm-core/src/identity_config.rs:19` (deserializer) | `generated-or-eval-contract` (Nix); `implemented-and-reachable` (consumption in daemon) | Loaded live at `d2bd/src/lib.rs:1425`; trust sessions "remain inert". Maps to Zone runtime identity key-ref state and store metadata, not Zone.spec |
 | `allocator.json` resource request rows (per-realm: cgroup, nftables, bridges, socket paths), `LocalRootAllocatorEngine` | `nixos-modules/allocator-json.nix` (emitter); `d2b-realm-core/src/allocator_engine.rs:332` (engine) | `generated-or-eval-contract` (Nix); `implemented-and-reachable` (engine) | Allocator resource requests are generated per realm from `d2b.realms.*` Nix config and consumed by the allocator at runtime. Maps to Zone runtime startup resource claiming. **Mechanism, not a ResourceType** |
 | `realm-entrypoints.json`, loaded from `/run/current-system/sw/share/d2b/realm-entrypoints.json` | `nixos-modules/host-daemon.nix:385` (emitter); `d2b/src/lib.rs:5239` (loader) | `generated-or-eval-contract` (Nix); `implemented-and-reachable` (CLI consumption) | Loaded by `d2b` CLI in live routing path for realm-qualified targets. Maps to ZoneLink access binding (CLI consumes it to find realm socket; replaced by ZoneLink resource + ComponentSession lookup) |
@@ -4090,10 +4129,10 @@ None of the following exist in baseline:
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs`, `d2b-session-unix/src/adapter.rs` for reconnect/transport precedents |
 | Reuse action | extract and adapt (`SecurePeerSession` Noise model → ComponentSession Noise KK; `SessionLifecycle`/`SessionPhase` → ZoneLink session reconnect loop and connection detail fields; `Connecting`/`Established` current evidence phases drive `status.connected` and `status.phase` transitions to `Pending`/`Ready`, not direct phase values; `RouteTreeEngine.decide_route()` → cursor tracking; `RealmIdentityStore` enrollment → ZoneLink child key-pin) |
 | Destination | `packages/d2b-contracts/src/v3/zone_link.rs`; `packages/d2b-core-controller/src/zone_link.rs` |
-| Detailed design | ZoneLink schema with resolved `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials` fields; cursor tracking; reconnect loop with exponential backoff; local intent queue (max 256 entries); child UID change detection; drain finalizer; Nix ZoneLink options |
-| Integration | core-controller zone_link handler; redb `zone_link_cursors` table; d2b-bus transport resolver; ComponentSession lifecycle |
+| Detailed design | Child-local ZoneLink schema with self-matching `spec.childZoneName` plus same-Zone `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials`; at most one uplink resource per non-root Zone and none in local root; child-store cursor/intent state; reconnect loop with exponential backoff; local intent queue (max 256 entries); local child UID change detection; drain finalizer; no reciprocal parent-store resource; parent allocator owns privileged listener/placement/route allocation effects and exposes only a sealed bootstrap/allocation interface |
+| Integration | child core-controller zone_link handler; child redb `zone_link_cursors` table; parent allocator and route engine through sealed allocation authority; d2b-bus transport resolver; ComponentSession lifecycle |
 | Data migration | Destructive reset; no v2 Realm peer migration |
-| Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zonelink-disabled-no-reconnect`, `zonelink-child-auth-denied-failed`, `zonelink-drain-closes-session` |
+| Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zonelink-disabled-no-reconnect`, `zonelink-child-auth-denied-failed`, `zonelink-drain-closes-session`, `zonelink-child-name-matches-store`, `zonelink-one-child-local-uplink`, `zonelink-parent-has-no-reciprocal-row` |
 | Removal proof | `realm_stubs.rs` (`ApiFrontend`, `PeerOperationRouter`, `TargetResolver`) removed after ComponentSession integration (ADR046-zone-control-018); `realm_access_resolver.rs` module removed after ZoneLink replaces entrypoint-table resolution; gateway `PeerSession`/`SecurePeerSession` session types remain as dead code in d2b-realm-router until Provider session migration wave |
 
 ### ADR046-zone-control-003
@@ -4166,7 +4205,7 @@ None of the following exist in baseline:
 | Current source | `nixos-modules/options-realms.nix` (`providerKind = "^[a-z][a-z0-9-]*$"` label regex matching `LABEL_PATTERN` in `ids.rs`; `providerType` submodule with `enable`/`kind`/`placement`/`freeformType` fields; `d2b.realms.<realm>.providers.*` attrset — `generated-or-eval-contract`, baseline `b5ddbed6`); `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.workloads.*` submodule shape — `generated-or-eval-contract`); `d2b.zones.*` Nix options: `ADR-only` |
 | Reuse action | adapt (`providerType` submodule → Provider option submodule; label regex `^[a-z][a-z0-9-]*$` retained unchanged; `placement` option → Provider component placement; `d2b.realms.*` option namespace → `d2b.zones.*` option namespace) |
 | Destination | `nixos-modules/options-zones.nix`; `nixos-modules/resources-zone-control.nix`; extended `nixos-modules/index.nix` |
-| Detailed design | `d2b.zones.<zone>.*` Nix options for Zone/ZoneLink/Provider/Role/RoleBinding/Quota/EmergencyPolicy authoring; Nix eval-time validation of ResourceRefs, verb enums, digest format, subject types, resolved ZoneLink transport ref constraints, and the no-expiry RoleBinding model; canonical JSON serialization; generation-bound resource bundle output |
+| Detailed design | `d2b.zones.<zone>.*` Nix options for Zone/ZoneLink/Provider/Role/RoleBinding/Quota/EmergencyPolicy authoring; Nix eval-time validation of ResourceRefs, verb enums, digest format, subject types, child-local ZoneLink self-name/one-uplink/local transport-ref constraints, and the no-expiry RoleBinding model; canonical JSON serialization; generation-bound resource bundle output; allocator bootstrap topology validates one parent per child, cycles, and depth without emitting reciprocal resources |
 | Integration | Nix resource compiler → configuration publication handler → Zone store; bootstrap Provider records auto-generated |
 | Data migration | Full reset; Nix realm options (`d2b.realms.*`) remain until purge wave |
 | Validation | nix-unit vectors for each Zone control type schema; cross-field constraint tests; rendered JSON contract tests (`make test-drift`) |
@@ -4282,7 +4321,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/zone_link.rs` (ZoneLink handler); `packages/d2b-resource-api/src/admission.rs` (request admission) |
 | Detailed design | **Selected**: `SessionPhase` 5-phase FSM (from main `d2b-session`) drives ZoneLink session state; `Established` state → `status.connected=true` + ZoneLink `status.phase=Ready`; `Disconnected`/`Reconnecting` states → `status.connected=false` + ZoneLink `status.phase=Pending` (or `Degraded` if degraded capability); session-internal phases are not exposed as `ZoneLink.status.phase` values — only the common Resource phases (`Pending|Ready|Degraded|Failed|Unknown`) appear in `status.phase` (§3.5); `begin_reconnect` window/attempt logic → ZoneLink reconnect loop; `RealmSessionAuthority` local vs gateway pattern → ZoneLink authority types for host-local vs transport-bridge sessions; `RealmServiceServer::call` wire validation (generation, request lifetime, attachment) → Zone API request admission; `RealmServiceLimits` 15 fields → ZoneLink `spec.limits`; `connect_component_session()` Nn peer-UID path → Zone runtime bootstrap ComponentSession; `NamedStream` lifecycle → ZoneLink named-stream operations; session-lifecycle tests ported as ZoneLink phase regression tests. **Excluded ADR45 assumptions**: `RealmSessionAuthority::gateway_peer()` (lines 72–87): gateway custody and `Locality::Remote` + `CredentialCustody::GatewayGuest` are ADR45 realm-gateway patterns; v3 ZoneLink transport is bound by the resolved `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials` contract instead. Realm 7-phase `SessionLifecycle` (`Allocating→…→Running→Stopping→Stopped`) is the ADR45 realm-specific lifecycle; ZoneLink uses the 5-phase d2b-session model. `GuestBootstrapPsk`/`GuestSessionCredentialV1`: ADR45 guest bootstrap, excluded. `realm_stubs.rs` `ApiService`/`ApiFrontend` dead code excluded (§16.2). |
-| Integration | Zone runtime startup creates bootstrap ComponentSession using `HandshakeCredentials::Nn` + local domain socket + peer-UID verification (adapted from `connect_component_session`); ZoneLink handler opens sessions for child Zone connections using d2b-bus `SessionEngine`; resource API admission layer validates requests using `RealmServiceServer::call` validation pattern |
+| Integration | Zone runtime startup creates bootstrap ComponentSession using `HandshakeCredentials::Nn` + local domain socket + peer-UID verification (adapted from `connect_component_session`); the child-local ZoneLink handler opens its allocator-bound uplink session using d2b-bus `SessionEngine`, and the parent routes child calls over that session; resource API admission validates requests using the `RealmServiceServer::call` pattern |
 | Data migration | Not applicable; new implementation |
 | Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zone-session-phase-forward-sequence-refuses-repeat` (ported from `forward_sequence_reaches_running_then_refuses_to_advance`), `zone-session-failure-records-phase` (ported from `failure_mid_establishment_rolls_into_teardown_and_records_phase`), `zone-session-stop-is-idempotent` (ported), `zone-bootstrap-session-nn-peer-uid-verified` |
 | Removal proof | `d2b-realm-router/src/service_v2.rs` `RealmServiceServer` removed after Zone API service layer replaces realm v2 service; `d2b-realm-router/src/session_lifecycle.rs` removed after d2b-bus lifecycle replaces realm-specific one |
@@ -4327,7 +4366,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse action | copy + adapt |
 | Destination | `packages/d2b-client/src/` (updated for v3 Zone API, replacing ADR45 daemon verbs with Zone resource operations) |
 | Detailed design | **Selected**: `Client::connect()` target-resolve → ComponentSession-open → `ConnectedClient` lifecycle; `RetryPolicy` 1..8 bound + `retryable_failure()` safe-only retry detection; `NamedStream::send/receive/close_local/reset` lifecycle; `ComponentSessionConnector` trait as connector abstraction; `HostSocketConnector::from_seqpacket_fd` + `local_daemon_endpoint_identity` for Zone runtime socket connector; `RouteTable` ambiguous-route rejection; `ServiceHandle`/`GeneratedClient`/`MethodHandle` typed service client pattern; `map_ttrpc_error`/`validate_reply`/`map_retry` error-handling chain; `ClientError`/`RemoteErrorKind`/`RetryClass` error taxonomy; `DaemonClient` call-options and outcome helpers (infrastructure only). **Excluded ADR45 assumptions**: `DaemonMethod` enum (lines 29–56 of daemon_service.rs): ADR45 daemon verbs (`vm_start`, `vm_stop`, `list_realms`, etc.) — replaced with Zone API verbs. `GuestClient`/`guest_service.rs`: ADR45 guest operations; excluded until v3 Guest transport work item. Hardcoded socket path `PUBLIC_SOCKET_PATH = "/run/d2b/public.sock"` in `host_socket.rs`: replaced by Zone-resource-managed path. `TransportKind::LocalUnix` restriction in daemon-access: v3 allows multiple transport kinds per ZoneLink binding. |
-| Integration | `d2b` CLI uses `d2b-client` to connect to Zone runtime via `HostSocketConnector`; Zone runtime uses `d2b-client` for internal child-Zone ZoneLink connections; Provider toolkit conformance tests use `Fixture`/`FakeProvider` with `d2b-client` service handles |
+| Integration | `d2b` CLI uses `d2b-client` to connect to Zone runtime via `HostSocketConnector`; a child Zone runtime uses `d2b-client` for its allocator-bound uplink while the parent route engine uses the established session for child calls; Provider toolkit conformance tests use `Fixture`/`FakeProvider` with `d2b-client` service handles |
 | Data migration | Not applicable; updated in place |
 | Validation | `client-retry-policy-max-8-attempts-enforced`, `client-named-stream-close-local-then-remote-close-transitions-closed`, `client-route-table-ambiguous-route-rejected`, `client-host-socket-peer-uid-verified-on-connect`, `client-retryable-failure-only-safe-mutations` |
 | Removal proof | `DaemonMethod` v2 verb enum retired after all v2 daemon operations migrated to Zone API |
@@ -4359,10 +4398,10 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None from main; eval-time validation is Nix-native |
 | Reuse action | net-new |
 | Destination | `nixos-modules/options-zones.nix`, `nixos-modules/resource-type-validators.nix` |
-| Detailed design | Declare the unified `d2b.zones.<zone>.resources.<name>` option tree with two sub-options: `type` (string, required) and `spec` (attrset, required). Declare the `d2b.artifacts.<id>` catalog option tree with `package` (types.package, required) and `type` (closed string enum, required); `d2b.artifacts` is a global option, not zone-local. For each core ResourceType (Zone, ZoneLink, Provider, Role, RoleBinding, Credential), a `genSchemaOptions` helper reads the corresponding ResourceTypeSchema JSON and emits per-type `spec` option declarations with correct Nix types, defaults, and documentation comments. Provider `spec.artifactId` is a plain string referencing the `d2b.artifacts` catalog; the `package` derivation is NOT a `spec` field. Non-core (Provider-registered) ResourceTypes are deferred to Phase 2 schema validation; Phase 1 accepts any non-empty `spec` attrset for non-core types. Implement all Phase 1 eval-time assertions (§14.10 Phase 1 table) via Nix `assert` and `lib.mkAssert`; `credentialRef` helper function producing `{ "$credentialRef": "Credential/<name>" }` literals; `resourceRef` and `closedEnum` helpers; bootstrap provider exclusion assertions; eval assertion that Zone resource name must equal Zone attrset key. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` directly with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to a dedicated Host admission gate (current `options-realms.nix:346`). Provider manifest-derived fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) are declared as read-only/not-settable options; setting them is an eval assertion error |
+| Detailed design | Declare the unified `d2b.zones.<zone>.resources.<name>` option tree with two sub-options: `type` (string, required) and `spec` (attrset, required). Declare the `d2b.artifacts.<id>` catalog option tree with `package` (types.package, required) and `type` (closed string enum, required); `d2b.artifacts` is a global option, not zone-local. For each core ResourceType (Zone, ZoneLink, Provider, Role, RoleBinding, Credential), a `genSchemaOptions` helper reads the corresponding ResourceTypeSchema JSON and emits per-type `spec` option declarations with correct Nix types, defaults, and documentation comments. Provider `spec.artifactId` is a plain string referencing the `d2b.artifacts` catalog; the `package` derivation is NOT a `spec` field. Non-core (Provider-registered) ResourceTypes are deferred to Phase 2 schema validation; Phase 1 accepts any non-empty `spec` attrset for non-core types. Implement all Phase 1 eval-time assertions (§14.10 Phase 1 table) via Nix `assert` and `lib.mkAssert`; `credentialRef` helper function producing `{ "$credentialRef": "Credential/<name>" }` literals; `resourceRef` and `closedEnum` helpers; bootstrap provider exclusion assertions; eval assertion that Zone resource name must equal Zone attrset key; child-local ZoneLink assertions require `childZoneName` to equal that key, reject a second uplink resource even when disabled, and reject any local-root uplink. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` directly with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to a dedicated Host admission gate (current `options-realms.nix:346`). Provider manifest-derived fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) are declared as read-only/not-settable options; setting them is an eval assertion error |
 | Integration | Unified `d2b.zones.<zone>.resources.*` option tree consumed by ADR046-zone-control-015 resource compiler; Zone controller (ADR046-zone-control-001) reads resulting bundle; Provider package conventions from ADR046-zone-control-003 |
 | Data migration | Replace `nixos-modules/options-realms.nix`-derived option trees once Zone controller is live and has reached parity |
-| Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, `nix-eval-zonelink-self-loop-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`) |
+| Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`) |
 | Removal proof | `nixos-modules/options-realms.nix`, `nixos-modules/realm-controller-config-json.nix`, `nixos-modules/realm-identity-config-json.nix` deleted after Zone controller and resource compiler reach full parity; `nixos-modules/assertions.nix` lines referencing `allowUnsafeLocal`/realm names removed after Host admission validation replaces them |
 
 ### ADR046-zone-control-015
@@ -4426,7 +4465,7 @@ Evidence class for all: `main-reuse-source`.
 | Detailed design | Implement the `ResourceExport` and `ResourceImport` standard ResourceTypes per §8A plus signed Provider `ProjectionFactory` metadata binding qualified Service type, qualified Binding type, allowed owner-Service backing refs, allowed Binding target refs, projection schema/fingerprint, and aggregate factory fingerprint. Admission accepts only an owner Service as `ResourceExport.resourceRef`; matches export/import/local-factory type and fingerprints; and creates exactly one same-qualified-type projection Service (`ownerRef: ResourceImport/<name>`). It never projects Device/Endpoint/Binding and never creates Binding. Binding spec is desired consumer intent only; observations belong only in status. No cross-Zone Ref, FD, secret, path, locator, or resource grant crosses a Zone; payload bytes use bounded encrypted named streams and high-churn sessions/streams remain internal. Export removal/ZoneLink loss revokes leases and degrades the projection Service; reconnect revalidates generation and both fingerprints. D091 currency propagates Service → export → import → projection Service → authored Binding → children. |
 | Integration | Zone store/redb (ADR046-store-001); shared D098 semantic base catalog (ADR046-provider-004); ZoneLink reconcile (§3); ComponentSession bounded encrypted named streams; signed projection factories/adapters for audio-pipewire, device-security-key, observability-otel, and policy-gated device-usbip; CLI graph rendering |
 | Data migration | None — full d2b 3.0 reset; no prior cross-Zone sharing state |
-| Validation | §8A.7: fast hermetic factory absent/mismatch/tamper, Service-only export target, exactly-one same-type projection Service, no Device/Endpoint/Binding projection, no auto-Binding, intent-only spec/status-only observations, backing/target allowlists, finalizer/update propagation, Provider classification, canonical Nix stability, quotas/reconnect/revoke, and no FD/secret/path tests; slower real encrypted-stream integration for audio/security-key/observability/policy-gated USBIP |
+| Validation | §8A.7: fast hermetic factory absent/mismatch/tamper, Service-only export target, exactly-one same-type projection Service, no Device/Endpoint/Binding projection, no auto-Binding, intent-only spec/status-only observations, backing/target allowlists, finalizer/update propagation, Provider classification, canonical Nix stability including child-local `ZoneLink/work-uplink` in `d2b.zones.work.resources`, local `zoneLinkRef` resolution, quotas/reconnect/revoke, and no FD/secret/path tests; slower real encrypted-stream integration for audio/security-key/observability/policy-gated USBIP |
 | Removal proof | Not applicable (new surface) |
 
 ### ADR046-zone-control-020

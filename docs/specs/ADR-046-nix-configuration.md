@@ -94,9 +94,9 @@ not deferred to runtime:
    Zone prefix, query string, relative segment, or implicit type is accepted.
 2. `resource_name` matches `^[a-z][a-z0-9-]*$` — the same LABEL_PATTERN as
    `RealmId`/`WorkloadId` in `d2b-realm-core/src/ids.rs`.
-3. Every intra-Zone ref resolves to a declared resource of the stated type in
-   the same Zone. Cross-Zone refs are rejected unless routed through an
-   explicit `ZoneLink`.
+3. Every resource ref resolves to a declared resource of the stated type in
+   the same Zone. Cross-Zone refs are always rejected; cross-Zone operations
+   route through a same-Zone `ZoneLink` plus non-Ref routing metadata.
 4. Owner cycles fail at eval time.
 5. No secret value, credential bytes, raw numeric UID/GID, freeform host path,
    ambient capability list, raw seccomp program, or arbitrary socket address
@@ -291,11 +291,14 @@ d2b.zones.dev = {
 Zone-level Nix options (`label`, `retainedGenerations`, `trustedPublishers`) are
 compiler/configuration-service settings. They control build behavior and are
 not emitted into the Zone ResourceSpec. Parent/child hierarchy is represented
-exclusively by a ZoneLink resource in the parent Zone; there is no `parentRef`
-in the Zone spec.
+by one child-local uplink `ZoneLink` in each non-root Zone. The allocator that
+provisions that child supplies the parent edge through sealed private bootstrap
+state; there is no `parentRef` in the Zone spec and no reciprocal parent-store
+ZoneLink resource.
 
-Every declared Zone compiles to exactly one `Zone/<name>` self-resource with
-an empty spec:
+Every declared Zone causes its runtime to maintain exactly one
+`Zone/<name>` self-resource with an empty spec. The self-resource is
+controller-created, not emitted in the Nix-authored resource bundle:
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -327,30 +330,38 @@ UID automatically.
 
 ### ZoneLink
 
-A `ZoneLink` resource connects a parent Zone to a child Zone. Because a
-ZoneLink lives in the PARENT Zone's resource bundle, it is declared in the
-parent zone's `resources` set. Parent/child relationships are represented
-only by the parent-local ZoneLink; there is no `parentRef` in any Zone's spec
-or cross-Zone ResourceRef. Current source for zone-hierarchy:
+A `ZoneLink` resource is the child Zone's local uplink to the allocator-
+established parent. It lives in the CHILD Zone's resource bundle and is
+declared in that child Zone's `resources` set. `spec.childZoneName` is an
+identity anchor and MUST equal the enclosing child Zone name. The parent
+allocator owns privileged listener creation, namespace/cgroup placement, and
+route allocation, but it does not create a reciprocal resource in the parent
+store. The sealed bootstrap allocation binds this local ZoneLink UID and child
+identity to exactly one parent edge. There is no `parentRef` in either Zone's
+spec and no cross-Zone ResourceRef. Current source for zone hierarchy:
 `d2b-realm-core/src/realm.rs` (`RealmPath` dotted hierarchy — e.g.,
 `work.personal`); `d2b.realms.<r>.parent` option in
 `nixos-modules/options-realms.nix`.
 
 ```nix
-# Declared in the PARENT zone's resources:
-d2b.zones.root.resources.link-dev = {
+# Declared in the CHILD Zone's resources:
+d2b.zones.dev.resources.dev-uplink = {
   type = "ZoneLink";
   spec = {
-    childZoneName         = "dev";                      # plain Zone name, not a ResourceRef
+    childZoneName         = "dev";                      # must equal the enclosing Zone name
     transportProviderRef  = "Provider/transport-unix";  # always explicit; no default
   };
 };
 ```
 
-An eval assertion verifies that for every `ZoneLink` resource in
-`d2b.zones.<p>.resources` with `spec.childZoneName = "<z>"`, the Zone `<z>` is
-declared in `d2b.zones`. There is no bidirectional `parentRef` requirement on
-the child Zone; the ZoneLink in the parent is the sole declaration.
+An eval assertion verifies that every `ZoneLink` in
+`d2b.zones.<z>.resources` has `spec.childZoneName = "<z>"`, that each non-root
+Zone has at most one uplink resource (enabled or disabled), and that the
+local-root Zone has none.
+Private allocator bootstrap edges are checked for one parent per child, cycles,
+and depth before publication. There is no bidirectional `parentRef` or
+undefined reciprocal link; the child-local ZoneLink is the sole resource
+declaration for that edge.
 
 `ZoneLink.spec.transportProviderRef` is always explicit. There is no default
 transport and no inference. Omitting `transportProviderRef` from a `ZoneLink`
@@ -364,8 +375,8 @@ Compiled ZoneLink bundle entry:
 apiVersion: resources.d2bus.org/v3
 type: ZoneLink
 metadata:
-  name: link-dev
-  zone: root
+  name: dev-uplink
+  zone: dev
   ownerRef: null
 spec:
   childZoneName:        dev
@@ -890,6 +901,16 @@ d2b.zones.local-root.resources.mic-export = {
   };
 };
 
+# The consumer's uplink is a local resource. The parent allocator supplies the
+# sealed route allocation and owns all privileged listener/routing effects.
+d2b.zones.work.resources.work-uplink = {
+  type = "ZoneLink";
+  spec = {
+    childZoneName = "work";
+    transportProviderRef = "Provider/transport-unix";
+  };
+};
+
 # Work Zone: import exactly one local AudioService projection.
 d2b.zones.work.resources.mic-import = {
   type = "ResourceImport";
@@ -1076,36 +1097,79 @@ Current source: `packages/d2b-core/src/processes.rs` — `ProcessesJson`,
 ```nix
 d2b.zones.dev.resources.wayland-proxy = {
   type = "Process";
+  metadata.ownerRef = "Provider/display-wayland";
   spec = {
-    providerRef  = "Provider/system-systemd";   # replaces ProcessRole + minijail profile selection
-    executionRef = "Host/host-system";          # replaces per-VM DAG node host/VM assignment
-    domain       = "user";
-    userRef      = "User/alice";
-    processClass = "service";
-    packageRef   = "Provider/display-wayland";  # replaces binaryPath in ProcessNode
-    template     = "wayland-proxy-host";        # replaces ProcessRole for template dispatch
-    configRef    = "Volume/wayland-proxy-config";
+    providerRef   = "Provider/system-systemd";
+    executionRef  = "Host/host-system";
+    domain        = "user";
+    userRef       = "User/alice";
+    processClass  = "service";
+    template      = "wayland-proxy-host";
+    configRef     = "Volume/wayland-proxy-config";
+    credentialRefs = [];
     mounts = [
       { volumeRef = "Volume/wayland-proxy-state";
         view      = "proxy";
         mountPath = "/state";
-        access    = "read-write"; }
+        access    = "read-write";
+        required  = true; }
     ];
-    budget  = { memory = { bytes = 134217728; }; };
-    sandbox = {
-      # Named profile only — replaces raw seccomp program and capability list.
-      seccompProfile = "system-systemd-default";
-      capabilities   = [];
-      noNewPrivs     = true;
+    sandbox = {};
+    budget = {};
+    networkUsage = {
+      networkRef = null;
+      ports = [];
+      allowEgress = false;
     };
-    network   = { networkRef = null; ports = []; };
-    devices   = [];
-    endpoints = [{ name = "wayland-host-socket"; transport = "unix"; }];
-    readiness = { kind = "unix-socket-accept"; };
-    restart   = { policy = "on-failure"; maxRestarts = 5; backoffMs = 1000; };
+    deviceUsage = [];
+    telemetry = {};
+    desiredLifecycle = "running";
+    restartPolicy = {
+      class = "on-failure";
+      backoffBase = "1s";
+      backoffMax = "60s";
+      backoffMultiplier = 2.0;
+      maxRestarts = 5;
+      resetAfter = "300s";
+    };
+    readiness = {
+      initialDelay = "0s";
+      timeout = "30s";
+      failureThreshold = 3;
+      successThreshold = 1;
+      class = "ready-condition";
+    };
+    healthCheck = {
+      enabled = false;
+      interval = "30s";
+      timeout = "5s";
+      failureThreshold = 3;
+      class = "provider-defined";
+    };
+    adoptionPolicy = "adopt-on-restart";
+    drainTimeout = "30s";
+  };
+};
+
+# Stable endpoints are separate owned resources, never inline Process fields.
+d2b.zones.dev.resources.wayland-host-socket = {
+  type = "Endpoint";
+  metadata.ownerRef = "Process/wayland-proxy";
+  spec = {
+    providerRef = "Provider/display-wayland";
+    producerRef = "Process/wayland-proxy";
+    endpointClass = "service";
+    transport = "unix";
+    purpose = "wayland-host-socket";
+    locality = "host-local";
   };
 };
 ```
+
+`providerRef` selects the Process implementation. `metadata.ownerRef` selects
+the semantic owner whose signed component descriptor resolves `template` to an
+exact executable and digest. No package reference or executable is accepted in
+`ExecutionSpec`.
 
 ### Prohibited fields
 
@@ -1130,28 +1194,39 @@ Current source: `ProcessRole::StoreVirtiofsPreflight`, `SwtpmPreStartFlush`,
 ```nix
 d2b.zones.dev.resources.store-sync-dev-vm = {
   type = "EphemeralProcess";
+  metadata.ownerRef = "Provider/volume-virtiofs";
   spec = {
     providerRef   = "Provider/system-minijail";
     executionRef  = "Host/host-system";
     domain        = "system";
+    userRef       = null;
     processClass  = "worker";
-    packageRef    = "Provider/volume-virtiofs";
     template      = "store-sync";
     configRef     = "Volume/store-sync-config";
-    successfulTtl = "1h";    # default; explicit for clarity
-    failedTtl     = "24h";   # default
-    startDeadline = "30s";
+    credentialRefs = [];
     mounts = [
       { volumeRef = "Volume/dev-vm-nix-store";
-        view = "sync-source"; mountPath = "/source"; access = "read-only"; }
+        view = "sync-source"; mountPath = "/source"; access = "read-only";
+        required = true; }
       { volumeRef = "Volume/dev-vm-store-farm";
-        view = "sync-target"; mountPath = "/target"; access = "read-write"; }
+        view = "sync-target"; mountPath = "/target"; access = "read-write";
+        required = true; }
     ];
+    sandbox = {};
+    budget = {};
+    networkUsage = null;
+    deviceUsage = [];
+    telemetry = {};
+    startDeadline = "30s";
+    runtimeDeadline = "300s";
+    successfulTtl = "1h";
+    failedTtl = "24h";
+    incidentHold = false;
   };
 };
 ```
 
-`startDeadline` and `runDeadline` use Go-style bounded duration strings.
+`startDeadline` and `runtimeDeadline` use Go-style bounded duration strings.
 Unbounded deadlines are rejected at eval time.
 
 ## Volume resource
@@ -1520,7 +1595,7 @@ All ref validation runs at Nix eval time:
 | `roleRef` resolution | The named Role is declared in `d2b.zones.<z>.resources` with `type = "Role"` |
 | `subjects` entries | Each entry is a canonical `<ResourceType>/<name>` ref string resolving to a declared resource of the stated type in the same Zone; type must be in the closed subject set |
 | `transportProviderRef` resolution | The named Provider is declared in `d2b.zones.<z>.resources` with `type = "Provider"`; required on every ZoneLink; no default |
-| `childZoneName` check | The named child Zone is declared in `d2b.zones`; plain Zone name, not a ResourceRef |
+| `childZoneName` check | Plain Zone name, not a ResourceRef; it equals the enclosing `d2b.zones.<z>` key, each non-root Zone has at most one uplink resource, and local root has none |
 | `ResourceExport` Service-only ref | `providerRef` and `resourceRef` resolve locally; `resourceRef` has the factory's qualified `*Service` type; Device/Endpoint/Binding/backing and cross-Zone targets reject |
 | `ResourceImport` local route/factory | `providerRef` and `zoneLinkRef` resolve locally; `exportKey` is bounded/not a Ref; expected Service type and projection/factory fingerprints match the signed export and local factory |
 | Qualified Binding refs | `serviceRef` resolves to the same-Zone matching Service; target ref resolves to a factory-allowed same-Zone Guest/User/Zone; Binding spec is intent-only, observations are status-only, and Binding is non-exportable |
@@ -1541,12 +1616,13 @@ declares the type in its installed dossier.
 ### Universal resource spec shape
 
 Every Zone resource is declared under the unified `d2b.zones.<zone>.resources`
-attribute set using a `type`/`spec` envelope that mirrors the canonical
-ResourceSpec JSON schema directly:
+attribute set using a `type`/optional-authored-`metadata`/`spec` envelope that
+mirrors the canonical ResourceSpec JSON schema directly:
 
 ```nix
 d2b.zones.<zone>.resources.<name> = {
   type = "<ResourceType>";     # string discriminator matching a known ResourceType
+  metadata.ownerRef = "Provider/owner"; # optional; canonical metadata, never spec
   spec = {
     # Exact ResourceType spec fields — identical names to the canonical JSON schema.
     # No field renaming; no parallel bespoke vocabulary.
@@ -1567,7 +1643,8 @@ layers (D088) — the universal `ResourceStatus` base, the ResourceType-common
 observation and are never authored in Nix. The `status.provider.details`
 extension schema is signed into and registered with the **Provider package**
 (resolved via `spec.artifactId`), not authored or emitted by the Zone Nix
-configuration; Nix authors only `type` + `spec`.
+configuration. Nix authors `type`, optional permitted metadata such as
+`ownerRef`, and `spec`; metadata never appears inside `spec`.
 
 The `managedBy` field (`configuration | controller | api`) is a core-set
 management metadata field set exclusively by the core runtime. It is not
@@ -1586,11 +1663,11 @@ are derived from the same committed ResourceTypeSchema
 (`settingsSchemaDigest` in `provider-catalog.json`) — the module system and the
 build validator use the same source of truth.
 
-There are no Nix-only fields inside a resource declaration. The `type`/`spec`
-envelope is the complete authoring shape; `type` is the ResourceType
-discriminator and `spec` is emitted verbatim. To disable a resource, omit it
-from `d2b.zones.<zone>.resources` or use the ResourceType's own desired-state
-fields if that type defines them.
+There are no Nix-only fields inside a resource declaration. `type` is the
+ResourceType discriminator, permitted authored `metadata` fields map to the
+canonical metadata envelope, and `spec` is emitted verbatim. To disable a
+resource, omit it from `d2b.zones.<zone>.resources` or use the ResourceType's
+own desired-state fields if that type defines them.
 
 All spec fields are emitted verbatim into the canonical JSON envelope.
 Derivation references and NixOS system closures belong in `d2b.artifacts`, not
@@ -1611,10 +1688,10 @@ inside any resource spec field.
 ```
 
 `uid`, `generation`, `revision`, and `timestamp` fields are absent from
-Nix-emitted artifacts. `ownerRef` defaults to `null`; it may be set in `spec`
-only for resources that are explicitly owner-attributed at authoring time (not
-for dynamically controller-created resources). `finalizers` defaults to `[]` in
-emitted bundles and is managed exclusively at runtime.
+Nix-emitted artifacts. `metadata.ownerRef` defaults to `null`; it may be
+authored only for ResourceTypes that permit configuration-assigned ownership
+and never appears in `spec`. `finalizers` defaults to `[]` in emitted bundles
+and is managed exclusively at runtime.
 
 
 ### ResourceTypeSchema validation
@@ -1800,19 +1877,17 @@ or bundle JSON.
 
 ### Cross-Zone generation ordering
 
-When Zone A has a `ZoneLink` to Zone B, Zone A's bundle includes a `cursorRef`
-pointing at the expected Zone B generation revision at compilation time. The
-configuration-publication controller verifies Zone B revision before activating
-Zone A.
+When child Zone A has a local uplink `ZoneLink` to parent Zone B, neither
+bundle carries the other Zone's generation or a cross-Zone `cursorRef`.
+Advertisement cursors are runtime status owned by A's local ZoneLink handler
+and the parent allocator/route engine.
 
-Zone activations are independent. When Zone A activates and Zone B (referenced
-via `ZoneLink`) has not yet reached the `cursorRef` revision recorded in
-Zone A's bundle, Zone A activates independently and the `ZoneLink` resource
-(and any Zone A resources that depend on Zone B state) enter `Degraded` status.
-They reconcile asynchronously when Zone B becomes reachable and reaches the
-expected revision. Zone A never claims a commit on behalf of Zone B. There is
-no cross-Zone atomic activation and no option to block Zone A activation on
-Zone B readiness.
+Zone activations are independent. Zone A activates without waiting for Zone B.
+Until its parent allocation is established and advertisements are current, A's
+local `ZoneLink` (plus dependent imports) is `Degraded`. It reconciles
+asynchronously when the parent route becomes reachable and current. Neither
+Zone claims a commit on behalf of the other, and there is no cross-Zone atomic
+activation.
 
 ### Resource cleanup contract
 
@@ -2031,8 +2106,8 @@ The Nix compiler detects and rejects at eval time:
 
 | Conflict | Rule |
 | --- | --- |
-| Duplicate Zone name | Two `d2b.zones.<x>` entries with the same `id` |
-| ZoneLink cycle | A chain of `childZoneName` references in `ZoneLink` resources that loops |
+| Duplicate Zone name | Impossible by Nix construction: a Zone name is the unique `d2b.zones.<name>` attr key; there is no Zone `id` field |
+| ZoneLink topology cycle | The private allocator bootstrap parent edges bound to child-local ZoneLinks form a cycle |
 | CIDR overlap | Two Networks in the same Zone with overlapping subnets |
 | Guest name reserved prefix | A `Guest/<name>` starting with `sys-` |
 | Owner cycle | Any `ownerRef` chain that loops |
@@ -2139,6 +2214,9 @@ Never accepted in any Nix-authored resource spec or generated artifact:
 - Raw seccomp BPF programs (only named Provider-owned profile refs);
 - Arbitrary socket addresses or raw file descriptor numbers;
 - Provider-internal `argv` or environment variable maps;
+- `packageRef`, renamed `network`/`devices`/`restart` aliases, or inline
+  Process `endpoints` (use owner-resolved `template`, canonical
+  `networkUsage`/`deviceUsage`/`restartPolicy`, and separate Endpoint resources);
 - `eval` or `builtins.exec` in Nix resource compiler expressions;
 - `RealmTarget` format strings (`<wid>.<realm>.d2b`) in any spec field.
 
@@ -2150,7 +2228,7 @@ Never accepted in any Nix-authored resource spec or generated artifact:
 | Provider install resource | Nix catalog + Provider resource → core controller lifecycle → Ready status |
 | Host system/user Process | Process under Host/host-system with system-systemd; locally held pidfd |
 | Guest with closure Volume | Guest + virtiofs Volume → per-VM store farm → guest `/nix/store` without direct host store export |
-| Cross-Zone ZoneLink | Parent Zone declares unidirectional ZoneLink with `childZoneName`/`transportProviderRef`; activates with child cursor; child update propagates to parent; no `parentRef` in child spec |
+| Cross-Zone ZoneLink | Child Zone declares one local uplink with self-matching `childZoneName` and local `transportProviderRef`; parent allocator binds the private edge and owns privileged route creation; no reciprocal resource or `parentRef` |
 | Configuration rollback | Two-generation rollback restores prior Zone resource state |
 | Ref validation rejection | Malformed or missing ref fails eval with structured error |
 | Conflict detection | CIDR overlap, owner cycle, and duplicate type/name rejection at eval time |
@@ -2235,7 +2313,7 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` — single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]*$`; ref validation assertions; `WorkloadProviderKind` → Guest/Host mapping per disposition table above; `Capability` → Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `retainedGenerations`/`trustedPublishers` are Zone-level compiler settings not emitted in Zone spec |
 | Integration | `nixos-modules/default.nix` imports new options files; old realms options coexist until ADR046-nix-002 |
 | Data migration | Operator configs migrate `d2b.realms.*` → `d2b.zones.*`; `d2b.vms.*` → `d2b.zones.<z>.resources.*` with `type = "Guest"` |
-| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; ZoneLink `childZoneName` resolves declared Zone; missing `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentRef`, `retainedGenerations`, etc.) |
+| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; allocator bootstrap topology rejects multi-parent and cycles; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentRef`, `retainedGenerations`, etc.) |
 | Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix` |
 | Drift pin | `make nix-unit-pin` after adding cases |
 | Removal proof | `options-realms*.nix` removed after `options-zones*.nix` achieves parity and parity drift test passes |
@@ -2312,11 +2390,11 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Current source | `nixos-modules/processes-json.nix` (`VmProcessDag`, `ProcessRole`, `binaryPath`, `argv`, `share.source == "/nix/store"` sentinel); `packages/d2b-core/src/processes.rs` (`ProcessRole` enum — all variants in disposition table above) |
 | Reuse action | extract and adapt |
 | Destination | `nixos-modules/resources-zones-processes.nix`; emits `zones/<z>/processes.json` |
-| Detailed design | Process/EphemeralProcess resource serialization per disposition table; no free-form `binaryPath` or `argv`; template refs; mounts from `volumeRef`; sandbox from named profile; VsockRelay → `Process` under `Provider/transport-vsock`; GuestSshReadiness retired at v3 cutover; Usbip long-lived backend/proxy → `Process`, Usbip per-busid attach/detach → `EphemeralProcess`, all owned by `Provider/device-usbip` |
+| Detailed design | Process/EphemeralProcess resource serialization per disposition table and the frozen `ExecutionSpec`: exact `providerRef`/`executionRef`/domain/user/processClass/template/config/credential/mount/sandbox/budget/`networkUsage`/`deviceUsage`/telemetry names; semantic owner from `metadata.ownerRef` with template fallback through the Process Provider; no `packageRef`, free-form `binaryPath`, `argv`, renamed network/device fields, or inline endpoints; stable produced endpoints are separate owned `Endpoint` resources with `producerRef`; Process uses canonical `restartPolicy` fields; EphemeralProcess uses `runtimeDeadline` and has no restart policy; VsockRelay → `Process` under `Provider/transport-vsock`; GuestSshReadiness retired at v3 cutover; Usbip long-lived backend/proxy → `Process`, Usbip per-busid attach/detach → `EphemeralProcess`, all owned by `Provider/device-usbip` |
 | Integration | `processes.json` replaces `cfg._bundle.processesJson`; Process Providers read the new format |
 | Data migration | Processes are emitted from v3 Process/EphemeralProcess resources; full d2b 3.0 reset; no v2 process artifact import. |
-| Validation | Process resource schema vectors; no-raw-path assertion; ProcessRole parity test (every variant has a test case) |
-| Tests | `tests/unit/nix/cases/zones-processes.nix`; `packages/d2b-contract-tests/tests/processes-schema.rs` |
+| Validation | Process and EphemeralProcess exact-schema vectors; reject `packageRef`, `network`, `devices`, `endpoints`, `restart`, and `runDeadline`; accept canonical `networkUsage`, `deviceUsage`, `restartPolicy`, `runtimeDeadline`, and separately owned Endpoint with `producerRef`; no-raw-path assertion; ProcessRole parity test (every variant has a test case) |
+| Tests | `tests/unit/nix/cases/zones-processes.nix`; `tests/unit/nix/cases/zones-process-exact-mirror.nix`; `packages/d2b-contract-tests/tests/processes-schema.rs` |
 | Drift pin | `make test-drift` after schema changes |
 | Removal proof | `processes-json.nix` and current `processes.json` schema removed after all Process Providers consume `zones/<z>/processes.json` |
 
