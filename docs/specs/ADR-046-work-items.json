@@ -665,7 +665,7 @@
     {
       "currentSource" : "`d2b-core/src/processes.rs`; `nixos-modules/processes-json.nix`; `d2b-priv-broker/src/ops/swtpm_dir.rs`; `d2b-host/src/swtpm_argv.rs`",
       "dataMigration" : "v3 reset; no v2 process graph migration",
-      "dependencyOwner" : "ADR046-ch-001; Volume, Device, and ADR046-network-005 foundations",
+      "dependencyOwner" : "Depends on `ADR046-ch-001` and `ADR046-network-005`; owner: cloud-hypervisor bootstrap-graph integration",
       "destination" : "`packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs`",
       "detailedDesign" : "Single owned VMM Process resource; synchronous ResourceClient dependency check (Device/kvm + all declared Devices, Networks, virtiofs Volumes); immediate Process creation when all deps ready; no EphemeralProcess resources; conditional net-VM Guest creation; per-dependency readiness tracking in reconcile loop. For each Network attachment the launch resolution carries only an opaque ref; network-local declares the semantic effect, the Core-owned `NetworkEffectPort` adapter performs `CreatePersistentTap → SetBridgePortFlags`, and `ProviderSupervisor` receives the connected CLOEXEC `OwnedFd` directly for LaunchTicket inheritance. The runtime controller receives no fd or broker operation. Primary reuse disposition: `replace`. Preserved source-plan detail: EXTRACT and REPLACE.",
       "integration" : "Depends on `Provider/volume-virtiofs`, `Provider/device-tpm`, `Provider/device-kvm`, `Provider/network-local` ResourceType readiness, the ADR046-network-005 effect chain, and direct ProviderSupervisor LaunchTicket fd handoff",
@@ -3074,7 +3074,7 @@
       "reuseSource" : null,
       "specId" : "ADR-046-nix-configuration",
       "specPath" : "docs/specs/ADR-046-nix-configuration.md",
-      "validation" : "Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint `visibility = \"provider\"` (and rejects `\"zone\"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve` operation; no-secret assertion vectors",
+      "validation" : "Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint purpose `credential-entra.d2bus.org/entra-login-token`, `visibility = \"provider\"` (and rejects `\"zone\"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve` operation; no-secret assertion vectors",
       "workItemId" : "ADR046-nix-009"
     },
     {

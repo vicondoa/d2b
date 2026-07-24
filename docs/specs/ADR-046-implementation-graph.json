@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1939,
+    "edges" : 1940,
     "maxTopologicalRank" : 22,
     "nodes" : 598,
     "specNodes" : 55,
@@ -5665,6 +5665,11 @@
     {
       "from" : "ADR046-ch-002",
       "to" : "ADR046-ch-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-ch-002",
+      "to" : "ADR046-network-005",
       "type" : "work-item-depends-on"
     },
     {
@@ -12772,11 +12777,12 @@
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-ch-002",
       "kind" : "work-item",
-      "owner" : "ADR046-ch-001; Volume, Device, and ADR046-network-005 foundations",
+      "owner" : "Depends on `ADR046-ch-001` and `ADR046-network-005`; owner: cloud-hypervisor bootstrap-graph integration",
       "parallelGroup" : "wi:ADR-046-provider-runtime-cloud-hypervisor",
       "prerequisites" : [
         "ADR-046-provider-runtime-cloud-hypervisor",
-        "ADR046-ch-001"
+        "ADR046-ch-001",
+        "ADR046-network-005"
       ],
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "topologicalRank" : 12,
@@ -16543,7 +16549,7 @@
       ],
       "specId" : "ADR-046-nix-configuration",
       "topologicalRank" : 15,
-      "validation" : "Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint `visibility = \"provider\"` (and rejects `\"zone\"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve` operation; no-secret assertion vectors",
+      "validation" : "Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint purpose `credential-entra.d2bus.org/entra-login-token`, `visibility = \"provider\"` (and rejects `\"zone\"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve` operation; no-secret assertion vectors",
       "wave" : "W5"
     },
     {

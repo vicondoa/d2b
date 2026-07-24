@@ -1707,7 +1707,7 @@ per-test budget.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-ch-001; Volume, Device, and ADR046-network-005 foundations |
+| Dependency/owner | Depends on `ADR046-ch-001` and `ADR046-network-005`; owner: cloud-hypervisor bootstrap-graph integration |
 | Current source | `d2b-core/src/processes.rs`; `nixos-modules/processes-json.nix`; `d2b-priv-broker/src/ops/swtpm_dir.rs`; `d2b-host/src/swtpm_argv.rs` |
 | Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` |

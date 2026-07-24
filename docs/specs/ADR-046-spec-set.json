@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "212dc5b240f0f75b32694f4469d181436613f69f5d0f780fe18c7f39c1d92447",
+      "sha256" : "9ff388089c225d43f6bea705ae4fd095ba203f234226aeeb0a91e869c8400160",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Proposed",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -548,7 +548,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-      "sha256" : "8747902a2af0db8c16ed97fe55d4b87283db0d1c7219ca3f5a9b6cb0a4458c58",
+      "sha256" : "62f6af217aa398e2f801e30157e3d7f124963893d3120c1ca622cd47776cf92a",
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "status" : "Proposed",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
