@@ -864,7 +864,7 @@ channel. The child-local service assigned the listener role:
 One `OpenTransport` call creates one carriage. When the relay WebSocket closes
 for any reason, the named byte stream is closed by the Provider process and
 core receives the close as a transport loss event. Core then applies its own
-reconnect policy and issues a new `OpenTransport` call.
+bounded reconnect lifecycle and issues a new `OpenTransport` call.
 
 #### `CloseTransport(handle)`
 
@@ -875,9 +875,10 @@ session.
 #### `ObserveTransport(handle) → Stream<TransportObservation>`
 
 Returns a stream of bounded carriage health observations: Azure auth events,
-WebSocket open/close events, and stable error codes. **Core aggregates these
-into the ZoneLink transport status sub-object.** The relay service does not
-write ZoneLink status directly.
+WebSocket open/close events, and stable error codes. **Core aggregates shared
+observations into canonical ZoneLink `status.resource` fields and bounded
+Azure-specific observations into `status.provider.details`.** The relay service
+does not write ZoneLink status directly.
 
 ### Core ownership
 
@@ -1059,8 +1060,9 @@ Credential resource.
 
 The relay transport service does **not** write ZoneLink status. The child
 Zone's core controller receives a `Stream<TransportObservation>` from
-`ObserveTransport` and aggregates those observations into its local ZoneLink
-transport status sub-object. There is no parent-side ZoneLink status or handler.
+`ObserveTransport` and aggregates those observations into the canonical local
+ZoneLink `status.resource` fields. There is no parent-side ZoneLink status or
+handler.
 
 Per D088, child core writes the ZoneLink universal `ResourceStatus` base at top-level
 `status.*` and cross-provider ZoneLink/transport observation under
@@ -1082,24 +1084,26 @@ status:
   phase: Ready
   conditions: [...]
   resource:
-    zoneLink:
-      sessionGeneration: 3
-      reconnectCount: 1
-      lastConnectedAt: 2026-07-22T00:00:00Z
-      ...
-    transport:
-      providerRef: Provider/transport-azure-relay
-      phase: Connected           # Pending | Connected | Reconnecting | Failed | Unknown
-      lastConnectedAt: 2026-07-22T00:00:00Z
-      lastDisconnectedAt: null
-      lastDisconnectReason: null       # bounded redacted string; no secret bytes
-      reconnectAttempt: 0
+    childZoneUid: <store-generated-uid>
+    connected: true
+    lastConnectedAt: 2026-07-22T00:00:00Z
+    lastDisconnectedAt: null
+    lastSentRevision: 14
+    lastAckedRevision: 14
+    lastReceivedRevision: 27
+    lastAppliedRevision: 27
+    linkEpoch: 3
+    pendingLocalIntents: 0
+    childAuthorized: true
   provider:
     providerRef: Provider/transport-azure-relay
     schemaId: transport-azure-relay.d2bus.org/ZoneLink/status
     schemaVersion: "1.0"
     observedProviderGeneration: 3
     details:
+      transportPhase: Connected   # Pending | Connected | Reconnecting | Failed | Unknown
+      lastDisconnectReason: null  # bounded redacted string; no secret bytes
+      reconnectAttempt: 0
       relayEndpoint:
         namespaceId: relns-d2b-prod   # non-secret; echoed from spec.transportSettings
         entityId: hc-d2b-k2           # non-secret; echoed from spec.transportSettings

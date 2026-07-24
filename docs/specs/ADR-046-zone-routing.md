@@ -10,7 +10,7 @@
 | Normative | Yes |
 | Owners | `d2b-zone-routing`, `d2b-bus` Zone route engine, core-controller ZoneLink handler |
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-object-model`, `ADR-046-resource-reconciliation` |
-| Supersedes | `RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + capability ceiling) |
+| Supersedes | `RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope) |
 
 ## Source and reuse policy
 
@@ -456,19 +456,19 @@ have mock/conformance implementations, and are tested, but:
 The provider trait family becomes `Provider` ResourceType with
 controller/service/worker Processes. The capability advertisement fields
 (`CapabilitySet`, `WorkloadCapabilitySet`, etc.) survive in the v3
-capability ceiling model. The trait boundary itself is replaced by typed
+allocator-issued capability-scope model. The trait boundary itself is replaced by typed
 ResourceSpec/Status fields on the Provider resource.
 
 ### CapabilitySet model
 
 Current routing authz is entirely `CapabilitySet`-based: the route engine
-propagates capability ceilings downward and checks that a requested
+propagates allocated capability scopes downward and checks that a requested
 capability is covered. There is no per-hop RBAC subject/verb check.
 
 **ADR 0046 mapping:**
-v3 adds a **RBAC layer above the capability ceiling**: at each hop, the
+v3 adds a **RBAC layer above the allocated capability scope**: at each hop, the
 intermediate Zone evaluates a `relay` verb check against the forwarded
-principal's RoleBinding. Capability ceiling propagation from
+principal's RoleBinding. Capability-scope propagation from
 `RouteNamespaceAllocation` is preserved. The delta (RBAC relay verb check)
 is genuinely new; it does not exist anywhere in the current baseline.
 
@@ -495,9 +495,10 @@ trust-session operations based on them today.
   Nix-authored child-local ZoneLink resources, and the runtime-created Zone
   self-resource. The `RealmControllersJson` schema retires when sealed allocator
   topology owns placement/path and ZoneLinks own transport/route state.
-- `realm-identity.json` → superseded by ZoneLink
-  `spec.childStaticKeyFingerprint`. The `RealmIdentityConfigJson` schema
-  retires when ZoneLink enrollment handles key pinning.
+- `realm-identity.json` → superseded by the allocator-sealed ZoneLink bootstrap
+  identity and the child-local `spec.transportCredentials` references defined
+  by the canonical ZoneLink schema. The `RealmIdentityConfigJson` schema
+  retires when ComponentSession enrollment handles key pinning.
 
 ### Realm access resolver
 
@@ -596,102 +597,48 @@ authority from prior hops beyond what its own enrolled RoleBinding grants.
 
 ## ZoneLink resource
 
-### Spec
+### Authoritative schema and routing interpretation
 
-```yaml
-apiVersion: resources.d2bus.org/v3
-type: ZoneLink
-metadata:
-  name: k1-uplink
-  zone: k1
-spec:
-  # Required: stable local child name; must equal metadata.zone.
-  childZoneName: k1
-  # Required: transport Provider that carries the link ComponentSession.
-  transportProviderRef: Provider/transport-unix
-  # Provider-specific transport binding (e.g. socket path class for unix,
-  # CID range for vsock, relay name for azure-relay). Validated by the
-  # transport Provider's schema; no raw socket path or credential bytes.
-  transportSettings: {}
-  # Child Zone's expected enrolled static public key fingerprint.
-  # Required for KK ComponentSession profile enforcement.
-  childStaticKeyFingerprint: <sha256-hex>
-  # Maximum capability ceiling propagated to child-local RoleBindings.
-  # The parent may only grant capabilities it itself holds.
-  capabilityCeiling:
-    resourceTypes: [Process, Volume, Network]
-    verbs: [get, list, watch, create, update-spec]
-    zones: []          # empty = only the child zone
-    executionRefs: []  # empty = child chooses
-  # Optional: preferred reconnect backoff profile (bounded seconds).
-  reconnectPolicy:
-    initialDelaySeconds: 1
-    maxDelaySeconds: 60
-    jitterFactor: 0.25
-  # Whether local intents may accumulate while disconnected.
-  localIntentPolicy: queue   # queue | drop | fail
-  # Maximum queued intents while disconnected (1–4096).
-  maxQueuedIntents: 256
-  # Route advertisement renewal interval (seconds, 10–3600).
-  routeRenewalSeconds: 300
-  # Maximum hop count for forwarded calls (1–16; counted at source).
-  maxHops: 8
-```
+[`ADR-046-resources-zone-control.md` §3](ADR-046-resources-zone-control.md)
+is the sole normative ZoneLink ResourceType schema. A ZoneLink `spec` has
+exactly these six top-level fields:
 
-Rules:
+1. `childZoneName`
+2. `transportProviderRef`
+3. `transportSettings`
+4. `transportCredentials`
+5. `disabled`
+6. `limits`
 
-- `childZoneName` must satisfy `^[a-z][a-z0-9-]*$` and equal the enclosing
-  child Zone name. Local root has no uplink; a non-root Zone has at most one
-  ZoneLink resource, enabled or disabled.
-- `transportProviderRef` must resolve to a Ready Provider in this same child
-  Zone.
-- `capabilityCeiling` may only include capabilities granted by the sealed
-  parent allocator binding; the allocator intersection is enforced
-  structurally before the link becomes Ready.
-- `childStaticKeyFingerprint` is the enrolled KK key fingerprint; the
-  handshake fails closed if the child presents a different static key.
-- The `transportSettings` object is validated against the transport
-  Provider's JSON Schema before the link is activated.
-- `maxHops` is enforced at the source d2b-bus; a call arriving with a
-  hop count equal to `maxHops` is refused before forwarding.
-- `localIntentPolicy: queue` records `UpdateSpec`/`Create`/`Delete`
-  intents locally until reconnected; `drop` discards them silently;
-  `fail` returns `zone-link-disconnected` to the caller immediately.
+Unknown fields are rejected. This document does not define a second routing
+schema. It only adds these routing interpretations:
 
-### Status
+- `childZoneName` identifies the enclosing child Zone and must equal
+  `metadata.zone`; local root has no uplink and a non-root Zone has at most one
+  ZoneLink, enabled or disabled.
+- `transportProviderRef` resolves to a Ready Provider in that same child Zone.
+  The Provider validates `transportSettings`, while `transportCredentials`
+  contains only same-Zone `Credential/<name>` refs.
+- `disabled: true` closes the session, withdraws admitted route projections,
+  and suppresses reconnect until re-enabled.
+- `limits.maxPendingIntents`, `limits.maxActiveStreams`,
+  `limits.reconnectMaxAttempts`, and `limits.reconnectWindowSecs` bound routing
+  queues, streams, and reconnect activity. Transport-specific backoff remains
+  Provider-internal and bounded by those limits.
+- The allocator-selected parent supplies the sealed ComponentSession identity,
+  route namespace, and allowed capability scope. None is an additional
+  ZoneLink spec field.
+- The routing wire contract has one fixed, bounded hop budget; it is not
+  operator-configurable per ZoneLink.
 
-```yaml
-status:
-  observedGeneration: 1
-  phase: Ready        # Pending | Ready | Degraded | Failed | Unknown
-  conditions:
-    - type: SessionEstablished
-      status: "True"
-      reason: kk-handshake-ok
-      observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:00Z
-    - type: ChildZoneReachable
-      status: "True"
-      reason: resource-api-probe-ok
-      observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
-    - type: AdvertisementCurrent
-      status: "True"
-      reason: route-renewed
-      observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:02Z
-  lastReconciledAt: 2026-07-22T00:01:00Z
-  # ZoneLink-specific status fields:
-  zoneLink:
-    childZoneUid: <store-generated-uid>
-    sessionGeneration: 3
-    reconnectCount: 1
-    lastConnectedAt: 2026-07-22T00:00:00Z
-    lastDisconnectedAt: null
-    routeRevision: <opaque>
-    queuedIntentCount: 0
-    advertisedRouteIds: [<route-id-1>]
-```
+The canonical D088 status shape is also owned by
+`ADR-046-resources-zone-control.md` §3.4. Universal `ResourceStatus` fields
+remain directly under `status`; ZoneLink-common observations are under
+`status.resource`; optional implementation observations are under
+`status.provider`. Routing consumes the universal base plus
+`status.resource`, including `childZoneUid`, `connected`, connection
+timestamps, revision cursors, `linkEpoch`, `pendingLocalIntents`, and
+`childAuthorized`. It never introduces another status container.
 
 Status phases:
 
@@ -707,7 +654,7 @@ Status phases:
 The child-local core-controller ZoneLink handler owns status. It never writes
 `Ready` until the parent allocator has authenticated the child, acknowledged
 the route allocation, and successfully probed the child's `d2b.resource.v3`
-service within the current session generation. The parent keeps private
+service within the current link epoch. The parent keeps private
 allocation/route state, not a second resource row.
 
 ## Zone tree identity and prefix naming
@@ -718,7 +665,7 @@ authors its local `ZoneLink/<link-name>` uplink; the link name need not equal
 the child's self-name, while `spec.childZoneName` must. The provisioning
 parent allocator assigns the private tree edge and verifies the child self-name
 during KK enrollment. The acknowledged UID is recorded as
-`status.zoneLink.childZoneUid`.
+`status.resource.childZoneUid`.
 
 Zone tree positions are described as ordered label paths from the local
 root, most-specific first, matching the `RealmPath` grammar from
@@ -741,7 +688,7 @@ Each Zone runtime maintains a local `RouteTreeEngine` (adapted from
 tracks:
 
 - **Parent entries**: for each child Zone, the immediate parent path,
-  optional route id, capability ceiling, and expiry.
+  optional route id, allocated capability scope, and expiry.
 - **Route entries**: for each descendant Zone reachable through this
   node, the advertising Zone, next-hop child label, route id, capability
   set, and expiry.
@@ -880,7 +827,7 @@ schemas.
 and emits a generated `nixos-modules/generated/options-zones-<type>.nix` for each
 ResourceType, overlaying typed submodule options onto `spec`. These generated files
 are committed and kept in sync by `make test-drift`. Field-level type errors (wrong
-enum value, out-of-range integer, non-hex fingerprint, etc.) are therefore caught
+enum value, out-of-range integer, malformed ResourceRef, etc.) are therefore caught
 at `nix eval` time via the generated option type, not by explicit assertions.
 
 #### Generated ZoneLink spec options (illustrative excerpt)
@@ -901,43 +848,44 @@ at `nix eval` time via the generated option type, not by explicit assertions.
     transportSettings = mkOption {
       # Freeform; validated at build time against the transport Provider's
       # transportSettingsSchema.  No socketPath, hostPath, password, token,
-      # or key top-level keys permitted.  Credential refs use "Credential/<name>".
+      # or key top-level keys permitted.
       type = types.attrs;
       default = {};
     };
-    childStaticKeyFingerprint = mkOption {
-      type = types.strMatching "^[0-9a-f]{64}$";
-      description = "SHA-256 fingerprint (64 lower-hex chars) of the child's enrolled KK static public key.";
+    transportCredentials = mkOption {
+      type = types.listOf (types.strMatching "^Credential/[a-z][a-z0-9-]*$");
+      default = [];
+      description = "Same-Zone Credential refs resolved for ComponentSession establishment.";
     };
-    capabilityCeiling = {
-      resourceTypes = mkOption {
-        type = types.listOf (types.enum [
-          "Credential" "EphemeralProcess" "Guest" "Host" "Network"
-          "Process" "Provider" "Volume" "Zone" "ZoneLink"
-        ]);
-        default = [];
+    disabled = mkOption {
+      type = types.bool;
+      default = false;
+    };
+    limits = {
+      maxPendingIntents = mkOption {
+        type = types.ints.between 0 1024;
+        default = 256;
       };
-      verbs = mkOption {
-        type = types.listOf (types.enum [
-          "create" "delete" "get" "list" "relay" "update-spec" "watch"
-        ]);
-        default = [];
+      maxActiveStreams = mkOption {
+        type = types.ints.between 1 128;
+        default = 32;
       };
-      zones         = mkOption { type = types.listOf types.str; default = []; };
-      executionRefs = mkOption { type = types.listOf types.str; default = []; };
+      reconnectMaxAttempts = mkOption {
+        type = types.ints.positive;
+        default = 10;
+      };
+      reconnectWindowSecs = mkOption {
+        type = types.ints.positive;
+        default = 300;
+      };
     };
-    reconnectPolicy = {
-      initialDelaySeconds = mkOption { type = types.ints.between 1 300;  default = 1;  };
-      maxDelaySeconds     = mkOption { type = types.ints.between 1 3600; default = 60; };
-      jitterFactor        = mkOption { type = types.numbers.between 0.0 0.5; default = 0.25; };
-    };
-    localIntentPolicy   = mkOption { type = types.enum [ "drop" "fail" "queue" ]; default = "queue"; };
-    maxQueuedIntents    = mkOption { type = types.ints.between 1 4096; default = 256; };
-    routeRenewalSeconds = mkOption { type = types.ints.between 10 3600; default = 300; };
-    maxHops             = mkOption { type = types.ints.between 1 16;   default = 8;   };
   };
 }
 ```
+
+This is an exact mirror of the six-field schema owned by
+`ADR-046-resources-zone-control.md` §3. The generator rejects any additional
+ZoneLink field rather than extending this excerpt.
 
 ### Eval-time assertions
 
@@ -987,17 +935,17 @@ d2b.zones.k1.resources.transport-unix = {
 d2b.zones.k1.resources.k1-uplink = {
   type = "ZoneLink";
   spec = {
-    childZoneName             = "k1";
-    transportProviderRef      = "Provider/transport-unix";
-    transportSettings          = {};     # unix transport uses allocator-issued FD; no config needed
-    childStaticKeyFingerprint = "a3f1e...c4b9";   # 64 lower-hex chars
-    capabilityCeiling = {
-      resourceTypes = [ "Network" "Process" "Volume" ];
-      verbs         = [ "create" "get" "list" "update-spec" "watch" ];
-      zones         = [];
-      executionRefs = [];
+    childZoneName        = "k1";
+    transportProviderRef = "Provider/transport-unix";
+    transportSettings    = {}; # allocator-issued FD; no path config
+    transportCredentials = [];
+    disabled             = false;
+    limits = {
+      maxPendingIntents    = 256;
+      maxActiveStreams     = 32;
+      reconnectMaxAttempts = 10;
+      reconnectWindowSecs  = 300;
     };
-    # All remaining fields use schema defaults (reconnectPolicy, localIntentPolicy, etc.)
   };
 };
 ```
@@ -1033,32 +981,28 @@ d2b.zones.k2.resources.relay-sas-k2 = {
 d2b.zones.k2.resources.k2-uplink = {
   type = "ZoneLink";
   spec = {
-    childZoneName             = "k2";
-    transportProviderRef      = "Provider/transport-azure-relay";
-    transportSettings          = {
-      relayName     = "d2b-k2";              # relay endpoint name; no key material
-      sasCredRef    = "Credential/relay-sas-k2";  # SAS token via Credential ref
+    childZoneName        = "k2";
+    transportProviderRef = "Provider/transport-azure-relay";
+    transportSettings = {
+      relayNamespaceId = "relns-d2b-prod";
+      relayEntityId    = "hc-d2b-k2";
     };
-    childStaticKeyFingerprint = "9d2e...7f01";
-    capabilityCeiling = {
-      resourceTypes = [ "Process" ];
-      verbs         = [ "create" "get" "list" "watch" ];
-      zones         = [];
-      executionRefs = [];
+    transportCredentials = [ "Credential/relay-sas-k2" ];
+    disabled = false;
+    limits = {
+      maxPendingIntents    = 128;
+      maxActiveStreams     = 32;
+      reconnectMaxAttempts = 10;
+      reconnectWindowSecs  = 300;
     };
-    localIntentPolicy   = "queue";
-    maxQueuedIntents    = 128;
-    routeRenewalSeconds = 120;
-    maxHops             = 4;
   };
 };
 ```
 
-Note that `spec.transportSettings.sasCredRef` is a `Credential/<name>` ref, not
-the SAS token value itself. The `transportSettingsSchema` for `transport-azure-relay`
-annotates the `sasCredRef` field with `"credentialRef": true`; the build emitter
-rejects any `transportSettings` field annotated `"secret": true` and requires that
-secret material arrive only as `Credential/<name>` refs.
+The relay SAS token is referenced only through
+`spec.transportCredentials`; `transportSettings` contains non-secret Provider
+configuration. The build emitter rejects settings annotated `"secret": true`
+and resolves every credential ref in the same child Zone.
 
 ### Build-time validation
 
@@ -1087,16 +1031,12 @@ The Nix build phase runs `xtask gen-zone-resources` which:
    Fields annotated `"secret": true` are rejected; those annotated
    `"credentialRef": true` must be `"Credential/<name>"` strings.
 
-4. **Capability ceiling subset check**: the emitter verifies that every
-   child-local ZoneLink `capabilityCeiling` is a structural subset of the
-   provisioning parent's private allocator grant. Capabilities wider than the
-   sealed grant are a build error.
-
-5. **Ref resolution**: all `*Ref` and `*ProviderRef` values are resolved
+4. **Ref resolution**: all `*Ref` and `*ProviderRef` values, including every
+   `transportCredentials` entry, are resolved
    against resources declared in the same `d2b.zones.<zone>.resources` and
    fail the build if unresolvable.
 
-6. **Conflict check**: duplicate `(type, zone, name)` tuples across the
+5. **Conflict check**: duplicate `(type, zone, name)` tuples across the
    entire emitted bundle fail the build.
 
 ### Canonical ResourceSpec JSON shapes
@@ -1140,31 +1080,23 @@ and the Nix-rendered resource bundle.
   },
   "spec": {
     "childZoneName": "k1",
+    "disabled": false,
+    "limits": {
+      "maxActiveStreams": 32,
+      "maxPendingIntents": 256,
+      "reconnectMaxAttempts": 10,
+      "reconnectWindowSecs": 300
+    },
+    "transportCredentials": [],
     "transportProviderRef": "Provider/transport-unix",
-    "transportSettings": {},
-    "childStaticKeyFingerprint": "a3f1e...c4b9",
-    "capabilityCeiling": {
-      "executionRefs": [],
-      "resourceTypes": ["Network", "Process", "Volume"],
-      "verbs": ["create", "get", "list", "update-spec", "watch"],
-      "zones": []
-    },
-    "reconnectPolicy": {
-      "initialDelaySeconds": 1,
-      "jitterFactor": 0.25,
-      "maxDelaySeconds": 60
-    },
-    "localIntentPolicy": "queue",
-    "maxHops": 8,
-    "maxQueuedIntents": 256,
-    "routeRenewalSeconds": 300
+    "transportSettings": {}
   }
 }
 ```
 
 The canonical form sorts all object keys lexicographically. Array ordering
 depends on the array's schema classification: order-significant arrays
-(e.g. `capabilityCeiling.verbs`, named-stream lists) are preserved as authored;
+(e.g. `transportCredentials`, named-stream lists) are preserved as authored;
 schema-declared set-like arrays (e.g. `resourceTypes` in capability specs) are
 sorted lexicographically. All fields with defaults are always emitted; no key
 omission. The `status` object is absent from the emitted bundle entirely.
@@ -1395,15 +1327,16 @@ Required before ADR046-routing-011 through ADR046-routing-013 are complete:
 | `nix-unit: zone-parent-one-parent` | nix-unit eval | Conflicting scalar definitions reject through normal Nix module merging |
 | `nix-unit: zone-parent-cycle` | nix-unit eval | Two-node and longer `parentZone` cycles reject before bootstrap publication |
 | `nix-unit: zone-parent-depth` | nix-unit eval | Sixteen-name ancestry succeeds and seventeen-name ancestry rejects |
-| `nix-unit: zone-link-fingerprint` | nix-unit eval | 63-char and non-hex fingerprints rejected at eval |
+| `nix-unit: zone-link-credential-ref` | nix-unit eval | Malformed or cross-Zone `transportCredentials` refs rejected |
 | `nix-unit: zone-link-child-name` | nix-unit eval | `childZoneName` unequal to enclosing child Zone rejected |
 | `nix-unit: zone-link-one-uplink` | nix-unit eval | Second uplink (even disabled) and any local-root uplink rejected |
-| `nix-unit: capability-ceiling-unknown-verb` | nix-unit eval | Unknown verb in `capabilityCeiling` rejected |
+| `nix-unit: zone-link-closed-spec` | nix-unit eval | Any ZoneLink top-level spec field outside the canonical six is rejected |
+| `nix-unit: zone-link-limits` | nix-unit eval | Queue, stream, reconnect-attempt, and reconnect-window bounds enforced |
 | `nix-unit: transport-binding-secret-key` | nix-unit eval | Binding with `key =` rejected at eval |
 | `drift: zone-resource-schema` | `make test-drift` | `xtask gen-zone-schemas && git diff --exit-code` passes |
 | `build: zone-bundle-deterministic` | flake check | Two identical configs produce identical `generationId` |
 | `build: transport-binding-unknown-field` | flake check | Unknown Provider binding key fails build |
-| `build: capability-ceiling-superset` | flake check | Ceiling wider than parent grant fails build |
+| `build: allocator-capability-scope` | flake check | Route capability scope wider than the sealed parent allocation fails build |
 | `build: missing-transport-provider` | flake check | Unresolvable `transportProviderRef` fails build |
 | `build: parent-topology-sealed` | flake check | Valid sorted `parentZone` rows compile only into the sealed allocator bootstrap input and never into `Zone.spec` or resource bundles |
 | `host-integration: cleanup-removed-zonelink` | NixOS test | Switch removes ZoneLink; assert `deletionRequestedAt` set; store transaction commits `Deleted` revision and removes row/index; audit record appended from committed revision with exactly-once recovery; generation reaches Ready; dynamic route entries deleted by ZoneLink controller teardown, not by generation diff |
@@ -1428,7 +1361,7 @@ ZoneLinkRouteAdvertisement {
   controllerGeneration: <opaque>      // bound to the child controller lease
   routes: [
     { descendant: ZonePath, nextHopChild: ZoneLabelId, routeId: <opaque>,
-      capabilities: CapabilitySet }   // capabilities narrowed by ceiling
+      capabilities: CapabilitySet }   // narrowed by allocator policy
   ]                                   // 1–64 routes
   issuedAtUnixSeconds: u64
   expiresAtUnixSeconds: u64           // > issuedAt; max 7200 s
@@ -1456,8 +1389,8 @@ Admission rules (adapted from `RouteTreeEngine::admit_advertisement`):
 7. Each route's `descendant` must be a strict descendant of
    `advertisingZone`; next-hop label must be the immediate child of
    `advertisingZone` toward `descendant`.
-8. Each route's `capabilities` must be a subset of the `capabilityCeiling`
-   in the `ZoneLinkNamespaceAllocation`.
+8. Each route's `capabilities` must be a subset of `allowedCapabilities`
+   in the private `ZoneLinkNamespaceAllocation`.
 9. Capacity check: projected physical entries after admission must not
    exceed `MAX_PARENT_ENTRIES` / `MAX_ROUTE_ENTRIES`; if admission would
    overflow, prune expired entries first; fail closed with
@@ -1485,13 +1418,14 @@ or unknown `routeId` is silently accepted (idempotent).
 ### Renewal
 
 Advertisements expire. The child's ZoneLink controller issues a renewal
-advertisement before expiry, at most every `routeRenewalSeconds`. A
+advertisement before expiry using the bounded protocol scheduler. Renewal
+timing is internal routing behavior, not a ZoneLink spec field. A
 renewal carries:
 
 - a new `issuedAt` / `expiresAt` window;
 - a new `signatureRef` (distinct from prior);
 - optionally updated `capabilities` (may narrow but not widen beyond the
-  parent's `capabilityCeiling`).
+  parent's private allocation).
 
 The engine admits the renewal exactly as a fresh advertisement, replacing
 the old entry for each `routeId` named in the renewal. The prior replay
@@ -1501,8 +1435,8 @@ route is treated as a new advertisement.
 ### Namespace allocation
 
 A parent allocates a `ZoneLinkNamespaceAllocation` when the child-local
-ZoneLink requests activation and when that local resource's
-`capabilityCeiling` changes:
+ZoneLink requests activation and whenever the parent allocator's private
+route policy changes:
 
 ```text
 ZoneLinkNamespaceAllocation {
@@ -1510,13 +1444,13 @@ ZoneLinkNamespaceAllocation {
   allocatedToGeneration: <controller-generation>
   allowedPrefixes: [ZonePath]    // child zone or descendants; 1–16
   maxRoutes: u32                 // 1–64
-  capabilityCeiling: CapabilitySet
+  allowedCapabilities: CapabilitySet
 }
 ```
 
 The child controller must sign advertisements that exactly match the
-allocated edge, generation, allowed prefixes, and capability ceiling.
-Allocation changes (e.g. ceiling narrowing) require the child to issue
+allocated edge, generation, allowed prefixes, and capability scope.
+Allocation changes (e.g. capability narrowing) require the child to issue
 a new advertisement under the new generation.
 
 The `ZoneLinkNamespaceAllocation` above **is** the explicit ZoneLink range
@@ -1665,18 +1599,20 @@ The result is immutable route metadata. It carries no transport socket,
 relay endpoint, credential, or host path. d2b-bus uses the hop list to
 compose the sequence of ComponentSession calls that forward the request.
 
-## Capability and RBAC ceiling narrowing
+## Capability and RBAC narrowing
 
-### Ceiling propagation
+### Allocated capability propagation
 
-Each `ZoneLink` spec declares a `capabilityCeiling`. This ceiling is the
-maximum `CapabilitySet` the parent will route to the child. It is enforced
+The parent allocator's private `ZoneLinkNamespaceAllocation` declares
+`allowedCapabilities`, the maximum `CapabilitySet` the parent will route to
+the child. It is not part of the ZoneLink ResourceSpec. The scope is enforced
 at two points:
 
 1. **Advertisement admission**: the child's advertised `capabilities` for
-   each route must be a subset of `capabilityCeiling` in the namespace
+   each route must be a subset of `allowedCapabilities` in the namespace
    allocation (`CapabilitySet::is_subset_of`). A route advertising
-   capabilities beyond the ceiling is rejected with `namespace-violation`.
+   capabilities beyond the allocation is rejected with
+   `namespace-violation`.
 2. **Bus route decision**: the `required_capability` for the operation is
    checked against the route's advertised capabilities at the target Zone.
    A missing capability returns `MissingCapability`.
@@ -1695,7 +1631,7 @@ subject mapped from the ZoneLink's enrolled identity:
 child-local subject = child RoleBinding that:
   - names the parent Zone's link principal as its subjectRef
   - grants only the verbs/resourceTypes/names declared in the binding
-  - has a capability scope no wider than capabilityCeiling
+  - has a capability scope no wider than the allocator-issued scope
 ```
 
 The parent cannot self-assert a subject, verb, or resource name in the
@@ -1803,7 +1739,7 @@ be forwarded through a ZoneLink if:
   descriptor;
 - the call's `purpose` class is `remote-zone`;
 - RBAC at each hop grants the `relay` verb for the service name;
-- the hop count does not exceed `maxHops`.
+- the hop count does not exceed the fixed protocol limit of 16.
 
 The forwarded session carries:
 
@@ -1975,23 +1911,26 @@ When a child-local ZoneLink ComponentSession disconnects:
    established this generation).
 2. In-flight operations with a pinned path through this link fail
    immediately with `zone-link-disconnected`.
-3. Child-to-parent intents may accumulate in the child store per
-   `localIntentPolicy`; parent-to-child operations fail immediately.
-4. The child-local controller schedules a reconnect attempt using the
-   `reconnectPolicy` backoff.
+3. Child-to-parent intents may accumulate in the child store up to
+   `spec.limits.maxPendingIntents`; parent-to-child operations fail
+   immediately.
+4. The child-local controller schedules bounded Provider-internal reconnect
+   attempts, limited by `spec.limits.reconnectMaxAttempts` within
+   `spec.limits.reconnectWindowSecs`.
 5. On reconnect:
-   - a new KK handshake is performed; the child static key is
-     re-verified against `childStaticKeyFingerprint`;
-   - a new session generation is assigned;
-   - all pinned-path tracking for the old generation is cleared;
+   - a new KK handshake is performed against the allocator-sealed enrolled
+     identity and resolved `spec.transportCredentials`;
+   - a new link epoch is assigned;
+   - all pinned-path tracking for the old epoch is cleared;
    - queued intents are replayed (with original idempotency keys if the
      queued mutation is younger than the retention window, or as new
      operations if older);
    - the child-local ZoneLink handler re-issues parent route/export
      advertisement watches from the last known parent revision or triggers
      `List` + reopen if the cursor expired.
-6. After reconnect, `status.zoneLink.reconnectCount` is incremented and
-   `lastConnectedAt` is updated.
+6. After reconnect, `status.resource.linkEpoch` is incremented and
+   `status.resource.lastConnectedAt` is updated atomically with the cursor
+   fields.
 
 During disconnected recovery, the ZoneLink controller updates only its own
 local status and outbound intent queue. It does not infer or mutate other
@@ -2000,12 +1939,12 @@ cleanup or status correction without a live session.
 
 ### Revocation
 
-A ZoneLink may be administratively revoked by setting its spec's
-`capabilityCeiling` to an empty set and then deleting the resource.
+A ZoneLink may be administratively revoked by setting
+`spec.disabled: true` and then deleting the resource.
 
 Revocation sequence:
 
-1. Spec update: `capabilityCeiling` set to empty.
+1. Spec update: `disabled` set to `true`; the child handler stops reconnecting.
 2. Child-local ZoneLink controller issues a route withdrawal for all advertised
    `routeId` values.
 3. The parent's `RouteTreeEngine` removes all entries for the child.
@@ -2041,8 +1980,8 @@ Additionally, the parent's `RouteTreeEngine` enforces:
   refers back to its own `advertisingZone` is rejected at admission.
 
 The hop counter enforced at source d2b-bus provides a belt-and-suspenders
-limit independent of the tree walk. Default `maxHops` is 8; absolute
-maximum is 16.
+limit independent of the tree walk. The protocol-wide initial budget is 16
+and is not configurable in ZoneLink spec.
 
 ### Hop limits
 
@@ -2058,16 +1997,16 @@ Hop counter enforcement:
 
 ## Local intents while disconnected
 
-When `localIntentPolicy: queue` is set, the child-local ZoneLink handler may
-enqueue `UpdateSpec`, `Create`, and `Delete` intents directed from the child to
-parent/ancestor resources while the uplink is disconnected. Parent-to-child
-mutations are not queued in the child and fail at the parent route boundary.
+The child-local ZoneLink handler may enqueue `UpdateSpec`, `Create`, and
+`Delete` intents directed from the child to parent/ancestor resources while
+the uplink is disconnected. Parent-to-child mutations are not queued in the
+child and fail at the parent route boundary.
 Behavior:
 
 - Intents are stored in the child Zone as bounded `ZoneLinkIntent` records, not
   resource mutations. No parent resource state is assumed.
-- `maxQueuedIntents` limits the queue. When the queue is full, new intents
-  fail with `zone-link-intent-queue-full`.
+- `spec.limits.maxPendingIntents` limits the queue. When the queue is full,
+  new intents fail with `zone-link-intent-queue-full`.
 - Intent records carry the original operation/idempotency/correlation IDs
   and a `queuedAt` timestamp.
 - On reconnect, intents are replayed in order with their original
@@ -2077,12 +2016,8 @@ Behavior:
   not retried automatically; the caller is notified with the conflict.
 - A `Get`, `List`, or `Watch` call traversing a disconnected uplink always
   returns `zone-link-disconnected` immediately; it is never queued.
-- `localIntentPolicy: drop` silently discards all intents during
-  disconnect and returns success to the caller (callers are not informed
-  of the drop; this mode is for fire-and-forget patterns where staleness
-  is acceptable).
-- `localIntentPolicy: fail` returns `zone-link-disconnected` immediately
-  for all mutating calls; no intent is queued or dropped.
+- If `maxPendingIntents` is zero, mutating calls fail immediately with
+  `zone-link-disconnected`; intents are never silently dropped.
 
 Local intent queueing does not constitute a claim of parent-Zone state.
 The ZoneLink handler does not infer parent resource phase, condition, or
@@ -2232,8 +2167,7 @@ included in span attributes.
 | --- | --- |
 | `zone-link-disconnected` | ZoneLink session not established; call rejected |
 | `zone-link-revoked` | ZoneLink was administratively revoked |
-| `zone-link-intent-queue-full` | Intent queue at `maxQueuedIntents` |
-| `zone-link-intent-dropped` | Intent dropped due to `localIntentPolicy: drop` |
+| `zone-link-intent-queue-full` | Intent queue reached `spec.limits.maxPendingIntents` |
 | `hop-limit-exceeded` | Forwarded call has no remaining hops |
 | `malformed-hop-count` | Hop counter in inbound frame claims more hops than allowed |
 | `relay-denied` | Intermediate Zone's RBAC denied relay |
@@ -2242,7 +2176,7 @@ included in span attributes.
 | `zone-route-capability-denied` | Required capability absent from route |
 | `zone-route-loop` | NCA algorithm detected a cycle |
 | `zone-route-multi-parent` | Route table has conflicting parents for one child Zone |
-| `zone-advertisement-namespace-violation` | Advertisement exceeds allocated namespace/ceiling |
+| `zone-advertisement-namespace-violation` | Advertisement exceeds allocated namespace or capability scope |
 | `zone-advertisement-replay` | Duplicate advertisement (replay rejection) |
 | `zone-advertisement-expired` | Advertisement received after expiry |
 | `zone-advertisement-malformed` | Advertisement fails structural invariants |
@@ -2259,9 +2193,10 @@ credentials, or provider diagnostics.
    Forwarded calls are re-authorized at each hop.
 2. A child Zone's resource status is not inferred from local intents; the
    parent only learns child state from authenticated responses.
-3. The KK handshake enforces `childStaticKeyFingerprint`; a child that
-   presents a different key is refused before any resource exchange.
-4. Capability ceilings propagate monotonically downward; a child cannot
+3. The KK handshake verifies the allocator-sealed enrolled identity and
+   resolved transport credentials; a different identity is refused before
+   any resource exchange.
+4. Allocated capability scopes narrow monotonically downward; a child cannot
    advertise capabilities beyond what its parent allocated.
 5. No FD, credential, or host path is forwarded. Transport bindings are
    provider-schema-validated opaque values.
@@ -2341,7 +2276,7 @@ Evidence classes: **A** = implemented-and-reachable from production binary,
 | --- | --- | --- | --- | --- |
 | `EnrollmentRecord`, `KeyRotationPlan`, `RevocationRecord`, `SessionTeardownDirective` | `d2b-realm-core/src/enrollment.rs` | **B** | `RealmIdentityStore` only (itself unwired) | → ZoneLink controller session/revocation lifecycle |
 | `RealmIdentityStore` | `d2b-realm-core/src/identity_store.rs` | **B** | No production callers found | → ZoneLink controller enrollment state machine |
-| `RealmIdentityConfigJson` (schema v2) | `d2b-realm-core/src/identity_config.rs` | **A** | Loaded at d2bd startup (lib.rs:1425) and priv-broker startup (runtime.rs:704); logs "runtime trust sessions remain inert" | → ZoneLink `spec.childStaticKeyFingerprint`; artifact retires |
+| `RealmIdentityConfigJson` (schema v2) | `d2b-realm-core/src/identity_config.rs` | **A** | Loaded at d2bd startup (lib.rs:1425) and priv-broker startup (runtime.rs:704); logs "runtime trust sessions remain inert" | → allocator-sealed ComponentSession enrollment identity plus ZoneLink `spec.transportCredentials`; artifact retires |
 
 ### Allocator engine
 
@@ -2357,7 +2292,7 @@ Evidence classes: **A** = implemented-and-reachable from production binary,
 | --- | --- | --- | --- | --- |
 | `WorkloadProvider`, `DisplayProvider`, `RuntimeProvider`, `PersistentShellProvider` traits | `d2b-realm-provider/src/provider.rs` | **B** | `d2b-host-providers` implements (itself unwired); `d2b-provider-aca`/`relay` implement and ARE wired for display session only | → Provider ResourceType controller/service processes |
 | `AcaWorkloadProvider` | `d2b-provider-aca/src/lib.rs` | **A** (display session path) | d2bd `new_gateway_display_runtime_from_config` (lib.rs:4165); ACA display gateway only | Not Zone routing; display path remains display-specific |
-| `CapabilitySet`, `WorkloadCapabilitySet`, `DisplayCapabilitySet` | `d2b-realm-provider/src/capabilities.rs` | **B** | Traits only; d2b-gateway-runtime uses `DisplayCapabilitySet` | → v3 capability ceiling fields |
+| `CapabilitySet`, `WorkloadCapabilitySet`, `DisplayCapabilitySet` | `d2b-realm-provider/src/capabilities.rs` | **B** | Traits only; d2b-gateway-runtime uses `DisplayCapabilitySet` | → v3 private route-allocation capability fields |
 | `ProviderCircuitBreaker` | `d2b-realm-provider/src/rate_limit.rs` | **B** | `d2b-provider-aca` only (display path) | → Provider rate-limit policy |
 
 ### Bundle artifacts and Nix options
@@ -2376,7 +2311,7 @@ The following transitions are NOT simple textual renames:
 
 1. **`RealmControllerPlacement` enum → private Zone runtime bootstrap placement + explicit parent topology + child-local uplink identity**: 6 variants collapse into per-Zone bootstrap configuration; compiler-only `parentZone` selects the allocator owner, and the child-local ZoneLink's `childZoneName`/`transportProviderRef` supplies transport state. The compiler seals the parent edge into allocator state. Placement and `parentZone` are not public `Zone.spec` fields; `Zone.spec` is `{}`.
 2. **`WorkloadId` → Guest/Host split**: VM/sandbox workloads become `Guest`; local/bare-metal become `Host`. Classification is semantic, not mechanical.
-3. **`CapabilitySet`-only authz → RBAC + capability ceiling**: current engine checks capability ceiling only. Per-hop `relay` verb RBAC is new.
+3. **`CapabilitySet`-only authz → RBAC + allocated capability scope**: current engine checks a route allocation scope only. Per-hop `relay` verb RBAC is new.
 4. **`RealmPath` DNS target form → Zone resource path**: grammar preserved; wire address format changes.
 5. **`EntrypointMode` enum → child-local ZoneLink transport plus topology projection**: `HostResident`/`GatewayBacked` mode is replaced by the child's transport spec; parent routing and CLI inspection use sealed topology and authenticated route projection state.
 6. **`realm-controllers.json`/`realm-identity.json` → sealed parent topology + child-local Zone/ZoneLink state**: data is loaded today but routing/trust sessions are explicitly inert.
@@ -2384,8 +2319,8 @@ The following transitions are NOT simple textual renames:
 
 | Item | Treatment |
 | --- | --- |
-| Behavior retained | Pure in-memory NCA tree-walk; loop/multi-parent detection; advertisement replay-window; capability ceiling propagation; idempotency dedup full 6-tuple `(realm, principal, node, operation_kind, idempotency_key)`; fail-closed on unknown realm/route; bounded audit label cardinality; `TreeRoutePath`/`TreeRouteHop` already exist (rename to ZoneRoutePath/ZoneRouteHop); `DirectShortcut*` machinery already exists; `RouteAuditEventKind` event set already exists |
-| Required delta | ZoneLink ResourceType spec/status/intent queue (ADR-only); compiler-only validated `parentZone` map sealed into allocator bootstrap topology; RBAC `relay` verb check per intermediate hop; watch cursor resync over ZoneLink; named-stream credit forwarding; hop counter byte in wire frames; no-FD/credential structural rejection at serialization boundary; private Zone runtime bootstrap placement (replaces placement enum, not a public spec field); per-hop subject narrowing |
+| Behavior retained | Pure in-memory NCA tree-walk; loop/multi-parent detection; advertisement replay-window; allocated capability-scope propagation; idempotency dedup full 6-tuple `(realm, principal, node, operation_kind, idempotency_key)`; fail-closed on unknown realm/route; bounded audit label cardinality; `TreeRoutePath`/`TreeRouteHop` already exist (rename to ZoneRoutePath/ZoneRouteHop); `DirectShortcut*` machinery already exists; `RouteAuditEventKind` event set already exists |
+| Required delta | Consume the canonical ZoneLink ResourceType spec/status/intent contract from ADR046-zone-control-002; compiler-only validated `parentZone` map sealed into allocator bootstrap topology; RBAC `relay` verb check per intermediate hop; watch cursor resync over ZoneLink; named-stream credit forwarding; hop counter byte in wire frames; no-FD/credential structural rejection at serialization boundary; private Zone runtime bootstrap placement (replaces placement enum, not a public spec field); per-hop subject narrowing |
 | Reuse path | Copy and adapt `RouteTreeEngine` (rename RealmPath→ZonePath, RouteId→ZoneRouteId); copy `RouteAdvertisement`/`RouteNamespaceAllocation`/`TreeRoutePath`/`TreeRouteHop`/`RouteFailClosedReason`/`DirectShortcut*`/`RouteAuditEventKind`; copy `OperationRouter` idempotency dedup; extract `RealmEntrypointTable` suffix-match into ZoneEntrypointResolver; adapt KK handshake from `SecurePeerSession`/`PeerSession` |
 | Replacement/deletion | `RealmEntrypointTable`/`RouteTreeEngine` on RealmPath types retire after ZoneRouteEngine live; `RemoteNodeRegistry` retires when ZoneLink controller live; `WorkloadTargetIndex` retires when Guest/Host resource lookup live; CLI `Route::GatewayBacked` retires when ZoneLink handles all cross-Zone routing; `realm-controllers.json`/`realm-identity.json` retire when sealed `parentZone` topology, runtime Zone identity, and ZoneLink transport state replace them |
 | Feasibility proof | `route_engine.rs` inline test suite (45 functions at line 1202) proves NCA, advertisement, loop, capability, replay, DirectShortcut; `target_resolver.rs` tests prove suffix match; `lib.rs` tests prove idempotency dedup namespace |
@@ -2403,10 +2338,10 @@ The following transitions are NOT simple textual renames:
 | Reuse source | Same v3 baseline commit `b5ddbed6` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/zone_routing.rs` |
-| Detailed design | Rename RealmPath → ZonePath, RealmId → ZoneLabelId, RouteId → ZoneRouteId, ControllerGenerationId → ZoneLinkControllerGeneration; preserve all bounds/validation/serde; add ZoneLink-specific advertisement envelope fields (v3 schema version, capability ceiling field); preserve `RouteFailClosedReason` + add `zone-link-disconnected`, `hop-limit-exceeded`, `relay-denied`, `attachment-not-permitted-over-zone-link`; freeze v3 protobuf numbers separately from v2 Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Rename RealmPath → ZonePath, RealmId → ZoneLabelId, RouteId → ZoneRouteId, ControllerGenerationId → ZoneLinkControllerGeneration; preserve all bounds/validation/serde; add ZoneLink-specific advertisement envelope fields (v3 schema version and private allocated-capability field); preserve `RouteFailClosedReason` + add `zone-link-disconnected`, `hop-limit-exceeded`, `relay-denied`, `attachment-not-permitted-over-zone-link`; freeze v3 protobuf numbers separately from v2 Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus zone route engine and ZoneLink controller consume these types |
 | Data migration | Full reset; no v2 Realm route compatibility |
-| Validation | Golden advertisement/path/failure vectors shared by Rust/Nix; property tests for NCA/loop/ceiling; replay-window tests; hop-count tests |
+| Validation | Golden advertisement/path/failure vectors shared by Rust/Nix; property tests for NCA/loop/allocated-capability narrowing; replay-window tests; hop-count tests |
 | Removal proof | v3 old `RealmPath` route types retired after zone-routing engine is live and all callers switched |
 
 ### ADR046-routing-002
@@ -2419,7 +2354,7 @@ The following transitions are NOT simple textual renames:
 | Reuse source | Same v3 baseline commit `b5ddbed6` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-zone-routing/src/engine.rs` |
-| Detailed design | Adapt RouteTreeEngine to ZoneRouteEngine using ZonePath/ZoneRouteId/ZoneLinkControllerGeneration from ADR046-routing-001; preserve all NCA/loop/multi-parent/capability/replay/capacity logic; add `decide_route` enforcement of `maxHops` parameter; add hop-counter decrement in relay path; expose `ZoneRoutePath` in v3 types Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Adapt RouteTreeEngine to ZoneRouteEngine using ZonePath/ZoneRouteId/ZoneLinkControllerGeneration from ADR046-routing-001; preserve all NCA/loop/multi-parent/capability/replay/capacity logic; add `decide_route` enforcement of the fixed protocol hop budget; add hop-counter decrement in relay path; expose `ZoneRoutePath` in v3 types Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus calls `ZoneRouteEngine::decide_route` for every cross-Zone ResourceClient call; ZoneLink controller calls `admit_advertisement`/`admit_withdrawal` |
 | Data migration | None (pure in-memory engine) |
 | Validation | Copy exact `route_engine.rs` test suite adapted to ZonePath; add relay/hop-count/RBAC-narrowing/shortcut integration tests |
@@ -2430,12 +2365,12 @@ The following transitions are NOT simple textual renames:
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-routing-003` |
-| Dependency/owner | ADR046-routing-001, ADR046-routing-002; ZoneLink resource owner |
+| Dependency/owner | ADR046-routing-001, ADR046-routing-002; Zone route resolver owner |
 | Current source | `packages/d2b-realm-core/src/routing.rs`: `RouteNamespaceAllocation`; `packages/d2b-realm-core/src/access.rs`: `RealmAccessResolverRequest/Response/Error`, `RealmAccessBinding`, `RealmTransportBinding`, `RealmAccessClientContract`, `UnixSocketPath`, `AccessBindingRef`, all access types (evidence: **B** — complete implementation, no production callers); `packages/d2bd/src/realm_access_resolver.rs`: `resolve_local_root_realm_access()`, `local_root_realm_access_client_contract()` (evidence: **B** — `pub mod` at `d2bd/src/lib.rs:117`, no callers from running daemon); `packages/d2b-realm-router/src/target_resolver.rs`: `RealmEntrypointTable`, `DispatchTarget`, `RealmEntrypoint`, `ResolveError` (evidence: **A**); `packages/d2b/src/lib.rs:5240`: `load_realm_entrypoint_table()` (evidence: **A**); `packages/d2b/src/target_routing.rs`: `Route::Local`/`Route::GatewayBacked` dispatch (evidence: **A**); `packages/d2b-realm-core/src/realm.rs`: `EntrypointMode`, `RealmControllerPlacement` (evidence: **A** as types; routing use **B**); `packages/d2b-core/src/realm_controller_config.rs`: `RealmControllersJson` (evidence: **C**); `nixos-modules/realm-controller-config-json.nix` (evidence: **C**) |
 | Reuse source | Same v3 baseline commit `b5ddbed6` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/zone_link.rs` (ZoneLink spec/status types, intent types, namespace allocation); `packages/d2b-zone-routing/src/resolver.rs` (ZoneEntrypointResolver) |
-| Detailed design | Child-local ZoneLink spec/status fields; self-name and one-uplink invariants; ZoneLinkIntent record stored in the child; ZoneLinkNamespaceAllocation issued by the exact parent allocator selected in sealed Nix-compiled `parentZone` topology; ZoneEntrypointResolver with longest-suffix match over ZonePath (adapted from `RealmEntrypointTable::resolve`) driven only by sealed `{ childZone, parentZone }` rows plus authenticated admitted route projections; no reciprocal parent-store resource or parent ZoneLink handler; fail closed on unknown topology, absent/stale projection, or unauthenticated route Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `packages/d2b-zone-routing/src/resolver.rs` (ZoneEntrypointResolver) |
+| Detailed design | Consume the canonical ZoneLink spec/status/intent types owned by ADR046-zone-control-002; ZoneLinkNamespaceAllocation is issued by the exact parent allocator selected in sealed Nix-compiled `parentZone` topology; ZoneEntrypointResolver uses longest-suffix match over ZonePath (adapted from `RealmEntrypointTable::resolve`) and is driven only by sealed `{ childZone, parentZone }` rows plus authenticated admitted route projections; no reciprocal parent-store resource or parent ZoneLink handler; fail closed on unknown topology, absent/stale projection, or unauthenticated route Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Child core-controller ZoneLink handler manages child-store ZoneLink resources; parent d2b-bus feeds sealed topology and authenticated `ZoneRouteEngine` projection state to ZoneEntrypointResolver for per-call dispatch |
 | Data migration | None; ZoneLink resources created from Nix configuration at v3 reset |
 | Validation | Longest-suffix match vectors over sealed topology; child-local ZoneLink spec validation; resolver rejects unknown/stale/withdrawn/unauthenticated route projections; parent-store fixture contains no ZoneLink row or handler |
@@ -2448,14 +2383,14 @@ The following transitions are NOT simple textual renames:
 | Work item ID | `ADR046-routing-004` |
 | Dependency/owner | ADR046-routing-003; core-controller ZoneLink handler owner |
 | Current source | `packages/d2b-realm-router/src/remote_node.rs`: `RemoteNodeRegistry`, `RemoteNodeEntry`, `RemoteNodeAvailability`, `RemoteNodeErrorKind`, `RemoteRetryAction`, `ensure_remote_execution_generation` (evidence: **B** — only in `d2bd/src/realm_stubs.rs` dead_code seam); `packages/d2b-realm-router/src/session_lifecycle.rs`: `SessionLifecycle`, `SessionPhase` (evidence: **B** — same seam); `packages/d2bd/src/realm_stubs.rs`: compile-only seam (`#[allow(dead_code)]`, declared at `d2bd/src/lib.rs:249`); `packages/d2b-realm-core/src/enrollment.rs`: `EnrollmentRecord`, `EnrollmentStatus`, `KeyRotationPlan`, `RevocationRecord`, `SessionTeardownDirective`, `RecoveryProcedure`, `IdentityAuditEventKind` (evidence: **B** — consumed by `RealmIdentityStore` which itself has no production callers); `packages/d2b-realm-core/src/identity_store.rs`: `RealmIdentityStore` (evidence: **B** — no production callers); `packages/d2b-realm-core/src/identity_config.rs`: `RealmIdentityConfigJson` (evidence: **A** — loaded at d2bd/priv-broker startup, routing inert); `nixos-modules/realm-identity-config-json.nix` (evidence: **C**); `packages/d2bd/src/workload_target_index.rs`: `WorkloadTargetIndex` (evidence: **A** — called at `d2bd/src/lib.rs:16745`; this is the live bridge from realm metadata to VM-name dispatch; retires with Guest/Host resource lookups) |
-| Main reuse source | `packages/d2b-session/src/lifecycle.rs` (`SessionLifecycle`, `SessionPhase`, `KeepaliveAction`, `poll_keepalive`, `disconnect`, `begin_reconnect`, `reconnect_established`, `close`; limits: `MAX_RECONNECT_ATTEMPTS=10`, `MAX_RECONNECT_WINDOW_MS=300000`; test: `lifecycle_keepalive_close_and_reconnect_change_generation`) — adapt as the ZoneLink session state machine inside the ZoneLink handler; generation-increment logic maps to `sessionGeneration` in ZoneLink status; reconnect policy comes from `spec.reconnectPolicy` instead of hard-coded LimitProfile |
+| Main reuse source | `packages/d2b-session/src/lifecycle.rs` (`SessionLifecycle`, `SessionPhase`, `KeepaliveAction`, `poll_keepalive`, `disconnect`, `begin_reconnect`, `reconnect_established`, `close`; limits: `MAX_RECONNECT_ATTEMPTS=10`, `MAX_RECONNECT_WINDOW_MS=300000`; test: `lifecycle_keepalive_close_and_reconnect_change_generation`) — adapt as the ZoneLink session state machine inside the ZoneLink handler; generation-increment logic maps to `status.resource.linkEpoch`; reconnect bounds come from `spec.limits.reconnectMaxAttempts` and `spec.limits.reconnectWindowSecs` |
 | Reuse source | Same v3 baseline commit `b5ddbed6` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/zone_links.rs` |
-| Detailed design | Child-local ZoneLink handler in core-controller: manages local ResourceSpec→allocator-bound session→advertisement lifecycle; session state machine (Pending/Established/Disconnected/Reconnecting/Revoked); reconnect backoff per `reconnectPolicy`; advertisement issuance/renewal/withdrawal using enrolled KK ComponentSession; child-store route cursor and outbound intent queue; capability ceiling change handling; status writer; aggregate metrics use only closed semantic phase/reason/outcome labels and never `link_name_hash` or another ZoneLink/Zone/resource identity label; Nix-compiled `parentZone` selects the parent allocator, which alone owns privileged listeners, placement, and route namespace and creates no reciprocal resource. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Child-local ZoneLink handler in core-controller: consumes the exact six-field ZoneLink schema from ADR046-zone-control-002 and manages local ResourceSpec→allocator-bound session→advertisement lifecycle; session state machine (Pending/Established/Disconnected/Reconnecting/Revoked); Provider-internal reconnect backoff bounded by `spec.limits`; advertisement issuance/renewal/withdrawal using enrolled KK ComponentSession; child-store route cursor and bounded outbound intent queue; private allocator capability-scope changes; D088 `status.resource` writer; aggregate metrics use only closed semantic phase/reason/outcome labels and never `link_name_hash` or another ZoneLink/Zone/resource identity label; Nix-compiled `parentZone` selects the parent allocator, which alone owns privileged listeners, placement, and route namespace and creates no reciprocal resource. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Child core-controller process → local transport Provider → sealed binding for the allocator selected by `parentZone` → d2b-bus ComponentSession; child ZoneLink handler exchanges advertisements while that parent ZoneRouteEngine admits/withdraws them |
 | Data migration | New ZoneLink resources from Nix configuration; no prior enrollment compatibility |
-| Validation | Session lifecycle tests; reconnect/revocation/ceiling-change; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
+| Validation | Session lifecycle tests; reconnect/disabled/revocation/allocator-policy-change; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
 | Removal proof | `RemoteNodeRegistry` retired after all enrolled peer routing moves to ZoneLink handler |
 
 ### ADR046-routing-005
@@ -2613,10 +2548,10 @@ The following transitions are NOT simple textual renames:
 | Reuse source | Same v3 baseline `b5ddbed6`; `assertions.nix` pattern reused for Zone assertions; `realm-controller-config-json.nix` is the structural template |
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-zones.nix` (new structural base), `nixos-modules/generated/resource-types.nix` (generated registry), `nixos-modules/generated/options-zones-<Type>.nix` (generated per ResourceType by `xtask gen-zone-nix-options`), `nixos-modules/assertions.nix` (new Zone assertions) |
-| Detailed design | Declare compiler-only scalar `d2b.zones.<zone>.parentZone` plus structural `d2b.zones.<zone>.resources.<name> = { type = ...; spec = {}; }` as specified in the "Option schema" section above. `parentZone` has no default, is required for every non-root Zone, forbidden on `local-root`, resolves to one declared Zone, and never enters a ResourceSpec. Wire `options-zones.nix` and all `generated/options-zones-*.nix` files into `nixos-modules/default.nix`. Add a new `xtask gen-zone-nix-options` command that reads `docs/reference/schemas/v3/<Type>.schema.json` for each ResourceType, derives `generated/resource-types.nix`, and emits a generated submodule overlaying typed spec options (types, bounds, enum constraints, defaults, docs) onto `d2b.zones.<zone>.resources.<name>.spec`. The generated registry's standard subset must equal the canonical 19-type registry from `ADR-046-resource-object-model` exactly; installed signed Provider schemas may append qualified types. These generated modules are committed and kept in sync by `xtask gen-zone-nix-options && git diff --exit-code` wired into `make test-drift`. Because the generated options carry field-level type constraints, field-level eval errors (wrong enum, out-of-range int, non-hex fingerprint) are caught without explicit assertions. Explicit assertions in `nixos-modules/assertions.nix` cover cross-resource invariants only: zone/resource key name regex, reserved names, `parentZone` required/forbidden/existence/self/cycle/16-name-depth constraints, child-local `childZoneName == zone`, at most one uplink resource per non-root Zone and none in local root, ref resolution, count limits, and transportSettings secret-key exclusion (listed in the eval-time assertions table). Conflicting parent scalar definitions fail through standard Nix module merging. Each new assertion must have a matching case in `tests/unit/nix/cases/zone-assertions.nix` (nix-unit auto-discovered). `d2b.realms` option namespace is NOT removed in this work item. Primary reuse disposition: `adapt`. Preserved source-plan detail: new module following same pattern. |
+| Detailed design | Declare compiler-only scalar `d2b.zones.<zone>.parentZone` plus structural `d2b.zones.<zone>.resources.<name> = { type = ...; spec = {}; }` as specified in the "Option schema" section above. `parentZone` has no default, is required for every non-root Zone, forbidden on `local-root`, resolves to one declared Zone, and never enters a ResourceSpec. Wire `options-zones.nix` and all `generated/options-zones-*.nix` files into `nixos-modules/default.nix`. Add a new `xtask gen-zone-nix-options` command that reads `docs/reference/schemas/v3/<Type>.schema.json` for each ResourceType, derives `generated/resource-types.nix`, and emits a generated submodule overlaying typed spec options (types, bounds, enum constraints, defaults, docs) onto `d2b.zones.<zone>.resources.<name>.spec`. The generated registry's standard subset must equal the canonical 19-type registry from `ADR-046-resource-object-model` exactly; installed signed Provider schemas may append qualified types. These generated modules are committed and kept in sync by `xtask gen-zone-nix-options && git diff --exit-code` wired into `make test-drift`. The ZoneLink module is generated from the exact six-field schema owned by ADR046-zone-control-002 and rejects any seventh field. Because the generated options carry field-level type constraints, field-level eval errors (wrong enum, out-of-range int, malformed ref) are caught without explicit assertions. Explicit assertions in `nixos-modules/assertions.nix` cover cross-resource invariants only: zone/resource key name regex, reserved names, `parentZone` required/forbidden/existence/self/cycle/16-name-depth constraints, child-local `childZoneName == zone`, at most one uplink resource per non-root Zone and none in local root, ref resolution, count limits, and transportSettings secret-key exclusion (listed in the eval-time assertions table). Conflicting parent scalar definitions fail through standard Nix module merging. Each new assertion must have a matching case in `tests/unit/nix/cases/zone-assertions.nix` (nix-unit auto-discovered). `d2b.realms` option namespace is NOT removed in this work item. Primary reuse disposition: `adapt`. Preserved source-plan detail: new module following same pattern. |
 | Integration | ADR046-routing-012 consumes the validated `parentZone` map for private allocator bootstrap sealing and iterates `d2b.zones.<zone>.resources.*` for resource-bundle emission |
 | Data migration | None; Zone options are new; Realm options retained until migration PR |
-| Validation | `nix-unit: zone-name-regex`, all five `nix-unit: zone-parent-*` vectors, `nix-unit: zone-link-fingerprint`, `nix-unit: zone-link-child-name`, `nix-unit: zone-link-one-uplink`, `nix-unit: capability-ceiling-unknown-verb`, `nix-unit: transport-settings-secret-key`; add `drift: standard-resource-type-registry` asserting the generated standard subset is exactly all 19 canonical types with no omission/addition/duplicate/reordering, plus `drift: zone-nix-options` (`xtask gen-zone-nix-options && git diff --exit-code`); run `make nix-unit-pin` after adding eval cases |
+| Validation | `nix-unit: zone-name-regex`, all five `nix-unit: zone-parent-*` vectors, `nix-unit: zone-link-credential-ref`, `nix-unit: zone-link-child-name`, `nix-unit: zone-link-one-uplink`, `nix-unit: zone-link-closed-spec`, `nix-unit: zone-link-limits`, `nix-unit: transport-settings-secret-key`; add `drift: standard-resource-type-registry` asserting the generated standard subset is exactly all 19 canonical types with no omission/addition/duplicate/reordering, plus `drift: zone-nix-options` (`xtask gen-zone-nix-options && git diff --exit-code`); run `make nix-unit-pin` after adding eval cases |
 | Removal proof | `nixos-modules/options-realms-workloads.nix` `d2b.realms` namespace retires after all hosts migrate to `d2b.zones` |
 
 ### ADR046-routing-012
@@ -2629,10 +2564,10 @@ The following transitions are NOT simple textual renames:
 | Reuse source | `realm-controller-config-json.nix` structural template; `xtask gen-schemas` extension point (main `a1cc0b2d` unchanged in this area) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/zone-resources-json.nix` (new), private local-root allocator bootstrap compiler/sealer input (not a ResourceSpec or public bundle), `nixos-modules/bundle-artifacts.nix` (new row for per-Zone `resource-bundle.json`), `packages/xtask/src/main.rs` (`gen-zone-schemas` subcommand emitting `docs/reference/schemas/v3/<Type>.schema.json` for Zone and ZoneLink; `gen-zone-nix-options` subcommand emitting `nixos-modules/generated/options-zones-<Type>.nix`) |
-| Detailed design | `zone-resources-json.nix` iterates `d2b.zones.<zone>.resources.*` to produce the canonical sorted resource list: for each entry, render `{ apiVersion, type, metadata: { name, zone, ownerRef: <if-authored>, labels: <if-authored>, annotations: <if-authored> }, spec: <spec-attrs-canonical> }`. Separately canonicalize sorted `{ childZone, parentZone }` rows from the compiler-only topology and seal them into the private allocator bootstrap input; `parentZone` never enters a resource bundle or `Zone.spec`, and a topology digest change releases/reallocates affected edges independently of resource `generationId`. Per-Zone generation is strict: local root's generated bundle contains no ZoneLink; a non-root Zone's enabled uplink and referenced transport Provider appear together only in that child's bundle; no emitter copies either resource into the selected parent's bundle. The bundle JSON omits `managedBy` and `configurationGeneration`; the configuration service/core sets those fields when activating the validated bundle. Sort all resources by `(type, zone, name)`. Compute `generationId` as SHA-256 (lower hex) of the UTF-8 bytes of the sorted `resources` array JSON. Compute `integrity` as SHA-256 (base64url, no padding) of the full bundle JSON with integrity field zeroed. Install at `/etc/d2b/zones/<zone>/resource-bundle.json` root:d2bd 0640. Canonical form: all object keys sorted lexicographically; order-significant arrays preserved; schema-declared set-like arrays sorted lexicographically; all optional fields emitted with defaults; no field renaming or restructuring. Build-time validation runs in a Nix derivation: (1) validate the complete parent map (non-root required, local-root forbidden, declared target, one scalar parent, not self, acyclic, max 16 names); (2) validate each resource against the committed JSON Schema; (3) validate `transportSettings` for each child-local ZoneLink against its same-Zone Provider's `transportSettingsSchema` — `transportProviderRef` is always explicit, never inferred or defaulted; (4) verify capability ceilings are subsets of the sealed selected-parent allocator grants; (5) verify `childZoneName == metadata.zone`, at most one uplink resource per non-root Zone, and no local-root uplink; (6) check for duplicate `(type, zone, name)` tuples. Providers MUST commit their `transportSettingsSchema` before any ZoneLink can reference them. Drift gates: `xtask gen-zone-schemas && git diff --exit-code` and `xtask gen-zone-nix-options && git diff --exit-code` both wired into `make test-drift`. Add `checks.${system}.zone-schema-drift` to `flake.nix`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and adapt. |
+| Detailed design | `zone-resources-json.nix` iterates `d2b.zones.<zone>.resources.*` to produce the canonical sorted resource list: for each entry, render `{ apiVersion, type, metadata: { name, zone, ownerRef: <if-authored>, labels: <if-authored>, annotations: <if-authored> }, spec: <spec-attrs-canonical> }`. Separately canonicalize sorted `{ childZone, parentZone }` rows from the compiler-only topology and seal them into the private allocator bootstrap input; `parentZone` never enters a resource bundle or `Zone.spec`, and a topology digest change releases/reallocates affected edges independently of resource `generationId`. Per-Zone generation is strict: local root's generated bundle contains no ZoneLink; a non-root Zone's enabled uplink and referenced transport Provider appear together only in that child's bundle; no emitter copies either resource into the selected parent's bundle. The bundle JSON omits `managedBy` and `configurationGeneration`; the configuration service/core sets those fields when activating the validated bundle. Sort all resources by `(type, zone, name)`. Compute `generationId` as SHA-256 (lower hex) of the UTF-8 bytes of the sorted `resources` array JSON. Compute `integrity` as SHA-256 (base64url, no padding) of the full bundle JSON with integrity field zeroed. Install at `/etc/d2b/zones/<zone>/resource-bundle.json` root:d2bd 0640. Canonical form: all object keys sorted lexicographically; order-significant arrays preserved; schema-declared set-like arrays sorted lexicographically; all optional fields emitted with defaults; no field renaming or restructuring. Build-time validation runs in a Nix derivation: (1) validate the complete parent map (non-root required, local-root forbidden, declared target, one scalar parent, not self, acyclic, max 16 names); (2) validate each resource against the committed JSON Schema, including the exact six-field ZoneLink schema from ADR046-zone-control-002; (3) validate `transportSettings` for each child-local ZoneLink against its same-Zone Provider's `transportSettingsSchema` — `transportProviderRef` is always explicit, never inferred or defaulted; (4) resolve every same-Zone `transportCredentials` ref; (5) verify `childZoneName == metadata.zone`, at most one uplink resource per non-root Zone, and no local-root uplink; (6) check for duplicate `(type, zone, name)` tuples. Private route capability policy is sealed in allocator bootstrap state and is not a ZoneLink ResourceSpec field. Providers MUST commit their `transportSettingsSchema` before any ZoneLink can reference them. Drift gates: `xtask gen-zone-schemas && git diff --exit-code` and `xtask gen-zone-nix-options && git diff --exit-code` both wired into `make test-drift`. Add `checks.${system}.zone-schema-drift` to `flake.nix`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and adapt. |
 | Integration | The local-root allocator consumes sealed parent topology independently of resource bundles; `nixos-modules/bundle-artifacts.nix` installs each per-Zone `resource-bundle.json`; ADR046-routing-013 Zone runtime reads it on startup |
 | Data migration | None; new artifact file |
-| Validation | `drift: zone-resource-schema`, `drift: zone-nix-options`, `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle` (K0 has no ZoneLink; K1 contains its self-matching ZoneLink and same-Zone transport Provider; neither is copied to K0), `build: transport-settings-unknown-field`, `build: capability-ceiling-superset`, `build: missing-transport-provider`; run `make flake-matrix-pin` after adding flake checks |
+| Validation | `drift: zone-resource-schema`, `drift: zone-nix-options`, `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle` (K0 has no ZoneLink; K1 contains its self-matching ZoneLink and same-Zone transport Provider; neither is copied to K0), `build: zone-link-exact-six-fields`, `build: transport-settings-unknown-field`, `build: transport-credential-ref`, `build: missing-transport-provider`; run `make flake-matrix-pin` after adding flake checks |
 | Removal proof | `realm-controllers.json` artifact retires after Zone runtime is live and all hosts migrated |
 
 ### ADR046-routing-013
