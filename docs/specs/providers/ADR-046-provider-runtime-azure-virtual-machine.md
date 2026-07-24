@@ -1261,6 +1261,7 @@ d2b.zones.dev.resources.arm-azure-vm = {
     consumerRef = "Provider/runtime-azure-virtual-machine";
   };
 };
+```
 
 ### Guest declaration (example)
 

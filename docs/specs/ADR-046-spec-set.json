@@ -77,7 +77,7 @@
       "version": 1,
       "dependsOn": [],
       "supersedes": null,
-      "sha256": "85fe66e3e8bc61b2fab44dae01ed63262545feb2b4519233b70cfbd4a8863b1a"
+      "sha256": "b93e80a44159c11c830fa22b90f9c08643fe3c07d5037636bd4a77ab49d21e0c"
     },
     {
       "specId": "ADR-046-feasibility-and-spikes",
@@ -102,7 +102,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": null,
-      "sha256": "30cf7f6222b7a8f997291cb09d9b77d305dbd96d755e0fa7ee1c4d9b9c879a30"
+      "sha256": "4b1ff14348a4f01586ba05fbb1128be472d2386aa83f542d5fb60fe56e79fc1a"
     },
     {
       "specId": "ADR-046-nix-configuration",
@@ -117,7 +117,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
-      "sha256": "c879425bc0b5845e13cad70db5c2c79f8c3ca48be11a517f8ca07178467cda17"
+      "sha256": "8f8bfd7138c22e66d291571fd8d4552107453223f88077ef3ac598b15457a97b"
     },
     {
       "specId": "ADR-046-primitive-resource-composition",
@@ -172,7 +172,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "supersedes": "`nixos-modules/components/audio/host.nix`, `nixos-modules/components/audio/guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs`",
-      "sha256": "568e2a9ef8717d6954e80512ecd2d6a9f199ebc41cf92d361fb56b5bbbbe552d"
+      "sha256": "8d7ffa922776486f4bbc99a3fec70f2d864afac4006abc12003a4941b0cb3779"
     },
     {
       "specId": "ADR-046-provider-clipboard-wayland",
@@ -280,7 +280,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "supersedes": "`ProcessRole::SecurityKeyFrontend` daemon-internal accept loop (`packages/d2bd/src/security_key.rs`), `nixos-modules/components/security-key-guest.nix` untracked guest `d2b-sk-frontend.service` unit",
-      "sha256": "01a2fc74bba37ba8c8a6a67a38f38a3ed629f3c1b0e215c9b7b2e1a57df9f88f"
+      "sha256": "9b360b4cc652280efb12056f3cdf24a123c9a7a21ba36fd944d1dd0a32396bc0"
     },
     {
       "specId": "ADR-046-provider-device-tpm",
@@ -320,7 +320,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
-      "sha256": "71494d0465b44ae1673177794013d65f8706a36115f9078e9fbb645c0857050e"
+      "sha256": "e5cc4b32e16a07e54472e3ef10dda4e18c308ea9660fabf89cbbd1a6f53ccf34"
     },
     {
       "specId": "ADR-046-provider-display-wayland",
@@ -354,7 +354,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "supersedes": "Current direct Provider construction/composition",
-      "sha256": "3d1c8147c45803fabd97a13986278a2ddd0955ae088ac902502d6c02e7f9e5fd"
+      "sha256": "f89ba42da92d4bd43326b5928ebccfd9080cf88e03bd645e61e4ae9c36ce35fe"
     },
     {
       "specId": "ADR-046-provider-network-local",
@@ -412,7 +412,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "`ProcessRole::OtelHostBridge` / `RunnerRole::OtelHostBridge`; socat-based vsock forwarder in `packages/d2b-host/src/otel_host_bridge_argv.rs`; `packages/d2bd/src/otel_host_bridge_readiness.rs`; hand-rolled per-VM `nixos-modules/components/observability/` pipeline (adapted to per-Zone)",
-      "sha256": "b69c6fa76a49e43be8aa775755328585da028a121ea42dced61546c46c877e7d"
+      "sha256": "20c9b769bd52f26acc455977472a198d4233973d1f580f084f0a9910b25719c0"
     },
     {
       "specId": "ADR-046-provider-runtime-azure-container-apps",
@@ -455,7 +455,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "Current `InfrastructureProvider` trait (`d2b-realm-provider/src/provider.rs`); `AzureVmForbidden` explicit rejection in `provider_registry.rs`; `AZURE_VM_IMPLEMENTATION_ID` constant; `WorkloadProviderKind::ProviderManaged` paths for Azure VM workloads",
-      "sha256": "9561be37fd535a8ab5a68a0c42f5b1a5648a31afc7fda0982f4c9d81b215cacb"
+      "sha256": "d5041f399b4c40bd81fba635e53820f467064525919120ec0d14d222779c8a4f"
     },
     {
       "specId": "ADR-046-provider-runtime-cloud-hypervisor",
@@ -738,7 +738,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": null,
-      "sha256": "94bfc5dfbdbe3a5cde98094238f45ae639a8c537ca9483137c92d1c7dd76a5d0"
+      "sha256": "a8aa34a62116ac6139902b55c1574efe8b037eafbce00802507e0a43562e5a6d"
     },
     {
       "specId": "ADR-046-resource-object-model",
@@ -750,7 +750,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": null,
-      "sha256": "d4cce7023bb8510f244a01b2a534a19fef29e947999aebbfec9e19fdf7ab3549"
+      "sha256": "927d89f6a6960615bafaf54e5be560d29ccbd72c201df3e1a767c73c4c97329b"
     },
     {
       "specId": "ADR-046-resource-reconciliation",
@@ -808,7 +808,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "supersedes": "Current ProcessRole device sidecars (Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video) and their Nix components",
-      "sha256": "de62d2df77c13b8583a292d2ec9c7d98ac9f6a780c1a16a5d559358ff8b43df5"
+      "sha256": "d70c6f595b354ef4c45b2be50c6d43210a09f803140243d39b3ec20a954457a6"
     },
     {
       "specId": "ADR-046-resources-host-guest-process-user",
@@ -875,7 +875,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": null,
-      "sha256": "e3ac0c46daad713c9f0eb1f8043668ccae78803d9405340f148106aceb4e1e24"
+      "sha256": "eaed7f6f2115f121fed50e705ee311f7750432b0a0fd5a37cb477c67f7354b25"
     },
     {
       "specId": "ADR-046-security-and-threat-model",
@@ -935,7 +935,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "None. This spec is a new cross-cutting synthesis. `SECURITY.md` and `docs/explanation/design.md` remain the disclosure policy and pre-v3 (v1/v2) threat model for the protected `v3` baseline and are not superseded; historical main-branch ADR 0045 (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, \"d2b 2.0 provider and transport framework\") and ADR 0032/0034 remain non-ancestry reuse sources whose useful invariants this spec adapts under D001/D041",
-      "sha256": "ffa1eb2d5f230ef4720eb70ae686113308694029cfe400a4282dc0a1b5e7016a"
+      "sha256": "22aeaae05007224cec7da11545179a3e39b064d36c625a07efcfab979f143547"
     },
     {
       "specId": "ADR-046-streamline",
@@ -1046,7 +1046,7 @@
         "ADR-046-zone-routing"
       ],
       "supersedes": "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
-      "sha256": "a966db69164292affaac13ba9a6a7af8c40fc31a0a517144625d01e6e4bfa088"
+      "sha256": "ea7163e0f0c5fc0167daf4161263e0b7253f3fc17933b5ab84f784306f2e5877"
     },
     {
       "specId": "ADR-046-zone-routing",
@@ -1061,7 +1061,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "supersedes": "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + capability ceiling)",
-      "sha256": "eb29ac800362bd79e881d5c56daeeacc9ea3eaeef328d71b5f667c9cc1ef12e6"
+      "sha256": "f7021d1dd8c4ef3634d29e45cc322e6d7d9ed2f5de7d28527ff6541ce83fc264"
     }
   ]
 }

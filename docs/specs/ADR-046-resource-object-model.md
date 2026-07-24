@@ -615,6 +615,17 @@ Service projections/leases/streams, and cross-Zone sharing is only via D096
 ResourceExport/ResourceImport targeting the qualified owner Service (a shared/
 multiplexed backing still has exactly one authority owner; no duplicate opens).
 
+**Shared physical USB backing.** After trusted physical-USB identity resolution,
+Core derives one non-reversible `opaqueKeyDigest` using the
+`physical-usb-backing/v1` domain and indexes the exact Host-global tuple
+`(Host, physical-usb-backing, opaqueKeyDigest)`. Every USB or security-key
+Provider backed by that device must acquire this tuple before any open,
+withhold, bind, module, relay, or attachment effect. A Provider-supplied label,
+selector digest, service-specific authority, or transport authority cannot
+replace it. The shared deterministic conflict is
+`physical-usb-backing-conflict`; no raw identity or digest enters public spec or
+status.
+
 **Status/spec base.** The universal status base exposes bounded provider-neutral
 authority state — `available`, current holder count, queue depth, arbitration,
 and update currency — with **no raw identity**; provider extension carries

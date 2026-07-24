@@ -188,7 +188,11 @@ Binding target ref types, the strict projection-Service schema/fingerprint, and
 an aggregate semantic factory fingerprint. Admission fails closed when the
 metadata is absent, unsigned, or mismatched. Provider/adapter identity is not
 part of the semantic fingerprint: local `providerRef` independently selects the
-implementation, while a strict `spec.provider` contains only its extension.
+implementation. Authored owner Services and Bindings may carry that
+implementation's strict `spec.provider`; a Core-generated projection never
+does. Its route derives from the signed local Provider descriptor,
+`providerRef`, and ResourceImport record, and implementation observation may
+appear only in `status.provider`.
 `*State`, `stateType`, and `allowedStateTargetRefTypes` are not compatibility
 aliases; strict schema admission rejects them.
 
@@ -205,8 +209,9 @@ projection:
    the Provider accepts the canonical minimal base without `spec.provider`, and
    `requestedCapabilities` is within the export ceiling.
 4. Core creates exactly one same-qualified-type local projection Service with
-   `ownerRef: ResourceImport/<name>`. It never creates a Device, Endpoint, or
-   Binding projection.
+   `ownerRef: ResourceImport/<name>`, `providerRef`, and only semantic
+   base/import fields. It rejects `spec.provider` and never creates a Device,
+   Endpoint, or Binding projection.
 5. An authored matching Binding is admitted only in the same Zone, with
    `serviceRef` targeting that Service and its consuming `Guest`, `User`, or
    `Zone` target type allowed by the factory. Binding spec contains desired

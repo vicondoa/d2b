@@ -72,7 +72,7 @@ mint another Service or Binding type name.
 | ResourceType | Author | Cardinality and role |
 | --- | --- | --- |
 | `Device` | Nix/operator | One real local physical hidraw backing per selector. It owns discovery/presence status only and is referenced by an owner-Zone authority Service. It is not exported and is not projected. |
-| `security-key.d2bus.org.SecurityKeyService` | Nix/operator for `mode: authority`; Core/import adapter for `mode: projection` | Exactly one authority Service per opaque security key across the Host authority scope. Its base carries the semantic D097 `AuthorityDescriptor`; the initial Provider extension references the same-Zone physical `Device` and local relay `Endpoint`. A projection has `ownerRef: ResourceImport/<name>` and its Provider extension has no physical Device or hidraw authority. |
+| `security-key.d2bus.org.SecurityKeyService` | Nix/operator for `mode: authority`; Core projection factory for `mode: projection` | Exactly one authority Service per opaque security key across the Host authority scope. Its base carries the semantic D097 `AuthorityDescriptor`; the authored owner extension references the same-Zone physical `Device` and local relay `Endpoint`. A projection has `ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, and no `spec.provider`, physical Device, or hidraw authority. |
 | `security-key.d2bus.org.SecurityKeyBinding` | Nix/operator only | One per consuming Guest/user attachment/policy. Its base references one same-Zone `SecurityKeyService` plus the Guest/User target. The initial Provider extension realizes its UHID frontend `Process` and private frontend `Endpoint`. |
 | `Process`, `Endpoint` | Controllers/adapters | Owned realization children. They are not substitute service/binding resources and are never authored as ceremony records. |
 
@@ -187,8 +187,8 @@ spec:
   providerRef: Provider/device-security-key
   mode: authority
   authority:
-    authorityScope: security-key
-    authorityKeyClass: opaque-security-key
+    authorityScope: physical-device
+    authorityKeyClass: semantic-security-key
     cardinality: zero-or-one
     arbitration: exclusive
     authorityRef: security-key.d2bus.org.SecurityKeyService/yubikey-primary
@@ -206,17 +206,24 @@ spec:
       fairnessPolicy: bounded-fifo
 status:
   phase: Pending | Ready | Degraded | Failed | Unknown
-  authority:
-    available: true
-    holderCount: 0
-    arbitration: exclusive
-    opaqueOwnerDigest: sha256:<redacted-owner-digest>
+  observedGeneration: 1
+  conditions:
+    - type: BackingAuthorityReady
+      status: "True"
+      reason: backing-authority-claimed
+  resource:
+    authority:
+      available: true
+      holderCount: 0
+      arbitration: exclusive
+      opaqueOwnerDigest: sha256:<redacted-owner-digest>
   provider:
     providerRef: Provider/device-security-key
     schemaId: device-security-key.d2bus.org/SecurityKeyService/status
     schemaVersion: "1.0.0"
     observedProviderGeneration: 1
     details:
+      physicalBackingClaim: ready
       relayProcessRef: Process/device-<uid-short>-sk-relay
       relayEndpointRef: Endpoint/yubikey-primary-ctaphid-relay
       relayReady: true
@@ -226,14 +233,17 @@ status:
       lastCeremonyOutcome: success | timeout | cancelled | busy | error | null
 ```
 
-The base `authorityKeyClass: opaque-security-key` tells Core that the authority
-identity is a provider-derived opaque security-key identity. The Provider
-extension's `authorityDerivation: physical-fido-selector` tells the initial
-implementation how to derive the non-authorizing opaque key digest from the
-trusted bundle `device_token` and FIDO selector. The spec never carries that
-token, a raw digest chosen by the caller, a path, serial, address, or fd.
-Core's Host-scoped authority index admits exactly one authority Service for the
-opaque physical key before it permits the relay DeviceGrant/open. The
+The base `authorityKeyClass: semantic-security-key` identifies the
+service-specific security-key authority. The Provider extension's
+`authorityDerivation: physical-fido-selector` selects its initial derivation,
+but the spec never carries the trusted bundle `device_token`, a raw digest
+chosen by the caller, a path, serial, address, or fd. In addition, after trusted
+physical-USB identity resolution, Core mandatorily derives the
+`physical-usb-backing/v1` digest and claims
+`(Host, physical-usb-backing, opaqueKeyDigest)`. Every USB and security-key
+Provider backed by the same token submits that identical tuple; neither this
+service-specific authority nor a Provider-private class can replace it. Core
+admits both required claims before it permits the relay DeviceGrant/open. The
 Provider setting `relayEndpointRef` is a reserved desired-child ref: the Service
 controller creates that same-name owned Endpoint and the Service remains
 `Pending` until it is Ready.
@@ -250,17 +260,14 @@ metadata:
 spec:
   providerRef: Provider/device-security-key
   mode: projection
-  provider:
-    schemaId: device-security-key.d2bus.org/SecurityKeyService/spec
-    schemaVersion: "1.0.0"
-    settings:
-      relayEndpointRef: Endpoint/yubikey-primary-import-ctaphid
 status:
   phase: Pending | Ready | Degraded | Failed | Unknown
-  import:
-    leaseState: pending | bound | degraded | revoked
-    remoteGeneration: 7
-    remoteFingerprint: sha256:<semantic-service-fingerprint>
+  observedGeneration: 1
+  resource:
+    import:
+      leaseState: pending | bound | degraded | revoked
+      remoteGeneration: 7
+      remoteFingerprint: sha256:<semantic-service-fingerprint>
   provider:
     providerRef: Provider/device-security-key
     schemaId: device-security-key.d2bus.org/SecurityKeyService/status
@@ -271,11 +278,15 @@ status:
       observedEndpointGeneration: 3
 ```
 
-A projection rejects base or Provider-extension `deviceRef`, `authority`,
-physical-selector, and DeviceGrant fields. It is created and owned by Core
-through the signed import adapter, always has `metadata.ownerRef:
-ResourceImport/<name>`, and owns only a local import-route Endpoint/lease binding.
-Nix and ordinary API callers cannot create `mode: projection`.
+A projection permits only `providerRef`, semantic base/import fields, and
+ResourceImport ownership. It rejects `spec.provider`, `deviceRef`, `authority`,
+physical selectors, and DeviceGrant fields. Core creates and owns it by
+invoking the signed projection factory, always with `metadata.ownerRef:
+ResourceImport/<name>`. Routing derives from that signed local Provider
+descriptor, `providerRef`, and the ResourceImport record; the Provider may
+report local import-route Endpoint/lease observations only in
+`status.provider`. Nix and ordinary API callers cannot create
+`mode: projection`.
 
 ## `SecurityKeyBinding` spec and status contract
 
@@ -306,7 +317,9 @@ spec:
       queueWaitTimeoutSecs: 15
 status:
   phase: Pending | Ready | Degraded | Failed | Unknown
-  attachment: detached | connecting | ready | degraded
+  observedGeneration: 1
+  resource:
+    attachment: detached | connecting | ready | degraded
   provider:
     providerRef: Provider/device-security-key
     schemaId: device-security-key.d2bus.org/SecurityKeyBinding/status
@@ -1034,10 +1047,11 @@ node name, sysfs path, serial, or a concatenation of vendor/product IDs.
 ### I-3: Exclusive DeviceGrant per relay Process
 
 At most one authority Service relay can hold the exclusive DeviceGrant for a
-given physical Device. Before Core opens hidraw, the Host-scoped D097 authority
-index admits the Service's opaque physical-key authority and rejects a duplicate.
-Core then enforces that no two concurrent exclusive grants are issued for the
-Device. The relay spec uses the initial Provider extension:
+given physical Device. Before Core opens hidraw, the Host-global D097 authority
+index admits both the Service's semantic security-key authority and the shared
+Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim, rejecting a
+duplicate with no effect. Core then enforces that no two concurrent exclusive
+grants are issued for the Device. The relay spec uses the initial Provider extension:
 `deviceUsage: [{deviceRef: Service.spec.provider.settings.deviceRef, access:
 exclusive}]`. On relay
 exit, Core releases the DeviceGrant/OFD lease automatically; there is no
@@ -1047,24 +1061,26 @@ virtual, or projected Device.
 
 ### I-4: Security-key proxy and USBIP are mutually exclusive
 
-A Device resource under `Provider/device-security-key` and a Device resource
-under `Provider/device-usbip` that share the same physical USB device (matching
-`vendorId` and `productId` and, if configured, `serial`) cannot hold authority
+A Service under `Provider/device-security-key` and a Service under any USB
+Provider that resolve to the same physical USB device cannot hold authority
 anywhere on the same Host.
 
 This is enforced:
 
-**At Nix eval time:** `assertions.nix` emits a hard error if
-the compiled Host bundle contains both a security-key authority Service/device
-pair and a `device-usbip` Device whose selectors match the same physical USB
-device, even when authored in different Zones. The eval check compares vendorId,
-productId, and serial. A failing assertion blocks NixOS activation.
+**At Nix eval time:** `assertions.nix` emits a hard error if the compiled Host
+bundle contains a security-key authority Service/device pair and a USB
+Service/device pair whose trusted selector inputs are known to resolve to the
+same physical USB device, even when authored in different Zones. This preflight
+blocks NixOS activation but is not runtime authority.
 
-**At authority admission:** the Host-scoped authority index and Provider
-controller check existing USBIP authorities before granting the Service. If any
-matching `device-usbip` Device is `Ready` or `Pending`, the
-`SecurityKeyService` transitions to `Failed` with `AuthorityConflict=True` and
-`device-mutual-exclusion-violation`. No hidraw or USBIP effect occurs.
+**At authority admission:** after trusted USB identity resolution, Core derives
+one `physical-usb-backing/v1` opaque digest. Security-key and every USB Provider
+must claim the exact Host-global
+`(Host, physical-usb-backing, opaqueKeyDigest)` tuple before effects. The second
+Service transitions to `Failed` with `BackingAuthorityReady=False`,
+`AuthorityConflict=True`, and `physical-usb-backing-conflict`. Provider-private
+labels, key classes, or digests cannot bypass the collision. No hidraw open,
+USBIP withhold/bind, module, relay, or attachment effect occurs.
 
 ### I-5: One ceremony lease, many explicit consumer Bindings
 
@@ -1287,16 +1303,22 @@ holder is the local authority Service, never a remote consumer.
 Authority Service base status carries the D097 provider-neutral authority fields
 (`available`, holder count, arbitration, opaque owner digest, update currency).
 `status.provider.details` carries queue depth, relay Process/Endpoint refs,
-observed Device/Endpoint generations, relay readiness, and the last non-secret
-ceremony outcome. Projection base status carries import lease state and remote
+observed Device/Endpoint generations, the initial implementation's shared
+physical-backing claim state, relay readiness, and the last non-secret ceremony
+outcome. All semantic authority fields are nested under `status.resource`.
+Projection `status.resource` carries import lease state and remote
 generation/fingerprint; its local import-route Endpoint/ref and readiness remain
 in `status.provider.details`. It has no Device or DeviceGrant observation.
+Binding attachment state is likewise nested under `status.resource`; no
+semantic authority/import/attachment field appears directly under `status`.
 
 Closed semantic Service conditions are `AuthorityReady`, `ImportBound`,
-`AuthorityConflict`, and `ConsumersDrained`. Initial-Provider backing/relay
-readiness and reasons remain in `status.provider.details`. USBIP collision or a
-second opaque physical-key authority sets `AuthorityConflict=True` and `Failed`
-before any open. Link loss/export revocation sets a projection
+`AuthorityConflict`, `BackingAuthorityReady`, and `ConsumersDrained`.
+Initial-Provider relay readiness and reasons remain in
+`status.provider.details`. A duplicate security-key authority sets
+`AuthorityConflict=True`; a shared physical USB collision additionally sets
+`BackingAuthorityReady=False` with `physical-usb-backing-conflict` and `Failed`
+before any effect. Link loss/export revocation sets a projection
 `ImportBound=False` and `Degraded`/`Failed` according to disconnect policy;
 dependent Bindings observe it.
 
@@ -1310,8 +1332,8 @@ Endpoint, then deletes the projection Service.
 
 ### Binding status
 
-Binding base status carries only semantic attachment state and common
-phase/update/conditions. Closed semantic conditions are `ServiceReady`,
+Binding `status.resource` carries only semantic attachment state; common
+phase/update/conditions remain universal top-level fields. Closed semantic conditions are `ServiceReady`,
 `TargetReady`, and `AttachmentReady`. `status.provider.details` carries Service
 generation, frontend Process/Endpoint refs, frontend readiness, whether this
 Binding is queued or active, and the last closed ceremony outcome. Neither layer
@@ -1441,13 +1463,13 @@ security-key-specific additions):
 | Error slug | Condition type | Meaning |
 | --- | --- | --- |
 | `device-not-found` | `DevicePresent=False` | Physical hidraw node absent or label not in bundle table |
-| `security-key-authority-conflict` | `AuthorityConflict=True` | A second Service or USBIP authority resolved to the same opaque physical key; no open occurred |
+| `security-key-authority-conflict` | `AuthorityConflict=True` | A second semantic security-key authority resolved to the same service-specific key; no open occurred |
+| `physical-usb-backing-conflict` | `BackingAuthorityReady=False`, `AuthorityConflict=True` | Another USB or security-key Service owns the Core-derived Host-global physical USB tuple; no backing effect occurred |
 | `security-key-binding-conflict` | `AttachmentReady=False` | Duplicate Binding intent exists for the same Service/Guest/User/policy tuple |
 | `device-grant-denied` | `BackingReady=False` | Core physical DeviceGrant open denied (revalidation failed or device absent) |
 | `device-session-timeout` | — | CTAP ceremony exceeded `leaseTimeoutSecs` |
 | `device-session-cancelled` | — | Binding ceremony was cancelled with a matching LeaseId |
 | `device-session-busy` | `status.provider.details.queued=false` | Fair-queue wait exceeded the Provider extension's `queueWaitTimeoutSecs`; `ERR_CHANNEL_BUSY` returned |
-| `device-mutual-exclusion-violation` | `AuthorityConflict=True` | USBIP authority for the same physical device is active |
 | `device-worker-failed` | Provider detail `relayReady=false` or `frontendReady=false` | Owned relay/frontend Process failed after retry exhaustion |
 | `device-cid-collision` | — | Internal CID allocation overflow (monotonic counter wraparound; effectively unreachable at u64) |
 | `device-selector-label-unresolvable` | `DevicePresent=False` | `inventory.selector.label` does not match any entry in Provider root config |
@@ -1526,8 +1548,8 @@ Constraints specific to this Provider:
 **One authority Service (D097).** The owner-Zone
 `security-key.d2bus.org.SecurityKeyService` in `mode: authority` is the
 stable semantic authority Resource. Its provider-neutral D097
-`AuthorityDescriptor` uses `authorityScope: security-key`, opaque
-`authorityKeyClass: opaque-security-key`, `cardinality: zero-or-one`,
+`AuthorityDescriptor` uses `authorityScope: physical-device`, opaque
+`authorityKeyClass: semantic-security-key`, `cardinality: zero-or-one`,
 `arbitration: exclusive`, `authorityRef` to itself, and `exportability:
 explicit-export`. The initial `Provider/device-security-key` extension references
 one same-Zone physical `Device` and its owned local relay `Endpoint`; that relay
@@ -1535,10 +1557,14 @@ is the sole holder of the physical hidraw FD. Its
 `authorityDerivation: physical-fido-selector`, `ownerProof:
 service-and-relay-process-identity`, and `fairnessPolicy: bounded-fifo` remain
 inside `spec.provider.settings`. Core derives the non-authorizing key digest from
-the trusted bundle `device_token`/FIDO selector. The Host-scoped authority index
-rejects a second Service or USBIP authority for the same opaque key before any
-open. Restart adopts the exact Service + relay Process DeviceGrant by the
-Provider owner proof; ambiguity quarantines. The physical Device is backing
+the trusted bundle `device_token`/FIDO selector. Separately and mandatorily, Core
+resolves trusted physical USB identity and derives the
+`physical-usb-backing/v1` digest used in the exact Host-global tuple
+`(Host, physical-usb-backing, opaqueKeyDigest)`. Every physical-USB-backed
+security-key and USB Provider claims that same tuple before effects; a
+service-specific authority remains additive and cannot replace it. Restart
+adopts the exact Service + relay Process DeviceGrant and shared backing claim by
+the Provider owner proof; ambiguity quarantines. The physical Device is backing
 inventory, not the service authority.
 
 **Preserved reusable semantics** (grounded in
@@ -1671,8 +1697,8 @@ d2b.zones.devices.resources."yubikey-primary" = {
     providerRef = "Provider/device-security-key";
     mode = "authority";
     authority = {
-      authorityScope = "security-key";
-      authorityKeyClass = "opaque-security-key";
+      authorityScope = "physical-device";
+      authorityKeyClass = "semantic-security-key";
       cardinality = "zero-or-one";
       arbitration = "exclusive";
       authorityRef =
@@ -1884,10 +1910,10 @@ class.
 | Current source | `packages/d2b-contracts/src/security_key.rs` — `SecurityKeySessionId`, `SecurityKeyDeviceLabel`, `SecurityKeySession`, `SecurityKeySessionResult`, `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`, `SecurityKeyOpenDeviceRequest`, `SecurityKeyEvent` (implemented-and-reachable) |
 | Reuse action | adapt |
 | Destination | Adapt to v3 Zone/ResourceRef identifiers; preserve serde shapes for zero downstream breakage where possible; remove `SecurityKeyApplyUdevRulesRequest` (W-X06) |
-| Detailed design | Rebase wire DTOs onto v3 Zone/ResourceRef identifiers; consume the shared ADR046-provider-004 `security-key.d2bus.org` Service/Binding bases and define only strict `device-security-key.d2bus.org` Provider-extension DTOs; preserve opaque bounded ceremony records as non-Resource DTOs; add `zone` to `SecurityKeyOpenDeviceRequest`; drop the udev-rules request because UHID comes from the Guest-substrate DeviceGrant. No provider-named ResourceType alias is admitted. |
+| Detailed design | Rebase wire DTOs onto v3 Zone/ResourceRef identifiers; consume the shared ADR046-provider-004 `security-key.d2bus.org` Service/Binding bases and define only strict `device-security-key.d2bus.org` Provider-extension DTOs; reject `spec.provider` on Core projections; place authority/import/attachment semantic observations only under `status.resource` and implementation observations only under `status.provider`; preserve opaque bounded ceremony records as non-Resource DTOs; add `zone` to `SecurityKeyOpenDeviceRequest`; drop the udev-rules request because UHID comes from the Guest-substrate DeviceGrant. No provider-named ResourceType alias is admitted. |
 | Integration | Core LaunchTicket, broker open op, Provider controller Service/Binding status/audit, CLI session readers, and provider tests consume the v3 DTOs. |
 | Data migration | Full d2b 3.0 reset; no v2 DTO compatibility migration beyond serde-shape preservation where possible |
-| Validation | DTO serde round trips, exact provider-neutral ResourceType identity, provider-named alias rejection, base/Provider-extension field separation, unknown-field denial, zone-field round trip, path-redaction tests, and updated `usb_sk_contract.rs` assertions in the provider crate. |
+| Validation | DTO serde round trips, exact provider-neutral ResourceType identity, provider-named alias rejection, canonical minimal base acceptance, Core projection `spec.provider` rejection, D088 `status.resource`/`status.provider` layering, base/Provider-extension field separation, unknown-field denial, zone-field round trip, path-redaction tests, and updated `usb_sk_contract.rs` assertions in the provider crate. |
 | Removal proof | W-X06 removes `SecurityKeyApplyUdevRulesRequest`, the `SecurityKeyApplyUdevRules` broker op, and related broker code after UHID DeviceGrant coverage is live. |
 
 ### W-R06
@@ -2082,24 +2108,24 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | Provider descriptor state declaration, controller/status logic, Process templates, and Nix principal provisioning for `Provider/device-security-key` |
-| Detailed design | Empty ProviderStateSet and strict bounded status schemas: physical presence in Device, authority/import aggregates in Service, attachment aggregates in Binding status. Ceremony rows remain high-churn non-Resource session records; CTAP/fd/LeaseId/CID data stays transient. No Process has `/state`. |
+| Detailed design | Empty ProviderStateSet and strict bounded status schemas: physical presence in Device `status.resource`; semantic authority/import aggregates in Service `status.resource`; attachment aggregates in Binding `status.resource`; initial physical-backing claim, relay, Endpoint, queue, and ceremony observations only in `status.provider`. No semantic field appears directly under `status`, and Core projections contain no `spec.provider`. Ceremony rows remain high-churn non-Resource session records; CTAP/fd/LeaseId/CID data stays transient. No Process has `/state`. |
 | Integration | W-N10 signs schemas; W-N02 writes resource-local status; Core Operation/session/audit surfaces own bounded records; Volume controllers see no request. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
-| Validation | `status_binding.rs` proves empty ProviderStateSet, no `/state` mounts, no Volume API calls, and no CTAP/fd/session secrets in status/log/audit/metrics. |
+| Validation | `status_binding.rs` proves empty ProviderStateSet, no `/state` mounts, no Volume API calls, authority/import/attachment fields only under `status.resource`, implementation fields only under `status.provider`, no projection `spec.provider`, and no CTAP/fd/session secrets in status/log/audit/metrics. |
 | Removal proof | None — net-new; no prior owner to remove |
 
 ### W-N12
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Nix resource compiler owner; depends on W-N10, W-N19, and ADR-046-nix-configuration. |
+| Dependency/owner | Nix resource compiler owner; depends on W-N10, W-N19, ADR046-zone-control-024, and ADR-046-nix-configuration. |
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | `nixos-modules/` resource compiler/eval assertions for physical Device, authority Service, ResourceExport/Import, and consumer Binding |
-| Detailed design | Compile the owner Device→Service→export and consumer import→projection-Service→Binding shape; reject authored projections, Device export/projection, cross-Zone refs, duplicate authorities/Bindings, paths, and Host-wide USBIP conflicts. |
+| Detailed design | Compile the owner Device→Service→export and consumer import→projection-Service→Binding shape; reject authored projections, projection `spec.provider`, Device export/projection, cross-Zone refs, duplicate authorities/Bindings, paths, and any security-key/USB configuration that does not collide through the exact Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple after trusted identity resolution. |
 | Integration | Nix emits Device/authority Service/export/import/Binding; Core alone creates projection Service; bundle feeds Provider and authority-index admission. |
 | Data migration | Full d2b 3.0 reset; current Nix options migrate to v3 Zone resources without state import |
-| Validation | Nix eval tests for label resolution, `busClass=hidraw`, exclusive arbitration, USBIP mutual exclusion, prohibited fields, and providerRef resolution. |
+| Validation | Nix eval tests for label resolution, `busClass=hidraw`, exclusive arbitration, Core-only projection without `spec.provider`, byte-identical USB/security-key physical backing tuple collision, Provider-private-class bypass rejection, prohibited fields, and providerRef resolution. |
 | Removal proof | Supersedes current option shape only after v3 Zone resource option parity; legacy security-key/USBIP mutual-exclusion assertion is replaced by v3 resource assertion coverage. |
 
 ### W-N13
@@ -2194,10 +2220,10 @@ class.
 | Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | net-new |
 | Destination | `packages/d2b-provider-device-security-key/src/{resource_type,provider_extension,admission}.rs`; controller contracts; system-core Guest UHID authority-subresource DeviceGrant (common base lives under ADR046-provider-004) |
-| Detailed design | Bind the shared semantic authority/projection Service and Binding base versions/fingerprints from ADR046-provider-004, then define only the initial strict Provider extension and admission. The extension references the local physical Device/relay Endpoint and owns CTAPHID/fairness/frontend settings and observations. Projection is Core-owned by ResourceImport with no Device/open; Binding is operator intent and the initial extension realizes its frontend Process/private Endpoint. Standard Device remains physical only; provider-named ResourceType aliases are rejected. |
+| Detailed design | Bind the shared semantic authority/projection Service and Binding base versions/fingerprints from ADR046-provider-004, then define only the initial strict Provider extension and admission. The owner/Binding extension references the local physical Device/relay Endpoint and owns CTAPHID/fairness/frontend settings and observations. Projection is Core-owned by ResourceImport with `providerRef` plus semantic base/import fields, no `spec.provider`, and no Device/open; routing derives from the signed local descriptor, `providerRef`, and import record. Binding is operator intent and the initial extension realizes its frontend Process/private Endpoint. Standard Device remains physical only; provider-named ResourceType aliases are rejected. |
 | Integration | ResourceExport targets Service; ResourceImport creates projection Service; Binding references same-Zone Service; Core injects Guest UHID without a Device row. |
 | Data migration | Full d2b 3.0 reset; no legacy Device/claim projection import |
-| Validation | Fast schema/lifecycle conformance consumes the ADR046-provider-004 fixtures, accepts canonical minimal base without `spec.provider`, includes a fake alternate security-key Provider, and proves Device→provider-neutral Service→export→import→projection Service→provider-neutral Binding→frontend, strict base/Provider-extension separation, exact types with no aliases, strict ownership/finalizers, no Device projection, and no local hidraw open in consumer Zone. |
+| Validation | Fast schema/lifecycle conformance consumes the ADR046-provider-004 fixtures, accepts canonical minimal base without `spec.provider`, includes a fake alternate security-key Provider, and proves Device→provider-neutral Service→export→import→projection Service→provider-neutral Binding→frontend, projection `spec.provider` rejection, D088 status layering, strict base/Provider-extension separation, exact types with no aliases, strict ownership/finalizers, no Device projection, and no local hidraw open in consumer Zone. |
 | Removal proof | Supersedes legacy frontend/import Device modeling; W-X06 removes udev mutation and W-X03 removes the legacy unit once Binding-owned realization is live. |
 
 ### Removal items
@@ -2294,25 +2320,25 @@ class.
 | Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
 | Reuse action | net-new (implement the signed security-key export/import adapter) |
 | Destination | `packages/d2b-provider-device-security-key/src/share_adapter.rs` |
-| Detailed design | Signed adapters admit ResourceExport only for an authority SecurityKeyService and create one Core-owned projection SecurityKeyService with `ownerRef: ResourceImport/<name>`. They never project Device or auto-create Binding. Route Binding ceremonies over bounded encrypted named streams to the single authority fair queue; no FD/USBIP/hidraw/ref crosses Zones. |
+| Detailed design | Signed adapters admit ResourceExport only for an authority SecurityKeyService. Core invokes the signed semantic factory to create one projection SecurityKeyService with `ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, and no `spec.provider`; route selection comes from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version only, while adapter identity is authenticated separately by the signed Provider descriptor. They never project Device or auto-create Binding. Route Binding ceremonies over bounded encrypted named streams to the single authority fair queue; no FD/USBIP/hidraw/ref crosses Zones. |
 | Integration | Core export/import routing/projection lifecycle; W-N22 authority; W-N17 Endpoint streams; Nix/operator-authored Binding consumes the same-Zone projection. |
 | Data migration | Full d2b 3.0 reset; no cross-Zone sharing state |
-| Validation | Fast fake-stream conformance proves owner Service→export→import→projection Service→Binding→frontend, one fair LeaseId-guarded ceremony, ciphertext to intermediaries, no Device projection/local hidraw/FD/USBIP, revocation degradation, and audit metadata only. |
+| Validation | Fast fake-stream conformance proves owner Service→export→import→projection Service→Binding→frontend, rejection of projection `spec.provider`, semantic factory-fingerprint stability when signed adapter identity changes, separate signed-descriptor identity authentication, one fair LeaseId-guarded ceremony, ciphertext to intermediaries, no Device projection/local hidraw/FD/USBIP, revocation degradation, and audit metadata only. |
 | Removal proof | Not applicable (new surface) |
 
 ### W-N22
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | D097 authority foundation owner; depends on W-R01, W-R02, W-R03, W-R04, W-N11, W-N19, and the D097 authority contract. |
+| Dependency/owner | D097 authority foundation owner; depends on W-R01, W-R02, W-R03, W-R04, W-N11, W-N19, ADR046-zone-control-024, and the D097 authority contract. |
 | Current source | `packages/d2bd/src/security_key.rs` (`CidTranslator`, `SecurityKeyState`, `LeaseId`/`LeaseState`, `CEREMONY_TIMEOUT` 120 s, `QUEUE_WAIT_TIMEOUT` 15 s, `parse_ctaphid_report`/`build_cancel_packet`); `packages/d2b-priv-broker/src/ops/security_key.rs` (`live_open_hidraw_security_key`, double `fstat` + FIDO usage-page 0xF1D0 + HID raw-info revalidation, `O_RDWR\|O_NONBLOCK\|O_NOFOLLOW`); `packages/d2b-sk-frontend/src/{main,uhid,vsock,framing}.rs` (UHID FIDO2 CTAPHID frontend, 64-byte report relay) |
 | Reuse source | Same baseline daemon/broker/frontend symbols |
 | Reuse action | `adapt` — relay becomes the D097 hidraw authority; transport moves to Endpoint/named-stream |
 | Destination | `packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs`; D097 `AuthorityDescriptor` on authority SecurityKeyService |
-| Detailed design | The provider-neutral authority Service, not Device/Endpoint/Process, is the stable D097 owner and carries the semantic opaque Host-scoped zero-or-one descriptor. The initial Provider extension references the local physical Device and relay Endpoint and supplies physical-key derivation, Service+relay ownerProof, and bounded-fairness details. Core rejects duplicates before opening. Preserve sole Core open with double-fstat/FIDO/HID validation, async fd I/O, per-session CidTranslator, LeaseId stale-release guard, cancel-all-CIDs, one ceremony, bounded FIFO wait, and Binding-owned UHID frontend. Ceremony rows are not Resources. |
+| Detailed design | The provider-neutral authority Service, not Device/Endpoint/Process, is the stable D097 owner and carries the semantic opaque Host-scoped zero-or-one descriptor. The initial Provider extension references the local physical Device and relay Endpoint and supplies service-specific physical-key derivation, Service+relay ownerProof, and bounded-fairness details. After trusted USB identity resolution, Core additionally derives `physical-usb-backing/v1` and atomically claims the exact `(Host, physical-usb-backing, opaqueKeyDigest)` tuple used by every USB Provider before any open, withhold, bind, module, relay, or attachment effect; Provider-private claims cannot replace it. Preserve sole Core open with double-fstat/FIDO/HID validation, async fd I/O, per-session CidTranslator, LeaseId stale-release guard, cancel-all-CIDs, one ceremony, bounded FIFO wait, and Binding-owned UHID frontend. Ceremony rows are not Resources. |
 | Integration | Authority Service owns relay/Endpoint; Core index admits it and LaunchTicket supplies physical DeviceGrant; W-N21 exports/imports Service; Binding owns frontend/private Endpoint; USBIP conflict remains Host-wide. |
 | Data migration | Full d2b 3.0 reset; no per-session/lease state persisted |
-| Validation | Fast hermetic tests adapt the existing `CidTranslator`/lease/cancel/UHID/broker-revalidation suites: CID alloc/translate/release, `LeaseId` stale-release, cancel-all-CIDs on disconnect, one-ceremony + 120 s timeout, 15 s fair-wait `ERR_CHANNEL_BUSY`, UHID frame round-trip, and broker double-`fstat`+FIDO+HID revalidation — all with fakes/`FakeEffectPort`, no real hidraw. Integration proves cross-Zone CTAP ceremony **serialization** over the encrypted named stream; the USBIP-vs-security-key conflict assertion/test remains. |
+| Validation | Fast hermetic tests adapt the existing `CidTranslator`/lease/cancel/UHID/broker-revalidation suites: CID alloc/translate/release, `LeaseId` stale-release, cancel-all-CIDs on disconnect, one-ceremony + 120 s timeout, 15 s fair-wait `ERR_CHANNEL_BUSY`, UHID frame round-trip, broker double-`fstat`+FIDO+HID revalidation, byte-identical USB/security-key backing tuple derivation for one fake token, and `physical-usb-backing-conflict` before effects under alternate labels/private authority classes — all with fakes/`FakeEffectPort`, no real hidraw. Integration proves cross-Zone CTAP ceremony **serialization** over the encrypted named stream and the shared physical USB collision. |
 | Removal proof | The legacy daemon accept loop, raw CTAPHID framing, fixed `SK_VSOCK_PORT`, and broker sysfs `/sys/class/hidraw/` scan fallback are deleted only after the relay `Endpoint`/named-stream successor and the `device_token`-only broker open are green (coordinated with W-X05 `ProcessRole` removal and the W-R broker-op revalidation item). |
 
 Per D094, each replaced current-code test is retired with an explicit
@@ -2347,8 +2373,8 @@ per-test budget.
 
 | Test file | What is tested |
 | --- | --- |
-| `resource_chain_conformance.rs` | Fast in-process owner chain: physical Device → authority `security-key.d2bus.org.SecurityKeyService`/Provider relay Endpoint → ResourceExport → ResourceImport → Core-owned projection Service (`ownerRef: ResourceImport/<name>`, no Device/hidraw) → Nix/operator `security-key.d2bus.org.SecurityKeyBinding` → Provider-realized Binding frontend Process/private Endpoint. Verifies local refs, ownership, finalizer order, semantic fingerprints, and no Device projection. |
-| `provider_neutral_type_identity.rs` | Admits only the two exact `security-key.d2bus.org` ResourceTypes; rejects provider-named aliases and unknown variants; verifies `providerRef=Provider/device-security-key`, strict `spec.provider`/`status.provider` schemas, and that physical Device, CTAPHID, hidraw, relay, UHID, queue, and ceremony fields cannot enter either semantic base schema. |
+| `resource_chain_conformance.rs` | Fast in-process owner chain: physical Device → authority `security-key.d2bus.org.SecurityKeyService`/Provider relay Endpoint → ResourceExport → ResourceImport → Core-owned projection Service (`ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, no `spec.provider`, Device, or hidraw) → Nix/operator `security-key.d2bus.org.SecurityKeyBinding` → Provider-realized Binding frontend Process/private Endpoint. Verifies local refs, ownership, finalizer order, semantic factory fingerprint independence from Provider/adapter identity, separately authenticated signed descriptor identity, and no Device projection. |
+| `provider_neutral_type_identity.rs` | Admits only the two exact `security-key.d2bus.org` ResourceTypes; rejects provider-named aliases and unknown variants; verifies `providerRef=Provider/device-security-key`, canonical minimal bases, strict authored `spec.provider`/`status.provider` schemas, projection `spec.provider` rejection, D088 status layering, and that physical Device, CTAPHID, hidraw, relay, UHID, queue, and ceremony fields cannot enter either semantic base schema. |
 | `ceremony_record_separation.rs` | Resource catalog/store contains Device, Service, Binding, Process, Endpoint, Export, and Import only; ceremony/session/LeaseId/CID/queue/cancel rows remain bounded high-churn records and cannot be admitted as Resource objects or ownerRef children. |
 | `controller_reconcile.rs` | Device observation creates no children; authority Service creates relay Process/Endpoint and physical DeviceGrant; projection Service is Core/import-only and creates no hidraw grant; Binding creates frontend Process/private Endpoint and system-core UHID grant; child-first deletion and no Volume calls. |
 | `session_ring.rs` | Per-Binding bounded ring evicts oldest at `sessionRingSize`; rows are non-secret non-Resource records |
@@ -2356,12 +2382,12 @@ per-test budget.
 | `fair_queue.rs` | Multiple local/imported Bindings serialize one ceremony; FIFO order, bounded queue, 15 s fake-clock deadline → `ERR_CHANNEL_BUSY`; active Binding unaffected |
 | `duplicate_binding_conflict.rs` | Duplicate Service/Guest/User/policy Binding rejected; distinct explicit Bindings admitted without a second hidraw open |
 | `device_grant_no_path.rs` | Authority relay receives the sole Core-opened physical DeviceGrant and no hidraw path. Projection Service receives no physical grant/open. Binding frontend receives system-core Guest UHID grant and no `/dev/uhid` path; no virtual/projected Device, udev rule, or plugdev group. |
-| `mutual_exclusion.rs` | Matching USBIP vs security-key authority in same or different Zones on one Host fails before effect with `AuthorityConflict`; unrelated keys pass |
+| `mutual_exclusion.rs` | USB and security-key Providers resolving one fake token through same or different labels submit a byte-identical Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple; the second fails before effects with `BackingAuthorityReady=False`, `AuthorityConflict=True`, and `physical-usb-backing-conflict`; Provider-private authority classes/digests cannot bypass it; unrelated tokens pass |
 | `cancel_propagation.rs` | Matching `{sessionId, LeaseId}` cancel invokes cancel-all-active-CIDs and completes only that Binding; stale LeaseId cannot cancel a later ceremony; DeviceGrant persists until authority relay exit |
 | `session_timeout.rs` | CEREMONY_TIMEOUT elapsed → Active → TimedOut → Idle; audit `device-session-timeout`; relay restartable after timeout |
 | `cid_isolation.rs` | Different Bindings/ceremonies do not share CID maps; round trip and cancel-all-CIDs; canonical Service/Binding subject only |
 | `descriptor_validation.rs` | Relay-control and Service/Binding Noise identities, fingerprints, encrypted stream bounds, SO_PEERCRED, no ambient path/raw CID, and opaque-ID Debug redaction |
-| `status_binding.rs` | Empty ProviderStateSet; semantic observations remain in Service/Binding base status while relay/frontend/queue/ceremony observations remain in `status.provider`; ceremony rows are not resources/status history; CTAP, fd, LeaseId, CID, and session keys absent |
+| `status_binding.rs` | Empty ProviderStateSet; authority/import/attachment observations occur only in `status.resource`, while shared-backing implementation state and relay/frontend/queue/ceremony observations remain in `status.provider`; no semantic field appears directly under `status`; ceremony rows are not resources/status history; CTAP, fd, LeaseId, CID, and session keys absent |
 
 ### Integration (in `integration/`)
 
@@ -2370,7 +2396,7 @@ per-test budget.
 | `host_relay_guest_frontend/` | Authority Service relay receives fake hidraw DeviceGrant; Binding frontend receives system-core fake UHID grant; owned Endpoints establish Noise KK; 64-byte CTAPHID exchange translates/reverses CID with no Device projection |
 | `cross_zone_service_binding/` | Real processes exercise export/import projection Service plus Binding frontend over encrypted named stream; no FD/USBIP/hidraw open in consumer Zone; revocation degrades Binding |
 | `fair_queue/` | Multiple Binding frontends serialize one authority ceremony; bounded wait returns `ERR_CHANNEL_BUSY` without disturbing active holder |
-| `usbip_mutual_exclusion/` | Host-wide eval/runtime authority conflict fails before either duplicate effect |
+| `usbip_mutual_exclusion/` | Host-wide trusted identity resolution produces the same `physical-usb-backing` tuple for USBIP and security-key; the second claim fails before either duplicate effect |
 
 ### Existing contract tests (reuse/update)
 
@@ -2392,9 +2418,12 @@ per-test budget.
 | (none — was not configurable) | `sessionRingSize`, `leaseTimeoutSecs`, `queueWaitTimeoutSecs` in Provider root config |
 
 The current USBIP/security-key mutual-exclusion assertion is preserved as a
-Host-wide authority-index/eval assertion. It compares the security-key authority
-Service's backing Device selector with USBIP selectors across all Zones in the
-compiled Host bundle and rejects the duplicate before either effect.
+Host-wide authority-index/eval assertion. Nix preflights known-equivalent
+selectors across all Zones, while runtime Core resolves trusted physical USB
+identity and requires both implementations to claim the byte-identical
+`(Host, physical-usb-backing, opaqueKeyDigest)` tuple. The second claim receives
+`physical-usb-backing-conflict` before either effect; a Provider-private
+authority cannot bypass the shared tuple.
 
 ## References
 

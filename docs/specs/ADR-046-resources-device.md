@@ -998,10 +998,14 @@ preserved in v3 with adapted Zone/ResourceRef identifiers.
 Security-key proxy and USBIP passthrough of the same physical USB device are
 mutually exclusive. This is enforced:
 - At Nix eval time in `assertions.nix`.
-- At Device controller startup: if a Device/`<label>` is active under
-  `device-usbip` and the same selector is requested by `device-security-key`,
-  the second Device resource transitions to Failed with a `ClaimConflict`
-  condition.
+- At runtime after trusted physical-USB identity resolution: Core derives one
+  `physical-usb-backing/v1` opaque digest and requires both Providers to claim
+  the identical Host-global `(Host, physical-usb-backing, opaqueKeyDigest)`
+  tuple before any open, withhold, bind, module, relay, or attachment effect.
+  The losing authority Service transitions to `Failed` with
+  `BackingAuthorityReady=False` and `physical-usb-backing-conflict`. A
+  Provider-private authority class or selector digest cannot bypass this
+  collision.
 
 ### Broker operations consumed
 
@@ -1276,7 +1280,7 @@ Stable Device-specific error classes (in addition to common resource errors):
 | `device-state-integrity-failure` | Tamper marker mismatch (TPM only) |
 | `device-session-timeout` | CTAP session exceeded lease timeout |
 | `device-session-cancelled` | CTAP session cancelled by operator |
-| `device-mutual-exclusion-violation` | security-key and USBIP for same physical device |
+| `physical-usb-backing-conflict` | A USB or security-key authority already owns the Core-derived Host-global physical USB tuple |
 | `device-worker-failed` | Owned worker Process in Failed/Unknown phase |
 | `device-wire-contract-mismatch` | Video or GPU wire constant mismatch |
 
@@ -1894,7 +1898,7 @@ Each Provider crate's `tests/` directory; run with `cargo test -p d2b-provider-d
 | --- | --- |
 | `d2b-provider-device-tpm/tests/` | `controller_state_machine.rs` — flush→swtpm→Ready cycle with fake broker; `conformance.rs` — spec/status serde vs ResourceTypeSchema; `fault_swtpm_missing.rs` — swtpm absent → phase Degraded |
 | `d2b-provider-device-usbip/tests/` | `arbitration_conflict.rs` — second-claim rejects; `conformance.rs` — spec/settings serde; `firewall_marker.rs` — ownership marker preserved in rule; `explicit_attach_split.rs` — EphemeralProcess bind vs declared Process |
-| `d2b-provider-device-security-key/tests/` | `lease_state_machine.rs` — full acquire/cancel/expire cycle; `session_ring.rs` — ring wrap and eviction; `mutual_exclusion.rs` — USBIP+SK same label rejected; `conformance.rs` — spec/status serde; `guest_frontend_process.rs` — frontend Process resource fields |
+| `d2b-provider-device-security-key/tests/` | `lease_state_machine.rs` — full acquire/cancel/expire cycle; `session_ring.rs` — ring wrap and eviction; `mutual_exclusion.rs` — USBIP+SK resolve the same token to an identical Core-derived physical backing tuple and the second claimant fails before effects; `conformance.rs` — spec/status serde; `guest_frontend_process.rs` — frontend Process resource fields |
 | `d2b-provider-device-gpu/tests/` | `combined_reconcile.rs` — gpu+video combined state machine; `render_node_enforcement.rs` — shared+renderNodeOnly=false rejected; `wire_constant_snapshot.rs` — byte-stable wire-contract constants; `conformance.rs` — spec/settings serde |
 
 ### Layer-2 integration tests
@@ -2079,10 +2083,10 @@ error listing the missing paths. There is no opt-out mechanism.
 | Current source | `packages/d2b-contracts/src/security_key.rs` (DTOs — implemented-and-reachable); `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation — implemented-and-reachable); **KEY: relay is in d2bd** — `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED, hidraw async fd, accept loop — implemented-and-reachable) and `packages/d2bd/src/lib.rs:start_sk_accept_loop` (ProcessRole::SecurityKeyFrontend dispatch — implemented-and-reachable); **guest binary**: `packages/d2b-sk-frontend/src/` (static UHID frontend — implemented-and-reachable); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.security_key.*`; `nixos-modules/components/security-key-guest.nix` |
 | Reuse action | extract and adapt |
 | Destination | `packages/d2b-provider-device-security-key/src/` (controller, relay Process, guest frontend Process, lease/session ring); `packages/d2b-provider-device-security-key/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-security-key/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-security-key/README.md` |
-| Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mutual-exclusion enforcement; Nix emitter; all four required crate paths present (see "Provider crate layout") |
+| Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see "Provider crate layout") |
 | Integration | Zone resource store; broker `SecurityKeyOpenDevice`/`SecurityKeyApplyUdevRules`; Guest frontend module |
 | Data migration | None; full reset |
-| Validation | `src/`: lease transitions, session ring eviction, broker op path-free, CID round-trip; `tests/`: `lease_state_machine.rs`, `session_ring.rs`, `mutual_exclusion.rs`, `conformance.rs`, `guest_frontend_process.rs`; `integration/`: `lease_acquire_cancel/`, `session_ring_capacity/`, `guest_frontend_connect/`; workspace policy check: `make test-policy` passes with all four paths present |
+| Validation | `src/`: lease transitions, session ring eviction, broker op path-free, CID round-trip; `tests/`: `lease_state_machine.rs`, `session_ring.rs`, `mutual_exclusion.rs` proves security-key and USB implementations resolve one token to a byte-identical physical backing key and the loser receives `physical-usb-backing-conflict` before any effect, `conformance.rs`, `guest_frontend_process.rs`; `integration/`: `lease_acquire_cancel/`, `session_ring_capacity/`, `guest_frontend_connect/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::SecurityKeyFrontend removed after parity |
 
 ### ADR046-device-005

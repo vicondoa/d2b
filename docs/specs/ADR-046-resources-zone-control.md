@@ -1830,7 +1830,7 @@ descriptor:
 | `bindingType` | Exact qualified semantic/provider-neutral `*Binding` type permitted to consume that Service |
 | `allowedBackingRefTypes` | Closed same-Zone types the owner Service may reference (`Device`, `Endpoint`, or qualified semantic backend types) |
 | `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` |
-| `projectionSchema` | Strict deny-unknown semantic base schema for the local projection Service; excludes `spec.provider` and has no implementation-specific field beyond standard `providerRef`, FD, secret, raw path/locator, credential, or payload bytes |
+| `projectionSchema` | Strict deny-unknown semantic base schema for the local projection Service; contains standard `providerRef` plus semantic base/import fields and excludes `spec.provider`, implementation-specific fields, FD, secret, raw path/locator, credential, and payload bytes |
 | `projectionSchemaFingerprint` | SHA-256 of the canonical projection schema |
 | `factoryFingerprint` | SHA-256 binding all fields above and the semantic projection-protocol version, never Provider/adapter identity |
 
@@ -1839,7 +1839,11 @@ Service type and fingerprints, the import's expectations, and the installed
 consumer Provider factory must match exactly. There is no generic fallback and
 no "project the exported resource's type" behavior. The selected implementation
 remains the local `providerRef`; strict `spec.provider` contains only
-implementation-specific settings. Every conformant Provider MUST accept the
+implementation-specific settings on authored owner Services and Bindings.
+Core-generated projection Services never contain `spec.provider`; their route
+derives from the signed local Provider descriptor, `providerRef`, and
+ResourceImport record, and implementation observation belongs only in
+`status.provider`. Every conformant Provider MUST accept the
 canonical minimal Service/Binding base without `spec.provider`. Base spec/status,
 conditions, errors, and fingerprints never contain PipeWire, OTEL, USBIP,
 CTAPHID, package, binary, or adapter details; `providerRef` is the sole opaque
@@ -2200,7 +2204,7 @@ so the index admits exactly one owner across all Zones on the host.
 | GPU-owned `udmabuf`/video subresources | subresource of the GPU authority | n/a (internal) | GPU authority | n/a | not a separate resource — declared **authority subresource/DeviceGrant**, never a new Provider |
 | Per-Guest swtpm state + marker | physical-device (Host-global) | exactly-one per Guest | `Provider/device-tpm` | exclusive | forbidden; **state never wiped** (device-tampering signal) |
 | Physical TPM | physical-device (Host-global) | exactly-one (host singleton) | `Provider/device-tpm` | exclusive | forbidden |
-| USB physical device | physical-device (Host-global) | exclusive per device | `Provider/device-usbip` | exclusive | forbidden directly; a policy-gated qualified USBIP Service may mediate it |
+| Physical USB backing | physical-device (Host-global) | zero-or-one per Core-derived trusted identity digest | Any authority Service implemented by a USB or security-key Provider, initially `Provider/device-usbip` and `Provider/device-security-key` | exclusive through the identical `(Host, physical-usb-backing, opaqueKeyDigest)` tuple | forbidden directly; a policy-gated semantic USB Service or security-key Service may mediate it |
 | `usbip-host` kernel module | host (Host-global) | exactly-one host-global | `Provider/device-usbip` | exclusive | forbidden |
 | Per-Network USBIP listener + firewall | zone | exactly-one per `Network` | `Network` authority | exclusive | forbidden (fixed port becomes an `Endpoint`) |
 | External NIC / macvtap `parentInterface` | physical-device (Host-global) | zero-or-one per interface | `Network`/`Provider/network-local` | `passthru` **globally exclusive across all Zones**; `bridge`/`private`/`vepa` per explicit policy | forbidden |
@@ -4499,10 +4503,10 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | Core authority index (ADR046-zone-control-019) |
 | Reuse action | net-new (Host-global index scope for host/physical-device authorities) |
 | Destination | `packages/d2b-core-controller/src/authority.rs` (Host-global index scope + hardware admission) |
-| Detailed design | Extend the core authority index so `host`, `physical-device`, `seat`, and `external-service` authorities are keyed **Host-global** (`(Host, authorityClass, opaqueKeyDigest)`), admitting exactly one owner across all Zones on the host, while `zone`-scoped authorities stay Zone-local. Enforce the §8B.3 hardware rows: GPU full-device exclusive vs render-node shared; per-Guest swtpm and physical TPM exclusive (state never wiped); USB device exclusive + host-global `usbip-host` module; macvtap/NIC `parentInterface` `passthru` globally exclusive across all Zones; host-shared `/dev/kvm` and `/dev/vhost-vsock` as `Provider/system-core` grants (no 28th Provider, no `kvm` busClass); globally-unique vsock CID; fixed listener ports as `Endpoint`s; host store + per-Guest store-view writer; Network TAP/bridge. A second Zone claiming the same physical backing is `duplicateConflict` before any open; restart adopts by `ownerProof`; Guest-stop drains dependent leases. GPU-owned `udmabuf`/video and per-session `vhost-vsock` tokens stay authority subresources/DeviceGrants (not resources/Providers). |
+| Detailed design | Extend the core authority index so `host`, `physical-device`, `seat`, and `external-service` authorities are keyed **Host-global** (`(Host, authorityClass, opaqueKeyDigest)`), admitting exactly one owner across all Zones on the host, while `zone`-scoped authorities stay Zone-local. Enforce the §8B.3 hardware rows: GPU full-device exclusive vs render-node shared; per-Guest swtpm and physical TPM exclusive (state never wiped); one Core-derived `physical-usb-backing/v1` identity digest claimed through the exact `(Host, physical-usb-backing, opaqueKeyDigest)` tuple by every USB or security-key implementation before effects, plus the separate host-global `usbip-host` module; macvtap/NIC `parentInterface` `passthru` globally exclusive across all Zones; host-shared `/dev/kvm` and `/dev/vhost-vsock` as `Provider/system-core` grants (no 28th Provider, no `kvm` busClass); globally-unique vsock CID; fixed listener ports as `Endpoint`s; host store + per-Guest store-view writer; Network TAP/bridge. A second Zone claiming the same physical backing receives `physical-usb-backing-conflict` before any open, bind, withhold, module, relay, or attachment effect; restart adopts by `ownerProof`; Guest-stop drains dependent leases. GPU-owned `udmabuf`/video and per-session `vhost-vsock` tokens stay authority subresources/DeviceGrants (not resources/Providers). |
 | Integration | Core authority index (ADR046-zone-control-019); Provider cardinality admission (ADR046-zone-control-022); `Provider/system-core` KVM/vhost-vsock grant; `Provider/device-*` and `Network` authorities |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Two Zones on one host cannot both claim one GPU/TPM/USB/`/dev/kvm`/passthru NIC/vsock CID/fixed port — second is `duplicateConflict`; render-node shared admits bounded holders; per-Guest swtpm exclusive and marker never wiped; host-global adoption by `ownerProof`; hardware D096 exportability (GPU/KVM/TPM/store/macvtap non-exportable; USBIP policy-gated); fast hermetic with fakes |
+| Validation | Two Zones on one host cannot both claim one GPU/TPM/USB/`/dev/kvm`/passthru NIC/vsock CID/fixed port — second is `duplicateConflict`; security-key and USB implementations resolving the same physical token submit byte-identical `physical-usb-backing` tuple keys and the loser receives `physical-usb-backing-conflict` before any effect; Provider-private authority classes/digests cannot bypass the collision; render-node shared admits bounded holders; per-Guest swtpm exclusive and marker never wiped; host-global adoption by `ownerProof`; hardware D096 exportability (GPU/KVM/TPM/store/macvtap non-exportable; semantic USB policy-gated); fast hermetic with fakes |
 | Removal proof | Not applicable (new surface) |
 
 ---

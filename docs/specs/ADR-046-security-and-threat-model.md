@@ -664,9 +664,14 @@ The security boundary is structural:
   High-churn session, stream, ceremony, transfer, and lease handles remain
   internal and are never resources or authority evidence.
 - The semantic base is not an implementation side channel. `providerRef`
-  selects a local implementation and strict `spec.provider` contains only its
-  settings; canonical minimal base admission works without that extension.
-  Export/import never copies the remote extension or changes semantic type.
+  selects a local implementation. Strict `spec.provider` is permitted only on
+  authored owner Services and Bindings; canonical minimal base admission works
+  without that extension. A Core-generated projection has only ResourceImport
+  ownership, `providerRef`, and semantic base/import fields, never
+  `spec.provider`. Its route derives from the signed local Provider descriptor,
+  `providerRef`, and ResourceImport record; implementation observation appears
+  only in `status.provider`. Export/import never copies the remote extension or
+  changes semantic type.
   PipeWire, CTAPHID, OTEL, USBIP, package, binary, adapter, and protocol details
   are rejected from base spec/status, conditions, errors, fingerprints,
   advertisements, and graph identity. The base `providerRef` is the sole opaque
@@ -1641,7 +1646,7 @@ section with the full control description.
 | `EphemeralProcess` | Terminal-result retention becoming an unbounded secret/output store | Bounded `successfulTtl`/`failedTtl`; forbidden-field list identical to Process | §15 |
 | `Volume` | Identity-marker tamper / silent re-provisioning after tamper or deletion race | HMAC identity marker, fail-closed `missing`/`replaced` status, quarantine on partial destruction | §17 |
 | `Network` | Firewall/IPv6/east-west drift silently reopening isolation | Dual-point IPv6 suppression enforcement; `hostBlocklist` additive-only; `firewallDigest` drift detection | Cross-cutting network invariants (`ADR-046-resources-network`) |
-| `Device` | Blanket device-path grant / cross-consumer device sharing (e.g. security-key + USBIP on one physical device) | No blanket grant; broker-derived node only; explicit mutual-exclusion enforcement (eval-time + runtime) | §13 |
+| `Device` | Blanket device-path grant / cross-consumer device sharing (e.g. security-key + USBIP on one physical device) | No blanket grant; broker-derived node only; eval preflight plus mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared by all USB/security-key Providers before effects | §13 |
 | `User` | Numeric UID/GID leaking into authorization decisions or public surface | `User/<name>` typed refs only; `mappingClass: process-principal-root` never exposes numeric UID/GID publicly | §15 |
 | `Credential` | Secret bytes reaching resource store/audit/telemetry, or a non-enrolled consumer reading a token | Zero-secret invariant; Noise KK-only sensitive delivery; exact `consumerRef` match | §9/§19 |
 | `Endpoint` | A stable endpoint leaking a raw locator (path/address/CID/port/fd/credential) into spec/status/CLI, or an unauthorized consumer resolving it to a live transport/FD | No raw locator in spec/status (closed transport/locality classes only); Core/ProviderSupervisor resolves via EffectPort/LaunchTicket under authorization; unauthorized resolve denied with a typed error (D092) | §D092 |
@@ -1665,7 +1670,7 @@ and [Forbidden designs](#forbidden-designs).
 | Activation | `activation-nixos` | Store-path leakage revealing exact system closure; privilege escalation via `startRoot: true` | Sealed store path never in any public surface; `startRoot: true` paired with `noNewPrivileges: true` + zero host capabilities | `provider-activation-nixos.md` |
 | Volume | `volume-local`, `volume-virtiofs` | Host path leakage; cross-VM store leakage; ADR 0021 capability violation | Opaque `sourcePolicyId`; `store-view/live` never real `/nix/store`; zero host capabilities for virtiofsd (conformance-kit tested) | `provider-volume-{local,virtiofs}.md` |
 | Network | `network-local` | Internal bridge/tap topology (IfName) leakage; firewall/isolation drift | FNV-1a-hashed IfNames never exposed; dual-point IPv6 suppression; `firewallDigest` drift detection | `provider-network-local.md` |
-| Device | `device-tpm`, `device-usbip`, `device-security-key`, `device-gpu` | Device-path leakage; cross-consumer device conflict; TPM re-provisioning as clean device | Broker-derived node only; mutual exclusion (security-key vs. USBIP); TPM fail-closed marker | `provider-device-*.md` |
+| Device | `device-tpm`, `device-usbip`, `device-security-key`, `device-gpu` | Device-path leakage; cross-consumer device conflict; TPM re-provisioning as clean device | Broker-derived node only; trusted USB identity resolution plus byte-identical `physical-usb-backing` tuple collision before security-key/USB effects; TPM fail-closed marker | `provider-device-*.md` |
 | Credential | `credential-secret-service`, `credential-entra`, `credential-managed-identity` | Secret bytes crossing a process/session/audit boundary | Zero-secret-bytes port boundary; domain-locked Credential type (user vs. system) | `provider-credential-*.md` |
 | Interaction | `display-wayland`, `audio-pipewire`, `clipboard-wayland`, `shell-terminal`, `notification-desktop` | Interactive content (clipboard/terminal/notification) exfiltration via observability surfaces | FD-only content delivery (SCM_RIGHTS); closed content-secrecy table (§20); nonce-bound action replay protection | `provider-{display-wayland,audio-pipewire,clipboard-wayland,shell-terminal,notification-desktop}.md` |
 | Transport | `transport-unix`, `transport-vsock`, `transport-azure-relay` | Raw CID/port/socket-path leakage; FD/credential smuggling over a remote transport | Opaque endpoint IDs with no public accessor; structural `attachment_support=false` over ZoneLink transports | `provider-transport-*.md` |

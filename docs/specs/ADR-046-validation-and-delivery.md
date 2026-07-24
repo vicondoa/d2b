@@ -792,7 +792,12 @@ Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
   `device-usbip`;
 - canonical minimal Service/Binding base admission succeeds without
   `spec.provider`; export/import preserves semantic type across independently
-  selected conformant implementations, while mismatched semantic factories and
+  selected conformant implementations; every Core projection has ResourceImport
+  ownership, `providerRef`, semantic base/import fields, and no `spec.provider`;
+  provider/adapter identity changes leave the semantic factory fingerprint
+  unchanged while signed-descriptor authentication still detects substitution;
+  common semantic observations exist only under `status.resource` and
+  implementation observations only under `status.provider`; mismatched factories and
   PipeWire/CTAPHID/OTEL/USBIP detail in base spec/status/conditions/errors/
   fingerprints reject;
 - quota/fairness/deadline enforcement; reconnect revalidation and revocation
@@ -803,7 +808,10 @@ Hermetic (fake ZoneLink/stream/clock/adapter) fast tests and slower integration
   exclusivity/consent/fair-queue; security-key: CTAP serialization with one
   exclusive per-device lease/deadline/cancel; observability: one SigNoz ingest
   with many producer Zones under quota/backpressure/redaction/cardinality;
-  USBIP: all Provider/Zone/export/device policy gates required;
+  USBIP: all Provider/Zone/export/device policy gates required; one physical
+  token selected by USBIP and security-key resolves to a byte-identical
+  Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple, and the
+  second claimant receives `physical-usb-backing-conflict` before any effect;
 - only those four Provider families are admitted (USBIP policy-gated); all other
   Providers and every Binding are non-exportable;
 - Nix canonical resources and projection names are inspectable/byte-stable even

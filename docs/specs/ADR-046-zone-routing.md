@@ -1062,7 +1062,6 @@ After core activates the bundle, persisted store resources gain additional
 core-populated fields — e.g. `metadata.managedBy`, `metadata.configurationGeneration`,
 `metadata.uid`, `metadata.generation`. These are absent from the Nix-rendered
 bundle JSON and must not be authored.
-```
 
 **ZoneLink resource** — emitted from
 `d2b.zones.k0.resources.k1-dev = { type = "ZoneLink"; spec = { ... }; };`:
@@ -1486,7 +1485,10 @@ transport, cross-Zone reference, or FD-forwarding path is introduced.
   preserves the "No cross-Zone resource references" invariant. The consumer's
   local `providerRef` independently selects a conformant implementation; route
   matching preserves the semantic Service type exactly and never copies the
-  owner's implementation extension.
+  owner's implementation extension. Core creates the projection with semantic
+  base/import fields only and rejects `spec.provider`; routing derives from the
+  signed local Provider descriptor, `providerRef`, and ResourceImport record,
+  while implementation observations may appear only in `status.provider`.
 - **Capability/RBAC ceiling.** Every hop applies the ceiling-propagation and
   RBAC-narrowing rules; `requestedCapabilities` is clamped to the export
   capability ceiling and to the ZoneLink allocation. No import can exceed the

@@ -23,7 +23,7 @@ tie-break or omitted dependency is used.
 | Spec nodes | 55 |
 | Work-item nodes | 538 |
 | Total nodes | 593 |
-| Edges | 1670 |
+| Edges | 1677 |
 | Max topological rank | 19 |
 
 ## Waves (W0–W7)
@@ -262,6 +262,7 @@ file overlap.
 
 - Regenerated from 55 member specs and 538 current work items; no stale 536-item graph content remains.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
+- `ADR046-zone-control-024` owns the shared Core-derived `physical-usb-backing` tuple; both the security-key and USB effect DAGs depend on it.
 - Every security-key `W-N`/`W-R`/`W-X` dependency in `Dependency/owner` is encoded. The dependency subgraph is acyclic and uses no generator tie-break.
 - File-overlap barriers cover only the shared core configuration/cleanup files. Soft cross-Provider integration order remains file-disjoint and concurrent.
 - No repository generator exists at this Proposed stage. `ADR046-streamline-001`/`024` own the future canonical `xtask` implementation.

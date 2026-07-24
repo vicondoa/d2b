@@ -122,7 +122,7 @@ within a Provider artifact and binds:
 | `bindingType` | Its qualified semantic/provider-neutral `*Binding` ResourceType expressing local consumer intent |
 | `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified semantic backend types the owner Service may reference |
 | `allowedBindingTargetRefTypes` | Closed subset of `Guest`, `User`, and `Zone` that a Binding may target |
-| `projectionSchema` | Signed, strict, deny-unknown semantic base schema for the projection Service; excludes `spec.provider` and contains no implementation-specific field beyond standard `providerRef`, raw locator, path, credential, secret, FD, or bytes |
+| `projectionSchema` | Signed, strict, deny-unknown semantic base schema for the projection Service; contains only standard `providerRef`, semantic base/import fields, and no `spec.provider`, implementation-specific field, raw locator, path, credential, secret, FD, or bytes |
 | `projectionSchemaFingerprint` | SHA-256 of that canonical schema |
 | `factoryFingerprint` | SHA-256 binding all fields above plus the semantic projection-protocol version; never Provider/adapter identity or implementation detail |
 
@@ -147,7 +147,10 @@ the advertisement/import expectation. `Service` and `Binding` remain qualified
 semantic types and do not enlarge the 19-type standard catalog. Export/import
 preserves `serviceType` exactly even when owner and consumer select different
 conformant implementations through local `providerRef`. It never copies or
-requires the remote `spec.provider` extension. The strict
+requires the remote `spec.provider` extension, and Core does not synthesize a
+local one. Routing derives from the signed local Provider descriptor,
+`providerRef`, and ResourceImport record; implementation observation is
+permitted only in `status.provider`. The strict
 descriptor accepts only `bindingType` and `allowedBindingTargetRefTypes`; the
 former `stateType`/`allowedStateTargetRefTypes` spellings and qualified `*State`
 types are not aliases and are rejected.
@@ -678,8 +681,8 @@ cannot alias, rename, or vendor-qualify the base types.
 | Current source | None — D098 common semantic Service/Binding bases are net-new ADR 0046 contracts |
 | Reuse action | net-new |
 | Destination | `packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs`; generated schema artifacts for the eight exact qualified ResourceTypes |
-| Detailed design | Define one shared strict base spec/status DTO and schema contract for each frozen D098 Service/Binding pair, including exact semantic type/schema IDs, versions, fingerprints, minimal valid base fixtures without `spec.provider`, authority/projection Service union, same-Zone Binding `serviceRef`/target rules, status-only observations, and projection-factory type binding. Register no implementation-qualified or former `*State` alias. |
+| Detailed design | Define one shared strict base spec/status DTO and schema contract for each frozen D098 Service/Binding pair, including exact semantic type/schema IDs, versions, fingerprints, minimal valid base fixtures without `spec.provider`, authority/projection Service union, same-Zone Binding `serviceRef`/target rules, D088 `status.resource` layering, status-only observations, and projection-factory type binding. A Core-generated projection permits only `providerRef`, semantic base/import fields, and ResourceImport ownership; it rejects `spec.provider`. Register no implementation-qualified or former `*State` alias. |
 | Integration | Provider manifests and ResourceApiBindings consume the common catalog fingerprint; ADR046-zone-control-019/020 use the same factory metadata to admit an owner Service and core-create one same-type projection Service; the four initial Provider dossiers supply only strict implementation extensions/controllers. |
 | Data migration | Full d2b 3.0 reset; no prior public Service/Binding names or aliases are imported |
-| Validation | Shared contract tests cover exact names, strict serde/schema round trips, common base discoverability without any Provider package, canonical minimal base acceptance without `spec.provider`, same-Zone refs/targets, owner/projection discrimination, status-only observations, no Device/Endpoint/Binding projection, implementation-detail rejection, fingerprint stability, and rejection of every implementation-qualified/former `*State` alias. Each initial and fake alternate Provider must pass the identical base conformance fixture. |
+| Validation | Shared contract tests cover exact names, strict serde/schema round trips, common base discoverability without any Provider package, canonical minimal base acceptance without `spec.provider`, same-Zone refs/targets, owner/projection discrimination, Core projection rejection of `spec.provider`, common fields only under `status.resource`, implementation observation only under `status.provider`, status-only observations, no Device/Endpoint/Binding projection, implementation-detail rejection, semantic factory-fingerprint stability under Provider/adapter identity changes, and rejection of every implementation-qualified/former `*State` alias. Each initial and fake alternate Provider must pass the identical base conformance fixture. |
 | Removal proof | Any Provider-local duplicate base DTO/schema is removed before that Provider is registered; only strict Provider extension DTOs remain implementation-owned. |

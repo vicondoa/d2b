@@ -2,7 +2,7 @@
   "adr": "0046",
   "artifactKind": "d2b-adr-implementation-graph",
   "counts": {
-    "edges": 1670,
+    "edges": 1677,
     "maxTopologicalRank": 19,
     "nodes": 593,
     "specNodes": 55,
@@ -5100,6 +5100,11 @@
       "type": "work-item-depends-on"
     },
     {
+      "from": "ADR046-nix-031",
+      "to": "ADR046-zone-control-024",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-nl-001",
       "to": "ADR-046-provider-network-local",
       "type": "implements-spec"
@@ -6935,6 +6940,11 @@
       "type": "work-item-depends-on"
     },
     {
+      "from": "ADR046-usbip-002",
+      "to": "ADR046-zone-control-024",
+      "type": "work-item-depends-on"
+    },
+    {
       "from": "ADR046-usbip-003",
       "to": "ADR-046-provider-device-usbip",
       "type": "implements-spec"
@@ -6961,7 +6971,17 @@
     },
     {
       "from": "ADR046-usbip-004",
+      "to": "ADR046-usbip-002",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-usbip-004",
       "to": "ADR046-usbip-003",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-usbip-004",
+      "to": "ADR046-zone-control-024",
       "type": "work-item-depends-on"
     },
     {
@@ -7007,6 +7027,11 @@
     {
       "from": "ADR046-usbip-008",
       "to": "ADR046-usbip-003",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "ADR046-usbip-008",
+      "to": "ADR046-zone-control-024",
       "type": "work-item-depends-on"
     },
     {
@@ -7871,6 +7896,11 @@
     },
     {
       "from": "W-N12",
+      "to": "ADR046-zone-control-024",
+      "type": "work-item-depends-on"
+    },
+    {
+      "from": "W-N12",
       "to": "W-N10",
       "type": "work-item-depends-on"
     },
@@ -8063,6 +8093,11 @@
       "from": "W-N22",
       "to": "ADR-046-provider-device-security-key",
       "type": "implements-spec"
+    },
+    {
+      "from": "W-N22",
+      "to": "ADR046-zone-control-024",
+      "type": "work-item-depends-on"
     },
     {
       "from": "W-N22",
@@ -15276,13 +15311,14 @@
       "exitGate": "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-nix-031",
       "kind": "work-item",
-      "owner": "ADR046-provider-004, ADR046-zone-control-019, ADR046-zone-control-020; Nix resource compiler owner",
+      "owner": "ADR046-provider-004, ADR046-zone-control-019, ADR046-zone-control-020, ADR046-zone-control-024; Nix resource compiler owner",
       "parallelGroup": "wi:ADR-046-nix-configuration",
       "prerequisites": [
         "ADR-046-nix-configuration",
         "ADR046-provider-004",
         "ADR046-zone-control-019",
-        "ADR046-zone-control-020"
+        "ADR046-zone-control-020",
+        "ADR046-zone-control-024"
       ],
       "specId": "ADR-046-nix-configuration",
       "topologicalRank": 11,
@@ -19197,11 +19233,12 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-usbip-002",
       "kind": "work-item",
-      "owner": "ADR046-usbip-001; UsbipBindFirewallRule broker op; d2b-host usbip argv support; framework core adapter owner",
+      "owner": "ADR046-usbip-001, ADR046-zone-control-024; UsbipBindFirewallRule broker op; d2b-host usbip argv support; framework core adapter owner",
       "parallelGroup": "wi:ADR-046-provider-device-usbip",
       "prerequisites": [
         "ADR-046-provider-device-usbip",
-        "ADR046-usbip-001"
+        "ADR046-usbip-001",
+        "ADR046-zone-control-024"
       ],
       "specId": "ADR-046-provider-device-usbip",
       "topologicalRank": 12,
@@ -19240,12 +19277,14 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-usbip-004",
       "kind": "work-item",
-      "owner": "ADR046-usbip-001 and ADR046-usbip-003; device-usbip controller owner",
+      "owner": "ADR046-usbip-001, ADR046-usbip-002, ADR046-usbip-003, and ADR046-zone-control-024; device-usbip controller owner",
       "parallelGroup": "wi:ADR-046-provider-device-usbip",
       "prerequisites": [
         "ADR-046-provider-device-usbip",
         "ADR046-usbip-001",
-        "ADR046-usbip-003"
+        "ADR046-usbip-002",
+        "ADR046-usbip-003",
+        "ADR046-zone-control-024"
       ],
       "specId": "ADR-046-provider-device-usbip",
       "topologicalRank": 13,
@@ -19326,11 +19365,12 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "ADR046-usbip-008",
       "kind": "work-item",
-      "owner": "ADR046-usbip-003; ADR-046-nix-configuration; Nix integrator",
+      "owner": "ADR046-usbip-003, ADR046-zone-control-024; ADR-046-nix-configuration; Nix integrator",
       "parallelGroup": "wi:ADR-046-provider-device-usbip",
       "prerequisites": [
         "ADR-046-provider-device-usbip",
-        "ADR046-usbip-003"
+        "ADR046-usbip-003",
+        "ADR046-zone-control-024"
       ],
       "specId": "ADR-046-provider-device-usbip",
       "topologicalRank": 13,
@@ -20865,10 +20905,11 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N12",
       "kind": "work-item",
-      "owner": "Nix resource compiler owner; depends on W-N10, W-N19, and ADR-046-nix-configuration.",
+      "owner": "Nix resource compiler owner; depends on W-N10, W-N19, ADR046-zone-control-024, and ADR-046-nix-configuration.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
         "ADR-046-provider-device-security-key",
+        "ADR046-zone-control-024",
         "W-N10",
         "W-N19"
       ],
@@ -21094,10 +21135,11 @@
       "exitGate": "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id": "W-N22",
       "kind": "work-item",
-      "owner": "D097 authority foundation owner; depends on W-R01, W-R02, W-R03, W-R04, W-N11, W-N19, and the D097 authority contract.",
+      "owner": "D097 authority foundation owner; depends on W-R01, W-R02, W-R03, W-R04, W-N11, W-N19, ADR046-zone-control-024, and the D097 authority contract.",
       "parallelGroup": "wi:ADR-046-provider-device-security-key",
       "prerequisites": [
         "ADR-046-provider-device-security-key",
+        "ADR046-zone-control-024",
         "W-N11",
         "W-N19",
         "W-R01",

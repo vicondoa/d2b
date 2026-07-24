@@ -278,8 +278,8 @@ An authority Service represents one semantic telemetry-ingest service, not an
 individual socket, backend product, or wire protocol. It references local
 ingest Endpoints and carries the D097 descriptor. Its
 `ResourceExport.spec.resourceRef` names the
-`TelemetryService`; the required `ResourceExport.spec.endpointRef` names one
-local ingest Endpoint only as the private arbitration transport front door.
+`TelemetryService`; that Service's local `ingestEndpointRefs` remain its private
+arbitration transport front doors and are not copied into `ResourceExport`.
 `exportedType` and `projectionType` are
 `telemetry.d2bus.org.TelemetryService`.
 
@@ -802,7 +802,8 @@ transport, and Binding-private collector or forwarder transport are owned
 fields. An ordinary telemetry producer references
 `TelemetryBinding.spec.serviceRef`, never an Endpoint, as its semantic capability.
 Only the Service/Binding controller, its exact child Processes, and
-`ResourceExport.endpointRef` resolve Endpoints for implementation transport.
+the export/import adapter acting through the referenced owner Service resolve
+Endpoints for implementation transport; `ResourceExport` has no Endpoint ref.
 
 Endpoint spec/status/CLI/audit/telemetry never include raw socket paths, CIDs,
 ports, IP addresses, fd numbers, OTLP payload bytes, span/log bodies, or
@@ -1661,9 +1662,10 @@ stream handle, credential, or secret.
 3. Projection Services cannot be authored directly, carry ingest refs,
    `spec.provider`, or an authority descriptor; only core may create one
    under a `ResourceImport`.
-4. `ResourceExport.resourceRef`, `exportedType`, and `endpointRef` form the
-   Service → local ingest Endpoint chain. Exporting a Binding or Endpoint as the
-   semantic telemetry type fails.
+4. `ResourceExport.resourceRef` and `exportedType` name only the authority
+   Service; that Service's local `ingestEndpointRefs` remain implementation
+   transport. Exporting a Binding or Endpoint as the semantic telemetry type
+   fails, and an Endpoint field on `ResourceExport` is rejected.
 5. `ResourceImport.expectedType` and `projectionType` are both
    exactly `telemetry.d2bus.org.TelemetryService`; an Endpoint projection fails.
 6. Binding `serviceRef` and `producerRef` resolve in the same Zone; signals are a
@@ -1754,9 +1756,10 @@ integration-only.
 
 #### `tests/projection_chain.rs`
 
-- In memory, build authority Service → `ResourceExport.resourceRef`, local
-  ingest Endpoint → `ResourceExport.endpointRef`, `ResourceImport` → core-owned
-  projected Service → producer Binding `serviceRef`.
+- In memory, build authority Service with local ingest Endpoint refs →
+  `ResourceExport.resourceRef` → `ResourceImport` → core-owned projected
+  Service → producer Binding `serviceRef`; assert the Export contains no
+  Endpoint ref.
 - Assert Export/Import expected/projected type is exactly
   `telemetry.d2bus.org.TelemetryService`, never `Endpoint`, and projection owner
   is exactly `ResourceImport/<name>`.
@@ -2168,10 +2171,10 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | SigNoz ingest authority (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
 | Reuse action | net-new (implement the signed observability export/import adapter) |
 | Destination | `packages/d2b-provider-observability-otel/src/share_adapter.rs` |
-| Detailed design | Implement the signed adapter: `sys-obs` exports the authority `TelemetryService`, with one referenced local ingest Endpoint as transport; every producer imports a core-owned local `TelemetryService` projection. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. |
+| Detailed design | Implement the signed adapter: `sys-obs` exports the authority `TelemetryService`, with one referenced local ingest Endpoint as transport; every producer import causes Core to create one local `TelemetryService` projection with ResourceImport ownership, `providerRef`, semantic base/import fields, and no `spec.provider`. Routing derives from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version, never Provider/adapter identity, which the signed descriptor authenticates separately. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. |
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
+| Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream, rejects projection `spec.provider`, and proves the semantic fingerprint is unchanged by Provider/adapter identity mutation while signed descriptor authentication remains exact; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
 | Removal proof | Not applicable |
 
 ### ADR046-otel-006: TelemetryService authority and TelemetryBinding realization (D096/D097)
@@ -2187,7 +2190,7 @@ Old and new suites never run in parallel indefinitely.
 | Detailed design | Implement one provider-neutral D097 authority Service with generic telemetry-ingest Endpoint refs and common service/signals/quota/policy fields. Its strict observability-otel `spec.provider` alone selects the loopback SigNoz stack, backend Endpoints, and OTLP. Core rejects duplicates and adopts by owner proof. Implement core-owned imported Service projections with no `spec.provider` or backend ownership. Implement per-producer Bindings with common service/producer/signals/quota/policy fields and strict implementation extension; Bindings own/cause edge collector/forwarder/private Endpoints/runtime Volume. Keep generic observations in `status.resource` and SigNoz/OTLP/OTEL observations in `status.provider`. Preserve trusted source upsert, retry/queue, bounded cardinality/redaction, audit non-transfer, status-first state, and no OTEL SDK in core. Endpoint is transport only. |
 | Integration | Ingest authority + export (ADR046-otel-005); core export/import controller and projection lifecycle (ADR046-zone-control-019/020); ComponentSession per-import encrypted streams; d2b-telemetry closed-label metrics |
 | Data migration | None — full d2b 3.0 reset |
-| Validation | Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove provider-neutral names, base/Provider field separation, status layering, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only. |
+| Validation | Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove provider-neutral names, base/Provider field separation, projection `spec.provider` rejection, exact D088 placement of semantic observations under `status.resource` and implementation observations under `status.provider`, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only. |
 | Removal proof | Legacy fixed per-source vsock ingress and old gates are removed only after the Service/Binding/ComponentSession successor passes; neither old provider-qualified ResourceType name nor any Endpoint-projection or ResourceType alias remains, and no duplicate suite remains. |
 
 ---
@@ -2203,7 +2206,7 @@ Old and new suites never run in parallel indefinitely.
    `telemetry.d2bus.org.TelemetryBinding`, initially implemented by
    `Provider/observability-otel`, including canonical base
    schemas/status/conditions, strict Provider extensions, and no aliases.
-4. **Cross-Zone chain**: authority Service → Export plus local ingest Endpoint → Import → core-owned projected Service → Binding `serviceRef`; Endpoint is never the semantic projection.
+4. **Cross-Zone chain**: authority Service → Export plus local ingest Endpoint → Import → Core-owned projected Service with no `spec.provider` → Binding `serviceRef`; Endpoint is never the semantic projection, and Provider/adapter identity is authenticated separately from the semantic factory fingerprint.
 5. **D097**: descriptor on the generic authority Service, with SigNoz/OTLP
    selection only in `spec.provider`, plus duplicate
    rejection/adoption/quarantine.
