@@ -40,8 +40,9 @@ Specifically:
   `ComponentSession` (new; may copy/adapt main commit `a1cc0b2d`). These crates
   are compile-checked in `d2bd` via `realm_stubs.rs` (explicitly
   `dead_code`-allowed, not called from the running daemon at baseline).
-- `RealmControllersJson` / `realm-controllers.json` → target Zone self-resource
-  in `zones/<z>/zone.json`.
+- `RealmControllersJson` / `realm-controllers.json` → runtime-created Zone
+  self-resource, compiler-only `parentZone` topology sealed into allocator
+  bootstrap state, and child-local ZoneLink transport/route state.
 - `RealmWorkloadsLauncherV2Json` / `realm-workloads-launcher-v2.json` →
   target Process resource annotations in `zones/<z>/processes.json`.
 - `Capability` enum → see capability disposition table below (mapping resolved;
@@ -283,18 +284,31 @@ Each Zone is declared under `d2b.zones.<name>`. The option path replaces
 `<name>` matches `^[a-z][a-z0-9-]*$` — the same LABEL_PATTERN as `RealmId`.
 
 ```nix
+d2b.zones.local-root = {
+  label = "Local root";    # parentZone is forbidden on this Zone
+};
+
 d2b.zones.dev = {
-  label = "Development";   # optional; defaults to attribute name
+  label      = "Development";   # optional; defaults to attribute name
+  parentZone = "local-root";    # required for every non-root Zone
 };
 ```
 
-Zone-level Nix options (`label`, `retainedGenerations`, `trustedPublishers`) are
-compiler/configuration-service settings. They control build behavior and are
-not emitted into the Zone ResourceSpec. Parent/child hierarchy is represented
-by one child-local uplink `ZoneLink` in each non-root Zone. The allocator that
-provisions that child supplies the parent edge through sealed private bootstrap
-state; there is no `parentRef` in the Zone spec and no reciprocal parent-store
-ZoneLink resource.
+Zone-level Nix options (`label`, `parentZone`, `retainedGenerations`,
+`trustedPublishers`) are compiler/configuration-service settings. They control
+build behavior and are not emitted into the Zone ResourceSpec. `parentZone` is
+a plain Zone name, not a `ResourceRef`. It is required for every non-root Zone,
+must resolve to another declared `d2b.zones.<name>`, and is forbidden on the
+distinguished local-root Zone. The compiler turns the resulting child→parent
+map into the sealed private allocator-bootstrap topology; it never emits
+`parentZone` into a Zone resource bundle or `Zone.spec`, which remains exactly
+`{}`.
+
+The scalar `parentZone` setting selects exactly one allocator owner for the
+child. One optional child-local uplink `ZoneLink` supplies that edge's transport
+binding and local route/session state. A non-root Zone with no enabled ZoneLink
+still has an authored parent but remains disconnected. There is no `parentRef`
+in the Zone spec and no reciprocal parent-store ZoneLink resource.
 
 Every declared Zone causes its runtime to maintain exactly one
 `Zone/<name>` self-resource with an empty spec. The self-resource is
@@ -336,9 +350,10 @@ declared in that child Zone's `resources` set. `spec.childZoneName` is an
 identity anchor and MUST equal the enclosing child Zone name. The parent
 allocator owns privileged listener creation, namespace/cgroup placement, and
 route allocation, but it does not create a reciprocal resource in the parent
-store. The sealed bootstrap allocation binds this local ZoneLink UID and child
-identity to exactly one parent edge. There is no `parentRef` in either Zone's
-spec and no cross-Zone ResourceRef. Current source for zone hierarchy:
+store. The compiler resolves the enclosing Zone's `parentZone`, and the sealed
+bootstrap allocation binds this local ZoneLink UID and child identity to that
+one selected parent edge. There is no `parentRef` in either Zone's spec and no
+cross-Zone ResourceRef. Current source for zone hierarchy:
 `d2b-realm-core/src/realm.rs` (`RealmPath` dotted hierarchy — e.g.,
 `work.personal`); `d2b.realms.<r>.parent` option in
 `nixos-modules/options-realms.nix`.
@@ -358,10 +373,15 @@ An eval assertion verifies that every `ZoneLink` in
 `d2b.zones.<z>.resources` has `spec.childZoneName = "<z>"`, that each non-root
 Zone has at most one uplink resource (enabled or disabled), and that the
 local-root Zone has none.
-Private allocator bootstrap edges are checked for one parent per child, cycles,
-and depth before publication. There is no bidirectional `parentRef` or
-undefined reciprocal link; the child-local ZoneLink is the sole resource
-declaration for that edge.
+The compiler validates the `parentZone` map before publication: `local-root`
+must omit the setting, every other Zone must have one resolved scalar parent,
+no Zone may name itself, the graph must be acyclic, and every ancestry path
+may contain at most 16 Zone names (the retained `MAX_REALM_LABELS` bound).
+Conflicting scalar definitions fail through normal Nix module merging, so one
+child cannot acquire two parents. There is no bidirectional `parentRef` or
+undefined reciprocal link; `parentZone` is the topology input and the
+child-local ZoneLink is the sole resource declaration for its transport and
+local route state.
 
 `ZoneLink.spec.transportProviderRef` is always explicit. There is no default
 transport and no inference. Omitting `transportProviderRef` from a `ZoneLink`
@@ -901,8 +921,12 @@ d2b.zones.local-root.resources.mic-export = {
   };
 };
 
-# The consumer's uplink is a local resource. The parent allocator supplies the
-# sealed route allocation and owns all privileged listener/routing effects.
+# Compiler-only topology selects the allocator owner; this is not emitted into
+# Zone.spec or any ResourceSpec.
+d2b.zones.work.parentZone = "local-root";
+
+# The consumer's uplink is a local resource. It supplies transport/local route
+# state while the selected parent allocator owns all privileged effects.
 d2b.zones.work.resources.work-uplink = {
   type = "ZoneLink";
   spec = {
@@ -1596,6 +1620,7 @@ All ref validation runs at Nix eval time:
 | `subjects` entries | Each entry is a canonical `<ResourceType>/<name>` ref string resolving to a declared resource of the stated type in the same Zone; type must be in the closed subject set |
 | `transportProviderRef` resolution | The named Provider is declared in `d2b.zones.<z>.resources` with `type = "Provider"`; required on every ZoneLink; no default |
 | `childZoneName` check | Plain Zone name, not a ResourceRef; it equals the enclosing `d2b.zones.<z>` key, each non-root Zone has at most one uplink resource, and local root has none |
+| `parentZone` topology | Compiler-only plain Zone name, not a ResourceRef; omitted on `local-root`, required everywhere else, resolves to one declared Zone, is not self, forms no cycle, and keeps every ancestry path within 16 Zone names |
 | `ResourceExport` Service-only ref | `providerRef` and `resourceRef` resolve locally; `resourceRef` has the factory's qualified `*Service` type; Device/Endpoint/Binding/backing and cross-Zone targets reject |
 | `ResourceImport` local route/factory | `providerRef` and `zoneLinkRef` resolve locally; `exportKey` is bounded/not a Ref; expected Service type and projection/factory fingerprints match the signed export and local factory |
 | Qualified Binding refs | `serviceRef` resolves to the same-Zone matching Service; target ref resolves to a factory-allowed same-Zone Guest/User/Zone; Binding spec is intent-only, observations are status-only, and Binding is non-exportable |
@@ -1877,8 +1902,9 @@ or bundle JSON.
 
 ### Cross-Zone generation ordering
 
-When child Zone A has a local uplink `ZoneLink` to parent Zone B, neither
-bundle carries the other Zone's generation or a cross-Zone `cursorRef`.
+When child Zone A selects parent Zone B with `A.parentZone` and has a local
+uplink `ZoneLink`, neither bundle carries the other Zone's generation or a
+cross-Zone `cursorRef`.
 Advertisement cursors are runtime status owned by A's local ZoneLink handler
 and the parent allocator/route engine.
 
@@ -2107,7 +2133,10 @@ The Nix compiler detects and rejects at eval time:
 | Conflict | Rule |
 | --- | --- |
 | Duplicate Zone name | Impossible by Nix construction: a Zone name is the unique `d2b.zones.<name>` attr key; there is no Zone `id` field |
-| ZoneLink topology cycle | The private allocator bootstrap parent edges bound to child-local ZoneLinks form a cycle |
+| Missing/extra Zone parent | Any non-root Zone omits `parentZone`, or `local-root` defines it |
+| Conflicting Zone parent | Separate module definitions resolve one Zone's scalar `parentZone` to different values; normal Nix option merging rejects the conflict |
+| Unknown/self Zone parent | `parentZone` does not resolve to a declared Zone or equals the child Zone |
+| Zone topology cycle/depth | The compiler-only `parentZone` graph cycles or an ancestry path exceeds 16 Zone names |
 | CIDR overlap | Two Networks in the same Zone with overlapping subnets |
 | Guest name reserved prefix | A `Guest/<name>` starting with `sys-` |
 | Owner cycle | Any `ownerRef` chain that loops |
@@ -2141,8 +2170,8 @@ destination is integrated and tested.
 | `nixos-modules/processes-json.nix` | `VmProcessDag`/`ProcessRole`/`binaryPath`/argv | Yes | `resources-zones-processes.nix`; emits `zones/<z>/processes.json` | ADR046-nix-006 |
 | `nixos-modules/storage-json.nix` | `StorageJson`/`StoragePathSpec`/ownership/ACL contract rows | Yes | `resources-zones-volumes.nix`; rows migrate to Volume resources | ADR046-nix-007 |
 | `nixos-modules/sync-json.nix` | `SyncJson` OFD lock contract rows | Yes | Internal to `d2b-contracts`; removed from Nix artifacts | ADR046-nix-007 |
-| `nixos-modules/allocator-json.nix` | `AllocatorJson` — realm/env bridge assignments, socket paths | Yes | Folded into Zone/Network/Host resources | ADR046-nix-008 |
-| `nixos-modules/realm-controller-config-json.nix` | `RealmControllersJson`/`realm-controllers.json` | Yes (read by live d2bd `realm_access_resolver`) | Zone bootstrap bundle `zones/<z>/zone.json` | ADR046-nix-008 |
+| `nixos-modules/allocator-json.nix` | `AllocatorJson` — realm/env bridge assignments, socket paths | Yes | Privileged effects remain allocator-owned; parent edges come from compiler-only `parentZone`; Network/Host resources carry declarative intent | ADR046-nix-008 |
+| `nixos-modules/realm-controller-config-json.nix` | `RealmControllersJson`/`realm-controllers.json` | Yes (read by live d2bd `realm_access_resolver`) | Runtime-created Zone self-resource + sealed `parentZone` allocator topology + child-local ZoneLink | ADR046-nix-008 |
 | `nixos-modules/realm-workloads-launcher-v2-json.nix` | `RealmWorkloadsLauncherV2Json`/`realm-workloads-launcher-v2.json` | Yes | Provider/display-wayland + Provider/shell-terminal Process configs in `zones/<z>/processes.json` | ADR046-nix-009 |
 | `nixos-modules/realm-identity-config-json.nix` | `RealmIdentityConfigJson`/`realm-identity.json` | Yes (read by live d2bd) | Credential resource specs; identity config inside Provider resources | ADR046-nix-009 |
 | `nixos-modules/unsafe-local-workloads-json.nix` | `unsafe-local-workloads.json` | Yes | User-only Host + Process resources | ADR046-nix-010 |
@@ -2177,7 +2206,7 @@ marked compile-only.
 | `ProcessRole.Virtiofsd` + `share.source == "/nix/store"` sentinel | `d2b-core/src/processes.rs`, `nixos-modules/processes-json.nix` | Live | `Process` under `Provider/volume-virtiofs` + Volume nix-closure source | ADR046-nix-006 |
 | `StorageJson`, `StoragePathSpec`, `PrincipalRef { kind: "uid"|"user" }` | `d2b-core/src/storage.rs`, `nixos-modules/storage-json.nix` | Live (storage.json consumed by broker) | `Volume` layout/views; `PrincipalRef` uid-kind → `User/<name>` ref | ADR046-nix-007 |
 | `SyncJson`, OFD lock rows | `d2b-core/src/sync.rs`, `nixos-modules/sync-json.nix` | Live | Internal `d2b-contracts` implementation mechanism; removed from Nix artifacts | ADR046-nix-007 |
-| `RealmControllersJson`, `RealmControllerMetadataSummary` | `d2b-core/src/realm_controller_config.rs`; read live by d2bd `realm_access_resolver` | Live | Zone self-resource + ZoneLink bootstrap; `realm-controllers.json` retained during migration | ADR046-nix-008 |
+| `RealmControllersJson`, `RealmControllerMetadataSummary` | `d2b-core/src/realm_controller_config.rs`; read live by d2bd `realm_access_resolver` | Live | Runtime Zone self-resource + compiler-only `parentZone` allocator topology + child-local ZoneLink transport/route state; `realm-controllers.json` retained during migration | ADR046-nix-008 |
 | `RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary` | `d2b-core/src/realm_workloads_launcher.rs` | Live | Process resource annotations in `zones/<z>/processes.json` | ADR046-nix-009 |
 | `RealmIdentityConfigJson` | `d2b-realm-core/src/identity_config.rs`; loaded live by d2bd | Live | Credential resource `scope`/`audience`/`allowedOperations`/`spec.provider.settings` fields; `realm-identity.json` retained during migration | ADR046-nix-009 |
 | `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | `d2b-realm-core/src/workload.rs` | Live in launcher metadata | `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.providerRef` per table; `UnsafeLocal` → user-only `Host` with `spec.isolationPosture: "none"` (never `Guest`; not a v3 Provider) | ADR046-nix-001 |
@@ -2224,14 +2253,14 @@ Never accepted in any Nix-authored resource spec or generated artifact:
 
 | Proof | Description |
 | --- | --- |
-| Zone self-resource round-trip | Nix → `zone.json` → Zone runtime → resource API GET returns matching spec |
+| Zone self-resource round-trip | Nix Zone declaration → runtime-created Zone self-resource → resource API GET returns `spec = {}` with no compiler-only settings |
 | Provider install resource | Nix catalog + Provider resource → core controller lifecycle → Ready status |
 | Host system/user Process | Process under Host/host-system with system-systemd; locally held pidfd |
 | Guest with closure Volume | Guest + virtiofs Volume → per-VM store farm → guest `/nix/store` without direct host store export |
-| Cross-Zone ZoneLink | Child Zone declares one local uplink with self-matching `childZoneName` and local `transportProviderRef`; parent allocator binds the private edge and owns privileged route creation; no reciprocal resource or `parentRef` |
+| Cross-Zone ZoneLink | Child Zone's `parentZone` selects one allocator owner; its local uplink has self-matching `childZoneName` and local `transportProviderRef`; the selected allocator binds the private edge and owns privileged route creation; no reciprocal resource, `parentRef`, or emitted `parentZone` |
 | Configuration rollback | Two-generation rollback restores prior Zone resource state |
 | Ref validation rejection | Malformed or missing ref fails eval with structured error |
-| Conflict detection | CIDR overlap, owner cycle, and duplicate type/name rejection at eval time |
+| Conflict detection | `parentZone` missing/unknown/self/cycle/depth, CIDR overlap, owner cycle, and duplicate type/name rejection at eval time |
 | ProcessRole parity | Every `ProcessRole` variant has a corresponding test case in the Process/EphemeralProcess resource schema |
 | Unsafe-local Host | User-only `Host` with `spec.isolationPosture: "none"` reconciled by `Provider/system-core`; child Processes use normal Process Providers; `NoIsolation` condition present in Host status; `no_isolation=true` in `ProcessEffect` audit events; OTEL never labels isolation; CLI/UI warning non-suppressible; no `Guest` emitted |
 | ResourceTypeSchema validation | Every emitted `spec` validates against committed JSON Schema at build time; schema drift gate passes; unknown field in `spec.provider.settings` (where schema declares it) or Provider `config` fails build |
@@ -2309,11 +2338,11 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | W0; `d2b-contracts` identities (ADR046-identities-001, ADR046-identities-002) |
 | Current source | `nixos-modules/options-realms.nix` (`RealmId`/`RealmPath`/`RealmControllerPlacement`/`EntrypointMode` labels); `options-realms-workloads.nix` (`WorkloadId`/`WorkloadProviderKind`/`IsolationPosture`/`WorkloadExecutionPosture`); `options-realms-network.nix`; `d2b-realm-core/src/realm.rs`, `workload.rs`, `capability.rs`, `ids.rs` (symbols to adapt) |
 | Reuse action | adapt |
-| Destination | `nixos-modules/options-zones.nix` (Zone-level options: `label`, `retainedGenerations`, `trustedPublishers` — compiler settings, not Zone spec fields); `nixos-modules/options-zones-resources.nix` (unified `resources` attrset) |
-| Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` — single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]*$`; ref validation assertions; `WorkloadProviderKind` → Guest/Host mapping per disposition table above; `Capability` → Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `retainedGenerations`/`trustedPublishers` are Zone-level compiler settings not emitted in Zone spec |
+| Destination | `nixos-modules/options-zones.nix` (Zone-level options: `label`, `parentZone`, `retainedGenerations`, `trustedPublishers` — compiler settings, not Zone spec fields); `nixos-modules/options-zones-resources.nix` (unified `resources` attrset) |
+| Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` — single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]*$`; ref validation assertions; `WorkloadProviderKind` → Guest/Host mapping per disposition table above; `Capability` → Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `parentZone` is a required non-root/forbidden-root compiler-only plain Zone name compiled into sealed allocator topology; `retainedGenerations`/`trustedPublishers` are likewise Zone-level compiler settings not emitted in Zone spec |
 | Integration | `nixos-modules/default.nix` imports new options files; old realms options coexist until ADR046-nix-002 |
 | Data migration | Operator configs migrate `d2b.realms.*` → `d2b.zones.*`; `d2b.vms.*` → `d2b.zones.<z>.resources.*` with `type = "Guest"` |
-| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; allocator bootstrap topology rejects multi-parent and cycles; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentRef`, `retainedGenerations`, etc.) |
+| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.) |
 | Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix` |
 | Drift pin | `make nix-unit-pin` after adding cases |
 | Removal proof | `options-realms*.nix` removed after `options-zones*.nix` achieves parity and parity drift test passes |
@@ -2421,14 +2450,14 @@ contract work item (ADR046-bus-011/ADR046-bus-012). Cross-reference:
 | Dependency/owner | ADR046-nix-004; Zone/Network migration |
 | Current source | `nixos-modules/allocator-json.nix` (realm/env bridge assignments, `allocatorStateDir`, socket paths, `providerPlacement`); `nixos-modules/realm-controller-config-json.nix` (emits `realm-controllers.json`); `packages/d2b-core/src/realm_controller_config.rs` (`RealmControllersJson`, `RealmControllerMetadataSummary`; read live by `d2bd/src/realm_access_resolver.rs` from `/etc/d2b/realm-controllers.json`) |
 | Reuse action | adapt and retire |
-| Destination | Zone self-resource in `zones/<z>/zone.json`; allocator concept retired from Nix; socket paths in Zone resource spec; `realm-controllers.json` RETAINED during migration (live d2bd reads it) |
-| Detailed design | Zone runtime derives socket paths from Zone name; broker row → Network/Host resource; `realm-controllers.json` must remain published until `realm_access_resolver` is replaced by Zone resource API |
-| Integration | Zone bootstrap config publishes socket paths consumed by the Zone runtime and `realm_access_resolver` during migration; the replacement Zone resource API takes over before legacy artifacts are removed. |
-| Data migration | Zone bootstrap data is regenerated from v3 Zone resources; full d2b 3.0 reset; no allocator/realm-controller state import. |
-| Validation | Zone resource round-trip; bootstrap socket path regression tests |
+| Destination | Compiler-only `parentZone` map in `nixos-modules/options-zones.nix`; local-root allocator bootstrap compiler/sealer; runtime-created Zone self-resource with `spec = {}`; child-local ZoneLink resource; `realm-controllers.json` RETAINED during migration (live d2bd reads it) |
+| Detailed design | Resolve each non-root `parentZone` to one declared Zone; reject a root value, missing/unknown/self/conflicting/cyclic parent, and ancestry deeper than 16 names. Canonicalize sorted child→parent rows and feed them to the local-root allocator's private bootstrap sealer. Parent allocators derive/pre-bind privileged socket/listener state from that topology; no socket path or `parentZone` enters `Zone.spec` or a ResourceRef. Child-local ZoneLinks provide transport/local route state. `realm-controllers.json` remains published until `realm_access_resolver` is replaced. |
+| Integration | Nix Zone options → validated topology compiler → local-root allocator bootstrap sealer; ZoneLink controller consumes only its sealed selected-parent binding. During migration, `realm-controllers.json` remains available to the legacy resolver until the Zone topology/ZoneLink path takes over. |
+| Data migration | Topology is regenerated from `d2b.zones.<zone>.parentZone`; full d2b 3.0 reset; no allocator/realm-controller state import. |
+| Validation | Zone self-resource round-trip with exact empty spec; `parentZone` required/root-forbidden/existence/one-parent/self/cycle/16-name-depth vectors; topology seal excludes `parentZone` from Zone/resource bundles; bootstrap socket/listener regression tests |
 | Tests | `tests/unit/nix/cases/zones-bootstrap.nix`; `realm_access_resolver` contract test |
 | Drift pin | `make nix-unit-pin` |
-| Removal proof | `allocator-json.nix`, `realm-controller-config-json.nix`, and `/etc/d2b/allocator.json`/`realm-controllers.json` removed ONLY after `realm_access_resolver` is replaced by Zone bundle reader |
+| Removal proof | Legacy `allocator-json.nix`, `realm-controller-config-json.nix`, and `/etc/d2b/allocator.json`/`realm-controllers.json` removed ONLY after the sealed `parentZone` topology and ZoneLink resolver are live; the allocator bootstrap mechanism itself remains |
 
 ### ADR046-nix-009
 
