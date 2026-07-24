@@ -1997,23 +1997,84 @@ The core/singleton control-plane authorities and their classification:
 
 | Authority | Scope | Cardinality | Owning Resource/service | Exportability |
 | --- | --- | --- | --- | --- |
-| Zone self runtime / resource store (redb) / resource API / bus / core controller | zone | exactly-one | `Zone` self-resource + core controller | forbidden (singleton, **not** cross-Zone exportable) |
-| Privileged broker | host | exactly-one | fixed local-root broker | forbidden |
-| Audit chain / audit authority | zone | exactly-one | core audit writer | forbidden (Zone-local system of record) |
+| Zone self-resource | zone | exactly-one | `Zone` self-resource | forbidden |
+| Resource store (redb) | zone | exactly-one | core resource store | forbidden |
+| Resource API + runtime | zone | exactly-one | core resource API/runtime | forbidden |
+| Core controller | zone | exactly-one | `d2b-core-controller` | forbidden |
+| Bus `Endpoint` (d2b-bus) | zone | exactly-one | core bus listener `Endpoint` | forbidden |
+| Privileged broker | host | exactly-one per Zone | fixed local-root broker | forbidden |
+| **Daemon** audit authority | zone | exactly-one | core daemon audit writer | forbidden (Zone-local system of record) |
+| **Broker** audit authority | host | exactly-one | broker audit writer (**separate** chain from the daemon) | forbidden (separate system of record) |
 | Configuration publisher | zone | exactly-one | core configuration controller | forbidden |
 | Artifact catalog | zone | exactly-one | Nix-emitted catalog | forbidden |
 | Host substrate allocator / effect authority | host | exactly-one | `Host` + `Provider/system-core` | forbidden |
-| Net-VM DHCP/DNS/NAT authority | zone | exactly-one **per `Network`** | `Network` net-VM authority | forbidden |
-| `Quota` / `EmergencyPolicy` scope | zone/scope | exactly-one per scope | the `Quota`/`EmergencyPolicy` resource | forbidden |
-| Provider controller | zone | bounded-many (declared cardinality) | `Provider` | forbidden |
+| Network authority (net Guest + DHCP/DNS/NAT) | zone | exactly-one **per `Network`** | `Network` net-VM authority | forbidden |
+| Provider controller | zone | exactly-one per Zone (observability **at-most-one**/zero-or-one) | `Provider` | forbidden |
+| `ResourceExport` authority | owner Zone | zero-or-one per exported backing | `ResourceExport` | n/a (is the export mechanism) |
+| `Quota` scope | zone/scope | exactly-one per scope | `Quota` | forbidden |
+| `EmergencyPolicy` scope | zone/scope | exactly-one per scope | `EmergencyPolicy` | forbidden |
 
-These are `exportability: forbidden` singletons: an audit chain, broker, or
-resource store is never shared cross-Zone by D096 — a Zone that needs another
-Zone's telemetry uses an explicit observability export (D096) that copies data
-and transfers no authority. `Quota` and `EmergencyPolicy` scope uniqueness is an
-`exactly-one`-per-scope authority: a second policy claiming the same scope is a
-`duplicateConflict`. The net-VM DHCP/DNS/NAT authority is `exactly-one` per
-`Network`; a second DHCP/DNS/NAT owner on the same Network is rejected.
+The **daemon audit authority and the broker audit authority are two separate
+authorities** (distinct writers, distinct chains); neither is transferable, and
+exporting audit copies requires a separate explicit D096 export that transfers no
+authority. **Provider controller cardinality** is `exactly-one` per Zone for most
+Providers; the observability Provider is `at-most-one` (zero-or-one) per Zone.
+The network authority is `exactly-one` per `Network` (the net Guest plus its
+DHCP/DNS/NAT owner); a second DHCP/DNS/NAT owner on the same `Network` is a
+`duplicateConflict`. `Quota`/`EmergencyPolicy` scope uniqueness is
+`exactly-one`-per-scope; a second policy/quota claiming the same scope is a
+`duplicateConflict`.
+
+**Cross-Zone exportability is not a blanket prohibition.** The core singletons
+above (Zone self/store/API/runtime/controller/bus/broker, both audit authorities,
+configuration publisher, artifact catalog) are `exportability: forbidden`: never
+shared cross-Zone. This does **not** mean every provider-owned resource is
+inherently cross-Zone prohibited. **D096 `ResourceExport`/`ResourceImport` are
+the sole typed cross-Zone bridge**, and provider-owned scarce/singleton backings
+(mic/speaker, security key, GPU, SigNoz ingest, and similar) are `exportability:
+explicit-export` and MAY be shared through it with a single authority owner. Only
+**credentials and secrets remain non-exportable by default** (D093 Entra stays a
+same-Zone identity Guest). A Zone needing another Zone's telemetry uses an
+explicit D096 observability export that copies data and transfers no authority;
+it never shares the audit chain or store.
+
+**Name disambiguation.** The Volume/virtiofs **`Export`** resource (the virtiofs
+share lifecycle owner referenced by D092, which owns its `Endpoint`) is a
+**distinct concept** from the D096 **`ResourceExport`** standard ResourceType
+(the cross-Zone sharing declaration). They are never conflated: a virtiofs
+`Export` is a local Volume-share owner; a `ResourceExport` is the cross-Zone
+bridge. A virtiofs share is shared cross-Zone only by wrapping its `Endpoint` in
+a D096 `ResourceExport`.
+
+### 8B.2 D097 core-audit migration findings
+
+The D097 core-singleton audit surfaced the following missing migration work.
+Core-owned items are work items in §17 (ADR046-zone-control-021…023); items whose
+implementation destination is a downstream (foreign) crate/spec are recorded here
+as findings for that scope to convert into its own work item:
+
+- **Process-global statics → per-Zone.** `USBIP_BACKGROUND_RECONCILE_ACTIVE`,
+  `FORCE_SHUTDOWN_GENERATIONS`, and `activation_locks()` are today process-global
+  and MUST move to per-Zone provider/resource status or a per-Zone coordinator
+  (core-owned; ADR046-zone-control-021).
+- **Configuration publisher per-VM → per-Zone staging.** The current per-VM
+  configuration staging symbols move to per-Zone staging under the single
+  configuration-publisher authority (core-owned; ADR046-zone-control-021).
+- **ZoneLink cursor/adoption.** ZoneLink cursor persistence and restart adoption
+  are an authority owned by the ZoneLink handler (core-owned;
+  ADR046-zone-control-021; see also `ADR-046-zone-routing`).
+- **Provider cardinality admission.** Admission MUST enforce Provider controller
+  cardinality via the core authority index (core-owned;
+  ADR046-zone-control-022; `ADR-046-resource-api-and-authorization`).
+- **Quota and EmergencyPolicy implementation/tests.** Scope-uniqueness authority
+  implementation and tests (core-owned; ADR046-zone-control-023).
+- **`NetworkEffectPort`.** The per-`Network` DHCP/DNS/NAT authority needs a
+  `NetworkEffectPort` (D077) rather than ad hoc effects — finding for the
+  `resources-network`/`network-local` downstream scope.
+- **activation-helper disposition.** The current activation-helper needs an
+  explicit v3 disposition — finding for the `activation-nixos` downstream scope.
+- **OTEL `vm`-label migration + `d2b-telemetry` bounded emitter** — finding for
+  the `telemetry-audit-and-support`/`observability-otel` downstream scope.
 
 Physical/scarce and per-user/session authorities (mic/speaker, security key,
 GPU/render-node, video decoder, TPM/swtpm, NIC/uplink/macvtap, Wayland portal,
@@ -4228,6 +4289,54 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None — full d2b 3.0 reset |
 | Validation | Projection created/owned by import; projection Ref resolvable by ordinary consumers; degrade/teardown on revoke; reconnect rebinds only after generation/fingerprint revalidation; hermetic fake-adapter + integration tiers |
 | Removal proof | Not applicable (new surface) |
+
+### ADR046-zone-control-021
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-zone-control-021` |
+| Dependency/owner | ADR046-zone-control-001, ADR046-zone-control-016; `d2b-core-controller` owner |
+| Current source | `packages/d2bd/src/` process-global statics `USBIP_BACKGROUND_RECONCILE_ACTIVE`, `FORCE_SHUTDOWN_GENERATIONS`, and `activation_locks()`; current per-VM configuration staging symbols; ZoneLink cursor persistence in `zone_link_cursors` |
+| Reuse source | ZoneLink handler/cursor scaffolding (§3); core coordinator patterns |
+| Reuse action | `adapt` (move process-global state to per-Zone status/coordinator) |
+| Destination | `packages/d2b-core-controller/src/{coordinator,configuration,zonelink}.rs` |
+| Detailed design | Per D097 core-audit findings (§8B.2): move the process-global `USBIP_BACKGROUND_RECONCILE_ACTIVE`, `FORCE_SHUTDOWN_GENERATIONS`, and `activation_locks()` state into **per-Zone** provider/resource status or a per-Zone coordinator keyed by the authority index (no process-global singletons that ignore Zone boundaries). Migrate the configuration publisher's per-VM staging symbols to **per-Zone** staging under the single configuration-publisher authority. Make ZoneLink cursor persistence and restart adoption an authority owned by the ZoneLink handler (`ownerProof`; ambiguity quarantines). All coordinated through the core authority index; no direct broker path, no process-global lock. |
+| Integration | Core authority index (ADR046-zone-control-019); ZoneLink reconcile (§3); configuration publication handler (ADR046-zone-control-016) |
+| Data migration | Full d2b 3.0 reset; no process-global state persisted across the cutover |
+| Validation | Two Zones on one host do not share `USBIP_BACKGROUND_RECONCILE_ACTIVE`/`FORCE_SHUTDOWN_GENERATIONS`/activation-lock state; per-Zone configuration staging isolation; ZoneLink cursor adoption by `ownerProof` and quarantine on ambiguity; hermetic with fakes |
+| Removal proof | The process-global statics and per-VM staging symbols are deleted after the per-Zone coordinator reaches parity; confirmed by `cargo check` and a no-process-global lint |
+
+### ADR046-zone-control-022
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-zone-control-022` |
+| Dependency/owner | ADR046-zone-control-019, ADR046-api-001; `d2b-core-controller` + resource API owners |
+| Current source | None — net-new D097 admission (Provider cardinality) |
+| Reuse source | Core authority index (ADR046-zone-control-019); resource API admission (`ADR-046-resource-api-and-authorization`) |
+| Reuse action | net-new |
+| Destination | `packages/d2b-core-controller/src/authority.rs`; resource API admission hook |
+| Detailed design | Admission enforces **Provider controller cardinality** via the core authority index: most Providers are `exactly-one` per Zone; the observability Provider is `at-most-one` (zero-or-one). A `Create`/activation that would install a second controller for an `exactly-one` Provider (or a second observability Provider) is rejected with `duplicateConflict` naming the incumbent owner digest before any effect; config activation goes `Degraded`. |
+| Integration | Core authority index; resource API admission; configuration activation |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | Second Provider controller for an `exactly-one` Provider rejected with `duplicateConflict`; second observability Provider rejected; single controller admitted; `Degraded` config activation names the incumbent digest; hermetic |
+| Removal proof | Not applicable (new surface) |
+
+### ADR046-zone-control-023
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-zone-control-023` |
+| Dependency/owner | ADR046-zone-control-019; `d2b-core-controller` + `d2b-contracts` owners |
+| Current source | None — `Quota` and `EmergencyPolicy` scope-uniqueness are specified (§7, §8) but not implemented/tested at baseline |
+| Reuse source | `Quota`/`EmergencyPolicy` schemas (§7, §8); core authority index |
+| Reuse action | net-new (implementation + tests) |
+| Destination | `packages/d2b-core-controller/src/{quota,emergency_policy}.rs`; `packages/d2b-contracts/src/v3/{quota,emergency_policy}.rs` |
+| Detailed design | Implement `Quota` and `EmergencyPolicy` scope-uniqueness as `exactly-one`-per-scope authorities in the core authority index: a second `Quota`/`EmergencyPolicy` claiming the same scope is a `duplicateConflict`. Add the scope-uniqueness admission, status, and the test matrix (per D094 fast hermetic tests). |
+| Integration | Core authority index (ADR046-zone-control-019); resource API admission |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | Duplicate-scope `Quota`/`EmergencyPolicy` rejected with `duplicateConflict`; single-scope admitted; union/individual scope flags honored; fast hermetic tests |
+| Removal proof | Not applicable (new implementation) |
 
 ---
 
