@@ -6335,6 +6335,21 @@
       "removalProof": "usbipd_perenv_autostart.rs, usbip_state_machine.rs, usbip_reconcile_state.rs, network.nix USBIP firewall block, and ProcessRole::Usbip are deleted after parity."
     },
     {
+      "workItemId": "ADR046-user-session-001",
+      "specId": "ADR-046-resources-host-guest-process-user",
+      "specPath": "docs/specs/ADR-046-resources-host-guest-process-user.md",
+      "dependencyOwner": "ADR046-zone-control-019 (authority index); `Provider/system-systemd` (user manager) + core/user-agent owner",
+      "currentSource": "None — the fixed user-session authority is today ambient prose across the display/audio/clipboard/notification/secret-service dossiers; no named owner exists",
+      "reuseSource": "`Provider/system-systemd` user-manager scope; D077 EffectPort/LaunchTicket FD handoff",
+      "reuseAction": "net-new (name and implement the shared user-session authority)",
+      "destination": "`packages/d2b-core-controller/src/user_session_authority.rs` (or a core/user-agent per-session agent Process under `Provider/system-systemd`); `AuthorityDescriptor` on the session authority",
+      "detailedDesign": "Name and implement the fixed user-session authority (D097 desktop/session): `authorityScope: seat` bound to `(Host, User, login-session/seat)`, opaque `authorityKey` (never a raw socket path/XDG_RUNTIME_DIR/DISPLAY/seat name), `cardinality: exactly-one` per `(Host, User, login-session)`, `arbitration: exclusive`, owner = a core/user-agent per-user-session agent Process (NOT a new Provider), adoption by `ownerProof` (agent Process identity + login-session id), `exportability: forbidden`. It is the sole opener of the compositor/PipeWire/session-bus FDs and hands them to desktop Providers only via the EffectPort/LaunchTicket. Core's authority index rejects a duplicate session authority (or a duplicate same-user display portal, clipboard host, notification sink, audio mediator, systemd user manager, Secret Service, or seat-input claimant) with `duplicateConflict` before any FD open; multi-user/seat is admitted only up to the declared per-Host limit. Guest-stop invalidates every session authority/lease bound to that Guest across display/audio/notification/credential/shell in one dependency-aware cascade (D091), with no stale FD surviving. Host input (`wl_seat`/pointer constraints) is an `at-most-one`-per-seat authority under this session authority; pointer-constraint enforcement is a declared boundary until an interaction Provider implements it.",
+      "integration": "Core authority index (ADR046-zone-control-019); `Provider/system-systemd` user manager; display/audio/clipboard/notification/secret-service/shell Provider services bind to this single authority for their FDs; D091 Guest-stop cascade",
+      "dataMigration": "None — full d2b 3.0 reset",
+      "validation": "Single session authority per `(Host, User, session)`; duplicate same-user session authority / desktop service rejected with `duplicateConflict`; multi-seat declared-limit enforcement; Guest-stop invalidates all bound desktop/audio/notification/credential/shell authorities and leases (no stale compositor/PipeWire/session-bus FD); seat-input second claimant rejected; adoption by `ownerProof` and quarantine on ambiguity; hermetic with fakes",
+      "removalProof": "Not applicable (net-new named authority; replaces ambient prose)"
+    },
+    {
       "workItemId": "ADR046-vl-001",
       "specId": "ADR-046-provider-volume-local",
       "specPath": "docs/specs/providers/ADR-046-provider-volume-local.md",

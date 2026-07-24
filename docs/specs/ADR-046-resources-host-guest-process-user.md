@@ -110,6 +110,77 @@ Core's authority index rejects a second authority for the same
 `(Zone/scope, authorityClass, opaqueKeyDigest)` with `duplicateConflict` before
 any effect; restart adopts by `ownerProof` and ambiguity quarantines.
 
+### Fixed user-session authority (D097 desktop/session)
+
+Display portal, the audio mediator, the notification sink, clipboard, Secret
+Service, and the shell all depend on a **fixed user-session authority** that
+pre-opens the compositor, PipeWire, and session-bus FDs for a login session.
+This authority is **named here, not left as ambient prose**:
+
+| Field | Value |
+| --- | --- |
+| `authorityScope` | `seat` (bound to a `Host` × `User` × login-session) |
+| `authorityKey` | opaque class over `(Host, User, login-session/seat)` — never a raw socket path, XDG_RUNTIME_DIR, DISPLAY, or seat name |
+| `cardinality` | `exactly-one` per `(Host, User, login-session/seat)` |
+| `arbitration` | `exclusive` (the sole opener of the compositor/PipeWire/session-bus FDs) |
+| Owner | a **core/user-agent session authority** (a per-user-session agent Process owned by `Provider/system-systemd` under the user's manager) — **not a new Provider** |
+| Adoption | restart adopts by `ownerProof` (the agent Process identity + login-session id); ambiguity quarantines |
+| Duplicate | a second session authority for the same `(Host, User, login-session)` is rejected with `duplicateConflict` before any FD open |
+| `exportability` | `forbidden` (the session FDs never cross a Zone; desktop Providers receive them only via the D077 EffectPort/LaunchTicket) |
+
+Every desktop/session Provider service binds to this single authority and
+receives its compositor/PipeWire/session-bus FD through the EffectPort/
+LaunchTicket; none opens the session FDs itself.
+
+**Desktop/session authority classification** (per-Provider detail stays in each
+dossier, refined by evidence; owner/cardinality named here):
+
+| Class | Scope | Cardinality | Owner | Exportability |
+| --- | --- | --- | --- | --- |
+| Display controller + portal/login | zone | `exactly-one` per Zone | display Provider controller | forbidden |
+| Compositor/session FD authority | seat | `exactly-one` per Host×User×session | core/user-agent session authority | forbidden |
+| Clipboard host (`clipd-host`) | user | `exactly-one` per `User`; picker global-or-seat arbitration | clipboard Provider | policy-gated (default-denied) |
+| Notification sink | user-session | `exactly-one` per User session | notification Provider | policy-gated (default-denied) |
+| Audio authority (mediator) | seat/user | `exactly-one` per compositor user; **one `AudioState` per Guest** | audio Provider | explicit-export (D096) |
+| systemd user manager | user | `exactly-one` per `User` × (`Host` or `Guest`) | `Provider/system-systemd` | forbidden |
+| Entrablau login authority | guest | `exactly-one` per identity Guest/tenant | credential-entra (in the identity Guest) | forbidden (D093) |
+| Secret Service / keyring | user-session | `exactly-one` per User session | credential-secret-service | forbidden |
+| ShellPool / shell supervisor | shell-session | `exactly-one` per `ShellSession` (never global) | shell Provider | forbidden |
+| Host input (`wl_seat`/pointer constraints) | seat | `at-most-one` per seat under the session authority | core/user-agent session authority | forbidden |
+
+**Host input boundary.** The `wl_seat`/pointer-constraint surface is an explicit
+`seat`-scoped authority owned by the fixed user-session authority (`at-most-one`
+per seat); until an interaction Provider implements pointer-constraint/relative
+input enforcement, that enforcement is a **declared unsupported boundary**
+(input is not silently multiplexed — a second seat-input claimant is a
+`duplicateConflict`).
+
+**Admission conflict.** A second same-user Provider service or resource for any
+`exactly-one` desktop authority (a second display portal, clipboard host,
+notification sink, audio mediator, systemd user manager, Secret Service, or
+session FD authority for the same `(Host, User, session)`) is rejected with
+`duplicateConflict` naming the incumbent owner digest before any effect;
+config activation goes `Degraded`. Multi-user/multi-seat is supported only up to
+the **declared per-Host limit** (one authority per distinct `(Host, User, seat)`
+tuple); anything beyond the declared limit is rejected.
+
+**Guest-stop invalidation.** Stopping a Guest invalidates every user-session
+authority and lease bound to that Guest across display, audio, notification,
+credential, and shell in one dependency-aware cascade (D091): the session FD
+authority and each dependent desktop authority are drained/recycled, their
+`Endpoint`s revoked, and any `AudioState`/projection/lease degraded — no stale
+compositor/PipeWire/session-bus FD survives a Guest stop.
+
+**Cross-Zone exportability (reconciled with D096).** Any prior claim of "no
+cross-Zone sharing path" for desktop classes is superseded: D096
+`ResourceExport`/`ResourceImport` are the sole typed bridge. Per class:
+**display, Host input, and Secret Service are non-exportable** (`forbidden`) —
+they never cross a Zone; **audio is a policy-gated explicit export** (already
+supported, D096); **clipboard and notifications are structurally supportable
+exports but default-denied** (policy-gated, opt-in only). Credentials/secrets
+remain non-exportable by default (D093). This is an explicit per-class decision,
+not a blanket omission.
+
 ## Shared field schemas
 
 ### ResourceName constraints
@@ -2400,6 +2471,22 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Runtime/integration tests 19–23 from the "Tests for Nix configuration and ResourceType-specific lifecycle" section in this spec; additionally: `GenerationDiff` hermetic unit tests (new/changed/unchanged/removed classification); `bundleSha256` integrity failure aborts and emits correct audit event; `catalogSha256` mismatch aborts bundle; UpdateSpec optimistic lock conflict retried correctly; Watch `Deleted` revision events consumed (not polling GET) to track cleanup completion; Zone `phase=Pending` while intents outstanding; Zone `phase=Degraded` immediately when any cleanup outstanding (no grace window); Zone `phase=Ready` when complete; activation returns after durable queue commit, not after reconcile; same-name `managedBy=controller` OR `managedBy=api` collision emits per-item `config-collision` error without seizing resource, other intents continue; unchanged spec refreshes `configurationGeneration` without triggering controller reconcile; final deletion: atomic tx commits `Deleted` revision event + row/index removal only; audit append follows committed revision via dedup/exactly-once recovery (NOT part of atomic tx); recovery retry produces no duplicate audit record; prior bundle record released after cleanup-complete and retention count exceeded; activation with zero diff and identical bundleSha256 is a no-op |
 | Removal proof | None — net-new controller; no prior owner to remove |
+
+### ADR046-user-session-001
+
+| Field | Value |
+| --- | --- |
+| Work item ID | `ADR046-user-session-001` |
+| Dependency/owner | ADR046-zone-control-019 (authority index); `Provider/system-systemd` (user manager) + core/user-agent owner |
+| Current source | None — the fixed user-session authority is today ambient prose across the display/audio/clipboard/notification/secret-service dossiers; no named owner exists |
+| Reuse source | `Provider/system-systemd` user-manager scope; D077 EffectPort/LaunchTicket FD handoff |
+| Reuse action | net-new (name and implement the shared user-session authority) |
+| Destination | `packages/d2b-core-controller/src/user_session_authority.rs` (or a core/user-agent per-session agent Process under `Provider/system-systemd`); `AuthorityDescriptor` on the session authority |
+| Detailed design | Name and implement the **fixed user-session authority** (D097 desktop/session): `authorityScope: seat` bound to `(Host, User, login-session/seat)`, opaque `authorityKey` (never a raw socket path/XDG_RUNTIME_DIR/DISPLAY/seat name), `cardinality: exactly-one` per `(Host, User, login-session)`, `arbitration: exclusive`, owner = a core/user-agent per-user-session agent Process (NOT a new Provider), adoption by `ownerProof` (agent Process identity + login-session id), `exportability: forbidden`. It is the sole opener of the compositor/PipeWire/session-bus FDs and hands them to desktop Providers only via the EffectPort/LaunchTicket. Core's authority index rejects a duplicate session authority (or a duplicate same-user display portal, clipboard host, notification sink, audio mediator, systemd user manager, Secret Service, or seat-input claimant) with `duplicateConflict` before any FD open; multi-user/seat is admitted only up to the declared per-Host limit. Guest-stop invalidates every session authority/lease bound to that Guest across display/audio/notification/credential/shell in one dependency-aware cascade (D091), with no stale FD surviving. Host input (`wl_seat`/pointer constraints) is an `at-most-one`-per-seat authority under this session authority; pointer-constraint enforcement is a declared boundary until an interaction Provider implements it. |
+| Integration | Core authority index (ADR046-zone-control-019); `Provider/system-systemd` user manager; display/audio/clipboard/notification/secret-service/shell Provider services bind to this single authority for their FDs; D091 Guest-stop cascade |
+| Data migration | None — full d2b 3.0 reset |
+| Validation | Single session authority per `(Host, User, session)`; duplicate same-user session authority / desktop service rejected with `duplicateConflict`; multi-seat declared-limit enforcement; Guest-stop invalidates all bound desktop/audio/notification/credential/shell authorities and leases (no stale compositor/PipeWire/session-bus FD); seat-input second claimant rejected; adoption by `ownerProof` and quarantine on ambiguity; hermetic with fakes |
+| Removal proof | Not applicable (net-new named authority; replaces ambient prose) |
 
 ---
 
