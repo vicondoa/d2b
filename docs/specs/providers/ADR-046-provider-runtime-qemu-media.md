@@ -747,7 +747,9 @@ spec:
   locality: host-local
   visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-qemu-media]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-qemu-media]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ---
 apiVersion: resources.d2bus.org/v3
@@ -766,7 +768,9 @@ spec:
   locality: host-local
   visibility: provider
   attachmentPolicy: launch-ticket-only
-  consumerPolicy: [Provider/runtime-qemu-media]
+  consumerPolicy:
+    allowedSubjects: [Provider/runtime-qemu-media]
+    allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 ```
 

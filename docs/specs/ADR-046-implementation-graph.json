@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1938,
+    "edges" : 1939,
     "maxTopologicalRank" : 22,
     "nodes" : 598,
     "specNodes" : 55,
@@ -7459,6 +7459,11 @@
     },
     {
       "from" : "ADR046-qemu-media-012",
+      "to" : "ADR046-network-005",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-qemu-media-012",
       "to" : "ADR046-qemu-media-002",
       "type" : "work-item-depends-on"
     },
@@ -12086,7 +12091,7 @@
       "destinations" : [
         "`packages/d2b-resource-api/src/authz.rs`, `packages/d2b-core-controller/src/rbac.rs`"
       ],
-      "detailedDesign" : "Role/RoleBinding schemas/evaluator/cache/revision invalidation, ComponentSession subject mapping, parent Zone access",
+      "detailedDesign" : "Role/RoleBinding schemas/evaluator/cache/revision invalidation, canonical resource/session verb enums including ZoneLink-scoped `relay`, ComponentSession subject mapping, parent Zone access, and independent per-hop relay plus target-verb admission",
       "entryContracts" : [
         "ADR-046-resource-api-and-authorization"
       ],
@@ -12101,7 +12106,7 @@
       ],
       "specId" : "ADR-046-resource-api-and-authorization",
       "topologicalRank" : 6,
-      "validation" : "Decision matrix/property tests; revocation/cache/outage/parent-child tests",
+      "validation" : "Decision matrix/property tests; closed-enum and relay-origin/scope rejection; relay-missing and target-verb-missing fail-closed vectors; revocation/cache/outage/parent-child tests",
       "wave" : "W0"
     },
     {
@@ -12730,7 +12735,7 @@
       ],
       "specId" : "ADR-046-componentsession-and-bus",
       "topologicalRank" : 6,
-      "validation" : "Message isolation, route/auth revocation, fairness, reconnect, no direct-store path",
+      "validation" : "Message isolation; closed session-verb enum including `relay`; relay missing/target verb missing/provider self-assertion fail-closed vectors; route/auth revocation; fairness; reconnect; no direct-store path",
       "wave" : "W1"
     },
     {
@@ -13672,7 +13677,7 @@
       "destinations" : [
         "packages/d2b-provider-credential-managed-identity/src/{audit.rs,telemetry.rs}; packages/d2b-contract-tests/tests/credential_audit.rs"
       ],
-      "detailedDesign" : "Shared audit/OTEL: emit audit records for all methods and controller events per §Audit; emit OTEL spans and metrics per §OTEL and metrics with no Zone/Credential/resource-name-derived label; report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential `metadata.name`, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces.",
+      "detailedDesign" : "Shared audit/OTEL: emit audit records for all methods and controller events per §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest`; emit OTEL spans and metrics per §OTEL and metrics with no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/Credential/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential name/ref/UID/digest, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces.",
       "entryContracts" : [
         "ADR-046-provider-credential-managed-identity"
       ],
@@ -13688,7 +13693,7 @@
       ],
       "specId" : "ADR-046-provider-credential-managed-identity",
       "topologicalRank" : 13,
-      "validation" : "`packages/d2b-contract-tests/tests/credential_audit.rs`; managed-identity `canary.rs`; audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived label key, reject Credential/Zone-name label canaries, preserve allowed OTEL resource identity attributes, reject identity span attributes, and reject sensitive shapes",
+      "validation" : "`packages/d2b-contract-tests/tests/credential_audit.rs` requires `resource_name_digest` in authorized audit records and rejects raw Credential name/ResourceRef/UID; managed-identity `canary.rs` and audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived label key; reject Credential name/ref/UID/digest canaries from all OTEL Resource attributes, span attributes, and metric labels; preserve generic collector-allowlisted Resource attributes including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; reject Zone-name span/label canaries and sensitive shapes; pass complete managed-identity metric/span frames through the shared collector ingress validator and prove that adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame",
       "wave" : "W6"
     },
     {
@@ -13809,7 +13814,7 @@
       "destinations" : [
         "packages/d2b-provider-credential-secret-service/src/{audit.rs,telemetry.rs}"
       ],
-      "detailedDesign" : "Audit/OTEL: emit audit records and OTEL spans/metrics for all credential service methods and controller events, with canary enforcement, expiry aggregated across user-agent leases, no Zone/Credential/resource-name-derived metric label, and no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces.",
+      "detailedDesign" : "Audit/OTEL: emit authorized bounded audit records with Credential identity represented only by `resource_name_digest`, and emit OTEL spans/metrics for all credential service methods and controller events with canary enforcement, expiry aggregated across user-agent leases, no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/Credential/resource-name-derived metric label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces.",
       "entryContracts" : [
         "ADR-046-provider-credential-secret-service"
       ],
@@ -13823,7 +13828,7 @@
       ],
       "specId" : "ADR-046-provider-credential-secret-service",
       "topologicalRank" : 11,
-      "validation" : "Credential audit/OTEL tests from `ADR-046-resources-credential`; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived metric key plus Credential/Zone-name label canary absence while preserving allowed OTEL resource identity attributes and rejecting identity span attributes; `tests/delivery.rs` for credential-secret-service",
+      "validation" : "Credential audit/OTEL tests from `ADR-046-resources-credential` require `resource_name_digest` in authorized audit records and reject raw Credential name/ResourceRef/UID; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived metric key; Credential name/ref/UID/digest canaries are absent from all OTEL Resource attributes, span attributes, and metric labels; Zone-name canaries are absent from spans and labels while generic collector-allowlisted Resource attributes remain; complete secret-service metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame; `tests/delivery.rs` covers credential-secret-service delivery",
       "wave" : "W6"
     },
     {
@@ -14007,7 +14012,7 @@
       "destinations" : [
         "`packages/d2b-provider-credential-<impl>/src/audit.rs`, `telemetry.rs`; `packages/d2b-contract-tests/tests/credential_audit.rs`"
       ],
-      "detailedDesign" : "Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential/Zone/resource-name-derived label; implement `contains_sensitive_shape` check in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `\"secret-canary\"`, `\"entra-token-canary\"`, `\"managed-identity-canary\"`, Credential `metadata.name`, and Zone name values never appear in any metric label, span attribute, log line, or status field; identity remains only in allowed OTEL resource attributes and permitted audit fields",
+      "detailedDesign" : "Implement audit record emission for all credential service methods and controller events using the field set defined in §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest`; implement OTEL span/metric emission using the closed semantic label set in §OTEL and metrics, with expiry reported as a provider/placement aggregate and no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); implement `contains_sensitive_shape` checks in all string fields of audit records and metric label values (adapted from `d2b-realm-provider/src/error.rs:contains_sensitive_shape`); add canary-enforcement tests that verify `\"secret-canary\"`, `\"entra-token-canary\"`, `\"managed-identity-canary\"`, Credential name/ref/UID/digest canaries, and Zone name values never appear in any metric label, span attribute, log line, or status field, and that Credential identity canaries are also absent from OTEL Resource attributes",
       "entryContracts" : [
         "ADR-046-resources-credential"
       ],
@@ -14023,7 +14028,7 @@
       ],
       "specId" : "ADR-046-resources-credential",
       "topologicalRank" : 12,
-      "validation" : "Canary tests across all three Provider crates; audit record field-presence tests; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, and every resource-name-derived key plus Credential/Zone-name canary absence; resource attribute tests preserve allowed `d2b.zone`/`d2b.credential.name` identity while span attribute tests reject identity and forbidden fields",
+      "validation" : "Canary tests across all three Provider crates; authorized audit record field-presence tests require `resource_name_digest` and reject raw Credential name/ResourceRef/UID; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived key; Credential name/ref/UID/digest canaries are absent from every OTEL Resource attribute, span attribute, and metric label; Zone-name canaries are absent from spans and labels while resource-attribute tests preserve the generic collector allowlist including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; complete Credential metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame",
       "wave" : "W4"
     },
     {
@@ -14888,9 +14893,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-contracts/src/v3/host.rs`, `packages/d2b-contracts/src/v3/guest.rs`, `packages/d2b-contracts/src/v3/execution_policy.rs`, `packages/d2b-contracts/src/v3/process.rs`, `packages/d2b-contracts/src/v3/ephemeral_process.rs`, `packages/d2b-contracts/src/v3/user.rs`"
+        "`packages/d2b-contracts/src/v3/host.rs`, `packages/d2b-contracts/src/v3/guest.rs`, `packages/d2b-contracts/src/v3/execution_policy.rs`, `packages/d2b-contracts/src/v3/process.rs`, `packages/d2b-contracts/src/v3/ephemeral_process.rs`, `packages/d2b-contracts/src/v3/user.rs`, `packages/d2b-contracts/src/v3/endpoint.rs`"
       ],
-      "detailedDesign" : "Implement strict typed Rust structs for HostSpec, GuestSpec, ExecutionPolicy, ExecutionSpec, SandboxSpec, BudgetSpec, MountSpec, NetworkUsageSpec, DeviceUsageSpec, EndpointSpec, TelemetrySpec, ProcessSpec, EphemeralProcessSpec, UserSpec; strict serde deny_unknown_fields; bounds/redaction on all string fields; stable error types; `UserSpec.osUsername` validated as OS username (1..255 bytes, no NUL/control/path-separator), not ResourceName grammar Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Implement strict typed Rust structs for HostSpec, GuestSpec, ExecutionPolicy, ExecutionSpec, SandboxSpec, BudgetSpec, MountSpec, NetworkUsageSpec, DeviceUsageSpec, EndpointSpec, EndpointConsumerPolicy, TelemetrySpec, ProcessSpec, EphemeralProcessSpec, UserSpec; EndpointSpec accepts exactly `owner\\|provider\\|zone`, and EndpointConsumerPolicy owns the only finer gates (`allowedSubjects`, `allowedProviderComponents`, `allowedOperations`) with no schema aliases; strict serde deny_unknown_fields; bounds/redaction on all string fields; stable error types; `UserSpec.osUsername` validated as OS username (1..255 bytes, no NUL/control/path-separator), not ResourceName grammar Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resources-host-guest-process-user"
       ],
@@ -14904,7 +14909,7 @@
       ],
       "specId" : "ADR-046-resources-host-guest-process-user",
       "topologicalRank" : 10,
-      "validation" : "Golden JSON vectors for each ResourceType; serde unknown-field rejection; bounds enforcement; `UserSpec.osUsername` OS-username validation (underscore allowed, NUL rejected)",
+      "validation" : "Golden JSON vectors for each ResourceType; Endpoint vectors accept only `owner\\|provider\\|zone`, reject every legacy/private visibility alias, reject scalar/array `consumerPolicy` aliases, and cover each canonical consumer allowlist; a docs drift test parses every `type: Endpoint` YAML/Nix example and fails unless visibility is canonical and finer gates occur only under `consumerPolicy`; serde unknown-field rejection; bounds enforcement; `UserSpec.osUsername` OS-username validation (underscore allowed, NUL rejected)",
       "wave" : "W5"
     },
     {
@@ -16351,7 +16356,7 @@
       ],
       "specId" : "ADR-046-nix-configuration",
       "topologicalRank" : 10,
-      "validation" : "nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.)",
+      "validation" : "nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; resource/session verb closed-enum vectors accept `relay` only in `sessionVerbs`; relay wildcard/unbounded/Provider-self-asserted fixtures fail before activation while an exact core-generated ZoneLink fixture passes; Endpoint visibility accepts exactly `owner|provider|zone` and uses `consumerPolicy` for finer bounds; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.)",
       "wave" : "W5"
     },
     {
@@ -18662,7 +18667,7 @@
       "destinations" : [
         "packages/d2b-provider-runtime-qemu-media/src/controller/process_builder.rs"
       ],
-      "detailedDesign" : "Process spec builder and LaunchTicket assembly: build the canonical `qemu-media-runner` Process ResourceSpec from §10.1 and assemble the LaunchTicket with sealed fd slots for kvm, tap, media, and optional display fds. No raw path, argv, executable path, or principal appears in any public field. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt fd-slot and sandbox/budget concepts to canonical Process resources and sealed LaunchTickets; do not copy raw argv strings or path construction.",
+      "detailedDesign" : "Process spec builder and LaunchTicket attachment resolution: build the canonical `qemu-media-runner` Process ResourceSpec from §10.1 and supply only opaque Network/Endpoint refs to Core's attachment resolver. Core, not the qemu controller, resolves authorized kvm, tap, media, and optional display attachments and seals their fd slots in the LaunchTicket. The qemu Provider/controller receives no broker operation or fd. No raw path, argv, executable path, or principal appears in any public field. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt sandbox/budget concepts to canonical Process resources and Core-sealed LaunchTickets; do not copy raw argv strings or path construction.",
       "entryContracts" : [
         "ADR-046-provider-runtime-qemu-media"
       ],
@@ -18682,7 +18687,7 @@
       ],
       "specId" : "ADR-046-provider-runtime-qemu-media",
       "topologicalRank" : 15,
-      "validation" : "`tests/process_spec_golden.rs`; `tests/launch_ticket_fd_slots.rs`; `tests/no_raw_argv_in_spec.rs`",
+      "validation" : "`tests/process_spec_golden.rs`; `tests/launch_ticket_fd_slots.rs`; `tests/launch_ticket_tap_fd_lifetime.rs`; `tests/no_controller_fd_or_broker_op.rs`; `tests/no_raw_argv_in_spec.rs`",
       "wave" : "W6"
     },
     {
@@ -18737,22 +18742,23 @@
       "destinations" : [
         "packages/d2b-provider-runtime-qemu-media/src/controller/network.rs"
       ],
-      "detailedDesign" : "Network tap fd acquisition: call the `network-local` ComponentSession service to request a tap fd for a Guest MAC/bridge assignment and include the fd in the LaunchTicket. No bridge name or interface name appears in any public field. Primary reuse disposition: `create`. Preserved source-plan detail: net-new against the `network-local` ComponentSession contract.",
+      "detailedDesign" : "Network attachment routing: project each Guest network attachment as an opaque `Network/<name>` ref and condition only. The network-local controller declares the opaque semantic effect; its Core-owned NetworkEffectPort adapter maps it to `CreatePersistentTap`, then `SetBridgePortFlags`, and transfers the already-authorized connected `OwnedFd` directly to ProviderSupervisor for the QEMU Process LaunchTicket. The adapter and supervisor keep `FD_CLOEXEC` set on parent copies; only the declared child slot is made inheritable immediately before exec. On cancellation, ticket rejection, or spawn failure, all fd copies close before generation-fenced `DeletePersistentTap`, and the opaque realization is retained until deletion confirmation. The qemu Provider/controller receives no broker operation, fd, bridge name, or interface name, and the fd is never serialized through ResourceAPI, ComponentSession, or d2b-bus. Primary reuse disposition: `create`.",
       "entryContracts" : [
         "ADR-046-provider-runtime-qemu-media"
       ],
       "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-qemu-media-012",
       "kind" : "work-item",
-      "owner" : "P1; depends on ADR046-qemu-media-002 and Provider config `networkProviderRef`; owner: runtime-qemu-media network dependency integration",
+      "owner" : "P1; depends on ADR046-qemu-media-002, ADR046-network-005, and Provider config `networkProviderRef`; owner: runtime-qemu-media network dependency integration",
       "parallelGroup" : "wi:ADR-046-provider-runtime-qemu-media",
       "prerequisites" : [
         "ADR-046-provider-runtime-qemu-media",
+        "ADR046-network-005",
         "ADR046-qemu-media-002"
       ],
       "specId" : "ADR-046-provider-runtime-qemu-media",
       "topologicalRank" : 13,
-      "validation" : "`tests/tap_fd_acquisition.rs`; `tests/tap_fd_unavailable.rs`",
+      "validation" : "`tests/tap_launch_routing.rs` proves `CreatePersistentTap → SetBridgePortFlags → ProviderSupervisor LaunchTicket` ordering; `tests/tap_fd_lifetime.rs` proves CLOEXEC, single child ownership, and close-before-`DeletePersistentTap`; `tests/tap_fd_no_bus_serialization.rs` rejects fd/broker DTOs at the qemu controller boundary; `tests/tap_fd_unavailable.rs` covers authorization and resolution failure",
       "wave" : "W6"
     },
     {
@@ -19589,7 +19595,7 @@
       "destinations" : [
         "`packages/d2b-bus/src/zone_route.rs` (cross-Zone bus routing), `packages/d2b-bus/src/relay.rs` (per-hop relay handler)"
       ],
-      "detailedDesign" : "Cross-Zone routing path in d2b-bus: ZoneEntrypointResolver consumes sealed topology plus authenticated route projections → ZoneRouteEngine::decide_route → admitted ComponentSession established by each next-hop child's local ZoneLink; hop-counter decrement and enforcement; RBAC `relay` verb check at each intermediate hop; idempotency key namespace (full 6-tuple) in ZoneLinkIdempotencyKey; pinned reverse path tracking; cancellation forwarding; watch cursor forwarding and revision-expired handling; no-FD/credential structural rejection at serialization boundary. No parent route step performs Resource API Get/List/Watch on ZoneLink Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Cross-Zone routing path in d2b-bus: ZoneEntrypointResolver consumes sealed topology plus authenticated route projections → ZoneRouteEngine::decide_route → admitted ComponentSession established by each next-hop child's local ZoneLink; hop-counter decrement and enforcement; independent target-verb plus canonical ZoneLink-scoped `relay` checks at each intermediate hop; idempotency key namespace (full 6-tuple) in ZoneLinkIdempotencyKey; pinned reverse path tracking; cancellation forwarding; watch cursor forwarding and revision-expired handling; no-FD/credential structural rejection at serialization boundary. No parent route step performs Resource API Get/List/Watch on ZoneLink Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-zone-routing"
       ],
@@ -19605,7 +19611,7 @@
       ],
       "specId" : "ADR-046-zone-routing",
       "topologicalRank" : 9,
-      "validation" : "End-to-end K0→K1→K2 resource call; relay-denied/hop-limit/FD-rejection tests; idempotency namespace collision tests; cancellation delivery tests; watch resync tests",
+      "validation" : "End-to-end K0→K1→K2 resource call; relay-missing, target-verb-missing, wildcard/self-asserted relay, hop-limit, and FD-rejection tests; prove relay alone grants no CRUD/local lifecycle; idempotency namespace collision tests; cancellation delivery tests; watch resync tests",
       "wave" : "W2"
     },
     {
@@ -19814,7 +19820,7 @@
       ],
       "specId" : "ADR-046-zone-routing",
       "topologicalRank" : 8,
-      "validation" : "Port inline registry lifecycle/drain/shutdown tests; add v3 ZonePath routing test; add RBAC relay-verb check at provider admission",
+      "validation" : "Port inline registry lifecycle/drain/shutdown tests; add v3 ZonePath routing test; prove provider admission cannot self-assert relay and each forward requires relay plus the target verb",
       "wave" : "W2"
     },
     {
@@ -19845,7 +19851,7 @@
       "destinations" : [
         "`packages/d2b-zone-routing/src/service.rs`"
       ],
-      "detailedDesign" : "Rename `RealmServiceServer` → `ZoneServiceServer`; service wire name `d2b.realm.v2.RealmService` → `d2b.zone.v3.ZoneService`; rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll, resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut, revoke_shortcut→revoke-zone-shortcut, report_shortcut_close→report-zone-shortcut-close, inspect→zone-inspect) and add list/watch topology-projection methods. The read-only projection starts from the sealed sorted `{ childZone, parentZone }` compiler input and joins only authenticated, admitted `ZoneRouteEngine` route/projection status. It exposes no ZoneLink resource name, UID, spec, status, Provider ref, fingerprint, transport setting, or handle. Replace `RealmSessionAuthority` with Zone principal + RBAC binding; replace `BootstrapBinding` with allocator-issued PSK binding associated with the child's local ZoneLink; replace `EnrollmentBinding` with the corresponding KK enrollment record; add `relay` verb RBAC check per hop; adapt shortcut model to ZonePath addressing; `RealmServiceLimits` defaults preserved; `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s` preserved; `CredentialCustody::GatewayGuest` excluded (all ZoneLink sessions are direct KK) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
+      "detailedDesign" : "Rename `RealmServiceServer` → `ZoneServiceServer`; service wire name `d2b.realm.v2.RealmService` → `d2b.zone.v3.ZoneService`; rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll, resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut, revoke_shortcut→revoke-zone-shortcut, report_shortcut_close→report-zone-shortcut-close, inspect→zone-inspect) and add list/watch topology-projection methods. The read-only projection starts from the sealed sorted `{ childZone, parentZone }` compiler input and joins only authenticated, admitted `ZoneRouteEngine` route/projection status. It exposes no ZoneLink resource name, UID, spec, status, Provider ref, fingerprint, transport setting, or handle. Replace `RealmSessionAuthority` with Zone principal + RBAC binding; replace `BootstrapBinding` with allocator-issued PSK binding associated with the child's local ZoneLink; replace `EnrollmentBinding` with the corresponding KK enrollment record; add independent target-verb plus canonical `relay` RBAC checks per forwarding hop; adapt shortcut model to ZonePath addressing; `RealmServiceLimits` defaults preserved; `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s` preserved; `CredentialCustody::GatewayGuest` excluded (all ZoneLink sessions are direct KK) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
       "entryContracts" : [
         "ADR-046-zone-routing"
       ],
@@ -19863,7 +19869,7 @@
       ],
       "specId" : "ADR-046-zone-routing",
       "topologicalRank" : 11,
-      "validation" : "Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-verb RBAC test; KK enrollment test; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight)",
+      "validation" : "Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-plus-target-verb RBAC tests; KK enrollment test; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight)",
       "wave" : "W2"
     },
     {
@@ -19918,7 +19924,7 @@
       "destinations" : [
         "`packages/d2b-resource-store/tests/rbac_property.rs`"
       ],
-      "detailedDesign" : "Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers; (5) `relay` is accepted only as the canonical ZoneLink-scoped session verb with core-generated or explicit admin-policy provenance and exact target bounds; and (6) every forwarding hop independently requires relay plus the target verb Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-security-and-threat-model"
       ],
@@ -24059,7 +24065,7 @@
       "destinations" : [
         "`packages/d2b-contracts/src/v3/role.rs`; `packages/d2b-core-controller/src/authz.rs`"
       ],
-      "detailedDesign" : "Role resource schema with rule schema from §5.3 and resolved bounds (32 rules, 16 resourceTypes per rule, 64 resourceNames, 32 executionRefs); verb enum; explicit wildcard enforcement; index builder; phase/conditions; `role-binding-drain` finalizer; Nix Role options; audit/OTEL instrumentation Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`verb_requires_admin()` verb table → Role verb enum; `DaemonAccessDecision` error types → Role admission errors; `MappedDaemonAccessPrincipal` → subject identity model).",
+      "detailedDesign" : "Role resource schema with rule schema from §5.3 and resolved bounds (32 rules, 16 resourceTypes per rule, 64 resourceNames, 32 executionRefs); separate closed resource/session verb enums including `relay`; core-generated ZoneLink ownership, exact adjacent-Zone enrollment selector, exact target bounds, and explicit admin-policy exception admission; explicit wildcard enforcement; index builder; phase/conditions; `role-binding-drain` finalizer; generated Nix Role option help; audit/OTEL instrumentation Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`verb_requires_admin()` verb table → Role verb enum; `DaemonAccessDecision` error types → Role admission errors; `MappedDaemonAccessPrincipal` → subject identity model).",
       "entryContracts" : [
         "ADR-046-resources-zone-control"
       ],
@@ -24075,7 +24081,7 @@
       ],
       "specId" : "ADR-046-resources-zone-control",
       "topologicalRank" : 11,
-      "validation" : "All §15.4 Role tests including the resolved bounds checks",
+      "validation" : "All §15.4 Role tests including closed-enum, relay origin/scope/target-verb, and resolved-bounds checks",
       "wave" : "W5"
     },
     {
@@ -24130,7 +24136,7 @@
       "destinations" : [
         "`nixos-modules/options-zones.nix`; `nixos-modules/resources-zone-control.nix`; extended `nixos-modules/index.nix`"
       ],
-      "detailedDesign" : "`d2b.zones.<zone>.*` Nix options for Zone/ZoneLink/Provider/Role/RoleBinding/Quota/EmergencyPolicy authoring; compiler-only scalar `parentZone` required on non-root Zones and forbidden on `local-root`; Nix eval-time validation of parent existence, one resolved parent, self/cycle rejection, 16-name ancestry depth, ResourceRefs, verb enums, digest format, subject types, child-local ZoneLink self-name/one-uplink/local transport-ref constraints, and the no-expiry RoleBinding model; canonical JSON serialization; generation-bound resource bundle output; the compiler seals the validated parent map into allocator bootstrap topology without emitting `parentZone` into `Zone.spec` or reciprocal resources Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (`providerType` submodule → Provider option submodule; label regex `^[a-z][a-z0-9-]*$` retained unchanged; `placement` option → Provider component placement; `d2b.realms.*` option namespace → `d2b.zones.*` option namespace).",
+      "detailedDesign" : "`d2b.zones.<zone>.*` Nix options for Zone/ZoneLink/Provider/Role/RoleBinding/Quota/EmergencyPolicy authoring; compiler-only scalar `parentZone` required on non-root Zones and forbidden on `local-root`; Nix eval-time validation of parent existence, one resolved parent, self/cycle rejection, 16-name ancestry depth, ResourceRefs, separate resource/session verb enums (including session-only `relay`), relay origin/scope restrictions, digest format, subject types, child-local ZoneLink self-name/one-uplink/local transport-ref constraints, and the no-expiry RoleBinding model; generated help carries the relay semantics; canonical JSON serialization; generation-bound resource bundle output; the compiler seals the validated parent map into allocator bootstrap topology without emitting `parentZone` into `Zone.spec` or reciprocal resources Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (`providerType` submodule → Provider option submodule; label regex `^[a-z][a-z0-9-]*$` retained unchanged; `placement` option → Provider component placement; `d2b.realms.*` option namespace → `d2b.zones.*` option namespace).",
       "entryContracts" : [
         "ADR-046-resources-zone-control"
       ],
@@ -24152,7 +24158,7 @@
       ],
       "specId" : "ADR-046-resources-zone-control",
       "topologicalRank" : 14,
-      "validation" : "nix-unit vectors for each Zone control type schema; cross-field constraint tests; rendered JSON contract tests (`make test-drift`)",
+      "validation" : "nix-unit vectors for each Zone control type schema; closed resource/session verb and relay restriction vectors; cross-field constraint tests; rendered JSON contract tests (`make test-drift`)",
       "wave" : "W5"
     },
     {
@@ -24318,7 +24324,7 @@
       ],
       "specId" : "ADR-046-resources-zone-control",
       "topologicalRank" : 11,
-      "validation" : "All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema",
+      "validation" : "All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-session-verb-closed-enum`, `nix-eval-relay-session-verb-known`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); Phase 2 runs `nix-build-relay-scope-restricted`; drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema",
       "wave" : "W5"
     },
     {
