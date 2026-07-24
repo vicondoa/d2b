@@ -164,6 +164,55 @@ placement and for the speculative-readiness check in §6.
 | all 27 `provider-*` dossiers | see §3.3; every dossier's deepest edge resolves to a W5 spec (`resources-host-guest-process-user`, `resources-volume`, `resources-device`, `resources-zone-control`, `resources-credential`, `telemetry-audit-and-support`, `cli-and-operations`, or `nix-configuration`) | W6 |
 | `security-hardening`, `streamline`, `reset-and-cutover`, `feasibility-proofs` (forthcoming) | the entire manifest (cross-cutting closing review) | W7 |
 
+### 3.5 Generated implementation graph artifact
+
+[`docs/specs/ADR-046-implementation-graph.json`](./ADR-046-implementation-graph.json)
+(`artifactKind: d2b-adr-implementation-graph`, `schemaVersion` 1) and its
+generated human view,
+[`docs/specs/ADR-046-implementation-graph.md`](./ADR-046-implementation-graph.md),
+are the deterministic implementation DAG derived mechanically from
+`ADR-046-spec-set.json`, `ADR-046-work-items.json`, and this section's wave
+topology: all 55 spec nodes plus all 518 work-item nodes (573 total),
+typed `spec-depends-on`/`work-item-depends-on`/`implements-spec`/
+`shared-contract`/`file-overlap-order` edges, topological rank, exact
+`ADR046-W0`-`ADR046-W7` wave assignment, and file-disjoint `parallelGroup`s.
+Regenerating one of these two files without the other, or without this
+section, is a drift bug; the refresh procedure is defined in the `.md`
+companion's §7 and applies unchanged to any future spec/work-item addition
+(including forthcoming D096 items) — no wave or rank is ever hand-picked for
+a new node.
+
+Two derivation notes surfaced while generating the graph, applying rules
+already stated above rather than introducing new ones:
+
+1. `ADR-046-current-code-migration-map` has an empty `dependsOn` list in
+   `ADR-046-spec-set.json`, identically to `ADR-046-decision-register`, but
+   is not listed in §3.2's wave table. Applying §3.1's derivation rule
+   mechanically ("wave floor" for a zero-dependency spec) places it in
+   `ADR046-W0` alongside `ADR-046-decision-register`, as an independent,
+   file-disjoint, zero-dependency sibling of the `ADR046-W0` serial chain
+   (never folded into that chain, since nothing depends on it and it depends
+   on nothing).
+2. This section's closing-wave row above names `security-hardening` and
+   `feasibility-proofs`; the corresponding committed files are
+   `ADR-046-security-and-threat-model.md` and
+   `ADR-046-feasibility-and-spikes.md` (`docs/specs/README.md`'s member
+   index uses these names). The generated graph uses the committed file
+   names; this is a naming-drift note, not a behavior change, since both
+   resolve to `ADR046-W7` either way.
+
+The graph also records two same-wave file-overlap contentions not yet
+present in §7's table above (`packages/d2b-contracts/src/v3/component_session.rs`
+shared by `ADR046-zone-control-013`/`ADR046-nix-027`, and
+`packages/d2b-core-controller/src/configuration.rs`/`cleanup.rs` shared
+across five `ADR046-W5` specs' work items), plus two same-wave duplicate-
+generator findings in `ADR046-W7` (`ADR046-delivery-004`/`ADR046-streamline-001`
+and `ADR046-delivery-007`/`ADR046-streamline-022`). Per §6.2 item 4, each is
+recorded as a `sharedPrepBarriers` entry in the generated artifact in the
+same change that discovered it; none of them requires editing this
+section's own text, since §6.2's file-overlap-graph procedure already
+governs how such a newly discovered contention is handled at wave entry.
+
 ## 4. Per-wave entry/exit criteria
 
 Every wave (`ADR046-W0`…`ADR046-W7`) uses this template. A wave's exit
