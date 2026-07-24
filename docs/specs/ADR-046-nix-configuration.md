@@ -1045,7 +1045,7 @@ d2b.zones.work.resources.entra-login = {
         "Provider/credential-entra"
         "Provider/runtime-azure-container-apps"
       ];
-      allowedOperations = [ "resolve" "attach" "observe" ];
+      allowedOperations = [ "resolve" ];
     };
   };
 };
@@ -1072,9 +1072,8 @@ contract; the Endpoint is Guest-placed (Host placement is rejected), uses
 `consumerPolicy` whose `allowedSubjects` contains both
 `Provider/credential-entra` and the Credential's exact `consumerRef`
 (`Provider/runtime-azure-container-apps`) and whose `allowedOperations` is
-exactly `resolve`, `attach`, and `observe`; the Credential scope and consumer
-placement are consistent; and no store path or token appears in any emitted
-spec.
+exactly `resolve`; the Credential scope and consumer placement are consistent;
+and no store path or token appears in any emitted spec.
 
 ### Package closures into Guests
 
@@ -2510,7 +2509,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `identityGuestRef`, `loginEndpointRef`, `scope`, `audience`, `consumerRef`, `allowedOperations`, canonical `spec.provider` extension where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
 | Integration | Provider/display-wayland, Provider/shell-terminal, and Provider/credential-entra consume Process/Credential resources; `d2bd` continues reading `realm-identity.json` until the Credential reader lands. |
 | Data migration | Launcher and identity config are re-emitted as v3 resources; full d2b 3.0 reset; no v2 launcher/identity state import. |
-| Validation | Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint `visibility = "provider"` (and rejects `"zone"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve`, `attach`, and `observe` operations; no-secret assertion vectors |
+| Validation | Launcher metadata shape regression; Entra identity-Guest fixture requires login Endpoint `visibility = "provider"` (and rejects `"zone"`), exact `consumerPolicy.allowedSubjects` containing both `Provider/credential-entra` and the Credential's configured `consumerRef`, and exact canonical `resolve` operation; no-secret assertion vectors |
 | Tests | `tests/unit/nix/cases/zones-launcher-metadata.nix`; `tests/unit/nix/cases/zones-credential-entra.nix` covers both required subjects, provider visibility, zone-visibility rejection, and exact Endpoint operations; no-secret vectors |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `realm-workloads-launcher-v2-json.nix`/`realm-identity-config-json.nix` and `/etc/d2b/realm-workloads-launcher-v2.json`/`realm-identity.json` removed ONLY after display/credential Providers read resource configs |

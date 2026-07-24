@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "fdbe65b4a6b93e8465e971f9651c3ef46cd27b8f3e724d421da5fd784b2ebee1",
+      "sha256" : "212dc5b240f0f75b32694f4469d181436613f69f5d0f780fe18c7f39c1d92447",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Proposed",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -254,7 +254,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-credential-managed-identity.md",
-      "sha256" : "4bb2c3878f50c24e3726d3ca95ab982284e43d655151221af68df35497694c0b",
+      "sha256" : "a0d61d8fab742709682250d7fb7beb925f79e1fc2344fa6794cc66d3abe77d78",
       "specId" : "ADR-046-provider-credential-managed-identity",
       "status" : "Proposed",
       "supersedes" : "Current v3 `ManagedIdentityRef`, `managed_identity_client_id` ACA config field, `CredentialProvider` trait (status/enrollment-only) in `d2b-realm-provider/src/credential.rs` and `provider.rs`",
@@ -548,7 +548,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-      "sha256" : "0fa75533c683e40b72c32666434b7185202c24534731fb088a136fe996a31c98",
+      "sha256" : "8747902a2af0db8c16ed97fe55d4b87283db0d1c7219ca3f5a9b6cb0a4458c58",
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "status" : "Proposed",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
@@ -772,7 +772,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-local.md",
-      "sha256" : "d3f4393a4b432d1f990782ba17a353a57be3c5b24368c35daf6c1a590fcb1c06",
+      "sha256" : "e8bd00b95e141dcf00c1808b04acd42d6f2de80d14cd176593d8eec7bdc8097f",
       "specId" : "ADR-046-provider-volume-local",
       "status" : "Proposed",
       "supersedes" : "`d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation",
