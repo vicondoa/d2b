@@ -15,6 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use d2b_contract_tests::{read_repo_file, repo_root};
 use serde_json::Value;
 
+/// A mutation applied to a serialized work-item row in a negative fixture.
+type MutateRow = fn(&mut Value);
+
 const SPEC_SET: &str = "docs/specs/ADR-046-spec-set.json";
 const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
 const GRAPH_JSON: &str = "docs/specs/ADR-046-implementation-graph.json";
@@ -196,8 +199,16 @@ fn check_work_items(
     declared: &BTreeMap<String, Vec<Declaration>>,
     manifest: &[Value],
     prefix_registry: &BTreeMap<String, Vec<String>>,
+    spec_paths: &BTreeMap<String, String>,
 ) -> Vec<String> {
     let mut findings = Vec::new();
+
+    // Index the manifest by id so each Markdown declaration can be compared
+    // field-for-field against its serialized row.
+    let manifest_by_id: BTreeMap<&str, &Value> = manifest
+        .iter()
+        .filter_map(|entry| entry["workItemId"].as_str().map(|id| (id, entry)))
+        .collect();
 
     let mut markdown_ids: BTreeSet<String> = BTreeSet::new();
     let mut owner_of: BTreeMap<String, String> = BTreeMap::new();
@@ -247,6 +258,10 @@ fn check_work_items(
                     "work item `{}` has an empty mandatory field",
                     item.id
                 ));
+            }
+
+            if let Some(entry) = manifest_by_id.get(item.id.as_str()) {
+                findings.extend(field_findings(item, spec_paths.get(spec_id), entry));
             }
         }
     }
@@ -339,6 +354,101 @@ fn check_work_items(
 
 fn list_is_empty(prefixes: Option<&Vec<String>>) -> bool {
     prefixes.is_none_or(Vec::is_empty)
+}
+
+/// Mirrors the generator's `None`-sentinel rule so an empty reuse source is
+/// recognized identically on both sides.
+fn is_none_sentinel(value: &str) -> bool {
+    value == "None"
+        || value
+            .strip_prefix("None")
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with(','))
+}
+
+/// Independently derives the row every serialized field should carry from a
+/// Markdown declaration and reports each field whose manifest value disagrees.
+///
+/// The ID-membership and per-item structural rules above never look at the
+/// *values* the generator wrote, so a generator regression that rewrites
+/// `dependencyOwner`, `destination`, `detailedDesign`, `validation`,
+/// `reuseAction`, `reuseSource`, or the member metadata would regenerate
+/// cleanly and pass. This closes that hole by comparing every field.
+fn field_findings(item: &Declaration, spec_path: Option<&String>, entry: &Value) -> Vec<String> {
+    let mut findings = Vec::new();
+    let id = &item.id;
+
+    // Mirror the generator's `BTreeMap` semantics: a repeated label keeps the
+    // last value. A duplicate is already reported as its own finding.
+    let mut declared_fields: BTreeMap<&str, &str> = BTreeMap::new();
+    for (label, value) in &item.fields {
+        declared_fields.insert(label.as_str(), value.as_str());
+    }
+
+    const SCALARS: &[(&str, &str)] = &[
+        ("currentSource", "Current source"),
+        ("dataMigration", "Data migration"),
+        ("dependencyOwner", "Dependency/owner"),
+        ("destination", "Destination"),
+        ("detailedDesign", "Detailed design"),
+        ("integration", "Integration"),
+        ("removalProof", "Removal proof"),
+        ("reuseAction", "Reuse action"),
+        ("validation", "Validation"),
+    ];
+    for (key, label) in SCALARS {
+        let Some(expected) = declared_fields.get(label) else {
+            continue;
+        };
+        let actual = entry.get(*key).and_then(Value::as_str).unwrap_or_default();
+        if actual != *expected {
+            findings.push(format!(
+                "`{id}` manifest `{key}` is `{actual}` but its Markdown declares `{expected}`"
+            ));
+        }
+    }
+
+    // reuseSource is optional: an absent or `None`-sentinel field serializes as
+    // JSON null; anything else must round-trip verbatim.
+    let expected_source: Option<&str> = match declared_fields.get("Reuse source") {
+        Some(value) if !is_none_sentinel(value) => Some(value),
+        _ => None,
+    };
+    let actual_source = entry.get("reuseSource");
+    let source_ok = match (expected_source, actual_source) {
+        (None, None) => true,
+        (None, Some(value)) => value.is_null(),
+        (Some(expected), Some(value)) => value.as_str() == Some(expected),
+        (Some(_), None) => false,
+    };
+    if !source_ok {
+        let rendered = actual_source
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| value.to_string())
+            })
+            .unwrap_or_else(|| "absent".to_string());
+        let want = expected_source.unwrap_or("none");
+        findings.push(format!(
+            "`{id}` manifest reuseSource is `{rendered}` but its Markdown declares `{want}`"
+        ));
+    }
+
+    // Member metadata: the row must carry the owning member's declared path.
+    if let Some(expected_path) = spec_path {
+        let actual_path = entry
+            .get("specPath")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if actual_path != expected_path.as_str() {
+            findings.push(format!(
+                "`{id}` manifest specPath is `{actual_path}` but its member path is `{expected_path}`"
+            ));
+        }
+    }
+
+    findings
 }
 
 /// Verifies the graph's node/edge closure, acyclicity, wave monotonicity, and
@@ -594,10 +704,21 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
         })
         .collect();
 
+    let spec_paths: BTreeMap<String, String> = members
+        .iter()
+        .map(|member| {
+            (
+                member["specId"].as_str().expect("specId").to_string(),
+                member["path"].as_str().expect("path").to_string(),
+            )
+        })
+        .collect();
+
     let findings = check_work_items(
         &declared,
         work_items["items"].as_array().expect("items array"),
         &registry,
+        &spec_paths,
     );
     assert!(
         findings.is_empty(),
@@ -913,12 +1034,19 @@ mod fixtures {
         )])
     }
 
+    fn spec_paths() -> BTreeMap<String, String> {
+        BTreeMap::from([(
+            SPEC.to_string(),
+            "docs/specs/ADR-046-fixture.md".to_string(),
+        )])
+    }
+
     fn declared(markdown: &str) -> BTreeMap<String, Vec<Declaration>> {
         BTreeMap::from([(SPEC.to_string(), declarations(markdown))])
     }
 
     fn run(md: &str, rows: Vec<Value>, prefixes: &[&str]) -> Vec<String> {
-        check_work_items(&declared(md), &rows, &registry(prefixes))
+        check_work_items(&declared(md), &rows, &registry(prefixes), &spec_paths())
     }
 
     #[test]
@@ -986,6 +1114,7 @@ mod fixtures {
             &declared(&md),
             &[manifest_row("ADR046-fixture-001", "create", Value::Null)],
             &registry,
+            &spec_paths(),
         );
         assert!(findings.iter().any(|f| f.contains("registered to both")));
     }
@@ -1001,6 +1130,7 @@ mod fixtures {
                 SPEC.to_string(),
                 vec!["zulu".to_string(), "fixture".to_string()],
             )]),
+            &spec_paths(),
         );
         assert!(unsorted.iter().any(|f| f.contains("unsorted")));
 
@@ -1092,6 +1222,114 @@ mod fixtures {
         )];
         let findings = run(&md, rows, &["fixture"]);
         assert!(findings.iter().any(|f| f.contains("with a reuse source")));
+    }
+
+    #[test]
+    fn a_manifest_scalar_that_disagrees_with_the_markdown_fails() {
+        // Every serialized scalar must round-trip from the Markdown declaration;
+        // a generator regression that rewrites one silently must be caught.
+        let cases: &[(&str, MutateRow)] = &[
+            ("currentSource", |row| {
+                row["currentSource"] = Value::String("drifted source".to_string())
+            }),
+            ("dataMigration", |row| {
+                row["dataMigration"] = Value::String("drifted migration".to_string())
+            }),
+            ("dependencyOwner", |row| {
+                row["dependencyOwner"] = Value::String("drifted owner".to_string())
+            }),
+            ("destination", |row| {
+                row["destination"] = Value::String("`packages/drifted/src/lib.rs`".to_string())
+            }),
+            ("detailedDesign", |row| {
+                row["detailedDesign"] = Value::String("drifted design".to_string())
+            }),
+            ("integration", |row| {
+                row["integration"] = Value::String("drifted integration".to_string())
+            }),
+            ("removalProof", |row| {
+                row["removalProof"] = Value::String("drifted proof".to_string())
+            }),
+            ("validation", |row| {
+                row["validation"] = Value::String("drifted validation".to_string())
+            }),
+        ];
+        for (key, mutate) in cases {
+            let md = markdown("###", "ADR046-fixture-001", &[]);
+            let mut row = manifest_row("ADR046-fixture-001", "create", Value::Null);
+            mutate(&mut row);
+            let findings = run(&md, vec![row], &["fixture"]);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.contains(&format!("manifest `{key}`"))),
+                "a drifted `{key}` must be reported, got {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_manifest_reuse_action_that_disagrees_with_the_markdown_fails() {
+        // A *valid* action that differs from the Markdown passes the vocabulary
+        // check but must still fail the value comparison.
+        let md = markdown("###", "ADR046-fixture-001", &[("Reuse action", "adapt")]);
+        let row = manifest_row("ADR046-fixture-001", "wrap", Value::Null);
+        let findings = run(&md, vec![row], &["fixture"]);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("manifest `reuseAction`")),
+            "a valid-but-mismatched reuse action must be reported, got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_reuse_source_that_disagrees_with_the_markdown_fails() {
+        // Markdown declares a reuse source under a non-create action; the
+        // manifest must carry that exact string, not null or a different value.
+        let md = markdown(
+            "###",
+            "ADR046-fixture-001",
+            &[
+                ("Reuse action", "adapt"),
+                ("Reuse source", "`packages/original/src/lib.rs`"),
+            ],
+        );
+        let dropped = run(
+            &md,
+            vec![manifest_row("ADR046-fixture-001", "adapt", Value::Null)],
+            &["fixture"],
+        );
+        assert!(
+            dropped.iter().any(|f| f.contains("manifest reuseSource")),
+            "a dropped reuse source must be reported, got {dropped:?}"
+        );
+
+        let rewritten = run(
+            &md,
+            vec![manifest_row(
+                "ADR046-fixture-001",
+                "adapt",
+                Value::String("`packages/wrong/src/lib.rs`".to_string()),
+            )],
+            &["fixture"],
+        );
+        assert!(
+            rewritten.iter().any(|f| f.contains("manifest reuseSource")),
+            "a rewritten reuse source must be reported, got {rewritten:?}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_spec_path_that_disagrees_with_the_member_fails() {
+        let md = markdown("###", "ADR046-fixture-001", &[]);
+        let mut row = manifest_row("ADR046-fixture-001", "create", Value::Null);
+        row["specPath"] = Value::String("docs/specs/ADR-046-wrong.md".to_string());
+        let findings = run(&md, vec![row], &["fixture"]);
+        assert!(
+            findings.iter().any(|f| f.contains("manifest specPath")),
+            "a drifted specPath must be reported, got {findings:?}"
+        );
     }
 
     fn node(id: &str, wave: &str, group: &str, prerequisites: &[&str]) -> Value {
