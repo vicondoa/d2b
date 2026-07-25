@@ -157,10 +157,10 @@
     "test-policy": {
       "displayName": "Policy meta-gates",
       "makeTarget": "test-policy",
-      "ciKind": "simple-nix",
+      "ciKind": "rust",
       "ciJobId": "test-policy",
       "needs": ["tier0"],
-      "timeoutMinutes": 10,
+      "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     }
   }
