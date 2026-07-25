@@ -1214,10 +1214,10 @@ status:
       reason: pending-delete-intents
       message: "2 resources pending deletion"
   pendingCleanup:
-    - { type: ZoneLink, name: old-link,     zone: k1, deletionRequestedAt: 2026-07-22T21:00:00Z }
-    - { type: Zone,     name: removed-zone, zone: removed-zone, deletionRequestedAt: 2026-07-22T21:00:00Z }
+    - { type: ZoneLink, name: old-link,     zone: k1, deletionRequestedAt: 2026-07-22T21:00:00.000Z }
+    - { type: Zone,     name: removed-zone, zone: removed-zone, deletionRequestedAt: 2026-07-22T21:00:00.000Z }
   priorConfigurationGeneration: <prior-id>
-  lastGenerationChange: 2026-07-22T21:00:00Z
+  lastGenerationChange: 2026-07-22T21:00:00.000Z
 ```
 
 Per-resource cleanup tracking fields (set by core on the pending-delete resource):
@@ -2478,9 +2478,9 @@ The following transitions are NOT simple textual renames:
 | Reuse action | adapt |
 | Destination | `packages/d2b-bus/src/session/` |
 | Detailed design | Copy `d2b-session` crate wholesale into `d2b-bus/src/session/`; adapt `EndpointPurpose`/`EndpointRole`/`ServicePackage` closed-enum tags for v3 purposes; strip `GUEST_SESSION_CREDENTIAL_*` types; strip `serve_ttrpc_services` fixed-endpoint binding (replaced by allocator-issued FD bootstrap); adapt `SessionEngine` as ZoneLink session drive loop; keep all Noise profiles (Nn/Kk/IKpsk2), generation discovery, record/fragment/keepalive/credit/cancellation/attachment logic verbatim Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
-| Integration | ZoneLink controller instantiates one `ComponentSessionDriver` per ZoneLink, typed as Kk for enrolled peers and Nn for initial bootstrap; d2b-bus routes ResourceClient calls through these drivers |
+| Integration | ZoneLink controller instantiates one `ComponentSessionDriver` per ZoneLink, typed as IKpsk2 with the allocator-issued single-use PSK for initial ZoneLink enrollment and Kk for the enrolled steady-state session; Nn is never used for a ZoneLink, because a ZoneLink peer is an adjacent-Zone subject reached over relay carriage that unauthenticated NN cannot authenticate and that cannot emit `bootstrap-ikpsk2` evidence - NN is reserved for local `SO_PEERCRED` or inherited-descriptor sessions; d2b-bus routes ResourceClient calls through these drivers |
 | Data migration | None (new infrastructure) |
-| Validation | Port all `component_session.rs` tests; port `noise_vectors.rs`; add ZoneLink-specific KK enrollment test; add ZoneLink reconnect/revocation integration test |
+| Validation | Port all `component_session.rs` tests; port `noise_vectors.rs`; add a ZoneLink IKpsk2 allocator-PSK bootstrap-enrollment test and the follow-on KK enrollment test; add ZoneLink reconnect/revocation integration test |
 | Removal proof | Not applicable (new crate) |
 
 ### ADR046-routing-008

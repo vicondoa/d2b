@@ -430,7 +430,7 @@ spec:
   providerRef: Provider/system-core   # required; fixed value for Host
   defaultDomain: system               # system|user; default system
   allowedDomains: [system, user]      # [system|user]; 1..2 items, unique
-  defaultUserRef: null                # User/<name>; required if user in allowedDomains
+  defaultUserRef: User/alice          # User/<name>; required when user in allowedDomains
   budget: {}                          # BudgetSpec; aggregate for all Processes on this Host
   networkAttachments: []              # 0..64 NetworkAttachmentList entries
   deviceAttachments: []               # 0..64 DeviceAttachmentList entries
@@ -543,8 +543,8 @@ status:
   observedGeneration: 1
   phase: Ready                        # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   # Host-specific:
@@ -667,7 +667,7 @@ spec:
   providerRef: Provider/runtime-cloud-hypervisor   # required; one of four runtime Providers
   defaultDomain: system
   allowedDomains: [system, user]
-  defaultUserRef: null
+  defaultUserRef: User/alice
   systemArtifactId: null  # artifact ID for the NixOS system closure; see d2b.artifacts catalog
   budget: {}
   networkAttachments: []
@@ -751,8 +751,8 @@ status:
   observedGeneration: 1
   phase: Ready                        # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   # Guest-specific:
@@ -981,8 +981,8 @@ status:
   observedGeneration: 1
   phase: Ready                        # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   # Process-specific:
@@ -1337,15 +1337,15 @@ status:
   observedGeneration: 1
   phase: Succeeded                    # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; EphemeralProcess steady lifecycle is Pending→Succeeded|Failed|Unknown; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:02Z"
-  completedAt: "2026-07-22T00:00:05Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:02.000Z"
+  completedAt: "2026-07-22T00:00:05.000Z"
   outcome:
     code: process-exited              # see outcome codes below
     exitCode: 0
     message: ""
     retryable: false
-    occurredAt: "2026-07-22T00:00:05Z"
+    occurredAt: "2026-07-22T00:00:05.000Z"
   # EphemeralProcess-specific:
   providerImplementation: ""
   processIdentityDigest: ""
@@ -1533,7 +1533,7 @@ status:
   observedGeneration: 1
   phase: Ready                          # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
   startedAt: null
   completedAt: null
   outcome: null

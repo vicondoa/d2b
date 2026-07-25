@@ -60,7 +60,7 @@ Volume
 Vendor ResourceTypes use a qualified name:
 
 ```text
-acme.io.Widget
+acme.d2bus.org.Widget
 ```
 
 ResourceApiBinding rejects type-name collisions. A type cannot be selected by
@@ -145,7 +145,7 @@ Host and Guest share:
 - `providerRef`;
 - `defaultDomain: system|user`;
 - `allowedDomains`;
-- `defaultUserRef` when user is the default.
+- `defaultUserRef` when `allowedDomains` contains `user`.
 - budgets;
 - Volume/Network/Device attachment defaults.
 

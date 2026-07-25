@@ -120,15 +120,15 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec: {}
 status:
   observedGeneration: 1
   phase: Ready
   conditions: []
-  lastReconciledAt: 2026-07-22T00:00:01Z
-  startedAt: 2026-07-22T00:00:00Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
   completedAt: null
   outcome: null
 ```
@@ -306,8 +306,8 @@ metadata:
   finalizers:
     - core.zone-link-drain
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   childZoneName: guest
   transportProviderRef: "Provider/transport-unix"
@@ -811,7 +811,7 @@ Provider.status extends common status with:
   type: controller                     # controller | service | worker
   phase: Ready                         # common phases
   processRef: Process/system-core-host-controller  # null for bootstrap exceptions
-  lastReconciledAt: 2026-07-22T00:00:01Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
   conditions: []
 ```
 
@@ -1023,8 +1023,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   rules:
     - resourceTypes: [Process, EphemeralProcess]
@@ -1038,7 +1038,7 @@ status:
   observedGeneration: 1
   phase: Ready
   conditions: []
-  lastReconciledAt: 2026-07-22T00:00:01Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
   startedAt: null
   completedAt: null
   outcome: null
@@ -1279,8 +1279,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   roleRef: Role/process-controller
   subjects:
@@ -1291,7 +1291,7 @@ status:
   observedGeneration: 1
   phase: Ready
   conditions: []
-  lastReconciledAt: 2026-07-22T00:00:01Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
   startedAt: null
   completedAt: null
   outcome: null
@@ -1516,8 +1516,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   ceilings:
     maxResources: 4096            # max total non-Deleted resources in Zone
@@ -1696,8 +1696,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   enabled: false                        # operator activates/deactivates disable
   scope:
@@ -3454,7 +3454,7 @@ per build. This is the Zone resource bundle.
   "zoneUid":       null,
   "zoneName":      "dev",
   "generation":    7,
-  "generatedAt":   "2026-07-22T21:25:43Z",
+  "generatedAt":   "2026-07-22T21:25:43.000Z",
   "nixRevision":   "abc123def456",
   "resources": [
     {

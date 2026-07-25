@@ -91,10 +91,13 @@ resource, indexed with owned/exported ResourceTypes and component placement in
 
 `ADR-046-spec-set.json` and `ADR-046-work-items.json` are deterministic indexes,
 regenerated from the member Markdown and not themselves members of the set.
-This Proposed documentation set does not yet contain the future checked-in
-generator. The current candidate was produced with a disposable script that was
-removed after regeneration; `ADR046-delivery-004` and
-`ADR046-delivery-009` own the future generator and fail-closed policy tests.
+The checked-in generator exists: `packages/xtask/src/gen_spec_set.rs` emits both
+manifests via `cargo run -p xtask -- spec-registry`, and
+`packages/xtask/src/implementation_graph.rs` emits the implementation graph via
+`cargo run -p xtask -- implementation-graph`. Both run under the fail-closed
+`make test-drift` gate, which regenerates every ADR 0046 artifact and requires a
+clean `git diff`. `ADR046-delivery-004` and `ADR046-delivery-009` own the
+follow-on hardening of that generator and its fail-closed policy tests.
 
 - `ADR-046-spec-set.json` (`artifactKind: d2b-adr-spec-set`, `schemaVersion` 3)
   binds the exact 55 member files: for each member, its `specId`, `path`,
@@ -242,7 +245,7 @@ Rules:
   reference;
 - a plain enum or inline value never uses a `Ref` suffix;
 - standard ResourceTypes use Zone-unique short names;
-- vendor ResourceTypes use a qualified name such as `acme.io.Widget`;
+- vendor ResourceTypes use a qualified name such as `acme.d2bus.org.Widget`;
 - API binding rejects ResourceType collisions;
 - cross-Zone resource references do not exist unless a later reviewed special
   case explicitly adds one.

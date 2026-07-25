@@ -607,7 +607,7 @@ status:
       guestMountReady: true    # observed via guest-control health probe
       # export socket path is a private implementation detail; never a status field
       phase: Ready
-      lastCheckedAt: 2026-07-22T00:00:01Z
+      lastCheckedAt: 2026-07-22T00:00:01.000Z
 ```
 
 The virtiofsd export socket path is an internal implementation detail of
@@ -1385,7 +1385,7 @@ NixOS generation:
   "schemaVersion": "resources.d2bus.org/zone-bundle/v1",
   "zone": "dev",
   "generationId": "<SHA-256 of sorted canonical resource JSON set>",
-  "emittedAt": "2026-07-22T21:00:00Z",
+  "emittedAt": "2026-07-22T21:00:00.000Z",
   "resources": {
     "Provider/volume-local":    { "digest": "<SHA-256>" },
     "Provider/volume-virtiofs": { "digest": "<SHA-256>" },

@@ -96,8 +96,8 @@ metadata:
   ownerRef: Guest/corp-vm
   finalizers: [device-tpm.d2bus.org/state-preserved]
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   providerRef: Provider/device-tpm
   deviceClass: emulated
@@ -113,13 +113,13 @@ status:
   observedGeneration: 1
   phase: Ready
   conditions: []
-  lastReconciledAt: 2026-07-22T00:00:01Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
   device:
     present: true
     health: healthy
     holderRefs: [Guest/corp-vm]
     claims: []
-    provisionedAt: 2026-07-22T00:00:01Z
+    provisionedAt: 2026-07-22T00:00:01.000Z
 ```
 
 ### Device spec fields
@@ -314,7 +314,7 @@ claims:
   - holderRef: Guest/corp-vm
     claim: exclusive
     passthrough: tpm-socket
-    claimedAt: 2026-07-22T00:00:01Z
+    claimedAt: 2026-07-22T00:00:01.000Z
     health: healthy | degraded | failed | unknown
 ```
 
@@ -989,7 +989,7 @@ claims:
   - holderRef: Guest/corp-vm
     claim: exclusive
     passthrough: hidraw-relay
-    claimedAt: 2026-07-22T00:05:00Z
+    claimedAt: 2026-07-22T00:05:00.000Z
     sessionId: sk-corp-vm-42   # opaque; NOT the physical device descriptor
     health: healthy
 ```
@@ -1668,7 +1668,7 @@ The Nix build produces a Zone resource generation bundle at
   "schemaVersion": 1,
   "zone": "dev",
   "configGeneration": 42,
-  "generatedAt": "2026-07-22T00:00:00Z",
+  "generatedAt": "2026-07-22T00:00:00.000Z",
   "contentDigest": "sha256:<hex>",
   "resources": [
     { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-gpu" },          "spec": { ... } },
@@ -1788,10 +1788,10 @@ status:
   pendingDeletion:
     - type: Device
       name: old-corp-vm-tpm
-      deletionRequestedAt: "2026-07-22T02:00:00Z"
+      deletionRequestedAt: "2026-07-22T02:00:00.000Z"
     - type: Device
       name: old-corp-vm-usb
-      deletionRequestedAt: "2026-07-22T02:00:00Z"
+      deletionRequestedAt: "2026-07-22T02:00:00.000Z"
 
 # Zone status after cleanup completes
 status:

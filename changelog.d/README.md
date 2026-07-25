@@ -82,3 +82,13 @@ to ship release notes. A pull request satisfies it with **either** an entry in
 `CHANGELOG.md` **or** a fragment in this directory - neither is not an option.
 The same gate validates the structure of every fragment present, so a malformed
 fragment fails on the pull request that introduced it rather than at fold time.
+
+## Release precondition
+
+A release must never ship unfolded fragments. When the auto-release workflow
+(`.github/workflows/release-host-binaries.yml`) detects a new version header in
+`CHANGELOG.md`, it fails closed if any file other than this `README.md` remains
+under `changelog.d/`. This guarantees every fragment's entries have been folded
+into the released `CHANGELOG.md` section and that no branch-named, wave-tagged
+fragment filename leaks into a release artifact. Run `make changelog-fold` and
+commit the folded `CHANGELOG.md` before cutting a release.

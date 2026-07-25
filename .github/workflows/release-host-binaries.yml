@@ -1,7 +1,7 @@
 name: release-host-binaries
 on:
   push:
-    branches: [main]
+    branches: [v3]
 
 permissions:
   contents: read
@@ -42,6 +42,18 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'skip=%s\n' "$skip" >> "$GITHUB_OUTPUT"
+      - name: Reject unfolded changelog fragments
+        if: steps.detect.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stray=$(find changelog.d -type f ! -name README.md -printf '%P\n' 2>/dev/null | sort || true)
+          if [ -n "$stray" ]; then
+            echo "Release blocked: unfolded changelog fragments remain under changelog.d/:" >&2
+            echo "$stray" >&2
+            echo "Run 'make changelog-fold' and commit the folded CHANGELOG.md before cutting a release." >&2
+            exit 1
+          fi
 
   build:
     needs: detect-version
@@ -180,8 +192,8 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout -B main origin/main
+          git fetch origin v3
+          git checkout -B v3 origin/v3
 
           rm -rf release-assets
           mkdir -p nix release-assets
@@ -238,7 +250,7 @@ jobs:
             'Consumers: `nix flake update d2b` to pick up pre-built binaries.'
           git push origin "$BRANCH"
           gh pr create \
-            --base main \
+            --base v3 \
             --head "$BRANCH" \
             --title "release: prebuilt manifest for v${VERSION}" \
             --body "Auto-generated after [v${VERSION}](https://github.com/${REPO}/releases/tag/${TAG}) release. Updates \`nix/prebuilt.json\` with SRI hashes for the published binaries." \

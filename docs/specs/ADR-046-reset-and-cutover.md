@@ -915,7 +915,7 @@ the ADR 0034 atomic-persistence sequence, at
 object per line, `O_APPEND | O_CREAT`, `fsync` after every append):
 
 ```json
-{"phase": 4, "step": "adopt-tpm-corp-vm", "outcome": "succeeded", "at": "2026-07-22T00:03:11Z"}
+{"phase": 4, "step": "adopt-tpm-corp-vm", "outcome": "succeeded", "at": "2026-07-22T00:03:11.000Z"}
 ```
 
 Idempotency rules, applied uniformly to every phase:

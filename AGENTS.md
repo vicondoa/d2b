@@ -161,11 +161,16 @@ content outside a section fails the fold rather than losing the entry. See
 
 ### Auto-release
 
-Merging to `main` with a new version header in `CHANGELOG.md` triggers:
+Merging to `v3` with a new version header in `CHANGELOG.md` triggers:
 1. Auto-creation of git tag `vX.Y.Z`
 2. Build of all host binaries (`d2bd`, `d2b`, `d2b-priv-broker`,
    `d2b-wayland-proxy`, `d2b-activation-helper`)
 3. GitHub Release with changelog notes + binary tarballs + `SHA256SUMS`
+
+`v3` is the clean-break integration lineage and never merges to `main`, so
+the release path cuts from `v3`, not `main` (see
+[`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
+"Only after all six hold").
 
 Consumers can fetch pre-built binaries from the release instead of
 building from source.
