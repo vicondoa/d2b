@@ -96,16 +96,74 @@ fn scan_passes_on_a_clean_tree() {
 }
 
 #[test]
-fn scan_ignores_binary_files() {
+fn scan_ignores_dash_bytes_inside_a_binary_file() {
+    // A leading NUL marks the file binary to `grep -I`. The banned dash bytes
+    // sit right after it, so if `grep -I` were dropped the scan would match
+    // them and fail; the pass here is binary-skip, not a dead scan.
+    let dash = '\u{2014}';
     let root = fixture_tree("binary", "clean text\n");
-    let mut blob: Vec<u8> = vec![0x00, 0x01, 0x02, 0xff];
-    blob.extend_from_slice("payload".as_bytes());
+    let mut buf = [0u8; 4];
+    let mut blob: Vec<u8> = vec![0x00];
+    blob.extend_from_slice(dash.encode_utf8(&mut buf).as_bytes());
+    blob.extend_from_slice(&[0x01, 0x02, 0xff]);
+    blob.extend_from_slice(b"payload");
     fs::write(root.join("blob.bin"), &blob).expect("write binary fixture");
 
     let (success, output) = scan(&root);
     assert!(
         success,
-        "the scan must not choke on a binary file; output:\n{output}"
+        "grep -I must skip the binary blob even though it embeds {dash:?}; output:\n{output}"
+    );
+
+    // The identical codepoint in a text file (no NUL) must still fail, which
+    // proves the pass above is binary-skip and not a scan that stopped matching.
+    let text_root = fixture_tree("binary-text-control", &format!("has one {dash} here\n"));
+    let (text_success, text_output) = scan(&text_root);
+    assert!(
+        !text_success,
+        "the same codepoint in a text file must fail; output:\n{text_output}"
+    );
+    assert!(
+        text_output.contains("nested/sample.md:1"),
+        "the text control must report the offending file:line; output:\n{text_output}"
+    );
+}
+
+#[test]
+fn scan_fails_closed_on_an_unreadable_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = fixture_tree("unreadable", "clean text\n");
+    let secret = root.join("nested/secret.md");
+    fs::write(&secret, "clean text\n").expect("write secret fixture");
+    let mut perms = fs::metadata(&secret).expect("metadata").permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&secret, perms).expect("chmod 000");
+
+    // Running as root bypasses the mode bits, so the grep-error path cannot be
+    // exercised; skip rather than assert a pass we cannot reach.
+    if fs::read(&secret).is_ok() {
+        let mut restore = fs::metadata(&secret).expect("metadata").permissions();
+        restore.set_mode(0o644);
+        let _ = fs::set_permissions(&secret, restore);
+        eprintln!("skipping: cannot make a file unreadable to this uid (running as root?)");
+        return;
+    }
+
+    let (success, output) = scan(&root);
+
+    let mut restore = fs::metadata(&secret).expect("metadata").permissions();
+    restore.set_mode(0o644);
+    let _ = fs::set_permissions(&secret, restore);
+
+    assert!(
+        !success,
+        "the scan must fail closed when grep cannot read a file, not report a pass having \
+         scanned nothing; output:\n{output}"
+    );
+    assert!(
+        output.contains("grep exited"),
+        "the scan must name the grep error status; output:\n{output}"
     );
 }
 
