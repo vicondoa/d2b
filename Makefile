@@ -390,6 +390,25 @@ D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
 D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
 D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
 
+## Classified hermetic tests that legitimately exceed the 50 ms per-test
+## micro-budget and therefore declare a bounded higher budget through the
+## sanctioned exception mechanism instead of being dropped from the census:
+##   * the *_bounded_byte_inputs_do_not_panic property harnesses each replay a
+##     committed corpus and drive RUNS=10000 generated inputs through a parser,
+##     so hundreds of milliseconds of pure execution is the intended workload;
+##   * the rejects_tampered_*_artifact cases build and hash a full launcher /
+##     unsafe-local artifact tree and prove every tamper is refused.
+## Budgets carry several-fold headroom over the observed p95 so reference-runner
+## noise cannot flap them, while still bounding each id to a fixed ceiling.
+D2B_RUNTIME_EXCEPTIONS   = \
+	--exception d2b-core::manifest_v04_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::bundle_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::host_json_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::privileges_json_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::rejects_tampered_realm_workloads_launcher_v2_artifact=300 \
+	--exception d2b-core::rejects_tampered_unsafe_local_workloads_artifact=300
+
+
 ## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
@@ -413,6 +432,24 @@ test-runtime-ledger:
 	fi; \
 	echo "test-runtime-ledger: warm-building the census crates so compilation is excluded from timings"; \
 	for crate in $$crates; do ( cd packages && cargo test -p "$$crate" --lib --tests --no-run --quiet ); done; \
+	echo "test-runtime-ledger: selecting libtest-harness targets per census crate (harness=false custom-main binaries emit no libtest JSON and cannot be timed)"; \
+	meta="$$work/cargo-metadata.json"; \
+	( cd packages && cargo metadata --format-version 1 --no-deps ) > "$$meta" 2>/dev/null; \
+	for crate in $$crates; do \
+	  manifest="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .manifest_path' "$$meta")"; \
+	  if [ -z "$$manifest" ] || [ ! -f "$$manifest" ]; then \
+	    echo "test-runtime-ledger: cannot resolve the Cargo.toml for census crate $$crate; refusing to guess its harness set" >&2; exit 1; fi; \
+	  harnessless="$$(awk '/^\[\[test\]\]/{if(t&&h&&n!="")print n;t=1;n="";h=0;next} /^\[/{if(t&&h&&n!="")print n;t=0} t&&/^[[:space:]]*name[[:space:]]*=/{l=$$0;sub(/.*=[[:space:]]*"/,"",l);sub(/".*/,"",l);n=l} t&&/^[[:space:]]*harness[[:space:]]*=[[:space:]]*false/{h=1} END{if(t&&h&&n!="")print n}' "$$manifest")"; \
+	  tflags="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .targets[] | select(.kind|index("test")) | select((.["required-features"]//[])|length==0) | .name' "$$meta" | \
+	    while read -r tname; do \
+	      [ -n "$$tname" ] || continue; \
+	      drop=0; for x in $$harnessless; do [ "$$x" = "$$tname" ] && drop=1; done; \
+	      [ "$$drop" -eq 0 ] && printf ' --test %s' "$$tname"; \
+	    done)"; \
+	  sel="--lib$$tflags"; \
+	  printf '%s\n' "$$sel" > "$$work/$$crate.testargs"; \
+	  echo "test-runtime-ledger: $$crate timed selector: $$sel"; \
+	done; \
 	args=""; \
 	rep=0; \
 	while [ "$$rep" -lt "$$reps" ]; do \
@@ -420,10 +457,22 @@ test-runtime-ledger:
 	  echo "test-runtime-ledger: repetition $$rep/$$reps"; \
 	  for crate in $$crates; do \
 	    json="$$work/$$crate-$$rep.json"; \
-	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --tests --quiet -- \
-	        -Z unstable-options --format=json --report-time ) > "$$json" 2>/dev/null || true; \
+	    err="$$work/$$crate-$$rep.err"; \
+	    sel="$$(cat "$$work/$$crate.testargs")"; \
+	    status=0; \
+	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --quiet -- \
+	        -Z unstable-options --format=json --report-time ) > "$$json" 2> "$$err" || status=$$?; \
+	    if [ "$$status" -ne 0 ]; then \
+	      echo "test-runtime-ledger: cargo test exited $$status for census crate $$crate; failing closed before recording any measurement" >&2; \
+	      sed -e "s#$(abspath .)#<repo>#g" -e "s#$$HOME#<home>#g" "$$err" 2>/dev/null | tail -n 20 >&2 || true; \
+	      exit 1; \
+	    fi; \
 	    if grep -q '"event": "failed"' "$$json"; then \
-	      echo "test-runtime-ledger: hermetic test failure while timing $$crate" >&2; exit 1; fi; \
+	      echo "test-runtime-ledger: a hermetic test reported failure while timing census crate $$crate" >&2; exit 1; fi; \
+	    started=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "started"' || true); \
+	    passed=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "ok"' || true); \
+	    if [ "$$started" -lt 1 ] || [ "$$started" -ne "$$passed" ]; then \
+	      echo "test-runtime-ledger: census crate $$crate did not emit a matching successful suite-completion event ($$passed/$$started ok); refusing to record a partial stream" >&2; exit 1; fi; \
 	    cdur="$$(grep '"type": "test"' "$$json" | grep '"exec_time"' | \
 	        sed -E 's/.*"exec_time": ([0-9.]+).*/\1/' | \
 	        awk '{ s += $$1 } END { printf "%d", (s * 1000) + 0.5 }')"; \
@@ -432,7 +481,7 @@ test-runtime-ledger:
 	done; \
 	( cd packages && $(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
-	    --output "$$ledger" $$args ); \
+	    --output "$$ledger" $(D2B_RUNTIME_EXCEPTIONS) $$args ); \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
 	    --ledger "$$ledger" --expected-census "$$census" )
 
