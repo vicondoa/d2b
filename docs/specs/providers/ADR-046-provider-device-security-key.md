@@ -231,6 +231,17 @@ status:
       observedDeviceGeneration: 1
       observedEndpointGeneration: 1
       lastCeremonyOutcome: success | timeout | cancelled | busy | error | null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 The base `authorityKeyClass: semantic-security-key` identifies the
@@ -276,6 +287,17 @@ status:
     details:
       relayEndpointRef: Endpoint/yubikey-primary-import-ctaphid
       observedEndpointGeneration: 3
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 A projection permits only `providerRef`, semantic base/import fields, and
@@ -344,6 +366,17 @@ status:
       queued: false
       lastCeremonyOutcome: success | timeout | cancelled | busy | error | null
       providerDiagnostic: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `serviceRef`, `target.guestRef`, and `target.userRef` are local ResourceRefs. The
@@ -679,6 +712,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Endpoint resources (D092)

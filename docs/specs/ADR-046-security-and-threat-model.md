@@ -234,10 +234,12 @@ input.
   FDs/credentials/paths (§10); capability ceilings propagate monotonically
   downward and a child cannot advertise beyond its parent's grant (ZR lines
   2081-2098).
-- **Detection:** `childStaticKeyFingerprint` re-verified on every reconnect
-  (ZR lines 554-580); route advertisement replay window and signature check
-  (ZR lines 1835-1895); malformed/exhausted hop count rejected at the
-  source bus (ZR lines 1880-1895).
+- **Detection:** the child's static public key is re-verified on every
+  reconnect against the private sealed enrollment record (the child key-pin,
+  bound to the child Zone uid and the allocator enrollment), not against any
+  ZoneLink spec field (ZR lines 554-580); route advertisement replay window
+  and signature check (ZR lines 1835-1895); malformed/exhausted hop count
+  rejected at the source bus (ZR lines 1880-1895).
 - **Recovery:** parent allocator revocation sets the admitted capability ceiling
   to empty and withdraws its private route projection; the child-local ZoneLink
   handler then closes existing streams with `zone-link-revoked`.
@@ -466,11 +468,17 @@ flag, codec fallback, or lower limit selected after failure.
 **Generation/revision binding.** The handshake `INIT` payload contains a
 SHA-256 commitment to the current generation/revision; the responder
 verifies this before completing `ACCEPT` and fails closed on any mismatch
-(ZR lines 96-124). For ZoneLink specifically, `spec.childStaticKeyFingerprint`
-(sha256-hex) pins the child's expected static public key and is re-verified
-on **every** reconnect; a child presenting a different key is refused before
-any resource exchange. `childZoneUid` is recorded on first successful
-connection and checked on every reconnect; a UID change resets the cursor to
+(ZR lines 96-124). For ZoneLink specifically, the reconnect trust anchor is
+the private sealed enrollment record, **not** a ZoneLink spec field: the
+child's static public key is pinned by the sealed enrollment record (the
+child key-pin, bound to the child Zone uid and the parent allocator
+enrollment) and is re-verified on **every** reconnect; a child presenting a
+different static key is refused before any resource exchange. The six-field
+ZoneLink schema (`childZoneName`, `transportProviderRef`, `transportSettings`,
+`transportCredentials`, `disabled`, `limits`) carries no
+`childStaticKeyFingerprint` field, and adding a seventh field is rejected by
+the generator. `childZoneUid` is recorded on first successful connection and
+checked on every reconnect; a UID change resets the cursor to
 revision 0 rather than silently continuing (ZR lines 554-580). Reconnect
 always performs a new handshake and increments the session generation;
 calls retry only under the provider/operation idempotency contract, and
@@ -1711,7 +1719,7 @@ section with the full control description.
 | ResourceType | Primary threat | Prevention/detection/recovery | Detail |
 | --- | --- | --- | --- |
 | `Zone` | A second `Zone/<name>` masquerading as the Zone's own self resource | Cardinality-1 admission (`resource-already-exists`); `Zone.spec` must be exactly `{}` (`zone-spec-invalid` otherwise) | §26/§8 |
-| `ZoneLink` | Child static key substitution / stale child identity reuse | `childStaticKeyFingerprint` re-verified every reconnect; `childZoneUid` mismatch resets cursor to revision 0 | §7/§10 |
+| `ZoneLink` | Child static key substitution / stale child identity reuse | Child static key re-verified every reconnect against the private sealed enrollment record (child key-pin bound to `childZoneUid` and the allocator enrollment), not a spec field; `childZoneUid` mismatch resets cursor to revision 0 | §7/§10 |
 | `Provider` | Forged/downgraded/malicious package | Signed `PackageIdentity`, build+runtime signature/conformance verification, quarantine-not-delete | §5 |
 | `Role` | Wildcard privilege escalation via operator/Provider-authored Role | Wildcard restricted to core-controller-generated Roles; `provider-wildcard-permission-restricted` | §8 |
 | `RoleBinding` | TOCTOU during deletion/re-creation; scope widening via narrowing | Atomic one-transaction deletion; `scopeNarrowing` restriction-only; immutable `roleRef` | §8 |

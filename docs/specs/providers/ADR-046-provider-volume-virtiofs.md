@@ -305,6 +305,17 @@ status:
       reason: health-probe-ok
       observedGeneration: 1
   lastReconciledAt: 2026-07-22T00:00:01.000Z
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 | Field | Type | Required | Default | Constraints |
@@ -352,6 +363,17 @@ status:
   connectionAvailability: Available
   leaseAvailability: Available
   conditions: []
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Endpoint resources (D092)

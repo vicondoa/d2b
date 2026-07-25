@@ -231,6 +231,17 @@ status:
   endpointGeneration: 7
   observedProducerGeneration: 3
   connectionAvailability: available
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 Endpoint spec/status never contains raw Unix paths, fd numbers, browser URLs,
@@ -455,6 +466,7 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
       providerRef = "Provider/runtime-cloud-hypervisor";
       defaultDomain = "system";
       allowedDomains = [ "system" "user" ];
+      defaultUserRef = "User/alice";  # required when "user" is in allowedDomains (D116)
       systemArtifactId = "work-identity-system";
       config.imports = [ inputs.entrablau.nixosModules.default ];
     };

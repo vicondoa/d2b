@@ -175,11 +175,23 @@ spec:
   providerRef: Provider/system-core
   defaultDomain: system
   allowedDomains: [system, user]
+  defaultUserRef: User/alice          # required when user is in allowedDomains (D116)
   budget: { ... }
 status:
   observedGeneration: 1
   phase: Ready
   ...
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 A Zone may have several Hosts:

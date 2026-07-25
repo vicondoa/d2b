@@ -676,6 +676,17 @@ status:
   connectionAvailability: Available
   leaseAvailability: NotRequired
   conditions: []
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Endpoint resources (D092)

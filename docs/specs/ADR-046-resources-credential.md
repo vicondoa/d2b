@@ -181,16 +181,29 @@ status:
   startedAt: 2026-07-22T00:00:01.000Z
   completedAt: null
   outcome: null
-  credential:
-    leaseHandle: <opaque bounded token; not a secret>
-    leaseState: Active             # Active | Expired | Revoked | Unknown
-    rotationGeneration: 1
-    sourceVersion: <opaque bounded token; not a secret>
-    expiresAtUnixMs: 1753228801000
-    issuedAtUnixMs: 1753225201000
-    lastRefreshedAt: 2026-07-22T00:00:01.000Z
-    lastRotatedAt: null
-    placementBinding: user-agent     # user-agent | host-system | guest-agent
+  resource:
+    interactionState: NotRequired
+    credential:
+      leaseHandle: <opaque bounded token; not a secret>
+      leaseState: Active             # Active | Expired | Revoked | Unknown
+      rotationGeneration: 1
+      sourceVersion: <opaque bounded token; not a secret>
+      expiresAtUnixMs: 1753228801000
+      issuedAtUnixMs: 1753225201000
+      lastRefreshedAt: 2026-07-22T00:00:01.000Z
+      lastRotatedAt: null
+      placementBinding: user-agent     # user-agent | host-system | guest-agent
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Spec field reference

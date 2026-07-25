@@ -344,6 +344,17 @@ status:
     code: ok
     message: null
     retryable: false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `authority.authorityKey` is a bounded opaque key, not a PipeWire node name,
@@ -393,6 +404,17 @@ status:
     code: ok
     message: null
     retryable: false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 The projection carries no `authority` field. Its routing authority is the
@@ -594,6 +616,17 @@ status:
     exitCode: null
     message: null
     retryable: false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### `AudioBinding.spec` fields
@@ -1296,6 +1329,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -1326,6 +1370,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -1355,6 +1410,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 This projection-Service-owned local Endpoint is only the front door to the
@@ -1389,6 +1455,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Retained opaque handles

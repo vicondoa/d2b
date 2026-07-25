@@ -120,6 +120,17 @@ status:
     holderRefs: [Guest/corp-vm]
     claims: []
     provisionedAt: 2026-07-22T00:00:01.000Z
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Device spec fields

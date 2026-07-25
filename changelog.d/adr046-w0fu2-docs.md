@@ -1,10 +1,12 @@
 ### Changed
 
-- ADR 0046 spec set: completed the universal-status sweep so every complete
-  Accepted resource example now serializes the universal envelope with its
-  `status.resource` (D107) and `status.update` (D091) currency object, including
-  the flat-status shell-pool and shell-session examples that the first pass left
-  populated but un-nested.
+- ADR 0046 spec set: advanced the universal-status sweep so more Accepted
+  resource examples serialize the universal envelope with its `status.resource`
+  (D107) and `status.update` (D091) currency object, including the flat-status
+  shell-pool and shell-session examples that the first pass left populated but
+  un-nested. This pass did not reach every complete envelope; the residual
+  complete envelopes still missing `status.update` are swept in the ADR046-W0fu3
+  pass.
 - ADR 0046 ZoneLink profile: aligned every normative handshake statement across
   the zone-routing, Unix transport, and Azure Relay Provider specs so a ZoneLink
   consumes the allocator-issued single-use PSK exactly once under IKpsk2, persists
@@ -31,9 +33,10 @@
 - Contributor docs: documented the heavy-lane target structure - the single
   `heavy-gate` semaphore, the public lanes that acquire a slot, and the guarded
   internal `heavy-lane-*` targets they delegate to - in the operating manuals.
-- Contributor docs: documented the `d2b-lint-allow: D103|D104|D108` allowlist
-  marker and its narrow per-line, per-code scope for the ADR 0046 spec-literal
-  lints.
+- Contributor docs: documented the ADR 0046 spec-literal lint allowlist. The
+  sole exemption is the decision-register row that defines a rule in
+  `docs/specs/ADR-046-decision-register.md`; there is no inline
+  `d2b-lint-allow` marker, and the lint rejects that escape hatch by design.
 - ADR 0046 live-test docs: the operating manuals now route `D2B_LIVE=1` live-host
   and hardware entrypoints through the heavy-gate semaphore instead of documenting
   a bare ungated invocation.
