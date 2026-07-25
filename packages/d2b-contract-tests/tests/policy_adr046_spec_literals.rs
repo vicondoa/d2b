@@ -21,12 +21,18 @@
 //!     provider (`d2bus.org.Widget`), an extra provider segment
 //!     (`foo.bar.d2bus.org.Widget`), a lowercase or overlong type, an overlong
 //!     provider, and a foreign-domain qualifier (`acme.io.Widget`) are all
-//!     rejected.
+//!     rejected. The complete `type:` token of a resource envelope and the
+//!     complete type segment of a `d2bus.org`-qualified token are extracted and
+//!     passed through the SAME exact validator the Nix admission uses, so an
+//!     unknown unqualified name (`type: Widget`) and a malformed qualified
+//!     token (`acme.d2bus.org.1Widget`, `acme.d2bus.org.Widget_Type`) are
+//!     caught rather than slipping past a looser regex-substring reject set.
 //!   * D108 - the retry delay is the integer scalar `retryAfterMs`; the earlier
 //!     `retryAfter` duration-string form is superseded, and a `retryAfterMs`
-//!     value that is a quoted string, a floating-point literal, or a
-//!     duration-with-unit is rejected (the scalar is an integer millisecond
-//!     count).
+//!     value that is a quoted string, a floating-point literal, a
+//!     duration-with-unit, a boolean/null literal, a signed integer, or a bare
+//!     decimal outside the frozen `1..=86400000` range (including `0`) is
+//!     rejected (the scalar is an unsigned decimal millisecond count).
 //!
 //! The scan is fixture-independent: it reads the committed `docs/specs/**`
 //! tree, never `D2B_FIXTURES`. Each scanner is exercised by planted-violation
@@ -60,17 +66,44 @@ impl std::fmt::Display for Violation {
     }
 }
 
-/// Whether `line` is exempt from the lint `code` ("D103" / "D104" / "D108").
+/// The one canonical file whose defining rows are exempt. This is an exact
+/// repo-relative path, not a filename suffix: a same-named copy under any other
+/// directory (`docs/specs/vendored/ADR-046-decision-register.md`, a stale
+/// backup) is NOT the canonical register and earns no exemption.
+const DECISION_REGISTER: &str = "docs/specs/ADR-046-decision-register.md";
+
+/// The single decision-register row that *defines* `code`, if it exists and is
+/// unique. `file` must be exactly [`DECISION_REGISTER`]; the row is the table
+/// line whose first cell is exactly `code` (`| <code> | ... |`). A code that
+/// appears in zero rows, or in more than one first cell, yields `None` - a
+/// duplicated or absent defining row is fail-closed (nothing is exempted)
+/// rather than fail-open (a prefix match that would silently exempt every line
+/// beginning `| <code> |`, including a body row that merely re-quotes the code).
 ///
-/// The only exemption is the decision-register table row that *defines* the
-/// rule (`| <code> |` in `ADR-046-decision-register.md`); that row legitimately
-/// quotes the rejected form. There is deliberately no per-line author-supplied
-/// marker: an inline `d2b-lint-allow` escape hatch could suppress a real
-/// violation anywhere in the tree, which is exactly the fail-open behaviour
-/// this gate exists to prevent.
-fn is_allowed(file: &str, line: &str, code: &str) -> bool {
-    file.ends_with("ADR-046-decision-register.md")
-        && line.trim_start().starts_with(&format!("| {code} |"))
+/// There is deliberately no per-line author-supplied marker: an inline
+/// `d2b-lint-allow` escape hatch could suppress a real violation anywhere in
+/// the tree, which is exactly the fail-open behaviour this gate exists to
+/// prevent. The returned exemption is the *exact* defining line; a line that
+/// merely shares its `| <code> |` prefix is not exempt.
+fn defining_row<'a>(file: &str, content: &'a str, code: &str) -> Option<&'a str> {
+    if file != DECISION_REGISTER {
+        return None;
+    }
+    let mut found: Option<&str> = None;
+    for line in content.lines() {
+        let Some(rest) = line.trim_start().strip_prefix('|') else {
+            continue;
+        };
+        let first_cell = rest.split('|').next().unwrap_or("").trim();
+        if first_cell == code {
+            if found.is_some() {
+                // More than one row claims this code: ambiguous, exempt nothing.
+                return None;
+            }
+            found = Some(line);
+        }
+    }
+    found
 }
 
 // ---------------------------------------------------------------------------
@@ -148,19 +181,82 @@ fn d103_is_conformant(s: &str) -> bool {
         && second <= 59
 }
 
+/// A persistent-timestamp authoring context: a field whose key ends in `At`
+/// (`createdAt`, `lastReconciledAt`, `lastTransitionAt`, ...) carrying a scalar
+/// value, in YAML (`key: value`), Nix (`key = value;`), or JSON
+/// (`"key": value`). The value is captured verbatim so it can be validated
+/// exactly, catching a malformed instant the broad [`d103_candidate`] shape
+/// never matches (a date with no time, a `HH:MM` with no seconds, a
+/// single-digit month). A key ending in `Ms`/`UnixMs` (`expiresAtUnixMs`) is
+/// NOT an `At` field and is left alone.
+fn d103_at_field() -> Regex {
+    Regex::new(r#"(?P<key>[A-Za-z][A-Za-z0-9_]*At)\s*[:=]\s*(?P<val>"[^"]*"|'[^']*'|[^\s,;)}]+)"#)
+        .expect("valid D103 at-field regex")
+}
+
+/// Whether `val` is attempting to be a calendar datetime: it begins with a
+/// four-digit year followed by `-`. This keeps the at-field pass from judging a
+/// prose expression (`now()`), an identifier, a bare unix-ms integer, or a
+/// `<placeholder>` as a malformed instant - only a value that is trying to be a
+/// `YYYY-...` datetime and failing is a real drift.
+fn d103_looks_like_date(val: &str) -> bool {
+    let bytes = val.as_bytes();
+    bytes.len() >= 5 && bytes[..4].iter().all(u8::is_ascii_digit) && bytes[4] == b'-'
+}
+
 fn scan_d103(file: &str, content: &str) -> Vec<Violation> {
     let candidate = d103_candidate();
+    let at_field = d103_at_field();
+    let exempt = defining_row(file, content, "D103");
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
-        if is_allowed(file, line, "D103") {
+        if Some(line) == exempt {
             continue;
         }
+        // Shape-first pass: any RFC 3339-shaped candidate anywhere on the line
+        // that is not the exact conformant instant.
         for m in candidate.find_iter(line) {
             if !d103_is_conformant(m.as_str()) {
                 out.push(Violation {
                     file: file.to_string(),
                     line: idx + 1,
                     text: m.as_str().to_string(),
+                });
+            }
+        }
+        // Authoring-context pass: a timestamp field whose value is neither a
+        // placeholder nor the exact conformant instant, including malformed
+        // values the shape pass never matched.
+        for caps in at_field.captures_iter(line) {
+            let raw = &caps["val"];
+            let val = raw
+                .trim_matches('"')
+                .trim_matches('\'')
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim();
+            // Only judge a value that is trying to be a `YYYY-...` datetime; a
+            // placeholder, an identifier, a bare integer, or a prose expression
+            // is not a malformed instant.
+            if !d103_looks_like_date(val) {
+                continue;
+            }
+            if d103_is_conformant(val) {
+                continue;
+            }
+            // A conformant candidate is already reported by the shape pass; a
+            // non-conformant value the shape pass matched is likewise already
+            // reported. Only add the value here when the shape pass could not
+            // have seen it - i.e. it carries no candidate at all.
+            if candidate.find(val).is_none() {
+                let key = &caps["key"];
+                out.push(Violation {
+                    file: file.to_string(),
+                    line: idx + 1,
+                    text: format!(
+                        "`{key}` value `{val}` is not the frozen `YYYY-MM-DDTHH:MM:SS.sssZ` instant"
+                    ),
                 });
             }
         }
@@ -246,34 +342,73 @@ fn is_valid_resource_type(token: &str) -> bool {
 /// Any token qualified under `d2bus.org`: `<provider-path>?.d2bus.org.<ty>`,
 /// with the provider path and type captured for exact validation. The `\b`
 /// anchor keeps a glued non-token like `foobard2bus.org` from matching with an
-/// empty provider path.
+/// empty provider path. The type segment is captured with the *permissive*
+/// grammar `[A-Za-z0-9_][A-Za-z0-9_-]*` - broader than the accepted
+/// `[A-Z][A-Za-z0-9]*` - so a malformed type such as `1Widget` (leading digit)
+/// or `Widget_Type` (underscore) is captured whole and then rejected by the
+/// exact validator, instead of the accept-shape stopping short and silently
+/// passing the malformation.
 fn d104_d2bus_candidate() -> Regex {
-    Regex::new(r"\b(?P<qual>(?:[a-z0-9][a-z0-9.-]*\.)?d2bus\.org)\.(?P<ty>[A-Za-z][A-Za-z0-9]*)")
-        .expect("valid D104 d2bus candidate regex")
+    Regex::new(
+        r"\b(?P<qual>(?:[a-z0-9][a-z0-9.-]*\.)?d2bus\.org)\.(?P<ty>[A-Za-z0-9_][A-Za-z0-9_-]*)",
+    )
+    .expect("valid D104 d2bus candidate regex")
 }
 
-/// A domain-qualified UpperCamel token whose segment immediately before the
-/// type is a public TLD. Anchoring on a TLD segment distinguishes a
-/// vendor-ResourceType-shaped token (`acme.io.Widget`,
-/// `widgets.example.org.WidgetResource`) from a gRPC service name
-/// (`d2b.audit.v3.AuditService`), a well-known message type
-/// (`google.protobuf.Any`), a D-Bus interface (`org.freedesktop.Notifications`,
-/// whose pre-type segment is `freedesktop`, not a TLD), and a status-condition
-/// path (`status.conditions.Ready`). Tokens qualified under `d2bus.org` are
-/// handled by [`d104_d2bus_candidate`] instead and skipped here.
-fn d104_foreign_candidate() -> Regex {
-    Regex::new(
-        r"\b(?P<dom>[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:io|org|com|net|dev|app|co|ai|xyz|cloud|internal|local))\.(?P<ty>[A-Z][A-Za-z0-9]*)",
-    )
-    .expect("valid D104 foreign candidate regex")
+/// A top-level (zero-indent) `type:` field in a YAML resource envelope, or the
+/// quoted `type` value in a Nix/JSON resource declaration. The captured value
+/// is the *complete* ResourceType token so it can pass through the exact
+/// validator; a bare unknown name (`type: Widget`) that no qualified/foreign
+/// substring scan would ever see is caught here. This context only fires inside
+/// a code block that is an actual resource envelope (carries a top-level
+/// `apiVersion:`), so a component-descriptor `type: controller`, a
+/// deployment-service `type: service`, and a condition-fragment `type: Ready`
+/// - none of which are ResourceType declarations - are not misread as one.
+fn d104_type_field() -> Regex {
+    Regex::new(r#"^type\s*[:=]\s*"?(?P<val>[A-Za-z0-9][A-Za-z0-9._-]*)"?;?\s*(?:#.*)?$"#)
+        .expect("valid D104 type-field regex")
+}
+
+/// Whether `block` (the body lines of one fenced code block) is a resource
+/// envelope: it carries a top-level `apiVersion:` key. Only then is a
+/// zero-indent `type:` inside it a ResourceType authoring context.
+fn block_is_envelope(block: &[&str]) -> bool {
+    block
+        .iter()
+        .any(|line| line.starts_with("apiVersion:") || line.starts_with("\"apiVersion\""))
+}
+
+/// Iterate fenced code blocks, invoking `visit(start_line_index, body_lines)`
+/// for each. `start_line_index` is the 0-based index of the block's first body
+/// line in `content`. Fences are ```` ``` ```` optionally followed by a
+/// language tag; the closing fence is any bare ```` ``` ````.
+fn for_each_code_block<'a>(content: &'a str, mut visit: impl FnMut(usize, &[&'a str])) {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut idx = 0;
+    while idx < lines.len() {
+        let trimmed = lines[idx].trim_start();
+        if trimmed.starts_with("```") {
+            let body_start = idx + 1;
+            let mut end = body_start;
+            while end < lines.len() && !lines[end].trim_start().starts_with("```") {
+                end += 1;
+            }
+            visit(body_start, &lines[body_start..end.min(lines.len())]);
+            idx = end + 1;
+        } else {
+            idx += 1;
+        }
+    }
 }
 
 fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
     let d2bus = d104_d2bus_candidate();
     let foreign = d104_foreign_candidate();
+    let type_field = d104_type_field();
+    let exempt = defining_row(file, content, "D104");
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
-        if is_allowed(file, line, "D104") {
+        if Some(line) == exempt {
             continue;
         }
 
@@ -307,7 +442,51 @@ fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
             });
         }
     }
+
+    // Authoring-context pass: the complete `type:` token of every resource
+    // envelope, passed through the exact validator so an unknown unqualified
+    // name is caught where no substring scan would see it.
+    for_each_code_block(content, |start, block| {
+        if !block_is_envelope(block) {
+            return;
+        }
+        for (offset, line) in block.iter().enumerate() {
+            let Some(caps) = type_field.captures(line) else {
+                continue;
+            };
+            let val = &caps["val"];
+            if !is_valid_resource_type(val) {
+                let line_no = start + offset + 1;
+                if Some(*line) != exempt {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: line_no,
+                        text: format!("ResourceType `{val}` is neither a standard type nor a valid `<provider>.d2bus.org.<Type>` qualification"),
+                    });
+                }
+            }
+        }
+    });
+
+    out.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.text.cmp(&b.text)));
+    out.dedup();
     out
+}
+
+/// A domain-qualified UpperCamel token whose segment immediately before the
+/// type is a public TLD. Anchoring on a TLD segment distinguishes a
+/// vendor-ResourceType-shaped token (`acme.io.Widget`,
+/// `widgets.example.org.WidgetResource`) from a gRPC service name
+/// (`d2b.audit.v3.AuditService`), a well-known message type
+/// (`google.protobuf.Any`), a D-Bus interface (`org.freedesktop.Notifications`,
+/// whose pre-type segment is `freedesktop`, not a TLD), and a status-condition
+/// path (`status.conditions.Ready`). Tokens qualified under `d2bus.org` are
+/// handled by [`d104_d2bus_candidate`] instead and skipped here.
+fn d104_foreign_candidate() -> Regex {
+    Regex::new(
+        r"\b(?P<dom>[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:io|org|com|net|dev|app|co|ai|xyz|cloud|internal|local))\.(?P<ty>[A-Z][A-Za-z0-9]*)",
+    )
+    .expect("valid D104 foreign candidate regex")
 }
 
 // ---------------------------------------------------------------------------
@@ -317,14 +496,16 @@ fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
 // the earlier `retryAfter` duration-string form. It did NOT freeze the separate
 // `timeout` / `backoff` / `*Deadline` duration surfaces (those are not in
 // D108's impacted-spec set and the specs retain their unit-string spellings),
-// so this lint is scoped to the retry scalar D108 actually froze. Three shapes
-// are rejected:
+// so this lint is scoped to the retry scalar D108 actually froze. It rejects:
 //
 //   * a `retryAfter`-family key that is not the exact `retryAfterMs` /
 //     `retry_after_ms` spelling (a superseded key);
-//   * a `retryAfterMs` value that is a duration-with-unit (`"5s"`, `500ms`);
-//   * a `retryAfterMs` value that is otherwise a non-integer literal - a quoted
-//     string (`"5000"`) or a floating-point literal (`5.5`).
+//   * a `retryAfterMs` value that is a duration-with-unit (`"5s"`, `500ms`), a
+//     quoted string (`"5000"`), or a floating-point literal (`5.5`);
+//   * a `retryAfterMs` value that is a boolean/null literal (`true`, `null`) or
+//     a signed integer (`-1`); the scalar is an unsigned decimal count;
+//   * a bare decimal outside the frozen `1..=86400000` range, including `0`
+//     (absence is spelled by omitting the field, not by `0`).
 //
 // A retry key used as a type annotation (`retry_after_ms: Option<u64>`) or in
 // an expression (`x = now + retry_after_ms`) is NOT a value assignment and is
@@ -355,28 +536,69 @@ fn d108_duration_value() -> Regex {
     Regex::new(r"^\d+\s*(?:ms|s|m|h|d)$").expect("valid D108 duration regex")
 }
 
-/// Classify a retry-key value: `Some(reason)` when it is a non-integer literal
-/// D108 forbids, `None` when it is an integer or a non-value form (a type
-/// annotation, an identifier, an expression fragment) the lint must not flag.
-fn d108_non_integer_reason(val: &str) -> Option<&'static str> {
+/// A bare unsigned decimal integer (no sign, no radix prefix, no separators).
+fn d108_bare_decimal() -> Regex {
+    Regex::new(r"^\d+$").expect("valid D108 bare-decimal regex")
+}
+
+/// A signed decimal integer: a leading `+`/`-` on an otherwise-decimal literal.
+/// `retryAfterMs` is unsigned, so a signed literal is rejected outright.
+fn d108_signed_decimal() -> Regex {
+    Regex::new(r"^[+-]\d+$").expect("valid D108 signed-decimal regex")
+}
+
+/// The frozen inclusive `retryAfterMs` range (D108): 1 ms to 24 h. `0` is
+/// rejected so absence has exactly one spelling; `86400001` and up exceed the
+/// EphemeralProcess failed-TTL ceiling.
+const D108_MIN_MS: u64 = 1;
+const D108_MAX_MS: u64 = 86_400_000;
+
+/// Classify a retry-key value: `Some(reason)` when it is a literal D108 forbids
+/// (a non-integer literal, or an out-of-range/zero/signed integer), `None` when
+/// it is a valid bare decimal in range OR a non-value form (a type annotation,
+/// an identifier, an expression fragment, a `<placeholder>`) the lint must not
+/// flag.
+fn d108_value_reason(val: &str) -> Option<String> {
     if val.starts_with('"') || val.starts_with('\'') {
-        return Some("a quoted string");
+        return Some("a quoted string".to_string());
     }
     if d108_float_value().is_match(val) {
-        return Some("a floating-point literal");
+        return Some("a floating-point literal".to_string());
     }
     if d108_duration_value().is_match(val) {
-        return Some("a duration-with-unit");
+        return Some("a duration-with-unit".to_string());
     }
+    if matches!(val, "true" | "false" | "null") {
+        return Some(format!("the non-integer literal `{val}`"));
+    }
+    if d108_signed_decimal().is_match(val) {
+        return Some(format!("the signed integer `{val}`"));
+    }
+    if d108_bare_decimal().is_match(val) {
+        // A bare decimal is the only value shape D108 admits; enforce its range.
+        let parsed = val.parse::<u64>().unwrap_or(u64::MAX);
+        if parsed == 0 {
+            return Some("zero (absence is spelled by omitting the field, not by 0)".to_string());
+        }
+        if !(D108_MIN_MS..=D108_MAX_MS).contains(&parsed) {
+            return Some(format!(
+                "out of the frozen {D108_MIN_MS}..={D108_MAX_MS} millisecond range"
+            ));
+        }
+        return None;
+    }
+    // Not a literal we can judge: an identifier, a type annotation, an
+    // expression fragment, or a `<placeholder>`. Leave it alone.
     None
 }
 
 fn scan_d108(file: &str, content: &str) -> Vec<Violation> {
     let key = d108_key();
     let assignment = d108_assignment();
+    let exempt = defining_row(file, content, "D108");
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
-        if is_allowed(file, line, "D108") {
+        if Some(line) == exempt {
             continue;
         }
         for m in key.find_iter(line) {
@@ -392,13 +614,13 @@ fn scan_d108(file: &str, content: &str) -> Vec<Violation> {
         }
         for caps in assignment.captures_iter(line) {
             let val = &caps["val"];
-            if let Some(reason) = d108_non_integer_reason(val) {
+            if let Some(reason) = d108_value_reason(val) {
                 let key = &caps["key"];
                 out.push(Violation {
                     file: file.to_string(),
                     line: idx + 1,
                     text: format!(
-                        "`{key}` value `{val}` is {reason} (use an integer millisecond count)"
+                        "`{key}` value `{val}` is {reason} (use a bare decimal millisecond count)"
                     ),
                 });
             }
@@ -537,6 +759,66 @@ fn d103_scanner_distinguishes_conformant_from_drifted_datetimes() {
 }
 
 #[test]
+fn d103_at_field_context_catches_malformed_instants_outside_the_candidate_shape() {
+    // Malformed values the broad candidate shape never matches, in a real
+    // timestamp-authoring field, must still be caught.
+    for bad in [
+        "createdAt: 2026-07-22",                 // date only, no time
+        "lastReconciledAt: 2026-07-22T00:00Z",   // HH:MM, no seconds
+        "startedAt: \"2026-7-2T00:00:00.000Z\"", // single-digit month/day
+        "updatedAt: 2026-07-22 00:00:00.000Z",   // space instead of T
+    ] {
+        assert!(
+            !scan_d103("f.md", bad).is_empty(),
+            "D103 at-field context must reject {bad:?}"
+        );
+    }
+    // Accepted at-field values: the exact instant (bare or quoted), an explicit
+    // null, and a `<...>` schema placeholder.
+    for ok in [
+        "createdAt: 2026-07-22T00:00:00.000Z",
+        "lastReconciledAt: \"2026-07-22T00:00:01.000Z\"",
+        "completedAt: null",
+        "lastTransitionAt: <deletionRequestedAt>",
+    ] {
+        assert!(
+            scan_d103("f.md", ok).is_empty(),
+            "D103 at-field context must accept {ok:?}"
+        );
+    }
+    // A key ending in `Ms`, not `At`, is a unix-ms count, not an instant.
+    assert!(scan_d103("f.md", "expiresAtUnixMs: 1753228801000").is_empty());
+}
+
+#[test]
+fn defining_row_exemption_is_bound_to_the_exact_unique_row() {
+    // A body line that merely shares the `| D103 |` prefix but is NOT the
+    // unique defining row (here duplicated) is not exempt: a duplicated code
+    // fails closed, exempting nothing.
+    let dup = concat!(
+        "| D103 | rejects 2026-07-22T00:00:00Z |\n",
+        "| D103 | duplicate row 2026-07-22T00:00:00Z |\n",
+    );
+    assert!(
+        !scan_d103("docs/specs/ADR-046-decision-register.md", dup).is_empty(),
+        "a duplicated defining row must exempt nothing (fail closed)"
+    );
+    // Only the exact defining line is exempt; another row on the same register
+    // that quotes the drifted form is still flagged.
+    let two = concat!(
+        "| D103 | defines the rule; rejects 2026-07-22T00:00:00Z |\n",
+        "| D091 | unrelated row that also cites 2026-07-22T00:00:00Z |\n",
+    );
+    let violations = scan_d103("docs/specs/ADR-046-decision-register.md", two);
+    assert_eq!(
+        violations.len(),
+        1,
+        "only the exact D103 defining row is exempt: {violations:?}"
+    );
+    assert_eq!(violations[0].line, 2, "the unrelated D091 row is flagged");
+}
+
+#[test]
 fn d104_grammar_accepts_standard_and_qualified_types_only() {
     // Every one of the 19 unqualified standard names is admissible.
     for name in STANDARD_TYPES {
@@ -650,6 +932,75 @@ fn d104_scanner_flags_every_grammar_violation() {
 }
 
 #[test]
+fn d104_catches_malformed_qualified_types_the_substring_reject_set_missed() {
+    // A malformed type segment must be captured WHOLE and rejected by the exact
+    // validator, not stopped short by an accept-shape that silently passes it.
+    for bad in [
+        "type: acme.d2bus.org.1Widget",     // leading digit
+        "type: acme.d2bus.org.Widget_Type", // underscore
+        "type: acme.d2bus.org.widget",      // lowercase
+        "type: acme.d2bus.org.Widget-Kind", // hyphen
+    ] {
+        assert!(
+            !scan_d104("f.md", bad).is_empty(),
+            "D104 must reject the malformed qualified token {bad:?}"
+        );
+    }
+    // The valid qualified token is still accepted.
+    assert!(scan_d104("f.md", "type: acme.d2bus.org.Widget").is_empty());
+}
+
+#[test]
+fn d104_type_field_context_catches_unknown_unqualified_names() {
+    // An unknown unqualified `type:` inside a resource envelope is a ResourceType
+    // authoring context and is rejected.
+    let bad_envelope = concat!(
+        "```yaml\n",
+        "apiVersion: resources.d2bus.org/v3\n",
+        "type: Widget\n",
+        "metadata:\n",
+        "  name: w\n",
+        "```\n",
+    );
+    assert!(
+        !scan_d104("f.md", bad_envelope).is_empty(),
+        "an unknown unqualified type in an envelope must be flagged"
+    );
+    // A standard type in the same envelope shape is accepted.
+    let good_envelope = concat!(
+        "```yaml\n",
+        "apiVersion: resources.d2bus.org/v3\n",
+        "type: Host\n",
+        "metadata:\n",
+        "  name: h\n",
+        "```\n",
+    );
+    assert!(
+        scan_d104("f.md", good_envelope).is_empty(),
+        "a standard type in an envelope must be accepted"
+    );
+    // A component/service descriptor and a bare condition fragment are NOT
+    // resource envelopes (no apiVersion), so their `type:` is not a ResourceType.
+    let descriptor = concat!(
+        "```yaml\n",
+        "componentId: aca-controller\n",
+        "type: controller\n",
+        "resourceTypes:\n",
+        "  - Guest\n",
+        "```\n",
+    );
+    assert!(
+        scan_d104("f.md", descriptor).is_empty(),
+        "a component descriptor `type: controller` must not be read as a ResourceType"
+    );
+    let condition = concat!("```yaml\n", "type: Ready\n", "status: \"True\"\n", "```\n");
+    assert!(
+        scan_d104("f.md", condition).is_empty(),
+        "a bare condition-fragment `type: Ready` must not be read as a ResourceType"
+    );
+}
+
+#[test]
 fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
     // Rejected: the superseded key spelling.
     assert!(!scan_d108("f.md", "retryAfter: \"5s\"").is_empty());
@@ -660,8 +1011,16 @@ fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
     assert!(!scan_d108("f.md", "retryAfterMs: \"5000\"").is_empty()); // quoted integer string
     assert!(!scan_d108("f.md", "retryAfterMs: 5.5").is_empty()); // floating point
     assert!(!scan_d108("f.md", "retryAfterMs: 500ms").is_empty()); // bare duration
-    // Accepted: the frozen integer scalar in both casings.
+    // Rejected: a boolean/null literal, a signed integer, zero, and an
+    // out-of-range value - none is a bare decimal in the frozen 1..=86400000.
+    assert!(!scan_d108("f.md", "retryAfterMs: true").is_empty()); // boolean
+    assert!(!scan_d108("f.md", "retryAfterMs: null").is_empty()); // null
+    assert!(!scan_d108("f.md", "retryAfterMs: -1").is_empty()); // signed
+    assert!(!scan_d108("f.md", "retryAfterMs: 0").is_empty()); // zero
+    assert!(!scan_d108("f.md", "retryAfterMs: 86400001").is_empty()); // over ceiling
+    // Accepted: the frozen integer scalar in both casings, at the bounds.
     assert!(scan_d108("f.md", "retryAfterMs: 5000").is_empty());
+    assert!(scan_d108("f.md", "retryAfterMs: 1").is_empty());
     assert!(scan_d108("f.md", "retryAfterMs: 86400000").is_empty());
     // Accepted: a type annotation or an expression, which are not value assigns.
     assert!(scan_d108("f.md", "retry_after_ms: Option<u64>").is_empty());
