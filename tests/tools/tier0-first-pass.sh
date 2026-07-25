@@ -38,9 +38,12 @@ DASHES=(
 # (`(rust-1)`). Alphanumeric and underscore boundaries are deliberately
 # excluded: this does not match W3C, SHA-like text, v3, H264, W3_ROWS, or
 # w4Fu. The last is part of the functional defaultSwitchReadiness contract.
+# A hyphenated marker is accepted only after an identifier character, so
+# v1.1-P2 is caught while the legitimate command option `-W2` is not.
 # Lowercase wave tags are recognized only in path-shaped filenames, such as
-# w3-ubuntu.txt; this avoids treating ordinary prose tokens as process tags.
-PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
+# a lowercase wave prefix followed by a distro name; this avoids treating
+# ordinary prose tokens as process tags.
+PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
 PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
 
 log() {
@@ -175,6 +178,7 @@ scan_process_markers() {
   for f in "${files[@]}"; do
     if [ "$is_repo_root" -eq 0 ]; then
       full_files+=("$f")
+      filename_files+=("$f")
       continue
     fi
     case "$f" in
@@ -189,6 +193,10 @@ scan_process_markers() {
         filename_files+=("$f")
         ;;
       tests/golden/l3-matrix/*)
+        filename_files+=("$f")
+        ;;
+      tests/fixtures/gen-w3-cli-goldens.py)
+        full_files+=("$f")
         filename_files+=("$f")
         ;;
       nixos-modules/*|pkgs/*|packages/*)

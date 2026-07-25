@@ -2,6 +2,6 @@ error: host-install-error
   code: not-yet-implemented
   exit_code: 70
   what_was_checked: Whether `host install` is implemented in this d2b release.
-  observed_state: host install is a W4 deliverable; W3 ships the schema + CLI surface only.
-  remediation: Use `d2b switch` or the NixOS module integration path until W4 ships.
+  observed_state: host install is not yet implemented; the schema and CLI surface are available.
+  remediation: Use `d2b switch` or the NixOS module integration path until host install is implemented.
   docs_anchor: docs/reference/error-codes.md#not-yet-implemented
