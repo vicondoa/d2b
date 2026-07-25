@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "7387aab8c42314c6114ec93b82a6e9ced7eeadce0a41fb01d2cffaadeb518514",
+      "sha256" : "21390bfbc3672cbbc317a004769603bcc56366fa13be85b6eb558990fb78fae4",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "3270d872d58f5e19717f8bd397ef260e61bbb8a4d4f16d7f70e0e4a96fa7ee27",
+      "sha256" : "1f9500df454a224acd38700050d64408cc556790673be59cf283551058981c06",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Accepted",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -620,7 +620,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-provider-state.md",
-      "sha256" : "84789646fcfe95a6a513bf06174f1e9d44df60c207f5473716c1be9f6ff1b537",
+      "sha256" : "d8e32c65da49416bec2184fa85992c4a00f69f04db273ce60572400e61502fee",
       "specId" : "ADR-046-provider-state",
       "status" : "Accepted",
       "supersedes" : "`d2b-core/src/storage.rs` generated contract, ADR 0034 storage/sync/adoption model for v3",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "e1cdc4b00d7868c33f6744e93f8c4750808341180dfc2be1f4f0b5f695582fa6",
+      "sha256" : "cfadc0ddc248a89a6079df7c55cac8eb55376f14ce1d91f14b3af60f0cf24223",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "93496709e92288706f3fff210fda6eecf1a01da094b2805fbbf919ce222716c6",
+      "sha256" : "6aeb15618a0746be84d0895a3f696c446e19288e90395923853a1935237b9f14",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",
