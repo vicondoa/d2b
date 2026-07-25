@@ -18,6 +18,13 @@
 //! every prior record for the wave, so there is deliberately no override, no
 //! force flag, and no partial-pass verdict.
 //!
+//! A history-only rebase is the one thing that does not invalidate a panel.
+//! Spec section 12.6 preserves the review because the reviewed content is
+//! provably unchanged, and [`stored_request`] implements that by matching a
+//! stored request on content identity rather than on the full digest triple.
+//! Validator evidence takes the opposite rule; [`seal`](super::seal) explains
+//! the asymmetry.
+//!
 //! Provider, model, and reasoning-effort fields are spec-defined record data
 //! and exist only inside the external delivery-state directory. Section 12.5
 //! keeps them out of Git, a pull-request body, and a release archive; that is
@@ -90,6 +97,17 @@ impl SnapshotView {
         }
     }
 
+    /// The candidate's content identity, excluding commit history.
+    ///
+    /// `content_id` and `candidate_id` are digests over content-only material,
+    /// so equality of this pair is itself the byte-identical content proof a
+    /// history-only rebase needs. `snapshot_sha256` is deliberately not part
+    /// of it; that value covers the base and head object IDs and is what
+    /// detects the rebase.
+    pub fn content_identity(&self) -> (&CandidateId, &ContentId) {
+        (&self.candidate_id, &self.content_id)
+    }
+
     /// Rejects a snapshot whose recorded digests do not re-derive from its own
     /// material, so a hand-edited candidate address cannot be laundered into
     /// the panel or seal lanes.
@@ -153,6 +171,11 @@ impl PanelRequest {
             candidate_id: self.candidate_id.clone(),
             snapshot_sha256: self.snapshot_sha256.clone(),
         }
+    }
+
+    /// The content identity this request was issued against.
+    pub fn content_identity(&self) -> (&CandidateId, &ContentId) {
+        (&self.candidate_id, &self.content_id)
     }
 
     /// Rejects a request that no longer names the roster or the binding this
@@ -449,6 +472,18 @@ pub fn attested_records(
 }
 
 /// Reads and validates the panel request stored for a candidate.
+///
+/// The request is matched on content identity, not on the full digest triple.
+/// A panel reviews content, and spec section 12.6 lets a history-only rebase
+/// preserve that review: `candidate_id` and `content_id` are digests over
+/// content-only material, so their equality is the byte-identical proof the
+/// reuse rests on. `snapshot_sha256` moves with the base and head object IDs
+/// and is deliberately not compared here — comparing it would force a fresh
+/// ten-role panel after every rebase, which is exactly what section 12.6
+/// exists to avoid.
+///
+/// Validator evidence takes the opposite rule; see
+/// [`seal`](super::seal) for why the two classes are asymmetric.
 pub fn stored_request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<PanelRequest> {
     let request: PanelRequest = candidate.read_json(PANEL_REQUEST_FILE).map_err(|error| {
         DeliveryError::new(format!(
@@ -456,9 +491,10 @@ pub fn stored_request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Resu
         ))
     })?;
     request.validate()?;
-    if request.digests() != snapshot.digests() {
+    if request.content_identity() != snapshot.content_identity() {
         return Err(DeliveryError::new(
-            "the stored panel request is bound to a different candidate than this snapshot",
+            "the stored panel request reviewed different content than this snapshot; a content \
+             change requires a new snapshot and a fresh panel",
         ));
     }
     Ok(request)
@@ -854,6 +890,57 @@ pub(crate) mod tests {
         let dir = write_record_dir(&scratch, &record_files(&snapshot));
         let error = attest(&candidate, &snapshot, &dir).expect_err("no request");
         assert!(error.message().contains("panel-request"), "{error}");
+    }
+
+    /// Builds the snapshot a history-only rebase produces: the same content,
+    /// so the same `candidate_id` and `content_id`, on moved commits, so a
+    /// different `snapshot_sha256`.
+    pub(crate) fn rebased(snapshot: &SnapshotView) -> SnapshotView {
+        let mut rebased = snapshot.clone();
+        rebased.material.repository_set[0].base_oid = fixtures::oid(5);
+        rebased.material.repository_set[0].head_oid = fixtures::oid(6);
+        let digests = rebased.material.digests().expect("digests");
+        assert_eq!(digests.candidate_id, snapshot.candidate_id);
+        assert_eq!(digests.content_id, snapshot.content_id);
+        assert_ne!(digests.snapshot_sha256, snapshot.snapshot_sha256);
+        rebased.snapshot_sha256 = digests.snapshot_sha256;
+        rebased
+            .validate()
+            .expect("self-consistent rebased snapshot");
+        rebased
+    }
+
+    #[test]
+    fn a_history_only_rebase_reuses_the_stored_request_and_records() {
+        let scratch = Scratch::new("panel-rebase-reuse");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        requested(&candidate, &snapshot);
+        let dir = write_record_dir(&scratch, &record_files(&snapshot));
+        attest(&candidate, &snapshot, &dir).expect("attest");
+
+        let rebased = rebased(&snapshot);
+        let request = stored_request(&candidate, &rebased).expect("request survives the rebase");
+        let attestation = attested_records(&candidate, &request).expect("records survive");
+        assert!(attestation.unanimous);
+        assert_eq!(attestation.records.len(), PANEL_ROLES.len());
+    }
+
+    #[test]
+    fn a_content_change_does_not_reuse_the_stored_request() {
+        let scratch = Scratch::new("panel-content-change");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        requested(&candidate, &snapshot);
+
+        let mut changed = snapshot.clone();
+        changed.material.repository_set[0].integration_tree_oid = fixtures::oid(9);
+        let digests = changed.material.digests().expect("digests");
+        assert_ne!(digests.candidate_id, snapshot.candidate_id);
+        changed.candidate_id = digests.candidate_id;
+        changed.content_id = digests.content_id;
+        changed.snapshot_sha256 = digests.snapshot_sha256;
+
+        let error = stored_request(&candidate, &changed).expect_err("content changed");
+        assert!(error.message().contains("different content"), "{error}");
     }
 
     fn reject(mutate: impl FnOnce(&mut Vec<RecordFile>, &SnapshotView)) -> DeliveryError {

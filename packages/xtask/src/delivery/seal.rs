@@ -14,6 +14,30 @@
 //! least one imported result, and every imported result must be a pass.
 //! [`EvidenceResult`] has no pending state by construction: a pending lane is
 //! an absent record, and an absent lane fails the seal.
+//!
+//! # How the two evidence classes survive a rebase
+//!
+//! Spec section 12.6 lets a history-only rebase preserve the panel record. It
+//! is silent on validator evidence, and this stage takes the fail-closed
+//! reading: the two classes are treated asymmetrically on purpose.
+//!
+//! * **Panel evidence is reusable.** Panel records bind `candidate_id` and
+//!   `content_id`, both of which exclude commit history by construction, so a
+//!   rebase that preserves every byte of integrated content reproduces them
+//!   exactly and the records stay valid.
+//! * **Validator evidence is not reusable.** Every evidence record is checked
+//!   against all three digests, including `snapshot_sha256`, which covers the
+//!   base and head object IDs. A history-only rebase moves `snapshot_sha256`
+//!   while leaving the other two alone, so every prior lane result becomes
+//!   stale and each lane must re-import against the new snapshot.
+//!
+//! The reason for the asymmetry is what each class actually attests. A panel
+//! reviews content, and the content is provably unchanged. A validator run
+//! exercises a specific commit range on a specific base: a merge conflict, a
+//! semantic conflict with newly landed work on the new base, or a rerun of a
+//! flaky gate can all change its outcome without changing a byte of the
+//! wave's own content. Reusing that result would assert something the run
+//! never established.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,6 +102,13 @@ pub struct EvidenceRecord {
 }
 
 impl EvidenceRecord {
+    /// Rejects evidence that is not bound to this exact snapshot.
+    ///
+    /// The `snapshot_sha256` comparison is the load-bearing one. A
+    /// history-only rebase preserves `candidate_id` and `content_id` by
+    /// design, so those two alone would silently carry a stale lane result
+    /// across a rebase; `snapshot_sha256` moves with the base and head object
+    /// IDs and is what forces the re-import.
     fn validate(&self, snapshot: &SnapshotView) -> Result<()> {
         ensure_artifact_kind(
             &self.artifact_kind,
@@ -96,7 +127,8 @@ impl EvidenceRecord {
             || self.snapshot_sha256 != snapshot.snapshot_sha256
         {
             return Err(DeliveryError::new(format!(
-                "validator evidence for {:?} is bound to a stale candidate; every lane reruns \
+                "validator evidence for {:?} is bound to a stale snapshot; a rebase preserves \
+                 the panel record but never a lane result, so every lane reruns and re-imports \
                  against the current snapshot",
                 self.validation
             )));
@@ -430,7 +462,38 @@ pub(crate) mod tests {
         stale.snapshot_sha256 = SnapshotSha256::parse("c".repeat(64)).expect("digest");
         import(&candidate, "github-ci.json", &stale);
         let error = seal(&candidate, &snapshot).expect_err("stale evidence");
-        assert!(error.message().contains("stale candidate"), "{error}");
+        assert!(error.message().contains("stale snapshot"), "{error}");
+    }
+
+    /// A history-only rebase preserves `candidate_id` and `content_id` but
+    /// moves `snapshot_sha256`, so the panel records stay valid while every
+    /// lane result goes stale and has to be re-imported.
+    #[test]
+    fn a_history_only_rebase_keeps_the_panel_but_invalidates_the_lanes() {
+        let scratch = Scratch::new("seal-rebase-evidence");
+        let (candidate, snapshot) = sealable(&scratch);
+        seal(&candidate, &snapshot).expect("seal before the rebase");
+
+        let rebased = crate::delivery::panel::tests::rebased(&snapshot);
+        let error = seal(&candidate, &rebased).expect_err("lane results are stale");
+        assert!(error.message().contains("stale snapshot"), "{error}");
+
+        import(
+            &candidate,
+            "github-ci.json",
+            &evidence(&rebased, EvidenceLane::GithubCi, "layer1-check"),
+        );
+        import(
+            &candidate,
+            "local-host.json",
+            &evidence(&rebased, EvidenceLane::LocalHost, "make-test-integration"),
+        );
+        let record: SealRecord = seal(&candidate, &rebased)
+            .and_then(|_| candidate.read_json(SEAL_FILE))
+            .expect("re-imported lanes seal the rebased snapshot");
+        assert_eq!(record.snapshot_sha256, rebased.snapshot_sha256);
+        assert_eq!(record.candidate_id, snapshot.candidate_id);
+        assert_eq!(record.panel.records.len(), PANEL_ROLES.len());
     }
 
     #[test]
