@@ -205,21 +205,23 @@ fn d103_looks_like_date(val: &str) -> bool {
 }
 
 /// Grow a candidate match `[start, end)` outward over adjacent ASCII
-/// alphanumeric bytes so a datetime carrying trailing (or leading) junk is
-/// judged as the WHOLE token, not just the conformant 24-byte prefix the shape
-/// regex happened to anchor. This closes `2026-07-22T00:00:00.000Zjunk`, whose
+/// alphanumeric bytes (and the identifier byte `_`) so a datetime carrying
+/// trailing (or leading) junk is judged as the WHOLE token, not just the
+/// conformant 24-byte prefix the shape regex happened to anchor. This closes
+/// `2026-07-22T00:00:00.000Zjunk` and `2026-07-22T00:00:00.000Z_junk`, whose
 /// leading 24 bytes are conformant but whose full token is not. Extension stops
-/// at any non-alphanumeric byte (`.`, `:`, `+`, `-`, whitespace, quotes) so a
-/// following prose sentence or a numeric offset is never swept in. The candidate
-/// regex is ASCII-only, so every offset here lands on a char boundary.
+/// at any other byte (`.`, `:`, `+`, `-`, whitespace, quotes) so a following
+/// prose sentence or a numeric offset is never swept in. The candidate regex is
+/// ASCII-only, so every offset here lands on a char boundary.
 fn d103_extend_token(line: &str, start: usize, end: usize) -> (usize, usize) {
+    let extend = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let bytes = line.as_bytes();
     let mut s = start;
-    while s > 0 && bytes[s - 1].is_ascii_alphanumeric() {
+    while s > 0 && extend(bytes[s - 1]) {
         s -= 1;
     }
     let mut e = end;
-    while e < bytes.len() && bytes[e].is_ascii_alphanumeric() {
+    while e < bytes.len() && extend(bytes[e]) {
         e += 1;
     }
     (s, e)
@@ -286,705 +288,127 @@ fn scan_d103(file: &str, content: &str) -> Vec<Violation> {
             }
         }
     }
+    // Structural pass: parse every tagged YAML/JSON/Nix fence with the real
+    // parsers and validate the COMPLETE scalar in value position. This catches a
+    // datetime whose key and value are split across lines (`"createdAt":` on one
+    // line, `"2026-07-22"` on the next) - which the per-line passes above cannot
+    // see - and any trailing junk fused to an otherwise-conformant instant,
+    // because the parser hands back the whole scalar, not a line fragment.
+    out.extend(d103_structural(file, content, &candidate));
     out
 }
 
-// ---------------------------------------------------------------------------
-// Structural document model (shared with policy_adr046_envelopes.rs).
-// Parses fenced YAML/JSON/Nix blocks into a Node tree so type-field
-// authoring contexts are validated structurally, not by line shape.
-// ---------------------------------------------------------------------------
-
-struct Block<'a> {
-    lang: String,
-    body_start: usize,
-    lines: Vec<&'a str>,
-}
-
-fn fenced_blocks(content: &str) -> Vec<Block<'_>> {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut blocks = Vec::new();
-    let mut idx = 0;
-    while idx < lines.len() {
-        let trimmed = lines[idx].trim_start();
-        if let Some(rest) = trimmed.strip_prefix("```") {
-            let lang = rest.trim().to_string();
-            let body_start = idx + 1;
-            let mut end = body_start;
-            while end < lines.len() && !lines[end].trim_start().starts_with("```") {
-                end += 1;
-            }
-            blocks.push(Block {
-                lang,
-                body_start,
-                lines: lines[body_start..end.min(lines.len())].to_vec(),
-            });
-            idx = end + 1;
-        } else {
-            idx += 1;
-        }
-    }
-    blocks
-}
-
-/// The count of leading ASCII spaces on `line`.
-fn indent(line: &str) -> usize {
-    line.len() - line.trim_start_matches(' ').len()
-}
-
-// ---------------------------------------------------------------------------
-// Structural document model.
-//
-// A `Node` is the parsed shape of a fenced block. `Map` preserves author order
-// and the block-relative line of each key so a violation can be reported at a
-// real file line. `Elision` is the `...` / `"..."` abbreviation marker the
-// specs use to say "more fields, deliberately not shown here".
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-enum Node {
-    Map(Vec<Entry>),
-    Seq(Vec<Node>),
-    Scalar(String),
-    Null,
-    Elision,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Entry {
-    key: String,
-    val: Node,
-    /// Block-relative 0-based line index of the key.
-    line: usize,
-}
-
-/// A direct child of a mapping, by key. No recursion: this is used where the
-/// contract is about a map's own direct children (status base keys, type).
-fn direct_child<'a>(map: &'a [Entry], key: &str) -> Option<&'a Entry> {
-    map.iter().find(|e| e.key == key)
-}
-
-/// Collect every mapping in the document tree (the node itself and every
-/// descendant), so a scanner can locate every envelope regardless of nesting.
-fn collect_maps<'a>(node: &'a Node, out: &mut Vec<&'a [Entry]>) {
+/// Collect every `(key, scalar)` pair in value position across a parsed
+/// document tree. A sequence item inherits its enclosing key so a list under an
+/// `At` field is still judged as a timestamp context.
+fn walk_scalars<'a>(
+    node: &'a Node,
+    key: Option<&'a str>,
+    out: &mut Vec<(Option<&'a str>, &'a str)>,
+) {
     match node {
+        Node::Scalar(s) => out.push((key, s.as_str())),
         Node::Map(entries) => {
-            out.push(entries.as_slice());
             for e in entries {
-                collect_maps(&e.val, out);
+                walk_scalars(&e.val, Some(e.key.as_str()), out);
             }
         }
         Node::Seq(items) => {
             for it in items {
-                collect_maps(it, out);
+                walk_scalars(it, key, out);
             }
         }
         _ => {}
     }
 }
 
-// ---------------------------------------------------------------------------
-// Comment stripping.
-// ---------------------------------------------------------------------------
+/// Whether a key names a persistent-timestamp field (ends in `At`) rather than a
+/// unix-ms count (`expiresAtUnixMs`) or an unrelated field.
+fn d103_is_at_key(key: &str) -> bool {
+    key.ends_with("At") && !key.ends_with("Ms") && !key.ends_with("UnixMs")
+}
 
-/// Strip `#`, `//`, and `/* */` comments from brace-structured text (JSON, Nix,
-/// and YAML flow scalars), preserving newlines so token line numbers stay
-/// aligned with the source. Comment characters inside a double-quoted string
-/// are preserved.
-fn strip_comments_brace(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut in_str = false;
-    let mut in_line = false;
-    let mut in_block = false;
-    let mut escaped = false;
-    while let Some(c) = chars.next() {
-        if in_line {
-            if c == '\n' {
-                in_line = false;
-                out.push(c);
-            }
+/// Structural D103 pass over tagged YAML/JSON/Nix fences. A block that carries a
+/// timestamp-authoring trigger but that the real parser cannot model fails
+/// closed: the drift is reported, never skipped.
+fn d103_structural(file: &str, content: &str, candidate: &Regex) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for block in fenced_blocks(content) {
+        if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix") {
             continue;
         }
-        if in_block {
-            if c == '*' && chars.peek() == Some(&'/') {
-                chars.next();
-                in_block = false;
-            } else if c == '\n' {
-                out.push('\n');
+        let mentions_at = block.lines.iter().any(|l| {
+            let t = l.trim_start().trim_start_matches('"');
+            t.split([':', '=']).next().is_some_and(|k| {
+                let k = k.trim().trim_matches('"');
+                d103_is_at_key(k)
+            })
+        });
+        let docs = match parse_block_docs(&block.lang, &block.lines) {
+            Ok(docs) => docs,
+            Err(_) => {
+                if mentions_at {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start + 1,
+                        text: "block carries a timestamp field the structural parser could not model; a lint must fail closed on an unparseable datetime context, not skip it (D103)".to_string(),
+                    });
+                }
+                continue;
             }
-            continue;
-        }
-        if in_str {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_str = false;
+        };
+        for doc in &docs {
+            let mut pairs = Vec::new();
+            walk_scalars(doc, None, &mut pairs);
+            for (key, s) in pairs {
+                // A timestamp field's complete value must be the exact instant.
+                if key.is_some_and(d103_is_at_key) && d103_looks_like_date(s) {
+                    if !d103_is_conformant(s) {
+                        out.push(Violation {
+                            file: file.to_string(),
+                            line: block.body_start + 1,
+                            text: format!(
+                                "`{}` value `{s}` is not the frozen `YYYY-MM-DDTHH:MM:SS.sssZ` instant",
+                                key.unwrap_or("")
+                            ),
+                        });
+                    }
+                    continue;
+                }
+                // Any other scalar carrying an RFC 3339-shaped token, validated
+                // as its complete alphanumeric-delimited token.
+                for m in candidate.find_iter(s) {
+                    let (a, b) = d103_extend_token(s, m.start(), m.end());
+                    let token = &s[a..b];
+                    if !d103_is_conformant(token) {
+                        out.push(Violation {
+                            file: file.to_string(),
+                            line: block.body_start + 1,
+                            text: token.to_string(),
+                        });
+                    }
+                }
             }
-            continue;
-        }
-        match c {
-            '"' => {
-                in_str = true;
-                out.push(c);
-            }
-            '#' => in_line = true,
-            '/' if chars.peek() == Some(&'/') => {
-                chars.next();
-                in_line = true;
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                in_block = true;
-            }
-            _ => out.push(c),
         }
     }
     out
 }
 
-/// Strip a trailing YAML `#` comment from a single line, respecting quotes and
-/// the YAML rule that `#` starts a comment only at line start or after
-/// whitespace.
-fn strip_yaml_comment(line: &str) -> String {
-    let bytes = line.as_bytes();
-    let mut in_s = false;
-    let mut in_d = false;
-    let mut prev_ws = true;
-    for (idx, &b) in bytes.iter().enumerate() {
-        match b {
-            b'\'' if !in_d => {
-                in_s = !in_s;
-                prev_ws = false;
-            }
-            b'"' if !in_s => {
-                in_d = !in_d;
-                prev_ws = false;
-            }
-            b'#' if !in_s && !in_d && prev_ws => {
-                return line[..idx].to_string();
-            }
-            b' ' | b'\t' => prev_ws = true,
-            _ => prev_ws = false,
-        }
-    }
-    line.to_string()
-}
-
 // ---------------------------------------------------------------------------
-// Brace tokenizer + parser (JSON, Nix attribute sets, YAML flow collections).
+// Structural document model (shared with policy_adr046_envelopes.rs via the
+// `common` module). Parses fenced YAML/JSON/Nix blocks into a `Node` tree with
+// real parsers (serde_json, serde_yaml_ng, rnix) so a literal is validated as
+// the complete parsed scalar in value position, never a line-shape regex or a
+// prefix match. Every parse returns a `Result`; a parse error on a block that
+// carries a check's authoring trigger is treated as a violation (fail closed).
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-enum TokKind {
-    LBrace,
-    RBrace,
-    LBrack,
-    RBrack,
-    Colon,
-    Sep,
-    Str(String),
-    Word(String),
-}
+mod common;
 
-struct Tok {
-    kind: TokKind,
-    line: usize,
-}
+use common::{
+    Entry, Node, collect_maps, direct_child, fenced_blocks, mentions_key, parse_block_docs,
+};
 
-fn tokenize_brace(text: &str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    let mut line = 0usize;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\n' => line += 1,
-            c if c.is_whitespace() => {}
-            '{' => toks.push(Tok {
-                kind: TokKind::LBrace,
-                line,
-            }),
-            '}' => toks.push(Tok {
-                kind: TokKind::RBrace,
-                line,
-            }),
-            '[' => toks.push(Tok {
-                kind: TokKind::LBrack,
-                line,
-            }),
-            ']' => toks.push(Tok {
-                kind: TokKind::RBrack,
-                line,
-            }),
-            ':' | '=' => toks.push(Tok {
-                kind: TokKind::Colon,
-                line,
-            }),
-            ',' | ';' => toks.push(Tok {
-                kind: TokKind::Sep,
-                line,
-            }),
-            '"' => {
-                let mut s = String::new();
-                let mut escaped = false;
-                for ch in chars.by_ref() {
-                    if escaped {
-                        s.push(ch);
-                        escaped = false;
-                    } else if ch == '\\' {
-                        escaped = true;
-                    } else if ch == '"' {
-                        break;
-                    } else {
-                        if ch == '\n' {
-                            line += 1;
-                        }
-                        s.push(ch);
-                    }
-                }
-                toks.push(Tok {
-                    kind: TokKind::Str(s),
-                    line,
-                });
-            }
-            _ => {
-                let mut w = String::new();
-                w.push(c);
-                while let Some(&nc) = chars.peek() {
-                    if nc.is_whitespace()
-                        || matches!(nc, '{' | '}' | '[' | ']' | ':' | '=' | ',' | ';' | '"')
-                    {
-                        break;
-                    }
-                    w.push(nc);
-                    chars.next();
-                }
-                toks.push(Tok {
-                    kind: TokKind::Word(w),
-                    line,
-                });
-            }
-        }
-    }
-    toks
-}
-
-fn scalar_or_special(s: String) -> Node {
-    if s == "..." {
-        Node::Elision
-    } else if s == "null" || s == "~" {
-        Node::Null
-    } else {
-        Node::Scalar(s)
-    }
-}
-
-fn parse_brace_block(lines: &[&str]) -> Vec<Node> {
-    let text = strip_comments_brace(&lines.join("\n"));
-    let toks = tokenize_brace(&text);
-    let mut cur = 0;
-    while cur < toks.len() && matches!(toks[cur].kind, TokKind::Sep) {
-        cur += 1;
-    }
-    if cur >= toks.len() {
-        return vec![Node::Map(Vec::new())];
-    }
-    let node = match toks[cur].kind {
-        TokKind::LBrace | TokKind::LBrack => parse_brace_value(&toks, &mut cur),
-        _ => Node::Map(parse_brace_map_body(&toks, &mut cur, false)),
-    };
-    vec![node]
-}
-
-fn parse_brace_value(toks: &[Tok], cur: &mut usize) -> Node {
-    if *cur >= toks.len() {
-        return Node::Null;
-    }
-    match &toks[*cur].kind {
-        TokKind::LBrace => {
-            *cur += 1;
-            Node::Map(parse_brace_map_body(toks, cur, true))
-        }
-        TokKind::LBrack => {
-            *cur += 1;
-            Node::Seq(parse_brace_seq(toks, cur))
-        }
-        TokKind::Str(s) | TokKind::Word(s) => {
-            let v = s.clone();
-            *cur += 1;
-            scalar_or_special(v)
-        }
-        _ => {
-            *cur += 1;
-            Node::Null
-        }
-    }
-}
-
-fn parse_brace_map_body(toks: &[Tok], cur: &mut usize, expect_rbrace: bool) -> Vec<Entry> {
-    let mut entries = Vec::new();
-    loop {
-        while *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Sep) {
-            *cur += 1;
-        }
-        if *cur >= toks.len() {
-            break;
-        }
-        match &toks[*cur].kind {
-            TokKind::RBrace => {
-                if expect_rbrace {
-                    *cur += 1;
-                }
-                break;
-            }
-            TokKind::RBrack => break,
-            TokKind::LBrace | TokKind::LBrack => {
-                let _ = parse_brace_value(toks, cur);
-            }
-            TokKind::Colon | TokKind::Sep => *cur += 1,
-            TokKind::Str(s) | TokKind::Word(s) => {
-                let key = s.clone();
-                let kline = toks[*cur].line;
-                *cur += 1;
-                if key == "..." {
-                    // Consume a `"...": "..."` form fully; a bare `"..."` has no
-                    // colon. Either way it is an elision marker.
-                    if *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Colon) {
-                        *cur += 1;
-                        let _ = parse_brace_value(toks, cur);
-                    }
-                    entries.push(Entry {
-                        key,
-                        val: Node::Elision,
-                        line: kline,
-                    });
-                    continue;
-                }
-                if *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Colon) {
-                    *cur += 1;
-                    let val = parse_brace_value(toks, cur);
-                    entries.push(Entry {
-                        key,
-                        val,
-                        line: kline,
-                    });
-                } else {
-                    entries.push(Entry {
-                        key,
-                        val: Node::Null,
-                        line: kline,
-                    });
-                }
-            }
-        }
-    }
-    entries
-}
-
-fn parse_brace_seq(toks: &[Tok], cur: &mut usize) -> Vec<Node> {
-    let mut items = Vec::new();
-    loop {
-        while *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Sep) {
-            *cur += 1;
-        }
-        if *cur >= toks.len() {
-            break;
-        }
-        if matches!(toks[*cur].kind, TokKind::RBrack) {
-            *cur += 1;
-            break;
-        }
-        if matches!(toks[*cur].kind, TokKind::RBrace) {
-            break;
-        }
-        items.push(parse_brace_value(toks, cur));
-    }
-    items
-}
-
-// ---------------------------------------------------------------------------
-// YAML indentation parser.
-// ---------------------------------------------------------------------------
-
-/// Index of the first `:` in `t` that separates a mapping key from its value:
-/// not inside quotes, and followed by a space or end-of-line.
-fn find_yaml_colon(t: &str) -> Option<usize> {
-    let bytes = t.as_bytes();
-    let mut in_s = false;
-    let mut in_d = false;
-    for (idx, &b) in bytes.iter().enumerate() {
-        match b {
-            b'\'' if !in_d => in_s = !in_s,
-            b'"' if !in_s => in_d = !in_d,
-            b':' if !in_s && !in_d => {
-                let next = bytes.get(idx + 1);
-                if next.is_none() || next == Some(&b' ') {
-                    return Some(idx);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn parse_yaml_scalar_or_flow(s: &str) -> Node {
-    let st = s.trim();
-    if st.starts_with('{') || st.starts_with('[') {
-        let text = strip_comments_brace(st);
-        let toks = tokenize_brace(&text);
-        let mut cur = 0;
-        return parse_brace_value(&toks, &mut cur);
-    }
-    let unq = st.trim_matches('"').trim_matches('\'');
-    if unq == "..." {
-        Node::Elision
-    } else if unq == "null" || unq == "~" || unq.is_empty() {
-        Node::Null
-    } else {
-        Node::Scalar(unq.to_string())
-    }
-}
-
-/// Indentation of the next non-blank, non-`---` line at or after `i`.
-fn peek_next_indent(refs: &[&str], i: usize) -> Option<usize> {
-    let mut j = i;
-    while j < refs.len() {
-        let t = refs[j].trim();
-        if t.is_empty() {
-            j += 1;
-            continue;
-        }
-        if t == "---" {
-            return None;
-        }
-        return Some(indent(refs[j]));
-    }
-    None
-}
-
-/// Whether the next content line at exactly `indent_level` is a sequence item.
-fn next_is_sequence(refs: &[&str], i: usize, indent_level: usize) -> bool {
-    let mut j = i;
-    while j < refs.len() {
-        let t = refs[j].trim();
-        if t.is_empty() {
-            j += 1;
-            continue;
-        }
-        if indent(refs[j]) != indent_level {
-            return false;
-        }
-        return t == "-" || t.starts_with("- ");
-    }
-    false
-}
-
-fn parse_yaml_child(refs: &[&str], i: &mut usize, child_indent: usize) -> Node {
-    if next_is_sequence(refs, *i, child_indent) {
-        Node::Seq(parse_yaml_sequence(refs, i, child_indent))
-    } else {
-        Node::Map(parse_yaml_mapping(refs, i, child_indent))
-    }
-}
-
-fn parse_yaml_mapping(refs: &[&str], i: &mut usize, indent_level: usize) -> Vec<Entry> {
-    let mut entries = Vec::new();
-    while *i < refs.len() {
-        let raw = refs[*i];
-        let t = raw.trim();
-        if t.is_empty() {
-            *i += 1;
-            continue;
-        }
-        if t == "---" {
-            break;
-        }
-        let ind = indent(raw);
-        if ind < indent_level {
-            break;
-        }
-        if ind > indent_level {
-            *i += 1;
-            continue;
-        }
-        if t == "..." {
-            entries.push(Entry {
-                key: "...".to_string(),
-                val: Node::Elision,
-                line: *i,
-            });
-            *i += 1;
-            continue;
-        }
-        if t == "-" || t.starts_with("- ") {
-            // A sequence at this level is not a mapping; hand back to the caller.
-            break;
-        }
-        let Some(colon) = find_yaml_colon(t) else {
-            *i += 1;
-            continue;
-        };
-        let key = t[..colon]
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
-        let after = t[colon + 1..].trim();
-        let kline = *i;
-        *i += 1;
-        if after.is_empty() {
-            match peek_next_indent(refs, *i) {
-                Some(ci) if ci > indent_level => {
-                    let val = parse_yaml_child(refs, i, ci);
-                    entries.push(Entry {
-                        key,
-                        val,
-                        line: kline,
-                    });
-                }
-                _ => entries.push(Entry {
-                    key,
-                    val: Node::Null,
-                    line: kline,
-                }),
-            }
-        } else {
-            entries.push(Entry {
-                key,
-                val: parse_yaml_scalar_or_flow(after),
-                line: kline,
-            });
-        }
-    }
-    entries
-}
-
-fn parse_yaml_sequence(refs: &[&str], i: &mut usize, indent_level: usize) -> Vec<Node> {
-    let mut items = Vec::new();
-    while *i < refs.len() {
-        let raw = refs[*i];
-        let t = raw.trim();
-        if t.is_empty() {
-            *i += 1;
-            continue;
-        }
-        if t == "---" {
-            break;
-        }
-        let ind = indent(raw);
-        if ind < indent_level {
-            break;
-        }
-        if ind > indent_level {
-            *i += 1;
-            continue;
-        }
-        let rest = if t == "-" {
-            Some("")
-        } else {
-            t.strip_prefix("- ")
-        };
-        let Some(rest) = rest else {
-            break;
-        };
-        let rest = rest.trim();
-        if rest.is_empty() {
-            *i += 1;
-            match peek_next_indent(refs, *i) {
-                Some(ci) if ci > indent_level => items.push(parse_yaml_child(refs, i, ci)),
-                _ => items.push(Node::Null),
-            }
-        } else if let Some(colon) = find_yaml_colon(rest) {
-            // Inline first key of a map item; further keys sit one level deeper
-            // than the dash (dash column + 2).
-            let key = rest[..colon].trim().trim_matches('"').to_string();
-            let after = rest[colon + 1..].trim();
-            let kline = *i;
-            let mut item_entries = Vec::new();
-            *i += 1;
-            if after.is_empty() {
-                match peek_next_indent(refs, *i) {
-                    Some(ci) if ci > ind + 1 => {
-                        let val = parse_yaml_child(refs, i, ci);
-                        item_entries.push(Entry {
-                            key,
-                            val,
-                            line: kline,
-                        });
-                    }
-                    _ => item_entries.push(Entry {
-                        key,
-                        val: Node::Null,
-                        line: kline,
-                    }),
-                }
-            } else {
-                item_entries.push(Entry {
-                    key,
-                    val: parse_yaml_scalar_or_flow(after),
-                    line: kline,
-                });
-            }
-            let more = parse_yaml_mapping(refs, i, ind + 2);
-            item_entries.extend(more);
-            items.push(Node::Map(item_entries));
-        } else {
-            items.push(parse_yaml_scalar_or_flow(rest));
-            *i += 1;
-        }
-    }
-    items
-}
-
-fn parse_yaml_block(lines: &[&str]) -> Vec<Node> {
-    let stripped: Vec<String> = lines.iter().map(|l| strip_yaml_comment(l)).collect();
-    let refs: Vec<&str> = stripped.iter().map(|s| s.as_str()).collect();
-    let mut docs = Vec::new();
-    let mut i = 0;
-    while i < refs.len() {
-        while i < refs.len() {
-            let t = refs[i].trim();
-            if t.is_empty() || t == "---" {
-                i += 1;
-            } else {
-                break;
-            }
-        }
-        if i >= refs.len() {
-            break;
-        }
-        let base = indent(refs[i]);
-        let node = if next_is_sequence(&refs, i, base) {
-            Node::Seq(parse_yaml_sequence(&refs, &mut i, base))
-        } else {
-            Node::Map(parse_yaml_mapping(&refs, &mut i, base))
-        };
-        docs.push(node);
-    }
-    docs
-}
-
-/// Parse a fenced block into one or more top-level documents. JSON and Nix use
-/// the brace parser; YAML uses the indentation parser; an untagged fence is
-/// sniffed by its first non-comment character.
-fn parse_block_docs(lang: &str, lines: &[&str]) -> Vec<Node> {
-    match lang {
-        "json" | "nix" => parse_brace_block(lines),
-        "yaml" | "yml" => parse_yaml_block(lines),
-        "" => {
-            let stripped = strip_comments_brace(&lines.join("\n"));
-            match stripped.trim_start().chars().next() {
-                Some('{') | Some('[') => parse_brace_block(lines),
-                _ => parse_yaml_block(lines),
-            }
-        }
-        _ => Vec::new(),
-    }
-}
 // ---------------------------------------------------------------------------
 // D104 - ResourceType grammar, validated exactly.
 //
@@ -1150,14 +574,39 @@ fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
     // context (envelope or resource declaration). This reads a quoted JSON
     // `"type"` and an indented Nix `type =` identically to a bare YAML `type:`,
     // closing the gap where the old zero-indent `^type` regex validated only
-    // bare top-level YAML. A dotted value is a qualified/foreign form already
-    // owned by the substring passes above, so it is skipped here to avoid a
-    // double report; a `<placeholder>` is authored deliberately and is skipped.
+    // bare top-level YAML. The COMPLETE parsed scalar is validated: an
+    // over-qualified `acme.d2bus.org.Widget.Type` - which the substring pass
+    // accepts because its capture stops at the first `.<Type>` - is rejected
+    // here because `is_valid_resource_type` sees the whole dotted token. A
+    // `<placeholder>` and a Nix interpolation/variable are authored deliberately
+    // (modeled as `Placeholder` / `Opaque`, never `Scalar`) and are left alone.
     for block in fenced_blocks(content) {
         if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
-        let docs = parse_block_docs(&block.lang, &block.lines);
+        let docs = match parse_block_docs(&block.lang, &block.lines) {
+            Ok(docs) => docs,
+            Err(_) => {
+                // Fail closed: a block that clearly declares a live resource
+                // envelope (an `apiVersion` marker) but that the real parser
+                // cannot model must be reported, never silently skipped. A bare
+                // `type =` without `apiVersion` is not necessarily a ResourceType
+                // authoring context - it is also an artifact-catalog type tag
+                // (`type = "provider"`), a condition-fragment `type: Ready`, or a
+                // component descriptor - so it does not by itself force a fail
+                // closed here; the substring passes still scan every line of an
+                // unparseable block for qualified/foreign ResourceType tokens.
+                let names_envelope = mentions_key(&block.lines, "apiVersion");
+                if names_envelope {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start + 1,
+                        text: "block declares a resource envelope the structural parser could not model; a lint must fail closed on an unparseable ResourceType context, not skip it (D104)".to_string(),
+                    });
+                }
+                continue;
+            }
+        };
         let mut maps = Vec::new();
         for doc in &docs {
             collect_maps(doc, &mut maps);
@@ -1173,7 +622,7 @@ fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
                 let Node::Scalar(val) = &entry.val else {
                     continue;
                 };
-                if val.contains('.') || d104_is_placeholder(val) {
+                if d104_is_placeholder(val) {
                     continue;
                 }
                 if !is_valid_resource_type(val) {
@@ -1350,6 +799,16 @@ fn d108_value_reason(val: &str) -> Option<String> {
     if d108_signed_decimal().is_match(val) {
         return Some(format!("the signed integer `{val}`"));
     }
+    // A non-finite float name is a value literal, not a type annotation, even
+    // though `NaN`/`Infinity` are upper-camel shaped and would otherwise be
+    // swallowed by the type/placeholder guard below. Reject them explicitly so
+    // `retryAfterMs: NaN` is a violation, not an accepted "type annotation".
+    if matches!(
+        val.to_ascii_lowercase().as_str(),
+        "nan" | "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
+    ) {
+        return Some(format!("the non-integer literal `{val}`"));
+    }
     // A genuine non-value form (a type annotation or a `<placeholder>`) is left
     // alone; those forms appear verbatim in the Accepted specs.
     if d108_is_type_or_placeholder(val) {
@@ -1390,6 +849,97 @@ fn scan_d108(file: &str, content: &str) -> Vec<Violation> {
                         "`{key}` value `{val}` is {reason} (use a bare decimal millisecond count)"
                     ),
                 });
+            }
+        }
+    }
+    // Structural pass: parse every tagged YAML/JSON/Nix fence with the real
+    // parsers and validate the COMPLETE parsed value of every `retryAfterMs` /
+    // `retry_after_ms` field. This closes the per-line bypasses: a quoted JSON
+    // key (`"retryAfterMs": "5s"`) that the assignment regex never matched
+    // because a `"` sits between the key and the `:`, and a key/value split
+    // across two lines. The value is judged as the parsed scalar, so `"5s"` and
+    // `NaN` are rejected while an authored `<placeholder>` / Nix expression
+    // (modeled as `Placeholder` / `Opaque`) is left alone.
+    out.extend(d108_structural(file, content, &key));
+    out
+}
+
+/// Collect every mapping `Entry` in the document tree, in author order.
+fn walk_entries<'a>(node: &'a Node, out: &mut Vec<&'a Entry>) {
+    match node {
+        Node::Map(entries) => {
+            for e in entries {
+                out.push(e);
+                walk_entries(&e.val, out);
+            }
+        }
+        Node::Seq(items) => {
+            for it in items {
+                walk_entries(it, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Structural D108 pass over tagged YAML/JSON/Nix fences. Validates the parsed
+/// value of the accepted retry key. Superseded key spellings are owned by the
+/// per-line key pass (which sees them regardless of value), so this pass only
+/// validates value position. A block that names a retry key but that the real
+/// parser cannot model fails closed.
+fn d108_structural(file: &str, content: &str, key_re: &Regex) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for block in fenced_blocks(content) {
+        if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix") {
+            continue;
+        }
+        let mentions_retry = block.lines.iter().any(|l| key_re.is_match(l));
+        let docs = match parse_block_docs(&block.lang, &block.lines) {
+            Ok(docs) => docs,
+            Err(_) => {
+                if mentions_retry {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start + 1,
+                        text: "block carries a retry field the structural parser could not model; a lint must fail closed on an unparseable retry context, not skip it (D108)".to_string(),
+                    });
+                }
+                continue;
+            }
+        };
+        for doc in &docs {
+            let mut entries = Vec::new();
+            walk_entries(doc, &mut entries);
+            for e in entries {
+                // Whole-key match of the retry family only: a key that merely
+                // embeds the substring is not the retry field.
+                if !matches!(key_re.find(&e.key), Some(m) if m.as_str() == e.key) {
+                    continue;
+                }
+                if e.key != "retryAfterMs" && e.key != "retry_after_ms" {
+                    // A superseded spelling; the per-line key pass owns it.
+                    continue;
+                }
+                let reason = match &e.val {
+                    Node::Scalar(s) => d108_value_reason(s),
+                    Node::Null => Some("empty (no millisecond count)".to_string()),
+                    Node::Map(_) | Node::Seq(_) => {
+                        Some("not a bare decimal millisecond count".to_string())
+                    }
+                    // An authored placeholder, a Nix expression/variable, or an
+                    // explicit `...` elision is not a concrete literal to judge.
+                    Node::Placeholder | Node::Opaque | Node::Elision => None,
+                };
+                if let Some(reason) = reason {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start + e.line + 1,
+                        text: format!(
+                            "`{}` value is {reason} (use a bare decimal millisecond count)",
+                            e.key
+                        ),
+                    });
+                }
             }
         }
     }
@@ -1976,6 +1526,62 @@ fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
 // ---------------------------------------------------------------------------
 // Real-tree scans - the actual gate.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn round5_parser_bypasses_are_closed() {
+    // Every counterexample the round-5 review cited, asserted rejected through
+    // the public scanner, so a regression that reopens a bypass fails here.
+
+    // D103: a conformant instant with a `_`-suffixed junk token. The candidate
+    // token is extended over `_`, so the WHOLE token is judged, not the 24-byte
+    // conformant prefix.
+    assert!(
+        !scan_d103("f.md", "createdAt: 2026-07-22T00:00:00.000Z_junk").is_empty(),
+        "a conformant prefix with a `_junk` suffix must be rejected"
+    );
+
+    // D103: a JSON key and value split across two lines. The per-line passes
+    // cannot see the pair; the structural pass validates the complete parsed
+    // scalar of the `createdAt` field.
+    let d103_split = "```json\n{\n  \"createdAt\":\n    \"2026-07-22\"\n}\n```";
+    assert!(
+        !scan_d103("f.md", d103_split).is_empty(),
+        "a createdAt key/value split across lines must be rejected structurally"
+    );
+
+    // D104: an over-qualified `acme.d2bus.org.Widget.Type`. The substring pass
+    // validates only the `...Widget` prefix and accepts it; the structural pass
+    // validates the COMPLETE scalar and rejects the trailing `.Type`.
+    let d104_overqualified = "```json\n{ \"apiVersion\": \"resources.d2bus.org/v3\", \"type\": \"acme.d2bus.org.Widget.Type\" }\n```";
+    assert!(
+        !scan_d104("f.md", d104_overqualified).is_empty(),
+        "an over-qualified d2bus.org type must be rejected on the complete scalar"
+    );
+
+    // D108: `retryAfterMs: NaN` is a non-finite float value, not a type
+    // annotation; the previous upper-camel guard swallowed it.
+    assert!(
+        !scan_d108("f.md", "retryAfterMs: NaN").is_empty(),
+        "retryAfterMs: NaN must be rejected as a value, not accepted as a type"
+    );
+
+    // D108: a quoted JSON key `"retryAfterMs"` the per-line assignment regex can
+    // never match (a `\"` sits between the key and the `:`). The structural pass
+    // reads the parsed key and rejects the `"5s"` duration value.
+    let d108_quoted_key = "```json\n{ \"retryAfterMs\": \"5s\" }\n```";
+    assert!(
+        !scan_d108("f.md", d108_quoted_key).is_empty(),
+        "a quoted JSON retryAfterMs key with a duration value must be rejected"
+    );
+
+    // D108: a JSON key and value split across two lines. The structural pass
+    // sees the pair; the per-line passes cannot.
+    let d108_split = "```json\n{\n  \"retryAfterMs\":\n    \"5s\"\n}\n```";
+    assert!(
+        !scan_d108("f.md", d108_split).is_empty(),
+        "a retryAfterMs key/value split across lines must be rejected structurally"
+    );
+}
 
 #[test]
 fn docs_specs_use_millisecond_precision_datetimes() {
