@@ -46,103 +46,16 @@ use serde::{Deserialize, Serialize};
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{WaveCommand, WorkflowOutput},
+    evidence::{self, EvidenceLane, REQUIRED_EVIDENCE_LANES},
     model::{
-        CandidateId, CandidateMaterial, ContentId, EVIDENCE_ARTIFACT_KIND, EvidenceResult,
-        SEAL_ARTIFACT_KIND, SnapshotSha256, sha256_bytes, validate_bounded_string,
-        validate_identifier, validate_sha256,
+        CandidateId, CandidateMaterial, ContentId, SEAL_ARTIFACT_KIND, SnapshotSha256,
+        sha256_bytes, validate_identifier, validate_sha256,
     },
     panel::{
         self, PanelAttestation, SnapshotView, ensure_artifact_kind, parse_snapshot_invocation,
     },
-    storage::{CandidateDir, EVIDENCE_DIR, PANEL_REQUEST_FILE, SEAL_FILE},
+    storage::{CandidateDir, PANEL_REQUEST_FILE, SEAL_FILE},
 };
-
-/// The three concurrent lanes of spec section 12.2.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum EvidenceLane {
-    /// The required GitHub Actions Layer-1 rollup.
-    GithubCi,
-    /// The heavy-gated local and host validators run by the integrator.
-    LocalHost,
-    /// The ten-role panel. Its authoritative evidence is the record set.
-    Panel,
-}
-
-impl EvidenceLane {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::GithubCi => "github-ci",
-            Self::LocalHost => "local-host",
-            Self::Panel => "panel",
-        }
-    }
-}
-
-/// Lanes that must carry at least one passing imported result before a seal.
-pub const REQUIRED_EVIDENCE_LANES: [EvidenceLane; 2] =
-    [EvidenceLane::GithubCi, EvidenceLane::LocalHost];
-
-/// Reader view of one validator-evidence record.
-///
-/// The writer is `wave validate-import`, work item `ADR046-delivery-003`, so
-/// this view reads the fields the seal is specified to depend on and tolerates
-/// fields it does not know. It carries a digest of the validator's output, not
-/// the output: raw command output never leaves the importing lane.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct EvidenceRecord {
-    pub artifact_kind: String,
-    pub schema_version: u32,
-    pub lane: EvidenceLane,
-    pub validation: String,
-    pub candidate_id: CandidateId,
-    pub content_id: ContentId,
-    pub snapshot_sha256: SnapshotSha256,
-    pub result: EvidenceResult,
-}
-
-impl EvidenceRecord {
-    /// Rejects evidence that is not bound to this exact snapshot.
-    ///
-    /// The `snapshot_sha256` comparison is the load-bearing one. A
-    /// history-only rebase preserves `candidate_id` and `content_id` by
-    /// design, so those two alone would silently carry a stale lane result
-    /// across a rebase; `snapshot_sha256` moves with the base and head object
-    /// IDs and is what forces the re-import.
-    fn validate(&self, snapshot: &SnapshotView) -> Result<()> {
-        ensure_artifact_kind(
-            &self.artifact_kind,
-            EVIDENCE_ARTIFACT_KIND,
-            "validator evidence",
-        )?;
-        if self.schema_version != DELIVERY_SCHEMA_VERSION {
-            return Err(DeliveryError::new(format!(
-                "unsupported validator evidence schema version {}",
-                self.schema_version
-            )));
-        }
-        validate_bounded_string(&self.validation, "validation name")?;
-        if self.candidate_id != snapshot.candidate_id
-            || self.content_id != snapshot.content_id
-            || self.snapshot_sha256 != snapshot.snapshot_sha256
-        {
-            return Err(DeliveryError::new(format!(
-                "validator evidence for {:?} is bound to a stale snapshot; a rebase preserves \
-                 the panel record but never a lane result, so every lane reruns and re-imports \
-                 against the current snapshot",
-                self.validation
-            )));
-        }
-        if self.result != EvidenceResult::Passed {
-            return Err(DeliveryError::new(format!(
-                "validator evidence for {:?} on lane {} did not pass",
-                self.validation,
-                self.lane.as_str()
-            )));
-        }
-        Ok(())
-    }
-}
 
 /// One lane's accepted validations, as bound into the seal.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -238,49 +151,38 @@ pub fn seal(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Workflo
 
     WorkflowOutput::ok(WaveCommand::Seal)
         .with_digests(&snapshot.digests())
-        .with_artifact(&candidate.seal_path())
+        .with_artifact(candidate, &candidate.seal_path())
 }
 
-/// Reads every imported evidence record and groups the passing ones by lane.
+/// Reads every imported evidence record through the one shared reader and
+/// groups the passing ones by lane.
+///
+/// The reader is [`evidence::read_lane_records`], the exact function the
+/// writer's own read path uses, so `seal` consumes precisely what
+/// `wave validate-import` produced: the canonical nested layout
+/// `evidence/<lane>/<validation>.json`, bound to this candidate's three
+/// digests. Because a lane and validation together address one file, a lane
+/// can never hold two records for one validation, so re-importing is idempotent
+/// rather than a conflict.
 fn sealed_lanes(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Vec<SealedLane>> {
-    let names = candidate.list(EVIDENCE_DIR).map_err(|error| {
-        DeliveryError::new(format!(
-            "no validator evidence for this candidate; import every lane's result first \
-             ({error})"
-        ))
-    })?;
+    let records = evidence::read_lane_records(
+        candidate,
+        &snapshot.candidate_id,
+        &snapshot.content_id,
+        &snapshot.snapshot_sha256,
+    )?;
+    if records.is_empty() {
+        return Err(DeliveryError::new(
+            "no validator evidence for this candidate; import every lane's result first",
+        ));
+    }
     let mut lanes: BTreeMap<EvidenceLane, BTreeSet<String>> = BTreeMap::new();
-    for name in names {
-        let name = name
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| DeliveryError::new("validator evidence file name is not UTF-8"))?;
-        if !name.ends_with(".json") {
-            return Err(DeliveryError::new(format!(
-                "validator evidence directory holds {name:?}, which is not an evidence record"
-            )));
-        }
-        let record: EvidenceRecord = serde_json::from_slice(
-            &candidate.read_bytes(std::path::Path::new(EVIDENCE_DIR).join(&name))?,
-        )
-        .map_err(|error| {
-            DeliveryError::new(format!(
-                "validator evidence {name:?} is not a valid record: {error}"
-            ))
-        })?;
-        record.validate(snapshot)?;
-        if !lanes
+    for record in records {
+        record.ensure_passed()?;
+        lanes
             .entry(record.lane)
             .or_default()
-            .insert(record.validation.clone())
-        {
-            return Err(DeliveryError::new(format!(
-                "lane {} imported two results for validation {:?}; the seal cannot tell which \
-                 one is current",
-                record.lane.as_str(),
-                record.validation
-            )));
-        }
+            .insert(record.validation);
     }
     ensure_required_lanes(&lanes.keys().copied().collect())?;
     Ok(lanes
@@ -309,7 +211,8 @@ fn ensure_required_lanes(present: &BTreeSet<EvidenceLane>) -> Result<()> {
 pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
-        model::PANEL_ROLES,
+        evidence::EvidenceRecord,
+        model::{EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_ROLES},
         panel::tests::{candidate_with_snapshot, record_files, write_record_dir},
         storage::tests::Scratch,
     };
@@ -323,19 +226,26 @@ pub(crate) mod tests {
         EvidenceRecord {
             artifact_kind: EVIDENCE_ARTIFACT_KIND.to_owned(),
             schema_version: DELIVERY_SCHEMA_VERSION,
-            lane,
-            validation: validation.to_owned(),
+            program: snapshot.program().to_owned(),
+            wave: snapshot.wave().to_owned(),
             candidate_id: snapshot.candidate_id.clone(),
             content_id: snapshot.content_id.clone(),
             snapshot_sha256: snapshot.snapshot_sha256.clone(),
+            lane,
+            validation: validation.to_owned(),
             result: EvidenceResult::Passed,
+            imported_at_unix: 0,
+            command: None,
+            output: None,
+            locator: None,
         }
     }
 
-    pub(crate) fn import(candidate: &CandidateDir, name: &str, record: &EvidenceRecord) {
-        candidate
-            .write_json(Path::new(EVIDENCE_DIR).join(name), record)
-            .expect("import evidence");
+    /// Files an evidence record through the production writer, so tests exercise
+    /// the same canonical nested layout `wave validate-import` writes and
+    /// `wave seal` reads.
+    pub(crate) fn import(candidate: &CandidateDir, record: &EvidenceRecord) {
+        evidence::import(candidate, record).expect("import evidence");
     }
 
     /// A candidate with a request, ten unanimous records, and both required
@@ -348,12 +258,10 @@ pub(crate) mod tests {
         panel::attest(&candidate, &snapshot, &dir).expect("attest");
         import(
             &candidate,
-            "github-ci.json",
             &evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check"),
         );
         import(
             &candidate,
-            "local-host.json",
             &evidence(&snapshot, EvidenceLane::LocalHost, "make-test-integration"),
         );
         (candidate, snapshot)
@@ -366,7 +274,11 @@ pub(crate) mod tests {
 
         let output = seal(&candidate, &snapshot).expect("seal");
         assert_eq!(output.operation, "seal");
-        assert_eq!(output.artifact.as_deref(), candidate.seal_path().to_str());
+        assert_eq!(
+            output.artifact.as_deref(),
+            Some("seal.json"),
+            "the artifact must be a candidate-relative key, not an absolute path"
+        );
 
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         record.validate().expect("sealed record is valid");
@@ -383,7 +295,6 @@ pub(crate) mod tests {
         panel::request(&candidate, &snapshot).expect("panel request");
         import(
             &candidate,
-            "github-ci.json",
             &evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check"),
         );
         let error = seal(&candidate, &snapshot).expect_err("no records");
@@ -427,7 +338,7 @@ pub(crate) mod tests {
     fn a_missing_validator_lane_is_refused() {
         let scratch = Scratch::new("seal-missing-lane");
         let (candidate, snapshot) = sealable(&scratch);
-        std::fs::remove_file(candidate.evidence_dir().join("local-host.json")).expect("remove");
+        std::fs::remove_dir_all(candidate.evidence_dir().join("local-host")).expect("remove lane");
         let error = seal(&candidate, &snapshot).expect_err("missing lane");
         assert!(error.message().contains("local-host"), "{error}");
     }
@@ -449,7 +360,7 @@ pub(crate) mod tests {
         let (candidate, snapshot) = sealable(&scratch);
         let mut failed = evidence(&snapshot, EvidenceLane::LocalHost, "make-test-integration");
         failed.result = EvidenceResult::Failed;
-        import(&candidate, "local-host.json", &failed);
+        import(&candidate, &failed);
         let error = seal(&candidate, &snapshot).expect_err("failed lane");
         assert!(error.message().contains("did not pass"), "{error}");
     }
@@ -460,7 +371,7 @@ pub(crate) mod tests {
         let (candidate, snapshot) = sealable(&scratch);
         let mut stale = evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check");
         stale.snapshot_sha256 = SnapshotSha256::parse("c".repeat(64)).expect("digest");
-        import(&candidate, "github-ci.json", &stale);
+        import(&candidate, &stale);
         let error = seal(&candidate, &snapshot).expect_err("stale evidence");
         assert!(error.message().contains("stale snapshot"), "{error}");
     }
@@ -480,12 +391,10 @@ pub(crate) mod tests {
 
         import(
             &candidate,
-            "github-ci.json",
             &evidence(&rebased, EvidenceLane::GithubCi, "layer1-check"),
         );
         import(
             &candidate,
-            "local-host.json",
             &evidence(&rebased, EvidenceLane::LocalHost, "make-test-integration"),
         );
         let record: SealRecord = seal(&candidate, &rebased)
@@ -496,17 +405,22 @@ pub(crate) mod tests {
         assert_eq!(record.panel.records.len(), PANEL_ROLES.len());
     }
 
+    /// The nested layout addresses a record by lane and validation, so
+    /// re-importing the same lane result overwrites in place rather than
+    /// leaving two rival records the seal cannot choose between. A seal after
+    /// a re-import still binds exactly the two required lanes.
     #[test]
-    fn a_duplicate_validation_within_one_lane_is_refused() {
-        let scratch = Scratch::new("seal-duplicate-validation");
+    fn re_importing_a_lane_result_is_idempotent() {
+        let scratch = Scratch::new("seal-idempotent-import");
         let (candidate, snapshot) = sealable(&scratch);
         import(
             &candidate,
-            "github-ci-again.json",
             &evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check"),
         );
-        let error = seal(&candidate, &snapshot).expect_err("duplicate validation");
-        assert!(error.message().contains("two results"), "{error}");
+        let output = seal(&candidate, &snapshot).expect("seal after a re-import");
+        assert_eq!(output.operation, "seal");
+        let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
+        assert_eq!(record.evidence.len(), 2);
     }
 
     #[test]
@@ -538,16 +452,12 @@ pub(crate) mod tests {
         let scratch = Scratch::new("seal-panel-lane");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         panel::request(&candidate, &snapshot).expect("panel request");
-        for (name, lane, validation) in [
-            ("github-ci.json", EvidenceLane::GithubCi, "layer1-check"),
-            (
-                "local-host.json",
-                EvidenceLane::LocalHost,
-                "make-test-integration",
-            ),
-            ("panel.json", EvidenceLane::Panel, "ten-role-panel"),
+        for (lane, validation) in [
+            (EvidenceLane::GithubCi, "layer1-check"),
+            (EvidenceLane::LocalHost, "make-test-integration"),
+            (EvidenceLane::Panel, "ten-role-panel"),
         ] {
-            import(&candidate, name, &evidence(&snapshot, lane, validation));
+            import(&candidate, &evidence(&snapshot, lane, validation));
         }
         let error = seal(&candidate, &snapshot).expect_err("no records");
         assert!(error.message().contains("panel-attest"), "{error}");

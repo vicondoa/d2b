@@ -25,43 +25,46 @@
 //! <state root>/<wave>/<candidate_id>/history-proof.json
 //! ```
 //!
-//! # Implementation note: deliberate de-escalation from the reuse source
+//! # Implementation note: path safety
 //!
 //! The implementation this module was adapted from anchored every operation on
 //! directory file descriptors, using `openat`, `mkdirat`, `renameat_with`, and
-//! `fchmodat` through `rustix` and `nix`. This one uses plain `std` instead.
-//! That is a deliberate tradeoff, recorded here so it is visible in review
-//! rather than having to be reconstructed.
-//!
-//! Security properties preserved:
+//! `fchmodat` through `rustix` and `nix`. This one uses `std`, extended with
+//! `O_NOFOLLOW` and post-open verification, so it holds these properties
+//! without hand-rolling directory-fd anchoring:
 //!
 //! * external-path refusal - the state root is rejected inside any declared
 //!   repository checkout and inside any enclosing Git working tree;
-//! * symlink-component rejection over the whole existing path prefix;
+//! * symlink rejection over the whole resolved path - every read, write, and
+//!   list first rejects a path any component of which is a symlink, including
+//!   the leaf;
+//! * `O_NOFOLLOW` on the leaf - the artifact leaf is opened with `O_NOFOLLOW`,
+//!   so a symlink swapped in after the component walk still cannot be followed;
+//! * post-open verification - a written leaf is confirmed by `fstat` to be a
+//!   regular file, mode `0600`, owned by the current effective user, before any
+//!   byte is written;
+//! * create-new temp then atomic rename - writes land in a fresh
+//!   `O_CREAT | O_EXCL | O_NOFOLLOW` temp in the verified parent, are fsynced,
+//!   and are renamed into place, with the parent directory fsynced afterwards.
+//!   `rename` replaces the destination name rather than following it, so it can
+//!   never truncate a file a symlink pointed at;
 //! * `0700` directories and `0600` files, verified after creation;
 //! * bounded reads, so a hostile artifact cannot exhaust memory;
 //! * traversal-proof relative paths, so no caller can address a file outside
 //!   the candidate directory.
 //!
-//! Properties **not** carried over:
-//!
-//! * TOCTOU-hardened file-descriptor anchoring. Path checks here are performed
-//!   against names, so an attacker with write access to an ancestor directory
-//!   could in principle swap a component between the check and the use.
-//! * `geteuid` file-ownership verification. An existing state directory owned
-//!   by another user is accepted as long as its mode is `0700`.
-//!
-//! Both would be additive changes and neither is load-bearing for the
-//! not-in-Git guarantee this module exists to enforce. Delivery state lives
-//! under a per-user state directory, and the threat model for it is operator
-//! error, not a local attacker racing the integrator.
+//! A residual TOCTOU window remains between the component walk and the leaf
+//! open, but `O_NOFOLLOW` plus the create-new-then-rename write shape mean the
+//! worst an attacker racing that window can do is make an operation fail, never
+//! make it write through a symlink into a reviewed checkout.
 
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, DirBuilder, File},
     io::{Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -241,6 +244,22 @@ impl CandidateDir {
         Ok(self.path.join(relative))
     }
 
+    /// The bounded, candidate-relative key for an artifact path under this
+    /// candidate directory.
+    ///
+    /// Structured output reports this logical key, never the absolute state
+    /// path, so no CI or operator log carries `HOME`, the local username, or a
+    /// checkout or store path.
+    pub fn artifact_key(&self, path: &Path) -> Result<String> {
+        let relative = path.strip_prefix(&self.path).map_err(|_| {
+            DeliveryError::new("delivery artifact is not under its candidate directory")
+        })?;
+        relative
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| DeliveryError::new("delivery artifact key is not UTF-8"))
+    }
+
     /// Writes a JSON artifact and returns its SHA-256 digest.
     pub fn write_json<T: Serialize>(
         &self,
@@ -259,17 +278,12 @@ impl CandidateDir {
             )));
         }
         let path = self.resolve(relative)?;
-        if let Some(parent) = path.parent() {
-            create_private_dir(parent)?;
-        }
-        let mut file = File::options()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(STATE_FILE_MODE)
-            .open(&path)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| DeliveryError::new("delivery artifact path has no parent directory"))?;
+        create_private_dir(parent)?;
+        reject_symlink_components(&path)?;
+        write_file_atomically(&path, parent, bytes)?;
         Ok(sha256_bytes(bytes))
     }
 
@@ -288,6 +302,7 @@ impl CandidateDir {
     /// Lists the entry names of a directory under the candidate directory.
     pub fn list(&self, relative: impl AsRef<Path>) -> Result<Vec<OsString>> {
         let path = self.resolve(relative)?;
+        reject_symlink_components(&path)?;
         let mut names = fs::read_dir(&path)?
             .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<std::io::Result<Vec<_>>>()?;
@@ -487,18 +502,140 @@ fn validate_anchored_relative(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+/// Opening flags shared by every leaf open: never follow a final-component
+/// symlink, and never leak the descriptor across an exec.
+const LEAF_OPEN_FLAGS: i32 = nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC;
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A process-unique temp-file suffix for create-new-then-rename writes.
+fn unique_suffix() -> String {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}.{counter}", std::process::id())
+}
+
+/// Confirms an opened handle is a regular file, optionally of an exact mode and
+/// owned by the current effective user.
+///
+/// The checks run against the open descriptor (`fstat`), not the path, so they
+/// describe the object the caller will actually read or write rather than a
+/// name an attacker could have swapped after the component walk.
+fn verify_regular_file(
+    file: &File,
+    path: &Path,
+    require_mode: Option<u32>,
+    require_owner: bool,
+) -> Result<()> {
+    let metadata = file.metadata().map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot stat delivery artifact {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
         return Err(DeliveryError::new(format!(
             "delivery artifact is not a regular file: {}",
             path.display()
         )));
     }
+    if let Some(mode) = require_mode
+        && metadata.permissions().mode() & 0o777 != mode
+    {
+        return Err(DeliveryError::new(format!(
+            "delivery artifact must have mode {mode:04o}: {}",
+            path.display()
+        )));
+    }
+    if require_owner && metadata.uid() != nix::unistd::geteuid().as_raw() {
+        return Err(DeliveryError::new(format!(
+            "delivery artifact is not owned by the current user: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Writes bytes into a fresh temp in the verified parent and atomically renames
+/// it into place.
+///
+/// The temp is created with `O_CREAT | O_EXCL | O_NOFOLLOW`, so a pre-planted
+/// symlink at the temp name cannot be followed or reused, and is verified to be
+/// a regular `0600` file owned by us before any byte is written. `rename`
+/// replaces the destination name rather than following it, so even a symlink
+/// raced into the leaf between the component walk and the rename cannot make the
+/// write land on the symlink's target.
+fn write_file_atomically(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
+    let temp = parent.join(format!(".{file_name}.tmp.{}", unique_suffix()));
+
+    let mut file = File::options()
+        .write(true)
+        .create_new(true)
+        .mode(STATE_FILE_MODE)
+        .custom_flags(LEAF_OPEN_FLAGS)
+        .open(&temp)
+        .map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot create delivery artifact {}: {error}",
+                temp.display()
+            ))
+        })?;
+    // Pin the mode exactly, so an unusual umask cannot leave it wider than
+    // 0600, then verify the descriptor before writing.
+    file.set_permissions(fs::Permissions::from_mode(STATE_FILE_MODE))?;
+    if let Err(error) = verify_regular_file(&file, &temp, Some(STATE_FILE_MODE), true) {
+        drop(file);
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(DeliveryError::environment(format!(
+            "cannot write delivery artifact {}: {error}",
+            temp.display()
+        )));
+    }
+
+    if let Err(error) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(DeliveryError::environment(format!(
+            "cannot install delivery artifact {}: {error}",
+            path.display()
+        )));
+    }
+
+    // Fsync the parent so the rename survives a crash.
+    File::open(parent)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot fsync delivery directory {}: {error}",
+                parent.display()
+            ))
+        })
+}
+
+fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>> {
+    reject_symlink_components(path)?;
+    let file = File::options()
+        .read(true)
+        .custom_flags(LEAF_OPEN_FLAGS)
+        .open(path)
+        .map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot open delivery artifact {}: {error}",
+                path.display()
+            ))
+        })?;
+    verify_regular_file(&file, path, None, false)?;
     let mut buffer = Vec::new();
-    File::open(path)?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut buffer)?;
+    file.take(limit as u64 + 1).read_to_end(&mut buffer)?;
     if buffer.len() > limit {
         return Err(DeliveryError::new(format!(
             "delivery artifact exceeds {limit} bytes: {}",
@@ -696,5 +833,95 @@ pub(crate) mod tests {
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
         assert!(root.existing_candidate("w0", &candidate_id()).is_err());
         assert!(!root.path().join("w0").exists());
+    }
+
+    #[test]
+    fn a_symlinked_artifact_leaf_is_refused_and_its_target_is_untouched() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("symlink-leaf");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+
+        // A file outside delivery state that a hostile symlink aims at. Writing
+        // through the symlink would truncate it, breaking the never-in-Git
+        // guarantee if it lived inside a checkout.
+        let victim = scratch.path.join("victim.txt");
+        fs::write(&victim, b"precious").expect("write victim");
+
+        // Seed the evidence directory through the writer so it exists at 0700,
+        // then plant a symlink at the artifact leaf.
+        candidate
+            .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"{}")
+            .expect("seed evidence directory");
+        let leaf = candidate.path().join(EVIDENCE_DIR).join("layer1.json");
+        symlink(&victim, &leaf).expect("plant the leaf symlink");
+
+        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
+        let error = candidate
+            .write_bytes(&relative, b"{}")
+            .expect_err("a symlinked leaf must be refused");
+        assert!(error.message().contains("symlink"), "{error}");
+        assert_eq!(
+            fs::read(&victim).expect("read victim"),
+            b"precious",
+            "the symlink target must not be truncated or overwritten"
+        );
+        assert!(
+            candidate.read_bytes(&relative).is_err(),
+            "reading through a symlinked leaf must be refused"
+        );
+    }
+
+    #[test]
+    fn a_symlinked_intermediate_directory_is_refused_for_read_write_and_list() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("symlink-dir");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+
+        // A real directory outside delivery state, then a symlink standing in
+        // for the candidate's evidence directory that points at it.
+        let elsewhere = scratch.path.join("elsewhere");
+        fs::create_dir_all(&elsewhere).expect("create the external directory");
+        let evidence = candidate.path().join(EVIDENCE_DIR);
+        symlink(&elsewhere, &evidence).expect("plant the directory symlink");
+
+        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
+        assert!(
+            candidate.write_bytes(&relative, b"{}").is_err(),
+            "writing through a symlinked directory must be refused"
+        );
+        assert!(
+            !elsewhere.join("layer1.json").exists(),
+            "nothing may be written into the symlink target"
+        );
+        assert!(
+            candidate.read_bytes(&relative).is_err(),
+            "reading through a symlinked directory must be refused"
+        );
+        assert!(
+            candidate.list(EVIDENCE_DIR).is_err(),
+            "listing through a symlinked directory must be refused"
+        );
+    }
+
+    #[test]
+    fn a_write_replaces_an_artifact_atomically() {
+        let scratch = Scratch::new("atomic-replace");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
+        candidate
+            .write_bytes(&relative, b"first")
+            .expect("first write");
+        candidate
+            .write_bytes(&relative, b"second")
+            .expect("second write");
+        assert_eq!(candidate.read_bytes(&relative).expect("read"), b"second");
+        // The replace leaves no temp files behind.
+        assert_eq!(
+            candidate.list(EVIDENCE_DIR).expect("list"),
+            vec![OsString::from("layer1.json")]
+        );
     }
 }

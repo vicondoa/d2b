@@ -534,7 +534,7 @@ pub fn request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Work
     candidate.write_json(PANEL_REQUEST_FILE, &request)?;
     WorkflowOutput::ok(WaveCommand::PanelRequest)
         .with_digests(&snapshot.digests())
-        .with_artifact(&candidate.panel_request_path())
+        .with_artifact(candidate, &candidate.panel_request_path())
 }
 
 /// `cargo xtask delivery wave panel-attest`.
@@ -576,7 +576,7 @@ pub fn attest(
 
     WorkflowOutput::ok(WaveCommand::PanelAttest)
         .with_digests(&snapshot.digests())
-        .with_artifact(&candidate.panel_dir())
+        .with_artifact(candidate, &candidate.panel_dir())
 }
 
 /// Reads every record file from an operator-supplied directory.
@@ -839,7 +839,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output.artifact.as_deref(),
-            candidate.panel_request_path().to_str()
+            Some("panel-request.json"),
+            "the artifact must be a candidate-relative key, not an absolute path"
         );
 
         let stored = stored_request(&candidate, &snapshot).expect("stored request");

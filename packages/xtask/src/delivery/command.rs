@@ -4,13 +4,17 @@
 //! stage owns its own module; this file only routes to it and fails closed for
 //! any stage that has not landed.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     model::{CandidateDigests, validate_repository_id},
+    storage::CandidateDir,
 };
 
 /// One stage of the wave delivery workflow.
@@ -22,16 +26,18 @@ pub enum WaveCommand {
     PanelRequest,
     PanelAttest,
     Seal,
+    MergeTarget,
     MergeEligibility,
 }
 
 /// Every wave subcommand, in workflow order.
-pub const WAVE_COMMANDS: [WaveCommand; 7] = [
+pub const WAVE_COMMANDS: [WaveCommand; 8] = [
     WaveCommand::Snapshot,
     WaveCommand::ValidateImport,
     WaveCommand::PanelRequest,
     WaveCommand::PanelAttest,
     WaveCommand::Seal,
+    WaveCommand::MergeTarget,
     WaveCommand::MergeEligibility,
     WaveCommand::Help,
 ];
@@ -45,6 +51,7 @@ impl WaveCommand {
             Self::PanelRequest => "panel-request",
             Self::PanelAttest => "panel-attest",
             Self::Seal => "seal",
+            Self::MergeTarget => "merge-target",
             Self::MergeEligibility => "merge-eligibility",
         }
     }
@@ -62,7 +69,7 @@ impl WaveCommand {
             Self::Snapshot => "ADR046-delivery-002",
             Self::ValidateImport => "ADR046-delivery-003",
             Self::PanelRequest | Self::PanelAttest => "ADR046-delivery-005",
-            Self::Seal | Self::MergeEligibility => "ADR046-delivery-006",
+            Self::Seal | Self::MergeTarget | Self::MergeEligibility => "ADR046-delivery-006",
         }
     }
 
@@ -86,9 +93,55 @@ impl WaveCommand {
             Self::Seal => {
                 "Bind unanimous panel records and passing validator lanes to one candidate."
             }
+            Self::MergeTarget => {
+                "Capture the wave's current pull-request stack into the candidate as the \
+                 merge-eligibility input."
+            }
             Self::MergeEligibility => {
                 "Confirm, per stacked pull request, that the seal still matches the current base \
                  and head and every required check is green."
+            }
+        }
+    }
+
+    /// A one-line synopsis showing every option and its value grammar,
+    /// including the compound `key=value` forms the flat option list cannot
+    /// express.
+    pub fn synopsis(self) -> &'static str {
+        match self {
+            Self::Help => "cargo xtask delivery wave help",
+            Self::Snapshot => {
+                "cargo xtask delivery wave snapshot --program NAME --wave ID \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT --base LOGICAL_ID=REVISION \
+                 [--head LOGICAL_ID=REVISION] [--edge FROM=TO] \
+                 [--generated NAME=LOGICAL_ID:PATH] [--dependency NAME=LOGICAL_ID:PATH] \
+                 [--contract NAME=LOGICAL_ID:PATH] [--state-dir DIR]"
+            }
+            Self::ValidateImport => {
+                "cargo xtask delivery wave validate-import --snapshot PATH --validation NAME \
+                 --result passed|failed --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--lane github-ci|local-host] [--command TEXT] [--log PATH] [--locator TEXT] \
+                 [--candidate CANDIDATE_ID] [--state-dir DIR]"
+            }
+            Self::PanelRequest => {
+                "cargo xtask delivery wave panel-request --snapshot PATH \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
+            }
+            Self::PanelAttest => {
+                "cargo xtask delivery wave panel-attest --snapshot PATH --records DIR \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
+            }
+            Self::Seal => {
+                "cargo xtask delivery wave seal --snapshot PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 [--state-dir DIR]"
+            }
+            Self::MergeTarget => {
+                "cargo xtask delivery wave merge-target --seal PATH --target PATH \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
+            }
+            Self::MergeEligibility => {
+                "cargo xtask delivery wave merge-eligibility --seal PATH \
+                 --repo LOGICAL_ID=CHECKOUT_ROOT [--target PATH] [--state-dir DIR]"
             }
         }
     }
@@ -101,7 +154,8 @@ impl WaveCommand {
             Self::PanelRequest => &["--snapshot", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
             Self::Seal => &["--snapshot", "--repo"],
-            Self::MergeEligibility => &["--seal", "--target", "--repo"],
+            Self::MergeTarget => &["--seal", "--target", "--repo"],
+            Self::MergeEligibility => &["--seal", "--repo"],
         }
     }
 
@@ -124,6 +178,7 @@ impl WaveCommand {
                 "--locator",
                 "--candidate",
             ],
+            Self::MergeEligibility => &["--state-dir", "--target"],
             _ => &["--state-dir"],
         }
     }
@@ -138,6 +193,7 @@ impl WaveCommand {
                 | Self::PanelRequest
                 | Self::PanelAttest
                 | Self::Seal
+                | Self::MergeTarget
                 | Self::MergeEligibility
         )
     }
@@ -183,14 +239,17 @@ impl WorkflowOutput {
         self
     }
 
-    /// Records the artifact this invocation produced. Only the external state
-    /// path is reported; artifact content never reaches stdout.
-    pub fn with_artifact(mut self, path: &std::path::Path) -> Result<Self> {
-        self.artifact = Some(
-            path.to_str()
-                .ok_or_else(|| DeliveryError::new("delivery artifact path is not UTF-8"))?
-                .to_owned(),
-        );
+    /// Records the artifact this invocation produced, as a bounded
+    /// candidate-relative key.
+    ///
+    /// Only the logical key (for example `evidence/local-host/layer1.json`) is
+    /// reported, never the absolute state path: structured stdout must never
+    /// carry `HOME`, the local username, or a checkout or store path into a CI
+    /// or operator log. The absolute path stays internal to storage. The
+    /// `candidate_id` field already addresses which candidate the key belongs
+    /// to, so the pair stays machine-readable.
+    pub fn with_artifact(mut self, candidate: &CandidateDir, path: &Path) -> Result<Self> {
+        self.artifact = Some(candidate.artifact_key(path)?);
         Ok(self)
     }
 }
@@ -199,6 +258,7 @@ impl WorkflowOutput {
 pub struct WorkflowCommandHelp {
     pub name: String,
     pub purpose: String,
+    pub synopsis: String,
     pub required_options: Vec<String>,
     pub optional_options: Vec<String>,
     pub implemented: bool,
@@ -234,6 +294,7 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
                 .map(|command| WorkflowCommandHelp {
                     name: command.as_str().to_owned(),
                     purpose: command.purpose().to_owned(),
+                    synopsis: command.synopsis().to_owned(),
                     required_options: command
                         .required_options()
                         .iter()
@@ -255,6 +316,7 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
         WaveCommand::PanelRequest => super::panel::run_request(rest),
         WaveCommand::PanelAttest => super::panel::run_attest(rest),
         WaveCommand::Seal => super::seal::run(rest),
+        WaveCommand::MergeTarget => super::eligibility::run_capture(rest),
         WaveCommand::MergeEligibility => super::eligibility::run(rest),
     }
 }
@@ -397,9 +459,51 @@ mod tests {
                 "panel-request",
                 "panel-attest",
                 "seal",
+                "merge-target",
                 "merge-eligibility",
                 "help",
             ]
+        );
+    }
+
+    #[test]
+    fn help_shows_a_synopsis_with_compound_option_grammar() {
+        let output = dispatch(&args(&["wave", "help"])).expect("help succeeds");
+        for command in &output.commands {
+            assert!(
+                !command.synopsis.is_empty(),
+                "{} must carry a synopsis",
+                command.name
+            );
+            assert!(
+                command.synopsis.contains(&command.name),
+                "{}'s synopsis must name the stage",
+                command.name
+            );
+        }
+        let snapshot = output
+            .commands
+            .iter()
+            .find(|command| command.name == "snapshot")
+            .expect("snapshot is listed");
+        assert!(
+            snapshot
+                .synopsis
+                .contains("--repo LOGICAL_ID=CHECKOUT_ROOT"),
+            "the synopsis must spell the compound --repo grammar: {}",
+            snapshot.synopsis
+        );
+        assert!(
+            snapshot.synopsis.contains("--edge FROM=TO"),
+            "the synopsis must spell the compound --edge grammar: {}",
+            snapshot.synopsis
+        );
+        assert!(
+            snapshot
+                .synopsis
+                .contains("--generated NAME=LOGICAL_ID:PATH"),
+            "the synopsis must spell the compound fingerprint grammar: {}",
+            snapshot.synopsis
         );
     }
 

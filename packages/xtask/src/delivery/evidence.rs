@@ -64,28 +64,42 @@ use super::{
 /// Chunk size used to stream a validator log through the hasher.
 const LOG_CHUNK_BYTES: usize = 64 * 1024;
 
-/// Which of the concurrent validator lanes produced a record.
+/// Which of the concurrent lanes of spec section 12.2 produced a record.
+///
+/// This is the one canonical lane ABI: `wave validate-import` writes these
+/// variants and `wave seal` reads them, so the two stages can never disagree
+/// on the on-disk vocabulary again.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum EvidenceLane {
-    /// Required GitHub CI.
-    Ci,
-    /// Heavy-gated validators run on the integrator's development host.
-    Local,
-    /// Heavy-gated host/VM validators.
-    Host,
+    /// Required GitHub CI (the Layer-1 `check` rollup).
+    GithubCi,
+    /// The heavy-gated local and host validators run by the integrator.
+    LocalHost,
+    /// The ten-role panel. Its authoritative evidence is the record set;
+    /// a lane record for the panel is accepted but never a substitute.
+    Panel,
 }
 
 /// Every lane, in the order section 12.2 lists them.
-pub const EVIDENCE_LANES: [EvidenceLane; 3] =
-    [EvidenceLane::Ci, EvidenceLane::Local, EvidenceLane::Host];
+pub const EVIDENCE_LANES: [EvidenceLane; 3] = [
+    EvidenceLane::GithubCi,
+    EvidenceLane::LocalHost,
+    EvidenceLane::Panel,
+];
+
+/// Lanes that must each carry at least one passing imported result before a
+/// seal. The panel is not here: its authoritative evidence is the ten
+/// unanimous records, which the seal verifies directly.
+pub const REQUIRED_EVIDENCE_LANES: [EvidenceLane; 2] =
+    [EvidenceLane::GithubCi, EvidenceLane::LocalHost];
 
 impl EvidenceLane {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Ci => "ci",
-            Self::Local => "local",
-            Self::Host => "host",
+            Self::GithubCi => "github-ci",
+            Self::LocalHost => "local-host",
+            Self::Panel => "panel",
         }
     }
 
@@ -95,7 +109,7 @@ impl EvidenceLane {
             .find(|lane| lane.as_str() == value)
             .ok_or_else(|| {
                 DeliveryError::usage(format!(
-                    "--lane must be one of ci, local, host; found {value:?}"
+                    "--lane must be one of github-ci, local-host, panel; found {value:?}"
                 ))
             })
     }
@@ -174,10 +188,44 @@ impl EvidenceRecord {
         Ok(())
     }
 
-    fn bound_to(&self, snapshot: &WaveSnapshot) -> bool {
-        self.candidate_id == snapshot.candidate_id
-            && self.content_id == snapshot.content_id
-            && self.snapshot_sha256 == snapshot.snapshot_sha256
+    /// Rejects evidence that is not bound to the given snapshot digests.
+    ///
+    /// The `snapshot_sha256` comparison is the load-bearing one. A
+    /// history-only rebase preserves `candidate_id` and `content_id` by
+    /// design, so those two alone would silently carry a stale lane result
+    /// across a rebase; `snapshot_sha256` moves with the base and head object
+    /// IDs and is what forces the re-import.
+    pub fn ensure_bound(
+        &self,
+        candidate_id: &CandidateId,
+        content_id: &ContentId,
+        snapshot_sha256: &SnapshotSha256,
+    ) -> Result<()> {
+        if &self.candidate_id != candidate_id
+            || &self.content_id != content_id
+            || &self.snapshot_sha256 != snapshot_sha256
+        {
+            return Err(DeliveryError::new(format!(
+                "validator evidence for {:?} on lane {} is bound to a stale snapshot; a rebase \
+                 preserves the panel record but never a lane result, so every lane reruns and \
+                 re-imports against the current snapshot",
+                self.validation,
+                self.lane.as_str()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Rejects a lane result that is anything other than a pass.
+    pub fn ensure_passed(&self) -> Result<()> {
+        if self.result != EvidenceResult::Passed {
+            return Err(DeliveryError::new(format!(
+                "validator evidence for {:?} on lane {} did not pass",
+                self.validation,
+                self.lane.as_str()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -232,7 +280,7 @@ fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOu
     let path = import(&candidate, &record)?;
     WorkflowOutput::ok(WaveCommand::ValidateImport)
         .with_digests(&sealed.digests())
-        .with_artifact(&path)
+        .with_artifact(&candidate, &path)
 }
 
 /// Writes one evidence record into the candidate directory.
@@ -248,29 +296,90 @@ pub fn import(candidate: &CandidateDir, record: &EvidenceRecord) -> Result<PathB
     candidate.resolve(&relative)
 }
 
-/// Reads every evidence record filed against one candidate, ordered by lane
-/// and validation identifier.
-pub fn read_all(candidate: &CandidateDir, snapshot: &WaveSnapshot) -> Result<Vec<EvidenceRecord>> {
+/// Reads every evidence record filed against one candidate from the canonical
+/// nested layout `evidence/<lane>/<validation>.json`, validated and bound to
+/// the given snapshot digests.
+///
+/// This is the single reader both `wave validate-import` (through
+/// [`read_all`]) and `wave seal` consume, so the two stages read exactly what
+/// the writer wrote. The layout is enforced strictly: the only entries allowed
+/// directly under `evidence/` are the known lane directories, and the only
+/// entries allowed inside a lane directory are `<validation>.json` records
+/// whose recorded validation matches the file name. A stray file, an unknown
+/// lane, or a record filed under the wrong lane or name is a rejection, which
+/// keeps raw validator output structurally unable to masquerade as evidence.
+pub fn read_lane_records(
+    candidate: &CandidateDir,
+    candidate_id: &CandidateId,
+    content_id: &ContentId,
+    snapshot_sha256: &SnapshotSha256,
+) -> Result<Vec<EvidenceRecord>> {
+    let evidence_root = Path::new(EVIDENCE_DIR);
+    if !candidate.resolve(evidence_root)?.is_dir() {
+        return Ok(Vec::new());
+    }
     let mut records = Vec::new();
-    for lane in EVIDENCE_LANES {
-        let relative = Path::new(EVIDENCE_DIR).join(lane.as_str());
-        if !candidate.resolve(&relative)?.is_dir() {
-            continue;
+    for entry in candidate.list(evidence_root)? {
+        let entry_name = entry
+            .to_str()
+            .ok_or_else(|| DeliveryError::new("evidence entry name is not UTF-8"))?
+            .to_owned();
+        let lane = EvidenceLane::parse(&entry_name).map_err(|_| {
+            DeliveryError::new(format!(
+                "evidence directory holds {entry_name:?}, which is not a known validator lane; \
+                 it is not an evidence record and raw output never lives under evidence"
+            ))
+        })?;
+        let lane_dir = evidence_root.join(lane.as_str());
+        if !candidate.resolve(&lane_dir)?.is_dir() {
+            return Err(DeliveryError::new(format!(
+                "evidence lane entry {entry_name:?} is not a directory"
+            )));
         }
-        for name in candidate.list(&relative)? {
-            let record: EvidenceRecord = candidate.read_json(relative.join(&name))?;
-            record.validate()?;
-            if !record.bound_to(snapshot) {
+        for file in candidate.list(&lane_dir)? {
+            let file_name = file
+                .to_str()
+                .ok_or_else(|| DeliveryError::new("evidence record file name is not UTF-8"))?
+                .to_owned();
+            if !file_name.ends_with(".json") {
                 return Err(DeliveryError::new(format!(
-                    "evidence {}/{} is bound to a different candidate",
-                    lane.as_str(),
-                    Path::new(&name).display()
+                    "validator lane {} holds {file_name:?}, which is not an evidence record",
+                    lane.as_str()
                 )));
             }
+            let record: EvidenceRecord = candidate.read_json(lane_dir.join(&file_name))?;
+            record.validate()?;
+            if record.lane != lane {
+                return Err(DeliveryError::new(format!(
+                    "evidence record filed under lane {} declares lane {}",
+                    lane.as_str(),
+                    record.lane.as_str()
+                )));
+            }
+            if file_name != format!("{}.json", record.validation) {
+                return Err(DeliveryError::new(format!(
+                    "evidence record {file_name:?} in lane {} declares validation {:?}, so its \
+                     file name does not address its own content",
+                    lane.as_str(),
+                    record.validation
+                )));
+            }
+            record.ensure_bound(candidate_id, content_id, snapshot_sha256)?;
             records.push(record);
         }
     }
     Ok(records)
+}
+
+/// Reads every evidence record filed against one candidate, ordered by lane
+/// and validation identifier.
+pub fn read_all(candidate: &CandidateDir, snapshot: &WaveSnapshot) -> Result<Vec<EvidenceRecord>> {
+    read_lane_records(
+        candidate,
+        &snapshot.candidate_id,
+        &snapshot.content_id,
+        &snapshot.snapshot_sha256,
+    )
 }
 
 /// Parsed `wave validate-import` invocation.
@@ -297,8 +406,15 @@ impl ImportRequest {
         let checkouts = options.repository_roots()?;
         let lane = match options.optional_string("--lane")? {
             Some(value) => EvidenceLane::parse(&value)?,
-            None => EvidenceLane::Local,
+            None => EvidenceLane::LocalHost,
         };
+        if lane == EvidenceLane::Panel {
+            return Err(DeliveryError::usage(
+                "--lane panel is not importable: the panel lane's evidence is the ten unanimous \
+                 records produced by wave panel-attest, not a validator import; import github-ci \
+                 or local-host",
+            ));
+        }
         let command = options.optional_string("--command")?;
         let log_path = options.optional_path("--log")?;
         let locator = options.optional_string("--locator")?;
@@ -492,7 +608,7 @@ mod tests {
         let snapshot = take(&fixture);
         let output = import_into(
             &fixture,
-            &import_args(&fixture, &snapshot, &["--lane", "host"]),
+            &import_args(&fixture, &snapshot, &["--lane", "local-host"]),
         )
         .expect("import");
 
@@ -501,15 +617,16 @@ mod tests {
             output.candidate_id.as_deref(),
             Some(snapshot.candidate_id.as_str())
         );
+        assert_eq!(
+            output.artifact.as_deref(),
+            Some("evidence/local-host/test-integration.json"),
+            "the artifact must be a candidate-relative key, not an absolute path"
+        );
         let expected = fixture
             .state()
             .join("w0")
             .join(snapshot.candidate_id.as_str())
-            .join("evidence/host/test-integration.json");
-        assert_eq!(
-            output.artifact.as_deref(),
-            Some(&*expected.to_string_lossy())
-        );
+            .join("evidence/local-host/test-integration.json");
         assert!(expected.is_file());
     }
 
@@ -550,7 +667,7 @@ mod tests {
                     .state()
                     .join("w0")
                     .join(snapshot.candidate_id.as_str())
-                    .join("evidence/local/test-integration.json"),
+                    .join("evidence/local-host/test-integration.json"),
             )
             .expect("read record"),
         )
@@ -695,15 +812,15 @@ mod tests {
         let records = read_all(&candidate, &snapshot).expect("read records");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].result, EvidenceResult::Failed);
-        assert_eq!(records[0].lane, EvidenceLane::Local);
+        assert_eq!(records[0].lane, EvidenceLane::LocalHost);
         assert_eq!(records[0].validation, "test-integration");
     }
 
     #[test]
-    fn every_lane_files_under_its_own_directory() {
+    fn every_importable_lane_files_under_its_own_directory() {
         let fixture = GitFixture::new("evidence-lanes");
         let snapshot = take(&fixture);
-        for lane in EVIDENCE_LANES {
+        for lane in REQUIRED_EVIDENCE_LANES {
             import_into(
                 &fixture,
                 &import_args(&fixture, &snapshot, &["--lane", lane.as_str()]),
@@ -717,8 +834,18 @@ mod tests {
         let records = read_all(&candidate, &snapshot).expect("read records");
         assert_eq!(
             records.iter().map(|record| record.lane).collect::<Vec<_>>(),
-            EVIDENCE_LANES.to_vec()
+            REQUIRED_EVIDENCE_LANES.to_vec()
         );
+    }
+
+    #[test]
+    fn the_panel_lane_cannot_be_imported_through_validate_import() {
+        let fixture = GitFixture::new("evidence-panel-lane");
+        let snapshot = take(&fixture);
+        let error = ImportRequest::parse(&import_args(&fixture, &snapshot, &["--lane", "panel"]))
+            .expect_err("the panel lane is not importable");
+        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
+        assert!(error.message().contains("panel-attest"), "{error}");
     }
 
     #[test]
@@ -806,5 +933,168 @@ mod tests {
             crate::delivery::model::sha256_bytes(contents.as_bytes())
         );
         assert!(digest_without_retaining(&fixture.scratch().join("absent.log")).is_err());
+    }
+
+    /// Drives the whole pipeline through the production code paths: `snapshot`
+    /// writes the candidate, `validate-import` writes both validator lanes
+    /// through the real writer (never a fabricated fixture), and the panel is
+    /// requested and attested. The returned candidate is ready for `seal`,
+    /// which consumes exactly what these stages produced. This is the
+    /// end-to-end proof that the single evidence ABI closes the writer/reader
+    /// gap the two divergent lane enums had opened.
+    fn drive_to_sealable(
+        name: &str,
+    ) -> (
+        GitFixture,
+        StateRoot,
+        CandidateDir,
+        crate::delivery::panel::SnapshotView,
+    ) {
+        let fixture = GitFixture::new(name);
+        let snapshot = take(&fixture);
+
+        import_into(
+            &fixture,
+            &import_args(&fixture, &snapshot, &["--lane", "github-ci"]),
+        )
+        .expect("import the github-ci lane through the production writer");
+        import_into(
+            &fixture,
+            &import_args(&fixture, &snapshot, &["--lane", "local-host"]),
+        )
+        .expect("import the local-host lane through the production writer");
+
+        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+        let snapshot_path = fixture
+            .state()
+            .join("w0")
+            .join(snapshot.candidate_id.as_str())
+            .join("snapshot.json");
+        let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
+            .expect("open the candidate the snapshot names");
+
+        crate::delivery::panel::request(&candidate, &view).expect("panel request");
+        let files = crate::delivery::panel::tests::record_files(&view);
+        let records_dir = fixture.scratch().join("panel-records");
+        std::fs::create_dir_all(&records_dir).expect("panel records directory");
+        for (record_name, bytes) in &files {
+            std::fs::write(records_dir.join(record_name), bytes).expect("write panel record");
+        }
+        crate::delivery::panel::attest(&candidate, &view, &records_dir).expect("panel attest");
+
+        (fixture, root, candidate, view)
+    }
+
+    #[test]
+    fn snapshot_validate_import_panel_and_seal_complete_end_to_end() {
+        let (_fixture, _root, candidate, view) = drive_to_sealable("delivery-e2e-seal");
+
+        let output = crate::delivery::seal::seal(&candidate, &view).expect("seal the wave");
+        assert_eq!(output.operation, "seal");
+
+        let record: crate::delivery::seal::SealRecord = candidate
+            .read_json(crate::delivery::storage::SEAL_FILE)
+            .expect("read the sealed record");
+        record.validate().expect("the sealed record re-validates");
+        assert_eq!(record.candidate_id, view.candidate_id);
+        assert_eq!(record.evidence.len(), 2);
+        assert_eq!(
+            record.panel.records.len(),
+            crate::delivery::model::PANEL_ROLES.len()
+        );
+        assert!(record.panel.unanimous);
+    }
+
+    #[test]
+    fn a_history_only_rebase_invalidates_lane_evidence_while_the_panel_survives() {
+        let (_fixture, _root, candidate, view) = drive_to_sealable("delivery-e2e-rebase");
+        crate::delivery::seal::seal(&candidate, &view).expect("seal before the rebase");
+
+        // A history-only rebase preserves candidate_id and content_id but moves
+        // snapshot_sha256, so the lane evidence goes stale and the seal refuses.
+        let rebased = crate::delivery::panel::tests::rebased(&view);
+        let error = crate::delivery::seal::seal(&candidate, &rebased)
+            .expect_err("lane evidence is stale after a rebase");
+        assert!(error.message().contains("stale snapshot"), "{error}");
+
+        // The panel record set still validates against the rebased snapshot: it
+        // binds content identity, not the moved snapshot digest.
+        let request = crate::delivery::panel::stored_request(&candidate, &rebased)
+            .expect("the panel request survives a history-only rebase");
+        let attestation = crate::delivery::panel::attested_records(&candidate, &request)
+            .expect("the panel records survive a history-only rebase");
+        assert!(attestation.unanimous);
+    }
+
+    #[test]
+    fn structured_stdout_never_leaks_absolute_state_or_host_paths() {
+        let fixture = GitFixture::new("delivery-no-path-leak");
+        let snapshot = take(&fixture);
+
+        let mut outputs = Vec::new();
+        outputs.push(
+            import_into(
+                &fixture,
+                &import_args(&fixture, &snapshot, &["--lane", "github-ci"]),
+            )
+            .expect("import the github-ci lane"),
+        );
+        outputs.push(
+            import_into(
+                &fixture,
+                &import_args(&fixture, &snapshot, &["--lane", "local-host"]),
+            )
+            .expect("import the local-host lane"),
+        );
+
+        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+        let snapshot_path = fixture
+            .state()
+            .join("w0")
+            .join(snapshot.candidate_id.as_str())
+            .join("snapshot.json");
+        let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
+            .expect("open the candidate the snapshot names");
+
+        outputs.push(crate::delivery::panel::request(&candidate, &view).expect("panel request"));
+
+        let files = crate::delivery::panel::tests::record_files(&view);
+        let records_dir = fixture.scratch().join("panel-records");
+        std::fs::create_dir_all(&records_dir).expect("panel records directory");
+        for (record_name, bytes) in &files {
+            std::fs::write(records_dir.join(record_name), bytes).expect("write panel record");
+        }
+        outputs.push(
+            crate::delivery::panel::attest(&candidate, &view, &records_dir).expect("panel attest"),
+        );
+        outputs.push(crate::delivery::seal::seal(&candidate, &view).expect("seal the wave"));
+
+        let state = fixture.state();
+        let state_str = state.to_string_lossy();
+        for output in &outputs {
+            let json = serde_json::to_string(output).expect("serialize the workflow output");
+            assert!(
+                !json.contains(state_str.as_ref()),
+                "{} leaked the absolute state path into structured stdout: {json}",
+                output.operation
+            );
+            assert!(
+                !json.contains("/home/"),
+                "{} leaked a HOME or checkout path into structured stdout: {json}",
+                output.operation
+            );
+            assert!(
+                !json.contains("/nix/store/"),
+                "{} leaked a store path into structured stdout: {json}",
+                output.operation
+            );
+            if let Some(artifact) = output.artifact.as_deref() {
+                assert!(
+                    !artifact.starts_with('/'),
+                    "{} reported an absolute artifact key: {artifact}",
+                    output.operation
+                );
+            }
+        }
     }
 }

@@ -133,7 +133,7 @@ fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<Workflow
     write(&candidate, &snapshot)?;
     WorkflowOutput::ok(WaveCommand::Snapshot)
         .with_digests(&snapshot.digests())
-        .with_artifact(&candidate.snapshot_path())
+        .with_artifact(&candidate, &candidate.snapshot_path())
 }
 
 /// Writes `snapshot.json` into the candidate directory.
