@@ -89,6 +89,7 @@ use d2b_realm_core::{
 };
 use schemars::schema::RootSchema;
 
+mod changelog;
 mod delivery;
 mod inventory;
 
@@ -357,10 +358,11 @@ fn main() -> std::process::ExitCode {
         {
             run_inventory(Some(PathBuf::from(output.as_str())))
         }
+        [command, rest @ ..] if command == "changelog-fold" => changelog::run_cli(rest),
         [command, rest @ ..] if command == "delivery" => delivery::run_cli(rest),
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-eligibility|help> [options]>"
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }

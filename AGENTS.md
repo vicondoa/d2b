@@ -133,14 +133,31 @@ same test model.
 
 ## Changelog & Releases
 
-Every PR that changes code **must** update `CHANGELOG.md`. The CI gate
-enforces this.
+Every PR that changes code **must** ship release notes. The CI gate
+enforces this and accepts either form: an entry in `CHANGELOG.md`, or a
+changelog fragment under `changelog.d/`.
 
 ### Format
 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Add entries under
 `## [Unreleased]`. When ready to release, rename the section to
 `## [X.Y.Z] - YYYY-MM-DD`.
+
+### Fragments (`changelog.d/`)
+
+When more than one branch is in flight, do **not** edit `CHANGELOG.md` —
+every branch appending to the same `## [Unreleased]` block is a guaranteed
+merge conflict. Write one `changelog.d/<branch-name>.md` fragment instead,
+holding the same `### <Section>` headings and entries you would have added
+to the block. Two branches never write the same file.
+
+The integrator folds the fragments at merge time with
+`make changelog-fold` (`cargo xtask changelog-fold`): entries collate by
+section into `## [Unreleased]` in Keep a Changelog order, released
+versions are untouched, and the consumed fragments are deleted. A
+fragment with an unknown heading, a repeated heading, an empty section, or
+content outside a section fails the fold rather than losing the entry. See
+[`changelog.d/README.md`](./changelog.d/README.md).
 
 ### Auto-release
 
