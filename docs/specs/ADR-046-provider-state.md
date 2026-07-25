@@ -841,7 +841,7 @@ Bundle properties:
 | Property | Rules |
 | --- | --- |
 | `resources` order | Lexicographically sorted by `(type, metadata.zone, metadata.name)` |
-| `contentHash` | SHA-256 of the canonical-sorted UTF-8 `resources` array alone (excluding envelope fields); it is the generation identity (`generationId`) and is deterministic across independent builds of the same Nix inputs |
+| `contentHash` | The D101 `d2b:v3:resource-bundle` digest over the canonical-sorted UTF-8 `resources` array alone (excluding envelope fields); it is the generation identity (`generationId`) and is deterministic across independent builds of the same Nix inputs |
 | `generatedAt` | Fixed Unix epoch `1970-01-01T00:00:00.000Z` for reproducibility; the Zone daemon records the real activation time in its own generation record, never in the bundle |
 | Resource metadata | Input bundle contains only `metadata.name` and `metadata.zone` per resource; `managedBy`, `configurationGeneration`, `uid`, `generation`, `resourceVersion`, and timestamps are set by the configuration service / core when persisting activated resources, never by the bundle emitter |
 | Credential refs | Remain as `"Credential/<name>"` strings in the bundle; raw key material never appears |
