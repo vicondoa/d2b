@@ -861,6 +861,8 @@ fields that request panel, agent, or model metadata.
   (W2fu4 H10) for the full retrospective.
 
 - **Signing.** Sign-offs / GPG signing are not used.
+- **Typography.** No em-dash (U+2014) in the subject or the body; use
+  a spaced hyphen. See the Don'ts entry for the repository-wide rule.
 - **AI/tool attribution.** Do not tag or list the AI agent, assistant,
   or model used in commit subjects, commit bodies, PR descriptions,
   changelog entries, or shipped docs. Do not add `Co-authored-by`
@@ -1044,6 +1046,23 @@ Touch these only with a clear plan and a corresponding test run.
   sections. See [Versioning & changelog](#versioning--changelog).
   The functional `d2b.defaultSwitchReadiness.<wave>` option
   surface is the one deliberate exception.
+- **Don't use the em-dash character (U+2014, spelled `\u2014`)
+  anywhere in the repository.** Not in source, comments, string
+  literals, CLI help or error text, documentation prose, ADRs, specs,
+  changelog entries, commit messages, or PR bodies. Use a spaced
+  hyphen ` - `, or restructure the sentence. This rule deliberately
+  names the codepoint rather than printing the character, because the
+  gate below would flag this very line. `make check-tier0` scans every
+  tracked and every non-ignored untracked file and fails closed with
+  the offending `file:line` list, so a reintroduced em-dash breaks the
+  build rather than surviving review. When a test genuinely needs the
+  codepoint (a parser tolerance case, the gate's own pattern) spell it
+  as an escape such as `"\u{2014}"` or `$'\u2014'`, never as the
+  character. The en-dash `–` (U+2013) is deliberately out of scope:
+  the ADR-046 work-item tokenizer treats it as a separator while a
+  plain hyphen is an ID character, so rewriting a range like
+  `ADR046-network-001–004` would mint a nonexistent dependency ID.
+  Banning it is a separate decision.
 - **Don't let a host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside
