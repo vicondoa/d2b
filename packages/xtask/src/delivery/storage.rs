@@ -70,7 +70,10 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsFd, BorrowedFd, OwnedFd},
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::{
+            ffi::OsStringExt,
+            fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        },
     },
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -221,6 +224,17 @@ impl StateRoot {
 ///
 /// Every accessor takes a relative path validated against traversal, so a
 /// caller cannot escape the state root.
+///
+/// Reads, listings, and writes all resolve on the *same anchored inode chain*:
+/// each operation opens the candidate directory from `/` a component at a time
+/// with `O_NOFOLLOW`, verifies it is a real `0700` directory owned by us, and
+/// walks every component beneath it relative to a pinned parent descriptor
+/// rather than re-resolving a pathname per syscall. The read side therefore has
+/// the identical anchoring discipline as the write side: an attacker who
+/// controls a writable ancestor can no longer swap the candidate subtree for a
+/// forged tree during a path-based check-then-open read, restore the legitimate
+/// tree, and have forged evidence sealed - a symlinked ancestor fails the walk
+/// with `ELOOP` and a swapped inode fails the identity/mode/owner check.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateDir {
     root: PathBuf,
@@ -323,9 +337,9 @@ impl CandidateDir {
 
     pub fn read_json<T: DeserializeOwned>(&self, relative: impl AsRef<Path>) -> Result<T> {
         let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
-        let path = self.resolve(relative)?;
-        let bytes = read_limited(&path, MAX_JSON_BYTES, &key)?;
+        let bytes = read_limited_anchored(&self.path, relative, MAX_JSON_BYTES, &key)?;
         serde_json::from_slice(&bytes).map_err(|error| {
             DeliveryError::new(format!("invalid JSON in delivery artifact {key}: {error}"))
         })
@@ -333,32 +347,22 @@ impl CandidateDir {
 
     pub fn read_bytes(&self, relative: impl AsRef<Path>) -> Result<Vec<u8>> {
         let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
-        read_limited(&self.resolve(relative)?, MAX_ARTIFACT_BYTES, &key)
+        read_limited_anchored(&self.path, relative, MAX_ARTIFACT_BYTES, &key)
     }
 
     /// Lists the entry names of a directory under the candidate directory.
+    ///
+    /// The directory is reached by an anchored fd-relative walk from `/` - the
+    /// same inode chain the anchored writer uses - and its entries are read
+    /// through the pinned descriptor, so the listing observes exactly the tree
+    /// the writer produced rather than one a check-then-open race could swap in.
     pub fn list(&self, relative: impl AsRef<Path>) -> Result<Vec<OsString>> {
         let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
-        let path = self.resolve(relative)?;
-        reject_symlink_components(&path)?;
-        let mut names = fs::read_dir(&path)
-            .map_err(|error| {
-                DeliveryError::environment(format!(
-                    "cannot list delivery artifact directory {key}: {error}"
-                ))
-            })?
-            .map(|entry| {
-                entry.map(|entry| entry.file_name()).map_err(|error| {
-                    DeliveryError::environment(format!(
-                        "cannot read delivery artifact directory {key}: {error}"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        names.sort();
-        Ok(names)
+        list_anchored(&self.path, relative, &key)
     }
 }
 
@@ -582,16 +586,17 @@ fn verify_regular_file(
 /// Writes bytes beneath the candidate directory, anchored on verified
 /// directory descriptors the whole way down.
 ///
-/// The candidate directory is opened once as the anchor; every intermediate
-/// directory is opened (or created and its parent fsynced) relative to its
-/// parent's descriptor and verified by `fstat` to be a real `0700` directory
-/// owned by us. The temp create, the rename, and the containing-directory
-/// fsync all run against the *same* pinned parent descriptor, so replacing a
-/// directory by name after the walk cannot redirect any of them. A per-syscall
-/// `O_NOFOLLOW` on each single-component open is equivalent to
-/// `RESOLVE_NO_SYMLINKS`, and opening each name relative to its parent
-/// descriptor is equivalent to `RESOLVE_BENEATH`, so the walk cannot be
-/// diverted upward or through a symlink.
+/// The candidate directory is opened once as the anchor by walking its absolute
+/// path from `/` with `O_NOFOLLOW` on each hop; every intermediate directory is
+/// opened (or created and its parent fsynced) relative to its parent's
+/// descriptor and verified by `fstat` to be a real `0700` directory owned by
+/// us. The temp create, the rename, and the containing-directory fsync all run
+/// against the *same* pinned parent descriptor, so replacing a directory by
+/// name after the walk cannot redirect any of them. A per-syscall `O_NOFOLLOW`
+/// on each single-component open is equivalent to `RESOLVE_NO_SYMLINKS`, and
+/// opening each name relative to its parent descriptor is equivalent to
+/// `RESOLVE_BENEATH`, so the walk cannot be diverted upward or through a
+/// symlink.
 fn write_anchored(candidate: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
     let relative_key = relative
         .to_str()
@@ -780,8 +785,19 @@ fn open_or_create_child(parent: BorrowedFd<'_>, name: &str) -> Result<OwnedFd> {
     match rustix::fs::openat(parent, name, flags, Mode::empty()) {
         Ok(fd) => Ok(fd),
         Err(rustix::io::Errno::NOENT) => {
+            // Test-only barrier: fired after the component is observed absent
+            // and before the `mkdirat`, so the concurrent-creation regression
+            // can force both racing writers past `ENOENT` before either creates
+            // the directory, guaranteeing exactly one hits the `EEXIST` branch.
+            // Compiled out entirely in non-test builds.
+            #[cfg(test)]
+            create_race_hook::before_mkdirat();
             match rustix::fs::mkdirat(parent, name, Mode::from_bits_truncate(STATE_DIR_MODE)) {
-                Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                Ok(()) => {}
+                Err(rustix::io::Errno::EXIST) => {
+                    #[cfg(test)]
+                    create_race_hook::record_eexist();
+                }
                 Err(error) => {
                     return Err(DeliveryError::environment(format!(
                         "cannot create a delivery state directory: {error}"
@@ -802,6 +818,85 @@ fn open_or_create_child(parent: BorrowedFd<'_>, name: &str) -> Result<OwnedFd> {
         Err(error) => Err(DeliveryError::environment(format!(
             "cannot open a delivery state directory: {error}"
         ))),
+    }
+}
+
+/// Test-only synchronization for the concurrent-creation regression.
+///
+/// [`open_or_create_child`] fires [`before_mkdirat`] after a component is
+/// observed absent (`openat` returned `ENOENT`) and before the `mkdirat`. The
+/// regression test installs a two-party barrier there so both racing writers
+/// provably observe `ENOENT` before either creates the directory: a writer
+/// cannot pass the barrier - and therefore cannot `mkdirat` - until the other
+/// has also reached it, which it can only do after its own `ENOENT`. That makes
+/// exactly one `mkdirat` win and the other take the `EEXIST` branch, the path
+/// the regression must exercise.
+///
+/// The hook state is process-global, but tests run in parallel, so both the
+/// barrier and the `EEXIST` counter are gated on a per-thread opt-in
+/// ([`set_participant`]). Unrelated tests that create directories while the
+/// hook is installed run the no-op path and never touch the barrier or the
+/// counter. Compiled out entirely in non-test builds.
+#[cfg(test)]
+mod create_race_hook {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    type Hook = Arc<dyn Fn() + Send + Sync>;
+
+    static HOOK: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
+    static EEXIST_HITS: AtomicUsize = AtomicUsize::new(0);
+
+    thread_local! {
+        static PARTICIPATE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn cell() -> &'static Mutex<Option<Hook>> {
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    fn is_participant() -> bool {
+        PARTICIPATE.with(Cell::get)
+    }
+
+    /// Opts the current thread in (or out) of the installed hook. Only opted-in
+    /// threads run the barrier and count `EEXIST` outcomes.
+    pub(super) fn set_participant(on: bool) {
+        PARTICIPATE.with(|flag| flag.set(on));
+    }
+
+    /// Installs (or clears with `None`) the pre-`mkdirat` hook and resets the
+    /// `EEXIST` counter.
+    pub(super) fn install(hook: Option<Hook>) {
+        EEXIST_HITS.store(0, Ordering::SeqCst);
+        *cell().lock().expect("create-race hook mutex") = hook;
+    }
+
+    /// Fired after `ENOENT` and before `mkdirat`. The hook is cloned out of the
+    /// lock before being called so two racing writers can both run it
+    /// concurrently (a barrier inside it must not be held behind the mutex).
+    /// Only opted-in threads run it.
+    pub(super) fn before_mkdirat() {
+        if !is_participant() {
+            return;
+        }
+        let hook = cell().lock().expect("create-race hook mutex").clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Records that the `EEXIST` branch was taken on an opted-in thread.
+    pub(super) fn record_eexist() {
+        if is_participant() {
+            EEXIST_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The number of `EEXIST` outcomes observed since the last [`install`].
+    pub(super) fn eexist_hits() -> usize {
+        EEXIST_HITS.load(Ordering::SeqCst)
     }
 }
 
@@ -1001,6 +1096,143 @@ fn read_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
+/// Reads a bounded artifact beneath the candidate directory on the same
+/// anchored inode chain the writer uses - the read-side mirror of
+/// [`write_anchored`]. This closes the check-then-open window a path-based read
+/// leaves: [`open_anchored_leaf`] opens the candidate from `/` a component at a
+/// time with `O_NOFOLLOW`, verifies it, walks every intermediate directory
+/// fd-relatively, and verifies the leaf is a regular file, so a symlink or
+/// directory swapped into any component after the walk is rejected rather than
+/// followed and the read observes exactly the tree the writer produced.
+fn read_limited_anchored(
+    candidate: &Path,
+    relative: &Path,
+    limit: usize,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let file = open_anchored_leaf(candidate, relative, label)?;
+    let mut buffer = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut buffer)?;
+    if buffer.len() > limit {
+        return Err(DeliveryError::new(format!(
+            "delivery artifact {label} exceeds {limit} bytes"
+        )));
+    }
+    Ok(buffer)
+}
+
+/// Opens a leaf file for reading beneath the candidate directory, anchored on
+/// verified directory descriptors the whole way down. The candidate directory
+/// is opened and verified from `/` (see [`open_anchored_directory`]), every
+/// intermediate directory is opened relative to its parent's descriptor and
+/// verified to be a real `0700` directory owned by us, and the leaf is opened
+/// relative to the final pinned parent with `O_RDONLY | O_NOFOLLOW` and
+/// verified to be a regular file.
+fn open_anchored_leaf(candidate: &Path, relative: &Path, label: &str) -> Result<File> {
+    let components: Vec<&OsStr> = relative
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
+    let (leaf, dirs) = components
+        .split_last()
+        .ok_or_else(|| DeliveryError::new("delivery artifact path has no leaf"))?;
+    let leaf = leaf
+        .to_str()
+        .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
+
+    let anchor = open_anchored_directory(candidate)?;
+    let mut chain: Vec<OwnedFd> = Vec::new();
+    for dir in dirs {
+        let name = dir
+            .to_str()
+            .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
+        let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+        chain.push(open_existing_directory(parent, name, label)?);
+    }
+
+    let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+    let leaf_fd = rustix::fs::openat(
+        parent,
+        leaf,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        DeliveryError::environment(format!("cannot open delivery artifact {label}: {error}"))
+    })?;
+    let file = File::from(leaf_fd);
+    verify_regular_file(&file, label, None, false)?;
+    Ok(file)
+}
+
+/// Lists the entry names of a directory beneath the candidate directory on the
+/// same anchored inode chain the writer uses. The candidate directory is opened
+/// and verified from `/`, the target directory is reached by an fd-relative
+/// walk, opened with `O_DIRECTORY | O_NOFOLLOW`, and verified to be a real
+/// `0700` directory owned by us before its entries are read through that pinned
+/// descriptor, so a swapped-in symlink or foreign directory is rejected rather
+/// than listed.
+fn list_anchored(candidate: &Path, relative: &Path, label: &str) -> Result<Vec<OsString>> {
+    let components: Vec<&OsStr> = relative
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
+
+    let anchor = open_anchored_directory(candidate)?;
+    // `validate_anchored_relative` guarantees at least one `Normal` component,
+    // so the chain is never empty and the loop yields the target directory.
+    let mut chain: Vec<OwnedFd> = Vec::new();
+    for dir in &components {
+        let name = dir
+            .to_str()
+            .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
+        let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+        chain.push(open_existing_directory(parent, name, label)?);
+    }
+    let dir_fd = chain
+        .last()
+        .ok_or_else(|| DeliveryError::new("delivery artifact directory path is empty"))?;
+
+    let dir = rustix::fs::Dir::read_from(dir_fd.as_fd()).map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot list delivery artifact directory {label}: {error}"
+        ))
+    })?;
+    let mut names = Vec::new();
+    for entry in dir {
+        let entry = entry.map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot read delivery artifact directory {label}: {error}"
+            ))
+        })?;
+        let raw = entry.file_name().to_bytes();
+        if raw == b"." || raw == b".." {
+            continue;
+        }
+        names.push(OsString::from_vec(raw.to_vec()));
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Opens an existing child directory relative to `parent` with no-follow flags
+/// and verifies it is a real `0700` directory owned by us. Unlike
+/// [`open_or_create_directory`] it never creates: a missing directory fails
+/// closed. Used by the anchored read and list walk so an intermediate artifact
+/// directory is proven delivery-owned before its contents are read. `label` is
+/// the candidate-relative artifact key, so a missing intermediate directory
+/// still names the safe key rather than an absolute path.
+fn open_existing_directory(parent: BorrowedFd<'_>, name: &str, label: &str) -> Result<OwnedFd> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = rustix::fs::openat(parent, name, flags, Mode::empty()).map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot open delivery artifact directory {label}: {error}"
+        ))
+    })?;
+    verify_anchored_directory(fd.as_fd(), name)?;
+    Ok(fd)
+}
+
 /// SHA-256 of a delivery artifact on disk.
 pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(sha256_bytes(&read_limited(
@@ -1051,6 +1283,10 @@ pub(crate) mod tests {
 
     fn candidate_id() -> CandidateId {
         CandidateId::parse("a".repeat(64)).expect("hex digest")
+    }
+
+    fn other_candidate_id() -> CandidateId {
+        CandidateId::parse("b".repeat(64)).expect("hex digest")
     }
 
     #[test]
@@ -1446,34 +1682,65 @@ pub(crate) mod tests {
             candidate.read_bytes(&relative).is_err(),
             "reading past a symlinked wave component must be refused"
         );
+        assert!(
+            candidate.list(EVIDENCE_DIR).is_err(),
+            "listing past a symlinked wave component must be refused"
+        );
     }
 
     #[test]
     fn concurrent_creation_of_an_absent_candidate_directory_both_succeed() {
-        use std::sync::Barrier;
+        use std::sync::{Arc, Barrier};
 
         let scratch = Scratch::new("concurrent-create");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
         let id = candidate_id();
 
-        // Two writers race to create the same initially-absent
-        // `<state>/W0/<candidate>` nested directory. `mkdirat` can only win
-        // once; the loser must treat `EEXIST` as concurrent creation rather
-        // than failing an otherwise valid evidence import.
-        let barrier = Barrier::new(2);
+        // Pre-seed `W0` with a *different* candidate so the shared wave
+        // directory already exists. Only the shared `<state>/W0/<candidate>`
+        // leaf then races, so the pre-`mkdirat` hook fires exactly once per
+        // racing thread rather than also firing for the wave directory.
+        root.candidate("W0", &other_candidate_id())
+            .expect("pre-seed W0");
+
+        // A two-party barrier fired *after* both threads observe `ENOENT` and
+        // *before* either `mkdirat`s. Neither thread can create the leaf until
+        // the other has also seen it absent, so `mkdirat` wins exactly once and
+        // the loser must take the `EEXIST` branch - the path this regression
+        // must exercise. Without this forced interleave the scheduler could let
+        // one thread finish creation before the other's first `openat`, and the
+        // `EEXIST` branch would never run.
+        let barrier = Arc::new(Barrier::new(2));
+        let hook_barrier = Arc::clone(&barrier);
+        create_race_hook::install(Some(Arc::new(move || {
+            hook_barrier.wait();
+        })));
+
+        // Two writers race to create the same initially-absent leaf. `mkdirat`
+        // can only win once; the loser must treat `EEXIST` as concurrent
+        // creation rather than failing an otherwise valid evidence import.
         let (a, b) = std::thread::scope(|scope| {
             let one = scope.spawn(|| {
-                barrier.wait();
+                create_race_hook::set_participant(true);
                 root.candidate("W0", &id).map(|_| ())
             });
             let two = scope.spawn(|| {
-                barrier.wait();
+                create_race_hook::set_participant(true);
                 root.candidate("W0", &id).map(|_| ())
             });
             (one.join().expect("thread a"), two.join().expect("thread b"))
         });
+
+        let eexist_hits = create_race_hook::eexist_hits();
+        create_race_hook::install(None);
+
         assert!(a.is_ok(), "first concurrent writer failed: {a:?}");
         assert!(b.is_ok(), "second concurrent writer failed: {b:?}");
+        assert!(
+            eexist_hits >= 1,
+            "the forced interleave must exercise the mkdirat EEXIST branch, \
+             observed {eexist_hits} EEXIST outcomes"
+        );
         assert!(root.path().join("W0").join(id.as_str()).is_dir());
     }
 
