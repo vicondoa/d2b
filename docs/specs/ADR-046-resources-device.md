@@ -1679,15 +1679,18 @@ absent `spec.provider.settings` fields receive their schema default.
 ### Zone resource bundle/generation
 
 The Nix build produces a Zone resource generation bundle at
-`/etc/d2b/zones/<zone>/resources.json`:
+`/etc/d2b/zones/<zone>/resource-bundle.json` (the canonical bundle shape is
+frozen in `ADR-046-nix-configuration.md` section "Bundle contract (canonical)"
+(D119); this spec consumes that shape and does not redefine it):
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
+  "bundleVersion": 1,
   "zone": "dev",
-  "configGeneration": 42,
-  "generatedAt": "2026-07-22T00:00:00.000Z",
-  "contentDigest": "sha256:<hex>",
+  "contentHash": "sha256:<hex>",
+  "artifactCatalogDigest": "sha256:<hex>",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
   "resources": [
     { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-gpu" },          "spec": { ... } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "Device", "metadata": { ..., "name": "corp-vm-security-key" }, "spec": { ... } },
@@ -1700,11 +1703,15 @@ The Nix build produces a Zone resource generation bundle at
 Bundle properties:
 
 - `resources` sorted lexicographically by `(type, metadata.name)`.
-- `contentDigest` = SHA-256 of the canonical serialization of the `resources`
-  array alone (sorted keys, no trailing whitespace, no BOM).
-- `configGeneration` is the NixOS system generation number.
-- Two bundles with identical `contentDigest` produce no resource changes at the
-  Zone runtime regardless of `configGeneration`.
+- `contentHash` = SHA-256 of the canonical serialization of the `resources`
+  array alone (sorted keys, no trailing whitespace, no BOM). It is the
+  generation identity (`generationId`).
+- `generatedAt` is the fixed Unix epoch `1970-01-01T00:00:00.000Z` for
+  reproducibility; the monotonic activation ordinal (`configurationGeneration`)
+  is assigned by the Zone daemon at activation and recorded in its generation
+  record, never in the bundle.
+- Two bundles with identical `contentHash` produce no resource changes at the
+  Zone runtime.
 - The Nix build fails if any `(type, metadata.name)` pair is duplicated, if the
   computed digest does not match, if any spec fails ResourceTypeSchema
   validation, or if any `spec.provider.settings` field fails Provider schema validation.
@@ -1737,9 +1744,11 @@ New assertions added to `nixos-modules/assertions.nix`:
 
 A NixOS build produces a Zone resource generation: the complete set of Device
 (and other resource-type) specs declared in the Nix config for that Zone. The
-generation has a monotonic `configGeneration`, a `contentDigest`, and the full
-set of `managedBy=configuration` resource descriptors. Applying a generation with
-the same `contentDigest` as the current active generation is a no-op.
+generation identity is the `contentHash`; the Zone daemon assigns a monotonic
+`configurationGeneration` ordinal at activation (recorded in its generation
+record, not in the bundle) and tracks the full set of `managedBy=configuration`
+resource descriptors. Applying a generation with the same `contentHash` as the
+current active generation is a no-op.
 
 ### Configuration-owned vs controller-created resources
 
@@ -1878,8 +1887,8 @@ Provider controller's existing per-op audit path.
 - `tests/unit/nix/cases/device-security-key-eval.nix`: security-key mutual-exclusion assertion; Credential-ref requirement.
 - `tests/unit/nix/cases/device-gpu-eval.nix`: GPU + video settings validation; shared-arbitration render-node-only enforcement.
 - `tests/unit/nix/cases/device-schema-validation.nix`: eval-time rule corpus - one test per validation row in the eval-time validation table; each must reject with the documented error slug.
-- `tests/unit/nix/cases/device-gen-cleanup-eval.nix`: generation diff - resource removed from Nix config appears in `pendingDeletion`; resource absent from prior generation does not appear; bundle `contentDigest` changes.
-- `tests/unit/nix/cases/device-bundle-canonical.nix`: bundle JSON is canonical (sorted keys, sorted resources, stable contentDigest); two identical config subtrees produce identical digests.
+- `tests/unit/nix/cases/device-gen-cleanup-eval.nix`: generation diff - resource removed from Nix config appears in `pendingDeletion`; resource absent from prior generation does not appear; bundle `contentHash` changes.
+- `tests/unit/nix/cases/device-bundle-canonical.nix`: bundle JSON is canonical (sorted keys, sorted resources, stable contentHash); two identical config subtrees produce identical digests.
 - `tests/unit/nix/cases/device-inline-secret-rejected.nix`: inline string in settings field with `credentialRef` constraint fails eval with `inline-secret-in-settings`.
 - `tests/unit/nix/cases/device-artifact-catalog.nix`: store path absent from all Device ResourceSpec JSON outputs; `spec.provider.settings` for TPM/USBIP carries no `artifactId` field; private catalog structure (type/digest/closure) is not present in the emitted resource bundle.
 
@@ -1894,7 +1903,7 @@ Provider controller's existing per-op audit path.
 | `packages/d2b-contract-tests/tests/video_binary_contract.rs` | Video wire-contract snapshot (reused) |
 | New: `packages/d2b-contract-tests/tests/device_resource_schema.rs` | Device ResourceTypeSchema golden vectors; unknown-field denial; discriminated-union busClass rejection corpus; no `artifactId` or store-path field in any Device Provider settings schema |
 | New: `packages/d2b-contract-tests/tests/device_provider_dossiers.rs` | Provider dossier completeness/schema conformance; settings schema fingerprint matches committed file |
-| New: `packages/d2b-contract-tests/tests/device_bundle_canonical.rs` | Bundle JSON canonical form: sorted keys, sorted resources, stable contentDigest, duplicate-(type,name) rejection, digest mismatch fails |
+| New: `packages/d2b-contract-tests/tests/device_bundle_canonical.rs` | Bundle JSON canonical form: sorted keys, sorted resources, stable contentHash, duplicate-(type,name) rejection, digest mismatch fails |
 | New: `packages/d2b-contract-tests/tests/device_gen_cleanup.rs` | Generation lifecycle: `managedBy=configuration` set on emitted resources; `managedBy=controller` on controller-created resources; `managedBy=api` on API-created resources; stale `managedBy=configuration` resource receives DeleteRequest; `managedBy=controller` and `managedBy=api` resources never receive generation-Delete |
 
 ### Layer-1 Rust (Provider tests - `src/` colocated unit tests)
@@ -2134,7 +2143,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | Current source | `nixos-modules/components/tpm.nix`, `usbip.nix`, `security-key-guest.nix`, `video/guest.nix`, `graphics.nix`; `nixos-modules/assertions.nix`; **old Workload Nix namespace**: `nixos-modules/options-realms-workloads.nix` (`d2b.vms.<vm>.tpm.enable`, `d2b.vms.<vm>.graphics.enable`, `d2b.vms.<vm>.usbip.*` - generated-or-eval-contract; v3 replaces `d2b.vms.*` with `d2b.zones.*`) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/resources-device.nix`; `nixos-modules/bundle-artifacts.nix` (bundle emission for resource store); `nixos-modules/assertions.nix` (six eval-time device assertions) |
-| Detailed design | Nix authoring shape `d2b.zones.<zone>.resources.<name> = { type = "Device"; metadata.ownerRef = ...; spec = { ...exact ResourceSpec fields... }; };` as specified in "Nix configuration" section; `metadata.name`/`metadata.zone`/`apiVersion` derived automatically; `status` and Core management fields (`managedBy`, `configurationGeneration`, uid, generation, revision, timestamps, finalizers) omitted from emitted JSON; `spec` field names/types/defaults identical to ResourceTypeSchema with no renaming; per-Provider `spec.provider.settings` validated against signed Provider schema; no `artifactId` or store-path fields in Device `spec.provider.settings` - binary paths are resolved from Provider package closures; Credential-ref enforcement; artifact catalog emitted as a separate private integrity-pinned map (ID→type/digest/closure) by its own emitter; six eval-time validation assertions; canonical sorted-key full resource-envelope JSON emission (`apiVersion`, `type`, `metadata`, `spec` only); Zone resource bundle with `contentDigest` as specified in "Zone resource bundle/generation" section; Core sets `metadata.managedBy=configuration` and `metadata.configurationGeneration` at activation |
+| Detailed design | Nix authoring shape `d2b.zones.<zone>.resources.<name> = { type = "Device"; metadata.ownerRef = ...; spec = { ...exact ResourceSpec fields... }; };` as specified in "Nix configuration" section; `metadata.name`/`metadata.zone`/`apiVersion` derived automatically; `status` and Core management fields (`managedBy`, `configurationGeneration`, uid, generation, revision, timestamps, finalizers) omitted from emitted JSON; `spec` field names/types/defaults identical to ResourceTypeSchema with no renaming; per-Provider `spec.provider.settings` validated against signed Provider schema; no `artifactId` or store-path fields in Device `spec.provider.settings` - binary paths are resolved from Provider package closures; Credential-ref enforcement; artifact catalog emitted as a separate private integrity-pinned map (ID→type/digest/closure) by its own emitter; six eval-time validation assertions; canonical sorted-key full resource-envelope JSON emission (`apiVersion`, `type`, `metadata`, `spec` only); Zone resource bundle with `contentHash` as specified in "Zone resource bundle/generation" section; Core sets `metadata.managedBy=configuration` and `metadata.configurationGeneration` at activation |
 | Integration | Resource store Nix emitter; artifact catalog emitted separately by Provider/system resource emitter (not by this emitter); device resource JSON output; Zone generation object including `priorGeneration`, `pendingDeletion`, `cleanupStatus` fields; cleanup contract logic belongs in the Core configuration handler (`packages/d2b-core-controller/src/configuration.rs`) consuming the generation from this emitter |
 | Data migration | Consumers migrate from per-VM options to Zone Device declarations; data migration guide references "Nix configuration" section migration table |
 | Validation | nix-unit: `device-tpm-eval.nix`, `device-usbip-eval.nix`, `device-security-key-eval.nix`, `device-gpu-eval.nix`, `device-schema-validation.nix`, `device-gen-cleanup-eval.nix`, `device-bundle-canonical.nix`, `device-inline-secret-rejected.nix`, `device-artifact-catalog.nix`; contract tests: `device_resource_schema.rs`, `device_bundle_canonical.rs`, `device_gen_cleanup.rs` |

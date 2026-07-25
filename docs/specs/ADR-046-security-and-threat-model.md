@@ -253,7 +253,7 @@ package attempts to make the Zone runtime activate untrusted state.
 
 - **Prevention:** bundle SHA-256 digest computed at eval time and verified
   before any Create/UpdateSpec (`ADR-046-resources-credential` lines
-  1069-1082); `catalogSha256` binds the artifact catalog to the bundle
+  1069-1082); `artifactCatalogDigest` binds the artifact catalog to the bundle
   (`ADR-046-nix-configuration` lines 192-202); schema fingerprints
   (`resourceTypeSchemaDigests`, `providerSchemaFingerprints`) verified before
   any resource of that type/Provider activates (`ADR-046-nix-configuration`
@@ -261,10 +261,13 @@ package attempts to make the Zone runtime activate untrusted state.
 - **Detection:** any mismatch aborts the **entire** bundle
   (`config-bundle-integrity-failed`, `bundle-schema-mismatch`,
   `config-catalog-mismatch`) - never a partial activation.
-- **Recovery:** the prior activated generation remains live; generation
-  counter rejects replay/downgrade (bundle `generation` must be strictly
-  greater than `store_meta.active_configuration_revision`, RZC lines
-  2753-2754).
+- **Recovery:** the prior activated generation remains live. Replay/downgrade is
+  prevented without a bundle-embedded counter: bundles are installed only through
+  trusted Nix activation into the immutable store, the runtime assigns a strictly
+  increasing `configurationGeneration` ordinal at each activation, and a bundle
+  whose `contentHash` equals the active generation's is a no-op. An operator
+  rollback restages a retained prior bundle as a new higher-ordinal generation
+  (RZC section 14.11); there is no path that decrements the active ordinal.
 
 ### AC6: Local same-UID peer abusing ComponentSession/d2b-bus
 
@@ -376,7 +379,7 @@ build host cannot alone forge a trusted artifact:
    against the actual derivation output - any mismatch is a build failure,
    not a runtime warning (RZC lines 2731-2735).
 2. **Runtime** (Zone activation): the activation controller re-verifies
-   `catalogSha256` and all schema fingerprints before applying any bundle
+   `artifactCatalogDigest` and all schema fingerprints before applying any bundle
    (`ADR-046-nix-configuration` lines 126-137, 192-202).
 
 `spec.config` for every Provider/ResourceType is restricted at both layers:
@@ -1485,9 +1488,10 @@ generation receive an async `Delete`; `managedBy: controller` and
 cleanup candidate exceeds `cleanupStuckThreshold` (default 5 minutes), a
 `GenerationCleanupFailed` condition is set - the runtime never force-removes
 finalizers to clear it (`ADR-046-resources-zone-control` lines 2808-2912).
-The generation counter itself rejects replay/downgrade: a bundle
-`generation` must be strictly greater than
-`store_meta.active_configuration_revision` (lines 2753-2754).
+Replay/downgrade is rejected without a bundle-embedded counter: the runtime
+assigns a strictly increasing `configurationGeneration` ordinal at each
+activation and treats a bundle whose `contentHash` equals the active
+generation's as a no-op (`ADR-046-resources-zone-control` section 14.11).
 
 **Provider upgrade policies.** `drain-then-replace` (drain the old component
 before launching new), `rolling` (phased replacement), and `immediate` (stop

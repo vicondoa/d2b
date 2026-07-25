@@ -3494,68 +3494,68 @@ ascending by the resource compiler (RFC 8785 array-of-string sort).
 
 ### 14.9 Zone resource bundle: generation, canonical sort, and integrity pinning
 
-The Nix resource compiler emits one `zone-resources.json` per configured Zone
-per build. This is the Zone resource bundle.
+The Nix resource compiler emits one `resource-bundle.json` per configured Zone
+per build. This is the Zone resource bundle. Its canonical field set, digest
+preimages, and the four-member digest chain are frozen in
+`ADR-046-nix-configuration` ("Zone resource bundle" and "Digest chain"); this
+section restates only the fields whose runtime-activation rules it owns and does
+not fork the shape.
 
 ```json
 {
-  "bundleVersion": "1",
+  "schemaVersion": 3,
+  "bundleVersion": 1,
   "zoneUid":       null,
-  "zoneName":      "dev",
-  "generation":    7,
-  "generatedAt":   "2026-07-22T21:25:43.000Z",
-  "nixRevision":   "abc123def456",
+  "zone":          "dev",
+  "contentHash":   "sha256:<64 lowercase hex over sorted canonical resources array>",
+  "artifactCatalogDigest": "sha256:<64 lowercase hex>",
+  "generatedAt":   "1970-01-01T00:00:00.000Z",
   "resources": [
-    {
-      "resourceType": "Credential", "name": "api-token",
-      "digest": "sha256:...",
-      "envelope": { "..." }
-    },
-    {
-      "resourceType": "Provider",  "name": "runtime-cloud-hypervisor",
-      "digest": "sha256:...",
-      "envelope": { "..." }
-    },
-    {
-      "resourceType": "Role",      "name": "process-controller",
-      "digest": "sha256:...",
-      "envelope": { "..." }
-    },
-    {
-      "resourceType": "RoleBinding", "name": "process-controller-binding",
-      "digest": "sha256:...",
-      "envelope": { "..." }
-    }
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Credential",
+      "metadata": { "name": "api-token", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Provider",
+      "metadata": { "name": "runtime-cloud-hypervisor", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Role",
+      "metadata": { "name": "process-controller", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "RoleBinding",
+      "metadata": { "name": "process-controller-binding", "zone": "dev" }, "spec": { } }
   ],
-  "bundleDigest": "sha256:..."
+  "providerSchemaDigests": {
+    "Provider/runtime-cloud-hypervisor": "sha256:<64 lowercase hex>"
+  }
 }
 ```
 
 | Bundle field | Type | Rules |
 | --- | --- | --- |
-| `bundleVersion` | string | Fixed `"1"`; the resource compiler's bundle schema version |
+| `schemaVersion` | integer | Fixed `3`; the resource compiler's bundle schema version |
+| `bundleVersion` | integer | Fixed `1`; the bundle envelope version |
 | `zoneUid` | string\|null | `null` at build time; the runtime validates against `store_meta.zone_uid` at activation; first activation stores the newly generated UID back into the bundle record in the store |
-| `zoneName` | string | Must match the Zone self-resource `metadata.name` |
-| `generation` | u64 | Monotonically increasing; compiler-incremented on every config change; starts at 1; rejected at runtime if not strictly greater than `store_meta.active_configuration_revision` |
-| `generatedAt` | RFC 3339 UTC | Build-time timestamp from `builtins.currentTime` (impure); not used for security decisions |
-| `nixRevision` | string | Git rev of the NixOS config, if available; opaque; traceability only |
-| `resources` | array | Sorted ascending by `(resourceType, name)` lexicographically; contains only operator-authored resources (`managedBy=configuration`); bootstrap resources (`Provider/system-core`, `Provider/system-minijail`, `Zone/<name>`) are runtime-created and never present in the bundle |
-| `digest` | sha256 hex | `sha256(<canonical-JSON-of-envelope.spec>)`; lowercase hex prefixed `sha256:` |
-| `bundleDigest` | sha256 hex | `sha256(<canonical-JSON-of-resources-array>)` over the sorted array; computed by the compiler; verified by the runtime before applying any resource |
+| `zone` | string | Must match the Zone self-resource `metadata.name` |
+| `contentHash` | sha256 hex | `sha256:<hex>` over the sorted canonical `resources` array (excluding the top-level `contentHash`, `artifactCatalogDigest`, and `generatedAt` fields); it is the generation identity. Applying a bundle whose `contentHash` equals the active generation's is a no-op |
+| `artifactCatalogDigest` | sha256 hex | The site-wide artifact catalog's `catalogDigest` copied in at emit time; anchors the catalog self-digest to this Nix-store-immutable bundle; excluded from the `contentHash` preimage; verified by the runtime before applying any resource |
+| `generatedAt` | RFC 3339 UTC | Fixed Unix epoch (`1970-01-01T00:00:00.000Z`) for reproducibility; the runtime records the actual activation time in its own generation record |
+| `resources` | array | Sorted ascending by `(type, name)` lexicographically; each element is a full resource envelope (`apiVersion`, `type`, `metadata`, `spec`); contains only operator-authored resources (`managedBy=configuration`); bootstrap resources (`Provider/system-core`, `Provider/system-minijail`, `Zone/<name>`) are runtime-created and never present in the bundle |
+| `providerSchemaDigests` | object | `Provider/<name>` to `sha256:<hex>` schema fingerprints; verified before any resource of that Provider activates |
 
-**Canonical sort order**: `(resourceType, name)` lexicographic ascending. Examples:
+**Canonical sort order**: `(type, name)` lexicographic ascending. Examples:
 `Credential/api-token` < `Provider/runtime-cloud-hypervisor`
 < `Role/process-controller` < `RoleBinding/process-controller-binding`.
 
-**Integrity pinning**: The runtime verifies `bundleDigest` against the `resources`
-array before applying any resource from the bundle. A digest mismatch rejects the
-entire bundle; the prior generation remains active.
+**Integrity pinning**: The runtime verifies `contentHash` over the `resources`
+array and `artifactCatalogDigest` against the installed artifact catalog before
+applying any resource from the bundle. There is no per-resource `digest` member
+and no separate `bundleDigest`: the sorted array is self-ordering and the
+`contentHash` covers every resource body. A digest mismatch rejects the entire
+bundle; the prior generation remains active.
 
 **Bundle file location**: Installed at
-`/var/lib/d2b/zones/<zone>/bundles/generation-<N>.json` (path managed by the
-Zone runtime's state directory). The `store_meta.active_configuration_revision`
-pointer names the active generation. Retained prior generation bundles use the
-same path scheme.
+`/etc/d2b/zones/<zone>/resource-bundle.json` by the NixOS activation script.
+Retained prior generation bundles are staged at
+`/var/lib/d2b/zones/<zone>/configuration/prior/<contentHash>.json`, and the
+durable generation record (`configuration/generation.json`) names the active
+generation by `contentHash` and its runtime-assigned `configurationGeneration`
+ordinal.
 
 ### 14.10 Nix eval and build-time validation pipeline
 
@@ -3612,19 +3612,19 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | `spec.roleRef` names an existing `type = "Role"` resource in the same Zone bundle - RoleBinding only | Resource compiler | build failure |
 | `spec.subjects[*]` names resolve to declared resources or known external principal types in the same Zone bundle - RoleBinding only | Resource compiler | build failure |
 | Inline-secret heuristic lint on config string values | Resource compiler | build warning; build failure with `--strict-secrets` |
-| `resources` array sorted by `(resourceType, name)` | Resource compiler | auto-sorted; not an operator error |
-| Per-resource `digest` = `sha256(canonical-JSON-of-spec)` | Resource compiler | computed and written; mismatch is a compiler bug |
-| `bundleDigest` over sorted `resources` array | Resource compiler | computed and written |
+| `resources` array sorted by `(type, name)` | Resource compiler | auto-sorted; not an operator error |
+| `contentHash` over sorted `resources` array | Resource compiler | computed and written |
+| `artifactCatalogDigest` copied from the site artifact catalog | Resource compiler | computed and written |
 
 #### Phase 3 - Runtime activation (on daemon restart or `d2b zone config apply`)
 
 | Check | Mechanism | Failure mode |
 | --- | --- | --- |
-| `bundleDigest` integrity re-verified against `resources` array | Zone runtime | bundle rejected; prior generation stays active |
+| `contentHash` re-verified over the `resources` array; `artifactCatalogDigest` verified against the installed artifact catalog | Zone runtime | bundle rejected; prior generation stays active |
 | `zoneUid` consistency: null = first activation; non-null must match `store_meta.zone_uid` | Zone runtime | bundle rejected |
-| `zoneName` must match Zone self-resource `metadata.name` | Zone runtime | bundle rejected |
-| `generation` strictly greater than `store_meta.active_configuration_revision` | Zone runtime | bundle rejected (prevents replay/downgrade) |
-| All resource `digest` values re-verified against `envelope.spec` | Zone runtime | bundle rejected |
+| `zone` must match Zone self-resource `metadata.name` | Zone runtime | bundle rejected |
+| `contentHash` differs from the active generation's `contentHash` (an identical `contentHash` is a no-op, not a downgrade) | Zone runtime | no-op when equal; new generation applied when different |
+| `providerSchemaDigests` re-verified against installed Provider catalogs | Zone runtime | bundle rejected |
 | Provider `config` re-validated against the config schema identified by the artifact catalog entry for `spec.artifactId` | Zone runtime | affected Provider set to `Failed` with `ConfigValid=False` condition; generation proceeds for other resources |
 | `zoneUid=null` only on store's first activation (no prior Zone UID stored) | Zone runtime | bundle rejected if non-null UID expected |
 
@@ -3642,7 +3642,7 @@ configuration generation changes.
 The Zone runtime stores two internal resource metadata fields on every resource
 in the redb store (not exposed in the public resource API envelope):
 - `managedBy`: one of `configuration | controller | api` - set by the runtime at create time
-- `configurationGeneration`: the bundle generation when this resource was last confirmed present in the bundle
+- `configurationGeneration`: the runtime-assigned monotonic activation ordinal at which this resource was last confirmed present in the bundle
 
 Every resource present in the bundle is created (or updated) by the runtime as
 `managedBy=configuration`. The Zone runtime also creates bootstrap resources
@@ -3654,7 +3654,7 @@ absence, `ownerRef`, labels, or any other field.
 
 | Class | `managedBy` | In bundle | Cleanup eligible |
 | --- | --- | --- | --- |
-| Config-owned | `configuration` | Yes | Yes - absent from new bundle (`configurationGeneration < new generation`) → async Delete |
+| Config-owned | `configuration` | Yes | Yes - absent from new bundle (`configurationGeneration` predates the new activation ordinal) → async Delete |
 | Bootstrap-created | `controller` | No | No - `managedBy=controller` resources untouched by generation cleanup |
 | Controller-created | `controller` | No | No - `managedBy=controller` resources untouched by generation cleanup |
 | API-created | `api` | No | No - `managedBy=api` resources untouched by generation cleanup |
@@ -3666,12 +3666,11 @@ controller-managed ResourceType.
 
 #### Generation activation sequence (non-blocking)
 
-1. Resource compiler emits bundle with `generation=N+1`.
+1. Resource compiler emits a bundle whose identity is its `contentHash`; the installed bundle's `contentHash` differs from the active generation's.
 2. Zone runtime reads and integrity-verifies the bundle (Phase 3 checks, §14.10).
-3. `store_meta.active_configuration_revision` advances to `N+1` atomically.
-4. The Zone begins serving all requests under generation `N+1` immediately.
-   No cleanup gate; no operator wait.
-5. `Zone.status.activeConfigurationGeneration = N+1`.
+3. The active generation advances atomically: the new `contentHash` is recorded active and the runtime assigns the next monotonic `configurationGeneration` ordinal (the redb `store_meta` active-generation pointer is updated within that atomic step).
+4. The Zone begins serving all requests under the new generation immediately after the advance returns. No cleanup gate; no operator wait.
+5. `Zone.status.activeConfigurationGeneration` = the new ordinal.
 6. `Zone.status.conditions[ConfigurationCurrent].status = "True"`.
 7. Absent config-owned resources are identified and queued for async Delete
    (see below). Activation does not wait for them.
@@ -3679,8 +3678,8 @@ controller-managed ResourceType.
 #### Absent resource deletion (normative)
 
 After generation activation, for each resource in the store with
-`managedBy=configuration` whose `configurationGeneration` does not match the
-new bundle generation (i.e., absent from the new bundle):
+`managedBy=configuration` whose `configurationGeneration` predates the new
+activation ordinal (i.e., absent from the new bundle):
 
 1. `metadata.deletionRequestedAt` is set to the activation timestamp (if null).
 2. The resource-type-specific core finalizer is added if absent:
@@ -3785,13 +3784,13 @@ complete its finalizer, or (b) performing a full Zone reset.
 #### Prior generation retention and rollback
 
 Prior generation bundle files are retained in the Zone store bundle directory
-up to the configured `retainedPriorGenerationCount` (default 3, range 1..16).
-A bundle file for generation M is eligible for pruning when:
+up to the configured `retainedGenerations` (default 3, range 1..16).
+A bundle file for a prior generation is eligible for pruning when:
 
-1. All resources from generation M with `managedBy=configuration` that were
-   absent from generation M+1 have completed deletion; AND
+1. All resources from that generation with `managedBy=configuration` that were
+   absent from the succeeding generation have completed deletion; AND
 2. No rollback lock is outstanding (`d2b zone config rollback-lock set`); AND
-3. Retaining this file would exceed `retainedPriorGenerationCount`.
+3. Retaining this file would exceed `retainedGenerations`.
 
 When the count is exceeded, the oldest eligible prior bundle file is pruned;
 resources with `deletionRequestedAt` already set from that generation continue
@@ -3966,9 +3965,9 @@ Rollback atomically:
 | `nix-build-schema-digest-mismatch` | Schema file with SHA-256 not matching `configSchemaDigest` in artifact catalog fails build |
 | `nix-build-manifest-digest-mismatch` | Manifest file with SHA-256 not matching `manifestDigest` in artifact catalog fails build |
 | `nix-build-resourcetype-collision` | Two Providers in the same Zone exporting the same short ResourceType name fail build |
-| `nix-build-bundle-sorted` | Emitted `resources` array is sorted by `(resourceType, name)` ascending |
-| `nix-build-bundle-digest-stable` | Same Nix config on two builds produces identical `bundleDigest` |
-| `nix-build-per-resource-digest-correct` | Per-resource `digest` matches `sha256(canonical-JSON-of-spec)` |
+| `nix-build-bundle-sorted` | Emitted `resources` array is sorted by `(type, name)` ascending |
+| `nix-build-content-hash-stable` | Same Nix config on two builds produces identical `contentHash` |
+| `nix-build-artifact-catalog-digest-anchored` | Emitted bundle's `artifactCatalogDigest` equals the site artifact catalog's `catalogDigest` |
 | `nix-build-credential-ref-survives-build` | `{ "$credentialRef": "Credential/api-token" }` appears verbatim in emitted bundle |
 | `nix-build-inline-secret-lint-warning` | Config string matching PEM header emits build warning |
 | `nix-build-inline-secret-strict-failure` | Same with `--strict-secrets` fails build |
@@ -3977,10 +3976,10 @@ Rollback atomically:
 
 | Test | Assertion |
 | --- | --- |
-| `nix-runtime-bundledigest-integrity` | Bundle with tampered `bundleDigest` is rejected; prior generation stays active |
-| `nix-runtime-generation-monotone` | Bundle with `generation ≤ active_configuration_revision` is rejected |
+| `nix-runtime-content-hash-integrity` | Bundle with tampered `contentHash` (or `resources` array) is rejected; prior generation stays active |
+| `nix-runtime-same-content-hash-noop` | Bundle whose `contentHash` equals the active generation's is a no-op, not a downgrade or re-activation |
 | `nix-runtime-zoneuid-mismatch-rejected` | Bundle with `zoneUid` not matching `store_meta.zone_uid` is rejected |
-| `nix-runtime-zonename-mismatch-rejected` | Bundle with `zoneName != Zone self-resource name` is rejected |
+| `nix-runtime-zone-mismatch-rejected` | Bundle with `zone != Zone self-resource name` is rejected |
 | `nix-runtime-activation-nonblocking` | New generation activates and serves requests before cleanup of prior generation completes |
 | `nix-runtime-provider-config-invalid-continues` | Provider `config` failing schema re-check sets `Failed` with `ConfigValid=False` condition but does not block other resources from activating |
 
@@ -3988,7 +3987,7 @@ Rollback atomically:
 
 | Test | Assertion |
 | --- | --- |
-| `cleanup-config-owned-absent-resource-deleted` | Provider present in generation N but absent from N+1 receives async Delete |
+| `cleanup-config-owned-absent-resource-deleted` | Provider present in the prior generation but absent from the newly activated generation receives async Delete |
 | `cleanup-controller-created-resource-preserved` | Controller-created `Process/provider-primary-0` (not in bundle) is NOT deleted on generation change |
 | `cleanup-bootstrap-provider-preserved` | `Provider/system-core` absent from operator config is NOT deleted on any generation change |
 | `cleanup-role-deletion-blocked-by-binding` | Config-owned Role awaiting cleanup is blocked by `core.role-binding-drain` until dependent RoleBinding is deleted |
@@ -4566,7 +4565,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`; exposed as `pkgs.d2b-resource-compiler`; called from `nixos-modules/resource-compiler.nix` |
-| Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, load manifest-derived fields (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) into the bundle envelope; emit private integrity-pinned artifact catalog (ID → type/digest/closure metadata) as a separate private file (never merged into the public resource bundle); check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; per-resource `digest` computation; `bundleDigest` computation over sorted `resources` array; inline-secret heuristic lint (`--strict-secrets` flag); `generation` counter persistence in Nix module state; emit `zone-resources.json` bundle with all fields per §14.9 |
+| Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, load manifest-derived fields (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) into the bundle envelope; emit private integrity-pinned artifact catalog (ID → type/digest/closure metadata) as a separate private file (never merged into the public resource bundle); check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; `contentHash` computation over the sorted `resources` array; `artifactCatalogDigest` copy from the site artifact catalog; inline-secret heuristic lint (`--strict-secrets` flag); emit `resource-bundle.json` bundle with all fields per §14.9 |
 | Integration | Reads from `d2b.zones.<zone>.resources.*` (ADR046-zone-control-014); emits bundle consumed by ADR046-zone-control-001 configuration publication handler; generation counter stored as Nix module derivation input hash (hermetic) or in a NixOS state file (impure) - exact mechanism is implementation decision |
 | Data migration | Full reset; no prior bundle state exists to carry forward |
 | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-bundle-digest-stable`, `nix-build-per-resource-digest-correct`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) |
@@ -4582,7 +4581,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs` `begin_reconnect` exponential backoff logic (cleanup retry); `packages/d2b-state/` lock/lease types (ADR046-store-001 dependency for bundle file locking) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/configuration.rs` (Phase 3 activation, diff, delete dispatch); `packages/d2b-core-controller/src/cleanup.rs` (pending tracking, status, stuck detection, rollback verb handler) |
-| Detailed design | Implement all Phase 3 runtime activation checks (§14.10 Phase 3 table); `bundleDigest` integrity verify; `zoneUid` consistency check; `generation` monotone check; per-resource `digest` re-verify; atomic generation advance in `store_meta`; diff computation (resources with `managedBy=configuration` absent from new bundle → async Delete; `managedBy=controller`/`managedBy=api` resources untouched); `managedBy` and `configurationGeneration` field maintenance on resources in redb store; `cleanupPendingCount` and `generationCleanupPending` maintenance; Zone.status.phase → Degraded while cleanup pending, reverts on completion; `GenerationCleanupPending`/`GenerationCleanupFailed` condition management; stuck-cleanup `GenerationCleanupFailed=True` at `cleanupStuckThreshold` (default 5 min) with exponential backoff retry; prior generation bundle retention and pruning up to configured `retainedPriorGenerationCount` (default 3, range 1..16); audit emission for all four cleanup audit kinds (§14.11); `zone.config-rollback` verb handler Primary reuse disposition: `adapt`. Preserved source-plan detail: extract exponential backoff from `begin_reconnect`. |
+| Detailed design | Implement all Phase 3 runtime activation checks (§14.10 Phase 3 table); `contentHash` and `artifactCatalogDigest` integrity verify; `zoneUid` consistency check; `contentHash`-identity no-op check; atomic generation advance recording the active `contentHash` and next `configurationGeneration` ordinal in `store_meta`; diff computation (resources with `managedBy=configuration` absent from new bundle → async Delete; `managedBy=controller`/`managedBy=api` resources untouched); `managedBy` and `configurationGeneration` field maintenance on resources in redb store; `cleanupPendingCount` and `generationCleanupPending` maintenance; Zone.status.phase → Degraded while cleanup pending, reverts on completion; `GenerationCleanupPending`/`GenerationCleanupFailed` condition management; stuck-cleanup `GenerationCleanupFailed=True` at `cleanupStuckThreshold` (default 5 min) with exponential backoff retry; prior generation bundle retention and pruning up to configured `retainedGenerations` (default 3, range 1..16); audit emission for all four cleanup audit kinds (§14.11); `zone.config-rollback` verb handler Primary reuse disposition: `adapt`. Preserved source-plan detail: extract exponential backoff from `begin_reconnect`. |
 | Integration | Zone store / redb (ADR046-store-001); core-controller watch/trigger bus (ADR046-zone-control-011); Zone status writer (ADR046-zone-control-001); audit emitter (§13.2); Credential revocation hook (triggered when `deletionRequestedAt` is set on a Credential and `core.credential-revoke` finalizer is present; revocation completes before finalizer clearance) |
 | Data migration | Full reset; no prior bundle activation state exists to carry forward |
 | Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-bundledigest-integrity`, `nix-runtime-generation-monotone`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zonename-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, all `cleanup-*` and `rollback-*` tests) |
