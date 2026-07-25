@@ -5,7 +5,7 @@ exit-code: 0
 
 PASS
 - kernel-version: kernel 6.8.12-d2b satisfies the >= 6.6 requirement
-  hint: Keep a 6.6+ kernel available for W2 daemon experiments.
+  hint: Keep a kernel version 6.6 or newer available for daemon testing.
 - cgroup-v2: /sys/fs/cgroup/cgroup.controllers is present
   hint: Keep the unified cgroup-v2 hierarchy enabled.
 - cpu-vendor: detected supported CPU vendor `intel`
@@ -49,9 +49,9 @@ PASS
 - kernel-module:usbip_host: optional kernel module `usbip_host` is loaded
   hint: No action required.
 - kernel-module:vfio: kernel module `vfio` remains deferred to a later wave
-  hint: No W2 action required.
+  hint: No action required.
 - kernel-module:vhost_vsock: kernel module `vhost_vsock` remains deferred to a later wave
-  hint: No W2 action required.
+  hint: No action required.
 - nftables-table: `nft list ruleset --json` shows an `inet d2b` table
   hint: No action required.
 - firewall-coexistence: firewalld and ufw are both inactive

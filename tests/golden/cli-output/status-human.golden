@@ -1,6 +1,6 @@
 === corp-vm ===
 env: work
-runtime: unknown (daemon-experimental, W4 not landed)
+runtime: unknown (daemon-experimental; runtime integration unavailable)
 daemon: inactive
 backend-runner: inactive
 virtiofsd: inactive
