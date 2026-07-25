@@ -895,6 +895,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "bolero",
  "d2b-realm-core",
+ "nix 0.29.0",
  "regex",
  "rustix 0.38.44",
  "schemars",

@@ -889,7 +889,7 @@ spec:
     class: on-failure                 # never|always|on-failure|on-crash
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null                 # null = unlimited; integer [1, 65535]
     resetAfter: "300s"
   readiness:
@@ -926,7 +926,7 @@ Process-specific fields:
 | `class` | `never\|always\|on-failure\|on-crash` | `on-failure` | - | `never` = no restart. `always` = restart on any exit. `on-failure` = restart on non-zero exit. `on-crash` = restart only on signal/crash (not clean non-zero). |
 | `backoffBase` | duration string | `"1s"` | `"0s".."60s"` | Initial backoff after first restart. |
 | `backoffMax` | duration string | `"60s"` | `"1s".."3600s"` | Maximum backoff cap. |
-| `backoffMultiplier` | float | `2.0` | `1.0..10.0` | Exponential backoff multiplier. |
+| `backoffMultiplierMilli` | integer | `2000` | `1000..10000` | Exponential backoff multiplier x 1000 (integer fixed-point; D101 forbids JSON floats). |
 | `maxRestarts` | u32? | `null` | `1..65535\|null` | Null means unlimited. When exceeded, phase becomes `Failed`. |
 | `resetAfter` | duration string | `"300s"` | `"0s".."86400s"` | If process stays Running for this duration, restart counter resets to 0. |
 
