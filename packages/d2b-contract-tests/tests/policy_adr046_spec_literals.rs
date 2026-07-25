@@ -204,6 +204,27 @@ fn d103_looks_like_date(val: &str) -> bool {
     bytes.len() >= 5 && bytes[..4].iter().all(u8::is_ascii_digit) && bytes[4] == b'-'
 }
 
+/// Grow a candidate match `[start, end)` outward over adjacent ASCII
+/// alphanumeric bytes so a datetime carrying trailing (or leading) junk is
+/// judged as the WHOLE token, not just the conformant 24-byte prefix the shape
+/// regex happened to anchor. This closes `2026-07-22T00:00:00.000Zjunk`, whose
+/// leading 24 bytes are conformant but whose full token is not. Extension stops
+/// at any non-alphanumeric byte (`.`, `:`, `+`, `-`, whitespace, quotes) so a
+/// following prose sentence or a numeric offset is never swept in. The candidate
+/// regex is ASCII-only, so every offset here lands on a char boundary.
+fn d103_extend_token(line: &str, start: usize, end: usize) -> (usize, usize) {
+    let bytes = line.as_bytes();
+    let mut s = start;
+    while s > 0 && bytes[s - 1].is_ascii_alphanumeric() {
+        s -= 1;
+    }
+    let mut e = end;
+    while e < bytes.len() && bytes[e].is_ascii_alphanumeric() {
+        e += 1;
+    }
+    (s, e)
+}
+
 fn scan_d103(file: &str, content: &str) -> Vec<Violation> {
     let candidate = d103_candidate();
     let at_field = d103_at_field();
@@ -214,13 +235,17 @@ fn scan_d103(file: &str, content: &str) -> Vec<Violation> {
             continue;
         }
         // Shape-first pass: any RFC 3339-shaped candidate anywhere on the line
-        // that is not the exact conformant instant.
+        // that, taken as its complete alphanumeric-delimited token, is not the
+        // exact conformant instant. Extending over trailing/leading alnum bytes
+        // is what rejects a conformant prefix with junk glued on.
         for m in candidate.find_iter(line) {
-            if !d103_is_conformant(m.as_str()) {
+            let (s, e) = d103_extend_token(line, m.start(), m.end());
+            let token = &line[s..e];
+            if !d103_is_conformant(token) {
                 out.push(Violation {
                     file: file.to_string(),
                     line: idx + 1,
-                    text: m.as_str().to_string(),
+                    text: token.to_string(),
                 });
             }
         }
@@ -264,6 +289,702 @@ fn scan_d103(file: &str, content: &str) -> Vec<Violation> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Structural document model (shared with policy_adr046_envelopes.rs).
+// Parses fenced YAML/JSON/Nix blocks into a Node tree so type-field
+// authoring contexts are validated structurally, not by line shape.
+// ---------------------------------------------------------------------------
+
+struct Block<'a> {
+    lang: String,
+    body_start: usize,
+    lines: Vec<&'a str>,
+}
+
+fn fenced_blocks(content: &str) -> Vec<Block<'_>> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut blocks = Vec::new();
+    let mut idx = 0;
+    while idx < lines.len() {
+        let trimmed = lines[idx].trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            let lang = rest.trim().to_string();
+            let body_start = idx + 1;
+            let mut end = body_start;
+            while end < lines.len() && !lines[end].trim_start().starts_with("```") {
+                end += 1;
+            }
+            blocks.push(Block {
+                lang,
+                body_start,
+                lines: lines[body_start..end.min(lines.len())].to_vec(),
+            });
+            idx = end + 1;
+        } else {
+            idx += 1;
+        }
+    }
+    blocks
+}
+
+/// The count of leading ASCII spaces on `line`.
+fn indent(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
+}
+
+// ---------------------------------------------------------------------------
+// Structural document model.
+//
+// A `Node` is the parsed shape of a fenced block. `Map` preserves author order
+// and the block-relative line of each key so a violation can be reported at a
+// real file line. `Elision` is the `...` / `"..."` abbreviation marker the
+// specs use to say "more fields, deliberately not shown here".
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+enum Node {
+    Map(Vec<Entry>),
+    Seq(Vec<Node>),
+    Scalar(String),
+    Null,
+    Elision,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Entry {
+    key: String,
+    val: Node,
+    /// Block-relative 0-based line index of the key.
+    line: usize,
+}
+
+/// A direct child of a mapping, by key. No recursion: this is used where the
+/// contract is about a map's own direct children (status base keys, type).
+fn direct_child<'a>(map: &'a [Entry], key: &str) -> Option<&'a Entry> {
+    map.iter().find(|e| e.key == key)
+}
+
+/// Collect every mapping in the document tree (the node itself and every
+/// descendant), so a scanner can locate every envelope regardless of nesting.
+fn collect_maps<'a>(node: &'a Node, out: &mut Vec<&'a [Entry]>) {
+    match node {
+        Node::Map(entries) => {
+            out.push(entries.as_slice());
+            for e in entries {
+                collect_maps(&e.val, out);
+            }
+        }
+        Node::Seq(items) => {
+            for it in items {
+                collect_maps(it, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Comment stripping.
+// ---------------------------------------------------------------------------
+
+/// Strip `#`, `//`, and `/* */` comments from brace-structured text (JSON, Nix,
+/// and YAML flow scalars), preserving newlines so token line numbers stay
+/// aligned with the source. Comment characters inside a double-quoted string
+/// are preserved.
+fn strip_comments_brace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_str = false;
+    let mut in_line = false;
+    let mut in_block = false;
+    let mut escaped = false;
+    while let Some(c) = chars.next() {
+        if in_line {
+            if c == '\n' {
+                in_line = false;
+                out.push(c);
+            }
+            continue;
+        }
+        if in_block {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block = false;
+            } else if c == '\n' {
+                out.push('\n');
+            }
+            continue;
+        }
+        if in_str {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_str = true;
+                out.push(c);
+            }
+            '#' => in_line = true,
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                in_line = true;
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                in_block = true;
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Strip a trailing YAML `#` comment from a single line, respecting quotes and
+/// the YAML rule that `#` starts a comment only at line start or after
+/// whitespace.
+fn strip_yaml_comment(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut in_s = false;
+    let mut in_d = false;
+    let mut prev_ws = true;
+    for (idx, &b) in bytes.iter().enumerate() {
+        match b {
+            b'\'' if !in_d => {
+                in_s = !in_s;
+                prev_ws = false;
+            }
+            b'"' if !in_s => {
+                in_d = !in_d;
+                prev_ws = false;
+            }
+            b'#' if !in_s && !in_d && prev_ws => {
+                return line[..idx].to_string();
+            }
+            b' ' | b'\t' => prev_ws = true,
+            _ => prev_ws = false,
+        }
+    }
+    line.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Brace tokenizer + parser (JSON, Nix attribute sets, YAML flow collections).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+enum TokKind {
+    LBrace,
+    RBrace,
+    LBrack,
+    RBrack,
+    Colon,
+    Sep,
+    Str(String),
+    Word(String),
+}
+
+struct Tok {
+    kind: TokKind,
+    line: usize,
+}
+
+fn tokenize_brace(text: &str) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    let mut line = 0usize;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => line += 1,
+            c if c.is_whitespace() => {}
+            '{' => toks.push(Tok {
+                kind: TokKind::LBrace,
+                line,
+            }),
+            '}' => toks.push(Tok {
+                kind: TokKind::RBrace,
+                line,
+            }),
+            '[' => toks.push(Tok {
+                kind: TokKind::LBrack,
+                line,
+            }),
+            ']' => toks.push(Tok {
+                kind: TokKind::RBrack,
+                line,
+            }),
+            ':' | '=' => toks.push(Tok {
+                kind: TokKind::Colon,
+                line,
+            }),
+            ',' | ';' => toks.push(Tok {
+                kind: TokKind::Sep,
+                line,
+            }),
+            '"' => {
+                let mut s = String::new();
+                let mut escaped = false;
+                for ch in chars.by_ref() {
+                    if escaped {
+                        s.push(ch);
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        break;
+                    } else {
+                        if ch == '\n' {
+                            line += 1;
+                        }
+                        s.push(ch);
+                    }
+                }
+                toks.push(Tok {
+                    kind: TokKind::Str(s),
+                    line,
+                });
+            }
+            _ => {
+                let mut w = String::new();
+                w.push(c);
+                while let Some(&nc) = chars.peek() {
+                    if nc.is_whitespace()
+                        || matches!(nc, '{' | '}' | '[' | ']' | ':' | '=' | ',' | ';' | '"')
+                    {
+                        break;
+                    }
+                    w.push(nc);
+                    chars.next();
+                }
+                toks.push(Tok {
+                    kind: TokKind::Word(w),
+                    line,
+                });
+            }
+        }
+    }
+    toks
+}
+
+fn scalar_or_special(s: String) -> Node {
+    if s == "..." {
+        Node::Elision
+    } else if s == "null" || s == "~" {
+        Node::Null
+    } else {
+        Node::Scalar(s)
+    }
+}
+
+fn parse_brace_block(lines: &[&str]) -> Vec<Node> {
+    let text = strip_comments_brace(&lines.join("\n"));
+    let toks = tokenize_brace(&text);
+    let mut cur = 0;
+    while cur < toks.len() && matches!(toks[cur].kind, TokKind::Sep) {
+        cur += 1;
+    }
+    if cur >= toks.len() {
+        return vec![Node::Map(Vec::new())];
+    }
+    let node = match toks[cur].kind {
+        TokKind::LBrace | TokKind::LBrack => parse_brace_value(&toks, &mut cur),
+        _ => Node::Map(parse_brace_map_body(&toks, &mut cur, false)),
+    };
+    vec![node]
+}
+
+fn parse_brace_value(toks: &[Tok], cur: &mut usize) -> Node {
+    if *cur >= toks.len() {
+        return Node::Null;
+    }
+    match &toks[*cur].kind {
+        TokKind::LBrace => {
+            *cur += 1;
+            Node::Map(parse_brace_map_body(toks, cur, true))
+        }
+        TokKind::LBrack => {
+            *cur += 1;
+            Node::Seq(parse_brace_seq(toks, cur))
+        }
+        TokKind::Str(s) | TokKind::Word(s) => {
+            let v = s.clone();
+            *cur += 1;
+            scalar_or_special(v)
+        }
+        _ => {
+            *cur += 1;
+            Node::Null
+        }
+    }
+}
+
+fn parse_brace_map_body(toks: &[Tok], cur: &mut usize, expect_rbrace: bool) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    loop {
+        while *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Sep) {
+            *cur += 1;
+        }
+        if *cur >= toks.len() {
+            break;
+        }
+        match &toks[*cur].kind {
+            TokKind::RBrace => {
+                if expect_rbrace {
+                    *cur += 1;
+                }
+                break;
+            }
+            TokKind::RBrack => break,
+            TokKind::LBrace | TokKind::LBrack => {
+                let _ = parse_brace_value(toks, cur);
+            }
+            TokKind::Colon | TokKind::Sep => *cur += 1,
+            TokKind::Str(s) | TokKind::Word(s) => {
+                let key = s.clone();
+                let kline = toks[*cur].line;
+                *cur += 1;
+                if key == "..." {
+                    // Consume a `"...": "..."` form fully; a bare `"..."` has no
+                    // colon. Either way it is an elision marker.
+                    if *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Colon) {
+                        *cur += 1;
+                        let _ = parse_brace_value(toks, cur);
+                    }
+                    entries.push(Entry {
+                        key,
+                        val: Node::Elision,
+                        line: kline,
+                    });
+                    continue;
+                }
+                if *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Colon) {
+                    *cur += 1;
+                    let val = parse_brace_value(toks, cur);
+                    entries.push(Entry {
+                        key,
+                        val,
+                        line: kline,
+                    });
+                } else {
+                    entries.push(Entry {
+                        key,
+                        val: Node::Null,
+                        line: kline,
+                    });
+                }
+            }
+        }
+    }
+    entries
+}
+
+fn parse_brace_seq(toks: &[Tok], cur: &mut usize) -> Vec<Node> {
+    let mut items = Vec::new();
+    loop {
+        while *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Sep) {
+            *cur += 1;
+        }
+        if *cur >= toks.len() {
+            break;
+        }
+        if matches!(toks[*cur].kind, TokKind::RBrack) {
+            *cur += 1;
+            break;
+        }
+        if matches!(toks[*cur].kind, TokKind::RBrace) {
+            break;
+        }
+        items.push(parse_brace_value(toks, cur));
+    }
+    items
+}
+
+// ---------------------------------------------------------------------------
+// YAML indentation parser.
+// ---------------------------------------------------------------------------
+
+/// Index of the first `:` in `t` that separates a mapping key from its value:
+/// not inside quotes, and followed by a space or end-of-line.
+fn find_yaml_colon(t: &str) -> Option<usize> {
+    let bytes = t.as_bytes();
+    let mut in_s = false;
+    let mut in_d = false;
+    for (idx, &b) in bytes.iter().enumerate() {
+        match b {
+            b'\'' if !in_d => in_s = !in_s,
+            b'"' if !in_s => in_d = !in_d,
+            b':' if !in_s && !in_d => {
+                let next = bytes.get(idx + 1);
+                if next.is_none() || next == Some(&b' ') {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_yaml_scalar_or_flow(s: &str) -> Node {
+    let st = s.trim();
+    if st.starts_with('{') || st.starts_with('[') {
+        let text = strip_comments_brace(st);
+        let toks = tokenize_brace(&text);
+        let mut cur = 0;
+        return parse_brace_value(&toks, &mut cur);
+    }
+    let unq = st.trim_matches('"').trim_matches('\'');
+    if unq == "..." {
+        Node::Elision
+    } else if unq == "null" || unq == "~" || unq.is_empty() {
+        Node::Null
+    } else {
+        Node::Scalar(unq.to_string())
+    }
+}
+
+/// Indentation of the next non-blank, non-`---` line at or after `i`.
+fn peek_next_indent(refs: &[&str], i: usize) -> Option<usize> {
+    let mut j = i;
+    while j < refs.len() {
+        let t = refs[j].trim();
+        if t.is_empty() {
+            j += 1;
+            continue;
+        }
+        if t == "---" {
+            return None;
+        }
+        return Some(indent(refs[j]));
+    }
+    None
+}
+
+/// Whether the next content line at exactly `indent_level` is a sequence item.
+fn next_is_sequence(refs: &[&str], i: usize, indent_level: usize) -> bool {
+    let mut j = i;
+    while j < refs.len() {
+        let t = refs[j].trim();
+        if t.is_empty() {
+            j += 1;
+            continue;
+        }
+        if indent(refs[j]) != indent_level {
+            return false;
+        }
+        return t == "-" || t.starts_with("- ");
+    }
+    false
+}
+
+fn parse_yaml_child(refs: &[&str], i: &mut usize, child_indent: usize) -> Node {
+    if next_is_sequence(refs, *i, child_indent) {
+        Node::Seq(parse_yaml_sequence(refs, i, child_indent))
+    } else {
+        Node::Map(parse_yaml_mapping(refs, i, child_indent))
+    }
+}
+
+fn parse_yaml_mapping(refs: &[&str], i: &mut usize, indent_level: usize) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    while *i < refs.len() {
+        let raw = refs[*i];
+        let t = raw.trim();
+        if t.is_empty() {
+            *i += 1;
+            continue;
+        }
+        if t == "---" {
+            break;
+        }
+        let ind = indent(raw);
+        if ind < indent_level {
+            break;
+        }
+        if ind > indent_level {
+            *i += 1;
+            continue;
+        }
+        if t == "..." {
+            entries.push(Entry {
+                key: "...".to_string(),
+                val: Node::Elision,
+                line: *i,
+            });
+            *i += 1;
+            continue;
+        }
+        if t == "-" || t.starts_with("- ") {
+            // A sequence at this level is not a mapping; hand back to the caller.
+            break;
+        }
+        let Some(colon) = find_yaml_colon(t) else {
+            *i += 1;
+            continue;
+        };
+        let key = t[..colon]
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+        let after = t[colon + 1..].trim();
+        let kline = *i;
+        *i += 1;
+        if after.is_empty() {
+            match peek_next_indent(refs, *i) {
+                Some(ci) if ci > indent_level => {
+                    let val = parse_yaml_child(refs, i, ci);
+                    entries.push(Entry {
+                        key,
+                        val,
+                        line: kline,
+                    });
+                }
+                _ => entries.push(Entry {
+                    key,
+                    val: Node::Null,
+                    line: kline,
+                }),
+            }
+        } else {
+            entries.push(Entry {
+                key,
+                val: parse_yaml_scalar_or_flow(after),
+                line: kline,
+            });
+        }
+    }
+    entries
+}
+
+fn parse_yaml_sequence(refs: &[&str], i: &mut usize, indent_level: usize) -> Vec<Node> {
+    let mut items = Vec::new();
+    while *i < refs.len() {
+        let raw = refs[*i];
+        let t = raw.trim();
+        if t.is_empty() {
+            *i += 1;
+            continue;
+        }
+        if t == "---" {
+            break;
+        }
+        let ind = indent(raw);
+        if ind < indent_level {
+            break;
+        }
+        if ind > indent_level {
+            *i += 1;
+            continue;
+        }
+        let rest = if t == "-" {
+            Some("")
+        } else {
+            t.strip_prefix("- ")
+        };
+        let Some(rest) = rest else {
+            break;
+        };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            *i += 1;
+            match peek_next_indent(refs, *i) {
+                Some(ci) if ci > indent_level => items.push(parse_yaml_child(refs, i, ci)),
+                _ => items.push(Node::Null),
+            }
+        } else if let Some(colon) = find_yaml_colon(rest) {
+            // Inline first key of a map item; further keys sit one level deeper
+            // than the dash (dash column + 2).
+            let key = rest[..colon].trim().trim_matches('"').to_string();
+            let after = rest[colon + 1..].trim();
+            let kline = *i;
+            let mut item_entries = Vec::new();
+            *i += 1;
+            if after.is_empty() {
+                match peek_next_indent(refs, *i) {
+                    Some(ci) if ci > ind + 1 => {
+                        let val = parse_yaml_child(refs, i, ci);
+                        item_entries.push(Entry {
+                            key,
+                            val,
+                            line: kline,
+                        });
+                    }
+                    _ => item_entries.push(Entry {
+                        key,
+                        val: Node::Null,
+                        line: kline,
+                    }),
+                }
+            } else {
+                item_entries.push(Entry {
+                    key,
+                    val: parse_yaml_scalar_or_flow(after),
+                    line: kline,
+                });
+            }
+            let more = parse_yaml_mapping(refs, i, ind + 2);
+            item_entries.extend(more);
+            items.push(Node::Map(item_entries));
+        } else {
+            items.push(parse_yaml_scalar_or_flow(rest));
+            *i += 1;
+        }
+    }
+    items
+}
+
+fn parse_yaml_block(lines: &[&str]) -> Vec<Node> {
+    let stripped: Vec<String> = lines.iter().map(|l| strip_yaml_comment(l)).collect();
+    let refs: Vec<&str> = stripped.iter().map(|s| s.as_str()).collect();
+    let mut docs = Vec::new();
+    let mut i = 0;
+    while i < refs.len() {
+        while i < refs.len() {
+            let t = refs[i].trim();
+            if t.is_empty() || t == "---" {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i >= refs.len() {
+            break;
+        }
+        let base = indent(refs[i]);
+        let node = if next_is_sequence(&refs, i, base) {
+            Node::Seq(parse_yaml_sequence(&refs, &mut i, base))
+        } else {
+            Node::Map(parse_yaml_mapping(&refs, &mut i, base))
+        };
+        docs.push(node);
+    }
+    docs
+}
+
+/// Parse a fenced block into one or more top-level documents. JSON and Nix use
+/// the brace parser; YAML uses the indentation parser; an untagged fence is
+/// sniffed by its first non-comment character.
+fn parse_block_docs(lang: &str, lines: &[&str]) -> Vec<Node> {
+    match lang {
+        "json" | "nix" => parse_brace_block(lines),
+        "yaml" | "yml" => parse_yaml_block(lines),
+        "" => {
+            let stripped = strip_comments_brace(&lines.join("\n"));
+            match stripped.trim_start().chars().next() {
+                Some('{') | Some('[') => parse_brace_block(lines),
+                _ => parse_yaml_block(lines),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
 // ---------------------------------------------------------------------------
 // D104 - ResourceType grammar, validated exactly.
 //
@@ -355,56 +1076,37 @@ fn d104_d2bus_candidate() -> Regex {
     .expect("valid D104 d2bus candidate regex")
 }
 
-/// A top-level (zero-indent) `type:` field in a YAML resource envelope, or the
-/// quoted `type` value in a Nix/JSON resource declaration. The captured value
-/// is the *complete* ResourceType token so it can pass through the exact
-/// validator; a bare unknown name (`type: Widget`) that no qualified/foreign
-/// substring scan would ever see is caught here. This context only fires inside
-/// a code block that is an actual resource envelope (carries a top-level
-/// `apiVersion:`), so a component-descriptor `type: controller`, a
+/// Whether `map` is a ResourceType authoring context whose direct `type` /
+/// `resourceType` field names a ResourceType: either a resource envelope (a
+/// direct `apiVersion` child), or a resource declaration (a direct `type`
+/// scalar together with a direct `spec` mapping). This is judged on the parsed
+/// document, so a quoted JSON `"type"` and an indented Nix `type =` are read
+/// identically to a bare YAML `type:` - closing the gap where the old
+/// zero-indent `^type` regex validated only bare top-level YAML. A nested
+/// component-descriptor `type: controller` (no `apiVersion`, no `spec`), a
 /// deployment-service `type: service`, and a condition-fragment `type: Ready`
-/// - none of which are ResourceType declarations - are not misread as one.
-fn d104_type_field() -> Regex {
-    Regex::new(r#"^type\s*[:=]\s*"?(?P<val>[A-Za-z0-9][A-Za-z0-9._-]*)"?;?\s*(?:#.*)?$"#)
-        .expect("valid D104 type-field regex")
-}
-
-/// Whether `block` (the body lines of one fenced code block) is a resource
-/// envelope: it carries a top-level `apiVersion:` key. Only then is a
-/// zero-indent `type:` inside it a ResourceType authoring context.
-fn block_is_envelope(block: &[&str]) -> bool {
-    block
-        .iter()
-        .any(|line| line.starts_with("apiVersion:") || line.starts_with("\"apiVersion\""))
-}
-
-/// Iterate fenced code blocks, invoking `visit(start_line_index, body_lines)`
-/// for each. `start_line_index` is the 0-based index of the block's first body
-/// line in `content`. Fences are ```` ``` ```` optionally followed by a
-/// language tag; the closing fence is any bare ```` ``` ````.
-fn for_each_code_block<'a>(content: &'a str, mut visit: impl FnMut(usize, &[&'a str])) {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut idx = 0;
-    while idx < lines.len() {
-        let trimmed = lines[idx].trim_start();
-        if trimmed.starts_with("```") {
-            let body_start = idx + 1;
-            let mut end = body_start;
-            while end < lines.len() && !lines[end].trim_start().starts_with("```") {
-                end += 1;
-            }
-            visit(body_start, &lines[body_start..end.min(lines.len())]);
-            idx = end + 1;
-        } else {
-            idx += 1;
-        }
+/// are not authoring contexts and are left alone.
+fn d104_is_type_authoring_context(map: &[Entry]) -> bool {
+    if direct_child(map, "apiVersion").is_some() {
+        return true;
     }
+    let has_type_scalar =
+        matches!(direct_child(map, "type"), Some(e) if matches!(e.val, Node::Scalar(_)));
+    let has_spec_map =
+        matches!(direct_child(map, "spec"), Some(e) if matches!(e.val, Node::Map(_)));
+    has_type_scalar && has_spec_map
+}
+
+/// Whether a captured type value is a schema `<placeholder>` rather than a
+/// concrete ResourceType, e.g. `<ResourceType>` or `<name>`. Placeholders are
+/// authored deliberately and are not grammar violations.
+fn d104_is_placeholder(val: &str) -> bool {
+    val.starts_with('<') || val.contains('<')
 }
 
 fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
     let d2bus = d104_d2bus_candidate();
     let foreign = d104_foreign_candidate();
-    let type_field = d104_type_field();
     let exempt = defining_row(file, content, "D104");
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
@@ -443,30 +1145,49 @@ fn scan_d104(file: &str, content: &str) -> Vec<Violation> {
         }
     }
 
-    // Authoring-context pass: the complete `type:` token of every resource
-    // envelope, passed through the exact validator so an unknown unqualified
-    // name is caught where no substring scan would see it.
-    for_each_code_block(content, |start, block| {
-        if !block_is_envelope(block) {
-            return;
+    // Authoring-context pass: parse every fenced block structurally and validate
+    // the direct `type` / `resourceType` scalar of each ResourceType authoring
+    // context (envelope or resource declaration). This reads a quoted JSON
+    // `"type"` and an indented Nix `type =` identically to a bare YAML `type:`,
+    // closing the gap where the old zero-indent `^type` regex validated only
+    // bare top-level YAML. A dotted value is a qualified/foreign form already
+    // owned by the substring passes above, so it is skipped here to avoid a
+    // double report; a `<placeholder>` is authored deliberately and is skipped.
+    for block in fenced_blocks(content) {
+        if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
+            continue;
         }
-        for (offset, line) in block.iter().enumerate() {
-            let Some(caps) = type_field.captures(line) else {
+        let docs = parse_block_docs(&block.lang, &block.lines);
+        let mut maps = Vec::new();
+        for doc in &docs {
+            collect_maps(doc, &mut maps);
+        }
+        for map in maps {
+            if !d104_is_type_authoring_context(map) {
                 continue;
-            };
-            let val = &caps["val"];
-            if !is_valid_resource_type(val) {
-                let line_no = start + offset + 1;
-                if Some(*line) != exempt {
+            }
+            for key in ["type", "resourceType"] {
+                let Some(entry) = direct_child(map, key) else {
+                    continue;
+                };
+                let Node::Scalar(val) = &entry.val else {
+                    continue;
+                };
+                if val.contains('.') || d104_is_placeholder(val) {
+                    continue;
+                }
+                if !is_valid_resource_type(val) {
                     out.push(Violation {
                         file: file.to_string(),
-                        line: line_no,
-                        text: format!("ResourceType `{val}` is neither a standard type nor a valid `<provider>.d2bus.org.<Type>` qualification"),
+                        line: block.body_start + entry.line + 1,
+                        text: format!(
+                            "ResourceType `{val}` is neither a standard type nor a valid `<provider>.d2bus.org.<Type>` qualification"
+                        ),
                     });
                 }
             }
         }
-    });
+    }
 
     out.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.text.cmp(&b.text)));
     out.dedup();
@@ -553,26 +1274,56 @@ fn d108_signed_decimal() -> Regex {
 const D108_MIN_MS: u64 = 1;
 const D108_MAX_MS: u64 = 86_400_000;
 
-/// Classify a retry-key value: `Some(reason)` when it is a literal D108 forbids
-/// (a non-integer literal, or an out-of-range/zero/signed integer), `None` when
-/// it is a valid bare decimal in range OR a non-value form (a type annotation,
-/// an identifier, an expression fragment, a `<placeholder>`) the lint must not
-/// flag.
+/// A retry-key value that is a Rust type annotation or a schema `<placeholder>`
+/// rather than a concrete value: `retry_after_ms: Option<u64>`, a bare Rust
+/// integer type (`u64`), a `TypeName`, or `<ms>`. These are the only non-decimal
+/// forms the lint tolerates; every other token in value position is rejected so
+/// `1e3`, `banana`, and `nonsense` can no longer slip through the fall-through.
+fn d108_is_type_or_placeholder(val: &str) -> bool {
+    // A `<...>` schema placeholder, or a generic type (`Option<u64>`, `Vec<u8>`).
+    if val.starts_with('<') || val.contains('<') {
+        return true;
+    }
+    // A type name is upper-camel (`Duration`, `NonZeroU64`).
+    if val.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        return true;
+    }
+    // A bare Rust primitive integer/scalar type used as a field annotation.
+    matches!(
+        val,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+            | "str"
+    )
+}
+
+/// Classify a retry-key value: `Some(reason)` when it is a value D108 forbids
+/// (a non-integer literal, an out-of-range/zero/signed integer, or any other
+/// token that is not a bare decimal), `None` only when it is a valid bare
+/// decimal in range OR a genuine non-value form (a type annotation or a
+/// `<placeholder>`) the lint must not flag.
+///
+/// The fall-through is fail-closed: a token in value position that is neither a
+/// valid bare decimal nor a recognised type/placeholder is rejected rather than
+/// silently accepted. This closes `retryAfterMs: 1e3`, `retryAfterMs: banana`,
+/// and `retryAfterMs: nonsense`, all of which the previous prefix/shape logic let
+/// pass.
 fn d108_value_reason(val: &str) -> Option<String> {
     if val.starts_with('"') || val.starts_with('\'') {
         return Some("a quoted string".to_string());
-    }
-    if d108_float_value().is_match(val) {
-        return Some("a floating-point literal".to_string());
-    }
-    if d108_duration_value().is_match(val) {
-        return Some("a duration-with-unit".to_string());
-    }
-    if matches!(val, "true" | "false" | "null") {
-        return Some(format!("the non-integer literal `{val}`"));
-    }
-    if d108_signed_decimal().is_match(val) {
-        return Some(format!("the signed integer `{val}`"));
     }
     if d108_bare_decimal().is_match(val) {
         // A bare decimal is the only value shape D108 admits; enforce its range.
@@ -587,9 +1338,25 @@ fn d108_value_reason(val: &str) -> Option<String> {
         }
         return None;
     }
-    // Not a literal we can judge: an identifier, a type annotation, an
-    // expression fragment, or a `<placeholder>`. Leave it alone.
-    None
+    if d108_float_value().is_match(val) {
+        return Some("a floating-point literal".to_string());
+    }
+    if d108_duration_value().is_match(val) {
+        return Some("a duration-with-unit".to_string());
+    }
+    if matches!(val, "true" | "false" | "null") {
+        return Some(format!("the non-integer literal `{val}`"));
+    }
+    if d108_signed_decimal().is_match(val) {
+        return Some(format!("the signed integer `{val}`"));
+    }
+    // A genuine non-value form (a type annotation or a `<placeholder>`) is left
+    // alone; those forms appear verbatim in the Accepted specs.
+    if d108_is_type_or_placeholder(val) {
+        return None;
+    }
+    // Fail closed: anything else in value position is not a bare decimal.
+    Some("not a bare decimal millisecond count".to_string())
 }
 
 fn scan_d108(file: &str, content: &str) -> Vec<Violation> {
@@ -788,6 +1555,45 @@ fn d103_at_field_context_catches_malformed_instants_outside_the_candidate_shape(
     }
     // A key ending in `Ms`, not `At`, is a unix-ms count, not an instant.
     assert!(scan_d103("f.md", "expiresAtUnixMs: 1753228801000").is_empty());
+}
+
+#[test]
+fn d103_rejects_a_conformant_prefix_carrying_trailing_or_leading_junk() {
+    // Round-4 bypass: a conformant 24-byte instant with junk glued on. The
+    // previous shape pass anchored on the conformant prefix and accepted it; the
+    // token is now validated whole, so the trailing junk is rejected.
+    assert!(
+        !scan_d103("f.md", "createdAt: 2026-07-22T00:00:00.000Zjunk").is_empty(),
+        "a conformant prefix with trailing junk must be rejected"
+    );
+    // Leading junk fused to the year is rejected the same way.
+    assert!(
+        !scan_d103("f.md", "createdAt: x2026-07-22T00:00:00.000Z").is_empty(),
+        "a conformant instant with leading junk must be rejected"
+    );
+    // A well-formed but impossible calendar value is rejected by the semantic
+    // check, not merely the shape check.
+    for bad in [
+        "createdAt: 2026-02-30T00:00:00.000Z", // Feb 30 never exists
+        "createdAt: 2026-07-22T23:59:60.000Z", // :60 leap second
+    ] {
+        assert!(
+            !scan_d103("f.md", bad).is_empty(),
+            "an impossible calendar instant must be rejected: {bad:?}"
+        );
+    }
+    // The exact conformant instant, delimited by whitespace/quotes/commas, is
+    // still accepted - extension stops at the first non-alphanumeric byte.
+    for ok in [
+        "createdAt: 2026-07-22T00:00:00.000Z",
+        "createdAt: \"2026-07-22T00:00:00.000Z\"",
+        "createdAt: 2026-07-22T00:00:00.000Z, next: 1",
+    ] {
+        assert!(
+            scan_d103("f.md", ok).is_empty(),
+            "the exact instant must be accepted: {ok:?}"
+        );
+    }
 }
 
 #[test]
@@ -1001,6 +1807,88 @@ fn d104_type_field_context_catches_unknown_unqualified_names() {
 }
 
 #[test]
+fn d104_validates_quoted_json_and_indented_nix_type_fields() {
+    // Round-4 bypass: the old `^type`-anchored regex saw only a bare, zero-indent
+    // YAML `type:`. A quoted JSON `"type"` and an indented Nix `type =` slipped
+    // through unvalidated. The structural pass reads all three identically.
+    let bad_json = concat!(
+        "```json\n",
+        "{\n",
+        "  \"apiVersion\": \"resources.d2bus.org/v3\",\n",
+        "  \"type\": \"Widget\",\n",
+        "  \"metadata\": { \"name\": \"w\" }\n",
+        "}\n",
+        "```\n",
+    );
+    assert!(
+        !scan_d104("f.md", bad_json).is_empty(),
+        "an unknown quoted JSON type in an envelope must be flagged"
+    );
+    let bad_nix = concat!(
+        "```nix\n",
+        "d2b.zones.\"z\".resources.\"w\" = {\n",
+        "  type = \"Widget\";\n",
+        "  spec = { size = 1; };\n",
+        "};\n",
+        "```\n",
+    );
+    assert!(
+        !scan_d104("f.md", bad_nix).is_empty(),
+        "an unknown indented Nix type in a resource declaration must be flagged"
+    );
+    // A `resourceType` field in a JSON envelope is validated the same way.
+    let bad_resource_type = concat!(
+        "```json\n",
+        "{\n",
+        "  \"apiVersion\": \"resources.d2bus.org/v3\",\n",
+        "  \"resourceType\": \"Widget\"\n",
+        "}\n",
+        "```\n",
+    );
+    assert!(
+        !scan_d104("f.md", bad_resource_type).is_empty(),
+        "an unknown quoted JSON resourceType in an envelope must be flagged"
+    );
+    // Standard types in the same quoted/indented shapes are accepted.
+    let good_json = concat!(
+        "```json\n",
+        "{\n",
+        "  \"apiVersion\": \"resources.d2bus.org/v3\",\n",
+        "  \"type\": \"Host\"\n",
+        "}\n",
+        "```\n",
+    );
+    let good_nix = concat!(
+        "```nix\n",
+        "d2b.zones.\"z\".resources.\"h\" = {\n",
+        "  type = \"Guest\";\n",
+        "  spec = { };\n",
+        "};\n",
+        "```\n",
+    );
+    for ok in [good_json, good_nix] {
+        assert!(
+            scan_d104("f.md", ok).is_empty(),
+            "a standard type in a quoted/indented field must be accepted: {ok:?}"
+        );
+    }
+    // A `<ResourceType>` placeholder in a Nix declaration is authored
+    // deliberately and is not flagged.
+    let placeholder = concat!(
+        "```nix\n",
+        "d2b.zones.\"z\".resources.\"n\" = {\n",
+        "  type = \"<ResourceType>\";\n",
+        "  spec = { };\n",
+        "};\n",
+        "```\n",
+    );
+    assert!(
+        scan_d104("f.md", placeholder).is_empty(),
+        "a `<ResourceType>` placeholder must not be flagged"
+    );
+}
+
+#[test]
 fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
     // Rejected: the superseded key spelling.
     assert!(!scan_d108("f.md", "retryAfter: \"5s\"").is_empty());
@@ -1018,6 +1906,25 @@ fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
     assert!(!scan_d108("f.md", "retryAfterMs: -1").is_empty()); // signed
     assert!(!scan_d108("f.md", "retryAfterMs: 0").is_empty()); // zero
     assert!(!scan_d108("f.md", "retryAfterMs: 86400001").is_empty()); // over ceiling
+    // Round-4 bypass: an unrecognised non-decimal token in value position (a
+    // pseudo-scientific literal, or a bare word) must be rejected. The previous
+    // fall-through silently accepted anything it could not classify.
+    assert!(
+        !scan_d108("f.md", "retryAfterMs: 1e3").is_empty(),
+        "a scientific-notation literal must be rejected"
+    );
+    assert!(
+        !scan_d108("f.md", "retryAfterMs: banana").is_empty(),
+        "a bare word must be rejected"
+    );
+    assert!(
+        !scan_d108("f.md", "retryAfterMs: nonsense").is_empty(),
+        "a bare word must be rejected"
+    );
+    assert!(
+        !scan_d108("f.md", "retryAfterMs: 0x1f4").is_empty(),
+        "a hexadecimal literal is not a bare decimal"
+    );
     // Accepted: the frozen integer scalar in both casings, at the bounds.
     assert!(scan_d108("f.md", "retryAfterMs: 5000").is_empty());
     assert!(scan_d108("f.md", "retryAfterMs: 1").is_empty());

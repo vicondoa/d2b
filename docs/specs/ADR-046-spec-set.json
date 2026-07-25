@@ -992,7 +992,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-volume.md",
-      "sha256" : "762badbb0946fdd83862f6e8c29de0e2112aa44f6ded5c02611a1e33f2d6ae90",
+      "sha256" : "578e56f5e556f0e25501f0c9a93f2826265c8c4f641bf6315b5637d8fd999452",
       "specId" : "ADR-046-resources-volume",
       "status" : "Accepted",
       "supersedes" : "`storage.json` v2, `sync.json` v1, per-VM hardlink-farm and store-view emitters in `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`",
