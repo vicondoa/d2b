@@ -16,7 +16,7 @@
       {
         "id": "serial-after-parallel",
         "mode": "serial",
-        "jobs": ["test-drift"]
+        "jobs": ["test-drift", "test-runtime-ledger"]
       }
     ]
   },

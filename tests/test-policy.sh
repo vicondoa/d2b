@@ -140,6 +140,7 @@ run_policy_cargo_binary "policy-dash-gate"        policy_dash_gate
 run_policy_cargo_binary "policy-adr046-work-items" policy_adr046_work_items
 run_policy_cargo_binary "policy-changelog-gate"   policy_changelog_gate
 run_policy_cargo_binary "policy-adr046-spec-literals" policy_adr046_spec_literals
+run_policy_cargo_binary "policy-adr046-envelopes"     policy_adr046_envelopes
 
 [ "$rc" -eq 0 ] || exit 1
 log "test-policy OK"

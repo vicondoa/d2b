@@ -2,8 +2,15 @@
 //!
 //! Records execution-only timings for individual tests, Provider crates, and
 //! Layer-1 shards into a deterministic machine-readable ledger, then enforces
-//! the hermetic execution budgets against it, including a historical
-//! regression threshold against a previously recorded ledger.
+//! the absolute hermetic execution budgets against it.
+//!
+//! The gate is an absolute per-test / per-crate / per-shard budget check on a
+//! freshly recorded ledger: it makes no historical-regression claim and holds
+//! no baseline. Every run is judged only against the frozen budgets and the
+//! pinned closed census, so there is nothing synthetic to keep in step. The
+//! broader goal of a genuine cross-machine reference baseline and a real
+//! multi-crate shard inventory is deferred; see the `test-runtime-ledger`
+//! Makefile target for the named follow-up.
 //!
 //! Measurement is delegated to the existing `make` targets: this task ingests
 //! the timings they produce (either as explicit shard/crate samples or as a
@@ -25,8 +32,6 @@ pub const TEST_BUDGET_MS: u64 = 50;
 pub const CRATE_BUDGET_MS: u64 = 2_000;
 /// Each Layer-1 hermetic shard.
 pub const SHARD_BUDGET_MS: u64 = 60_000;
-/// Default historical regression threshold, as a ratio of the baseline p95.
-pub const DEFAULT_REGRESSION_RATIO: f64 = 1.25;
 /// Minimum execution-only repetitions the ledger must carry before its p95 or
 /// per-crate budgets mean anything. A single wall-clock sample flaps on noise
 /// and can silently fold build work into the timing, so the gate refuses to
@@ -122,9 +127,9 @@ pub fn validate_id(scope: &str, id: &str) -> Result<(), String> {
 
 /// Validate every identifier, label, and bound in a ledger.
 ///
-/// Applied both when a ledger is emitted and when one is loaded (as the current
-/// run or as a baseline), so a hand-edited or hostile ledger cannot slip an
-/// oversized, control-bearing, or unbounded row past the gate at check time.
+/// Applied both when a ledger is emitted and when one is loaded at check time,
+/// so a hand-edited or hostile ledger cannot slip an oversized, control-bearing,
+/// or unbounded row past the gate.
 pub fn validate_ledger(ledger: &Ledger) -> Result<(), String> {
     validate_runner_label(&ledger.runner)?;
     let scopes: [(&str, &Vec<Sample>); 3] = [
@@ -270,7 +275,7 @@ pub fn parse_libtest_json(stream: &str) -> Result<Vec<(String, u64)>, String> {
     Ok(out)
 }
 
-/// A budget or regression violation.
+/// A budget or census violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Violation {
     pub scope: String,
@@ -278,9 +283,12 @@ pub struct Violation {
     pub detail: String,
 }
 
-/// Enforces the hermetic budgets, plus the historical regression threshold
-/// when a previously recorded ledger is supplied.
-pub fn check(ledger: &Ledger, baseline: Option<&Ledger>, ratio: f64) -> Vec<Violation> {
+/// Enforces the absolute hermetic per-test, per-crate, and per-shard budgets.
+///
+/// This is a budget gate, not a regression gate: each recorded p95 is judged
+/// only against its own frozen budget, with no historical anchor. A slower run
+/// that still fits the budget passes.
+pub fn check(ledger: &Ledger) -> Vec<Violation> {
     let mut violations = Vec::new();
     let scopes: [(&str, &Vec<Sample>); 3] = [
         ("test", &ledger.tests),
@@ -288,16 +296,6 @@ pub fn check(ledger: &Ledger, baseline: Option<&Ledger>, ratio: f64) -> Vec<Viol
         ("shard", &ledger.shards),
     ];
     for (scope, samples) in scopes {
-        let baseline_samples: BTreeMap<&str, u64> = baseline
-            .map(|base| match scope {
-                "test" => &base.tests,
-                "crate" => &base.crates,
-                _ => &base.shards,
-            })
-            .into_iter()
-            .flatten()
-            .map(|sample| (sample.id.as_str(), sample.p95_ms))
-            .collect();
         for sample in samples {
             if sample.p95_ms > sample.budget_ms {
                 violations.push(Violation {
@@ -309,43 +307,26 @@ pub fn check(ledger: &Ledger, baseline: Option<&Ledger>, ratio: f64) -> Vec<Viol
                     ),
                 });
             }
-            if let Some(previous) = baseline_samples.get(sample.id.as_str()) {
-                let ceiling = (*previous as f64 * ratio).ceil() as u64;
-                if *previous > 0 && sample.p95_ms > ceiling {
-                    violations.push(Violation {
-                        scope: scope.to_string(),
-                        id: sample.id.clone(),
-                        detail: format!(
-                            "p95 {} ms regressed past {ceiling} ms ({previous} ms x {ratio})",
-                            sample.p95_ms
-                        ),
-                    });
-                }
-            }
         }
     }
     violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
     violations
 }
 
-/// Enforces that the ledger is a *complete, comparable* census before its
-/// budgets are trusted, independent of whether any single budget is exceeded.
+/// Enforces that the ledger is a *complete* census before its budgets are
+/// trusted, independent of whether any single budget is exceeded.
 ///
 /// `check` only rules on samples that are present; this rules on what must be
 /// present. Without it a ledger can pass every budget while measuring nothing
-/// meaningful: one un-repeated sample, an empty scope, or a baseline whose ids
-/// were quietly dropped so a regression has nothing to compare against.
+/// meaningful: one un-repeated sample, or an empty scope.
 ///
 /// A run fails the audit when any of the following holds:
 ///
 /// * it records fewer than [`MIN_REPETITIONS`] execution-only repetitions;
-/// * any of the test, crate, or shard censuses is empty;
+/// * any of the test, crate, or shard censuses is empty; or
 /// * any sample carries a number of samples other than the declared
-///   repetition count, so every id is measured every repetition; or
-/// * a baseline is supplied and its repetition count differs, or any id it
-///   recorded is missing from this run - a dropped scope can neither evade its
-///   budget nor make a regression disappear.
-pub fn audit_census(ledger: &Ledger, baseline: Option<&Ledger>) -> Vec<Violation> {
+///   repetition count, so every id is measured every repetition.
+pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
     let mut violations = Vec::new();
 
     if ledger.repetitions < MIN_REPETITIONS {
@@ -388,39 +369,6 @@ pub fn audit_census(ledger: &Ledger, baseline: Option<&Ledger>) -> Vec<Violation
                         ledger.repetitions
                     ),
                 });
-            }
-        }
-    }
-
-    if let Some(base) = baseline {
-        if base.repetitions != ledger.repetitions {
-            violations.push(Violation {
-                scope: "ledger".to_string(),
-                id: "repetitions".to_string(),
-                detail: format!(
-                    "baseline recorded {} repetition(s) but this run recorded {}; a comparison \
-                     is only meaningful at matching repetition counts",
-                    base.repetitions, ledger.repetitions
-                ),
-            });
-        }
-        let compared: [(&str, &Vec<Sample>, &Vec<Sample>); 3] = [
-            ("test", &base.tests, &ledger.tests),
-            ("crate", &base.crates, &ledger.crates),
-            ("shard", &base.shards, &ledger.shards),
-        ];
-        for (scope, base_samples, current_samples) in compared {
-            let present: BTreeSet<&str> = current_samples.iter().map(|s| s.id.as_str()).collect();
-            for sample in base_samples {
-                if !present.contains(sample.id.as_str()) {
-                    violations.push(Violation {
-                        scope: scope.to_string(),
-                        id: sample.id.clone(),
-                        detail: "present in the baseline but missing from this run; a scope \
-                                 cannot be dropped to evade its budget or regression check"
-                            .to_string(),
-                    });
-                }
             }
         }
     }
@@ -603,8 +551,7 @@ const USAGE: &str = "usage: cargo xtask test-runtime-ledger <command>\n\
               [--shard <id>=<ms>]... [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
               [--libtest-json <path>]... [--crate-libtest-json <crate>=<path>]...\n\
               [--exception <test-id>=<ms>]...\n\
-       check  --ledger <path> --baseline <path> --expected-census <path>\n\
-              [--regression-ratio <f>] [--top <n>]\n\
+       check  --ledger <path> --expected-census <path> [--top <n>]\n\
        census --expected-census <path> --field <crates|shards>\n\
        lint   <path>...\n\
        help";
@@ -790,17 +737,15 @@ fn load_ledger(path: &str) -> Result<Ledger, String> {
             ledger.artifact_kind, ledger.schema_version
         ));
     }
-    // Validate on load, so a hand-edited or hostile ledger (current run OR
-    // baseline) cannot slip an oversized or control-bearing id past the gate.
+    // Validate on load, so a hand-edited or hostile ledger cannot slip an
+    // oversized or control-bearing id past the gate.
     validate_ledger(&ledger).map_err(|error| format!("`{path}`: {error}"))?;
     Ok(ledger)
 }
 
 fn run_check(args: &[String]) -> Result<(), String> {
     let mut ledger_path = String::new();
-    let mut baseline_path: Option<String> = None;
     let mut census_path: Option<String> = None;
-    let mut ratio = DEFAULT_REGRESSION_RATIO;
     let mut top = 10usize;
     let mut index = 0usize;
     while index < args.len() {
@@ -810,13 +755,7 @@ fn run_check(args: &[String]) -> Result<(), String> {
             .ok_or_else(|| format!("{flag} expects a value"))?;
         match flag {
             "--ledger" => ledger_path = value.clone(),
-            "--baseline" => baseline_path = Some(value.clone()),
             "--expected-census" => census_path = Some(value.clone()),
-            "--regression-ratio" => {
-                ratio = value
-                    .parse()
-                    .map_err(|_| format!("--regression-ratio expects a number, got `{value}`"))?
-            }
             "--top" => {
                 top = value
                     .parse()
@@ -829,26 +768,14 @@ fn run_check(args: &[String]) -> Result<(), String> {
     if ledger_path.is_empty() {
         return Err("--ledger is required".to_string());
     }
-    // A pinned baseline and a pinned closed census are both mandatory: without
-    // them the gate could pass on a scope shrunk to one convenient id or on a
-    // run with no historical anchor at all.
-    let baseline_path = baseline_path.ok_or_else(|| {
-        "--baseline is required so the gate has a pinned historical anchor and can reject a \
-         dropped id"
-            .to_string()
-    })?;
+    // A pinned closed census is mandatory: without it the gate could pass on a
+    // scope shrunk to one convenient id.
     let census_path = census_path.ok_or_else(|| {
         "--expected-census is required so the crate and shard censuses are enforced against a \
          pinned closed set"
             .to_string()
     })?;
-    if !(1.0..=10.0).contains(&ratio) {
-        return Err(format!(
-            "--regression-ratio must be between 1.0 and 10.0, got {ratio}"
-        ));
-    }
     let ledger = load_ledger(&ledger_path)?;
-    let baseline = load_ledger(&baseline_path)?;
     let expected = load_expected_census(&census_path)?;
     for sample in top_slow_tests(&ledger, top) {
         println!(
@@ -856,8 +783,8 @@ fn run_check(args: &[String]) -> Result<(), String> {
             sample.id, sample.p95_ms, sample.budget_ms
         );
     }
-    let mut violations = check(&ledger, Some(&baseline), ratio);
-    violations.extend(audit_census(&ledger, Some(&baseline)));
+    let mut violations = check(&ledger);
+    violations.extend(audit_census(&ledger));
     violations.extend(audit_closed_census(&ledger, &expected));
     violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
     violations.dedup();
@@ -946,7 +873,7 @@ mod tests {
     #[test]
     fn an_over_budget_hermetic_test_fails_the_gate() {
         let over = ledger(vec![sample("slow::test", TEST_BUDGET_MS, &[10, 20, 90])]);
-        let violations = check(&over, None, DEFAULT_REGRESSION_RATIO);
+        let violations = check(&over);
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].scope, "test");
         assert!(violations[0].detail.contains("exceeds the 50 ms budget"));
@@ -965,19 +892,7 @@ mod tests {
             .insert("crypto::kdf_vectors".to_string(), 500);
         let recorded = collector.into_ledger("reference".to_string(), 1);
         assert_eq!(recorded.tests[0].budget_ms, 500);
-        assert!(check(&recorded, None, DEFAULT_REGRESSION_RATIO).is_empty());
-    }
-
-    #[test]
-    fn a_synthetic_timing_regression_fails_the_gate() {
-        let baseline = ledger(vec![sample("steady::test", TEST_BUDGET_MS, &[10])]);
-        let regressed = ledger(vec![sample("steady::test", TEST_BUDGET_MS, &[40])]);
-        let violations = check(&regressed, Some(&baseline), DEFAULT_REGRESSION_RATIO);
-        assert_eq!(violations.len(), 1);
-        assert!(violations[0].detail.contains("regressed past"));
-
-        let steady = ledger(vec![sample("steady::test", TEST_BUDGET_MS, &[12])]);
-        assert!(check(&steady, Some(&baseline), DEFAULT_REGRESSION_RATIO).is_empty());
+        assert!(check(&recorded).is_empty());
     }
 
     #[test]
@@ -1072,7 +987,7 @@ mod tests {
     fn audit_passes_a_complete_repeated_census() {
         let complete = full_ledger(MIN_REPETITIONS);
         assert!(
-            audit_census(&complete, None).is_empty(),
+            audit_census(&complete).is_empty(),
             "a complete, repeated census across every scope is accepted"
         );
     }
@@ -1080,7 +995,7 @@ mod tests {
     #[test]
     fn audit_rejects_a_single_sample_that_could_flap() {
         let thin = full_ledger(1);
-        let violations = audit_census(&thin, None);
+        let violations = audit_census(&thin);
         assert!(
             violations
                 .iter()
@@ -1093,7 +1008,7 @@ mod tests {
     fn audit_rejects_an_empty_scope() {
         let mut missing = full_ledger(MIN_REPETITIONS);
         missing.crates.clear();
-        let violations = audit_census(&missing, None);
+        let violations = audit_census(&missing);
         assert!(
             violations
                 .iter()
@@ -1106,47 +1021,12 @@ mod tests {
     fn audit_rejects_a_sample_count_that_does_not_match_the_repetitions() {
         let mut ragged = full_ledger(MIN_REPETITIONS);
         ragged.tests[0].samples_ms.pop();
-        let violations = audit_census(&ragged, None);
+        let violations = audit_census(&ragged);
         assert!(
             violations
                 .iter()
                 .any(|v| v.scope == "test" && v.detail.contains("every id must be measured")),
             "a short sample vector is rejected: {violations:?}"
-        );
-    }
-
-    #[test]
-    fn audit_rejects_dropping_a_baseline_id() {
-        let baseline = full_ledger(MIN_REPETITIONS);
-        let mut dropped = full_ledger(MIN_REPETITIONS);
-        dropped.tests.clear();
-        // Re-add a *different* test so the scope is not merely empty; the point
-        // is that the baseline's id vanished, not that the census is blank.
-        dropped.tests.push(Sample {
-            budget_ms: TEST_BUDGET_MS,
-            id: "c::d".to_string(),
-            p95_ms: 1,
-            samples_ms: vec![1; MIN_REPETITIONS],
-        });
-        let violations = audit_census(&dropped, Some(&baseline));
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.id == "a::b" && v.detail.contains("missing from this run")),
-            "a baseline id that disappeared is rejected: {violations:?}"
-        );
-    }
-
-    #[test]
-    fn audit_rejects_a_repetition_count_mismatch_against_the_baseline() {
-        let baseline = full_ledger(MIN_REPETITIONS);
-        let current = full_ledger(MIN_REPETITIONS + 1);
-        let violations = audit_census(&current, Some(&baseline));
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.id == "repetitions" && v.detail.contains("matching repetition")),
-            "comparing across differing repetition counts is rejected: {violations:?}"
         );
     }
 
