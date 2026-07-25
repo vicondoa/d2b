@@ -96,7 +96,7 @@ impl WaveCommand {
     pub fn required_options(self) -> &'static [&'static str] {
         match self {
             Self::Help => &[],
-            Self::Snapshot => &["--program", "--wave", "--repo"],
+            Self::Snapshot => &["--program", "--wave", "--repo", "--base"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
             Self::PanelRequest => &["--snapshot", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
@@ -108,13 +108,29 @@ impl WaveCommand {
     pub fn optional_options(self) -> &'static [&'static str] {
         match self {
             Self::Help => &[],
+            Self::Snapshot => &[
+                "--state-dir",
+                "--head",
+                "--edge",
+                "--generated",
+                "--dependency",
+                "--contract",
+            ],
+            Self::ValidateImport => &[
+                "--state-dir",
+                "--lane",
+                "--command",
+                "--log",
+                "--locator",
+                "--candidate",
+            ],
             _ => &["--state-dir"],
         }
     }
 
     /// Whether this stage's implementation has landed.
     pub fn implemented(self) -> bool {
-        matches!(self, Self::Help)
+        matches!(self, Self::Help | Self::Snapshot | Self::ValidateImport)
     }
 }
 
@@ -225,6 +241,8 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
                 .collect();
             Ok(output)
         }
+        WaveCommand::Snapshot => super::snapshot::run(rest),
+        WaveCommand::ValidateImport => super::evidence::run(rest),
         other => Err(DeliveryError::unimplemented(
             other.as_str(),
             other.work_item(),
@@ -305,6 +323,11 @@ impl CliOptions {
 
     pub fn optional_path(&mut self, name: &str) -> Result<Option<PathBuf>> {
         Ok(self.optional_string(name)?.map(PathBuf::from))
+    }
+
+    /// Consumes every occurrence of a repeated option, in the order supplied.
+    pub fn repeated_strings(&mut self, name: &str) -> Vec<String> {
+        self.values.remove(name).unwrap_or_default()
     }
 
     /// Parses the repeated `--repo LOGICAL_ID=CHECKOUT_ROOT` mappings that tell

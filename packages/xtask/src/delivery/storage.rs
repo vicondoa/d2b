@@ -177,7 +177,7 @@ impl StateRoot {
     /// Anchors a root without the external-path check, for hermetic tests that
     /// keep their scratch state inside the ignored build directory.
     #[cfg(test)]
-    fn for_tests(path: &Path) -> Result<Self> {
+    pub(crate) fn for_tests(path: &Path) -> Result<Self> {
         create_private_dir(path)?;
         Ok(Self {
             path: fs::canonicalize(path)?,
@@ -514,13 +514,13 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static NEXT_SCRATCH: AtomicU32 = AtomicU32::new(0);
 
-    fn repo_root() -> PathBuf {
+    pub(crate) fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
@@ -530,12 +530,12 @@ mod tests {
 
     /// Scratch directory inside the ignored build tree, so tests never touch
     /// a tracked path and never write outside the project.
-    struct Scratch {
-        path: PathBuf,
+    pub(crate) struct Scratch {
+        pub(crate) path: PathBuf,
     }
 
     impl Scratch {
-        fn new(label: &str) -> Self {
+        pub(crate) fn new(label: &str) -> Self {
             let ordinal = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
             let path = repo_root()
                 .join("packages/target/xtask-delivery-tests")
