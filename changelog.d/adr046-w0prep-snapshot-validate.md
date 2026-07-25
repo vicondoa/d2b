@@ -1,5 +1,3 @@
-# Unreleased
-
 ### Added
 
 - `cargo xtask delivery wave snapshot` binds one wave's stack into an immutable
