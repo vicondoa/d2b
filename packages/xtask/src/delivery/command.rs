@@ -116,13 +116,21 @@ impl WaveCommand {
                 "--dependency",
                 "--contract",
             ],
+            Self::ValidateImport => &[
+                "--state-dir",
+                "--lane",
+                "--command",
+                "--log",
+                "--locator",
+                "--candidate",
+            ],
             _ => &["--state-dir"],
         }
     }
 
     /// Whether this stage's implementation has landed.
     pub fn implemented(self) -> bool {
-        matches!(self, Self::Help | Self::Snapshot)
+        matches!(self, Self::Help | Self::Snapshot | Self::ValidateImport)
     }
 }
 
@@ -234,6 +242,7 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
             Ok(output)
         }
         WaveCommand::Snapshot => super::snapshot::run(rest),
+        WaveCommand::ValidateImport => super::evidence::run(rest),
         other => Err(DeliveryError::unimplemented(
             other.as_str(),
             other.work_item(),
