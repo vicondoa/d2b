@@ -18,6 +18,12 @@
   the removed baseline, historical-regression, shard, or regeneration-workflow
   capabilities (there is no `make runtime-ledger-regen` target and no committed
   baseline file).
+- Documented the envelope policy lint's D116 negative-example marker in
+  `AGENTS.md` beside the existing lint guidance: the `policy_adr046_envelopes`
+  lint exempts an intentional teaching block that demonstrates the D116
+  eval-time failure only when it carries a comment naming both `d2b-lint` and
+  `d116`, and the guidance frames it as a narrowly scoped intentional-rejection
+  signal rather than a general suppression switch.
 
 ### Fixed
 

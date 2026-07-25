@@ -199,6 +199,35 @@ pinned to that one file. Everywhere else, including a rejection
 illustration, must be phrased so it does not embed the exact rejected
 literal; correct the example rather than trying to silence the lint.
 
+### Envelope policy lint (D116) negative-example marker
+
+Unlike the spec-literal lints above - which honor no author-suppression
+marker at all - the envelope policy lint (`policy_adr046_envelopes`)
+recognizes exactly one deliberately narrow exemption. That lint enforces
+D116 across `docs/specs/**`: a `Host` or `Guest` whose `allowedDomains`
+admits the `user` domain must name a non-null, non-empty `defaultUserRef`
+(D116 is frozen in `docs/specs/ADR-046-decision-register.md`). A block that
+simply omits it is a real violation and must be corrected.
+
+The one exception is an **intentional negative example**: a fenced example
+(typically a Nix block) authored to *teach* the rule by demonstrating the
+eval-time failure that omitting `defaultUserRef` produces. Deleting that
+counter-example would lose correct teaching content, so the lint preserves
+it - but only when the block carries a greppable marker comment **inside
+the fence** that names both `d2b-lint` and `d116` (the lint matches those
+two tokens case-insensitively; the marker in use is spelled
+`# d2b-lint: expect-d116-eval-error`).
+
+This is an unambiguous authoring signal for an intentional-rejection
+example, not a general suppression switch. It exempts only the marked
+teaching block, and the envelope lint is being pinned so the exemption
+resolves to a specific documenting file and block rather than anywhere the
+comment happens to appear. Never reach for it to silence a D116 failure on
+a shape that is meant to be valid - correct the shape instead. If you are
+adding a legitimate negative example and the exact marker spelling has
+since moved, take the requirement from `policy_adr046_envelopes` (a comment
+naming both `d2b-lint` and `d116`), not from this paragraph.
+
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](./tests/AGENTS.md).
 [`tests/README.md`](./tests/README.md) is the human quick-start for the
