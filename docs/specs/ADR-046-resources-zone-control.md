@@ -2551,9 +2551,22 @@ The child Zone's `zone link/delegation` handler reconciles its local uplink:
    compiler-only `parentZone` map. The allocator alone creates privileged
    listeners/route namespace and returns the pre-bound transport through
    sealed bootstrap authority.
-3. **Authentication**: Establish the allocator-bound ComponentSession; perform
-   the Noise handshake; authenticate the parent allocator and present the
-   child-local subject.
+3. **Authentication**: Establish the allocator-bound ComponentSession by driving
+   the core-owned enrollment-and-session state machine
+   `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` (canonical in
+   ADR-046-zone-routing; implemented by ADR046-zone-routing). When the link is
+   `Unenrolled`, run the one-time `Noise_IKpsk2_25519_ChaChaPoly_SHA256`
+   bootstrap that consumes the allocator-issued single-use PSK exactly once,
+   then commit the sealed enrollment record (child static key-pin bound to the
+   child Zone UID) in one durable transaction to reach `EnrollmentCommitted`.
+   Every enrolled (post-bootstrap) session, including every reconnect, then runs
+   the `Noise_KK_25519_ChaChaPoly_SHA256` handshake from the sealed record
+   without a PSK, re-entering at `KK` from `EnrollmentCommitted`. Authenticate
+   the parent allocator and present the child-local subject. Resource-plane
+   traffic (advertisements, intent replay, cursor resync, forwarded calls) is
+   prohibited before `Ready`. The transport Provider never selects, negotiates,
+   or reorders handshake profiles; core alone drives this sequence and the
+   selected transport carries opaque bytes only.
 4. **Child authorization check**: Require the parent to acknowledge that the
    child subject and requested ceiling fit the sealed allocation; set
    `ChildAuthorized`. Parent access to `d2b.resource.v3` is independently
@@ -4209,7 +4222,7 @@ None of the following exist in baseline:
 | `RealmControllerPlacement` label set | adapt (semantics change: process placement → component placement) | Provider `spec.components[].placement` field enum |
 | `EntrypointMode::{HostResident,GatewayBacked}` | adapt | ZoneLink transport binding selector |
 | `RealmTransportBinding::{LocalUnixSocket,RemoteRealmTransport,ProviderRealmTransport}` | adapt | ZoneLink `spec.transportProviderRef` + transport settings variants |
-| `SecurePeerSession<C>` (Noise KK) | copy/adapt via main `a1cc0b2d` | ComponentSession Noise KK handshake (ADR046-zone-control-018) |
+| `SecurePeerSession<C>` (Noise KK) | copy/adapt via main `a1cc0b2d` | Enrolled-steady-state Noise KK handshake primitive within the ZoneLink enrollment-and-session FSM (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`, ADR046-zone-control-018); the one-time IKpsk2 bootstrap primitive is reused separately from d2b-bus (ADR046-zone-control-011) and this KK primitive never replaces or reorders that bootstrap step |
 | `SessionLifecycle`, `SessionPhase` | adapt | ZoneLink session reconnect loop and connection detail fields (`status.connected`, `status.lastConnectedAt`); `Connecting`/`Established` current evidence phases do not become `ZoneLink.status.phase` values |
 | `RouteRealmClass`/`RoutePlacementClass` label strings | reuse label values | ZoneLink OTEL telemetry labels (§13.2) |
 | `workload_lists_and_advertises()`, `display_fails_closed_when_unsupported()` | adapt | Provider trust/conformance check (ADR046-zone-control-003) |
@@ -4268,10 +4281,10 @@ None of the following exist in baseline:
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs`, `d2b-session-unix/src/adapter.rs` for reconnect/transport precedents |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/zone_link.rs`; `packages/d2b-core-controller/src/zone_link.rs` |
-| Detailed design | Child-local ZoneLink schema with self-matching `spec.childZoneName` plus same-Zone `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials`; at most one uplink resource per non-root Zone and none in local root; child-store cursor/intent state; reconnect loop with exponential backoff; local intent queue (max 256 entries); local child UID change detection; drain finalizer; no reciprocal parent-store resource; compiler-only `parentZone` selects the one allocator owner, while that allocator owns privileged listener/placement/route allocation effects and exposes only a sealed bootstrap/allocation interface Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`SecurePeerSession` Noise model → ComponentSession Noise KK; `SessionLifecycle`/`SessionPhase` → ZoneLink session reconnect loop and connection detail fields; `Connecting`/`Established` current evidence phases drive `status.connected` and `status.phase` transitions to `Pending`/`Ready`, not direct phase values; `RouteTreeEngine.decide_route()` → cursor tracking; `RealmIdentityStore` enrollment → ZoneLink child key-pin). |
+| Detailed design | Child-local ZoneLink schema with self-matching `spec.childZoneName` plus same-Zone `spec.transportProviderRef`, `spec.transportSettings`, and `spec.transportCredentials`; at most one uplink resource per non-root Zone and none in local root; child-store cursor/intent state; reconnect loop with exponential backoff; local intent queue (max 256 entries); local child UID change detection; drain finalizer; no reciprocal parent-store resource; compiler-only `parentZone` selects the one allocator owner, while that allocator owns privileged listener/placement/route allocation effects and exposes only a sealed bootstrap/allocation interface. The controller drives the core-owned enrollment-and-session state machine `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` (canonical in ADR-046-zone-routing; the FSM itself is implemented by ADR046-zone-routing) and never adapts directly to a steady-state KK session: only `Unenrolled -> IKpsk2` consumes the allocator-issued single-use PSK (once), the sealed enrollment record (child static key-pin) is committed in one durable transaction before the enrolled `Noise_KK_25519_ChaChaPoly_SHA256` handshake, reconnect re-enters at `KK` from `EnrollmentCommitted` without a PSK, and resource-plane traffic is prohibited until `Ready`; the selected transport Provider never selects, negotiates, or reorders the handshake profile. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`SecurePeerSession` Noise model -> the ZoneLink enrollment-and-session state machine above rather than a direct ComponentSession KK session; `SessionLifecycle`/`SessionPhase` -> ZoneLink session reconnect loop and connection detail fields; `Connecting`/`Established` current evidence phases drive `status.connected` and `status.phase` transitions to `Pending`/`Ready`, not direct phase values; `RouteTreeEngine.decide_route()` -> cursor tracking; `RealmIdentityStore` enrollment -> ZoneLink child key-pin and sealed bootstrap record). |
 | Integration | child core-controller zone_link handler; child redb `zone_link_cursors` table; Nix-compiled `parentZone` bootstrap topology; selected parent allocator and route engine through sealed allocation authority; d2b-bus transport resolver; ComponentSession lifecycle |
 | Data migration | Destructive reset; no v2 Realm peer migration |
-| Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zonelink-disabled-no-reconnect`, `zonelink-child-auth-denied-failed`, `zonelink-drain-closes-session`, `zonelink-child-name-matches-store`, `zonelink-one-child-local-uplink`, `zonelink-parent-bootstrap-binding`, `zonelink-parent-has-no-reciprocal-row` |
+| Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zonelink-disabled-no-reconnect`, `zonelink-child-auth-denied-failed`, `zonelink-drain-closes-session`, `zonelink-child-name-matches-store`, `zonelink-one-child-local-uplink`, `zonelink-parent-bootstrap-binding`, `zonelink-parent-has-no-reciprocal-row`, `zonelink-unenrolled-runs-ikpsk2-bootstrap-first`, `zonelink-ikpsk2-consumes-single-use-psk-once`, `zonelink-enrollment-committed-before-kk-handshake`, `zonelink-reconnect-uses-kk-without-psk`, `zonelink-resource-traffic-before-ready-rejected`, `zonelink-transport-does-not-select-or-reorder-handshake-profile` |
 | Removal proof | `realm_stubs.rs` (`ApiFrontend`, `PeerOperationRouter`, `TargetResolver`) removed after ComponentSession integration (ADR046-zone-control-018); `realm_access_resolver.rs` module removed after ZoneLink replaces entrypoint-table resolution; gateway `PeerSession`/`SecurePeerSession` session types remain as dead code in d2b-realm-router until Provider session migration wave |
 
 ### ADR046-zone-control-003

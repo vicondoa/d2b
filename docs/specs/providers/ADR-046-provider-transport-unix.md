@@ -898,10 +898,14 @@ from OS-enforced SO_PEERCRED, not a peer-supplied long-term key.
 - SO_PEERCRED is still verified by `PeerIdentityPolicy`; for KK sessions its
   role is supplemental provenance, not primary authentication.
 
-The child Zone's core ZoneLink controller enforces KK on its enrolled ZoneLink
-session (IKpsk2 only for the one-time bootstrap enrollment and after
-revocation); this Provider accepts whichever Noise profile the session engine
-negotiates on its FD.
+The child Zone's core ZoneLink controller drives the core-owned
+enrollment-and-session state machine
+`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` (canonical in
+ADR-046-zone-routing): the one-time IKpsk2 bootstrap runs only from `Unenrolled`
+(and after revocation), and every enrolled steady-state session, including every
+reconnect, uses KK. This Provider carries whichever Noise profile core selects
+from that enrollment state on its FD; the transport never selects, negotiates,
+or reorders handshake profiles.
 
 ### IKpsk2 - one-time bootstrap
 
@@ -929,14 +933,21 @@ selected parent allocator (chosen by compiler-only K1.parentZone)
 child Zone K1 core ZoneLink controller
   -> K1 d2b-bus
        hands OwnedTransport to session engine
-  -> ComponentSession (KK handshake, record protection, named streams, reconnect)
+  -> ComponentSession (core-driven enrollment-and-session FSM:
+       Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready;
+       one-time IKpsk2 bootstrap when Unenrolled, then enrolled KK;
+       record protection, named streams, reconnect)
   -> selected parent allocator's route endpoint
 ```
 
 After `OpenTransport` returns, the transport FD is owned by the session engine.
 K1's d2b-bus:
 - wraps the FD as `UnixSeqpacketTransport` or `UnixStreamTransport`;
-- establishes the KK ComponentSession handshake;
+- establishes the ComponentSession handshake selected by core from the ZoneLink
+  enrollment state (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK ->
+  Ready`): the one-time IKpsk2 bootstrap when the link is `Unenrolled`,
+  otherwise the enrolled KK handshake; the transport never selects or reorders
+  the profile;
 - owns per-session FD credits, named stream scheduling, reconnect generation;
 - forwards resource API traffic over K1's allocator-bound uplink.
 
