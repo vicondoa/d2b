@@ -538,10 +538,12 @@ impl ImportRequest {
 fn digest_without_retaining(path: &Path) -> Result<OutputDigest> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(DeliveryError::new(format!(
-            "validator log is not a regular file: {}",
-            path.display()
-        )));
+        // Name the artifact role, never the absolute log path: this diagnostic
+        // reaches operator stderr and CI logs, and the log path is operator
+        // supplied and routinely absolute.
+        return Err(DeliveryError::new(
+            "validator log is not a regular file".to_owned(),
+        ));
     }
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
@@ -595,7 +597,7 @@ mod tests {
     use crate::delivery::{
         DeliveryErrorKind,
         snapshot::tests::{GitFixture, take},
-        storage::tests::repo_root,
+        storage::tests::{assert_no_absolute_path, repo_root},
     };
 
     /// Sentinel that must never appear in any file the import writes.
@@ -988,6 +990,18 @@ mod tests {
             crate::delivery::model::sha256_bytes(contents.as_bytes())
         );
         assert!(digest_without_retaining(&fixture.scratch().join("absent.log")).is_err());
+    }
+
+    #[test]
+    fn a_non_regular_validator_log_does_not_leak_its_absolute_path() {
+        // A directory (not a regular file) exercises the rejection branch. The
+        // diagnostic names the artifact role, never the absolute log path.
+        let fixture = GitFixture::new("evidence-log-redaction");
+        let dir = fixture.scratch().join("not-a-file");
+        std::fs::create_dir_all(&dir).expect("create directory");
+        let error =
+            digest_without_retaining(&dir).expect_err("a directory must not digest as a log");
+        assert_no_absolute_path(error.message(), &[fixture.scratch()]);
     }
 
     /// Drives the whole pipeline through the production code paths: `snapshot`

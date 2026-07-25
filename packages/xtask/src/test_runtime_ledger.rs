@@ -560,11 +560,27 @@ fn pair(value: &str, flag: &str) -> Result<(String, u64), String> {
     Ok((id.to_string(), millis))
 }
 
+/// Reduces a filesystem path to its final component so a diagnostic can name
+/// the artifact without disclosing the absolute checkout or work directory.
+///
+/// The Make target passes census, ledger, work, and lint paths as absolute
+/// paths, so an unredacted diagnostic would echo the checkout layout and a
+/// username-bearing directory into CI logs. Naming only the leaf keeps the
+/// message diagnosable while dropping the sensitive directory portion.
+fn redact_path(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<path>".to_owned())
+}
+
 /// Load and validate the pinned closed census from a committed JSON pin.
 fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
-    let bytes = fs::read(path).map_err(|error| format!("cannot read `{path}`: {error}"))?;
-    let census: ExpectedCensus = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("`{path}` is not a valid expected census: {error}"))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read the expected census pin: {error}"))?;
+    let census: ExpectedCensus = serde_json::from_slice(&bytes).map_err(|error| {
+        format!("the expected census pin is not a valid expected census: {error}")
+    })?;
     census.validate()?;
     Ok(census)
 }
@@ -637,7 +653,7 @@ fn run_record(args: &[String]) -> Result<(), String> {
             }
             "--libtest-json" => {
                 let stream = fs::read_to_string(value)
-                    .map_err(|error| format!("cannot read `{value}`: {error}"))?;
+                    .map_err(|error| format!("cannot read the libtest stream: {error}"))?;
                 for (id, millis) in parse_libtest_json(&stream)? {
                     collector.tests.entry(id).or_default().push(millis);
                 }
@@ -647,8 +663,9 @@ fn run_record(args: &[String]) -> Result<(), String> {
                     .split_once('=')
                     .ok_or_else(|| format!("{flag} expects `<crate>=<path>`, got `{value}`"))?;
                 validate_id("crate", crate_id)?;
-                let stream = fs::read_to_string(path)
-                    .map_err(|error| format!("cannot read `{path}`: {error}"))?;
+                let stream = fs::read_to_string(path).map_err(|error| {
+                    format!("cannot read the libtest stream for crate `{crate_id}`: {error}")
+                })?;
                 for (name, millis) in parse_libtest_json(&stream)? {
                     // Crate-qualify the libtest name so `d2b-core::foo::bar`
                     // cannot collide with an identically-named test in another
@@ -677,10 +694,12 @@ fn run_record(args: &[String]) -> Result<(), String> {
     if let Some(parent) = Path::new(&output).parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create `{}`: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("cannot create the runtime ledger output directory: {error}")
+        })?;
     }
-    fs::write(&output, rendered).map_err(|error| format!("cannot write `{output}`: {error}"))?;
+    fs::write(&output, rendered)
+        .map_err(|error| format!("cannot write the runtime ledger output: {error}"))?;
     println!(
         "recorded {} test and {} crate measurements",
         ledger.tests.len(),
@@ -690,18 +709,19 @@ fn run_record(args: &[String]) -> Result<(), String> {
 }
 
 fn load_ledger(path: &str) -> Result<Ledger, String> {
-    let bytes = fs::read(path).map_err(|error| format!("cannot read `{path}`: {error}"))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read the runtime ledger: {error}"))?;
     let ledger: Ledger = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("`{path}` is not a valid runtime ledger: {error}"))?;
+        .map_err(|error| format!("the runtime ledger is not valid JSON: {error}"))?;
     if ledger.artifact_kind != ARTIFACT_KIND || ledger.schema_version != SCHEMA_VERSION {
         return Err(format!(
-            "`{path}` declares {}/{} instead of {ARTIFACT_KIND}/{SCHEMA_VERSION}",
+            "the runtime ledger declares {}/{} instead of {ARTIFACT_KIND}/{SCHEMA_VERSION}",
             ledger.artifact_kind, ledger.schema_version
         ));
     }
     // Validate on load, so a hand-edited or hostile ledger cannot slip an
     // oversized or control-bearing id past the gate.
-    validate_ledger(&ledger).map_err(|error| format!("`{path}`: {error}"))?;
+    validate_ledger(&ledger).map_err(|error| format!("the runtime ledger: {error}"))?;
     Ok(ledger)
 }
 
@@ -774,8 +794,8 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     }
     let mut findings = Vec::new();
     for path in args {
-        let text =
-            fs::read_to_string(path).map_err(|error| format!("cannot read `{path}`: {error}"))?;
+        let text = fs::read_to_string(path)
+            .map_err(|error| format!("cannot read lint target `{}`: {error}", redact_path(path)))?;
         findings.extend(lint_source(path, &text));
     }
     if findings.is_empty() {
@@ -788,7 +808,10 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     for finding in &findings {
         eprintln!(
             "{}:{}: {} - {}",
-            finding.path, finding.line, finding.rule, finding.detail
+            redact_path(&finding.path),
+            finding.line,
+            finding.rule,
+            finding.detail
         );
     }
     Err(format!(
@@ -1157,6 +1180,59 @@ mod tests {
         assert!(
             parse_libtest_json(stream).is_err(),
             "a libtest name carrying a newline is rejected"
+        );
+    }
+
+    #[test]
+    fn a_missing_census_pin_does_not_leak_its_absolute_directory() {
+        let dir = "/home/redaction-sentinel-census";
+        let error = load_expected_census(&format!("{dir}/runtime-census.json"))
+            .expect_err("a missing census pin must fail");
+        assert!(
+            !error.contains(dir),
+            "the census diagnostic leaked its absolute directory: {error}"
+        );
+    }
+
+    #[test]
+    fn a_missing_ledger_does_not_leak_its_absolute_directory() {
+        let dir = "/home/redaction-sentinel-ledger";
+        let error = load_ledger(&format!("{dir}/runtime-ledger.json"))
+            .expect_err("a missing ledger must fail");
+        assert!(
+            !error.contains(dir),
+            "the ledger diagnostic leaked its absolute directory: {error}"
+        );
+    }
+
+    #[test]
+    fn a_missing_libtest_stream_does_not_leak_its_absolute_directory() {
+        let dir = "/home/redaction-sentinel-stream";
+        let args = vec![
+            "--runner".to_string(),
+            "reference".to_string(),
+            "--libtest-json".to_string(),
+            format!("{dir}/stream.json"),
+        ];
+        let error = run_record(&args).expect_err("a missing libtest stream must fail");
+        assert!(
+            !error.contains(dir),
+            "the record diagnostic leaked its absolute directory: {error}"
+        );
+    }
+
+    #[test]
+    fn a_missing_lint_target_names_the_leaf_not_the_absolute_directory() {
+        let dir = "/home/redaction-sentinel-lint";
+        let args = vec![format!("{dir}/entrypoint.sh")];
+        let error = run_lint(&args).expect_err("a missing lint target must fail");
+        assert!(
+            !error.contains(dir),
+            "the lint diagnostic leaked its absolute directory: {error}"
+        );
+        assert!(
+            error.contains("entrypoint.sh"),
+            "the lint diagnostic must still name the offending file: {error}"
         );
     }
 }
