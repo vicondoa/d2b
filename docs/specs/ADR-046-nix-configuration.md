@@ -475,6 +475,7 @@ each built artifact:
 ```json
 {
   "schemaVersion": "v1",
+  "catalogDigest": "sha256:<64 lowercase hex of the canonical catalog excluding this field>",
   "entries": [
     {
       "artifactId":    "system-core",
@@ -498,10 +499,16 @@ each built artifact:
 
 `storePath` is a private field read only by `d2b-activation-helper` and the
 Zone runtime for staging. It never appears in any public ResourceSpec, status
-field, audit record, or OTEL telemetry export. `d2b-activation-helper` verifies
-the artifact catalog document digest (digest-chain member 4; see Bundle
-contract (canonical)) before staging. The catalog is content-addressed: same
-derivation inputs produce byte-identical output.
+field, audit record, or OTEL telemetry export. `catalogDigest` is the artifact
+catalog document digest (digest-chain member 3; see Bundle contract
+(canonical)): a `sha256:<hex>` computed under the D101
+`d2b:v3:artifact-catalog` domain tag over the canonical catalog object with the
+`catalogDigest` key itself excluded from the preimage. `d2b-activation-helper`
+recomputes it and fails closed unless it equals both the catalog's own
+`catalogDigest` and the active bundle's `artifactCatalogDigest` anchor before
+staging; recomputing the self-digest alone can never detect tampering, so the
+Nix-store-immutable bundle anchor is the authority. The catalog is
+content-addressed: same derivation inputs produce byte-identical output.
 
 ### Validation
 
@@ -1944,6 +1951,7 @@ produces a different store path and `contentHash`.
   "bundleVersion": 1,
   "zone": "dev",
   "contentHash": "sha256:<64 lowercase hex>",
+  "artifactCatalogDigest": "sha256:<64 lowercase hex>",
   "generatedAt": "1970-01-01T00:00:00.000Z",
   "resources": [
     { "apiVersion": "resources.d2bus.org/v3", "type": "<Type>",
@@ -1962,6 +1970,14 @@ produces a different store path and `contentHash`.
 - `generatedAt` is the Unix epoch (`1970-01-01T00:00:00.000Z`) for
   reproducibility; the Zone runtime records the actual activation time in its
   own generation record, not in the bundle.
+- `artifactCatalogDigest` is the site-wide artifact catalog's `catalogDigest`
+  copied into the bundle at emit time. It anchors the catalog's self-digest to
+  this Nix-store-immutable bundle and is excluded from the `contentHash`
+  preimage (which is the `resources` array alone). It is not part of the
+  generation identity: two generations with an identical `resources` array share
+  a `contentHash` but each carries the `artifactCatalogDigest` of the catalog it
+  was built against, so the durable generation record persists the accepted
+  `artifactCatalogDigest` alongside the active `contentHash`.
 
 #### Emitted at build time vs created at runtime
 
@@ -1989,21 +2005,32 @@ it is never edited directly.
 Integrity verification is computable from exactly these members; there is no
 file-list manifest and no `candidateId`/`contentId`:
 
-1. **Per-resource envelope digest** - each element of `resources` has a
-   canonical `sha256:<hex>` digest under the D101 `d2b:v3:resource-envelope`
-   domain tag.
-2. **Bundle `contentHash`** - `sha256:<hex>` over the canonical sorted
-   `resources` array (excluding `contentHash` and `generatedAt`). It is the
-   generation identity; the Zone runtime and audit records refer to this value
-   as `generationId` (the two names denote the same digest).
-3. **`providerSchemaDigests`** - one `sha256:<hex>` per `Provider/<name>` used
+1. **Bundle `contentHash`** - `sha256:<hex>` over the canonical sorted
+   `resources` array (excluding the top-level `contentHash`,
+   `artifactCatalogDigest`, and `generatedAt` fields). It is the generation
+   identity; the Zone runtime and audit records refer to this value as
+   `generationId` (the two names denote the same digest). Because the preimage
+   is exactly the emitted `resources` bytes, this digest already covers every
+   resource envelope in the bundle; there is no separate per-envelope digest
+   field in the bundle, and none is needed for tamper detection (the D101
+   `d2b:v3:resource-envelope` tag remains the store-side per-resource
+   StateEnvelope digest at rest, which is a distinct artifact).
+2. **`providerSchemaDigests`** - one `sha256:<hex>` per `Provider/<name>` used
    in the bundle, taken from the Provider's committed settings schema (D101
    `d2b:v3:schema`); the runtime verifies these when applying the bundle.
-4. **Artifact catalog document digest** - the site-wide
-   `artifact-catalog.json` carries a `sha256:<hex>` under the D101
-   `d2b:v3:artifact-catalog` domain tag; `d2b-activation-helper` verifies it
-   before staging.
-5. **Per-artifact store-path hashes** - each artifact-catalog entry records its
+3. **Artifact-catalog document digest** - the site-wide `artifact-catalog.json`
+   carries a `catalogDigest` (`sha256:<hex>` under the D101
+   `d2b:v3:artifact-catalog` domain tag, computed over the canonical catalog
+   with the `catalogDigest` key excluded from its own preimage). The bundle
+   anchors this exact value in its top-level `artifactCatalogDigest` field; the
+   bundle is Nix-store-immutable, so the anchor cannot be forged without
+   changing the bundle store path. `d2b-activation-helper` recomputes the
+   installed catalog's digest and fails closed unless it equals both the
+   catalog's `catalogDigest` and the active bundle's `artifactCatalogDigest`.
+   The durable generation record persists the accepted `artifactCatalogDigest`
+   so a later restart re-verifies against a pinned value rather than an
+   unpinned self-digest.
+4. **Per-artifact store-path hashes** - each artifact-catalog entry records its
    Nix-computed `packageDigest`/`closureDigest`; each bundle resource's
    `artifactId`/`systemArtifactId` resolves to a catalog entry and the runtime
    verifies the resolved artifact's recorded digest at apply time.
@@ -2036,11 +2063,11 @@ Nix eval
          cross-Zone index cross-check;
       3. stage the new generation into the Zone runtime (not yet active);
       4. atomically persist generation.json = { activeContentHash,
-         priorContentHash, retainedGenerations, retention-ring metadata }
-         in one durable write (temp file in the same directory, write, fsync
-         the file, rename over the target, fsync the parent directory), per
-         the ADR 0034 storage contract; the new generation counts as active
-         only when this write returns success;
+         activeArtifactCatalogDigest, priorContentHash, retainedGenerations,
+         retention-ring metadata } in one durable write (temp file in the same
+         directory, write, fsync the file, rename over the target, fsync the
+         parent directory), per the ADR 0034 storage contract; the new
+         generation counts as active only when this write returns success;
       5. notify the configuration-publication controller.
 ```
 
@@ -2293,7 +2320,7 @@ contract (canonical)).
 The bundle envelope, its canonical `resources` array, and the full digest chain
 are specified once in Bundle contract (canonical) above. There is no separate
 file-list manifest and no `candidateId`/`contentId`: the generation identity is
-the bundle `contentHash`, and integrity is the five-member digest chain defined
+the bundle `contentHash`, and integrity is the four-member digest chain defined
 in that section.
 
 ## Conflict detection
@@ -2573,7 +2600,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, `installFileName`, `mode 0640` ownership); `nixos-modules/bundle.nix` (bundle derivation, SHA256SUMS, `d2b._bundle` integrity chain) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/bundle-zones.nix` (per-Zone bundle derivation); common helpers retained in `bundle-artifacts.nix` |
-| Detailed design | Per-Zone monolithic `resource-bundle.json` (store-derivation filename `bundle.json`) whose `contentHash` is the generation identity, verified via the five-member digest chain (see Bundle contract (canonical)); `generationIndex` monotonic ordinal; atomic `generation.json` activation commit; `manifestVersion` -> `schemaVersion` rename Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and rewrite. |
+| Detailed design | Per-Zone monolithic `resource-bundle.json` (store-derivation filename `bundle.json`) whose `contentHash` is the generation identity, verified via the four-member digest chain (see Bundle contract (canonical)); `generationIndex` monotonic ordinal; atomic `generation.json` activation commit; `manifestVersion` -> `schemaVersion` rename Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and rewrite. |
 | Integration | `d2b-activation-helper` reads `resource-bundle.json` per Zone; validates the digest chain before staging |
 | Data migration | Per-Zone bundles are generated from v3 resource declarations; full d2b 3.0 reset; no v2 monolithic bundle state import. |
 | Validation | Artifact-shape contract tests in `packages/d2b-contract-tests/tests/`; determinism test (build twice, diff outputs) |
@@ -2841,10 +2868,10 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | No current equivalent for a separate artifact catalog. Current `nixos-modules/bundle.nix` embeds package derivation references inline. Current `nixos-modules/closures-json.nix` uses `pkgs.closureInfo` keyed by `d2b.vms.<name>`. |
 | Reuse action | create |
 | Destination | `nixos-modules/artifact-catalog.nix` (new emitter); `nixos-modules/options-artifacts.nix` (new option: `d2b.artifacts.<id> = { package; type; }`); `/etc/d2b/artifact-catalog.json` (output artifact, `root:d2bd` 0640); `nixos-modules/bundle-zones.nix` (extend to include the artifact catalog document digest as a digest-chain member); `nixos-modules/options-zones-resources.nix` (replace `closureRef` / `nixosSystem` helpers with `systemArtifactId` validation) |
-| Detailed design | `d2b.artifacts.<id>` attrset option: `id` matches `^[a-z][a-z0-9-]*$`; `type ∈ { "provider", "nixos-system", "nixos-module-set", "config-bundle" }`; no other fields. Emitter computes `pkgs.closureInfo` for each entry and writes `artifact-catalog.json` with sorted entries (by `artifactId`) containing `artifactId`, `type`, `storePath` (private, for activation-helper staging), `packageDigest`, `closureDigest`, `closureSize`. `storePath` is a private field of the root:d2bd 0640 file; it is never emitted in public ResourceSpecs, status fields, audit records, or OTEL telemetry. The digest chain includes the artifact catalog document digest (member 4; see Bundle contract (canonical)). `d2b-activation-helper` reads `storePath` from the catalog to resolve and stage each artifact; verifies catalog digest before staging. Build-time validation: `artifactId` / `systemArtifactId` / `source.systemArtifactId` fields in resource specs resolve against `d2b.artifacts`; type-mismatch fails with a structured error. `d2b.providerCatalog.<name>.package` option is removed; replaced by `d2b.providerCatalog.<name>.artifactId`. `Guest.spec.systemArtifactId` replaces the former `nixosSystem` Nix-only helper. `Volume.source.systemArtifactId` replaces `source.closureRef`. |
+| Detailed design | `d2b.artifacts.<id>` attrset option: `id` matches `^[a-z][a-z0-9-]*$`; `type ∈ { "provider", "nixos-system", "nixos-module-set", "config-bundle" }`; no other fields. Emitter computes `pkgs.closureInfo` for each entry and writes `artifact-catalog.json` with sorted entries (by `artifactId`) containing `artifactId`, `type`, `storePath` (private, for activation-helper staging), `packageDigest`, `closureDigest`, `closureSize`, and a top-level `catalogDigest` computed under the D101 `d2b:v3:artifact-catalog` domain tag over the canonical catalog with the `catalogDigest` key excluded from its own preimage. `bundle-zones.nix` copies that `catalogDigest` value into each Zone bundle's top-level `artifactCatalogDigest` field so the Nix-store-immutable bundle anchors the catalog document digest. `storePath` is a private field of the root:d2bd 0640 file; it is never emitted in public ResourceSpecs, status fields, audit records, or OTEL telemetry. The digest chain includes the artifact catalog document digest (member 3; see Bundle contract (canonical)). `d2b-activation-helper` reads `storePath` from the catalog to resolve and stage each artifact; it recomputes the catalog digest and fails closed unless it equals both the catalog's `catalogDigest` and the active bundle's `artifactCatalogDigest` before staging. Build-time validation: `artifactId` / `systemArtifactId` / `source.systemArtifactId` fields in resource specs resolve against `d2b.artifacts`; type-mismatch fails with a structured error. `d2b.providerCatalog.<name>.package` option is removed; replaced by `d2b.providerCatalog.<name>.artifactId`. `Guest.spec.systemArtifactId` replaces the former `nixosSystem` Nix-only helper. `Volume.source.systemArtifactId` replaces `source.closureRef`. |
 | Integration | `nixos-modules/closures-json.nix` rewritten (ADR046-nix-012) to key by artifact ID; `nixos-modules/bundle-zones.nix` includes artifact catalog in integrity chain |
 | Data migration | Artifact catalog entries are generated from new `d2b.artifacts` declarations; full d2b 3.0 reset; no v2 `closureRef`/`nixosSystem` metadata import. |
-| Validation | Artifact catalog round-trip: declare artifact, build, verify JSON entry present with correct type/digests/storePath; missing artifact ID fails build with structured error; wrong-type artifact fails build; `storePath` absent from all public ResourceSpecs and status/audit/OTEL surfaces |
+| Validation | Artifact catalog round-trip: declare artifact, build, verify JSON entry present with correct type/digests/storePath; missing artifact ID fails build with structured error; wrong-type artifact fails build; `storePath` absent from all public ResourceSpecs and status/audit/OTEL surfaces; `catalogDigest` present and equal to the recomputed self-digest; each Zone bundle's `artifactCatalogDigest` equals the catalog `catalogDigest`; a bundle whose `artifactCatalogDigest` does not match the installed catalog fails activation closed; a tampered `artifact-catalog.json` (self-digest recomputes clean but no longer equals the bundle anchor) fails activation closed |
 | Tests | `tests/unit/nix/cases/artifact-catalog.nix` (declaration, resolution, storePath present in private catalog); `tests/unit/nix/cases/artifact-catalog-type-mismatch.nix` (build failure for wrong type); `tests/unit/nix/cases/artifact-catalog-missing-id.nix` (build failure for absent ID); `tests/unit/nix/cases/artifact-catalog-public-surfaces.nix` (storePath absent from all emitted ResourceSpecs); `packages/d2b-contract-tests/tests/artifact-catalog-schema.rs` |
 | Drift pin | `make test-drift` (artifact catalog schema); `make nix-unit-pin` |
 | Removal proof | Not removed; extended as new artifact types are added |
