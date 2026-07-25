@@ -35,6 +35,24 @@ if ! is_known_target "$target"; then
   exit 2
 fi
 
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# test-integration, test-hardware, and perf dispatch the destructive live and
+# hardware lanes, so they must never bypass the heavy-gate semaphore. When one
+# of those targets is requested outside the gate, re-exec through it exactly
+# once; the gate exports D2B_HEAVY_GATE across the re-exec so the next pass runs
+# the real work. Non-heavy targets (test-rust, test-drift, ...) run bare.
+case "$target" in
+  test-integration | test-hardware | perf)
+    if [ -z "${D2B_HEAVY_GATE:-}" ]; then
+      _hg_xtask="${CARGO_TARGET_DIR:-$ROOT/packages/target}/debug/xtask"
+      if [ ! -x "$_hg_xtask" ]; then
+        ( cd "$ROOT/packages" && cargo build --quiet -p xtask )
+      fi
+      exec "$_hg_xtask" heavy-gate -- bash "$0" "$@"
+    fi
+    ;;
+esac
+
 [ -f "$LEDGER" ] || { echo "run-layer: missing ledger $LEDGER (run gen-migration-ledger.sh)" >&2; exit 1; }
 
 # Extract `name`s whose make_target matches and status is still runnable legacy.

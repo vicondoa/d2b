@@ -1,0 +1,8 @@
+{
+  "crates": [
+    "d2b-core"
+  ],
+  "shards": [
+    "hermetic-core"
+  ]
+}

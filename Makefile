@@ -11,6 +11,7 @@
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
         heavy-lane-hardware heavy-lane-perf \
+        heavy-lane-pre-tag heavy-lane-smoke-lite \
         heavy-gate-build heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
@@ -297,12 +298,27 @@ i3-check:
 ##           Requires: KVM, d2b active, both personal-dev and work-aad VMs declared.
 ##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/d2b-smoke-run-log.txt.
 ##           ALSO runs the I3 invariant grep gate (ADR 0022 + panel-docs R1).
-pre-tag: i3-check
+##           Public heavy lane: acquires a slot, then runs the raw live work behind
+##           the gate - the live smoke suite is the most destructive, stateful lane
+##           in the tree and must never bypass the sole-use semaphore.
+pre-tag: i3-check heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-pre-tag
+
+## heavy-lane-pre-tag - the raw full live-VM smoke work. Internal: reachable only
+## from inside the gate (see heavy-lane-guard).
+heavy-lane-pre-tag: heavy-lane-guard
 	bash tests/integration/live/live-vm-smoke.sh --full
 
 ## smoke-lite - run the single-VM lite smoke gate (≤5 min).
 ##              Used at every panel-round HEAD per I5.
-smoke-lite:
+##              Public heavy lane: acquires a slot, then runs the raw live work
+##              behind the gate.
+smoke-lite: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-smoke-lite
+
+## heavy-lane-smoke-lite - the raw lite live-VM smoke work. Internal: reachable
+## only from inside the gate (see heavy-lane-guard).
+heavy-lane-smoke-lite: heavy-lane-guard
 	bash tests/integration/live/live-vm-smoke.sh --lite
 
 .PHONY: test-changelog changelog-fold
@@ -321,61 +337,113 @@ changelog-fold:
 	cd packages && cargo run -q -p xtask -- changelog-fold
 # --- hermetic execution-budget gate ----------------------------------------
 
-.PHONY: test-runtime-ledger
+.PHONY: test-runtime-ledger runtime-ledger-regen
 
-## test-runtime-ledger - hermetic execution-budget gate. Warm-builds the
-##   workspace first so compilation never lands in the timings, then collects
+## test-runtime-ledger - hermetic execution-budget gate. Reads the pinned
+##   closed census (D2B_RUNTIME_CENSUS) of crates and shards, warm-builds those
+##   census crates so compilation never lands in the timings, then collects
 ##   repeated *execution-only* samples at three granularities - per test (from a
-##   libtest JSON stream), per crate, and per Layer-1 shard - across
-##   D2B_RUNTIME_REPETITIONS runs. It records them into a deterministic,
+##   crate-qualified libtest JSON stream), per crate (summed from that stream's
+##   per-test exec_time, so cargo's dependency-freshness overhead never lands in
+##   the timing), and per hermetic shard (summed across the census crates) -
+##   across D2B_RUNTIME_REPETITIONS runs. It records them into a deterministic,
 ##   portable ledger carrying an operator-supplied runner label instead of a
-##   hostname, then enforces the per-test / per-crate / per-shard budgets, a
-##   complete-census audit (non-empty scopes, matching repetition counts), and,
-##   when D2B_RUNTIME_BASELINE names a previously recorded ledger, the
-##   historical regression threshold plus baseline-id-loss detection.
+##   hostname, then enforces the per-test / per-crate / per-shard budgets, the
+##   complete-census audit (non-empty scopes, matching repetition counts), the
+##   closed-census audit (the crate and shard sets reproduce the pin exactly),
+##   and the historical regression threshold plus baseline-id-loss detection
+##   against the REQUIRED pinned baseline (D2B_RUNTIME_BASELINE).
 ##
-##   Both cargo invocations run from packages/ (not the repo root via
+##   The baseline and census are mandatory: a run with no historical anchor, or
+##   one free to shrink a scope to a single convenient id, cannot substantiate a
+##   regression gate. Regenerate the baseline with `make runtime-ledger-regen`
+##   after intentionally adding, removing, or renaming a census test.
+##
+##   All cargo invocations run from packages/ (not the repo root via
 ##   --manifest-path) so packages/.cargo/config.toml - and its sccache
-##   rustc-wrapper - is discovered; the ledger and baseline paths are passed as
-##   root-absolute so the working-directory change cannot misplace them.
-D2B_RUNTIME_SHARDS      ?= test-rust
-D2B_RUNTIME_CRATES      ?= d2b-core xtask
+##   rustc-wrapper - is discovered; the ledger, baseline, and census paths are
+##   passed root-absolute so the working-directory change cannot misplace them.
 D2B_RUNTIME_RUNNER      ?= local
 D2B_RUNTIME_REPETITIONS ?= 3
 D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
-D2B_RUNTIME_BASELINE    ?=
+D2B_RUNTIME_BASELINE    ?= tests/runtime-ledger-baseline.json
+D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
+D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
+
+## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
 	ledger='$(abspath $(D2B_RUNTIME_LEDGER))'; \
+	baseline='$(abspath $(D2B_RUNTIME_BASELINE))'; \
+	census='$(abspath $(D2B_RUNTIME_CENSUS))'; \
 	work='$(abspath packages/target/test-runtime-ledger.work)'; \
 	reps='$(D2B_RUNTIME_REPETITIONS)'; \
 	rm -rf "$$work"; mkdir -p "$$work"; \
-	echo "test-runtime-ledger: warm-building the workspace so compilation is excluded from timings"; \
-	( cd packages && cargo test --workspace --all-targets --no-run --quiet ); \
+	crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	shards="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field shards)"; \
+	if [ -z "$$crates" ] || [ -z "$$shards" ]; then \
+	  echo "test-runtime-ledger: the pinned census names no crates or no shards" >&2; exit 1; fi; \
+	echo "test-runtime-ledger: warm-building the census crates so compilation is excluded from timings"; \
+	for crate in $$crates; do ( cd packages && cargo test -p "$$crate" --lib --tests --no-run --quiet ); done; \
 	args=""; \
 	rep=0; \
 	while [ "$$rep" -lt "$$reps" ]; do \
 	  rep=$$((rep + 1)); \
 	  echo "test-runtime-ledger: repetition $$rep/$$reps"; \
-	  for shard in $(D2B_RUNTIME_SHARDS); do \
-	    start="$$(date +%s%3N)"; \
-	    $(MAKE) --no-print-directory "$$shard" >/dev/null; \
-	    end="$$(date +%s%3N)"; \
-	    args="$$args --shard $$shard=$$((end - start))"; \
-	  done; \
-	  for crate in $(D2B_RUNTIME_CRATES); do \
+	  shard_total=0; \
+	  for crate in $$crates; do \
 	    json="$$work/$$crate-$$rep.json"; \
-	    cstart="$$(date +%s%3N)"; \
-	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --quiet -- \
-	        -Z unstable-options --format=json --report-time ) > "$$json"; \
-	    cend="$$(date +%s%3N)"; \
-	    args="$$args --crate $$crate=$$((cend - cstart)) --libtest-json $$json"; \
+	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --tests --quiet -- \
+	        -Z unstable-options --format=json --report-time ) > "$$json" 2>/dev/null || true; \
+	    if grep -q '"event": "failed"' "$$json"; then \
+	      echo "test-runtime-ledger: hermetic test failure while timing $$crate" >&2; exit 1; fi; \
+	    cdur="$$(grep '"type": "test"' "$$json" | grep '"exec_time"' | \
+	        sed -E 's/.*"exec_time": ([0-9.]+).*/\1/' | \
+	        awk '{ s += $$1 } END { printf "%d", (s * 1000) + 0.5 }')"; \
+	    args="$$args --crate $$crate=$$cdur --crate-libtest-json $$crate=$$json"; \
+	    shard_total=$$((shard_total + cdur)); \
+	  done; \
+	  for shard in $$shards; do \
+	    args="$$args --shard $$shard=$$shard_total"; \
 	  done; \
 	done; \
-	( cd packages && cargo run --quiet -p xtask -- test-runtime-ledger record \
+	( cd packages && $(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
 	    --output "$$ledger" $$args ); \
-	baseline=""; \
-	if [ -n '$(D2B_RUNTIME_BASELINE)' ]; then baseline="--baseline $(abspath $(D2B_RUNTIME_BASELINE))"; fi; \
-	( cd packages && cargo run --quiet -p xtask -- test-runtime-ledger check \
-	    --ledger "$$ledger" $$baseline )
+	( cd packages && $(D2B_LEDGER_XTASK) check \
+	    --ledger "$$ledger" --baseline "$$baseline" --expected-census "$$census" )
+
+## runtime-ledger-regen - regenerate tests/runtime-ledger-baseline.json in place.
+##   Run after intentionally adding, removing, or renaming a census test so the
+##   pinned baseline reflects the new closed id set. The baseline pins every
+##   census test id at its budget ceiling, so cross-machine timing noise cannot
+##   flap the regression check while an id that vanishes is still caught.
+runtime-ledger-regen:
+	@set -eu; \
+	baseline='$(abspath $(D2B_RUNTIME_BASELINE))'; \
+	census='$(abspath $(D2B_RUNTIME_CENSUS))'; \
+	work='$(abspath packages/target/runtime-ledger-regen.work)'; \
+	reps='$(D2B_RUNTIME_REPETITIONS)'; \
+	rm -rf "$$work"; mkdir -p "$$work"; \
+	crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	shards="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field shards)"; \
+	echo "runtime-ledger-regen: warm-building the census crates"; \
+	for crate in $$crates; do ( cd packages && cargo test -p "$$crate" --lib --tests --no-run --quiet ); done; \
+	args=""; \
+	for crate in $$crates; do \
+	  json="$$work/$$crate.json"; \
+	  ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --tests --quiet -- \
+	      -Z unstable-options --format=json --report-time ) > "$$json" 2>/dev/null || true; \
+	  if grep -q '"event": "failed"' "$$json"; then \
+	    echo "runtime-ledger-regen: hermetic test failure while enumerating $$crate" >&2; exit 1; fi; \
+	  args="$$args --crate $$crate=2000"; \
+	  for name in $$(grep '"type": "test"' "$$json" | grep '"exec_time"' | \
+	      sed -E 's/.*"name": "([^"]+)".*/\1/'); do \
+	    args="$$args --test $$crate::$$name=50"; \
+	  done; \
+	done; \
+	for shard in $$shards; do args="$$args --shard $$shard=60000"; done; \
+	( cd packages && $(D2B_LEDGER_XTASK) record \
+	    --runner reference --repetitions "$$reps" --output "$$baseline" $$args ); \
+	echo "runtime-ledger-regen: wrote $$baseline"
+

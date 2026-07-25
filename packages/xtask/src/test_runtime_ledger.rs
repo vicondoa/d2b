@@ -33,6 +33,120 @@ pub const DEFAULT_REGRESSION_RATIO: f64 = 1.25;
 /// draw a conclusion from fewer than this many execution-only repetitions.
 pub const MIN_REPETITIONS: usize = 3;
 
+/// Upper bound on a printable identifier (test id, crate id, or shard id).
+/// Long enough for any crate-qualified `crate::module::submodule::test` path
+/// and short enough that a host path, a multi-line log fragment, or an
+/// unbounded blob cannot masquerade as an id.
+pub const MAX_ID_LEN: usize = 256;
+/// Upper bound on the free-form runner label. It is a short human handle for a
+/// reference machine, never a hostname or a path.
+pub const MAX_RUNNER_LABEL_LEN: usize = 64;
+/// Upper bound on how many raw samples a single id may carry. A run records one
+/// sample per repetition, so this caps a hostile or corrupt ledger from
+/// inflating artifact cardinality without bound.
+pub const MAX_SAMPLES_PER_ID: usize = 4_096;
+/// Upper bound on a libtest JSON stream this task will ingest. A stream larger
+/// than this is rejected before it is parsed so a giant blob cannot be folded
+/// into the ledger or echoed into a violation message.
+pub const MAX_LIBTEST_BYTES: usize = 8 * 1024 * 1024;
+
+/// Validate the short, closed runner-label grammar.
+///
+/// A label is `[a-z0-9]` followed by up to [`MAX_RUNNER_LABEL_LEN`]`-1` further
+/// `[a-z0-9._-]` characters. That admits `local`, `ci-x86-runner`,
+/// `bench.host-1` and refuses anything carrying whitespace, control
+/// characters, path separators, or shell metacharacters, so the label can be
+/// printed verbatim in a violation line or a ledger without injecting newlines
+/// or leaking a host path.
+pub fn validate_runner_label(label: &str) -> Result<(), String> {
+    if label.is_empty() {
+        return Err("runner label must not be empty".to_string());
+    }
+    if label.len() > MAX_RUNNER_LABEL_LEN {
+        return Err(format!(
+            "runner label is {} bytes; the maximum is {MAX_RUNNER_LABEL_LEN}",
+            label.len()
+        ));
+    }
+    let mut chars = label.chars();
+    let first = chars.next().expect("label is non-empty");
+    if !first.is_ascii_alphanumeric() {
+        return Err(
+            "runner label must start with a lowercase letter or digit; got a disallowed \
+             leading character"
+                .to_string(),
+        );
+    }
+    if first.is_ascii_uppercase() {
+        return Err("runner label must be lowercase".to_string());
+    }
+    for ch in label.chars() {
+        let ok = ch.is_ascii_digit() || ch.is_ascii_lowercase() || matches!(ch, '.' | '_' | '-');
+        if !ok {
+            return Err(
+                "runner label admits only lowercase letters, digits, '.', '_', and '-'".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validate a printable, bounded, control-free identifier.
+///
+/// Every id (test, crate, or shard) must be non-empty, at most [`MAX_ID_LEN`]
+/// bytes, and composed only of printable ASCII (`0x20..=0x7e`). Rejecting
+/// control characters and non-ASCII bytes stops a newline or terminal escape
+/// from being serialized into the ledger and then echoed verbatim into a
+/// slow-test or violation line; bounding the length stops a host path or log
+/// blob from being smuggled in as an id.
+pub fn validate_id(scope: &str, id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err(format!("{scope} id must not be empty"));
+    }
+    if id.len() > MAX_ID_LEN {
+        return Err(format!(
+            "{scope} id is {} bytes; the maximum is {MAX_ID_LEN}",
+            id.len()
+        ));
+    }
+    for byte in id.bytes() {
+        if !(0x20..=0x7e).contains(&byte) {
+            return Err(format!(
+                "{scope} id carries a non-printable or non-ASCII byte (0x{byte:02x}); ids must \
+                 be printable ASCII so they cannot inject control characters into output"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate every identifier, label, and bound in a ledger.
+///
+/// Applied both when a ledger is emitted and when one is loaded (as the current
+/// run or as a baseline), so a hand-edited or hostile ledger cannot slip an
+/// oversized, control-bearing, or unbounded row past the gate at check time.
+pub fn validate_ledger(ledger: &Ledger) -> Result<(), String> {
+    validate_runner_label(&ledger.runner)?;
+    let scopes: [(&str, &Vec<Sample>); 3] = [
+        ("test", &ledger.tests),
+        ("crate", &ledger.crates),
+        ("shard", &ledger.shards),
+    ];
+    for (scope, samples) in scopes {
+        for sample in samples {
+            validate_id(scope, &sample.id)?;
+            if sample.samples_ms.len() > MAX_SAMPLES_PER_ID {
+                return Err(format!(
+                    "{scope} id `{}` carries {} samples; the maximum is {MAX_SAMPLES_PER_ID}",
+                    sample.id,
+                    sample.samples_ms.len()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
@@ -120,7 +234,17 @@ struct LibtestEvent {
 }
 
 /// Parses a `libtest --format=json` stream into per-test millisecond samples.
+///
+/// The stream is bounded to [`MAX_LIBTEST_BYTES`] before parsing and every test
+/// name is validated as a printable, bounded id, so neither an unbounded blob
+/// nor a control-bearing name can be folded into the ledger.
 pub fn parse_libtest_json(stream: &str) -> Result<Vec<(String, u64)>, String> {
+    if stream.len() > MAX_LIBTEST_BYTES {
+        return Err(format!(
+            "libtest stream is {} bytes; the maximum is {MAX_LIBTEST_BYTES}",
+            stream.len()
+        ));
+    }
     let mut out = Vec::new();
     for line in stream.lines() {
         let line = line.trim();
@@ -137,6 +261,7 @@ pub fn parse_libtest_json(stream: &str) -> Result<Vec<(String, u64)>, String> {
         let (Some(name), Some(seconds)) = (event.name, event.exec_time) else {
             continue;
         };
+        validate_id("test", &name)?;
         if !seconds.is_finite() || seconds < 0.0 {
             return Err(format!("test `{name}` reports a non-measurable exec_time"));
         }
@@ -303,6 +428,89 @@ pub fn audit_census(ledger: &Ledger, baseline: Option<&Ledger>) -> Vec<Violation
     violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
     violations
 }
+
+/// The pinned, closed crate and shard census the ledger must reproduce exactly.
+///
+/// Loaded from a committed JSON pin so the set of measured crates and shards is
+/// fixed in the repository, not chosen per run. `audit_closed_census` enforces
+/// exact-set equality against it, which is what stops the gate from passing on
+/// "one arbitrary repeated id per scope": a census that drops a pinned crate,
+/// substitutes a different one, or adds an unpinned one fails closed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedCensus {
+    pub crates: Vec<String>,
+    pub shards: Vec<String>,
+}
+
+impl ExpectedCensus {
+    /// Validate the pin's own ids so a malformed pin cannot smuggle a
+    /// control-bearing or oversized id into a violation line.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.crates.is_empty() {
+            return Err(
+                "the expected census pins no crates; it must pin the closed \
+                        hermetic crate set"
+                    .to_string(),
+            );
+        }
+        if self.shards.is_empty() {
+            return Err(
+                "the expected census pins no shards; it must pin the closed \
+                        hermetic shard set"
+                    .to_string(),
+            );
+        }
+        for id in &self.crates {
+            validate_id("crate", id)?;
+        }
+        for id in &self.shards {
+            validate_id("shard", id)?;
+        }
+        Ok(())
+    }
+}
+
+/// Enforce that the ledger's crate and shard censuses reproduce the pinned
+/// closed sets *exactly* - no missing pinned id, and no unpinned extra.
+///
+/// `audit_census` proves the run is complete and repeated; this proves it is
+/// measuring the pinned set and only the pinned set. Together they close the
+/// "accepts one arbitrary repeated id" hole: a run cannot shrink a scope to a
+/// single convenient crate, and it cannot pad a scope with an id that is not in
+/// the committed census.
+pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    let compared: [(&str, &Vec<String>, &Vec<Sample>); 2] = [
+        ("crate", &expected.crates, &ledger.crates),
+        ("shard", &expected.shards, &ledger.shards),
+    ];
+    for (scope, expected_ids, samples) in compared {
+        let want: BTreeSet<&str> = expected_ids.iter().map(String::as_str).collect();
+        let have: BTreeSet<&str> = samples.iter().map(|s| s.id.as_str()).collect();
+        for id in want.difference(&have) {
+            violations.push(Violation {
+                scope: scope.to_string(),
+                id: (*id).to_string(),
+                detail: "pinned in the closed census but missing from this run; the census \
+                         cannot shrink to evade a budget"
+                    .to_string(),
+            });
+        }
+        for id in have.difference(&want) {
+            violations.push(Violation {
+                scope: scope.to_string(),
+                id: (*id).to_string(),
+                detail: "measured but not pinned in the closed census; add it to the census \
+                         pin (or the regeneration helper) before the gate will accept it"
+                    .to_string(),
+            });
+        }
+    }
+    violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
+    violations
+}
+
 pub fn top_slow_tests(ledger: &Ledger, limit: usize) -> Vec<&Sample> {
     let mut tests: Vec<&Sample> = ledger.tests.iter().collect();
     tests.sort_by(|a, b| b.p95_ms.cmp(&a.p95_ms).then_with(|| a.id.cmp(&b.id)));
@@ -393,8 +601,11 @@ const USAGE: &str = "usage: cargo xtask test-runtime-ledger <command>\n\
      \n\
        record --runner <label> --output <path> [--repetitions <n>]\n\
               [--shard <id>=<ms>]... [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
-              [--libtest-json <path>]... [--exception <test-id>=<ms>]...\n\
-       check  --ledger <path> [--baseline <path>] [--regression-ratio <f>] [--top <n>]\n\
+              [--libtest-json <path>]... [--crate-libtest-json <crate>=<path>]...\n\
+              [--exception <test-id>=<ms>]...\n\
+       check  --ledger <path> --baseline <path> --expected-census <path>\n\
+              [--regression-ratio <f>] [--top <n>]\n\
+       census --expected-census <path> --field <crates|shards>\n\
        lint   <path>...\n\
        help";
 
@@ -402,6 +613,7 @@ pub fn run_cli(args: &[String]) -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("record") => run_record(&args[1..]),
         Some("check") => run_check(&args[1..]),
+        Some("census") => run_census(&args[1..]),
         Some("lint") => run_lint(&args[1..]),
         Some("help") | None => {
             println!("{USAGE}");
@@ -430,6 +642,50 @@ fn pair(value: &str, flag: &str) -> Result<(String, u64), String> {
     Ok((id.to_string(), millis))
 }
 
+/// Load and validate the pinned closed census from a committed JSON pin.
+fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
+    let bytes = fs::read(path).map_err(|error| format!("cannot read `{path}`: {error}"))?;
+    let census: ExpectedCensus = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("`{path}` is not a valid expected census: {error}"))?;
+    census.validate()?;
+    Ok(census)
+}
+
+fn run_census(args: &[String]) -> Result<(), String> {
+    let mut census_path = String::new();
+    let mut field = String::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{flag} expects a value"))?;
+        match flag {
+            "--expected-census" => census_path = value.clone(),
+            "--field" => field = value.clone(),
+            other => return Err(format!("unknown census flag `{other}`\n{USAGE}")),
+        }
+        index += 2;
+    }
+    if census_path.is_empty() {
+        return Err("--expected-census is required".to_string());
+    }
+    let census = load_expected_census(&census_path)?;
+    let ids = match field.as_str() {
+        "crates" => &census.crates,
+        "shards" => &census.shards,
+        other => {
+            return Err(format!(
+                "--field expects `crates` or `shards`, got `{other}`"
+            ));
+        }
+    };
+    for id in ids {
+        println!("{id}");
+    }
+    Ok(())
+}
+
 fn run_record(args: &[String]) -> Result<(), String> {
     let mut collector = Collector::default();
     let mut runner = String::new();
@@ -451,24 +707,44 @@ fn run_record(args: &[String]) -> Result<(), String> {
             }
             "--shard" => {
                 let (id, millis) = pair(value, flag)?;
+                validate_id("shard", &id)?;
                 collector.shards.entry(id).or_default().push(millis);
             }
             "--crate" => {
                 let (id, millis) = pair(value, flag)?;
+                validate_id("crate", &id)?;
                 collector.crates.entry(id).or_default().push(millis);
             }
             "--test" => {
                 let (id, millis) = pair(value, flag)?;
+                validate_id("test", &id)?;
                 collector.tests.entry(id).or_default().push(millis);
             }
             "--exception" => {
                 let (id, millis) = pair(value, flag)?;
+                validate_id("test", &id)?;
                 collector.exceptions.insert(id, millis);
             }
             "--libtest-json" => {
                 let stream = fs::read_to_string(value)
                     .map_err(|error| format!("cannot read `{value}`: {error}"))?;
                 for (id, millis) in parse_libtest_json(&stream)? {
+                    collector.tests.entry(id).or_default().push(millis);
+                }
+            }
+            "--crate-libtest-json" => {
+                let (crate_id, path) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("{flag} expects `<crate>=<path>`, got `{value}`"))?;
+                validate_id("crate", crate_id)?;
+                let stream = fs::read_to_string(path)
+                    .map_err(|error| format!("cannot read `{path}`: {error}"))?;
+                for (name, millis) in parse_libtest_json(&stream)? {
+                    // Crate-qualify the libtest name so `d2b-core::foo::bar`
+                    // cannot collide with an identically-named test in another
+                    // crate's suite.
+                    let id = format!("{crate_id}::{name}");
+                    validate_id("test", &id)?;
                     collector.tests.entry(id).or_default().push(millis);
                 }
             }
@@ -479,10 +755,14 @@ fn run_record(args: &[String]) -> Result<(), String> {
     if runner.is_empty() {
         return Err("--runner is required so the ledger records its reference runner".to_string());
     }
+    validate_runner_label(&runner)?;
     if output.is_empty() {
         return Err("--output is required".to_string());
     }
     let ledger = collector.into_ledger(runner, repetitions);
+    // Validate before writing so an oversized, control-bearing, or unbounded
+    // row is refused at emit time, not only when the ledger is later loaded.
+    validate_ledger(&ledger)?;
     let rendered = render_json(&ledger).map_err(|error| error.to_string())?;
     if let Some(parent) = Path::new(&output).parent()
         && !parent.as_os_str().is_empty()
@@ -510,12 +790,16 @@ fn load_ledger(path: &str) -> Result<Ledger, String> {
             ledger.artifact_kind, ledger.schema_version
         ));
     }
+    // Validate on load, so a hand-edited or hostile ledger (current run OR
+    // baseline) cannot slip an oversized or control-bearing id past the gate.
+    validate_ledger(&ledger).map_err(|error| format!("`{path}`: {error}"))?;
     Ok(ledger)
 }
 
 fn run_check(args: &[String]) -> Result<(), String> {
     let mut ledger_path = String::new();
     let mut baseline_path: Option<String> = None;
+    let mut census_path: Option<String> = None;
     let mut ratio = DEFAULT_REGRESSION_RATIO;
     let mut top = 10usize;
     let mut index = 0usize;
@@ -527,6 +811,7 @@ fn run_check(args: &[String]) -> Result<(), String> {
         match flag {
             "--ledger" => ledger_path = value.clone(),
             "--baseline" => baseline_path = Some(value.clone()),
+            "--expected-census" => census_path = Some(value.clone()),
             "--regression-ratio" => {
                 ratio = value
                     .parse()
@@ -544,22 +829,36 @@ fn run_check(args: &[String]) -> Result<(), String> {
     if ledger_path.is_empty() {
         return Err("--ledger is required".to_string());
     }
+    // A pinned baseline and a pinned closed census are both mandatory: without
+    // them the gate could pass on a scope shrunk to one convenient id or on a
+    // run with no historical anchor at all.
+    let baseline_path = baseline_path.ok_or_else(|| {
+        "--baseline is required so the gate has a pinned historical anchor and can reject a \
+         dropped id"
+            .to_string()
+    })?;
+    let census_path = census_path.ok_or_else(|| {
+        "--expected-census is required so the crate and shard censuses are enforced against a \
+         pinned closed set"
+            .to_string()
+    })?;
     if !(1.0..=10.0).contains(&ratio) {
         return Err(format!(
             "--regression-ratio must be between 1.0 and 10.0, got {ratio}"
         ));
     }
     let ledger = load_ledger(&ledger_path)?;
-    let baseline = baseline_path.as_deref().map(load_ledger).transpose()?;
+    let baseline = load_ledger(&baseline_path)?;
+    let expected = load_expected_census(&census_path)?;
     for sample in top_slow_tests(&ledger, top) {
         println!(
             "slowest: {} p95 {} ms (budget {} ms)",
             sample.id, sample.p95_ms, sample.budget_ms
         );
     }
-    let violations = check(&ledger, baseline.as_ref(), ratio);
-    let mut violations = violations;
-    violations.extend(audit_census(&ledger, baseline.as_ref()));
+    let mut violations = check(&ledger, Some(&baseline), ratio);
+    violations.extend(audit_census(&ledger, Some(&baseline)));
+    violations.extend(audit_closed_census(&ledger, &expected));
     violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
     violations.dedup();
     if violations.is_empty() {
@@ -848,6 +1147,189 @@ mod tests {
                 .iter()
                 .any(|v| v.id == "repetitions" && v.detail.contains("matching repetition")),
             "comparing across differing repetition counts is rejected: {violations:?}"
+        );
+    }
+
+    fn expected_census() -> ExpectedCensus {
+        ExpectedCensus {
+            crates: vec!["d2b-core".to_string()],
+            shards: vec!["unit".to_string()],
+        }
+    }
+
+    #[test]
+    fn closed_census_accepts_an_exact_match() {
+        let complete = full_ledger(MIN_REPETITIONS);
+        assert!(
+            audit_closed_census(&complete, &expected_census()).is_empty(),
+            "a ledger reproducing the pinned closed set exactly is accepted"
+        );
+    }
+
+    #[test]
+    fn closed_census_rejects_a_shrunk_scope() {
+        let mut shrunk = full_ledger(MIN_REPETITIONS);
+        shrunk.crates.clear();
+        let violations = audit_closed_census(&shrunk, &expected_census());
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.scope == "crate" && v.id == "d2b-core" && v.detail.contains("missing")),
+            "dropping a pinned crate is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn closed_census_rejects_an_unpinned_extra() {
+        let mut padded = full_ledger(MIN_REPETITIONS);
+        padded.crates.push(Sample {
+            budget_ms: CRATE_BUDGET_MS,
+            id: "not-pinned".to_string(),
+            p95_ms: 1,
+            samples_ms: vec![1; MIN_REPETITIONS],
+        });
+        let violations = audit_closed_census(&padded, &expected_census());
+        assert!(
+            violations.iter().any(|v| v.scope == "crate"
+                && v.id == "not-pinned"
+                && v.detail.contains("not pinned")),
+            "padding a scope with an unpinned id is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn closed_census_rejects_a_substituted_crate() {
+        let mut swapped = full_ledger(MIN_REPETITIONS);
+        swapped.crates[0].id = "d2b-other".to_string();
+        let violations = audit_closed_census(&swapped, &expected_census());
+        // Exactly one missing (pinned) and one extra (unpinned).
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.id == "d2b-core" && v.detail.contains("missing")),
+            "the pinned crate is reported missing: {violations:?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.id == "d2b-other" && v.detail.contains("not pinned")),
+            "the substitute crate is reported unpinned: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_census_pin_is_rejected() {
+        let empty = ExpectedCensus {
+            crates: Vec::new(),
+            shards: vec!["unit".to_string()],
+        };
+        assert!(
+            empty.validate().is_err(),
+            "a census with no crates is refused"
+        );
+        let empty_shards = ExpectedCensus {
+            crates: vec!["d2b-core".to_string()],
+            shards: Vec::new(),
+        };
+        assert!(
+            empty_shards.validate().is_err(),
+            "a census with no shards is refused"
+        );
+    }
+
+    #[test]
+    fn runner_label_grammar_admits_short_handles_and_rejects_everything_else() {
+        for ok in ["local", "ci-x86-runner", "bench.host-1", "r0"] {
+            assert!(validate_runner_label(ok).is_ok(), "`{ok}` is a valid label");
+        }
+        for bad in [
+            "",
+            "-leading",
+            ".leading",
+            "UPPER",
+            "has space",
+            "has/slash",
+            "has\nnewline",
+            "trailing\u{7f}",
+        ] {
+            assert!(
+                validate_runner_label(bad).is_err(),
+                "`{bad:?}` must be rejected"
+            );
+        }
+        let too_long = "a".repeat(MAX_RUNNER_LABEL_LEN + 1);
+        assert!(
+            validate_runner_label(&too_long).is_err(),
+            "an over-length label is rejected"
+        );
+    }
+
+    #[test]
+    fn id_validation_rejects_control_characters_and_oversize() {
+        assert!(validate_id("test", "crate::module::test").is_ok());
+        assert!(validate_id("test", "").is_err(), "an empty id is rejected");
+        assert!(
+            validate_id("test", "line\nbreak").is_err(),
+            "a newline in an id is rejected"
+        );
+        assert!(
+            validate_id("test", "tab\tstop").is_err(),
+            "a tab in an id is rejected"
+        );
+        assert!(
+            validate_id("test", "esc\u{1b}[0m").is_err(),
+            "a terminal escape in an id is rejected"
+        );
+        assert!(
+            validate_id("test", "sn\u{f6}w").is_err(),
+            "a non-ASCII byte in an id is rejected"
+        );
+        let too_long = "a".repeat(MAX_ID_LEN + 1);
+        assert!(
+            validate_id("test", &too_long).is_err(),
+            "an over-length id (a smuggled host path or log blob) is rejected"
+        );
+    }
+
+    #[test]
+    fn validate_ledger_rejects_a_control_bearing_or_unbounded_row() {
+        let mut hostile = full_ledger(MIN_REPETITIONS);
+        hostile.tests[0].id = "inject\nnewline".to_string();
+        assert!(
+            validate_ledger(&hostile).is_err(),
+            "a control-bearing id is rejected on validation"
+        );
+
+        let mut flooded = full_ledger(MIN_REPETITIONS);
+        flooded.tests[0].samples_ms = vec![1; MAX_SAMPLES_PER_ID + 1];
+        assert!(
+            validate_ledger(&flooded).is_err(),
+            "an unbounded sample vector is rejected on validation"
+        );
+
+        let mut bad_runner = full_ledger(MIN_REPETITIONS);
+        bad_runner.runner = "Bad Runner".to_string();
+        assert!(
+            validate_ledger(&bad_runner).is_err(),
+            "an invalid runner label is rejected on validation"
+        );
+    }
+
+    #[test]
+    fn parse_libtest_json_rejects_an_oversized_stream() {
+        let giant = "x".repeat(MAX_LIBTEST_BYTES + 1);
+        assert!(
+            parse_libtest_json(&giant).is_err(),
+            "a stream larger than the ingest bound is rejected before parsing"
+        );
+    }
+
+    #[test]
+    fn parse_libtest_json_rejects_a_control_bearing_test_name() {
+        let stream = "{ \"type\": \"test\", \"name\": \"a::b\\ninjected\", \"event\": \"ok\", \"exec_time\": 0.01 }\n";
+        assert!(
+            parse_libtest_json(stream).is_err(),
+            "a libtest name carrying a newline is rejected"
         );
     }
 }
