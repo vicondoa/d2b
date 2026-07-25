@@ -150,9 +150,11 @@ to individually clear.
    `phase >= 5` checkpoint recorded (this host has already cut over; direct
    the operator to `d2b host reset` or `d2b host cutover doctor` instead).
 2. Confirms baseline shape: `Realm`/`Workload` Nix option namespace present
-   (`d2b.realms.*`), `d2bd.service`/`d2b-priv-broker.socket`/
-   `d2b-priv-broker.service` units installed, no `d2b.zones.*` Zone runtime
-   unit present yet.
+   (`d2b.realms.*`), the three root-visible units
+   `d2bd.service`/`d2b-priv-broker.socket`/`d2b-priv-broker.service` installed
+   and still launching their pre-cutover binaries, and no `d2b.zones.*` option
+   namespace present yet. Cutover adapts those same three units in place; it
+   never expects or installs a separate Zone runtime unit.
 3. Runs the [disk-space guard](#disk-spacegc-safety) before touching anything
    else, fail-closed on insufficient space, mirroring
    `tests/tools/preflight-disk-space.sh`'s ordering before toolchain
@@ -854,23 +856,24 @@ other section needs to restate it:
 | Point | What "rollback" means | Mechanism |
 | --- | --- | --- |
 | Before Phase 1 (`plan`) | No state changed; nothing to roll back | N/A |
-| End of Phase 3 (drain complete) | Configuration/binary rollback: undo the NixOS activation that installed the new units, restart the old `d2bd`/`d2b-priv-broker` units, restart Guests | `nixos-rebuild switch --rollback` to the pre-cutover system generation, then `systemctl start d2bd.service d2b-priv-broker.service`, then normal Guest start |
-| End of Phase 4 (disposition execution complete) | **Last safe rollback point.** Adopted bytes exist at both old and new locations (old path not yet removed by any gate); configuration/binary rollback is still possible because the old daemon/unit set has not been destroyed, only stopped | Same as above; the cutover journal (below) records that Phase 4 completed so a resumed/re-run cutover does not re-adopt already-adopted paths |
-| Phase 5 onward | **No rollback.** The redb resource store now holds committed state with no v2 representation to revert to; Provider installs and Guest starts have created new process/cgroup/Volume state that a binary rollback cannot cleanly unwind | Recovery is **restore from the cutover snapshot**, not rollback: stop the new Zone runtime, `d2b host cutover rollback --checkpoint <id>` re-runs Phase 3's drain against the *new* control plane, restores the pre-cutover NixOS generation, and restarts the old daemon/broker against the still-Preserved and still-Adopted (never Destroyed, because Phase 10 has not run) durable paths |
+| End of Phase 3 (drain complete) | Configuration/binary rollback: undo the NixOS activation that swapped the three units' binary/config in place, restart the three units against their pre-cutover binaries, restart Guests | `nixos-rebuild switch --rollback` to the pre-cutover system generation, then `systemctl start d2bd.service d2b-priv-broker.service`, then normal Guest start |
+| End of Phase 4 (disposition execution complete) | **Last safe rollback point.** Adopted bytes exist at both old and new locations (old path not yet removed by any gate); configuration/binary rollback is still possible because the three units still have a pre-cutover generation to roll back to and none of the durable paths they need has been destroyed, only stopped | Same as above; the cutover journal (below) records that Phase 4 completed so a resumed/re-run cutover does not re-adopt already-adopted paths |
+| Phase 5 onward | **No rollback.** The redb resource store now holds committed state with no v2 representation to revert to; Provider installs and Guest starts have created new process/cgroup/Volume state that a binary rollback cannot cleanly unwind | Recovery is **restore from the cutover snapshot**, not rollback: stop the Zone runtime, `d2b host cutover rollback --checkpoint <id>` re-runs Phase 3's drain against the live control plane, restores the pre-cutover NixOS generation, and restarts the three units against the pre-cutover binaries and the still-Preserved and still-Adopted (never Destroyed, because Phase 10 has not run) durable paths |
 | After Phase 10 clears any gate | **Fully irreversible** for whatever that gate destroyed. `d2b host cutover rollback` after Phase 10 refuses with `cutover-rollback-window-closed` and directs the operator to the cutover snapshot for forensic recovery only (the snapshot's content digests, not a live restore, since the artifact itself is gone) | N/A - this is why Phase 10 requires its own separate consent and never runs automatically |
 
 `d2b host cutover rollback --checkpoint <checkpoint_id> [--json | --human]`
 is only valid while the journal (below) shows the named checkpoint's last
 completed phase is `<= 4`. It:
 
-1. Re-drains the new Zone runtime using the same algorithm as [Old
+1. Re-drains the Zone runtime using the same algorithm as [Old
    daemon/unit/process drain](#old-daemonunitprocess-drain), applied to the
-   new units instead of the old;
+   three units now running the cut-over binaries;
 2. Restores the pre-cutover NixOS system generation
    (`nixos-rebuild switch --rollback`, or the equivalent `activation-nixos`
    rollback once that Provider itself is live for a later, non-initial
    cutover);
-3. Restarts `d2bd.service`/`d2b-priv-broker.service`;
+3. Restarts `d2bd.service`/`d2b-priv-broker.service` against the restored
+   pre-cutover binaries;
 4. Restarts every Guest from its Preserved/Adopted-but-not-yet-Destroyed
    state - since Phase 10 has not run, every old path this rollback needs is
    still present.
@@ -967,7 +970,6 @@ is no bulk Destroy:
 
 | Candidate | Gate that must clear before Destroy | Removal proof |
 | --- | --- | --- |
-| `d2bd.service`, `d2b-priv-broker.service`, `d2b-priv-broker.socket` unit files | New fixed Zone runtime units installed and `verify` check 1 passed at least once since the units were stopped | `tests/host-integration/cutover-unit-retirement.nix` boots with only new units present and passes `d2b host cutover verify` |
 | `/etc/d2b/realm-controllers.json`, `/etc/d2b/realm-identity.json` | Every Zone self-resource exists, the compiler-only `parentZone` topology is present only in sealed allocator bootstrap state, and every declared child-local `ZoneLink` reports `Ready`/accepted-`Degraded` with no reciprocal parent-store row per `verify` check 6 | `ADR046-nix-008`/`ADR046-nix-009` parity tests pass against the live Zone |
 | `nixos-modules/options-realms*.nix`, `nixos-modules/options-vms.nix` | Every VM/realm declaration has an equivalent `d2b.zones.<zone>.resources.*` declaration that produced a `Ready` Guest/Host in `verify` | `tests/unit/nix/cases/realm-to-zone-parity.nix` |
 | `/var/lib/d2b/vms/<vm>/swtpm/`, `/var/lib/d2b/swtpm-markers/<vm>` (source side of an Adopt) | `verify` check 4 (TPM digest match) passed **and** the destination TPM Volume has survived at least one full Guest restart cycle post-cutover, proving the adopted marker is load-bearing in practice, not merely digest-equal | `integration/swtpm_marker.rs` adapted; `tests/host-integration/tpm-adopt-retirement.nix` |
@@ -982,6 +984,30 @@ also clear. `d2b host cutover finalize` reports, per candidate, which gate is
 outstanding and refuses to Destroy that candidate until it clears; it never
 partially destroys a candidate (e.g., it never removes only the marker file
 while leaving the swtpm directory, or vice versa).
+
+### The three root-visible units are adapted in place, never destroyed
+
+`d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` are the
+only three root-visible units the framework ever declares, and cutover keeps it
+that way. They are **not** Destroy candidates and never appear in the removal
+gate above: cutover retains all three unit names and adapts what they launch in
+place. The bootstrap `nixos-rebuild switch` swaps the binary and configuration
+behind the same three units - `d2bd.service` becomes the fixed Zone core
+controller launcher (`ADR046-core-001`), and the two broker units keep their
+socket-activated shape - so at no point does a second, parallel Zone runtime
+unit set exist alongside the first. Restarting `d2bd.service` during cutover is
+a continuation event under this repository's binding ADR 0034 storage contract:
+the restarted daemon re-adopts the store and any live runners before any
+cleanup, and never broad-sweeps `/run/d2b`. Because there is no parallel unit
+set, there is no Destroy step for the three units and no window in which the
+host carries more than three d2b units.
+
+The exact-three-units invariant is asserted end to end:
+`tests/host-integration/cutover-unit-topology.nix` boots the cut-over host and
+requires `systemctl list-units --no-pager --all | grep -E '^(d2b|microvm)' |
+wc -l` to return exactly `3` (`d2bd.service`, `d2b-priv-broker.socket`,
+`d2b-priv-broker.service`), matching the AGENTS.md host exit criterion, before
+`d2b host cutover verify` may report success.
 
 ## Data export/import where selected
 
@@ -1354,29 +1380,36 @@ note that such instructions are never an acceptable recovery path.
 Cutover spans two distinct NixOS activation contexts, and this spec is
 explicit about which one applies where:
 
-1. **The one-time bootstrap `nixos-rebuild switch`.** Before any Zone runtime
-   exists, the operator runs a normal `nixos-rebuild switch` against a NixOS
+1. **The one-time bootstrap `nixos-rebuild switch`.** Before the Zone runtime
+   is live, the operator runs a normal `nixos-rebuild switch` against a NixOS
    configuration that has replaced `nixos-modules/options-realms*.nix`/
    `options-vms.nix` with `d2b.zones.<zone>.*`. This activation:
-   - installs the new fixed Zone runtime systemd unit set (the
-     `Provider/system-core`/`system-minijail` bootstrap processes' owning
-     unit, per `ADR-046-core-controllers` "Process model") **without
-     starting it** - `system.activationScripts` orders the new unit's
-     installation `Before=` the point where old units are stopped, but the
-     unit itself is declared `wantedBy = []`/not auto-started at this
-     activation, so the physical host boots with both the old units present
-     (already stopped by a prior `d2b host cutover` Phase 3 drain, if this
-     is a re-activation) and the new unit installed-but-dormant;
-   - does **not** delete `d2bd.service`/`d2b-priv-broker.service` unit files
-     yet - those remain Preserved until [Old artifact/unit/schema removal
-     gates](#old-artifactunitschema-removal-gates) clears them in Phase 10;
+   - swaps the binary and configuration behind the **existing** three units
+     in place: `d2bd.service` is retained and becomes the fixed Zone core
+     controller launcher (the `Provider/system-core`/`system-minijail`
+     bootstrap processes are supervised in-process by `d2bd`, per
+     `ADR-046-core-controllers` "Process model"), and `d2b-priv-broker.socket`/
+     `d2b-priv-broker.service` keep their socket-activated shape. No second,
+     parallel Zone runtime unit set is installed; the host carries exactly the
+     same three unit names before and after this activation;
+   - installs the adapted units **without auto-starting a fresh Zone runtime** -
+     `d2bd.service` is left stopped (already drained by a prior `d2b host
+     cutover` Phase 3, if this is a re-activation) so that starting the Zone
+     runtime remains the explicit, consent-gated act of `d2b host cutover
+     apply`, not a side effect of activation;
+   - does **not** delete or rename any of the three unit files - they are
+     adapted in place and are never Destroy candidates (§ [The three
+     root-visible units are adapted in place, never
+     destroyed](#the-three-root-visible-units-are-adapted-in-place-never-destroyed));
    - is itself rollback-safe via the normal NixOS generation mechanism for as
      long as this spec's [rollback boundary](#rollback-boundary) remains
      open (through end of Phase 4).
 2. **`d2b host cutover apply`** is then run interactively by the operator
    (never from an activation script - it requires the exact consent phrase
-   from a human-read `plan` output) and is what actually starts the new Zone
-   runtime unit and executes Phases 3-8.
+   from a human-read `plan` output) and is what actually starts the adapted
+   `d2bd.service` as the live Zone runtime and executes Phases 3-8. Starting
+   it is a continuation event: the daemon re-adopts store/runner state before
+   any cleanup, per ADR 0034.
 3. **After cutover completes**, ordinary NixOS rebuilds resume their normal
    role: they change the Zone's `d2b.zones.<zone>.*` Nix configuration and
    activate new configuration generations through the ordinary
@@ -1390,13 +1423,12 @@ explicit about which one applies where:
    [volume-local reaches Ready without a state Volume](#volume-local-reaches-ready-without-a-state-volume)
    section already establishes for Volume creation, applied here to NixOS
    activation instead.
-4. **Ordering invariant.** The new fixed Zone runtime unit is declared
-   `After=` and `Requires=` nothing that depends on Zone runtime already
-   being up (it is the process that brings Zone runtime up); it is declared
-   `Before=` nothing that the old `d2bd.service`/`d2b-priv-broker.service`
-   units are declared `After=`, so the two unit sets never race for the same
-   socket path during the window where both are installed but only one is
-   running.
+4. **Ordering invariant.** Because the three units are adapted in place rather
+   than paired with a parallel set, there is no cross-unit-set race for a
+   socket path: activation swaps the binary/config behind each unit name while
+   that unit is stopped, and `d2b host cutover apply` starts `d2bd.service`
+   only after activation has completed, so the single `public.sock` owner is
+   unambiguous at every instant.
 
 ## Backup/retention count 1-16, no TTL
 
@@ -1502,8 +1534,8 @@ owns the destination.
 
 | Current artifact | Evidence (migration-map) | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
-| `d2bd.service` | §7, `production-reachable` | Preserve until Phase 10 gate clears (§ [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates)), then Destroy | Fixed Zone runtime unit | `ADR046-core-001` |
-| `d2b-priv-broker.service`, `d2b-priv-broker.socket` | §7, `production-reachable` | Preserve until Phase 10 gate clears, then Destroy | Zone-local privileged broker (`ADR046-provider-003`) | `ADR046-provider-003` |
+| `d2bd.service` | §7, `production-reachable` | Adapt in place (retain the unit name; swap the binary/config it launches). Never Destroyed | Same `d2bd.service`, now the fixed Zone core controller launcher | `ADR046-core-001` |
+| `d2b-priv-broker.service`, `d2b-priv-broker.socket` | §7, `production-reachable` | Adapt in place (retain both unit names; swap the broker binary/config). Never Destroyed | Same `d2b-priv-broker.socket`/`d2b-priv-broker.service`, Zone-local privileged broker (`ADR046-provider-003`) | `ADR046-provider-003` |
 | `/run/d2b/d2bd.sock`, `/run/d2b/broker.sock` | §7 | Destroy (Phase 3, boot-scoped) | `/run/d2b/z-<zone-id>/...` fresh sockets | `ADR046-core-controllers` "Process model" |
 | `/run/d2b/allocator.sock` | §7, config-ref/schema-only, engine not live | Destroy (Phase 3; never adopted - no live allocator process to quiesce) | No successor socket; provisioning integrates into fixed core controllers | `ADR046-core-001` |
 | `d2b-realm-router` PeerSession/MuxSession/`WorkloadOp`/`RealmMethod` wire | multiple rows, `dead-reachable`/`production-reachable` | Preserve (compiled into binary; Destroy only when the binary itself is retired at Phase 10) | ComponentSession/d2b-bus/`ResourceOp` | `ADR046-session-001`, `ADR046-bus-001`, `ADR046-api-001` |
@@ -1657,7 +1689,8 @@ applies here exactly as everywhere else in the repository).
 
 | Test | Asserts |
 | --- | --- |
-| `cutover-full-rehearsal.nix` | A real NixOS VM with one TPM-enabled Guest, one store-view Guest, and framework SSH keys: full Preflight→Verify cutover rehearsal, `verify` digest checks pass, old units retired only after their Phase 10 gates clear |
+| `cutover-full-rehearsal.nix` | A real NixOS VM with one TPM-enabled Guest, one store-view Guest, and framework SSH keys: full Preflight->Verify cutover rehearsal, `verify` digest checks pass, the three root-visible units are adapted in place, and legacy option-namespace/wire/helper artifacts are retired only after their Phase 10 gates clear |
+| `cutover-unit-topology.nix` | The cut-over host carries exactly three root-visible d2b units (`systemctl list-units --all \| grep -E '^(d2b\|microvm)' \| wc -l` returns `3`: `d2bd.service`, `d2b-priv-broker.socket`, `d2b-priv-broker.service`), before and after cutover, matching the AGENTS.md host exit criterion |
 | `cutover-crash-resume.nix` | Kills the `apply` process mid-Phase-4 (mid-Adopt) and confirms a re-run resumes idempotently with no data loss and no duplicate Volume creation |
 | `zone-provider-guest-reset-isolation.nix` | Full/Provider/Guest reset scope isolation proven against a live multi-Guest, multi-Provider Zone |
 | `tpm-adopt-retirement.nix` | Phase 10 TPM gate: adopted TPM Volume survives a full Guest restart cycle before its source directory may be Destroyed |
