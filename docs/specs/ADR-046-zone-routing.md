@@ -2015,6 +2015,55 @@ Reconnect on an already-enrolled link re-enters at `KK` from
 `EnrollmentCommitted` (the sealed enrollment record is reused); it does not
 consume a PSK or re-run IKpsk2. Only `Unenrolled` -> `IKpsk2` consumes a PSK.
 
+### Key lifecycle and cryptoperiods
+
+The allocator-issued bootstrap PSK and the enrolled KK transport session each
+have a frozen lifetime. These parameters are protocol constants owned by the
+child-local ZoneLink handler and the parent allocator; they are not ZoneLink
+`spec` fields and never extend the locked six-field schema.
+
+**Bootstrap PSK lifetime and reissue.** The allocator issues at most one live
+single-use PSK per link identity generation; issuing a fresh PSK durably
+invalidates any prior outstanding PSK, so at most one PSK is ever consumable.
+Each PSK carries an absolute expiry `BOOTSTRAP_PSK_TTL_MS` (default 300000;
+frozen range 60000..3600000). The child MUST complete the `Unenrolled -> IKpsk2
+-> EnrollmentCommitted` transition before that expiry. A PSK presented after
+expiry is refused at bootstrap admission with `bootstrap-psk-expired`; the link
+stays `Unenrolled` and a fresh allocator-issued PSK is required. PSK consumption
+is atomic and single-use (§ZoneLink session state machine): any completed or
+attempted IKpsk2 handshake burns the PSK.
+
+**IKpsk2 authentication failure.** A failed IKpsk2 bootstrap handshake (bad PSK,
+prologue mismatch, or a static-key admission the allocator refuses) burns the
+single-use PSK and fails closed with `bootstrap-handshake-failed`. The link
+returns to `Unenrolled`; the same PSK is never retried, and a fresh
+allocator-issued PSK is required before another IKpsk2 attempt.
+
+**Enrolled KK cryptoperiod and rehandshake.** An established `Ready` KK
+ComponentSession has a maximum lifetime `KK_SESSION_MAX_LIFETIME_MS` (default
+86400000; frozen range 3600000..604800000). On expiry the handler performs a
+fresh enrolled KK rehandshake from the persisted `EnrollmentCommitted` record (a
+new `linkEpoch` is assigned, old-epoch pinned-path tracking is cleared, and
+resource traffic resumes only after the state reaches `Ready` again). Renewal is
+always a fresh `Noise_KK` handshake against the sealed enrollment record; the
+IKpsk2 bootstrap session is never rekeyed or reused, and there is no in-band
+record-layer rekey of a live session.
+
+**Enrolled KK authentication failure.** An enrolled KK handshake whose peer
+static key does not match the sealed enrollment fingerprint fails closed with
+`zone-link-enrollment-key-mismatch`. The link stays `EnrollmentCommitted` and
+reports `Degraded`, and retries the enrolled KK handshake under the bounded
+reconnect budget (`spec.limits.reconnectMaxAttempts` within
+`spec.limits.reconnectWindowSecs`). It never downgrades to an IKpsk2 or an
+unauthenticated handshake to recover.
+
+**No fallback below the enrolled contract.** Once a link is
+`EnrollmentCommitted`, the only handshake it may attempt is the enrolled KK
+handshake. Fallback to IKpsk2 or to any unauthenticated pattern (for example
+`Noise_NN`) is prohibited. Only a durable revocation (§Revocation) that marks
+the sealed enrollment invalidated returns the link to `Unenrolled` and permits a
+fresh allocator-issued PSK and a new IKpsk2 bootstrap.
+
 ### Link failure and restart
 
 When a child-local ZoneLink ComponentSession disconnects:
@@ -2528,7 +2577,7 @@ The following transitions are NOT simple textual renames:
 | Detailed design | Child-local ZoneLink handler in core-controller: consumes the exact six-field ZoneLink schema from ADR046-zone-control-002 and manages local ResourceSpec→allocator-bound session→advertisement lifecycle; crash-safe enrollment-and-session state machine `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` where only `Unenrolled -> IKpsk2` consumes the allocator-issued single-use PSK (once), the sealed enrollment record (child static key-pin) is committed in one durable transaction before the enrolled KK handshake, reconnect re-enters at `KK` from `EnrollmentCommitted` without a PSK, and resource traffic (advertisements, intent replay, cursor resync, forwarded calls) is prohibited until `Ready`; per-window crash recovery (consumed-PSK crash fails closed `bootstrap-psk-consumed` and requires a fresh PSK, persist crash before commit stays `Unenrolled`, teardown crash re-derives from the durable invalidation marker); revocation invalidates both the sealed enrollment record and the active KK session and requires a fresh PSK plus a new IKpsk2 afterwards while refusing any pre-revocation static key; Provider-internal reconnect backoff bounded by `spec.limits`; advertisement issuance/renewal/withdrawal using enrolled KK ComponentSession; child-store route cursor and bounded outbound intent queue; private allocator capability-scope changes; D088 `status.resource` writer; aggregate metrics use only closed semantic phase/reason/outcome labels and never `link_name_hash` or another ZoneLink/Zone/resource identity label; Nix-compiled `parentZone` selects the parent allocator, which alone owns privileged listeners, placement, and route namespace and creates no reciprocal resource. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Child core-controller process → local transport Provider → sealed binding for the allocator selected by `parentZone` → d2b-bus ComponentSession; child ZoneLink handler exchanges advertisements while that parent ZoneRouteEngine admits/withdraws them |
 | Data migration | New ZoneLink resources from Nix configuration; no prior enrollment compatibility |
-| Validation | Session lifecycle tests; state-machine transition tests `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; fault-injection cells for each crash window (consumed-PSK crash fails closed `bootstrap-psk-consumed` and refuses PSK reuse; persist crash before enrollment commit stays `Unenrolled`; teardown crash re-derives `Unenrolled` from the durable invalidation marker); old-KK-rejection cell asserting a peer presenting a pre-revocation static key is refused before any resource exchange; resource-traffic-before-`Ready` rejection cell; reconnect/disabled/revocation/allocator-policy-change; revocation invalidates both enrollment and active session and re-enrollment requires a fresh PSK plus new IKpsk2; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
+| Validation | Session lifecycle tests; state-machine transition tests `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; fault-injection cells for each crash window (consumed-PSK crash fails closed `bootstrap-psk-consumed` and refuses PSK reuse; persist crash before enrollment commit stays `Unenrolled`; teardown crash re-derives `Unenrolled` from the durable invalidation marker); old-KK-rejection cell asserting a peer presenting a pre-revocation static key is refused before any resource exchange; resource-traffic-before-`Ready` rejection cell; key-lifecycle cells: an expired bootstrap PSK is refused with `bootstrap-psk-expired` and issuing a fresh PSK invalidates any prior outstanding PSK; a failed IKpsk2 handshake burns the PSK and returns `Unenrolled` with `bootstrap-handshake-failed`; an enrolled KK session past `KK_SESSION_MAX_LIFETIME_MS` performs a fresh enrolled KK rehandshake from `EnrollmentCommitted` (new `linkEpoch`, no PSK, no IKpsk2 reuse); an enrolled KK key mismatch fails closed `zone-link-enrollment-key-mismatch`, stays `EnrollmentCommitted`/`Degraded`, and retries only under the bounded reconnect budget; a `EnrollmentCommitted` link never downgrades to IKpsk2 or an unauthenticated pattern and only a durable revocation returns it to `Unenrolled`; reconnect/disabled/revocation/allocator-policy-change; revocation invalidates both enrollment and active session and re-enrollment requires a fresh PSK plus new IKpsk2; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
 | Removal proof | `RemoteNodeRegistry` retired after all enrolled peer routing moves to ZoneLink handler |
 
 ### ADR046-routing-005
