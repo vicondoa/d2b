@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # scripts/changelog-check.sh — fail-closed changelog policy gate for PR CI.
+#
+# A code change ships release notes either as a CHANGELOG.md entry or as a
+# changelog.d/ fragment (see changelog.d/README.md). Neither is a failure.
+# Every fragment present is structurally validated here, so a malformed
+# fragment fails on the PR that introduced it instead of at fold time.
 
 set -euo pipefail
 
@@ -26,6 +31,12 @@ while IFS= read -r path; do
     CHANGELOG.md)
       changelog_changed=1
       ;;
+    changelog.d/README.md)
+      # Documents the fragment mechanism; carries no release notes.
+      ;;
+    changelog.d/*.md)
+      changelog_changed=1
+      ;;
     *.rs|*.nix|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock)
       code_changed=1
       ;;
@@ -33,8 +44,9 @@ while IFS= read -r path; do
 done <<<"$changed_files"
 
 if [ "$code_changed" -eq 1 ] && [ "$changelog_changed" -ne 1 ]; then
-  echo "FAIL: code changed ($merge_base..HEAD) but CHANGELOG.md was not updated." >&2
-  echo "      Add release notes under '## [Unreleased]' before merging." >&2
+  echo "FAIL: code changed ($merge_base..HEAD) but no release notes were added." >&2
+  echo "      Add an entry under '## [Unreleased]' in CHANGELOG.md, or add a" >&2
+  echo "      changelog.d/<branch>.md fragment (see changelog.d/README.md)." >&2
   exit 1
 fi
 
@@ -130,4 +142,102 @@ if (@errors) {
 }
 
 print "PASS: CHANGELOG.md policy checks passed.\n";
+PERL
+
+perl - <<'PERL'
+use strict;
+use warnings;
+
+# Structural validation of changelog.d/ fragments. Mirrors the fail-closed
+# rules the assembler (`cargo xtask changelog-fold`) enforces, so a fragment
+# that would abort the fold fails on the pull request instead.
+my @sections = qw(Added Changed Deprecated Removed Fixed Security);
+my %known = map { $_ => 1 } @sections;
+
+my @fragments = sort grep { $_ ne 'changelog.d/README.md' } glob('changelog.d/*.md');
+my @errors;
+
+for my $path (@fragments) {
+    open my $fh, '<', $path or die "open $path: $!";
+    my @lines = <$fh>;
+    close $fh;
+    chomp @lines;
+
+    my $current;
+    my $swallow = 0;
+    my $saw_heading = 0;
+    my $before = scalar @errors;
+    my %seen;
+    my @order;
+    my %entries;
+    my $stray_reported = 0;
+
+    for my $idx (0 .. $#lines) {
+        my $line = $lines[$idx];
+        $line =~ s/\s+$//;
+        my $lineno = $idx + 1;
+
+        if ($line =~ /^#/) {
+            if ($line !~ /^### (.+)$/) {
+                push @errors, "$path:$lineno: expected a '### <Section>' heading, found '$line'";
+                next;
+            }
+            my $title = $1;
+            $title =~ s/^\s+|\s+$//g;
+            $saw_heading = 1;
+            if (!$known{$title}) {
+                push @errors,
+                  "$path:$lineno: unknown section '$title'; expected one of "
+                  . join(', ', @sections);
+                ($current, $swallow) = (undef, 1);
+                next;
+            }
+            if (exists $seen{$title}) {
+                push @errors,
+                  "$path:$lineno: duplicate '### $title' heading (first seen on line $seen{$title})";
+                ($current, $swallow) = (undef, 1);
+                next;
+            }
+            $seen{$title} = $lineno;
+            push @order, $title;
+            $entries{$title} = [];
+            ($current, $swallow) = ($title, 0);
+            next;
+        }
+
+        if (defined $current) {
+            push @{ $entries{$current} }, $line;
+        } elsif (!$swallow && $line =~ /\S/ && !$stray_reported) {
+            $stray_reported = 1;
+            push @errors, "$path:$lineno: content before the first '### <Section>' heading";
+        }
+    }
+
+    if (!$saw_heading && scalar(@errors) == $before) {
+        push @errors,
+          "$path: no '### <Section>' heading; a fragment must carry at least one entry";
+    }
+
+    for my $title (@order) {
+        my @body = @{ $entries{$title} };
+        shift @body while @body && $body[0] !~ /\S/;
+        pop @body while @body && $body[-1] !~ /\S/;
+        if (!@body) {
+            push @errors, "$path:$seen{$title}: section '### $title' has no entries";
+            next;
+        }
+        if ($body[0] !~ /^[-*] /) {
+            push @errors, "$path:$seen{$title}: section '### $title' must start with a '- ' bullet";
+        }
+    }
+}
+
+if (@errors) {
+    warn "FAIL: changelog.d/ fragment validation failed:\n";
+    warn "  - $_\n" for @errors;
+    warn "  See changelog.d/README.md for the fragment format.\n";
+    exit 1;
+}
+
+printf "PASS: %d changelog.d/ fragment(s) validated.\n", scalar @fragments;
 PERL

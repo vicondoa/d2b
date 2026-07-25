@@ -273,3 +273,18 @@ pre-tag: i3-check
 ##              Used at every panel-round HEAD per I5.
 smoke-lite:
 	bash tests/integration/live/live-vm-smoke.sh --lite
+
+.PHONY: test-changelog changelog-fold
+
+## test-changelog — the changelog policy gate (also the CI test-changelog job).
+##                  Requires code changes to ship release notes as either a
+##                  CHANGELOG.md entry or a changelog.d/ fragment, and validates
+##                  the structure of every fragment present.
+test-changelog:
+	bash scripts/changelog-check.sh
+
+## changelog-fold — fold every changelog.d/ fragment into the CHANGELOG.md
+##                  '## [Unreleased]' block and delete the consumed fragments.
+##                  Run at merge time; see changelog.d/README.md.
+changelog-fold:
+	cd packages && cargo run -q -p xtask -- changelog-fold
