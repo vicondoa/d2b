@@ -21,10 +21,19 @@ else
   merge_base=$(git rev-parse HEAD^)
 fi
 
-changed_files=$(git diff --name-only --diff-filter=ACMR "$merge_base..HEAD")
+# Deletions count as changes: removing a Rust module, a shell script, or a
+# Makefile rule is a behaviour change that needs a release note just as much as
+# an edit. `--diff-filter=d` (lowercase) keeps everything EXCEPT entries that
+# are only broken-pair noise, so additions, copies, modifications, renames,
+# type changes, and deletions are all considered.
+changed_files=$(git diff --name-only --diff-filter=ACMRTD "$merge_base..HEAD")
 code_changed=0
 changelog_changed=0
 
+# A change is "code" if it touches an executable or configuration surface, not
+# only the three languages the old gate recognized. A deleted shell script or a
+# Makefile behaviour change must ship a note; only prose (Markdown, LICENSE)
+# and the changelog machinery itself are exempt.
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case "$path" in
@@ -37,8 +46,18 @@ while IFS= read -r path; do
     changelog.d/*.md)
       changelog_changed=1
       ;;
-    *.rs|*.nix|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock)
+    *.md|LICENSE|LICENSE.*)
+      # Prose. Documentation-only changes are exempt from the note requirement.
+      ;;
+    *.rs|*.nix|*.sh|*.bash|*.pl|*.py|*.rb|*.js|*.ts \
+    |Makefile|*/Makefile|*.mk|makefile|*/makefile \
+    |*.toml|*.lock|*.json|*.yaml|*.yml \
+    |.github/workflows/*|.github/actions/*)
       code_changed=1
+      ;;
+    *)
+      # Everything else (data fixtures, images, plain text) neither requires nor
+      # blocks a note.
       ;;
   esac
 done <<<"$changed_files"
@@ -147,20 +166,64 @@ PERL
 perl - <<'PERL'
 use strict;
 use warnings;
+use Encode ();
 
-# Structural validation of changelog.d/ fragments. Mirrors the fail-closed
-# rules the assembler (`cargo xtask changelog-fold`) enforces, so a fragment
-# that would abort the fold fails on the pull request instead.
+# Structural validation of changelog.d/ fragments. This is the SECOND parser of
+# the fragment format; the canonical one is the Rust assembler
+# (`cargo xtask changelog-fold --check`, packages/xtask/src/changelog.rs). Two
+# parsers exist on purpose: the changelog CI job is intentionally toolchain-free
+# (git + bash + perl only) so it stays fast and runnable on every pull request
+# without provisioning a Rust toolchain, while the Rust parser is what actually
+# rewrites CHANGELOG.md at merge time. Because a fragment that this gate accepts
+# but the Rust fold rejects would break the merge, the two MUST agree on
+# discovery, file types, encoding, and structure. That equivalence is pinned by
+# the cross-language parity tests in
+# packages/d2b-contract-tests/tests/policy_changelog_gate.rs and the Rust-side
+# discovery tests in packages/xtask/src/changelog.rs. Keep all three in sync.
 my @sections = qw(Added Changed Deprecated Removed Fixed Security);
 my %known = map { $_ => 1 } @sections;
 
-my @fragments = sort grep { $_ ne 'changelog.d/README.md' } glob('changelog.d/*.md');
 my @errors;
 
+# Discovery mirrors the Rust `load_fragments`: read every directory entry rather
+# than globbing '*.md', skip only README.md, and reject a non-regular file (a
+# symlink, a directory, a fifo) BEFORE the name check, then reject any entry
+# whose name does not end in '.md'. A bare glob would silently ignore a symlink
+# fragment or a mis-named file that the Rust fold refuses.
+my @fragments;
+if (opendir(my $dh, 'changelog.d')) {
+    my @names = sort grep { $_ ne '.' && $_ ne '..' && $_ ne 'README.md' } readdir($dh);
+    closedir $dh;
+    for my $name (@names) {
+        my $path = "changelog.d/$name";
+        if (-l $path || !-f _) {
+            push @errors,
+              "$path: not a regular file; the fragment directory holds one '.md' file per branch";
+            next;
+        }
+        if ($name !~ /\.md\z/) {
+            push @errors, "$path: fragments must be named '<branch>.md'";
+            next;
+        }
+        push @fragments, $path;
+    }
+}
+
 for my $path (@fragments) {
-    open my $fh, '<', $path or die "open $path: $!";
-    my @lines = <$fh>;
+    open my $fh, '<:raw', $path or die "open $path: $!";
+    my $bytes = do { local $/; <$fh> };
     close $fh;
+    $bytes = '' unless defined $bytes;
+
+    # The Rust fold reads fragments with `read_to_string`, which fails on
+    # invalid UTF-8. Reject the same inputs here instead of parsing mojibake.
+    my $text = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK | Encode::LEAVE_SRC) };
+    if (!defined $text) {
+        push @errors, "$path: is not valid UTF-8";
+        next;
+    }
+    my @lines = split /\n/, $text, -1;
+    pop @lines if @lines && $lines[-1] eq '';
     chomp @lines;
 
     my $current;
