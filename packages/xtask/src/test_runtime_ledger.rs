@@ -10,7 +10,7 @@
 //! `libtest --format=json` stream) and never spawns a test runner itself, so
 //! the ledger stays reproducible and free of host paths.
 
-use std::{collections::BTreeMap, fs, path::Path, process::ExitCode};
+use std::{collections::BTreeMap, collections::BTreeSet, fs, path::Path, process::ExitCode};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,11 @@ pub const CRATE_BUDGET_MS: u64 = 2_000;
 pub const SHARD_BUDGET_MS: u64 = 60_000;
 /// Default historical regression threshold, as a ratio of the baseline p95.
 pub const DEFAULT_REGRESSION_RATIO: f64 = 1.25;
+/// Minimum execution-only repetitions the ledger must carry before its p95 or
+/// per-crate budgets mean anything. A single wall-clock sample flaps on noise
+/// and can silently fold build work into the timing, so the gate refuses to
+/// draw a conclusion from fewer than this many execution-only repetitions.
+pub const MIN_REPETITIONS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -198,7 +203,106 @@ pub fn check(ledger: &Ledger, baseline: Option<&Ledger>, ratio: f64) -> Vec<Viol
     violations
 }
 
-/// Returns the slowest recorded tests, worst first.
+/// Enforces that the ledger is a *complete, comparable* census before its
+/// budgets are trusted, independent of whether any single budget is exceeded.
+///
+/// `check` only rules on samples that are present; this rules on what must be
+/// present. Without it a ledger can pass every budget while measuring nothing
+/// meaningful: one un-repeated sample, an empty scope, or a baseline whose ids
+/// were quietly dropped so a regression has nothing to compare against.
+///
+/// A run fails the audit when any of the following holds:
+///
+/// * it records fewer than [`MIN_REPETITIONS`] execution-only repetitions;
+/// * any of the test, crate, or shard censuses is empty;
+/// * any sample carries a number of samples other than the declared
+///   repetition count, so every id is measured every repetition; or
+/// * a baseline is supplied and its repetition count differs, or any id it
+///   recorded is missing from this run - a dropped scope can neither evade its
+///   budget nor make a regression disappear.
+pub fn audit_census(ledger: &Ledger, baseline: Option<&Ledger>) -> Vec<Violation> {
+    let mut violations = Vec::new();
+
+    if ledger.repetitions < MIN_REPETITIONS {
+        violations.push(Violation {
+            scope: "ledger".to_string(),
+            id: "repetitions".to_string(),
+            detail: format!(
+                "{} execution-only repetition(s) recorded; at least {MIN_REPETITIONS} are \
+                 required so a single sample cannot flap the gate",
+                ledger.repetitions
+            ),
+        });
+    }
+
+    let scopes: [(&str, &Vec<Sample>); 3] = [
+        ("test", &ledger.tests),
+        ("crate", &ledger.crates),
+        ("shard", &ledger.shards),
+    ];
+    for (scope, samples) in scopes {
+        if samples.is_empty() {
+            violations.push(Violation {
+                scope: scope.to_string(),
+                id: "*".to_string(),
+                detail: format!(
+                    "the {scope} census is empty; every granularity must be measured so the \
+                     advertised {scope} budget is actually enforced"
+                ),
+            });
+        }
+        for sample in samples {
+            if sample.samples_ms.len() != ledger.repetitions {
+                violations.push(Violation {
+                    scope: scope.to_string(),
+                    id: sample.id.clone(),
+                    detail: format!(
+                        "carries {} sample(s) but the ledger declares {} repetition(s); every \
+                         id must be measured on every repetition",
+                        sample.samples_ms.len(),
+                        ledger.repetitions
+                    ),
+                });
+            }
+        }
+    }
+
+    if let Some(base) = baseline {
+        if base.repetitions != ledger.repetitions {
+            violations.push(Violation {
+                scope: "ledger".to_string(),
+                id: "repetitions".to_string(),
+                detail: format!(
+                    "baseline recorded {} repetition(s) but this run recorded {}; a comparison \
+                     is only meaningful at matching repetition counts",
+                    base.repetitions, ledger.repetitions
+                ),
+            });
+        }
+        let compared: [(&str, &Vec<Sample>, &Vec<Sample>); 3] = [
+            ("test", &base.tests, &ledger.tests),
+            ("crate", &base.crates, &ledger.crates),
+            ("shard", &base.shards, &ledger.shards),
+        ];
+        for (scope, base_samples, current_samples) in compared {
+            let present: BTreeSet<&str> = current_samples.iter().map(|s| s.id.as_str()).collect();
+            for sample in base_samples {
+                if !present.contains(sample.id.as_str()) {
+                    violations.push(Violation {
+                        scope: scope.to_string(),
+                        id: sample.id.clone(),
+                        detail: "present in the baseline but missing from this run; a scope \
+                                 cannot be dropped to evade its budget or regression check"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
+    violations
+}
 pub fn top_slow_tests(ledger: &Ledger, limit: usize) -> Vec<&Sample> {
     let mut tests: Vec<&Sample> = ledger.tests.iter().collect();
     tests.sort_by(|a, b| b.p95_ms.cmp(&a.p95_ms).then_with(|| a.id.cmp(&b.id)));
@@ -454,6 +558,10 @@ fn run_check(args: &[String]) -> Result<(), String> {
         );
     }
     let violations = check(&ledger, baseline.as_ref(), ratio);
+    let mut violations = violations;
+    violations.extend(audit_census(&ledger, baseline.as_ref()));
+    violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
+    violations.dedup();
     if violations.is_empty() {
         println!(
             "runtime budgets hold for {} test, {} crate, and {} shard measurements on `{}`",
@@ -640,5 +748,106 @@ mod tests {
         let top = top_slow_tests(&recorded, 1);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].id, "b::slow");
+    }
+
+    /// A complete, three-repetition census across every granularity.
+    fn full_ledger(repetitions: usize) -> Ledger {
+        let three = |id: &str, budget: u64| Sample {
+            budget_ms: budget,
+            id: id.to_string(),
+            p95_ms: 1,
+            samples_ms: vec![1; repetitions],
+        };
+        Ledger {
+            artifact_kind: ARTIFACT_KIND.to_string(),
+            crates: vec![three("d2b-core", CRATE_BUDGET_MS)],
+            repetitions,
+            runner: "reference".to_string(),
+            schema_version: SCHEMA_VERSION,
+            shards: vec![three("unit", SHARD_BUDGET_MS)],
+            tests: vec![three("a::b", TEST_BUDGET_MS)],
+        }
+    }
+
+    #[test]
+    fn audit_passes_a_complete_repeated_census() {
+        let complete = full_ledger(MIN_REPETITIONS);
+        assert!(
+            audit_census(&complete, None).is_empty(),
+            "a complete, repeated census across every scope is accepted"
+        );
+    }
+
+    #[test]
+    fn audit_rejects_a_single_sample_that_could_flap() {
+        let thin = full_ledger(1);
+        let violations = audit_census(&thin, None);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.scope == "ledger" && v.id == "repetitions"),
+            "one repetition is below the floor: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn audit_rejects_an_empty_scope() {
+        let mut missing = full_ledger(MIN_REPETITIONS);
+        missing.crates.clear();
+        let violations = audit_census(&missing, None);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.scope == "crate" && v.detail.contains("empty")),
+            "an unmeasured crate census is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn audit_rejects_a_sample_count_that_does_not_match_the_repetitions() {
+        let mut ragged = full_ledger(MIN_REPETITIONS);
+        ragged.tests[0].samples_ms.pop();
+        let violations = audit_census(&ragged, None);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.scope == "test" && v.detail.contains("every id must be measured")),
+            "a short sample vector is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn audit_rejects_dropping_a_baseline_id() {
+        let baseline = full_ledger(MIN_REPETITIONS);
+        let mut dropped = full_ledger(MIN_REPETITIONS);
+        dropped.tests.clear();
+        // Re-add a *different* test so the scope is not merely empty; the point
+        // is that the baseline's id vanished, not that the census is blank.
+        dropped.tests.push(Sample {
+            budget_ms: TEST_BUDGET_MS,
+            id: "c::d".to_string(),
+            p95_ms: 1,
+            samples_ms: vec![1; MIN_REPETITIONS],
+        });
+        let violations = audit_census(&dropped, Some(&baseline));
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.id == "a::b" && v.detail.contains("missing from this run")),
+            "a baseline id that disappeared is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn audit_rejects_a_repetition_count_mismatch_against_the_baseline() {
+        let baseline = full_ledger(MIN_REPETITIONS);
+        let current = full_ledger(MIN_REPETITIONS + 1);
+        let violations = audit_census(&current, Some(&baseline));
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.id == "repetitions" && v.detail.contains("matching repetition")),
+            "comparing across differing repetition counts is rejected: {violations:?}"
+        );
     }
 }
