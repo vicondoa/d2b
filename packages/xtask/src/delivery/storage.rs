@@ -1636,7 +1636,7 @@ pub(crate) mod tests {
     /// supplied roots, nor `HOME`, the build tree, or a temp name. Shared by
     /// the per-error-class redaction tests so every class is held to the same
     /// bar the write path already meets.
-    fn assert_no_absolute_path(message: &str, roots: &[&Path]) {
+    pub(crate) fn assert_no_absolute_path(message: &str, roots: &[&Path]) {
         for root in roots {
             let root = root.to_string_lossy();
             assert!(

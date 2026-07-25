@@ -51,8 +51,6 @@ use super::{
 
 /// Ref used for a repository whose head was not named explicitly.
 const DEFAULT_HEAD_REF: &str = "HEAD";
-/// Longest Git diagnostic quoted back in an error message.
-const MAX_GIT_DIAGNOSTIC_BYTES: usize = 240;
 
 /// The immutable artifact `wave snapshot` writes.
 ///
@@ -176,12 +174,8 @@ pub fn read(candidate: &CandidateDir) -> Result<Option<WaveSnapshot>> {
 /// snapshot enters the workflow from outside a candidate directory.
 pub fn read_file(path: &Path) -> Result<WaveSnapshot> {
     let bytes = read_bounded(path, MAX_JSON_BYTES)?;
-    let snapshot: WaveSnapshot = serde_json::from_slice(&bytes).map_err(|error| {
-        DeliveryError::new(format!(
-            "invalid wave snapshot at {}: {error}",
-            path.display()
-        ))
-    })?;
+    let snapshot: WaveSnapshot = serde_json::from_slice(&bytes)
+        .map_err(|error| DeliveryError::new(format!("invalid wave snapshot: {error}")))?;
     snapshot.verify()?;
     Ok(snapshot)
 }
@@ -459,15 +453,13 @@ fn fingerprints(values: Vec<String>) -> Result<Vec<FingerprintInput>> {
 fn toplevel(path: &Path) -> Result<PathBuf> {
     let root = PathBuf::from(git_text(path, &["rev-parse", "--show-toplevel"])?);
     if !root.is_absolute() {
-        return Err(DeliveryError::environment(format!(
-            "git reported a relative working-tree root for {}",
-            path.display()
-        )));
+        return Err(DeliveryError::environment(
+            "git reported a relative working-tree root for the repository checkout",
+        ));
     }
     std::fs::canonicalize(&root).map_err(|error| {
         DeliveryError::environment(format!(
-            "cannot canonicalize repository root {}: {error}",
-            root.display()
+            "cannot canonicalize the repository root git reported: {error}"
         ))
     })
 }
@@ -477,8 +469,7 @@ fn object_format(root: &Path) -> Result<GitObjectFormat> {
         "sha1" => Ok(GitObjectFormat::Sha1),
         "sha256" => Ok(GitObjectFormat::Sha256),
         other => Err(DeliveryError::new(format!(
-            "unsupported Git object format {other:?} in {}",
-            root.display()
+            "unsupported Git object format {other:?} in the repository checkout"
         ))),
     }
 }
@@ -535,14 +526,26 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .map_err(|error| {
-            DeliveryError::environment(format!("cannot run git in {}: {error}", root.display()))
+            // Name the operation by its (repository-relative) git arguments and
+            // the errno only. The absolute checkout root and any raw git stderr
+            // are deliberately withheld: both routinely carry host paths, and
+            // this diagnostic reaches operator stderr and CI logs verbatim.
+            DeliveryError::environment(format!(
+                "cannot run git {} in the repository checkout: {error}",
+                args.join(" ")
+            ))
         })?;
     if !output.status.success() {
+        // Report the git operation and its exit status, never the checkout path
+        // or the raw subprocess stderr (git error text routinely interpolates
+        // absolute paths).
         return Err(DeliveryError::new(format!(
-            "git {} failed in {}: {}",
+            "git {} failed in the repository checkout{}",
             args.join(" "),
-            root.display(),
-            diagnostic(&output.stderr)
+            match output.status.code() {
+                Some(code) => format!(" (exit status {code})"),
+                None => String::new(),
+            }
         )));
     }
     Ok(output.stdout)
@@ -552,39 +555,27 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     let stdout = git_output(root, args)?;
     let text = String::from_utf8(stdout).map_err(|_| {
         DeliveryError::new(format!(
-            "git {} produced non-UTF-8 output in {}",
-            args.join(" "),
-            root.display()
+            "git {} produced non-UTF-8 output in the repository checkout",
+            args.join(" ")
         ))
     })?;
     let text = text.trim();
     if text.is_empty() {
         return Err(DeliveryError::new(format!(
-            "git {} produced no output in {}",
-            args.join(" "),
-            root.display()
+            "git {} produced no output in the repository checkout",
+            args.join(" ")
         )));
     }
     Ok(text.to_owned())
-}
-
-fn diagnostic(stderr: &[u8]) -> String {
-    let text = String::from_utf8_lossy(stderr);
-    let line = text.lines().next().unwrap_or_default().trim();
-    match line.char_indices().nth(MAX_GIT_DIAGNOSTIC_BYTES) {
-        Some((end, _)) => format!("{}…", &line[..end]),
-        None => line.to_owned(),
-    }
 }
 
 /// Bounded read of a delivery artifact addressed by an explicit path.
 pub(crate) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(DeliveryError::new(format!(
-            "delivery artifact is not a regular file: {}",
-            path.display()
-        )));
+        return Err(DeliveryError::new(
+            "delivery artifact is not a regular file",
+        ));
     }
     let mut buffer = Vec::new();
     File::open(path)?
@@ -592,8 +583,7 @@ pub(crate) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
         .read_to_end(&mut buffer)?;
     if buffer.len() > limit {
         return Err(DeliveryError::new(format!(
-            "delivery artifact exceeds {limit} bytes: {}",
-            path.display()
+            "delivery artifact exceeds {limit} bytes"
         )));
     }
     Ok(buffer)
@@ -604,7 +594,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
         DeliveryErrorKind,
-        storage::tests::{Scratch, repo_root},
+        storage::tests::{Scratch, assert_no_absolute_path, repo_root},
     };
 
     /// A throwaway Git repository under the ignored build tree.
@@ -733,6 +723,40 @@ pub(crate) mod tests {
     fn snapshot_of(fixture: &GitFixture) -> WaveSnapshot {
         let request = SnapshotRequest::parse(&fixture.snapshot_args()).expect("parse request");
         WaveSnapshot::seal(discover(&request).expect("discover")).expect("seal")
+    }
+
+    #[test]
+    fn a_failed_git_command_leaks_neither_the_checkout_path_nor_raw_git_stderr() {
+        // Ask an established repository for an object that does not exist. Git
+        // exits nonzero and writes its own diagnostic (prefixed `fatal:`) to
+        // stderr, routinely interpolating absolute paths. The delivery
+        // diagnostic reaches operator stderr and CI logs verbatim, so it must
+        // name only the git operation and its exit status - never the absolute
+        // checkout path, and never the raw subprocess stderr.
+        let fixture = GitFixture::new("snapshot-git-redaction");
+        let error = git_text(&fixture.repo(), &["cat-file", "-t", "HEAD:no/such/file"])
+            .expect_err("cat-file on a missing object must fail");
+        let message = error.message();
+        assert_no_absolute_path(message, &[fixture.scratch(), &fixture.repo()]);
+        assert!(
+            message.contains("git cat-file -t HEAD:no/such/file"),
+            "the diagnostic must name the git operation: {message}"
+        );
+        assert!(
+            !message.contains("fatal:") && !message.to_ascii_lowercase().contains("not a git"),
+            "the diagnostic must not echo raw git stderr: {message}"
+        );
+    }
+
+    #[test]
+    fn a_git_spawn_failure_names_the_operation_not_the_checkout_path() {
+        // A bounded read of a directory that is not a regular file exercises
+        // the sibling read-side leak class: the diagnostic names the artifact
+        // role, never the absolute path.
+        let scratch = Scratch::new("snapshot-read-redaction");
+        let error = read_bounded(&scratch.path, MAX_ARTIFACT_BYTES)
+            .expect_err("a directory must not read as a bounded artifact");
+        assert_no_absolute_path(error.message(), &[&scratch.path]);
     }
 
     #[test]

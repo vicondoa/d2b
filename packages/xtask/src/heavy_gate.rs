@@ -121,6 +121,31 @@ const CANONICAL_RUNTIME_ROOT: &str = "/run/user";
 /// exists.
 const CANONICAL_FALLBACK_ROOT: &str = "/tmp";
 
+/// Semantic labels for the fixed heavy-gate namespace components.
+///
+/// Every operator- and CI-facing diagnostic names the directory or file by its
+/// ROLE, never by its absolute path or the caller's uid. The gate paths embed
+/// both the runtime root and the uid (`/run/user/<uid>/d2b-heavy-gates/uid-<uid>`),
+/// and these diagnostics reach stderr and CI logs verbatim, so interpolating
+/// the resolved path or the raw uid would leak them. Naming the role instead
+/// keeps the message actionable without disclosing either. The remediation
+/// text uses the shell-style `$UID` placeholder rather than the literal number.
+mod gate_label {
+    /// The canonical per-uid runtime root (`/run/user/$UID`, else `/tmp`).
+    pub const ROOT: &str = "the heavy-gate root directory";
+    /// The shared `d2b-heavy-gates` parent beneath the root.
+    pub const SHARED: &str = "the shared heavy-gate directory";
+    /// The per-uid `uid-$UID` slot directory.
+    pub const SLOT_DIR: &str = "the per-uid heavy-gate slot directory";
+    /// The process-private lock-support probe file.
+    pub const PROBE: &str = "the heavy-gate lock-probe file";
+
+    /// The `slot-<index>` file within the per-uid slot directory.
+    pub fn slot(index: usize) -> String {
+        format!("heavy-gate slot {index}")
+    }
+}
+
 /// Set in the child environment so nested lanes reuse the held slot instead
 /// of deadlocking against the same two slots.
 pub const GATE_ACTIVE_ENV: &str = "D2B_HEAVY_GATE";
@@ -339,6 +364,7 @@ pub fn gate_root_from(uid: u32, test_root: Option<&Path>) -> PathBuf {
 }
 
 /// Per-uid slot directory under `root`.
+#[cfg(test)]
 pub fn gate_dir_path(root: &Path, uid: u32) -> PathBuf {
     root.join(GATE_DIR_NAME).join(format!("uid-{uid}"))
 }
@@ -379,11 +405,17 @@ pub fn shared_parent_is_trusted(owner_uid: u32, mode: u32, current_uid: u32) -> 
 /// open directory descriptor.
 #[derive(Debug)]
 pub struct GateDir {
+    /// The resolved per-uid slot directory path. Retained only for test
+    /// assertions on the filesystem layout; production diagnostics name the
+    /// directory by role, never by path, so no operator- or CI-facing surface
+    /// reads it.
+    #[cfg(test)]
     path: PathBuf,
     dir: File,
 }
 
 impl GateDir {
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -459,29 +491,26 @@ impl GateDir {
     /// renaming the path components after preparation cannot switch the
     /// semaphore namespace mid-run.
     pub fn prepare(root: &Path, uid: u32) -> Result<Self> {
+        // The resolved path is retained only for test assertions; production
+        // diagnostics name every gate component by role, never by path.
+        #[cfg(test)]
         let path = gate_dir_path(root, uid);
-        let shared = path
-            .parent()
-            .expect("the per-uid slot directory always has a parent")
-            .to_path_buf();
 
         // Anchor to the root itself before creating anything beneath it. A
         // peer-owned or owned-but-loose root is refused so the shared directory
         // cannot be renamed out from under a future invocation.
-        let root_dir = open_directory(root)?;
+        let root_dir = open_directory(root, gate_label::ROOT)?;
         let root_stat = fstat(root_dir.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!("cannot stat {}: {errno}", root.display()))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::ROOT))
         })?;
         if !shared_parent_is_trusted(root_stat.st_uid, root_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
-                "the heavy-gate root {} is owned by uid {} with mode {:o}; refusing to create a \
-                 semaphore namespace under a directory a peer could rename. Ensure the per-user \
-                 runtime directory /run/user/{uid} exists and is owned by you (mode 0700), or - \
-                 where it is genuinely absent - that /tmp is the usual root-owned sticky \
-                 directory.",
-                root.display(),
-                root_stat.st_uid,
-                root_stat.st_mode as u32 & 0o7777,
+                "{} is owned by another user or is group- or world-writable; refusing to create \
+                 a semaphore namespace under a directory a peer could rename. Ensure the \
+                 per-user runtime directory /run/user/$UID exists and is owned by you \
+                 (mode 0700), or - where it is genuinely absent - that /tmp is the usual \
+                 root-owned sticky directory.",
+                gate_label::ROOT,
             )));
         }
 
@@ -495,34 +524,32 @@ impl GateDir {
         // normalised; it is verified and, unless it is a trusted root-owned
         // parent, refused.
         let shared_anchor = anchored_path(&root_dir, GATE_DIR_NAME);
-        create_dir_with_mode(&shared_anchor, 0o700)?;
-        let shared_dir = open_directory(&shared_anchor)?;
+        create_dir_with_mode(&shared_anchor, gate_label::SHARED, 0o700)?;
+        let shared_dir = open_directory(&shared_anchor, gate_label::SHARED)?;
         let mut shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::SHARED))
         })?;
         if shared_stat.st_uid == uid && (shared_stat.st_mode as u32 & 0o7777) != 0o700 {
             let self_anchor = PathBuf::from(format!("/proc/self/fd/{}", shared_dir.as_raw_fd()));
             fs::set_permissions(&self_anchor, fs::Permissions::from_mode(0o700)).map_err(
                 |error| {
                     GateError::environment(format!(
-                        "cannot lock down the heavy-gate parent {}: {error}",
-                        shared.display()
+                        "cannot lock down {}: {error}",
+                        gate_label::SHARED
                     ))
                 },
             )?;
             shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
-                GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
+                GateError::environment(format!("cannot stat {}: {errno}", gate_label::SHARED))
             })?;
         }
         if !shared_parent_is_trusted(shared_stat.st_uid, shared_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
-                "the heavy-gate parent {} is owned by uid {} with mode {:o}; refusing to \
+                "{} is owned by another user or is group- or world-writable; refusing to \
                  share a semaphore namespace a peer could rename. Ensure the per-user runtime \
-                 directory /run/user/{uid} is owned by you (mode 0700), or have an administrator \
+                 directory /run/user/$UID is owned by you (mode 0700), or have an administrator \
                  provision a root-owned (optionally sticky) {GATE_DIR_NAME} directory.",
-                shared.display(),
-                shared_stat.st_uid,
-                shared_stat.st_mode as u32 & 0o7777,
+                gate_label::SHARED,
             )));
         }
 
@@ -530,31 +557,33 @@ impl GateDir {
         // descriptor so a swap of the shared path cannot redirect us.
         let uid_name = format!("uid-{uid}");
         let uid_anchor = anchored_path(&shared_dir, &uid_name);
-        create_dir_with_mode(&uid_anchor, 0o700)?;
-        let dir = open_directory(&uid_anchor)?;
+        create_dir_with_mode(&uid_anchor, gate_label::SLOT_DIR, 0o700)?;
+        let dir = open_directory(&uid_anchor, gate_label::SLOT_DIR)?;
         let metadata = fstat(dir.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!("cannot stat {}: {errno}", path.display()))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::SLOT_DIR))
         })?;
         if metadata.st_uid != uid {
             return Err(GateError::environment(format!(
-                "heavy-gate slot directory {} is owned by uid {}, not uid {}; \
+                "{} is owned by a different user than the caller; \
                  refusing to share a semaphore across uids",
-                path.display(),
-                metadata.st_uid,
-                uid
+                gate_label::SLOT_DIR,
             )));
         }
         if metadata.st_mode as u32 & 0o077 != 0 {
             return Err(GateError::environment(format!(
-                "heavy-gate slot directory {} has mode {:o}; it must not be \
-                 group- or world-accessible. Remove it and rerun.",
-                path.display(),
-                metadata.st_mode as u32 & 0o7777
+                "{} has a group- or world-accessible mode; it must be private (0700). \
+                 Remove it and rerun.",
+                gate_label::SLOT_DIR,
             )));
         }
-        Ok(Self { path, dir })
+        Ok(Self {
+            #[cfg(test)]
+            path,
+            dir,
+        })
     }
 
+    #[cfg(test)]
     fn slot_path(&self, index: usize) -> PathBuf {
         self.path.join(format!("slot-{index}"))
     }
@@ -575,7 +604,6 @@ impl GateDir {
     /// fails closed here, before a single slot is touched.
     pub fn probe_ofd_support(&self) -> Result<()> {
         let probe_name = format!(".ofd-probe-{}", std::process::id());
-        let probe_path = self.path.join(&probe_name);
         let probe_anchor = anchored_path(&self.dir, &probe_name);
         let _ = fs::remove_file(&probe_anchor);
         let probe = OpenOptions::new()
@@ -586,44 +614,41 @@ impl GateDir {
             .custom_flags(libc::O_NOFOLLOW)
             .open(&probe_anchor)
             .map_err(|error| {
-                GateError::environment(format!(
-                    "cannot create heavy-gate probe file {}: {error}",
-                    probe_path.display()
-                ))
+                GateError::environment(format!("cannot create {}: {error}", gate_label::PROBE))
             })?;
 
-        let result = self.evaluate_probe(&probe, &probe_path);
+        let result = self.evaluate_probe(&probe);
         drop(probe);
         let _ = fs::remove_file(&probe_anchor);
         result
     }
 
-    fn evaluate_probe(&self, probe: &File, probe_path: &Path) -> Result<()> {
+    fn evaluate_probe(&self, probe: &File) -> Result<()> {
         match try_lock(probe) {
-            Ok(()) => unlock(probe).map_err(|errno| self.probe_error(errno, probe_path, "release")),
+            Ok(()) => unlock(probe).map_err(|errno| self.probe_error(errno, "release")),
             // A contended probe still proves the mechanism works.
             Err(Errno::EAGAIN | Errno::EACCES) => Ok(()),
-            Err(errno) => Err(self.probe_error(errno, probe_path, "acquire")),
+            Err(errno) => Err(self.probe_error(errno, "acquire")),
         }
     }
 
-    fn probe_error(&self, errno: Errno, probe_path: &Path, phase: &str) -> GateError {
+    fn probe_error(&self, errno: Errno, phase: &str) -> GateError {
         match classify_lock_errno(errno) {
             LockOutcome::Unsupported => self.unsupported_error(errno),
             _ => GateError::environment(format!(
-                "cannot {phase} the heavy-gate probe lock on {}: {errno}",
-                probe_path.display()
+                "cannot {phase} the lock on {}: {errno}",
+                gate_label::PROBE
             )),
         }
     }
 
     fn unsupported_error(&self, errno: Errno) -> GateError {
         GateError::unsupported(format!(
-            "open file description locks (F_OFD_SETLK) are unavailable on {} ({errno}). \
-             The heavy gate fails closed rather than falling back to flock or running \
-             unsynchronized; the per-user runtime directory (/run/user/<uid>, else /tmp) \
+            "open file description locks (F_OFD_SETLK) are unavailable on the filesystem backing \
+             {} ({errno}). The heavy gate fails closed rather than falling back to flock or \
+             running unsynchronized; the per-user runtime directory (/run/user/$UID, else /tmp) \
              must live on a filesystem that supports them.",
-            self.path.display()
+            gate_label::SLOT_DIR
         ))
     }
 
@@ -632,7 +657,6 @@ impl GateDir {
     /// Returns `Ok(None)` when the slot is held by another lane.
     pub fn try_acquire(&self, index: usize) -> Result<Option<SlotGuard>> {
         assert!(index < SLOT_COUNT, "slot index out of range");
-        let path = self.slot_path(index);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -642,29 +666,21 @@ impl GateDir {
             .custom_flags(libc::O_NOFOLLOW)
             .open(self.slot_anchor(index))
             .map_err(|error| {
-                GateError::environment(format!(
-                    "cannot open heavy-gate slot file {}: {error}",
-                    path.display()
-                ))
+                GateError::environment(format!("cannot open {}: {error}", gate_label::slot(index)))
             })?;
         let metadata = file.metadata().map_err(|error| {
-            GateError::environment(format!(
-                "cannot stat heavy-gate slot file {}: {error}",
-                path.display()
-            ))
+            GateError::environment(format!("cannot stat {}: {error}", gate_label::slot(index)))
         })?;
         if !metadata.is_file() {
             return Err(GateError::environment(format!(
-                "heavy-gate slot path {} is not a regular file",
-                path.display()
+                "{} is not a regular file",
+                gate_label::slot(index)
             )));
         }
         if metadata.uid() != getuid().as_raw() {
             return Err(GateError::environment(format!(
-                "heavy-gate slot file {} is owned by uid {}, not uid {}",
-                path.display(),
-                metadata.uid(),
-                getuid().as_raw()
+                "{} is owned by a different user than the caller",
+                gate_label::slot(index)
             )));
         }
 
@@ -674,8 +690,8 @@ impl GateDir {
                 LockOutcome::Busy => Ok(None),
                 LockOutcome::Unsupported => Err(self.unsupported_error(errno)),
                 LockOutcome::Environment => Err(GateError::environment(format!(
-                    "cannot lock heavy-gate slot file {}: {errno}",
-                    path.display()
+                    "cannot lock {}: {errno}",
+                    gate_label::slot(index)
                 ))),
             },
         }
@@ -739,7 +755,7 @@ impl GateDir {
             Err(Errno::EBADF) => return Ok(SlotProof::NotHeld),
             Err(errno) => {
                 return Err(GateError::environment(format!(
-                    "cannot stat the inherited heavy-gate slot descriptor {fd}: {errno}"
+                    "cannot stat the inherited heavy-gate slot descriptor: {errno}"
                 )));
             }
         };
@@ -763,16 +779,13 @@ impl GateDir {
             }
             Err(error) => {
                 return Err(GateError::environment(format!(
-                    "cannot open the heavy-gate slot file {} to verify ownership: {error}",
-                    self.slot_path(index).display()
+                    "cannot open {} to verify ownership: {error}",
+                    gate_label::slot(index)
                 )));
             }
         };
         let slot_stat = fstat(slot.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!(
-                "cannot stat the heavy-gate slot file {}: {errno}",
-                self.slot_path(index).display()
-            ))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::slot(index)))
         })?;
         if slot_stat.st_dev != inherited.st_dev || slot_stat.st_ino != inherited.st_ino {
             return Ok(SlotProof::NotHeld);
@@ -797,22 +810,18 @@ impl GateDir {
     }
 }
 
-fn create_dir_with_mode(path: &Path, mode: u32) -> Result<()> {
+fn create_dir_with_mode(path: &Path, label: &str, mode: u32) -> Result<()> {
     match fs::DirBuilder::new().mode(mode).create(path) {
         Ok(()) => {
             // `mkdir` masks the requested mode with the umask; force it back
             // so a restrictive umask cannot loosen the directory we just made.
             fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
-                GateError::environment(format!(
-                    "cannot set mode {mode:o} on {}: {error}",
-                    path.display()
-                ))
+                GateError::environment(format!("cannot set mode {mode:o} on {label}: {error}"))
             })
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(GateError::environment(format!(
-            "cannot create {}: {error}",
-            path.display()
+            "cannot create {label}: {error}"
         ))),
     }
 }
@@ -822,23 +831,19 @@ fn create_dir_with_mode(path: &Path, mode: u32) -> Result<()> {
 /// `O_DIRECTORY` rejects a non-directory (`ENOTDIR`) and `O_NOFOLLOW` rejects a
 /// symlink (`ELOOP`) so the returned descriptor is always a real directory,
 /// and every later operation anchored to it stays bound to that inode.
-fn open_directory(path: &Path) -> Result<File> {
+fn open_directory(path: &Path, label: &str) -> Result<File> {
     OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
         .open(path)
         .map_err(|error| match error.raw_os_error() {
             Some(errno) if errno == libc::ELOOP => GateError::environment(format!(
-                "{} is a symlink; refusing to use it as a heavy-gate directory",
-                path.display()
+                "{label} is a symlink; refusing to use it as a heavy-gate directory"
             )),
             Some(errno) if errno == libc::ENOTDIR => {
-                GateError::environment(format!("{} is not a directory", path.display()))
+                GateError::environment(format!("{label} is not a directory"))
             }
-            _ => GateError::environment(format!(
-                "cannot open the heavy-gate directory {}: {error}",
-                path.display()
-            )),
+            _ => GateError::environment(format!("cannot open {label}: {error}")),
         })
 }
 
@@ -971,7 +976,7 @@ pub fn acquire_slot(
                      running unsynchronized. Another heavy lane is still holding both slots \
                      under {}.",
                     policy.timeout.as_secs(),
-                    dir.path().display()
+                    gate_label::SLOT_DIR
                 ),
             ));
         }
@@ -1666,6 +1671,36 @@ mod tests {
         GateDir::prepare(root, getuid().as_raw()).expect("gate directory is preparable")
     }
 
+    /// Asserts a gate diagnostic names components by role only. Every message
+    /// `run` prints to stderr and CI logs verbatim, so it must carry neither
+    /// an absolute path (a supplied root or a resolved runtime path) nor the
+    /// caller's numeric uid in any of the historical leak shapes. The redacted
+    /// diagnostics use role labels and the shell-style `$UID` placeholder.
+    fn assert_no_path_or_uid(message: &str, roots: &[&Path]) {
+        for root in roots {
+            let root = root.to_string_lossy();
+            assert!(
+                !message.contains(root.as_ref()),
+                "a gate diagnostic must not leak {root}: {message}"
+            );
+        }
+        assert!(
+            !message.contains("/home") && !message.contains("/target/"),
+            "a gate diagnostic must not leak HOME or a build path: {message}"
+        );
+        let uid = getuid().as_raw();
+        for leak in [
+            format!("uid {uid}"),
+            format!("uid-{uid}"),
+            format!("/run/user/{uid}"),
+        ] {
+            assert!(
+                !message.contains(&leak),
+                "a gate diagnostic must not leak the caller's uid as {leak:?}: {message}"
+            );
+        }
+    }
+
     fn wait_for(deadline: Duration, mut ready: impl FnMut() -> bool) -> bool {
         let started = Instant::now();
         while started.elapsed() < deadline {
@@ -1925,6 +1960,35 @@ mod tests {
         );
         // Restore a sane mode so Scratch teardown can remove the tree.
         let _ = fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700));
+    }
+
+    #[test]
+    fn refused_gate_directories_name_roles_never_paths_or_the_uid() {
+        // Every GateDir::prepare refusal is printed by `run` to stderr and CI
+        // logs verbatim. Force the two representative refusals and assert each
+        // names its component by role only - never the resolved runtime path
+        // and never the caller's numeric uid. The leak escaped twice before
+        // precisely because nothing asserted on this output.
+
+        // A world- or group-writable root is untrusted (names the ROOT role).
+        let root = Scratch::new("gate-redaction-root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        let error = GateDir::prepare(root.path(), getuid().as_raw())
+            .expect_err("a world-writable root must be refused");
+        assert_eq!(error.kind(), GateErrorKind::Environment);
+        assert_no_path_or_uid(error.message(), &[root.path()]);
+        let _ = fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700));
+
+        // A pre-existing group-accessible per-uid slot directory is refused
+        // (names the slot-directory role).
+        let loose = Scratch::new("gate-redaction-slot");
+        let slot_dir = gate_dir_path(loose.path(), getuid().as_raw());
+        fs::create_dir_all(&slot_dir).unwrap();
+        fs::set_permissions(&slot_dir, fs::Permissions::from_mode(0o770)).unwrap();
+        let error = GateDir::prepare(loose.path(), getuid().as_raw())
+            .expect_err("a group-accessible slot directory must be refused");
+        assert_eq!(error.kind(), GateErrorKind::Environment);
+        assert_no_path_or_uid(error.message(), &[loose.path(), &slot_dir]);
     }
 
     #[test]
@@ -2199,7 +2263,7 @@ mod tests {
         let original = gate_dir_path(scratch.path(), uid);
         let moved = scratch.path().join(GATE_DIR_NAME).join("uid-moved");
         fs::rename(&original, &moved).unwrap();
-        create_dir_with_mode(&original, 0o700).unwrap();
+        create_dir_with_mode(&original, gate_label::SLOT_DIR, 0o700).unwrap();
 
         let guard = dir
             .try_acquire(0)

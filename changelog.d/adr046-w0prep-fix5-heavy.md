@@ -24,6 +24,14 @@
   check-then-open, so an attacker who controls a writable ancestor can no longer
   swap trees during the read phase and seal forged evidence into legitimate
   state.
+- Diagnostics from the delivery workflow, heavy-gate slot verification, and the
+  wave-snapshot Git path now name components by semantic role and
+  repository-relative key only. They no longer interpolate absolute host paths
+  (including `HOME` and the per-user runtime directory), the caller's numeric
+  uid, or raw Git subprocess stderr, so an error surfaced to operator stderr or
+  a CI log no longer discloses host filesystem layout or user identity.
+  Negative-output tests now assert that a forced failure in each of these
+  surfaces emits no absolute path and no uid.
 
 ### Fixed
 
