@@ -563,3 +563,5 @@ mod tests {
         assert_eq!(decoded, caps);
     }
 }
+
+pub mod v3;
