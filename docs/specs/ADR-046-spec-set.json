@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "ee5521cb4c4ed5d8ecc8edb3cd84172325f5042ba9d948ec6c903068bb95784a",
+      "sha256" : "76b7e84c245eb8f8e878f10422d7c34399483368e08055ea1375ebc11efaf864",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "db124e2358fa68b92b533e8ea05f821962279bb0b9610165943f86beb6421c51",
+      "sha256" : "dc5a52b3ac1ebfcc2bcc99e64a29be756854b9e2f2e613d8dee658192f8b4a09",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Accepted",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -863,7 +863,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-object-model.md",
-      "sha256" : "ee7b851ba5a5011a4e69851cf92366a4813fcfac893b7f84db5b1a9e5a158b2c",
+      "sha256" : "ec0870207989dce99f137d2451acc4769465850b28c06eabfa6de53e53452427",
       "specId" : "ADR-046-resource-object-model",
       "status" : "Accepted",
       "supersedes" : null,
@@ -955,7 +955,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "4e46c0fa8a97d52e76e0a86ec24c17c82eebd2167dd44157e7955a0eb8cd5e37",
+      "sha256" : "672c8ef7366b497ac0e4addbe381968aa1b5e5f98a53b19baf04532dc08f40b0",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Accepted",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
@@ -1102,7 +1102,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-streamline.md",
-      "sha256" : "0469f2123a56ddfc04f8b10d5a671ccea23c700225bfe1d5a82ea87d97cccf2a",
+      "sha256" : "d9fc4d871f7f9f146ddd7482aad9817012d357e9f824882fdb6b048bef44ca4f",
       "specId" : "ADR-046-streamline",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1140,7 +1140,7 @@
         "ADR-046-decision-register"
       ],
       "path" : "docs/specs/ADR-046-terminology-and-identities.md",
-      "sha256" : "49f9dabc790e712e0fe7269d48eafd54db07fd31d47385f2734730d462668af7",
+      "sha256" : "7d87554af03104240c653f933aeaf5c96a8522891343f89847eecda9fab562a8",
       "specId" : "ADR-046-terminology-and-identities",
       "status" : "Accepted",
       "supersedes" : "Public Realm terminology selected by ADR 0043 for d2b v3",
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "515de298d19f91ea085a034bf306e2aa93a53ecd4143aed8c86fbfb955b1258d",
+      "sha256" : "59f27e5f7c0fba3726e3de01bc01d5e063af5b475744b54d6f8a8b093b40125d",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "dcc4845e34da63f8a798d072a8608f4b21223a7d2d56598f18590a7feaa81548",
+      "sha256" : "3088ef8bcfaf7c18026c1ebf7d7f4ae074b0f9970edcacd9d40ce0119af68bc6",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",

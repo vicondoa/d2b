@@ -1593,7 +1593,7 @@
       "workItemId" : "ADR046-delivery-008"
     },
     {
-      "currentSource" : "The fail-closed completeness, identity, and closed-action contract in `docs/specs/README.md`; the Proposed tree has no checked-in generator or policy test",
+      "currentSource" : "The fail-closed completeness, identity, and closed-action contract in `docs/specs/README.md`; the checked-in `packages/xtask/src/gen_spec_set.rs` generator and `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs` policy test, hardened by this item",
       "dataMigration" : "None - documentation/build-policy contract only",
       "dependencyOwner" : "`ADR046-delivery-004`, `ADR046-delivery-008`; spec-set policy-test owner",
       "destination" : "`packages/xtask/src/gen_spec_set.rs`; `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs`; generated spec-set, work-item, and implementation-graph drift checks",
@@ -5048,13 +5048,13 @@
       "dependencyOwner" : "W0; d2b-bus owner",
       "destination" : "`packages/d2b-bus/src/session/`",
       "detailedDesign" : "Copy `d2b-session` crate wholesale into `d2b-bus/src/session/`; adapt `EndpointPurpose`/`EndpointRole`/`ServicePackage` closed-enum tags for v3 purposes; strip `GUEST_SESSION_CREDENTIAL_*` types; strip `serve_ttrpc_services` fixed-endpoint binding (replaced by allocator-issued FD bootstrap); adapt `SessionEngine` as ZoneLink session drive loop; keep all Noise profiles (Nn/Kk/IKpsk2), generation discovery, record/fragment/keepalive/credit/cancellation/attachment logic verbatim Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
-      "integration" : "ZoneLink controller instantiates one `ComponentSessionDriver` per ZoneLink, typed as Kk for enrolled peers and Nn for initial bootstrap; d2b-bus routes ResourceClient calls through these drivers",
+      "integration" : "ZoneLink controller instantiates one `ComponentSessionDriver` per ZoneLink, typed as IKpsk2 with the allocator-issued single-use PSK for initial ZoneLink enrollment and Kk for the enrolled steady-state session; Nn is never used for a ZoneLink, because a ZoneLink peer is an adjacent-Zone subject reached over relay carriage that unauthenticated NN cannot authenticate and that cannot emit `bootstrap-ikpsk2` evidence - NN is reserved for local `SO_PEERCRED` or inherited-descriptor sessions; d2b-bus routes ResourceClient calls through these drivers",
       "removalProof" : "Not applicable (new crate)",
       "reuseAction" : "adapt",
       "reuseSource" : null,
       "specId" : "ADR-046-zone-routing",
       "specPath" : "docs/specs/ADR-046-zone-routing.md",
-      "validation" : "Port all `component_session.rs` tests; port `noise_vectors.rs`; add ZoneLink-specific KK enrollment test; add ZoneLink reconnect/revocation integration test",
+      "validation" : "Port all `component_session.rs` tests; port `noise_vectors.rs`; add a ZoneLink IKpsk2 allocator-PSK bootstrap-enrollment test and the follow-on KK enrollment test; add ZoneLink reconnect/revocation integration test",
       "workItemId" : "ADR046-routing-007"
     },
     {
@@ -6350,7 +6350,7 @@
     {
       "currentSource" : "None - real Zone resource-store/controller-registration graph not implemented yet; doc-level invariant source is ADR046-streamline-005",
       "dataMigration" : "None - docs/tooling only; no runtime state",
-      "dependencyOwner" : "The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source",
+      "dependencyOwner" : "The Zone resource-store implementation work item (not yet filed; blocked on `ADR046-W0`-`ADR046-W8` implementation request per D024); ADR046-streamline-001 for the doc-level invariant source",
       "destination" : "`packages/d2b-resource-store-redb/tests/provider_state_graph.rs` (or the eventual crate implementing Zone resource storage)",
       "detailedDesign" : "A graph-walk over the real controller-registration/resource-ownership index (not Markdown) asserting the D076/D086/D087 invariants; the doc-level half of this check (dossier text describing the invariant correctly) is covered now by ADR046-streamline-005's `policy_spec_ownership` Primary reuse disposition: `create`. Preserved source-plan detail: net-new future runtime graph checker.",
       "integration" : "Runs as a Type 3 integration test against the real resource-store crate once it exists",
@@ -6365,7 +6365,7 @@
     {
       "currentSource" : "Existing policy-broker lint pattern in packages/d2b-contract-tests/tests/policy_broker_dispositions.rs and policy_broker_schema.rs; no Provider crate source exists yet",
       "dataMigration" : "None - docs/tooling only; no runtime state",
-      "dependencyOwner" : "The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the W0-W10 implementation request); ADR046-streamline-001 for the doc-level invariant source",
+      "dependencyOwner" : "The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the `ADR046-W0`-`ADR046-W8` implementation request); ADR046-streamline-001 for the doc-level invariant source",
       "destination" : "`packages/d2b-contract-tests/tests/policy_effectport_boundary.rs`, `policy_worker_bus_boundary.rs`",
       "detailedDesign" : "Static source scan (import-graph/symbol-use analysis) over compiled Provider crates, mirroring the existing `policy_broker_dispositions.rs` pattern already proven against `packages/d2bd`/`packages/d2b-priv-broker` Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing policy-broker lint pattern to Provider/Worker boundary checks.",
       "integration" : "Standing Layer-1 policy lint once Provider crates exist",
@@ -6470,7 +6470,7 @@
     {
       "currentSource" : "Existing bounded-parallel test-runner precedent in tests/tools/run-layer.sh and layer1-jobs.py; Provider toolkit fake crates are net-new",
       "dataMigration" : "None - docs/tooling only; no runtime state",
-      "dependencyOwner" : "The Provider-toolkit implementation work item (blocked on the W0-W10 implementation request)",
+      "dependencyOwner" : "The Provider-toolkit implementation work item (blocked on the `ADR046-W0`-`ADR046-W8` implementation request)",
       "destination" : "`tests/tools/run-layer.sh` extension (this repository already has `tests/tools/run-layer.sh` and `layer1-jobs.py` bounded-parallelism precedent) plus fake `EffectPort`/`ResourceClient` stub crates under `packages/d2b-provider-toolkit-fakes/`",
       "detailedDesign" : "Extend the existing `layer1-jobs.py` bounded-parallel-shard pattern with a per-Provider-crate shard definition; fake dependency crates implement the same `EffectPort`/`ResourceClient` trait surface with in-memory stand-ins Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bounded-parallel shard pattern; add net-new fake EffectPort/ResourceClient crates.",
       "integration" : "`make test-unit`/`make check` shard addition once Provider crates exist",

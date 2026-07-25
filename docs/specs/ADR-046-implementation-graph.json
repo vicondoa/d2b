@@ -19662,7 +19662,7 @@
       ],
       "specId" : "ADR-046-zone-routing",
       "topologicalRank" : 7,
-      "validation" : "Port all `component_session.rs` tests; port `noise_vectors.rs`; add ZoneLink-specific KK enrollment test; add ZoneLink reconnect/revocation integration test",
+      "validation" : "Port all `component_session.rs` tests; port `noise_vectors.rs`; add a ZoneLink IKpsk2 allocator-PSK bootstrap-enrollment test and the follow-on KK enrollment test; add ZoneLink reconnect/revocation integration test",
       "wave" : "W2"
     },
     {
@@ -21737,7 +21737,7 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-streamline-006",
       "kind" : "work-item",
-      "owner" : "The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source",
+      "owner" : "The Zone resource-store implementation work item (not yet filed; blocked on `ADR046-W0`-`ADR046-W8` implementation request per D024); ADR046-streamline-001 for the doc-level invariant source",
       "parallelGroup" : "wi:ADR-046-streamline",
       "prerequisites" : [
         "ADR-046-streamline",
@@ -21760,7 +21760,7 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-streamline-007",
       "kind" : "work-item",
-      "owner" : "The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the W0-W10 implementation request); ADR046-streamline-001 for the doc-level invariant source",
+      "owner" : "The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the `ADR046-W0`-`ADR046-W8` implementation request); ADR046-streamline-001 for the doc-level invariant source",
       "parallelGroup" : "wi:ADR-046-streamline",
       "prerequisites" : [
         "ADR-046-streamline",
@@ -21921,7 +21921,7 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-streamline-014",
       "kind" : "work-item",
-      "owner" : "The Provider-toolkit implementation work item (blocked on the W0-W10 implementation request)",
+      "owner" : "The Provider-toolkit implementation work item (blocked on the `ADR046-W0`-`ADR046-W8` implementation request)",
       "parallelGroup" : "wi:ADR-046-streamline",
       "prerequisites" : [
         "ADR-046-streamline"
