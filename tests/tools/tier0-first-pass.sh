@@ -46,6 +46,86 @@ DASHES=(
 PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])H[0-9]{1,2}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
 PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
 
+# Shrink-only legacy debt ratchet. This path set and its budget may only get
+# smaller. Adding a path is permitted only in the same change that removes a
+# different violation and its entry; never increase the budget. Do not attach
+# free-text reasons: membership is the sole exemption, so every change remains
+# an explicit path diff.
+LEGACY_PROCESS_MARKER_PATH_BUDGET=71
+LEGACY_PROCESS_MARKER_PATHS=(
+  docs/reference/broker-w2-dispositions.md
+  docs/reference/schemas/v1/bundle.json
+  docs/reference/schemas/v1/minijail-profile.json
+  docs/reference/schemas/v1/processes.json
+  docs/reference/schemas/v1/wire-protocol.json
+  docs/reference/schemas/v2/minijail-profile.json
+  docs/reference/schemas/v2/processes.json
+  docs/reference/wave-evidence-schema.md
+  nixos-modules/host-activation.nix
+  nixos-modules/host.nix
+  nixos-modules/net.nix
+  packages/Cargo.toml
+  packages/d2b-contract-tests/tests/minijail_gpu.rs
+  packages/d2b-contract-tests/tests/minijail_profiles.rs
+  packages/d2b-contract-tests/tests/minijail_swtpm_video.rs
+  packages/d2b-contract-tests/tests/policy_guest.rs
+  packages/d2b-contract-tests/tests/policy_restart_adoption.rs
+  packages/d2b-contract-tests/tests/privileges_parity.rs
+  packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs
+  packages/d2b-contract-tests/tests/usb_sk_contract.rs
+  packages/d2b-contracts/proto/guest_control.proto
+  packages/d2b-contracts/tests/version_skew.rs
+  packages/d2b-core/Cargo.toml
+  packages/d2b-core/src/bundle_resolver.rs
+  packages/d2b-core/src/host_w3.rs
+  packages/d2b-core/src/minijail_profile.rs
+  packages/d2b-core/src/privileges_w3.rs
+  packages/d2b-core/tests/bundle_resolver_tamper.rs
+  packages/d2b-exec-runner/tests/tty_pty_integration.rs
+  packages/d2b-gateway-runtime/src/aca_workload.rs
+  packages/d2b-gateway-runtime/src/display_listener.rs
+  packages/d2b-gateway-runtime/src/production.rs
+  packages/d2b-gateway-runtime/src/waypipe_display.rs
+  packages/d2b-gateway/Cargo.toml
+  packages/d2b-gateway/src/audit.rs
+  packages/d2b-gateway/src/handshake.rs
+  packages/d2b-gateway/src/ledger.rs
+  packages/d2b-gateway/src/lib.rs
+  packages/d2b-gateway/src/orchestrator.rs
+  packages/d2b-guestd/src/exec_pty.rs
+  packages/d2b-host/Cargo.toml
+  packages/d2b-host/src/hardlink_farm.rs
+  packages/d2b-host/src/runner_shape.rs
+  packages/d2b-priv-broker/Cargo.toml
+  packages/d2b-priv-broker/src/ops/store_sync_audit.rs
+  packages/d2b-priv-broker/src/ops/tap.rs
+  packages/d2b-priv-broker/src/runtime.rs
+  packages/d2b-provider-aca/Cargo.toml
+  packages/d2b-provider-relay/src/bin/d2b-relay.rs
+  packages/d2b-realm-provider/src/credential.rs
+  packages/d2b-realm-router/src/display_transport.rs
+  packages/d2b-realm-router/src/secure_session.rs
+  packages/d2b-realm-router/src/session_lifecycle.rs
+  packages/d2b/src/lib.rs
+  packages/d2b/tests/auth_status_contract.rs
+  packages/d2b/tests/cli_contract.rs
+  packages/d2b/tests/cli_json_contract.rs
+  packages/d2b/tests/host_doctor_contract.rs
+  packages/d2b/tests/status_contract.rs
+  packages/d2b/tests/usb_contract.rs
+  packages/d2b/tests/vm_verbs_contract.rs
+  packages/d2bd/Cargo.toml
+  packages/d2bd/src/guest_control_health.rs
+  packages/d2bd/src/lib.rs
+  packages/d2bd/src/main.rs
+  packages/d2bd/src/supervisor/pidfd_table.rs
+  packages/d2bd/src/workload_target_index.rs
+  tests/fixtures/gen-w3-cli-goldens.py
+  tests/golden/l3-matrix/w3-arch.txt
+  tests/golden/l3-matrix/w3-fedora.txt
+  tests/golden/l3-matrix/w3-ubuntu.txt
+)
+
 log() {
   printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2
 }
@@ -149,7 +229,9 @@ scan_process_markers() {
   local root="$1"
   local -a files=() full_files=() source_files=() filename_files=()
   local -a workflow_files=() changelog_files=()
-  local f hits context_hits toplevel enum_status grep_status awk_status
+  local -a new_violation_lines=() stale_legacy_paths=()
+  local -A legacy_paths=() violation_paths=()
+  local f hit path hits context_hits toplevel enum_status grep_status awk_status
   local is_repo_root=0 filename_hits=
 
   root=$(cd "$root" && pwd -P)
@@ -174,6 +256,16 @@ scan_process_markers() {
   [ "$enum_status" -eq 0 ] \
     || fail "process-marker scan could not enumerate files under $root (enumerator exited $enum_status)"
   [ "${#files[@]}" -gt 0 ] || fail "process-marker scan found no files under $root"
+
+  if [ "$is_repo_root" -eq 1 ]; then
+    [ "${#LEGACY_PROCESS_MARKER_PATHS[@]}" -eq "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ] \
+      || fail "process-marker legacy path count (${#LEGACY_PROCESS_MARKER_PATHS[@]}) does not match shrink-only budget $LEGACY_PROCESS_MARKER_PATH_BUDGET"
+    for f in "${LEGACY_PROCESS_MARKER_PATHS[@]}"; do
+      [ -z "${legacy_paths[$f]+present}" ] \
+        || fail "duplicate process-marker legacy path: $f"
+      legacy_paths["$f"]=1
+    done
+  fi
 
   for f in "${files[@]}"; do
     if [ "$is_repo_root" -eq 0 ]; then
@@ -244,12 +336,36 @@ scan_process_markers() {
     set +e
     context_hits=$(
       cd "$root" && awk -v marker="$PROCESS_MARKER_RE" '
+        # W0 through W8 are the closed, validated delivery-wave namespace when
+        # they occur as exact tokens inside the delivery implementation. Strip
+        # only that token shape before applying the process-marker matcher.
+        # Suffixed forms such as W0-prep and W4-fu remain visible to the gate.
+        function strip_delivery_wave_ids(text, i, previous, following) {
+          if (FILENAME !~ /(^|\/)packages\/xtask\/src\/delivery\// ||
+              text !~ /(`W[0-8]`|"W[0-8]"|\/W[0-8]\/|ADR046-W[0-8])/) {
+            return text
+          }
+          for (i = 1; i < length(text); i++) {
+            if (substr(text, i, 1) != "W" ||
+                substr(text, i + 1, 1) !~ /^[0-8]$/) {
+              continue
+            }
+            previous = i == 1 ? "" : substr(text, i - 1, 1)
+            following = i + 2 > length(text) ? "" : substr(text, i + 2, 1)
+            if ((previous == "" || previous !~ /[[:alnum:]_]/) &&
+                (following == "" || following !~ /[[:alnum:]_-]/)) {
+              text = substr(text, 1, i - 1) "X" substr(text, i + 1)
+            }
+          }
+          return text
+        }
         {
-          marker_at = match($0, marker)
+          candidate = strip_delivery_wave_ids($0)
+          marker_at = match(candidate, marker)
           if (!marker_at) {
             next
           }
-          prefix = substr($0, 1, marker_at)
+          prefix = substr(candidate, 1, marker_at)
           comment_at = match(prefix, /(^|[[:space:]])(\/\/[/!]?|#|\/\*|\*)/)
           cli_string = FILENAME ~ /^packages\/d2b\/src\// &&
             prefix ~ /["]/
@@ -310,11 +426,44 @@ scan_process_markers() {
   if [ -n "$filename_hits" ]; then
     hits+="${hits:+$'\n'}$filename_hits"
   fi
-  if [ -n "$hits" ] || [ "$grep_status" -eq 0 ]; then
-    [ -n "$hits" ] && printf '%s\n' "$hits" >&2
-    fail "internal process marker matched a shipped or operator-facing artifact under $root (see output above)"
+  if [ "$grep_status" -eq 0 ] && [ -z "$hits" ]; then
+    fail "process-marker scan matched but produced no classifiable diagnostic under $root"
   fi
-  ok "no process markers in shipped or operator-facing artifacts"
+
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    path=${hit%%:*}
+    [ "$path" != "$hit" ] \
+      || fail "process-marker scan produced an unclassifiable diagnostic: $hit"
+    violation_paths["$path"]=1
+    if [ -z "${legacy_paths[$path]+present}" ]; then
+      new_violation_lines+=("$hit")
+    fi
+  done <<< "$hits"
+
+  if [ "$is_repo_root" -eq 1 ]; then
+    for f in "${LEGACY_PROCESS_MARKER_PATHS[@]}"; do
+      if [ -z "${violation_paths[$f]+present}" ]; then
+        stale_legacy_paths+=("$f")
+      fi
+    done
+  fi
+
+  if [ "${#new_violation_lines[@]}" -gt 0 ]; then
+    printf '%s\n' "${new_violation_lines[@]}" >&2
+    fail "new process-marker violation outside the legacy path allow-list"
+  fi
+  if [ "${#stale_legacy_paths[@]}" -gt 0 ]; then
+    for f in "${stale_legacy_paths[@]}"; do
+      log "  STALE: $f"
+    done
+    fail "legacy process-marker paths no longer violate; delete their entries and lower the budget"
+  fi
+  if [ "$is_repo_root" -eq 1 ]; then
+    ok "process-marker ratchet clean; ${#LEGACY_PROCESS_MARKER_PATHS[@]} legacy paths remain"
+  else
+    ok "no process markers in shipped or operator-facing artifacts"
+  fi
 }
 
 # Exposed so the gate's own test can drive the scan over a fixture tree.
