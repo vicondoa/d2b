@@ -296,7 +296,7 @@ Each spec contains an **Implementation work items** section. Every item has:
 
 | Field | Requirement |
 | --- | --- |
-| Work item ID | Declared by an exact level-three heading `### ADR046-<registered-prefix>-<ordinal>`; an optional table row must match it exactly |
+| Work item ID | Declared by a level-three heading `### ADR046-<registered-prefix>-<ordinal>`, optionally followed by a title (see "Authoring shapes the registry tolerates"); an optional table row must match the ID exactly |
 | Dependency/owner | Prerequisites, future wave, crate/component, shared owner |
 | Current source | Exact v3 paths, symbols, call sites, artifacts, and tests |
 | Reuse source | Optional exact main commit/paths/symbols/tests used for copy/adaptation; explicit `None` serializes as `null` |
@@ -316,6 +316,46 @@ suffix. `<ordinal>` is a three-digit value from `001` through `999`. A member
 that owns work items registers a nonempty bytewise-sorted prefix list. Every
 prefix is globally unique to exactly one member and is never inferred by
 splitting an ID, Spec ID, or filename.
+
+### Authoring shapes the registry tolerates
+
+The generator parses the shapes the set actually uses, not an idealized
+subset. An author does not have to normalize an existing spec to these rules,
+but a tool that reads the set must handle all of them.
+
+**The work-item heading may carry a title after the ID.** 356 headings are the
+bare ID; the rest add a title introduced by a spaced hyphen (112), a colon
+(51), or parentheses (24). All four forms declare the same ID.
+
+```text
+### ADR046-core-001
+### ADR046-core-001 - Some title
+### ADR046-core-001: Some title
+### ADR046-core-001 (Some title)
+```
+
+Because a registered prefix may itself contain hyphens, ID extraction is
+**anchored on the ID grammar and takes the shortest match**, never split on a
+separator character. `ADR046-security-key-012 - Some title` yields
+`ADR046-security-key-012`, and `ADR046-core-001-002` yields `ADR046-core-001`.
+A parser that splits on the first hyphen, or that recognizes only one title
+introducer, silently truncates or drops items.
+
+**The enclosing section title varies.** `## Implementation work items` is the
+majority spelling, but the set also uses `## Work items`, numbered forms such
+as `## 17. Implementation work items`, and descriptive forms such as
+`## Bus and ComponentSession reuse work items`. Anchor a scan on the work-item
+heading pattern, not on the section title, and assert the expected total so a
+miss fails closed rather than silently under-reporting.
+
+**Table cells escape pipes as `\|`.** Unescape on read and re-escape on write,
+or any field value containing a pipe is corrupted.
+
+**Dependency cells reserve the word `through`.** It is a range-expansion
+keyword: `ADR046-network-001 through ADR046-network-004` expands to four
+dependency edges. Use `to`, or list the IDs, when a literal range is not
+intended, and remember that a bare ordinal such as `004` carries no
+`ADR046-` prefix and therefore does not parse as an ID at all.
 
 | Normative member | Registered `workItemPrefixes` |
 | --- | --- |
