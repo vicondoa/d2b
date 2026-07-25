@@ -46,8 +46,10 @@ const EXPECTED_WORK_ITEMS: usize = 543;
 pub enum HeadingForm {
     /// `### ADR046-core-001`
     Bare,
-    /// `### ADR046-core-001 — Some title`, and the 19 headings that introduce
-    /// the same whitespace-separated title with no dash at all.
+    /// A title introduced by whitespace and, optionally, a dash of any kind:
+    /// `### ADR046-core-001 — Some title`, `### ADR046-core-001 - Some title`,
+    /// and the 19 headings that introduce the same title with no dash at all.
+    /// The three spell one form because the dash is decoration, not grammar.
     EmDash,
     /// `### ADR046-core-001: Some title`
     Colon,
@@ -651,17 +653,34 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 }
 
 /// Returns the canonical work-item id a heading declares, if it declares one.
+///
+/// Extraction is anchored on the id grammar, never on a title separator. A
+/// heading may introduce its title with an em-dash, an en-dash, a hyphen, a
+/// colon, a parenthesis, or nothing but whitespace, and ids themselves contain
+/// hyphens, so splitting on a separator character truncates the id. Instead,
+/// take the leading run of id-shaped characters and return the *shortest*
+/// anchored slice of it that satisfies the grammar; everything after that is
+/// title text whatever punctuation introduces it.
 fn leading_work_item_id(rest: &str) -> Option<String> {
-    let token: String = rest
-        .chars()
-        .take_while(|c| !c.is_whitespace() && *c != ':')
-        .collect();
-    let token = token.trim_matches('`').to_string();
-    if is_work_item_id(&token) {
-        Some(token)
-    } else {
-        None
+    let text = rest.trim_start_matches('`');
+    if !text.starts_with(WORK_ITEM_ID_PREFIX) {
+        return None;
     }
+    let body: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    let cuts = body
+        .match_indices('-')
+        .map(|(index, _)| index)
+        .chain(std::iter::once(body.len()));
+    for cut in cuts {
+        let candidate = &body[..cut];
+        if is_work_item_id(candidate) {
+            return Some(candidate.to_string());
+        }
+    }
+    None
 }
 
 fn is_work_item_id(token: &str) -> bool {
@@ -887,6 +906,8 @@ mod tests {
         let cases = [
             ("### ADR046-core-001", HeadingForm::Bare),
             ("### ADR046-core-001 — Some title", HeadingForm::EmDash),
+            ("### ADR046-core-001 - Some title", HeadingForm::EmDash),
+            ("### ADR046-core-001 – Some title", HeadingForm::EmDash),
             ("### ADR046-core-001 Some title", HeadingForm::EmDash),
             ("### ADR046-core-001: Some title", HeadingForm::Colon),
             (
@@ -905,6 +926,29 @@ mod tests {
         }
     }
 
+    /// A hyphen introducing a title is indistinguishable, character by
+    /// character, from the hyphens inside the id. Extraction is anchored on the
+    /// id grammar so neither a spaced nor an unspaced hyphen can truncate a
+    /// multi-segment prefix.
+    #[test]
+    fn a_hyphen_title_never_truncates_a_hyphenated_prefix() {
+        let cases = [
+            "### ADR046-security-key-012",
+            "### ADR046-security-key-012 - Some title",
+            "### ADR046-security-key-012 — Some title",
+            "### ADR046-security-key-012-Some title",
+            "### ADR046-security-key-012: Some title",
+            "### ADR046-security-key-012 (Some title)",
+            "### `ADR046-security-key-012` - Some title",
+        ];
+        for line in cases {
+            let (_, rest) = heading(line).expect("heading parses");
+            let id = leading_work_item_id(rest)
+                .unwrap_or_else(|| panic!("`{line}` must declare a work item"));
+            assert_eq!(id, "ADR046-security-key-012", "{line}");
+        }
+    }
+
     #[test]
     fn the_expected_heading_census_totals_every_work_item() {
         let total: usize = EXPECTED_HEADING_FORMS.iter().map(|(_, n)| n).sum();
@@ -918,12 +962,34 @@ mod tests {
             "### ADR046-core-0001",
             "### ADR046-core-000",
             "### Implementation work items",
-            "### ADR046-core-001-extra",
+            "### ADR046-Core-001",
+            "### ADR-046-core-001",
+            "### ADR046-001",
         ] {
             let (_, rest) = heading(line).expect("heading parses");
             assert!(
                 leading_work_item_id(rest).is_none(),
                 "`{line}` must not be read as a work item"
+            );
+        }
+    }
+
+    /// Shortest anchored match: once the grammar is satisfied the heading has
+    /// declared its id, and trailing text is title whether or not a space
+    /// separates it. `ADR046-core-001-002` would otherwise be read as prefix
+    /// `core-001` with ordinal `002`.
+    #[test]
+    fn id_extraction_stops_at_the_shortest_grammatical_match() {
+        for (line, expected) in [
+            ("### ADR046-core-001-extra", "ADR046-core-001"),
+            ("### ADR046-core-001-002", "ADR046-core-001"),
+            ("### ADR046-core-001-0", "ADR046-core-001"),
+        ] {
+            let (_, rest) = heading(line).expect("heading parses");
+            assert_eq!(
+                leading_work_item_id(rest).as_deref(),
+                Some(expected),
+                "{line}"
             );
         }
     }

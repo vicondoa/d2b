@@ -122,6 +122,26 @@ fn split_id(token: &str) -> Option<(String, u32)> {
     well_formed.then_some((prefix.to_string(), value))
 }
 
+/// Returns the work-item id a heading declares, anchored on the id grammar
+/// rather than on whatever punctuation introduces the title. Work-item ids
+/// contain hyphens, so a parser that splits the heading on a separator
+/// truncates every id whose prefix has more than one segment.
+fn leading_id(rest: &str) -> Option<String> {
+    let text = rest.trim_start_matches('`');
+    if !text.starts_with("ADR046-") {
+        return None;
+    }
+    let body: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    body.match_indices('-')
+        .map(|(index, _)| index)
+        .chain(std::iter::once(body.len()))
+        .map(|cut| body[..cut].to_string())
+        .find(|candidate| split_id(candidate).is_some())
+}
+
 /// Collects every ADR 0046 work-item declaration in one Markdown document,
 /// including declarations at an invalid heading level so the caller can reject
 /// them explicitly rather than silently skipping them.
@@ -137,15 +157,10 @@ fn declarations(markdown: &str) -> Vec<Declaration> {
         }
         let level = line.chars().take_while(|c| *c == '#').count();
         let rest = line[level..].trim_start();
-        let token: String = rest
-            .chars()
-            .take_while(|c| !c.is_whitespace() && *c != ':')
-            .collect();
-        let token = token.trim_matches('`').to_string();
-        if split_id(&token).is_none() {
+        let Some(token) = leading_id(rest) else {
             index += 1;
             continue;
-        }
+        };
         let mut cursor = index + 1;
         while cursor < lines.len() && lines[cursor].trim().is_empty() {
             cursor += 1;
@@ -841,6 +856,34 @@ mod fixtures {
 
     fn markdown(heading: &str, id: &str, extra: &[(&str, &str)]) -> String {
         format!("{heading} {id}: fixture\n\n{}\n", table(id, extra))
+    }
+
+    /// The repository is about to replace every em-dash with a plain hyphen,
+    /// which rewrites 112 of the 543 headings into a spelling whose separator
+    /// is character-identical to the hyphens inside the ids. All five title
+    /// spellings, dashed or not, must keep yielding the declared id intact.
+    #[test]
+    fn every_title_spelling_yields_the_declared_id() {
+        for id in ["ADR046-core-001", "ADR046-security-key-012"] {
+            let titles = [
+                String::new(),
+                format!(" \u{2014} {id} title"),
+                format!(" - {id} title"),
+                format!(": {id} title"),
+                format!(" ({id} title)"),
+                format!(" {id} title"),
+            ];
+            for title in titles {
+                let doc = format!("### {id}{title}\n\n{}\n", table(id, &[]));
+                let found: Vec<String> =
+                    declarations(&doc).into_iter().map(|item| item.id).collect();
+                assert_eq!(
+                    found,
+                    vec![id.to_string()],
+                    "heading `### {id}{title}` must declare exactly `{id}`"
+                );
+            }
+        }
     }
 
     fn manifest_row(id: &str, action: &str, reuse: Value) -> Value {
