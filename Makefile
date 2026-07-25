@@ -232,14 +232,37 @@ heavy-lane-perf: heavy-lane-guard
 ## outside the gate. It does not trust the mere presence of D2B_HEAVY_GATE
 ## (any process can export that); instead it asks the wrapper to verify that
 ## this process genuinely holds a slot via its open file description lock.
-## A missing slot means someone ran the raw target directly, which would
-## bypass the sole-use semaphore.
+##
+## verify-slot reports its verdict purely through its exit status, so branch on
+## the typed codes rather than collapsing every nonzero status into one:
+##
+##   0  a genuinely held slot            -> proceed
+##   3  no slot is held                  -> reacquire by running the PUBLIC lane
+##                                          (which acquires a slot and re-runs
+##                                          this lane through the gate). A shared
+##                                          prerequisite cannot exec that itself
+##                                          without double-running the parent
+##                                          recipe, so guide the operator to the
+##                                          acquiring entrypoint and fail closed
+##                                          with the typed unheld code.
+##   *  the verifier itself malfunctioned -> propagate the exact code unchanged
+##                                          and fail closed
+##
+## Collapsing 3 and every malfunction into one "outside the semaphore" exit hid
+## a broken gate behind a slot-bypass message; keeping the codes distinct lets a
+## caller tell "ran the raw target directly" apart from "the verifier is broken".
 heavy-lane-guard: heavy-gate-build
-	@if ! $(HEAVY_GATE_BIN) heavy-gate verify-slot; then \
-	  echo "heavy lane invoked outside the heavy-gate semaphore." >&2; \
-	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot," >&2; \
-	  echo "or 'cargo xtask heavy-gate -- make <lane>'; do not run the internal target directly." >&2; \
-	  exit 2; \
+	@rc=0; $(HEAVY_GATE_BIN) heavy-gate verify-slot || rc=$$?; \
+	if [ "$$rc" -eq 0 ]; then \
+	  exit 0; \
+	elif [ "$$rc" -eq 3 ]; then \
+	  echo "heavy lane invoked outside the heavy-gate semaphore (no slot held)." >&2; \
+	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot" >&2; \
+	  echo "and re-runs this lane through the gate; do not run the internal target directly." >&2; \
+	  exit "$$rc"; \
+	else \
+	  echo "heavy-gate verify-slot failed closed (exit $$rc); refusing to run heavy work unsynchronised." >&2; \
+	  exit "$$rc"; \
 	fi
 
 # ===========================================================================
