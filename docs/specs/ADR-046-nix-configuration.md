@@ -549,6 +549,19 @@ d2b.providerCatalog = {
 };
 ```
 
+The entry attribute name (`system-core`, `runtime-cloud-hypervisor`) and the
+`artifactId` are independent: the name is the operator-facing catalog key and
+`artifactId` may differ from it. Because a Provider resource's identity in the
+catalog is its `spec.artifactId` (D075, D120) and not the entry name, `artifactId`
+MUST be unique across all `d2b.providerCatalog` entries. Nix attrset key
+uniqueness only guarantees distinct entry names; it does not reject two
+differently-named entries that share one `artifactId`. An explicit eval-time
+assertion therefore folds over `d2b.providerCatalog`, collects the `artifactId`
+of every entry, and fails closed (`provider-catalog-duplicate-artifact-id`) when
+any `artifactId` appears on more than one entry, naming both entry keys and the
+shared `artifactId`. This is what makes D120's "resolves to exactly one
+provider-catalog entry" decidable at eval time rather than an unenforced claim.
+
 ### Catalog artifact
 
 Emits `/etc/d2b/provider-catalog.json` (sorted by `providerName`). The
@@ -1723,7 +1736,7 @@ All ref validation runs at Nix eval time:
 | `ResourceImport` local route/factory | `providerRef` and `zoneLinkRef` resolve locally; `exportKey` is bounded/not a Ref; expected Service type and projection/factory fingerprints match the signed export and local factory |
 | Qualified Binding refs | `serviceRef` resolves to the same-Zone matching Service; target ref resolves to a factory-allowed same-Zone Guest/User/Zone; Binding spec is intent-only, observations are status-only, and Binding is non-exportable |
 | `artifactId` / `systemArtifactId` format | Plain bounded string `^[a-z][a-z0-9-]*$`; not a `<Type>/<name>` ResourceRef; no `*Ref` suffix |
-| Provider `artifactId` catalog resolution | The Provider resource's `spec.artifactId` matches the `artifactId` of exactly one `d2b.providerCatalog` entry (trust validation) and one `d2b.artifacts` entry with `type = "provider"`. Provider catalog identity is `spec.artifactId`; there is no separate `catalogEntryId` field (D075 freezes Provider spec as `{ artifactId; config; }`) |
+| Provider `artifactId` catalog resolution | The Provider resource's `spec.artifactId` matches the `artifactId` of exactly one `d2b.providerCatalog` entry (trust validation) and one `d2b.artifacts` entry with `type = "provider"`. "Exactly one" is enforceable because `artifactId` is asserted unique across `d2b.providerCatalog` entries (see "Provider package catalog"; `provider-catalog-duplicate-artifact-id`). Provider catalog identity is `spec.artifactId`; there is no separate `catalogEntryId` field (D075 freezes Provider spec as `{ artifactId; config; }`) |
 
 Failed validation emits a structured eval error identifying the exact option
 path and rejected value.
@@ -2340,6 +2353,7 @@ The Nix compiler detects and rejects at eval time:
 | Type collision | Two `d2b.zones.<z>.resources` entries with the same attribute key (Nix prevents this by construction) or two entries with different keys but emitting the same `<Type>/<name>` pair (eval-checked for cross-type uniqueness) |
 | Provider already installed | Two `d2b.zones.<z>.resources` entries of `type = "Provider"` in the same Zone with the same `spec.artifactId` (duplicate install of one Provider artifact) |
 | Catalog entry absent | A Provider `spec.artifactId` that matches no `d2b.providerCatalog` entry, or an `artifactId`/`systemArtifactId` not in `d2b.artifacts` |
+| Provider catalog duplicate artifactId | Two `d2b.providerCatalog` entries with different attribute names but the same `artifactId` (`provider-catalog-duplicate-artifact-id`; makes D120 identity ambiguous) |
 | Artifact type mismatch | An artifact ID used in a field that expects a different `type` (e.g., `"nixos-system"` where `"provider"` is required) |
 | Duplicate artifact ID | Two `d2b.artifacts.<id>` entries with the same key |
 | Missing ref target | Any `*Ref` field whose target is not declared |
@@ -2539,8 +2553,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` - single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]{0,62}$` (D113 1-63 byte bound enforced at eval); ref validation assertions; `WorkloadProviderKind` -> Guest/Host mapping per disposition table above; `Capability` -> Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `parentZone` is a required non-root/forbidden-root compiler-only plain Zone name compiled into sealed allocator topology; `retainedGenerations`/`trustedPublishers` are likewise Zone-level compiler settings not emitted in Zone spec |
 | Integration | `nixos-modules/default.nix` imports new options files; old realms options coexist until ADR046-nix-002 |
 | Data migration | Operator configs migrate `d2b.realms.*` → `d2b.zones.*`; `d2b.vms.*` → `d2b.zones.<z>.resources.*` with `type = "Guest"` |
-| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; ZoneId/ResourceName length-bound boundary vectors (63-byte name accepted, 64-byte name rejected, empty name rejected) per D113; resource/session verb closed-enum vectors accept `relay` only in `sessionVerbs`; relay wildcard/unbounded/Provider-self-asserted fixtures fail before activation while an exact core-generated ZoneLink fixture passes; Endpoint visibility accepts exactly `owner|provider|zone` and uses `consumerPolicy` for finer bounds; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.) |
-| Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix` |
+| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; ZoneId/ResourceName length-bound boundary vectors (63-byte name accepted, 64-byte name rejected, empty name rejected) per D113; resource/session verb closed-enum vectors accept `relay` only in `sessionVerbs`; relay wildcard/unbounded/Provider-self-asserted fixtures fail before activation while an exact core-generated ZoneLink fixture passes; Endpoint visibility accepts exactly `owner|provider|zone` and uses `consumerPolicy` for finer bounds; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.); two `d2b.providerCatalog` entries with different attribute names but the same `artifactId` fail eval closed (`provider-catalog-duplicate-artifact-id`, naming both keys and the shared `artifactId`) while distinct `artifactId`s and a single entry pass, so D120's "resolves to exactly one entry" is enforced |
+| Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix`, `tests/unit/nix/cases/provider-catalog-artifact-id-unique.nix` |
 | Drift pin | `make nix-unit-pin` after adding cases |
 | Removal proof | `options-realms*.nix` removed after `options-zones*.nix` achieves parity and parity drift test passes |
 
