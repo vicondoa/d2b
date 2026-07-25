@@ -12,6 +12,14 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the shared `cargo xtask delivery wave` dispatch skeleton for the
+  ADR 0046 delivery contract: the `snapshot`, `validate-import`,
+  `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
+  subcommand surface, the `content_id`/`candidate_id`/`snapshot_sha256`
+  digest contract, and the external candidate-ID-addressed evidence
+  directory. Evidence state is refused inside any repository checkout or Git
+  working tree, and every stage whose implementation has not landed fails
+  closed with a nonzero exit instead of reporting an unearned success.
 - Proposed ADR 0046 and its complete, documentation-only normative
   specification set for the d2b 3.0 Provider control plane, under user review.
   The atomic set has 55 member specs (28 foundation, resource, cross-cutting,
