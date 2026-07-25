@@ -1231,6 +1231,20 @@ fn exec_wrapped_command(args: &[String], nesting: NestingMarker) -> Result<u8> {
 }
 
 /// Clear the wrapper's signal mask and become the wrapped command.
+/// Names a wrapped program by its final path component only.
+///
+/// The wrapped program is operator supplied and may be an absolute path, so an
+/// unredacted diagnostic would echo the checkout or a username-bearing
+/// directory into the operator stderr and CI logs that a spawn failure
+/// reaches. Naming only the leaf keeps the failure diagnosable while dropping
+/// the sensitive directory portion.
+fn program_label(program: &OsString) -> String {
+    Path::new(program)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<program>".to_owned())
+}
+
 fn exec_shim(request: &Request) -> Result<u8> {
     let mut mask = SigSet::empty();
     for signal in FORWARDED_SIGNALS {
@@ -1247,7 +1261,7 @@ fn exec_shim(request: &Request) -> Result<u8> {
         GateErrorKind::Spawn,
         format!(
             "cannot start `{}`: {error}",
-            request.program.to_string_lossy()
+            program_label(&request.program)
         ),
     ))
 }
@@ -1345,7 +1359,7 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
             GateErrorKind::Spawn,
             format!(
                 "cannot start the heavy lane for `{}`: {error}",
-                request.program.to_string_lossy()
+                program_label(&request.program)
             ),
         )
     })?;
@@ -2115,6 +2129,37 @@ mod tests {
         std::process::exit(i32::from(error.kind().exit_code()));
     }
 
+    #[test]
+    fn a_spawn_failure_names_the_program_leaf_not_its_absolute_directory() {
+        // A wrapped program that does not exist must fail closed while its
+        // diagnostic names only the leaf, never the absolute directory the
+        // operator supplied. `exec_shim` runs the exec in-process, so a missing
+        // program returns the spawn diagnostic directly.
+        let request = Request {
+            program: OsString::from("/home/redaction-sentinel-lane/does-not-exist"),
+            args: Vec::new(),
+        };
+        let error = exec_shim(&request).expect_err("a missing program must fail to exec");
+        let message = error.message();
+        assert!(
+            !message.contains("/home/redaction-sentinel-lane"),
+            "the spawn diagnostic leaked its absolute directory: {message}"
+        );
+        assert!(
+            message.contains("does-not-exist"),
+            "the spawn diagnostic must still name the program leaf: {message}"
+        );
+    }
+
+    #[test]
+    fn program_label_reduces_an_absolute_path_to_its_leaf() {
+        assert_eq!(
+            program_label(&OsString::from("/home/alice/checkout/tests/entrypoint.sh")),
+            "entrypoint.sh"
+        );
+        assert_eq!(program_label(&OsString::from("make")), "make");
+    }
+
     fn spawn_child_mode(test_name: &str, root: &Path, env_key: &str) -> std::process::Child {
         Command::new(std::env::current_exe().expect("the test binary path is known"))
             .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
@@ -2491,7 +2536,7 @@ mod tests {
     // they prove the guard cannot be fooled by a bare `D2B_HEAVY_GATE` export.
     // They run it in a re-exec of *this* test binary rather than the separately
     // built `xtask` binary: the canonical per-uid namespace is non-overridable
-    // in a released binary (Finding 2), so only the crate's own test build
+    // in a released binary by design, so only the crate's own test build
     // honours the `XDG_RUNTIME_DIR` scratch-root seam. The exercised code path
     // (`execute` -> `verify_slot` -> `classify_nesting` ->
     // `descriptor_is_locked_slot`) is byte-for-byte the one the real binary
