@@ -392,8 +392,11 @@ never authenticates a d2b Zone subject.
 ### KK enrollment contract
 
 Before the child-local ZoneLink becomes Ready, the child controller and the
-selected parent allocator's sealed route endpoint complete an out-of-band
-enrollment exchange that establishes:
+selected parent allocator's sealed route endpoint complete a one-time IKpsk2
+bootstrap enrollment. The child consumes the allocator-issued single-use PSK
+exactly once in a `Noise_IKpsk2_25519_ChaChaPoly_SHA256` handshake, atomically
+persists the enrolled static-key identity, and terminates or rekeys that
+bootstrap session. Enrollment establishes:
 
 - **Selected parent route endpoint**: the parent allocator binds its route
   principal's static 25519 public-key fingerprint into the sealed allocation
@@ -409,9 +412,11 @@ The enrollment record carries the static public keys in an opaque, bounded
 format. No private key material enters any resource spec, status, bundle
 artifact, OTEL span, or audit record.
 
-On every session establishment:
+On every enrolled (post-bootstrap) session establishment:
 
-1. The sender initiates a Noise KK handshake (`-> e, es, ss` / `<- e, ee, se`).
+1. The sender initiates a Noise KK handshake (`-> e, es, ss` / `<- e, ee, se`)
+   using the persisted enrolled static keys; the one-time IKpsk2 bootstrap
+   above runs only for initial enrollment and to re-enroll after revocation.
 2. The Noise prologue binds the canonical ZoneLink identity and exact spec
    digest: `childZoneName`, `transportProviderRef`, `transportSettings`,
    `transportCredentials`, `disabled`, and `limits`, plus the sealed enrollment
@@ -1135,8 +1140,9 @@ Rules:
   token or key.
 - The provider-extension `RelayConnected` and `CredentialValid` conditions
   reflect carriage health, not Zone routing health. Core derives
-  `ZoneLink.status.conditions.SessionEstablished` from the Noise KK handshake
-  outcome, which succeeds only after relay transport is `Connected`.
+  `ZoneLink.status.conditions.SessionEstablished` from the enrolled Noise KK
+  handshake outcome (established after the one-time IKpsk2 bootstrap
+  enrollment), which succeeds only after relay transport is `Connected`.
 
 ### Status phases
 
@@ -1368,7 +1374,7 @@ download, or PATH scan.
 | Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process - only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | The child Zone's core ZoneLink controller calls its same-Zone selected Provider's `OpenTransport(spec.transportSettings, roleCredentialRef)` using the role ref selected from `spec.transportCredentials` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream; the parent has only sealed allocator/route state |
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
-| Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; Noise KK binding; relay identity exclusion |
+| Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; enrolled Noise KK binding (established after the one-time IKpsk2 bootstrap enrollment); relay identity exclusion |
 | Removal proof | `d2b-provider-relay/src/lib.rs` relay plumbing retained until ACA display migration completes |
 
 ### ADR046-transport-relay-002
@@ -1481,7 +1487,7 @@ wave:
 
 | Test | Fixture | What it proves |
 | --- | --- | --- |
-| `zone_link_connect.rs` | `fake_relay_server.rs` (in-process async fake relay via injected effect port) | Full child-local ZoneLink bootstrap over fake relay: K2-local Provider/link, compiler-only `k2.parentZone = "local-root"`, no local-root reciprocal row, connect, Noise KK, resource API ping, Watch |
+| `zone_link_connect.rs` | `fake_relay_server.rs` (in-process async fake relay via injected effect port) | Full child-local ZoneLink bootstrap over fake relay: K2-local Provider/link, compiler-only `k2.parentZone = "local-root"`, no local-root reciprocal row, connect, initial IKpsk2 bootstrap consuming the allocator-issued single-use PSK, enrolled follow-on Noise KK, resource API ping, Watch, and a fresh IKpsk2 bootstrap re-enrollment after revocation |
 | `credential_delivery.rs` | Injected fake Credential effect port | Listener credential acquired via KK session; token bytes zeroized; sender credential acquired independently by child Zone instance; no cross-Zone token minting |
 | `reconnect_scenario.rs` | Fake relay server with injected disconnect | Disconnect triggers new relay connect; new Noise KK; Watch resumes from last revision; queued intents replayed |
 | `fake_relay_server.rs` | - | Fake Azure Relay server that accepts listener and sender WebSocket roles; no real Azure service required; controllable inject-disconnect API; passed as constructor argument or injected effect port to test subjects |
