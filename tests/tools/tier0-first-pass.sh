@@ -33,8 +33,8 @@ DASHES=(
 )
 
 # A process marker is a delimited wave (`W3`, `W4-fu`, `W1fu3`), phase
-# (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), contextual finding/revision
-# (`finding H20`, `revision R5`), or parenthesized reviewer finding
+# (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), high finding (`H20`),
+# contextual finding/revision (`finding M2`, `revision R5`), or reviewer finding
 # (`(rust-1)`). Alphanumeric and underscore boundaries are deliberately
 # excluded: this does not match W3C, SHA-like text, v3, H264, W3_ROWS, or
 # w4Fu. The last is part of the functional defaultSwitchReadiness contract.
@@ -43,7 +43,7 @@ DASHES=(
 # Lowercase wave tags are recognized only in path-shaped filenames, such as
 # a lowercase wave prefix followed by a distro name; this avoids treating
 # ordinary prose tokens as process tags.
-PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
+PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])H[0-9]{1,2}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
 PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
 
 log() {
