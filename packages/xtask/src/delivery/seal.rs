@@ -293,7 +293,7 @@ pub(crate) mod tests {
         let (candidate, snapshot) = sealable(&scratch);
 
         let output = seal(&candidate, &snapshot).expect("seal");
-        assert_eq!(output.operation, "seal");
+        assert_eq!(output.operation.as_str(), "seal");
         assert_eq!(
             output.artifact.as_deref(),
             Some(format!("W0/{}/seal.json", snapshot.candidate_id.as_str()).as_str()),
@@ -438,7 +438,7 @@ pub(crate) mod tests {
             &evidence(&snapshot, EvidenceLane::GithubCi, "layer1-check"),
         );
         let output = seal(&candidate, &snapshot).expect("seal after a re-import");
-        assert_eq!(output.operation, "seal");
+        assert_eq!(output.operation.as_str(), "seal");
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         assert_eq!(record.evidence.len(), 2);
     }

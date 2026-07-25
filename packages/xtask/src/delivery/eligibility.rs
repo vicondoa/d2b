@@ -575,7 +575,7 @@ mod tests {
         let scratch = Scratch::new("eligibility-ok");
         let (candidate, seal, _snapshot) = sealed(&scratch);
         let output = evaluate(&candidate, &seal, &target(fixtures::material())).expect("eligible");
-        assert_eq!(output.operation, "merge-eligibility");
+        assert_eq!(output.operation.as_str(), "merge-eligibility");
 
         let record: EligibilityRecord = candidate
             .read_json(MERGE_ELIGIBILITY_FILE)
@@ -812,7 +812,7 @@ mod tests {
         let (candidate, _seal, _snapshot) = sealed(&scratch);
 
         let output = capture(&candidate, target(fixtures::material())).expect("capture");
-        assert_eq!(output.operation, "merge-target");
+        assert_eq!(output.operation.as_str(), "merge-target");
         assert_eq!(
             output.artifact.as_deref(),
             Some(
@@ -841,7 +841,7 @@ mod tests {
 
         let resolved = load_target(&candidate, None).expect("fallback to the captured target");
         let output = evaluate(&candidate, &seal, &resolved).expect("eligible from the fallback");
-        assert_eq!(output.operation, "merge-eligibility");
+        assert_eq!(output.operation.as_str(), "merge-eligibility");
 
         let record: EligibilityRecord = candidate
             .read_json(MERGE_ELIGIBILITY_FILE)

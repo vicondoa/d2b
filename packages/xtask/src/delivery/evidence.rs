@@ -661,7 +661,7 @@ mod tests {
         )
         .expect("import");
 
-        assert_eq!(output.operation, "validate-import");
+        assert_eq!(output.operation.as_str(), "validate-import");
         assert_eq!(
             output.candidate_id.as_deref(),
             Some(snapshot.candidate_id.as_str())
@@ -1045,7 +1045,7 @@ mod tests {
         let (_fixture, _root, candidate, view) = drive_to_sealable("delivery-e2e-seal");
 
         let output = crate::delivery::seal::seal(&candidate, &view).expect("seal the wave");
-        assert_eq!(output.operation, "seal");
+        assert_eq!(output.operation.as_str(), "seal");
 
         let record: crate::delivery::seal::SealRecord = candidate
             .read_json(crate::delivery::storage::SEAL_FILE)

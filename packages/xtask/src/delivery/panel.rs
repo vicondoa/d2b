@@ -842,7 +842,7 @@ pub(crate) mod tests {
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
 
         let output = request(&candidate, &snapshot).expect("panel request");
-        assert_eq!(output.operation, "panel-request");
+        assert_eq!(output.operation.as_str(), "panel-request");
         assert_eq!(
             output.candidate_id.as_deref(),
             Some(snapshot.candidate_id.as_str())
@@ -884,7 +884,7 @@ pub(crate) mod tests {
         let dir = write_record_dir(&scratch, &files);
 
         let output = attest(&candidate, &snapshot, &dir).expect("attest");
-        assert_eq!(output.operation, "panel-attest");
+        assert_eq!(output.operation.as_str(), "panel-attest");
         assert_eq!(candidate.list(PANEL_DIR).expect("panel dir").len(), 10);
 
         let request = stored_request(&candidate, &snapshot).expect("request");

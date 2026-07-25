@@ -1,3 +1,13 @@
+### Changed
+
+- The delivery workflow success JSON is now a pinned, version-coupled contract.
+  Its `operation` and `status` values are typed closed domains rather than free
+  strings, and a golden contract test fixes the complete wire shape (field
+  names, omitted-when-empty optional fields, and both value domains). An
+  incompatible change to the shape or either domain now fails the build unless
+  it travels with a `schema_version` bump, so a consumer that reads this JSON
+  can no longer break silently against a drifted producer.
+
 ### Security
 
 - The heavy-gate semaphore now uses a single canonical per-uid namespace
