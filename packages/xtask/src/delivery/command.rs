@@ -256,10 +256,6 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
         WaveCommand::PanelAttest => super::panel::run_attest(rest),
         WaveCommand::Seal => super::seal::run(rest),
         WaveCommand::MergeEligibility => super::eligibility::run(rest),
-        other => Err(DeliveryError::unimplemented(
-            other.as_str(),
-            other.work_item(),
-        )),
     }
 }
 
