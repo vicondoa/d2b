@@ -195,13 +195,33 @@ spec:
   maxAttached: 1
   outputRingCapacity: 262144
 status:
+  observedGeneration: 1
   phase: Ready
-  detail:
-    kind: CapacityReady
-  activeSessions: 2
-  attachedSessions: 1
-  capacityRemaining: 6
-  attachedCapacityRemaining: 0
+  conditions:
+    - type: Ready
+      status: "True"
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: CapacityReady
+    activeSessions: 2
+    attachedSessions: 1
+    capacityRemaining: 6
+    attachedCapacityRemaining: 0
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Spec schema
@@ -350,14 +370,34 @@ spec:
   outputRingCapacity: 262144
   desiredLifecycle: running
 status:
+  observedGeneration: 1
   phase: Ready
-  detail:
-    kind: ReadyDetached
-  supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
-  supervisorGeneration: 1
-  attachCount: 0
-  outputRingBytes: 8192
-  outputRingEvictedBytes: 0
+  conditions:
+    - type: Ready
+      status: "True"
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: ReadyDetached
+    supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
+    supervisorGeneration: 1
+    attachCount: 0
+    outputRingBytes: 8192
+    outputRingEvictedBytes: 0
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Spec schema
@@ -1648,21 +1688,37 @@ spec:
 status:
   observedGeneration: 1
   phase: Ready
-  detail:
-    kind: IsolationPostureWarning
-    message: host execution target reports non-isolated posture
   conditions:
     - type: Ready
       status: "True"
     - type: IsolationPostureWarning
       status: "True"
-  executionRef: Host/workstation
-  userRef: User/alice
-  activeSessions: 1
-  attachedSessions: 1
-  capacityRemaining: 3
-  attachedCapacityRemaining: 0
-  isolationPosture: none
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: IsolationPostureWarning
+      message: host execution target reports non-isolated posture
+    executionRef: Host/workstation
+    userRef: User/alice
+    activeSessions: 1
+    attachedSessions: 1
+    capacityRemaining: 3
+    attachedCapacityRemaining: 0
+    isolationPosture: none
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -1684,8 +1740,6 @@ spec:
 status:
   observedGeneration: 3
   phase: Ready
-  detail:
-    kind: ReadyAttached
   conditions:
     - type: Ready
       status: "True"
@@ -1695,11 +1749,29 @@ status:
       status: "True"
     - type: Attached
       status: "True"
-  supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
-  supervisorGeneration: 7
-  attachCount: 1
-  outputRingBytes: 65536
-  outputRingEvictedBytes: 8192
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: ReadyAttached
+    supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
+    supervisorGeneration: 7
+    attachCount: 1
+    outputRingBytes: 65536
+    outputRingEvictedBytes: 8192
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 3
+    targetGeneration: 3
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Appendix B: controller and supervisor interaction sequence

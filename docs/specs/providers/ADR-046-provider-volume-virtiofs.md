@@ -1162,7 +1162,28 @@ is required in Nix.
       }
     }
   },
-  "status": {}
+  "status": {
+    "observedGeneration": 0,
+    "phase": "Pending",
+    "conditions": [],
+    "lastReconciledAt": null,
+    "startedAt": null,
+    "completedAt": null,
+    "outcome": null,
+    "resource": {},
+    "update": {
+      "state": "Unknown",
+      "reasons": [],
+      "observedGeneration": 0,
+      "targetGeneration": 1,
+      "disruption": "None",
+      "preserveState": true,
+      "operationId": null,
+      "lastAssessedAt": null,
+      "owned": { "count": 0, "refs": [] },
+      "dependencies": { "count": 0, "refs": [] }
+    }
+  }
 }
 ```
 
