@@ -25,10 +25,15 @@
 //!   wrapper never releases the slot early.
 //! * The wrapper owns the child's process group: it starts the child as a
 //!   process-group leader, forwards terminating signals to the whole group,
-//!   escalates to `SIGKILL` after [`TERMINATION_GRACE`], reaps the child, and
-//!   unconditionally sweeps the group with `SIGKILL` once the leader exits. A
-//!   `Ctrl-C`, an external timeout, or a signal that races the leader's exit
-//!   therefore cannot orphan a descendant that still holds the slot.
+//!   escalates to `SIGKILL` after [`TERMINATION_GRACE`], observes the leader's
+//!   exit *without reaping it*, unconditionally sweeps the group with
+//!   `SIGKILL` while the leader is still an unreaped zombie, and only then
+//!   reaps the leader. Sweeping before reaping keeps the leader's pid and pgid
+//!   pinned by the zombie, so the numeric pgid cannot be recycled onto an
+//!   unrelated process group between the exit and the `SIGKILL`. A `Ctrl-C`,
+//!   an external timeout, or a signal that races the leader's exit therefore
+//!   cannot orphan a descendant that still holds the slot, nor can the sweep
+//!   ever reach a stranger's group.
 //!
 //! The wrapper receives those signals through a `signalfd`, which requires
 //! them to be blocked. A blocked signal mask survives `execve`, and a wrapped
@@ -58,7 +63,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::thread::sleep;
@@ -70,6 +75,7 @@ use nix::libc;
 use nix::sys::signal::{SigSet, Signal, killpg};
 use nix::sys::signalfd::{SfdFlags, SignalFd};
 use nix::sys::stat::fstat;
+use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 use nix::unistd::{Pid, getuid};
 
 /// Number of concurrent heavy lanes allowed per uid.
@@ -880,6 +886,7 @@ impl Request {
 }
 
 const USAGE: &str = "usage: cargo xtask heavy-gate -- <command> [args...]\n\
+     usage: cargo xtask heavy-gate verify-slot\n\
      \n\
      Runs <command> under the sole two-slot per-UID heavy-lane semaphore.\n\
      Every Layer-2, host-integration, hardware, live, and perf-heavy command\n\
@@ -889,9 +896,16 @@ const USAGE: &str = "usage: cargo xtask heavy-gate -- <command> [args...]\n\
      is exported as D2B_HEAVY_GATE_SLOT_FD) and runs in its own process\n\
      group, which the wrapper signals and reaps.\n\
      \n\
+     `verify-slot` takes no command: it exits 0 only when this process\n\
+     genuinely holds a slot (proved via the inherited descriptor's inode,\n\
+     ownership, and an atomic F_OFD_SETLK), and exits 3 otherwise. Shell and\n\
+     Make guards use it so a bare, forgeable D2B_HEAVY_GATE cannot bypass the\n\
+     semaphore.\n\
+     \n\
      exit codes: 64 usage, 69 open file description locks unsupported,\n\
      71 cannot start the command, 72 gate directory unusable,\n\
-     75 no slot within the wait ceiling. Any other code is the command's own.";
+     75 no slot within the wait ceiling, 3 verify-slot found no held slot.\n\
+     Any other code is the command's own.";
 
 /// Entry point for `cargo xtask heavy-gate`.
 pub fn run(args: &[String]) -> ExitCode {
@@ -948,12 +962,60 @@ fn classify_nesting(dir: &GateDir) -> NestingMarker {
     }
 }
 
+/// Marker sub-operation selecting the slot-verification check.
+///
+/// Unlike the wrapped-command form, this takes no command: it inspects the
+/// inherited environment, confirms the caller genuinely holds a heavy-gate
+/// slot (matching inode, ownership, and an atomic `F_OFD_SETLK` ownership
+/// proof through the inherited descriptor), and reports the verdict purely
+/// through its exit status. Shell and Make guards use it so they cannot be
+/// fooled by a bare, forgeable `D2B_HEAVY_GATE` marker.
+pub const VERIFY_SLOT_OP: &str = "verify-slot";
+
+/// Exit code when [`VERIFY_SLOT_OP`] confirms a genuinely held slot.
+pub const VERIFY_SLOT_HELD: u8 = 0;
+
+/// Exit code when [`VERIFY_SLOT_OP`] finds no genuinely held slot. Distinct
+/// from every [`GateErrorKind`] code so a caller can tell "not in a slot" (an
+/// expected branch that should acquire) apart from a gate malfunction.
+pub const VERIFY_SLOT_UNHELD: u8 = 3;
+
+/// Answer "does this process genuinely hold a heavy-gate slot?" for the shell
+/// and Make guards.
+///
+/// Returns [`VERIFY_SLOT_HELD`] only when the inherited [`GATE_ACTIVE_ENV`]
+/// marker is backed by a descriptor that passes the same inode, ownership, and
+/// atomic `F_OFD_SETLK` ownership proof the nesting check uses. A top-level
+/// invocation, a forged or stale marker, or a marker naming an unlocked or
+/// foreign descriptor all yield [`VERIFY_SLOT_UNHELD`], so a guard that merely
+/// exported `D2B_HEAVY_GATE` is told to acquire a real slot instead of running
+/// heavy work. Resolving the gate directory itself failing is a real
+/// environment error and propagates as such.
+fn verify_slot() -> Result<u8> {
+    let dir = GateDir::resolve()?;
+    match classify_nesting(&dir) {
+        NestingMarker::VerifiedSlot => Ok(VERIFY_SLOT_HELD),
+        _ => Ok(VERIFY_SLOT_UNHELD),
+    }
+}
+
 fn execute(args: &[String]) -> Result<u8> {
     // The internal re-exec shim resolves and verifies its inherited slot; a
     // forged marker cannot authorize it into running unsynchronized.
     if args.first().is_some_and(|first| first == EXEC_SHIM_FLAG) {
         let dir = GateDir::resolve()?;
         return exec_wrapped_command(&args[1..], classify_nesting(&dir));
+    }
+
+    // The slot-verification sub-operation reuses the atomic ownership proof
+    // and reports its verdict through the exit status alone.
+    if args.first().is_some_and(|first| first == VERIFY_SLOT_OP) {
+        if args.len() != 1 {
+            return Err(GateError::usage(format!(
+                "{USAGE}\n\n`{VERIFY_SLOT_OP}` takes no arguments"
+            )));
+        }
+        return verify_slot();
     }
 
     // Parse before touching the filesystem so `--help` works even where the
@@ -1133,19 +1195,15 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
     drop(handoff);
 
     let group = Pid::from_raw(child.id() as i32);
+    let leader = group;
 
     let outcome = supervise_loop(
-        || match child.try_wait() {
-            Ok(Some(status)) => Ok(Some(ChildExit {
-                code: status.code(),
-                signal: status.signal(),
-            })),
-            Ok(None) => Ok(None),
-            Err(error) => Err(GateError::of(
-                GateErrorKind::Spawn,
-                format!("cannot reap the heavy-lane child: {error}"),
-            )),
-        },
+        // Observe the leader's exit *without reaping it*: `WNOWAIT` leaves the
+        // zombie in place so its pid and pgid stay reserved until the sweep
+        // has run. Reaping here (as `try_wait` would) frees the pgid and opens
+        // a window in which the kernel could recycle it onto an unrelated
+        // group before the unconditional `SIGKILL` sweep fires.
+        || observe_exit(leader),
         || relay.drain(),
         |signal| {
             eprintln!("heavy-gate: forwarding {signal} to the heavy lane process group");
@@ -1153,6 +1211,12 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
         },
         || {
             let _ = killpg(group, Signal::SIGKILL);
+        },
+        // Reap the leader only after the final sweep has returned, so the
+        // zombie pinned the pgid across the whole teardown. `Child::wait`
+        // reaps the zombie `observe_exit` deliberately left behind.
+        || {
+            let _ = child.wait();
         },
         || sleep(POLL_INTERVAL),
         Instant::now,
@@ -1163,6 +1227,32 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
         outcome.signal,
         outcome.interrupt.map(|signal| signal as i32),
     ))
+}
+
+/// Observe the process leader's terminal disposition without reaping it.
+///
+/// `waitid` with `WEXITED | WNOHANG | WNOWAIT` reports a terminated child but
+/// leaves it as an unreaped zombie, which keeps its pid and process-group id
+/// reserved. That reservation is what lets the caller sweep the group with
+/// `SIGKILL` before reaping without risking the pgid being recycled onto an
+/// unrelated group in between. `WNOHANG` keeps the poll nonblocking.
+fn observe_exit(leader: Pid) -> Result<Option<ChildExit>> {
+    let flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG | WaitPidFlag::WNOWAIT;
+    match waitid(Id::Pid(leader), flags) {
+        Ok(WaitStatus::Exited(_, code)) => Ok(Some(ChildExit {
+            code: Some(code),
+            signal: None,
+        })),
+        Ok(WaitStatus::Signaled(_, signal, _)) => Ok(Some(ChildExit {
+            code: None,
+            signal: Some(signal as i32),
+        })),
+        Ok(_) => Ok(None),
+        Err(errno) => Err(GateError::of(
+            GateErrorKind::Spawn,
+            format!("cannot observe the heavy-lane child: {errno}"),
+        )),
+    }
 }
 
 /// The child's terminal disposition, abstracted so the supervision loop can be
@@ -1195,11 +1285,16 @@ struct SuperviseOutcome {
 ///   leader exits, so no descendant can outlive the wrapper still holding the
 ///   inherited slot descriptor - even if a signal is pending that will kill
 ///   the wrapper the moment the mask is restored.
-fn supervise_loop<Poll, Drain, Forward, Sweep, Nap, Now>(
+/// * Reap the leader only *after* that final sweep. The leader is observed as
+///   an unreaped zombie, so its pid and pgid stay reserved across the sweep; a
+///   pgid recycled onto an unrelated group between the exit and the `SIGKILL`
+///   is therefore impossible.
+fn supervise_loop<Poll, Drain, Forward, Sweep, Reap, Nap, Now>(
     mut poll_exit: Poll,
     mut drain: Drain,
     mut forward: Forward,
     mut sweep: Sweep,
+    mut reap: Reap,
     mut nap: Nap,
     mut now: Now,
 ) -> Result<SuperviseOutcome>
@@ -1208,6 +1303,7 @@ where
     Drain: FnMut() -> Vec<Signal>,
     Forward: FnMut(Signal),
     Sweep: FnMut(),
+    Reap: FnMut(),
     Nap: FnMut(),
     Now: FnMut() -> Instant,
 {
@@ -1255,7 +1351,7 @@ where
     }
 
     // Unconditionally sweep the whole process group with SIGKILL before the
-    // caller restores the forwarded-signal mask. The round-1 fix swept only
+    // caller restores the forwarded-signal mask. An earlier form swept only
     // when an interrupt had been *observed*, which left a gap: a signal
     // arriving after this final drain but before a conditional sweep stays
     // pending, and `SignalRelay::drop` then unblocks it and kills the wrapper
@@ -1263,8 +1359,14 @@ where
     // orphaning the slot. Sweeping unconditionally guarantees the process
     // group is gone before the mask is restored, so a late pending signal can
     // only terminate an already-childless wrapper, which releases the slot as
-    // it exits.
+    // it exits. The sweep runs while the leader is still an unreaped zombie so
+    // its pid and pgid cannot be recycled onto an unrelated group; the caller
+    // reaps the leader only after the sweep returns.
     sweep();
+
+    // Reap the leader now that the group is gone. Doing this after the sweep
+    // keeps the leader's zombie pinning the pgid for the whole teardown.
+    reap();
 
     Ok(SuperviseOutcome {
         code: exit.code,
@@ -2046,7 +2148,7 @@ mod tests {
         // A forged marker supplies an independent O_RDWR open on the very same
         // slot inode - correct device and inode, current uid, regular file -
         // but from a *separate* open file description that does not hold the
-        // lock. The round-1 GETLK-on-a-fresh-handle form accepted this because
+        // lock. An earlier GETLK-on-a-fresh-handle form accepted this because
         // *some* description (the guard's) held the slot; the atomic
         // SETLK-through-the-inherited-descriptor form rejects it because the
         // claim conflicts with the guard's lock.
@@ -2106,6 +2208,213 @@ mod tests {
         drop(guard);
     }
 
+    // ---- verify-slot through the real binary (the shell-guard path) ----
+    //
+    // These drive the actual `xtask heavy-gate verify-slot` binary the shell
+    // and Make guards call, not the internal Rust helper, so they prove the
+    // guard cannot be fooled by a bare `D2B_HEAVY_GATE` export. A slot
+    // descriptor is handed to the child exactly as the gate does it: an open
+    // handle with close-on-exec cleared so it survives `execve` at the same
+    // fd number the environment advertises.
+
+    /// Path to the built `xtask` binary next to this unit-test binary
+    /// (`<target>/debug/xtask`), or `None` when only the library tests were
+    /// built so the binary is absent.
+    fn xtask_binary() -> Option<PathBuf> {
+        let test_exe = std::env::current_exe().ok()?;
+        let candidate = test_exe.parent()?.parent()?.join("xtask");
+        candidate.is_file().then_some(candidate)
+    }
+
+    /// Clear close-on-exec so a handle is inherited by the child at the same
+    /// fd number, mirroring [`SlotGuard::duplicate_for_child`].
+    fn clear_cloexec(file: &File) {
+        fcntl(
+            file.as_raw_fd(),
+            FcntlArg::F_SETFD(FdFlag::from_bits_truncate(0)),
+        )
+        .expect("close-on-exec is clearable");
+    }
+
+    /// Run `xtask heavy-gate verify-slot` with a controlled environment and
+    /// return its exit code. `slot` is `Some((index, fd))` to advertise a slot
+    /// marker, or `None` to export only the bare, forgeable `D2B_HEAVY_GATE`.
+    fn run_verify_slot(
+        xtask: &Path,
+        root: &Path,
+        marker: bool,
+        slot: Option<(usize, RawFd)>,
+    ) -> i32 {
+        let mut command = Command::new(xtask);
+        command
+            .args(["heavy-gate", VERIFY_SLOT_OP])
+            .env("XDG_RUNTIME_DIR", root)
+            .env_remove("TMPDIR")
+            .env_remove(GATE_ACTIVE_ENV)
+            .env_remove(SLOT_INDEX_ENV)
+            .env_remove(SLOT_FD_ENV)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if marker {
+            command.env(GATE_ACTIVE_ENV, "1");
+        }
+        if let Some((index, fd)) = slot {
+            command.env(SLOT_INDEX_ENV, index.to_string());
+            command.env(SLOT_FD_ENV, fd.to_string());
+        }
+        command
+            .status()
+            .expect("the verify-slot binary runs")
+            .code()
+            .expect("verify-slot exits normally")
+    }
+
+    #[test]
+    fn verify_slot_rejects_a_bare_marker_through_the_binary() {
+        let _serial = exclusive();
+        let Some(xtask) = xtask_binary() else {
+            eprintln!("skipping: xtask binary not built next to the test binary");
+            return;
+        };
+        let scratch = Scratch::new("verify-bare");
+
+        // Exactly the headline bypass: export the forgeable marker with no
+        // real slot descriptor. verify-slot must report no held slot so the
+        // shell guard acquires a real slot instead of running heavy work.
+        let code = run_verify_slot(&xtask, scratch.path(), true, None);
+        assert_eq!(
+            code, VERIFY_SLOT_UNHELD as i32,
+            "a bare D2B_HEAVY_GATE export is not a held slot"
+        );
+    }
+
+    #[test]
+    fn verify_slot_rejects_a_forged_foreign_descriptor_through_the_binary() {
+        let _serial = exclusive();
+        let Some(xtask) = xtask_binary() else {
+            return;
+        };
+        let scratch = Scratch::new("verify-forged");
+        let _dir = gate_dir_under(scratch.path());
+
+        // A descriptor on a file the caller controls that is NOT the canonical
+        // slot inode. Correct uid, regular file, but the inode will not match
+        // slot-0, so verify-slot rejects it.
+        let bogus_path = scratch.path().join("not-a-slot");
+        let bogus = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&bogus_path)
+            .expect("the bogus file opens");
+        clear_cloexec(&bogus);
+
+        let code = run_verify_slot(&xtask, scratch.path(), true, Some((0, bogus.as_raw_fd())));
+        assert_eq!(
+            code, VERIFY_SLOT_UNHELD as i32,
+            "a descriptor on a foreign file is not a held slot"
+        );
+        drop(bogus);
+    }
+
+    #[test]
+    fn verify_slot_rejects_a_closed_descriptor_through_the_binary() {
+        let _serial = exclusive();
+        let Some(xtask) = xtask_binary() else {
+            return;
+        };
+        let scratch = Scratch::new("verify-closed");
+        let dir = gate_dir_under(scratch.path());
+
+        // Capture a real slot fd number, then close it. A marker naming a
+        // now-closed descriptor fails fstat in the child.
+        let slot = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(dir.slot_anchor(0))
+            .expect("slot opens");
+        let fd = slot.as_raw_fd();
+        drop(slot);
+
+        let code = run_verify_slot(&xtask, scratch.path(), true, Some((0, fd)));
+        assert_eq!(
+            code, VERIFY_SLOT_UNHELD as i32,
+            "a closed descriptor is not a held slot"
+        );
+    }
+
+    #[test]
+    fn verify_slot_rejects_a_separate_open_while_another_lane_holds_it() {
+        let _serial = exclusive();
+        let Some(xtask) = xtask_binary() else {
+            return;
+        };
+        let scratch = Scratch::new("verify-contended");
+        let dir = gate_dir_under(scratch.path());
+
+        // A genuine lane holds slot 0 through one open file description.
+        let guard = dir.try_acquire(0).unwrap().expect("slot 0 is free");
+
+        // The caller presents a *separate* open on the same slot inode that
+        // does not hold the lock. The atomic ownership proof through that
+        // descriptor conflicts with the guard's lock, so verify-slot rejects
+        // it: a forged marker cannot smuggle in a third lane.
+        let separate = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(dir.slot_anchor(0))
+            .expect("separate open succeeds");
+        clear_cloexec(&separate);
+
+        let code = run_verify_slot(
+            &xtask,
+            scratch.path(),
+            true,
+            Some((0, separate.as_raw_fd())),
+        );
+        assert_eq!(
+            code, VERIFY_SLOT_UNHELD as i32,
+            "a separate open is rejected while another description holds the slot"
+        );
+        drop(separate);
+        drop(guard);
+    }
+
+    #[test]
+    fn verify_slot_accepts_a_genuinely_held_slot_through_the_binary() {
+        let _serial = exclusive();
+        let Some(xtask) = xtask_binary() else {
+            return;
+        };
+        let scratch = Scratch::new("verify-held");
+        let dir = gate_dir_under(scratch.path());
+
+        // Hold the slot the way the wrapper does, hand the child an inherited
+        // duplicate on the *same* locked description. The atomic proof through
+        // that descriptor is idempotent, so verify-slot confirms a held slot.
+        let guard = dir.try_acquire(0).unwrap().expect("slot 0 is free");
+        let child_handle = guard.duplicate_for_child().expect("duplicate succeeds");
+
+        let code = run_verify_slot(
+            &xtask,
+            scratch.path(),
+            true,
+            Some((0, child_handle.as_raw_fd())),
+        );
+        assert_eq!(
+            code, VERIFY_SLOT_HELD as i32,
+            "a descriptor on the genuinely locked slot is a held slot"
+        );
+        drop(child_handle);
+        drop(guard);
+    }
+
     // ---- supervision drains signals around the leader's exit -----------
 
     #[test]
@@ -2116,6 +2425,7 @@ mod tests {
         let drain_calls = Cell::new(0u32);
         let forwarded = Cell::new(0u32);
         let sweeps = Cell::new(0u32);
+        let reap_after_sweep = Cell::new(false);
 
         let outcome = supervise_loop(
             || {
@@ -2144,11 +2454,16 @@ mod tests {
             },
             |_signal| forwarded.set(forwarded.get() + 1),
             || sweeps.set(sweeps.get() + 1),
+            || reap_after_sweep.set(sweeps.get() == 1),
             || {},
             Instant::now,
         )
         .expect("the loop completes");
 
+        assert!(
+            reap_after_sweep.get(),
+            "the leader is reaped only after the group is swept, so its zombie pins the pgid"
+        );
         assert_eq!(
             outcome.interrupt,
             Some(Signal::SIGTERM),
@@ -2207,6 +2522,7 @@ mod tests {
             |_signal| forwarded.set(forwarded.get() + 1),
             || sweeps.set(sweeps.get() + 1),
             || {},
+            || {},
             Instant::now,
         )
         .expect("the loop completes");
@@ -2229,6 +2545,8 @@ mod tests {
         use std::cell::Cell;
 
         let sweeps = Cell::new(0u32);
+        let reaps = Cell::new(0u32);
+        let reap_after_sweep = Cell::new(false);
         let outcome = supervise_loop(
             || {
                 Ok(Some(ChildExit {
@@ -2239,6 +2557,10 @@ mod tests {
             Vec::new,
             |_signal| panic!("no signal should be forwarded on a clean exit"),
             || sweeps.set(sweeps.get() + 1),
+            || {
+                reaps.set(reaps.get() + 1);
+                reap_after_sweep.set(sweeps.get() == 1);
+            },
             || {},
             Instant::now,
         )
@@ -2246,6 +2568,12 @@ mod tests {
 
         assert_eq!(outcome.interrupt, None);
         assert_eq!(outcome.code, Some(3));
+        assert_eq!(reaps.get(), 1, "the leader is reaped exactly once");
+        assert!(
+            reap_after_sweep.get(),
+            "the leader is reaped after the sweep, so the zombie pins its pid and pgid across \
+             teardown and the pgid cannot be recycled onto an unrelated group"
+        );
         assert_eq!(
             sweeps.get(),
             1,
@@ -2266,7 +2594,7 @@ mod tests {
                     continue;
                 }
                 if let Some((lhs, _)) = line.split_once(':')
-                    && lhs.trim() == target
+                    && lhs.split_whitespace().any(|t| t == target)
                 {
                     in_recipe = true;
                 }
@@ -2282,12 +2610,91 @@ mod tests {
         if in_recipe { Some(recipe) } else { None }
     }
 
-    /// Inventory guard for the sole-use invariant: every live, hardware, and
-    /// performance entrypoint must route through the heavy-gate semaphore, so a
-    /// future lane cannot be added that silently bypasses it. This walks the
-    /// on-disk entrypoints instead of a hand-maintained list, so a new live
-    /// script, a new aggregating runner, or a new bare heavy make target fails
-    /// this test until it is gated.
+    /// True when `line` opens a Makefile rule (`target[s]: [prereqs]`) rather
+    /// than a variable assignment (`X := ...`, `X = ...`, `X ?= ...`,
+    /// `X += ...`), a recipe body line, a comment, or a blank line.
+    fn makefile_rule_parts(line: &str) -> Option<(&str, &str)> {
+        if line.starts_with('\t') || line.starts_with('#') || line.trim().is_empty() {
+            return None;
+        }
+        let (lhs, rhs) = line.split_once(':')?;
+        // `:=` immediate assignment: the ':' we split on is the assignment
+        // operator, so the right side starts with '='.
+        if rhs.starts_with('=') {
+            return None;
+        }
+        // `=`, `?=`, `+=` assignments keep the operator on the left of any ':'.
+        if lhs.contains('=') {
+            return None;
+        }
+        Some((lhs, rhs))
+    }
+
+    /// Every rule target name declared in the Makefile.
+    fn makefile_targets(makefile: &str) -> Vec<String> {
+        let mut targets = Vec::new();
+        for line in makefile.lines() {
+            if let Some((lhs, _)) = makefile_rule_parts(line) {
+                for tok in lhs.split_whitespace() {
+                    targets.push(tok.to_string());
+                }
+            }
+        }
+        targets
+    }
+
+    /// The prerequisite tokens declared for `target`, or `None` when the
+    /// Makefile has no rule for it.
+    fn makefile_prereqs(makefile: &str, target: &str) -> Option<Vec<String>> {
+        for line in makefile.lines() {
+            if let Some((lhs, rhs)) = makefile_rule_parts(line)
+                && lhs.split_whitespace().any(|t| t == target)
+            {
+                return Some(rhs.split_whitespace().map(str::to_string).collect());
+            }
+        }
+        None
+    }
+
+    /// Recursively collect every heavy-entrypoint candidate under `dir`: a
+    /// shell script (`.sh`) or any executable regular file. A data file that is
+    /// neither is ignored, so a non-`.sh` executable entrypoint cannot slip in
+    /// unguarded. Returns an empty vec when `dir` is absent (optional lanes).
+    fn collect_heavy_entrypoints(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(dir) else {
+            return out;
+        };
+        for entry in entries {
+            let path = entry.expect("a readable dir entry").path();
+            let meta = fs::symlink_metadata(&path)
+                .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
+            if meta.file_type().is_dir() {
+                out.extend(collect_heavy_entrypoints(&path));
+                continue;
+            }
+            if !meta.file_type().is_file() {
+                continue;
+            }
+            let is_sh = path.extension() == Some(OsStr::new("sh"));
+            let is_exec = meta.permissions().mode() & 0o111 != 0;
+            if is_sh || is_exec {
+                out.push(path);
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Inventory guard for the sole-use invariant: every live, hardware,
+    /// benchmark, cloud, and performance entrypoint must route through the
+    /// heavy-gate semaphore, so a future lane cannot be added that silently
+    /// bypasses it. This is a CLOSED-WORLD guard - it walks the on-disk
+    /// entrypoints recursively and parses the Makefile for every heavy lane
+    /// rather than checking a hand-maintained list. Adding a new heavy
+    /// entrypoint (a nested or non-`.sh` script, a new aggregating runner, a
+    /// new `heavy-lane-*` make target, or a new public delegation) fails this
+    /// test until it is gated.
     #[test]
     fn every_live_and_heavy_entrypoint_routes_through_the_gate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2295,61 +2702,150 @@ mod tests {
             .and_then(Path::parent)
             .expect("packages/xtask resolves to a repo root");
 
-        // 1. Every live-lane script must self-guard: invoked directly, it must
-        //    re-exec through `xtask heavy-gate` exactly once.
-        let live_dir = root.join("tests/integration/live");
-        let mut live_scripts: Vec<PathBuf> = fs::read_dir(&live_dir)
-            .expect("the live-lane directory is readable")
-            .map(|entry| entry.expect("a readable dir entry").path())
-            .filter(|path| path.extension() == Some(OsStr::new("sh")))
-            .collect();
-        live_scripts.sort();
+        // The shared self-guard the shell entrypoints call. Its presence proves
+        // the script asks the wrapper to verify a genuinely-held slot rather
+        // than trusting the mere presence of the D2B_HEAVY_GATE variable.
+        let self_guard_token = "d2b_heavy_gate_reexec";
+
+        // 1. Filesystem entrypoints. Walk every heavy-lane directory
+        //    recursively and require an executable self-guard on each script.
+        //    performance-budgets.sh lives outside those directories, so it is
+        //    named explicitly. Optional directories (benchmark, cloud) are
+        //    walked when present and simply contribute nothing when absent.
+        let mut entrypoints: Vec<PathBuf> = Vec::new();
+        for dir in [
+            "tests/integration/live",
+            "tests/host-integration/hardware",
+            "tests/benchmark",
+            "tests/integration/cloud",
+        ] {
+            entrypoints.extend(collect_heavy_entrypoints(&root.join(dir)));
+        }
+        let perf = root.join("tests/unit/gates/performance-budgets.sh");
         assert!(
-            !live_scripts.is_empty(),
-            "expected at least one live-lane script under {}",
-            live_dir.display()
+            perf.is_file(),
+            "expected the performance-budgets entrypoint at {}",
+            perf.display()
         );
-        for script in &live_scripts {
+        entrypoints.push(perf.clone());
+        entrypoints.sort();
+        entrypoints.dedup();
+
+        let live_count = entrypoints
+            .iter()
+            .filter(|p| p.starts_with(root.join("tests/integration/live")))
+            .count();
+        assert!(
+            live_count >= 7,
+            "expected the known live-lane scripts to be discovered; found {live_count}"
+        );
+
+        for script in &entrypoints {
+            let meta = fs::symlink_metadata(script)
+                .unwrap_or_else(|e| panic!("cannot stat {}: {e}", script.display()));
+            assert!(
+                meta.permissions().mode() & 0o111 != 0,
+                "heavy entrypoint {} is not executable; a non-executable entrypoint invites a \
+                 caller to run it with a bare `bash <script>` that skips any wrapper",
+                script.display()
+            );
             let body = fs::read_to_string(script)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", script.display()));
             assert!(
-                body.contains("heavy-gate --") && body.contains("D2B_HEAVY_GATE"),
-                "live-lane script {} does not re-exec through the heavy-gate semaphore; add the \
-                 self-guard block so a direct invocation cannot bypass the sole-use invariant",
+                body.contains(self_guard_token),
+                "heavy entrypoint {} does not call `{self_guard_token}`; add the shared \
+                 self-guard so a direct invocation verifies a genuinely-held slot and re-execs \
+                 through the gate instead of running heavy work unguarded",
                 script.display()
             );
         }
 
         // 2. The aggregating runner and the layer dispatcher (which drives the
-        //    hardware and perf lanes) must also self-guard.
+        //    hardware and perf lanes) must also route through the same
+        //    verifying self-guard.
         for relative in ["tests/runner.sh", "tests/tools/run-layer.sh"] {
             let path = root.join(relative);
             let body = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
             assert!(
-                body.contains("heavy-gate --") && body.contains("D2B_HEAVY_GATE"),
-                "{relative} does not re-exec through the heavy-gate semaphore"
+                body.contains(self_guard_token),
+                "{relative} does not route through the verifying heavy-gate self-guard"
             );
         }
 
-        // 3. Every public heavy make target must invoke $(HEAVY_GATE); its raw
-        //    work lives behind a heavy-lane-* guarded target.
+        // 3. The shared self-guard itself must verify a held slot, not trust
+        //    the bare marker. This is what closed the relocated bypass.
+        let helper = root.join("tests/tools/heavy-gate-reexec.sh");
+        let helper_body = fs::read_to_string(&helper)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", helper.display()));
+        assert!(
+            helper_body.contains("heavy-gate verify-slot"),
+            "the shared self-guard must call `heavy-gate verify-slot`; without the ownership \
+             proof it would fall back to trusting the forgeable D2B_HEAVY_GATE marker"
+        );
+
+        // 4. Makefile closed-world. Enumerate every `heavy-lane-*` target from
+        //    the Makefile (not a hardcoded list). The guard target itself is
+        //    the gate; every other heavy lane must (a) depend on it and (b) be
+        //    reachable only through a public `$(HEAVY_GATE) $(MAKE) <lane>`
+        //    delegation. A new raw heavy lane therefore fails this test until
+        //    it is both guarded and delegated.
         let makefile =
             fs::read_to_string(root.join("Makefile")).expect("the repo Makefile is readable");
-        for target in [
-            "test-integration",
-            "test-host-integration",
-            "test-hardware",
-            "perf",
-            "pre-tag",
-            "smoke-lite",
-        ] {
-            let recipe = makefile_recipe(&makefile, target)
-                .unwrap_or_else(|| panic!("the Makefile has no recipe for `{target}`"));
+
+        let mut heavy_lanes: Vec<String> = makefile_targets(&makefile)
+            .into_iter()
+            .filter(|t| t.starts_with("heavy-lane-") && t != "heavy-lane-guard")
+            .collect();
+        heavy_lanes.sort();
+        heavy_lanes.dedup();
+        assert!(
+            !heavy_lanes.is_empty(),
+            "expected at least one heavy-lane-* work target in the Makefile"
+        );
+
+        for lane in &heavy_lanes {
+            let prereqs = makefile_prereqs(&makefile, lane)
+                .unwrap_or_else(|| panic!("the Makefile has no rule for `{lane}`"));
             assert!(
-                recipe.contains("$(HEAVY_GATE)"),
-                "public heavy target `{target}` does not route through $(HEAVY_GATE):\n{recipe}"
+                prereqs.iter().any(|p| p == "heavy-lane-guard"),
+                "heavy lane `{lane}` does not list `heavy-lane-guard` as a prerequisite, so its \
+                 raw work could run without the slot-ownership check"
+            );
+            let delegation = format!("$(HEAVY_GATE) $(MAKE) {lane}");
+            assert!(
+                makefile.contains(&delegation),
+                "heavy lane `{lane}` has no public `{delegation}` delegation; a raw lane with no \
+                 gate-acquiring public entrypoint can only be run by bypassing the semaphore"
             );
         }
+
+        // 5. The guard target's recipe must enforce ownership by calling
+        //    `heavy-gate verify-slot` (the exclusive gating recipe), not by
+        //    testing the bare D2B_HEAVY_GATE variable.
+        let guard_recipe = makefile_recipe(&makefile, "heavy-lane-guard")
+            .expect("the Makefile defines heavy-lane-guard");
+        assert!(
+            guard_recipe.contains("heavy-gate verify-slot"),
+            "heavy-lane-guard must verify a genuinely-held slot via `heavy-gate verify-slot`; \
+             testing D2B_HEAVY_GATE alone is the forgeable-marker bypass:\n{guard_recipe}"
+        );
+
+        // 6. static.sh routing. static.sh invokes performance-budgets.sh
+        //    directly; that is safe only because the perf script self-guards
+        //    (asserted in step 1). Require the invocation to be present so the
+        //    routing stays wired, and require perf to be in the guarded set.
+        let static_sh =
+            fs::read_to_string(root.join("tests/static.sh")).expect("tests/static.sh is readable");
+        assert!(
+            static_sh.contains("performance-budgets.sh"),
+            "tests/static.sh no longer references performance-budgets.sh; if the perf canary moved \
+             its new entrypoint must remain in this inventory guard"
+        );
+        assert!(
+            entrypoints.contains(&perf),
+            "the performance-budgets entrypoint must be in the guarded set so static.sh's direct \
+             invocation cannot bypass the semaphore"
+        );
     }
 }

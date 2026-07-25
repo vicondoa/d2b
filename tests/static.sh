@@ -1281,6 +1281,11 @@ d2b_static_parallel_wait_all
 d2b_static_gate_end "W3 host-prepare gates"
 
 d2b_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"
+# performance-budgets.sh self-gates: it SKIPs cheaply unless D2B_PERF_STABLE=1,
+# and only when it would do real timing work does it route itself through the
+# sole-use heavy-gate semaphore (see its ADR 0046 self-guard). So invoking it
+# directly here is safe - the cheap SKIP path never acquires a slot, and a real
+# D2B_PERF_STABLE=1 run acquires one before any heavy work.
 if [ -x "$ROOT/tests/unit/gates/performance-budgets.sh" ]; then bash "$ROOT/tests/unit/gates/performance-budgets.sh" || fail "performance-budgets"; fi
 d2b_static_gate_end "L1c and performance canaries"
 

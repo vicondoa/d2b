@@ -229,12 +229,13 @@ heavy-lane-perf: heavy-lane-guard
 	bash tests/tools/run-layer.sh perf
 
 ## heavy-lane-guard - fail closed when a heavy-lane internal target is invoked
-## outside the gate. The gate exports D2B_HEAVY_GATE across the re-exec, so a
-## missing marker means someone ran the raw target directly, which would
-## bypass the sole-use semaphore. This is a usability guard; the real
-## synchronisation is the gate's verified open file description lock.
-heavy-lane-guard:
-	@if [ -z "$${D2B_HEAVY_GATE:-}" ]; then \
+## outside the gate. It does not trust the mere presence of D2B_HEAVY_GATE
+## (any process can export that); instead it asks the wrapper to verify that
+## this process genuinely holds a slot via its open file description lock.
+## A missing slot means someone ran the raw target directly, which would
+## bypass the sole-use semaphore.
+heavy-lane-guard: heavy-gate-build
+	@if ! $(HEAVY_GATE_BIN) heavy-gate verify-slot; then \
 	  echo "heavy lane invoked outside the heavy-gate semaphore." >&2; \
 	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot," >&2; \
 	  echo "or 'cargo xtask heavy-gate -- make <lane>'; do not run the internal target directly." >&2; \

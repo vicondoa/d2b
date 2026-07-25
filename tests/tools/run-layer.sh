@@ -37,19 +37,16 @@ fi
 
 # --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
 # test-integration, test-hardware, and perf dispatch the destructive live and
-# hardware lanes, so they must never bypass the heavy-gate semaphore. When one
-# of those targets is requested outside the gate, re-exec through it exactly
-# once; the gate exports D2B_HEAVY_GATE across the re-exec so the next pass runs
-# the real work. Non-heavy targets (test-rust, test-drift, ...) run bare.
+# hardware lanes, so they must never bypass the sole-use heavy-gate semaphore.
+# The mere presence of D2B_HEAVY_GATE is not trusted: for those targets the
+# shared helper verifies this process genuinely holds a slot and re-execs
+# through the gate exactly once when it does not. Non-heavy targets (test-rust,
+# test-drift, ...) run bare.
 case "$target" in
   test-integration | test-hardware | perf)
-    if [ -z "${D2B_HEAVY_GATE:-}" ]; then
-      _hg_xtask="${CARGO_TARGET_DIR:-$ROOT/packages/target}/debug/xtask"
-      if [ ! -x "$_hg_xtask" ]; then
-        ( cd "$ROOT/packages" && cargo build --quiet -p xtask )
-      fi
-      exec "$_hg_xtask" heavy-gate -- bash "$0" "$@"
-    fi
+    # shellcheck source=tests/tools/heavy-gate-reexec.sh
+    . "$ROOT/tests/tools/heavy-gate-reexec.sh"
+    d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
     ;;
 esac
 
