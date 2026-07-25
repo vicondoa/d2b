@@ -57,25 +57,60 @@ fail() {
 scan_dashes() {
   local root="$1"
   local -a files=() patterns=()
-  local dash hits toplevel
+  local dash hits toplevel enum_status grep_status
 
   root=$(cd "$root" && pwd -P)
   toplevel=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)
+
+  # Enumerate through a pipe (not process substitution) so PIPESTATUS carries
+  # the enumerator's exit status; lastpipe keeps the read loop in this shell so
+  # the array survives. A NUL-safe read preserves paths with spaces/newlines.
+  # A non-zero enumerator status fails closed instead of scanning a short or
+  # empty list as if the tree were clean.
+  local lastpipe_was_set=1
+  shopt -q lastpipe || lastpipe_was_set=0
+  shopt -s lastpipe
+  set +e
   if [ -n "$toplevel" ] && [ "$(cd "$toplevel" && pwd -P)" = "$root" ]; then
-    mapfile -d '' files < <(cd "$root" && git ls-files -z --cached --others --exclude-standard)
+    (cd "$root" && git ls-files -z --cached --others --exclude-standard) \
+      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
   else
-    mapfile -d '' files < <(cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0)
+    (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
+      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
   fi
+  enum_status=${PIPESTATUS[0]}
+  set -e
+  [ "$lastpipe_was_set" -eq 1 ] || shopt -u lastpipe
+
+  [ "$enum_status" -eq 0 ] \
+    || fail "dash scan could not enumerate files under $root (enumerator exited $enum_status)"
   [ "${#files[@]}" -gt 0 ] || fail "dash scan found no files under $root"
 
   for dash in "${DASHES[@]}"; do
     patterns+=(-e "$dash")
   done
 
-  hits=$(cd "$root" && grep -nHIF "${patterns[@]}" -- "${files[@]}") || true
-  if [ -n "$hits" ]; then
+  # grep exits 0 on a match, 1 on a clean scan, and >1 on an error (an
+  # unreadable or vanished file, a bad pattern). Status is authoritative: a
+  # status of 0 is a banned-dash hit even when the notice lands on stderr (a
+  # `grep -I`-dropped binary match reports "binary file matches" to stderr and
+  # still exits 0), so keying on stdout content alone would fail open. stderr is
+  # folded in for the diagnostic. Only status 1 is the clean case; anything
+  # greater must fail the gate rather than report a pass having scanned nothing.
+  # `if hits=$(...)` suspends errexit while capturing the command-substitution
+  # status.
+  if hits=$(cd "$root" && grep -nHIF "${patterns[@]}" -- "${files[@]}" 2>&1); then
+    grep_status=0
+  else
+    grep_status=$?
+  fi
+  if [ "$grep_status" -gt 1 ]; then
+    [ -n "$hits" ] && printf '%s\n' "$hits" >&2
+    fail "dash scan aborted: grep exited $grep_status (unreadable/vanished file or bad pattern) under $root"
+  fi
+  if [ "$grep_status" -eq 0 ]; then
     printf '%s\n' "$hits" >&2
-    fail "only the ASCII hyphen '-' may spell a dash; a banned dash codepoint appears on $(printf '%s\n' "$hits" | wc -l) line(s) above"
+    fail "only the ASCII hyphen '-' may spell a dash; a banned dash codepoint matched under $root (see grep output above)"
   fi
   ok "no non-ASCII dash in ${#files[@]} files"
 }
