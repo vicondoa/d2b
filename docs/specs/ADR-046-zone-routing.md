@@ -40,7 +40,7 @@ in the pre-ADR45 v3 baseline. Do not cite them as v3 baseline behavior.
 
 | Module | Key symbols | Selected behavior |
 | --- | --- | --- |
-| `src/handshake.rs` | `NoiseHandshake`, `HandshakeCredentials` (Nn/Kk/IKpsk2), `EstablishedHandshake`, `NegotiatedOffer`, `encode_offer`, `negotiate_offer`, generation discovery functions | Three Noise profiles (25519·ChaChaPoly·SHA256); prologue = preface‖canonical‑offer binds offer to transcript; INIT/ACCEPT authenticated payloads; generation discovery pre-handshake (SHA256 binding); fail-closed on all key/payload/step errors |
+| `src/handshake.rs` | `NoiseHandshake`, `HandshakeCredentials` (Nn/Kk/IKpsk2), `EstablishedHandshake`, `NegotiatedOffer`, `encode_offer`, `negotiate_offer`, generation discovery functions | Three Noise profiles (25519·ChaChaPoly·SHA256); prologue = preface‖canonical-offer binds offer to transcript; INIT/ACCEPT authenticated payloads; generation discovery pre-handshake (SHA256 binding); fail-closed on all key/payload/step errors |
 | `src/lifecycle.rs` | `SessionLifecycle`, `SessionPhase` (Established/Disconnected/Reconnecting/Closing/Closed), `KeepaliveAction` | Keepalive ping/pong with nonce tracking; reconnect up to `MAX_RECONNECT_ATTEMPTS=10` within `MAX_RECONNECT_WINDOW_MS=300000`; generation increment on each reconnect; deterministic close record with `CloseReason`/`Remediation` |
 | `src/streams.rs` | `NamedStreamMux`, `StreamId`, `StreamPhase` (Open/HalfClosedLocal/HalfClosedRemote/Closed/Reset), `StreamEvent` | Credit-based named-stream state machine; max `MAX_ACTIVE_NAMED_STREAMS=128`; per-stream send/receive credit; half-close, reset, remove-terminal; send-credit reservation/refund; receive-credit release |
 | `src/cancellation.rs` | `Cancellation` (Arc+AtomicBool+Notify), `RequestRegistry` | Per-generation request registry; cancel-before/after-dispatch distinction; `CancelResult` (5 variants); `cancel_all` on session close; zero allocation `cancelled()` async wait |
@@ -1364,7 +1364,7 @@ ZoneLinkRouteAdvertisement {
   routes: [
     { descendant: ZonePath, nextHopChild: ZoneLabelId, routeId: <opaque>,
       capabilities: CapabilitySet }   // narrowed by allocator policy
-  ]                                   // 1–64 routes
+  ]                                   // 1-64 routes
   issuedAtUnixSeconds: u64
   expiresAtUnixSeconds: u64           // > issuedAt; max 7200 s
   signature: {
@@ -1444,8 +1444,8 @@ route policy changes:
 ZoneLinkNamespaceAllocation {
   treeEdge: { parent: ZonePath, child: ZonePath }
   allocatedToGeneration: <controller-generation>
-  allowedPrefixes: [ZonePath]    // child zone or descendants; 1–16
-  maxRoutes: u32                 // 1–64
+  allowedPrefixes: [ZonePath]    // child zone or descendants; 1-16
+  maxRoutes: u32                 // 1-64
   allowedCapabilities: CapabilitySet
 }
 ```
@@ -1456,8 +1456,8 @@ Allocation changes (e.g. capability narrowing) require the child to issue
 a new advertisement under the new generation.
 
 The `ZoneLinkNamespaceAllocation` above **is** the explicit ZoneLink range
-capacity/quota (D097 hardware-audit finding): `allowedPrefixes` (1–16) and
-`maxRoutes` (1–64) are the bounded per-edge capacity; a child exceeding either
+capacity/quota (D097 hardware-audit finding): `allowedPrefixes` (1-16) and
+`maxRoutes` (1-64) are the bounded per-edge capacity; a child exceeding either
 bound is rejected, so the parent allocator's route namespace cannot be
 exhausted by one child edge.
 
@@ -2617,7 +2617,7 @@ The following transitions are NOT simple textual renames:
 | --- | --- |
 | Work item ID | `ADR046-routing-013` |
 | Dependency/owner | ADR046-routing-012, ADR046-routing-003; `d2b-core-controller` owner (ADR-046-core-controllers) |
-| Current source | `packages/d2b-realm-core/src/realm_controller_config.rs`: `RealmControllersJson`, `RealmControllerRow`, `RealmControllerConfigError` (evidence: **C** - loaded but routing inert); `packages/d2bd/src/realm_access_resolver.rs`: `resolve_local_root_realm_access()`, `RealmAccessResolverRequest`, `RealmAccessBinding` (evidence: **B** - pub mod at lib.rs:117, no callers); `packages/d2b-state/src/` (both baselines): atomic state, OFD locks, lease primitives (evidence: **A** for locks/leases, **B** for realm-specific storage); `nixos-modules/host-daemon.nix:220–221`: bundle artifact install paths, daemon SIGHUP wiring (evidence: **A**) |
+| Current source | `packages/d2b-realm-core/src/realm_controller_config.rs`: `RealmControllersJson`, `RealmControllerRow`, `RealmControllerConfigError` (evidence: **C** - loaded but routing inert); `packages/d2bd/src/realm_access_resolver.rs`: `resolve_local_root_realm_access()`, `RealmAccessResolverRequest`, `RealmAccessBinding` (evidence: **B** - pub mod at lib.rs:117, no callers); `packages/d2b-state/src/` (both baselines): atomic state, OFD locks, lease primitives (evidence: **A** for locks/leases, **B** for realm-specific storage); `nixos-modules/host-daemon.nix:220-221`: bundle artifact install paths, daemon SIGHUP wiring (evidence: **A**) |
 | Main reuse source | `packages/d2b-state/src/` (main `a1cc0b2d`): atomic state, audit segment primitives adapted for generation tracking |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/configuration.rs` (defined by ADR-046-core-controllers); shared bundle DTOs may live in `packages/d2b-core/` |

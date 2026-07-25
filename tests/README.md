@@ -41,7 +41,7 @@ tests/
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
-Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
+Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 `packages/<crate>/`, **not** here.
 
 ## Running tests

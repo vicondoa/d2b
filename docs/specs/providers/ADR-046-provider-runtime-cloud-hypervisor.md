@@ -914,7 +914,7 @@ Note:
 
 ### 12.5 Eval-time validation rules
 
-Rules 1–17 from `ADR-046-nix-configuration` apply to every Guest resource. The
+Rules 1-17 from `ADR-046-nix-configuration` apply to every Guest resource. The
 following are additional rules enforced specifically for `runtime-cloud-hypervisor`
 Guests:
 
@@ -1742,7 +1742,7 @@ per-test budget.
 | Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; Guest-control `Endpoint` resource emitted without raw locator; `make test-drift` gate for schema/Nix drift Primary reuse disposition: `adapt`. Preserved source-plan detail: ADAPT and REPLACE. |
 | Integration | Zone resource bundle emission; private artifact catalog; `xtask gen-resource-nix-options` for auto-generated Nix option types |
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
-| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
+| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1-17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
 | Removal proof | `options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `nixos-modules/store.nix` removed after integration parity |
 
 ### ADR046-ch-005 (guest-control health and adoption)

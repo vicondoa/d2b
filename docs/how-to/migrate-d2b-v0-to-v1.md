@@ -95,7 +95,7 @@ git -C /etc/nixos push --tags    # if your config is in a remote repo
 ```
 
 Bump the d2b input in your `flake.nix` to v1.0.0 **after** you
-have applied every change in §§1–7 below. The `supervisor` option's
+have applied every change in §§1-7 below. The `supervisor` option's
 v1.0-intended hard removal + eval-time rejection assertion is
 **scheduled for v1.1** (per ADR 0015 § Decision); v1.0 retains the
 option for backward-compat with consumer flakes
@@ -141,7 +141,7 @@ changed.
 d2b host validate --dry-run --json | jq '.waves[] | select(.wave=="p2")'
 ```
 
-Then, once §§2–7 are complete:
+Then, once §§2-7 are complete:
 
 ```bash
 sudo d2b host validate --apply --wave p2
@@ -623,7 +623,7 @@ Validation / Rollback* layout for the default-switch auto-flip itself.
 ### Before
 
 - `d2b.daemonExperimental.enable` defaults to `false` even though
-  every individual breaking change in §§1–6 has landed in the running
+  every individual breaking change in §§1-6 has landed in the running
   config.
 - The default-switch readiness option set
   (`d2b.defaultSwitchReadiness.<wave>.{implemented,validated}`)
@@ -710,7 +710,7 @@ sudo rm -rf /var/lib/d2b/validated
 sudo nixos-rebuild switch --flake .#myhost
 
 # Option C - full v0.4.x rollback (see §8 below). Recommended only
-#            if §§1–6 also need to be undone.
+#            if §§1-6 also need to be undone.
 ```
 
 ## 8. Whole-migration rollback

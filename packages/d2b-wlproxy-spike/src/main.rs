@@ -31,7 +31,7 @@
 //!    fixed at 128 bytes. A Wayland message with more than ~28 fds in a single
 //!    recvmsg call would trigger MSG_CTRUNC, silently dropping the excess fds
 //!    because `trans.rs` does not check `header.flags` for MSG_CTRUNC after the
-//!    call. In practice the Wayland protocol sends at most 1–3 fds per message
+//!    call. In practice the Wayland protocol sends at most 1-3 fds per message
 //!    (dmabuf planes, clipboard, etc.), so this limit is unlikely to be reached.
 //!    The d2b filter binary (Lane C) should document this as a known
 //!    low-risk gap and log a startup warning if a safety margin is needed.

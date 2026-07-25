@@ -1007,7 +1007,7 @@ pub struct ExecControlResult {
 }
 
 /// Terminal disposition of the guest command. `Exited` carries the WIFEXITED
-/// code (0–255); `Signaled` carries the terminating signal number; `Error`
+/// code (0-255); `Signaled` carries the terminating signal number; `Error`
 /// carries a closed-enum guest error slug for an abnormal terminal state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
@@ -1594,7 +1594,7 @@ impl fmt::Debug for ConsoleWriteStdinArgs {
     }
 }
 
-/// Read console output from a ring-buffer–backed session.
+/// Read console output from a ring-buffer-backed session.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConsoleReadOutputArgs {
@@ -1917,7 +1917,7 @@ pub struct AudioSetVolumeArgs {
     pub vm: String,
     /// Which audio channel to adjust.
     pub channel: AudioChannel,
-    /// New level (0–100 inclusive). Validated at the wire boundary.
+    /// New level (0-100 inclusive). Validated at the wire boundary.
     pub level: LevelPercent,
 }
 

@@ -26,7 +26,7 @@ let
   #   • field absent
   #   • field present but value is not the exact string "on"
   #     (e.g. boolean true, number 1, string "true", string "ON")
-  #   • jq not on PATH (path is Nix-store–hardcoded below)
+  #   • jq not on PATH (path is Nix-store-hardcoded below)
   #
   # The jq path is baked in at Nix eval time so the function works
   # in both audio.nix's extraArgsScript (minimal $PATH) and the

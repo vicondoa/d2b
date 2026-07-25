@@ -964,9 +964,9 @@ in
           default = 10;
           description = ''
             Workload-VM IP index within its env's LAN subnet. The
-            VM's IP = <lan-subnet-prefix>.<index>. Range 10–250 to
+            VM's IP = <lan-subnet-prefix>.<index>. Range 10-250 to
             leave room for the net VM (.1), gateway-ish reservations
-            (.2–.9), and DHCP pool overflow (.251–.254). Must be
+            (.2-.9), and DHCP pool overflow (.251-.254). Must be
             unique within an env.
           '';
         };
@@ -1223,7 +1223,7 @@ in
             example = "default";
             description = ''
               Default persistent shell session name used when an attach/detach
-              request omits `--name`. The identifier is 1–64 ASCII bytes, starts
+              request omits `--name`. The identifier is 1-64 ASCII bytes, starts
               with `[A-Za-z0-9_]`, and then allows `[A-Za-z0-9._-]`.
             '';
           };

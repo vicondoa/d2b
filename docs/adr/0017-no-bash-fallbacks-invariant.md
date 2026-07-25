@@ -38,7 +38,7 @@ Two residual surfaces survived into v1.0 as dead/stub code:
 2. **`should_fallback_to_legacy(args)` in `packages/d2b/src/lib.rs:3897`.**
    A predicate used by the early-dispatch path (`lib.rs:1413`) to
    route certain unrecognized argv shapes to the stub above. Its
-   allow-list was chiselled down across P0–P7 until the function
+   allow-list was chiselled down across P0-P7 until the function
    returns `false` for every shape the v1.0 CLI declares native,
    but the function and the dispatch arm remain.
 

@@ -197,7 +197,7 @@ Negative:
 ## References
 
 - [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
-- v1.2 plan §P1.1, §6 (invariants I1–I7)
+- v1.2 plan §P1.1, §6 (invariants I1-I7)
 - [ADR 0015](0015-daemon-only-clean-break.md) - daemon-only clean break (v1.0)
 - [ADR 0017](0017-no-bash-fallbacks-invariant.md) - no bash fallbacks (v1.1)
 - [ADR 0018](0018-microvm-nix-removal.md) - microvm.nix removal (v1.1)

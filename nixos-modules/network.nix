@@ -121,7 +121,7 @@ in
     # Env name length: bridges are `br-<env>-lan` (7 + len env).
     # Linux caps interface names at 15 chars (IFNAMSIZ=16 incl. NUL),
     # so env must be ≤ 8. Tap names are `<env>-l<index>` (env + 2
-    # + 1–3 digits), bounded by the same 15.
+    # + 1-3 digits), bounded by the same 15.
     ++ (lib.mapAttrsToList
       (envName: _: {
         assertion = lib.stringLength envName <= 8;

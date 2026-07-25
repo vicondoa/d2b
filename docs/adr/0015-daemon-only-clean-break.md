@@ -31,7 +31,7 @@ to `d2bd`:
    `cli.nix` Nix module packaged the bash entrypoints and every
    `d2b-<vm>-*` desktop wrapper read from it.
 
-P0–P5 closed the readiness gap. By the time P5 lands, the daemon
+P0-P5 closed the readiness gap. By the time P5 lands, the daemon
 covers every verb on the v0.4.0 user-facing surface, the broker has
 live handlers for the full host-prepare dispatch
 (see [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md),
@@ -229,7 +229,7 @@ fallback):
 - The `daemon-experimental` / `legacy-systemd` mode plumbing from
   [ADR 0007](0007-bash-coexistence-and-migration.md). ADR 0007
   remains in the repository as historical context; this ADR
-  supersedes its decisions 1–6 in their entirety.
+  supersedes its decisions 1-6 in their entirety.
 
 ### Why no v0 → v1 manifest compatibility window
 
@@ -329,7 +329,7 @@ v2 → v3 auto-rewriter.
   `d2bd.service`, `d2b-priv-broker.service`, and
   `d2b-priv-broker.socket` remain.
 - **ADR 0007 status unchanged.** ADR 0007 stays `Accepted` as the
-  historical record of the W2–W14c coexistence path; this ADR
+  historical record of the W2-W14c coexistence path; this ADR
   documents the end-state and is the binding reference from v1.0
   onwards. The ADR 0007 → ADR 0015 supersession is recorded in the
   ADR index ([`docs/adr/README.md`](README.md)).

@@ -273,7 +273,7 @@ state you're in and which command(s) to run.
 The script **does not** run `nixos-rebuild`. That's the user's next step:
 
 1. Commit the `/etc/nixos` changes that consume the new flake (Phase 9
-   steps 1, 4–8 of the plan):
+   steps 1, 4-8 of the plan):
    - `flake.nix`: add `inputs.d2b.url = "github:vicondoa/d2b/v0.1.0";`
    - `flake.nix`: replace `./modules/d2b` import with
      `inputs.d2b.nixosModules.default`

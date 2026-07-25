@@ -161,9 +161,9 @@ is controller-managed and is not present in the Nix-rendered bundle output.
 
 | Field | Type | Required | Bounds | Rules |
 | --- | --- | --- | --- | --- |
-| `clientId` | string | Yes | 1–128 chars; charset `^[A-Za-z0-9._-]+$` | Opaque Azure Managed Identity client GUID. Validated via `OpaqueAzureRef::parse` (current v3 baseline `d2b-realm-provider/src/credential.rs:OpaqueAzureRef`). The field name is `clientId`, not `clientIdRef`; it is an inline opaque identifier, not a `<ResourceType>/<name>` ResourceRef. A secret-shaped value (containing `=`, `+`, `/`, whitespace, or connection-string patterns) fails validation fail-closed. |
+| `clientId` | string | Yes | 1-128 chars; charset `^[A-Za-z0-9._-]+$` | Opaque Azure Managed Identity client GUID. Validated via `OpaqueAzureRef::parse` (current v3 baseline `d2b-realm-provider/src/credential.rs:OpaqueAzureRef`). The field name is `clientId`, not `clientIdRef`; it is an inline opaque identifier, not a `<ResourceType>/<name>` ResourceRef. A secret-shaped value (containing `=`, `+`, `/`, whitespace, or connection-string patterns) fails validation fail-closed. |
 | `imdsEndpointAlias` | enum | Yes | closed set | Provider-validated closed alias string resolving to a known IMDS endpoint category. Never an endpoint URL, path, IP address, or hostname. Accepted values and their meanings are defined in §Closed alias set for `imdsEndpointAlias`. |
-| `maxLeases` | u32 | No | 1–256; default 64 | Maximum concurrent active leases this Provider instance may hold. Requests beyond the ceiling return `credential-queue-pressure`. |
+| `maxLeases` | u32 | No | 1-256; default 64 | Maximum concurrent active leases this Provider instance may hold. Requests beyond the ceiling return `credential-queue-pressure`. |
 | `controllerExecutionRef` | ResourceRef | Yes | `Host/<name>` or `Guest/<name>` in same Zone | Execution target for the `managed-identity-controller` Process. Must resolve to a declared system-domain Host or Guest in the same Zone. The controller is secret-free regardless of placement: it holds no `ManagedIdentityCredentialClient`, makes no IMDS calls, and carries no token bytes. |
 
 ### `clientId` validation
@@ -1555,7 +1555,7 @@ Applied to every entry with `type = "Provider"` and
     (`azure-imds`, `azure-imds-aca`); an unknown value fails the eval.
 11. `spec.config.clientId` passes `OpaqueAzureRef` charset validation; a
     secret-shaped value fails `contains_sensitive_shape`.
-12. `spec.config.maxLeases` must be 1–256 inclusive.
+12. `spec.config.maxLeases` must be 1-256 inclusive.
 
 ### Build-time validation
 
@@ -1595,7 +1595,7 @@ from the Nix configuration:
 6. Stalled cleanup surfaces as `Degraded` / `nix-cleanup-stalled` with bounded
    retry.
 7. `activation-nixos` activation completes without blocking on cleanup.
-8. Up to `retainedConfigurationMax` (default 3, range 1–16) prior bundles
+8. Up to `retainedConfigurationMax` (default 3, range 1-16) prior bundles
    retained; rollback re-creates Credential resources from retained bundle
    (fresh leases acquired; prior IMDS tokens are not restored).
 9. Controller-created and API-created Credential resources are never deleted by
@@ -1641,7 +1641,7 @@ observeInterval: 30s
 1. Validate `spec.scope.domainFilter != "user"`.
 2. Validate `spec.allowedOperations` ⊆ supported set.
 3. Validate `spec.scope.executionRef` resolves a live `Host` or `Guest`.
-4. **Admit**: if checks 1–3 pass and the Provider is Ready, create and apply the
+4. **Admit**: if checks 1-3 pass and the Provider is Ready, create and apply the
    `mi-agent-<credential-name>` Process resource (using the agent Process template
    in §Process resource templates), owned by this Credential.  The controller does
    not wait for the Credential to reach `phase=Ready` before spawning the agent;
@@ -1853,7 +1853,7 @@ item.
 | Current source | `packages/d2b-provider-aca/src/lib.rs:managed_identity_client_id` and `packages/d2bd/src/lib.rs:managed_identity_client_id` are the current raw ACA managed-identity config surfaces; v3 Provider/Credential resource authoring is net-new |
 | Reuse action | replace |
 | Destination | nixos-modules/options-resources.nix; nixos-modules/activation-nixos-cleanup.nix; integration/aca-credential-ref.sh |
-| Detailed design | Shared Nix and cleanup: implement Nix eval-time assertions 1–12 from §Eval-time assertions, closed enum schema for `imdsEndpointAlias`, `clientId` validation via `OpaqueAzureRef` charset, generation cleanup contract, and artifact catalog validation for `credential-managed-identity-bin`. Integration fixture asserts that the migrated ACA Provider config carries `credentialRef: "Credential/aca-relay-mi"` and the raw `managed_identity_client_id` string field is absent from rendered Provider config JSON and ACA runtime bundle. Primary reuse disposition: `replace`. Preserved source-plan detail: replace raw ACA managed identity client-id fields with Credential resource references and v3 Provider/Credential Nix emission. |
+| Detailed design | Shared Nix and cleanup: implement Nix eval-time assertions 1-12 from §Eval-time assertions, closed enum schema for `imdsEndpointAlias`, `clientId` validation via `OpaqueAzureRef` charset, generation cleanup contract, and artifact catalog validation for `credential-managed-identity-bin`. Integration fixture asserts that the migrated ACA Provider config carries `credentialRef: "Credential/aca-relay-mi"` and the raw `managed_identity_client_id` string field is absent from rendered Provider config JSON and ACA runtime bundle. Primary reuse disposition: `replace`. Preserved source-plan detail: replace raw ACA managed identity client-id fields with Credential resource references and v3 Provider/Credential Nix emission. |
 | Integration | Nix compiler emits Provider/Credential/ACA resource config; ResourceAPI admission validates it; activation cleanup deletes old generation resources through finalizers; ACA Provider consumes `credentialRef` to obtain tokens from the managed-identity Credential Provider. |
 | Data migration | Full d2b 3.0 reset; raw ACA `managed_identity_client_id` config is replaced by a newly authored Credential resource reference rather than imported in place |
 | Validation | Nix eval assertion tests; artifact catalog validation tests; `integration/aca-credential-ref.sh` |

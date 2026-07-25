@@ -12,7 +12,7 @@ Before upgrading from v1.0 to v1.1, satisfy these prerequisites in
 order:
 
 1. **Linux kernel ≥ 6.9** (hard upgrade blocker). Operators on
-   kernel 6.6–6.8 cannot run v1.1. The daemon's pidfs runtime
+   kernel 6.6-6.8 cannot run v1.1. The daemon's pidfs runtime
    self-probe in `packages/d2bd/src/startup.rs` and the
    static eval gate in
    `packages/d2b-contract-tests/tests/policy_lints.rs`

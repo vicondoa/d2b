@@ -219,7 +219,7 @@ not ResourceType specs.
 | `iconRef` | bounded ID | max 64 chars | Optional. Closed set of declared icon IDs from the Provider's signed icon catalog. No host paths. |
 | `urgency` | enum | `low` \| `normal` \| `critical` | Optional; default `normal`. |
 | `category` | enum | closed set | Required; see §4.3. |
-| `expireTimeoutSecs` | u32 | 0–3600 | 0 = no timeout. |
+| `expireTimeoutSecs` | u32 | 0-3600 | 0 = no timeout. |
 | `actions` | `[]ActionSpec` | max 4 entries | Optional. See §4.2. |
 | `correlationId` | opaque bytes | max 64 chars | Optional. Stable cross-request join key. Never logged or labeled. |
 | `idempotencyKey` | opaque bytes | max 64 chars | Optional. Controls replay protection for duplicate delivery within a session. |

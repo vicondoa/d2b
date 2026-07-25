@@ -1868,7 +1868,7 @@ at landing time. All other v0.1.6 gates remain green.
 
 ## [0.1.6] - 2026-05-19
 
-Docs catch-up release. The v0.1.1–v0.1.5 patches shipped fixes for
+Docs catch-up release. The v0.1.1-v0.1.5 patches shipped fixes for
 five framework bugs surfaced during the first real consumer
 migration, but the public docs hadn't been updated to describe the
 resulting behavior changes. This release brings the docs in sync

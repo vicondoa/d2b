@@ -309,7 +309,7 @@ pub fn exit_code_for_terminal(status: &ExecTerminalStatus) -> i32 {
 }
 
 /// Validate + resolve a wire terminal status into an [`ExecOutcome`].
-/// Only a true guest `WIFEXITED` (0–255) or `WIFSIGNALED` (valid signo)
+/// Only a true guest `WIFEXITED` (0-255) or `WIFSIGNALED` (valid signo)
 /// resolves as a guest outcome. An out-of-range exit code, an out-of-range
 /// signal, or an abnormal `Error` slug is a transport/protocol failure - never
 /// synthesized as a guest success/status.

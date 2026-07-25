@@ -188,7 +188,7 @@ No secrets are accepted in Provider config. Credential material is a
 ### 4.1 Host
 
 Complete normative contract: [`ADR-046-resources-host-guest-process-user`](../ADR-046-resources-host-guest-process-user.md).
-This section records the system-core–specific controller behavior.
+This section records the system-core-specific controller behavior.
 
 #### 4.1.1 Spec schema (normative summary)
 
@@ -735,7 +735,7 @@ bounded blocking adapters, not broker-mediated privileged operations.
 > runtime at bootstrap and are **never** Nix-authored in the resource bundle.
 > Operators do not declare a `Provider/system-core` entry in
 > `d2b.zones.<z>.resources`. The Nix surface for system-core is the artifact
-> catalog entry (§8.1) and the Host/User resource authoring described in §8.2–§8.4.
+> catalog entry (§8.1) and the Host/User resource authoring described in §8.2-§8.4.
 
 ### 8.1 Artifact catalog entry
 
@@ -885,7 +885,7 @@ produces a structured eval error identifying the resource name and field.
 
 ### 8.5 Nix schema drift gate
 
-The spec fields and default values described in §8.2–§8.4 are the authoritative
+The spec fields and default values described in §8.2-§8.4 are the authoritative
 source. Generated Nix option types and documentation are derived from the same
 ResourceTypeSchema and Provider schema used for build-time validation. The
 `make test-drift` gate (`xtask gen-nix-options` + `git diff --exit-code`)

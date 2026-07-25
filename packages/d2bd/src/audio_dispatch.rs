@@ -2,11 +2,11 @@
 //!
 //! Resolves the per-VM provider capability row before touching local state:
 //!
-//! * **Cloud Hypervisor NixOS** – OFD-locked local state I/O, host PipeWire
+//! * **Cloud Hypervisor NixOS** - OFD-locked local state I/O, host PipeWire
 //!   enforcement via a `pw-cli`/`wpctl` subprocess (credential-aware; see
 //!   [`audio_host_controller::PipeWireHostController`]), guest enforcement via
 //!   guestd audio RPCs over the authenticated guest-control transport.
-//! * **qemu-media** – OFD-locked local state I/O, offline state-file policy.
+//! * **qemu-media** - OFD-locked local state I/O, offline state-file policy.
 //!   Guest enforcement always reported `Unsupported`. No guestd calls.
 //!
 //! All provider-internal resource IDs and credentials are redacted from

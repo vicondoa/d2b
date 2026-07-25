@@ -359,7 +359,7 @@ has built cleanly. See "Rollback" at the end of this section.
    A "trust boundary" is the coarsest answer to "which of these VMs
    are allowed to see each other on the LAN, and which must be
    quarantined?" Each group becomes one `d2b.envs.<env>`. Most
-   consumers end up with 1–3 envs (e.g. `work`, `personal`, `lab`).
+   consumers end up with 1-3 envs (e.g. `work`, `personal`, `lab`).
 
    For each env, choose:
 
@@ -531,9 +531,9 @@ change. For the full predicate semantics see
 
 - **Step 5 (build) fails:** no on-disk state has moved. Revert your
   config changes (`git checkout -- .` or undo the edits from steps
-  3–4) and rebuild against the old config - your existing VMs are
+  3-4) and rebuild against the old config - your existing VMs are
   untouched.
-- **Steps 6–7 succeed but step 8 (`switch`) fails:** the new closure
+- **Steps 6-7 succeed but step 8 (`switch`) fails:** the new closure
   is built but not active; state directories have been renamed. To
   roll back: revert the config, move state back
   (`mv /var/lib/d2b/vms/<vm> /var/lib/microvms/<vm>` for each

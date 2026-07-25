@@ -341,7 +341,7 @@ manual tier.
   container; resource lifecycle under real broker calls.
 - Host/Guest cross-process scenarios: Provider Process spawned as a real child process;
   inter-process ComponentSession handshake verified.
-- Provider–system interaction fixtures: real `Provider/system-core` or `Provider/system-minijail`
+- Provider-system interaction fixtures: real `Provider/system-core` or `Provider/system-minijail`
   involvement where the Provider depends on it.
 - Cleanup contract scenarios: Nix generation change triggers correct async Delete and
   audit events for this Provider's ResourceTypes (§0.2 cleanup contract, integration tier).
@@ -354,7 +354,7 @@ Documents the Provider dossier. Must include all of:
 
 | Section | Required Content |
 |---------|-----------------|
-| Provider identity | `Provider/<name>` canonical ResourceRef; `ProviderType` axis (D043–D049); crate path |
+| Provider identity | `Provider/<name>` canonical ResourceRef; `ProviderType` axis (D043-D049); crate path |
 | Nix config schema | `d2b.zones.<zone>.resources.<name>` snippet with this Provider's `spec.*` fields; rendered canonical JSON; Credential ref fields identified |
 | ResourceTypes | Table: ResourceType name, lifecycle phases, `owner` value, finalizer contract |
 | Controllers/services/workers/binaries | Table: name, binary or library entry point, executionRef (Host or Guest), cgroup placement |
@@ -508,7 +508,7 @@ They are the replacement target, not a reuse source. ComponentSession copies fro
 | `public_wire.rs` - `ConsoleProviderKind` / `ConsoleReadOutputResult` | production-reachable | Callers: `d2bd/src/console_session.rs:30` | ADAPT | Console service under Provider Process | `ADR046-provider-001` |
 | `public_wire.rs` - `ExecOp` / `ExecOpResponse` | production-reachable | Guest-control exec; callers: d2bd exec_session | ADAPT | ComponentSession `Exec` service bootstrap | `ADR046-session-001` |
 | `broker_wire.rs` - `RunnerRole` / `ChildExitStatus` / `ChildReapedNotification` | production-reachable | Callers: `d2bd/src/supervisor/` | ADAPT | Process lifecycle protocol in Zone runtime; `RunnerRole` → ProcessRole classification below | `ADR046-core-001` |
-| `provider_registry_v2.rs` | production-reachable | Current provider registry (canonical IDs and opaque bundle intents); callers: Nix bundle emitter, broker | ADAPT | Zone-local Provider registry; extend for frozen Provider family per D043–D049 | `ADR046-provider-001` |
+| `provider_registry_v2.rs` | production-reachable | Current provider registry (canonical IDs and opaque bundle intents); callers: Nix bundle emitter, broker | ADAPT | Zone-local Provider registry; extend for frozen Provider family per D043-D049 | `ADR046-provider-001` |
 
 ### 1.9 `d2b-state`
 
@@ -654,7 +654,7 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 | `processes.json` | `processes-json.nix` | ADAPT → Zone-scoped Process resource specs | ProcessRole → ResourceSpec field |
 | `storage.json` | storage Nix emitter | ADAPT → Volume resource specs per Guest | Keep ADR 0034 lifecycle semantics |
 | `manifest.json` | `manifest.nix` | RETAIN; bump `manifestVersion` | Schema + emitter move together |
-| `provider-registry-v2.json` | `provider-registry-v2-json.nix` | ADAPT → extend for frozen Provider family | D043–D049 frozen catalog |
+| `provider-registry-v2.json` | `provider-registry-v2-json.nix` | ADAPT → extend for frozen Provider family | D043-D049 frozen catalog |
 | `privileges.json` | privileges emitter | ADAPT → BrokerOperation catalog update | Per §3 target operations |
 | `ui-colors.json` / `ui-colors.css` | `ui-colors.nix` / `niri-vm-borders.nix` | RETAIN | Not affected by Zone rename |
 | `unsafe-local-workloads.json` | `unsafe-local-workloads-json.nix` | ADAPT → user-only `Host` ResourceSpec; `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`; no-isolation posture field explicit | D042 |
@@ -942,7 +942,7 @@ Main crate: `packages/d2b-session-unix/`. Not present on v3 baseline.
 | Symbol Group (a1cc0b2d) | Symbols | v3 Destination | Excluded Assumptions |
 |------------------------|---------|----------------|----------------------|
 | Constants | `PROVIDER_SCHEMA_VERSION`, `PROVIDER_API_MAJOR/MINOR`, `MAX_PROVIDER_CAPABILITIES`, `MAX_PROVIDER_REGISTRY_ENTRIES`, `MAX_PROVIDER_PLAN_RESOURCES`, `MAX_CREDENTIAL_OPERATION_CLASSES`, `MAX_PROVIDER_REQUEST_LIFETIME_MS`, `MAX_PROVIDER_LEASE_LIFETIME_MS`, `MAX_PROVIDER_DRAIN_MS`, `MAX_OBSERVABILITY_*`, `MAX_SAFE_JSON_INTEGER`, `PROVIDER_CONTRACT_FINGERPRINT` | `packages/d2b-contracts/src/v2_provider.rs` | None |
-| `ProviderType` enum | 11 variants: `Runtime, Infrastructure, Transport, Substrate, Credential, Display, Network, Storage, Device, Audio, Observability` | same | Do NOT add variants; frozen catalog per D043–D049 |
+| `ProviderType` enum | 11 variants: `Runtime, Infrastructure, Transport, Substrate, Credential, Display, Network, Storage, Device, Audio, Observability` | same | Do NOT add variants; frozen catalog per D043-D049 |
 | `ProviderMethod` enum | All ~50 methods across all axes (Runtime*, Infrastructure*, Transport*, Substrate*, Credential*, Display*, Network*, Storage*, Device*, Audio*, Observability*) | same | Frozen; do NOT add methods |
 | Core types | `ProviderDescriptor`, `ProviderCapabilitySet`, `ProviderCapability`, `ProviderFactoryKey`, `ProviderApiVersion`, `ProviderAuthority`, `NetworkPosture`, `DeviceMediationPosture`, `ProviderContractError` | same | `ProviderAuthority` may reference main-specific realm auth; review for v3 |
 

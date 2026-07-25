@@ -310,7 +310,7 @@ host, prefer `d2b down <vm> --apply` followed by
 #### Integrator-prep-first pattern (W3 onwards)
 
 For waves whose thematic scopes are NOT file-disjoint by default -
-W3 host-prepare is the canonical example, with scopes s1–s5
+W3 host-prepare is the canonical example, with scopes s1-s5
 naturally sharing `packages/d2b-contracts`, `packages/d2b-core`
 DTOs, schemas, and `Cargo.toml` workspace pins - the wave is
 preceded by an **integrator API/contract prep commit landed
@@ -726,7 +726,7 @@ organised **by version**, never by development phase.
 ### Process markers stay out of shipped artifacts
 
 Internal development bookkeeping - wave tags (`W3`, `W4-fu`,
-`W2-followup`), phase tags (`P0`–`P7`, `v1.1-P4`, `ph6-…`),
+`W2-followup`), phase tags (`P0`-`P7`, `v1.1-P4`, `ph6-…`),
 decision codes (`D5/P2.3`), follow-up/round/finding refs
 (`fu3`, `H20`, `(rust-1)`) - is for organising work, not for
 shipping. Do **not** introduce these markers into:
@@ -1058,10 +1058,10 @@ Touch these only with a clear plan and a corresponding test run.
   build rather than surviving review. When a test genuinely needs the
   codepoint (a parser tolerance case, the gate's own pattern) spell it
   as an escape such as `"\u{2014}"` or `$'\u2014'`, never as the
-  character. The en-dash `–` (U+2013) is deliberately out of scope:
+  character. The en-dash `-` (U+2013) is deliberately out of scope:
   the ADR-046 work-item tokenizer treats it as a separator while a
   plain hyphen is an ID character, so rewriting a range like
-  `ADR046-network-001–004` would mint a nonexistent dependency ID.
+  `ADR046-network-001-004` would mint a nonexistent dependency ID.
   Banning it is a separate decision.
 - **Don't let a host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider

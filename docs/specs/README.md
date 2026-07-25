@@ -115,7 +115,7 @@ removed after regeneration; `ADR046-delivery-004` and
   d2b-adr-implementation-graph`, `schemaVersion` 1) and its rendered human view
   `ADR-046-implementation-graph.md` are the D095 machine-readable
   implementation DAG. They map every one of the 55 member specs and every work
-  item exactly once to a `W0`–`W7` launch wave and a file-disjoint parallel
+  item exactly once to a `W0`-`W7` launch wave and a file-disjoint parallel
   group, with typed edges, owner/destinations, entry contracts, prerequisites,
   blockers, exit gate, and topological rank. They are generated from the two
   manifests above plus the 8-wave topology in

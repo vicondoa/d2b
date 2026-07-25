@@ -299,5 +299,5 @@ receivers:
 ```
 
 The 30-second scrape interval is the recommended default; faster
-scrapes (5–10 s) are appropriate during incident investigation but
+scrapes (5-10 s) are appropriate during incident investigation but
 inflate backend storage proportionally.

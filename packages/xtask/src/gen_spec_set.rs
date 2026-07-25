@@ -906,11 +906,11 @@ mod tests {
         let cases = [
             ("### ADR046-core-001", HeadingForm::Bare),
             ("### ADR046-core-001 - Some title", HeadingForm::Dash),
-            // The em-dash is banned in this repository's own prose, so the
-            // separator this parser must still tolerate is written as an
-            // escape rather than as a literal character.
+            // Typographic dashes are banned in this repository's own prose, so
+            // the separators this parser must still tolerate are written as
+            // escapes rather than as literal characters.
             ("### ADR046-core-001 \u{2014} Some title", HeadingForm::Dash),
-            ("### ADR046-core-001 – Some title", HeadingForm::Dash),
+            ("### ADR046-core-001 \u{2013} Some title", HeadingForm::Dash),
             ("### ADR046-core-001 Some title", HeadingForm::Dash),
             ("### ADR046-core-001: Some title", HeadingForm::Colon),
             (

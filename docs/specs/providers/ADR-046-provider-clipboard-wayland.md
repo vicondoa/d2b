@@ -1083,7 +1083,7 @@ pub struct ClipboardAuditEvent {
     pub source_zone_id: Option<BoundedId>,  // max 63 chars; no path/payload
     pub dest_zone_id: Option<BoundedId>,
     pub mime_type: Option<AllowedMime>,     // from MIME allowlist only; null if rejected before check
-    pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1–64K, 64K–1M, >1M; never exact size
+    pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1-64K, 64K-1M, >1M; never exact size
     pub reason: ReasonCode,
     pub attribution_quality: AttributionQuality,
     pub occurred_at: OffsetDateTime,

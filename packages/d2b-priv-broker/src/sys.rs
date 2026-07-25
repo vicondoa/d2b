@@ -2046,7 +2046,7 @@ pub mod pidfd_sys {
     /// user-NS child before execve. The crosvm argv references it as
     /// `--gpu-device-node /proc/self/fd/10`.
     ///
-    /// Chosen to avoid fds 0–9 (stdin=0, stdout=1, stderr=2,
+    /// Chosen to avoid fds 0-9 (stdin=0, stdout=1, stderr=2,
     /// broker-socket=3, connection-fd=4, sync-pipe-read=5).
     pub const RENDER_NODE_INHERITED_FD: libc::c_int = 10;
 

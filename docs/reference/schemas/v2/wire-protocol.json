@@ -613,7 +613,7 @@
           ]
         },
         "level": {
-          "description": "New level (0–100 inclusive). Validated at the wire boundary.",
+          "description": "New level (0-100 inclusive). Validated at the wire boundary.",
           "allOf": [
             {
               "$ref": "#/definitions/LevelPercent"
@@ -3405,7 +3405,7 @@
       ]
     },
     "ConsoleReadOutputArgs": {
-      "description": "Read console output from a ring-buffer–backed session.",
+      "description": "Read console output from a ring-buffer-backed session.",
       "type": "object",
       "required": [
         "maxLen",
@@ -5006,7 +5006,7 @@
       "additionalProperties": false
     },
     "ExecTerminalStatus": {
-      "description": "Terminal disposition of the guest command. `Exited` carries the WIFEXITED code (0–255); `Signaled` carries the terminating signal number; `Error` carries a closed-enum guest error slug for an abnormal terminal state.",
+      "description": "Terminal disposition of the guest command. `Exited` carries the WIFEXITED code (0-255); `Signaled` carries the terminating signal number; `Error` carries a closed-enum guest error slug for an abnormal terminal state.",
       "oneOf": [
         {
           "type": "object",

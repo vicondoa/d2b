@@ -28,7 +28,7 @@ branch/worktree/GC cleanup policy; and the release/cutover gate.
 
 This spec is documentation only. It creates no crates, dependencies, Nix
 modules, services, controllers, Providers, state stores, CI workflows, or
-`xtask` subcommands. Per ADR 0046 decision D024, future W0–W8 implementation
+`xtask` subcommands. Per ADR 0046 decision D024, future W0-W8 implementation
 (§3) requires a separate request. This spec is the binding contract that
 request must follow; it does not itself begin that work, and no cleanup,
 branch deletion, or worktree removal described in §14 is performed by this
@@ -87,7 +87,7 @@ below is the latest-safe placement, not the earliest-possible one.
 This rule derives a wave only for a spec. `ADR046-W8` (§3.2) has no spec
 members and is therefore **not** produced by the layering above: it is a
 terminal delivery-process wave whose contents - the tooling and process
-friction accumulated while delivering `ADR046-W0`–`ADR046-W7`, in the
+friction accumulated while delivering `ADR046-W0`-`ADR046-W7`, in the
 categories signoff, build, test, merge, codegen, and disk - are triaged and
 fixed at `ADR046-W7` close rather than read off a `Depends on` edge. Its
 only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
@@ -105,7 +105,7 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 | `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
 | `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
-| `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`–`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
+| `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`-`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
 Waves are numbered `ADR046-W0`…`ADR046-W8` - an ADR-046-scoped namespace,
 distinct from this repository's general per-plan `Wn` commit-tag convention
@@ -134,7 +134,7 @@ single agent/reviewer owns all 27 at once:
 | Credentials (3) | `credential-secret-service`, `credential-entra`, `credential-managed-identity` |
 | Transport/observability/activation (5) | `transport-unix`, `transport-vsock`, `transport-azure-relay`, `observability-otel`, `activation-nixos` |
 
-Within a track, the 3–7 Providers are further parallel (each is its own
+Within a track, the 3-7 Providers are further parallel (each is its own
 crate, its own `ADR-046-provider-<name>.md` dossier, and its own
 `tests/`/`integration/` tree per D059). The only intra-track ordering
 constraint is `volume-local` before `volume-virtiofs` (D083: volume-virtiofs
@@ -186,13 +186,13 @@ at `ADR046-W7` close rather than derived from a `Depends on` edge.
 
 ### 3.5 Machine-readable implementation graph (D095)
 
-The wave topology in §3.1–§3.4 and the file-overlap graph in §6 are also emitted
+The wave topology in §3.1-§3.4 and the file-overlap graph in §6 are also emitted
 as a single generated, committed, machine-readable artifact so no author
 re-derives launch order or parallelism from this prose. Per D095:
 
 - **Artifacts.** `docs/specs/ADR-046-implementation-graph.json` (canonical) and
   `docs/specs/ADR-046-implementation-graph.md` (rendered human view: Mermaid DAG,
-  the `W0`–`W7` table, shared-prep and parallel groups, this ready-wave
+  the `W0`-`W7` table, shared-prep and parallel groups, this ready-wave
   algorithm, the critical path, and counts). Both are **generated non-member
   artifacts**: they are NOT part of the 55 `ADR-046-spec-set.json` members and do
   not change that count.
@@ -200,7 +200,7 @@ re-derives launch order or parallelism from this prose. Per D095:
   (`d2b-adr-implementation-graph`), `schemaVersion`, `adr` (`0046`), and `status`.
   It carries one `node` for every one of the 55 member specs and every work item
   in `ADR-046-work-items.json`, each mapped **exactly once** to a `wave`
-  (`W0`–`W7`; `W8` contributes no node until its work items are recorded at
+  (`W0`-`W7`; `W8` contributes no node until its work items are recorded at
   `ADR046-W7` close, per §3.1), a file-disjoint `parallelGroup`,
   `owner`/`destinations`, `entryContracts`, `prerequisites`, `blockers`
   (empty in a `Proposed` plan unless an explicit blocker is recorded),
@@ -210,7 +210,7 @@ re-derives launch order or parallelism from this prose. Per D095:
   `implements-spec` (work item → its spec), and `file-overlap-order` (same-wave
   file contention ordering).
 - **Source of truth.** `spec-depends-on`/`shared-contract` edges derive from
-  `ADR-046-spec-set.json.members[].dependsOn`; waves derive from §3.1–§3.4;
+  `ADR-046-spec-set.json.members[].dependsOn`; waves derive from §3.1-§3.4;
   work-item mapping and `work-item-depends-on` derive from
   `ADR-046-work-items.json`; the W6 `file-overlap-order` edges derive from §3.3.
 - **Generation.** This Proposed documentation set has no implemented repository
@@ -430,13 +430,13 @@ the other claimant's worktree opens:
 | Contended path | Claimed by | Resolution |
 | --- | --- | --- |
 | `packages/d2b-contracts/src/v3/volume.rs` | `ADR046-primitives-001` (base struct), `ADR-046-resources-volume` (full schema), `ADR-046-provider-state` (`stateSchema`/`persistenceClass`/`sensitivityClass`/quota/sealing fields) | `resources-volume`'s base Volume struct lands first (small commit) in `ADR046-W5`; `provider-state`'s extension fields land as an immediate fast-follow commit on the same branch before both fan out to `volume-local`/`volume-virtiofs`/interaction Provider slices in `ADR046-W6` |
-| `packages/Cargo.toml` workspace member list | every new crate across `ADR046-W0`–`ADR046-W6` | integrator-only trailing commit per merged slice; never edited inside a slice's own PR diff except to add that slice's own single new member line, which the integrator rebases to the current tail before merge |
+| `packages/Cargo.toml` workspace member list | every new crate across `ADR046-W0`-`ADR046-W6` | integrator-only trailing commit per merged slice; never edited inside a slice's own PR diff except to add that slice's own single new member line, which the integrator rebases to the current tail before merge |
 | `flake.nix` package/output list | every new Provider crate (`ADR046-W6`) | integrator-only trailing commit, batched per track (§3.3), same rule as Cargo.toml |
 | `nixos-modules/index.nix`, `nixos-modules/default.nix` | `ADR046-identities-002` (zones/resources), every `ADR-046-provider-*` Nix authoring section (`ADR046-W5`/`ADR046-W6`) | `ADR046-W0` lands the base zones/resources wiring; each `ADR046-W6` Provider slice appends its own resource-type Nix module import as a single line, rebased by the integrator at merge time, never touching another Provider's import line |
 | `packages/d2b-contract-tests/tests/workspace_policy.rs` | every Provider crate-layout assertion (D059/`ADR046-pstate-011`-equivalent gates), one row per Provider | integrator batches one appended assertion per merged `ADR046-W6` slice; a slice's own PR adds only its own assertion function, appended after the current last function, never reordering existing ones |
 | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` | regenerated after every spec status/work-item-state change (§8) | integrator-only; regenerated and committed as the last commit of each wave, never inside a slice's own PR |
 | `packages/d2b-core-controller/src/rbac.rs`, `authz_audit.rs` | `resource-api-and-authorization` (W0-adjacent api-002 work item), `resources-zone-control` (Role/RoleBinding schema), `telemetry-audit-and-support` (audit hooks) | `resources-zone-control` (W5) lands the concrete Role/RoleBinding schema atop the W0 `authz.rs` skeleton; `telemetry-audit-and-support` (W5, parallel) adds only its own `authz_audit.rs` audit-emission hooks, a distinct file, so this is a false-positive overlap once split at the file (not module) level - recorded here so the integrator does not accidentally serialize two already-disjoint files under one shared symbol name |
-| `CHANGELOG.md` `## [Unreleased]` block | every slice in every wave (`ADR046-W0`–`ADR046-W8`), because the changelog gate requires release notes for any code change | no slice edits `CHANGELOG.md`; each slice writes one `changelog.d/<branch>.md` fragment carrying standard Keep a Changelog `### <Section>` headings (see `changelog.d/README.md`), which no other slice touches, and the integrator runs `cargo xtask changelog-fold` at wave close to collate every fragment into `## [Unreleased]` by section and delete the consumed fragments. The `test-changelog` gate accepts either a `CHANGELOG.md` entry or a fragment, so slices never need the shared file |
+| `CHANGELOG.md` `## [Unreleased]` block | every slice in every wave (`ADR046-W0`-`ADR046-W8`), because the changelog gate requires release notes for any code change | no slice edits `CHANGELOG.md`; each slice writes one `changelog.d/<branch>.md` fragment carrying standard Keep a Changelog `### <Section>` headings (see `changelog.d/README.md`), which no other slice touches, and the integrator runs `cargo xtask changelog-fold` at wave close to collate every fragment into `## [Unreleased]` by section and delete the consumed fragments. The `test-changelog` gate accepts either a `CHANGELOG.md` entry or a fragment, so slices never need the shared file |
 
 Any newly discovered contention during wave execution is added to this table
 in the same PR that discovers it; the parent decision register process
@@ -497,7 +497,7 @@ are Accepted; per the parent ADR's "Current-code fit" table and
    the successor, and is never bundled into the same commit that lands the
    successor (so a revert of one does not silently also revert the other).
 4. `DELETE`-disposition rows (per the migration map's disposition-code
-   table, §0/§1–§9) are deleted only in the wave whose successor spec closes
+   table, §0/§1-§9) are deleted only in the wave whose successor spec closes
    them - for example, the per-realm PID1 broker/controller systemd units
    (§5.2 of the migration map) are deleted only after `ADR046-W5`'s
    `resources-zone-control`/`core-controllers` successors are integrated and
@@ -1292,7 +1292,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Current anchor | This repository's `AGENTS.md` "Panel review" (8/N-role phase gate, no candidate snapshot/seal), "Stacked PR workflow for large waves," "Worktrees for parallel agents," `tests/AGENTS.md`/`tests/README.md` Layer-1/Layer-2 taxonomy, and `Makefile` targets (`make check-tier0`, `test-unit`, `test-lint`, `test-rust`, `test-proofs`, `test-flake`, `test-drift`, `test-policy`, `check`, `check-static`, `test`, `test-integration`, `test-host-integration`) |
 | Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool are `ADR-only` in this repository today - they exist as a proven, documented process on this codebase's sibling ADR-0045 lineage and are adopted here by explicit copy/adapt under D001/D041, not invented fresh |
 | Behavior retained | Layer-1-first bias, closed drift/meta-gate set, hermetic mocking discipline, commit-before-build convention, no-AI-metadata-in-Git convention, worktree/branch hygiene, `KillMode=process` restart-continuation semantics |
-| Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`–`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
+| Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`-`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
 | Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; extend the existing ten-role panel table unchanged |
 | Replacement/deletion | Nothing in this repository's current validation/delivery tooling is removed by this spec; `ADR046-delivery-00x` work items (§17) are additive tooling built alongside, not instead of, the existing `Makefile`/panel-review process, until `ADR046-W7` explicitly retires any tooling the migration map marks `DELETE`/`REPLACE` |
 | Feasibility proof | The sibling-lineage candidate-snapshot/panel/seal contract supplies the reuse design named in §11/§12; `ADR-046-feasibility-and-spikes` owns the ADR-0046-specific redb/reconciliation/session/package/state numeric proofs cited in §10.4 |
@@ -1419,10 +1419,10 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Work item ID | `ADR046-delivery-008` |
 | Dependency/owner | `ADR046-streamline-001`, `ADR046-W0`; delivery-tooling integrator |
 | Current source | none in this repository; launch order and parallelism were previously derived only from this spec's §3/§6 prose |
-| Reuse source | `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and §3.1–§3.4/§3.5 of this spec; no new framework |
+| Reuse source | `ADR-046-spec-set.json`, `ADR-046-work-items.json`, and §3.1-§3.4/§3.5 of this spec; no new framework |
 | Reuse action | adapt |
 | Destination | `docs/specs/ADR-046-implementation-graph.json`, `docs/specs/ADR-046-implementation-graph.md` (generated by `ADR046-streamline-001`'s `xtask implementation-graph`); the artifact contract, generation, validation, and ready-wave query are owned by §3.5 of this spec |
-| Detailed design | Owns the D095 implementation-graph contract: `artifactKind`/`schemaVersion`/`adr`/`status`; one node per member spec and per work item mapped exactly once to a `W0`–`W7` wave and a file-disjoint `parallelGroup`, with `owner`/`destinations`/`entryContracts`/`prerequisites`/`blockers`/`exitGate`/`topologicalRank`; work-item nodes additionally embed the manifest's exact `detailedDesign` and `validation` text byte-for-byte; typed `spec-depends-on`/`shared-contract`/`work-item-depends-on`/`implements-spec`/`file-overlap-order` edges; the §3.5.1 ready-wave query; and the anti-serialization invariant that every ready file-disjoint group launches concurrently while a same-wave dependency is a prep barrier, not whole-wave serialization. The graph is a generated non-member artifact and does not change the 55-member `ADR-046-spec-set.json` count. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (D095 artifact contract). |
+| Detailed design | Owns the D095 implementation-graph contract: `artifactKind`/`schemaVersion`/`adr`/`status`; one node per member spec and per work item mapped exactly once to a `W0`-`W7` wave and a file-disjoint `parallelGroup`, with `owner`/`destinations`/`entryContracts`/`prerequisites`/`blockers`/`exitGate`/`topologicalRank`; work-item nodes additionally embed the manifest's exact `detailedDesign` and `validation` text byte-for-byte; typed `spec-depends-on`/`shared-contract`/`work-item-depends-on`/`implements-spec`/`file-overlap-order` edges; the §3.5.1 ready-wave query; and the anti-serialization invariant that every ready file-disjoint group launches concurrently while a same-wave dependency is a prep barrier, not whole-wave serialization. The graph is a generated non-member artifact and does not change the 55-member `ADR-046-spec-set.json` count. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (D095 artifact contract). |
 | Integration | Consumed by §4 wave entry/exit and §6 anti-serialization checks and by `ADR046-streamline-013`; a `tests/unit/gates/` drift gate regenerates and `git diff --exit-code`s the graph after any spec/work-item edit |
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Every 55 spec node and every work item present exactly once; all edge endpoints resolve; graph acyclic; waves monotonic (dependencies earlier or explicit same-wave prep barrier); parallel groups claim no ordering absent a dependency/file-overlap edge; deterministic JSON with no timestamps/host paths; every Mermaid node ID valid; the ready-wave query returns the expected concurrently-launchable groups on a seeded fixture |

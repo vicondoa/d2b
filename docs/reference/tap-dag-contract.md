@@ -153,7 +153,7 @@ Broker op: `BrokerRequest::CreatePersistentTap`. Used when the
 packaged CH binary lacks the `tap-fd` capability (probed at
 bundle build via `host.json::chConfig`).
 
-1. Broker performs steps 1–4 of the `TapFd` flow above.
+1. Broker performs steps 1-4 of the `TapFd` flow above.
 2. Broker calls `TUNSETPERSIST = 1` so the tap survives broker
    process exit.
 3. Broker calls `TUNSETOWNER(uid)` + `TUNSETGROUP(gid)` with the

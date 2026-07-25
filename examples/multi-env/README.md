@@ -93,7 +93,7 @@ d2b.envs.personal = { lanSubnet = "10.30.0.0/24"; uplinkSubnet = "192.0.2.4/30";
 | Net VM (auto, `autostart = true`)  | `d2b.vms.sys-work-net`              | `d2b.vms.sys-personal-net`          |
 | Net VM uplink IP                   | `192.0.2.2`                             | `192.0.2.6`                             |
 | Net VM LAN IP (= gateway, dnsmasq) | `10.20.0.1`                             | `10.30.0.1`                             |
-| DHCP overflow pool                 | `10.20.0.251–254`                       | `10.30.0.251–254`                       |
+| DHCP overflow pool                 | `10.20.0.251-254`                       | `10.30.0.251-254`                       |
 | usbipd proxy unit                  | `d2b-sys-work-usbipd-proxy`         | `d2b-sys-personal-usbipd-proxy`     |
 | usbipd proxy bind                  | `192.0.2.1:3240`                        | `192.0.2.5:3240`                        |
 | usbipd backend port (loopback)     | `3242`                                  | `3241`                                  |

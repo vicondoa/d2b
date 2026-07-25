@@ -108,7 +108,7 @@ spec:
   artifactId: d2b-provider-device-tpm
   config:
     controllerExecutionRef: "Host/host-system"   # required; Host for controller Process
-    logLevel: 20                                 # swtpm --log level; 1–20; default 20
+    logLevel: 20                                 # swtpm --log level; 1-20; default 20
     # startupClear: REJECTED - flush always mandatory (load-bearing invariant)
     # stateDirPath: REJECTED - path is policy-derived by volume-local; never configurable
 ```

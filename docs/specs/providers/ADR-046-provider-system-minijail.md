@@ -708,7 +708,7 @@ Adoption algorithm:
 5. Verify that the broker serving the operation is the original recorded
    `clone3` parent and still owns the unreaped child record.
 
-All steps 2–5 run outside the watch-loop task. A blocking-adapter timeout is
+All steps 2-5 run outside the watch-loop task. A blocking-adapter timeout is
 treated as an adoption failure (ambiguous result), not a clean success.
 
 If all checks pass, ProviderSupervisor obtains a fresh duplicate pidfd from the

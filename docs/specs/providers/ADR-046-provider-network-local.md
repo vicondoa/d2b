@@ -828,8 +828,8 @@ Content that appears in files:
 
 | File | Content |
 | --- | --- |
-| `dnsmasq.conf` | DHCP reservations (MAC→index mapping, no external hostnames), forwarders, domain, static pools; `bind-interfaces=true`; `dhcp-ignore-names=true`; dnsmasq system user; hardened confinement settings from `nixos-modules/net.nix` lines 363–441 |
-| `nftables.rules` | Complete `inet` filter/nat/ip6 rulesets for the net VM; all semantics from `nixos-modules/net.nix` lines 168–296; no raw tap IfNames (interface indices used via `eth0`/`eth1` NIC naming inside guest) |
+| `dnsmasq.conf` | DHCP reservations (MAC→index mapping, no external hostnames), forwarders, domain, static pools; `bind-interfaces=true`; `dhcp-ignore-names=true`; dnsmasq system user; hardened confinement settings from `nixos-modules/net.nix` lines 363-441 |
+| `nftables.rules` | Complete `inet` filter/nat/ip6 rulesets for the net VM; all semantics from `nixos-modules/net.nix` lines 168-296; no raw tap IfNames (interface indices used via `eth0`/`eth1` NIC naming inside guest) |
 | `routing.conf` | Static routes for external attachment egress CIDRs; no raw IfNames |
 | `attachments.json` | Attachment index → MAC mapping; no Guest resource names or workload IPs |
 
@@ -1165,11 +1165,11 @@ forces a dnsmasq restart by setting `desiredLifecycle: stopped` followed by
 `running` in a ResourceMutationBatch.  The controller waits for the dnsmasq
 Process to reach Ready again before reporting `DhcpReady=True`.
 
-dnsmasq invariants (preserved from `nixos-modules/net.nix` lines 302–441):
+dnsmasq invariants (preserved from `nixos-modules/net.nix` lines 302-441):
 - `bind-interfaces=true` (binds only to `eth1`/LAN);
 - `dhcp-ignore-names=true` (no hostname spoofing);
 - static DHCP host reservations from `spec.attachments[]` (via config Volume);
-- DHCP dynamic pool: `lanCidr.251`–`lanCidr.254`;
+- DHCP dynamic pool: `lanCidr.251`-`lanCidr.254`;
 - DNS forwarders from `spec.dns.forwarders`;
 - runs under the `net-local-controller` OS user with hardened minijail confinement.
 
@@ -1409,7 +1409,7 @@ status, audit, or telemetry.
 The controller writes the net VM's nftables ruleset to the `nftables.rules` config
 Volume entry.  The **net-agent service** reads and applies it via `nft -f` at
 startup and on each `Reload()` call.  The ruleset preserves all semantics from
-`nixos-modules/net.nix` lines 168–296 (see §16 security invariants for the full
+`nixos-modules/net.nix` lines 168-296 (see §16 security invariants for the full
 chain), except that it contains no USBIP/TCP-3240 carve-out. USBIP Binding
 proxies receive an authorized connected relay stream through Endpoint
 resolution and a LaunchTicket; they do not require a generic net-VM forward
@@ -2340,9 +2340,9 @@ On controller binary upgrade:
 | Bridge-port flags | `packages/d2b-host/src/bridge_port.rs` | Full reuse; wrapped by core adapter |
 | Route preflight | `packages/d2b-host/src/routes.rs` | Full reuse; wrapped by core adapter |
 | sysctl apply | `packages/d2b-host/src/netlink.rs` | Full reuse; wrapped by core adapter |
-| CIDR validation | `nixos-modules/lib.nix:cidrOverlaps` (lines 429–462) | Ported to `validate.rs` |
-| dnsmasq invariants | `nixos-modules/net.nix` lines 302–441 | Encoded in `dnsmasq.conf` rendering |
-| nftables rules | `nixos-modules/net.nix` lines 168–296 | Encoded in `nftables.rules` rendering |
+| CIDR validation | `nixos-modules/lib.nix:cidrOverlaps` (lines 429-462) | Ported to `validate.rs` |
+| dnsmasq invariants | `nixos-modules/net.nix` lines 302-441 | Encoded in `dnsmasq.conf` rendering |
+| nftables rules | `nixos-modules/net.nix` lines 168-296 | Encoded in `nftables.rules` rendering |
 | lib.mkForce override | `nixos-modules/base.nix`:`10-eth-dhcp` | Preserved in net-vm-base artifact |
 
 ### 25.2 Breaking changes from v1 baseline
@@ -2458,7 +2458,7 @@ On controller binary upgrade:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Provider; config rendering owned by `Provider/network-local`, storage reconciliation owned by `Provider/volume-local`. |
-| Current source | Reuse semantics from `nixos-modules/net.nix` lines 168–296 for nftables and lines 302–441 for dnsmasq; runtime volume model is net-new. |
+| Current source | Reuse semantics from `nixos-modules/net.nix` lines 168-296 for nftables and lines 302-441 for dnsmasq; runtime volume model is net-new. |
 | Reuse source | `nixos-modules/net.nix` dnsmasq, nftables, routing, and attachment configuration semantics. |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-network-local/src/config_volume.rs`. |
@@ -2512,7 +2512,7 @@ On controller binary upgrade:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Nix; depends on Network resource schema and CIDR validation rules. |
-| Current source | `nixos-modules/lib.nix:cidrOverlaps` lines 429–462 provides CIDR overlap logic in the v1 module layer. |
+| Current source | `nixos-modules/lib.nix:cidrOverlaps` lines 429-462 provides CIDR overlap logic in the v1 module layer. |
 | Reuse source | `nixos-modules/lib.nix:cidrOverlaps`. |
 | Reuse action | adapt |
 | Destination | Nix flake/resource schema checks for declared Networks and provider `validate.rs` parity. |

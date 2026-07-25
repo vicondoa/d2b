@@ -4040,7 +4040,7 @@ async fn query_wpctl_channel_state(
 /// - `Volume: 0.50`
 /// - `Volume: 0.50 [MUTED]`
 ///
-/// Returns a protobuf `GuestAudioChannelState` with `muted`, `level` (0–100),
+/// Returns a protobuf `GuestAudioChannelState` with `muted`, `level` (0-100),
 /// and `level_known = true`. Returns `AudioPipeWireUnavailable` on any parse
 /// failure so the caller fails closed.
 fn parse_wpctl_get_volume_output(

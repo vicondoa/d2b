@@ -129,7 +129,7 @@ status:
 | `providerRef` | ResourceRef | yes | - | must resolve to an installed Provider | Selects the device Provider |
 | `deviceClass` | enum | yes | - | `physical` \| `emulated` | Physical devices exist in sysfs/udev; emulated devices are created by the Provider |
 | `arbitration` | enum | yes | - | `exclusive` \| `shared` | Whether the device may be simultaneously claimed by more than one holder |
-| `maxConcurrentClaims` | uint | no | 1 | 1–16 | Maximum simultaneous claimants; must equal 1 when `arbitration=exclusive` |
+| `maxConcurrentClaims` | uint | no | 1 | 1-16 | Maximum simultaneous claimants; must equal 1 when `arbitration=exclusive` |
 | `inventory` | object | yes | - | see below | Physical or emulated device selector |
 | `provider` | object? | no | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional selected-Provider extension envelope (D089). `settings` carries Provider-validated implementation-only device configuration (`<provider>.d2bus.org/Device/spec`); strict deny-unknown, bounded. MUST NOT shadow a base field. |
 
@@ -586,7 +586,7 @@ Device (emulated, exclusive, TPM class).
 
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
-| `logLevel` | uint | 20 | 1–20 | swtpm `--log level` value |
+| `logLevel` | uint | 20 | 1-20 | swtpm `--log level` value |
 | `startupClear` | bool | true | - | Emit `--flags startup-clear`; requires pre-start flush |
 | `stateDirPath` | null | provider-derived | - | Overrides are rejected; path is always derived from Volume/state owner |
 
@@ -730,7 +730,7 @@ Device (physical, exclusive per Guest attachment).
 | --- | --- | --- | --- | --- |
 | `usbipHostKernelModule` | string | `usbip-host` | fixed | Host kernel module |
 | `vhciHcdKernelModule` | string | `vhci_hcd` | fixed | Guest kernel module |
-| `backendPort` | uint16 | provider-derived | 1–65535 | Per-env deterministic USBIP backend port |
+| `backendPort` | uint16 | provider-derived | 1-65535 | Per-env deterministic USBIP backend port |
 
 The usbip host and guest binaries are dependencies bundled inside the
 `d2b-provider-device-usbip` package closure. Their executable paths are resolved
@@ -871,9 +871,9 @@ Device (physical, exclusive per-session lease).
 | `devices[].vendorId` | uint16 | - | - | USB vendor ID |
 | `devices[].productId` | uint16 | - | - | USB product ID |
 | `devices[].serial` | string \| null | null | max 128 chars | Optional serial filter |
-| `vsockPort` | uint16 | 14320 | 1–65535 | AF_VSOCK port for host↔guest relay |
-| `sessionRingSize` | uint | 32 | 8–256 | Bounded recent-session ring size |
-| `leaseTimeoutSecs` | uint | 300 | 30–3600 | Session-level lease timeout |
+| `vsockPort` | uint16 | 14320 | 1-65535 | AF_VSOCK port for host↔guest relay |
+| `sessionRingSize` | uint | 32 | 8-256 | Bounded recent-session ring size |
+| `leaseTimeoutSecs` | uint | 300 | 30-3600 | Session-level lease timeout |
 
 The `vsockPort` default 14320 is stable and matches `security-key-guest.nix`
 option `d2b.securityKey.vsockPort` default.
@@ -1323,7 +1323,7 @@ d2b.zones.<zone>.resources.<name> = {
     arbitration   = "exclusive";            # "exclusive" | "shared"
 
     # Optional - defaults shown
-    maxConcurrentClaims = 1;               # 1–16; must be 1 when arbitration=exclusive
+    maxConcurrentClaims = 1;               # 1-16; must be 1 when arbitration=exclusive
 
     inventory.selector = {};               # emulated: {} or absent
     # inventory.selector.busClass = "usb" | "hidraw" | "drm" | "pci" | "tpm";
@@ -1427,7 +1427,7 @@ check` time against the committed ResourceTypeSchema:
 | `spec.arbitration=exclusive` ⟹ `spec.maxConcurrentClaims = 1` | `exclusive-max-claims-conflict` |
 | `spec.arbitration=shared` ⟹ `spec.deviceClass=physical` | `emulated-shared-arbitration` |
 | `spec.arbitration=shared` + GPU Provider ⟹ `spec.provider.settings.renderNodeOnly=true` | `shared-arbitration-requires-render-node-only` |
-| `spec.maxConcurrentClaims` ∈ 1–16 | `max-claims-out-of-bounds` |
+| `spec.maxConcurrentClaims` ∈ 1-16 | `max-claims-out-of-bounds` |
 | No two Device resources in the same Zone share the same `spec.inventory.selector.label` | `duplicate-device-label` |
 | USBIP and security-key Provider both referencing same selector label | `usbip-sk-mutual-exclusion` |
 | `spec.provider.settings` validates against the Provider's signed JSON Schema | `invalid-provider-settings` |

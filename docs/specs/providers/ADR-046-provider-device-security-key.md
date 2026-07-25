@@ -100,14 +100,14 @@ validated against the signed JSON Schema in the Provider package descriptor.
 
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
-| `devices` | list | `[]` | 0–16 entries | Per-selector entries; may be empty when Zone configures no security-key Devices |
+| `devices` | list | `[]` | 0-16 entries | Per-selector entries; may be empty when Zone configures no security-key Devices |
 | `devices[].label` | string | - | `^[a-z][a-z0-9-]{0,62}$` | Stable operator-defined selector label; unique within the config |
-| `devices[].vendorId` | uint16 | - | 0x0001–0xFFFE | USB vendor ID |
-| `devices[].productId` | uint16 | - | 0x0001–0xFFFE | USB product ID |
+| `devices[].vendorId` | uint16 | - | 0x0001-0xFFFE | USB vendor ID |
+| `devices[].productId` | uint16 | - | 0x0001-0xFFFE | USB product ID |
 | `devices[].serial` | string \| null | `null` | ≤ 128 UTF-8 chars, no NUL | Optional serial filter; null matches any serial |
-| `sessionRingSize` | uint | `32` | 8–256 | Maximum recent ceremony-session records per SecurityKeyBinding; oldest entry evicted when full; records are not Resources |
-| `leaseTimeoutSecs` | uint | `120` | 30–3600 | Provider ceiling/default for per-Binding ceremony timeout; preserves baseline `CEREMONY_TIMEOUT` |
-| `queueWaitTimeoutSecs` | uint | `15` | 5–120 | Maximum wait for a busy lease before the relay returns `ERR_CHANNEL_BUSY`; maps to `QUEUE_WAIT_TIMEOUT` |
+| `sessionRingSize` | uint | `32` | 8-256 | Maximum recent ceremony-session records per SecurityKeyBinding; oldest entry evicted when full; records are not Resources |
+| `leaseTimeoutSecs` | uint | `120` | 30-3600 | Provider ceiling/default for per-Binding ceremony timeout; preserves baseline `CEREMONY_TIMEOUT` |
+| `queueWaitTimeoutSecs` | uint | `15` | 5-120 | Maximum wait for a busy lease before the relay returns `ERR_CHANNEL_BUSY`; maps to `QUEUE_WAIT_TIMEOUT` |
 
 **Prohibited fields:** `devices[].hidrawPath`, `devices[].sysfsPath`, any field
 containing a raw filesystem path. The Provider derives the physical node from
@@ -391,7 +391,7 @@ When Core launches the relay Process, it resolves the `deviceUsage` entry
 5. Holds the corresponding OFD lease for the relay's process lifetime. Lease releases
    automatically when the relay exits for any reason.
 
-No path or UID crosses any wire. No Provider code participates in steps 1–5.
+No path or UID crosses any wire. No Provider code participates in steps 1-5.
 
 ### Identity and FIDO usage page
 
@@ -974,7 +974,7 @@ The relay maintains a `CidTranslator` (v3 counterpart to the type of the same
 name in `packages/d2bd/src/security_key.rs`). On each incoming guest CTAPHID
 packet:
 
-- Bytes 0–3 are the guest-assigned CID (u32, big-endian per CTAPHID spec).
+- Bytes 0-3 are the guest-assigned CID (u32, big-endian per CTAPHID spec).
 - The relay looks up the guest CID in the translation table. If absent, it
   allocates a new host-assigned CID from a monotonic counter and records the
   mapping.
@@ -1561,7 +1561,7 @@ Constraints specific to this Provider:
   `d2b.zone=<Zone name>`; neither is copied into metric labels.
 - **`phase`** metric label: `"Ready"` | `"Pending"` | `"Degraded"` | `"Failed"` | `"Unknown"`.
 - Metric `d2b_device_sk_session_total{outcome}`: counter; `outcome` ∈ `{success, timeout, cancelled, busy, conflict, error}`.
-- Metric `d2b_device_sk_ceremony_duration_seconds`: histogram; bucketed 0–120 s.
+- Metric `d2b_device_sk_ceremony_duration_seconds`: histogram; bucketed 0-120 s.
 - Metric `d2b_device_sk_relay_restarts_total`: counter.
 - No metric label or span attribute carries a device/resource/Service/Binding
   name, UID, ref, digest (including `resource_name_digest`), session ID, guest

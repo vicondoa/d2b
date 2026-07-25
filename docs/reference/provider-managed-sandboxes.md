@@ -129,8 +129,8 @@ provider reports a complete, non-secret guestd-compatible bootstrap contract:
 4. The sandbox has a workload identity suitable for acquiring its scoped relay
    sender material.
 5. The persistent-shell helper is available in the sandbox image.
-6. The agent reports bounded effective shell limits (`maxSessions` 1–256,
-   `maxAttached` 1–64, and `maxAttached <= maxSessions`).
+6. The agent reports bounded effective shell limits (`maxSessions` 1-256,
+   `maxAttached` 1-64, and `maxAttached <= maxSessions`).
 7. Health and capability advertisement come from the in-sandbox agent, with
    generation metadata for the guest boot, guestd instance, and shell daemon.
 

@@ -228,7 +228,7 @@ status:
 | `videoSidecar` | bool | `false` | - | If true, spawn a crosvm video-decoder Process alongside the GPU worker. Requires `renderNodeOnly=false`. |
 | `videoNvidiaDecode` | bool | `false` | - | If true, include `nvidia-ctl`, `nvidia-device`, `nvidia-uvm` allowlist tokens for the video worker in addition to `dri`. No effect when `videoSidecar=false`. |
 | `contextTypes` | list\<enum\> | `[cross-domain, virgl, virgl2]` | closed set | GPU context types: `virgl`, `virgl2`, `cross-domain`. Order is preserved and emitted in sorted order in canonical JSON. |
-| `displays` | list\<object\> | `[{hidden: true}]` | 0–8 entries | Virtual display config. Each entry: `{hidden: bool}`. |
+| `displays` | list\<object\> | `[{hidden: true}]` | 0-8 entries | Virtual display config. Each entry: `{hidden: bool}`. |
 | `egl` | bool | `true` | - | EGL rendering via virglrenderer. |
 | `vulkan` | bool | `true` | - | Vulkan rendering via venus. |
 | `crossDomainTrusted` | bool | `false` | - | Enable the `cross-domain` virtio-gpu context type for cross-domain Wayland forwarding. Default `false`; set `true` only for VMs where Wayland forwarding is the primary use case (e.g., a Wayland-forwarding launchpad VM). Must be `false` for VMs running Docker or container workloads. |
@@ -261,7 +261,7 @@ The `inventory.selector` for GPU devices always uses `busClass: drm`.
    includes it in the returned result.
 
 **Observe interval:** default 30 s; maximum 60 s. Configurable in the Provider
-root config via `observeIntervalSecs: uint (10–60)`.
+root config via `observeIntervalSecs: uint (10-60)`.
 
 ### Physical probe failure semantics
 
@@ -306,7 +306,7 @@ and fails the NixOS eval.
 A Device resource with `settings.renderNodeOnly=true` may use either
 `arbitration: exclusive` (default) or `arbitration: shared` (must be explicitly
 set by the operator). When `arbitration: shared`, `maxConcurrentClaims` may be
-1–16.
+1-16.
 
 Render-node-only mode:
 - Provider/system-minijail validates the LaunchTicket and requests
@@ -485,7 +485,7 @@ No `/dev` path crosses the public wire. Maximum 8 fds per Process launch.
 | `nvidia-uvm` | | when `videoNvidiaDecode=true` or NVIDIA graphics VM |
 | `udmabuf` | ✓ | |
 
-Source: `packages/d2b-core/src/bundle_resolver.rs` lines 1888–1894 (ProcessRole::Gpu
+Source: `packages/d2b-core/src/bundle_resolver.rs` lines 1888-1894 (ProcessRole::Gpu
 and ProcessRole::GpuRenderNode broker device token comment). Source:
 `nixos-modules/minijail-profiles.nix` gpu profile `deviceBinds` list.
 
@@ -681,7 +681,7 @@ the **privileged broker** performs:
    passed via fd inheritance.
 
 Source: `nixos-modules/minijail-profiles.nix` `gpu-render-node` profile (lines
-490–545 approximately); `packages/d2b-priv-broker/src/sys.rs`
+490-545 approximately); `packages/d2b-priv-broker/src/sys.rs`
 (`clone3_spawn_runner`); `packages/d2b-core/src/bundle_resolver.rs`
 (test `gpu_render_node_user_namespace_propagates_to_resolved_intent` at line 4419).
 
@@ -972,7 +972,7 @@ privileged broker which executes them:
 
 Source: `packages/d2b-contracts/src/broker_wire.rs` `RunnerRole::Gpu`,
 `RunnerRole::Video`; `packages/d2b-core/src/bundle_resolver.rs` device token
-sets (lines 1882–1894).
+sets (lines 1882-1894).
 
 ### No blanket device grant
 
@@ -1671,7 +1671,7 @@ disposition contract test passes.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-device-gpu/src/probe.rs` |
-| Detailed design | Call `GpuEffectPort::probe_drm_device(selector)` on each `scheduled-observe` trigger; the effect port resolves device presence against the trusted device table and returns a presence/health result without exposing raw sysfs or device paths to the controller. Three-strike failure counter; `observe_interval_secs` (10–60, default 30); emit `DevicePresent` condition and update `lastProbedAt`. |
+| Detailed design | Call `GpuEffectPort::probe_drm_device(selector)` on each `scheduled-observe` trigger; the effect port resolves device presence against the trusted device table and returns a presence/health result without exposing raw sysfs or device paths to the controller. Three-strike failure counter; `observe_interval_secs` (10-60, default 30); emit `DevicePresent` condition and update `lastProbedAt`. |
 | Integration | `scheduled-observe` trigger from reconcile loop calls `probe::check_drm_device` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/conformance.rs` contains probe-mock path; `cargo test` passes |
@@ -1699,7 +1699,7 @@ disposition contract test passes.
 | --- | --- |
 | Work item ID | `ADR046-gpu-005` |
 | Dependency/owner | ADR046-gpu-002; `ADR046-components-processes-and-sandbox` (Provider/system-minijail present and able to handle Process resources with `gpu-worker`/`render-node-worker` templates) |
-| Current source | `packages/d2b-host/src/gpu_argv.rs` (implemented-and-reachable); `packages/d2b-core/src/bundle_resolver.rs` lines 1888–1894 (device token set); `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode` (implemented-and-reachable); `nixos-modules/minijail-profiles.nix` gpu/gpu-render-node profiles (implemented-and-reachable) |
+| Current source | `packages/d2b-host/src/gpu_argv.rs` (implemented-and-reachable); `packages/d2b-core/src/bundle_resolver.rs` lines 1888-1894 (device token set); `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode` (implemented-and-reachable); `nixos-modules/minijail-profiles.nix` gpu/gpu-render-node profiles (implemented-and-reachable) |
 | Reuse source | `packages/d2b-host/src/gpu_argv.rs` (baseline `b5ddbed`): `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig`; `packages/d2b-core/src/bundle_resolver.rs` device token constant comment |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-gpu/src/worker_gpu.rs` |
@@ -1778,7 +1778,7 @@ disposition contract test passes.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | **GPU/video process roles**: `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` (`implemented-and-reachable`). **GPU argv**: `packages/d2b-host/src/gpu_argv.rs` `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig` (`implemented-and-reachable`). **Video argv + wire constants**: `packages/d2b-host/src/video_argv.rs` `VideoArgvInput`, `VideoBackend`, `wire_contract_snapshot()`, all `VHOST_USER_MEDIA_*` constants (`implemented-and-reachable`). **GPU device token set**: `packages/d2b-core/src/bundle_resolver.rs` lines 1882–1894, ProcessRole::Gpu/GpuRenderNode arm (`implemented-and-reachable`). **Minijail profiles**: `nixos-modules/minijail-profiles.nix` gpu, video, gpu-render-node profiles with device binds, seccomp refs, user NS config (`implemented-and-reachable`). **Broker ops**: `packages/d2b-contracts/src/broker_wire.rs` `RunnerRole::Gpu`, `RunnerRole::Video` (`implemented-and-reachable`). **Nix host graphics**: `nixos-modules/components/graphics.nix` (crosvm wrapper, virglVideo patch, CH rev guard, crossDomainTrusted enforcement) (`implemented-and-reachable`). **Nix guest video**: `nixos-modules/components/video/guest.nix` (`virtio_media` module, CH `--vhost-user-media` arg) (`generated-or-eval-contract`). **Contract tests**: `packages/d2b-contract-tests/tests/minijail_gpu.rs`, `minijail_swtpm_video.rs`, `video_binary_contract.rs` (`implemented-and-reachable`). **Provider crate**: `packages/d2b-provider-device-gpu/` (`ADR-only`). |
+| Current anchor | **GPU/video process roles**: `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` (`implemented-and-reachable`). **GPU argv**: `packages/d2b-host/src/gpu_argv.rs` `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig` (`implemented-and-reachable`). **Video argv + wire constants**: `packages/d2b-host/src/video_argv.rs` `VideoArgvInput`, `VideoBackend`, `wire_contract_snapshot()`, all `VHOST_USER_MEDIA_*` constants (`implemented-and-reachable`). **GPU device token set**: `packages/d2b-core/src/bundle_resolver.rs` lines 1882-1894, ProcessRole::Gpu/GpuRenderNode arm (`implemented-and-reachable`). **Minijail profiles**: `nixos-modules/minijail-profiles.nix` gpu, video, gpu-render-node profiles with device binds, seccomp refs, user NS config (`implemented-and-reachable`). **Broker ops**: `packages/d2b-contracts/src/broker_wire.rs` `RunnerRole::Gpu`, `RunnerRole::Video` (`implemented-and-reachable`). **Nix host graphics**: `nixos-modules/components/graphics.nix` (crosvm wrapper, virglVideo patch, CH rev guard, crossDomainTrusted enforcement) (`implemented-and-reachable`). **Nix guest video**: `nixos-modules/components/video/guest.nix` (`virtio_media` module, CH `--vhost-user-media` arg) (`generated-or-eval-contract`). **Contract tests**: `packages/d2b-contract-tests/tests/minijail_gpu.rs`, `minijail_swtpm_video.rs`, `video_binary_contract.rs` (`implemented-and-reachable`). **Provider crate**: `packages/d2b-provider-device-gpu/` (`ADR-only`). |
 | Evidence class | GPU/video process role enum and argv generators: `implemented-and-reachable`. GPU device token set and minijail profiles: `implemented-and-reachable`. Broker RunnerRole::Gpu/Video: `implemented-and-reachable`. CH/crosvm version guard: `implemented-and-reachable`. Video wire-contract constants: `implemented-and-reachable`. Device ResourceType schema: `ADR-only`. Provider crate and reconcile loop: `ADR-only`. |
 | Behavior retained | GPU device allowlist token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; distinct allocator-assigned video vs GPU worker principal (LaunchTicket invariant; private broker state); render-node fd pre-opened by the **privileged broker** and inherited via private fd-inheritance protocol; user-namespace zero-host-caps (ADR 0021); no Wayland/audio sockets for video role; EndpointRef-based cross-domain trust projected from Device setting into LaunchTicket at resolution time; argv builder omits CrossDomain from runtime args when false; NVIDIA opt-in gating for video; CH/crosvm rev compatibility guard; `videoSidecar` + `videoNvidiaDecode` mutual independence; `virglVideo` + `videoSidecar` mutual exclusion. |
 | Required delta | `d2b-provider-device-gpu` crate, async reconcile controller, Device ResourceType schema for GPU settings, Provider resource registration, process-name templates from Device UID, wire-contract check at startup, shared render-node arbitration enforcement, generation-based lifecycle via Zone resource plane; D087 status-first state assertion in the component descriptor - no Provider state Volume, empty ProviderStateSet, no controller `/state` mount, bounded operational state in status and Operation rows (ADR046-gpu-008). |

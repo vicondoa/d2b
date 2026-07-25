@@ -666,7 +666,7 @@ resource field.
 ### 6.4 retainedGenerations Nix option
 
 `d2b.zones.<zone>.retainedGenerations` is a Zone-level Nix option (default 3,
-range 1–16). It is the **sole** location where the retention bound is declared.
+range 1-16). It is the **sole** location where the retention bound is declared.
 It flows into `Provider.spec.config.retainedGenerations` only. It is not
 duplicated in any `NixosGeneration` spec, nor in any other resource field.
 

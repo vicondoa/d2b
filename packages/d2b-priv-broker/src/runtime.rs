@@ -572,7 +572,7 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
         ))));
     }
 
-    // Steps 4–5: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs). The
+    // Steps 4-5: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs). The
     // `LISTEN_*` vars are intentionally left in place; see the fn docs for
     // why that is inert (LISTEN_PID self-scoping + explicit runner env).
     Some(crate::sys::adopt_listen_fd_from_fd3().map_err(RunError::Io))

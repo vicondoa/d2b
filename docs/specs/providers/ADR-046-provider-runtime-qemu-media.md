@@ -128,14 +128,14 @@ It is never specified directly in Nix.
 | --- | --- | --- | --- | --- | --- |
 | `controllerExecutionRef` | ResourceRef | **yes** | - | `Host/<n>` | Host on which the runtime-qemu-media controller Process runs |
 | `qemuBinaryArtifactId` | string | yes | `"qemu-system-x86_64"` | `^[a-z][a-z0-9-]*$` | Artifact catalog ID for the QEMU binary closure |
-| `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5–300 | Deadline for initial QMP greeting after process start |
-| `qmpOperationTimeoutSeconds` | u32 | no | `60` | 5–300 | Per-QMP-command timeout |
+| `qmpReadyTimeoutSeconds` | u32 | no | `30` | 5-300 | Deadline for initial QMP greeting after process start |
+| `qmpOperationTimeoutSeconds` | u32 | no | `60` | 5-300 | Per-QMP-command timeout |
 | `pausedAtBootDefault` | bool | no | `true` | - | Default `pauseAtBoot` if not set in Guest spec.provider.settings |
 | `displayProviderRef` | ResourceRef? | no | `null` | `Provider/<n>` | Provider for WaylandSession resources; required when any Guest sets `displayWindow: true` |
 | `networkProviderRef` | ResourceRef | yes | - | `Provider/<n>` | Network Provider for tap/bridge delivery |
 | `volumeProviderRef` | ResourceRef | yes | - | `Provider/<n>` | Volume Provider for media and runtime volumes |
-| `runtimeTmpfsQuotaBytes` | u64 | no | `10485760` | 1 MiB–256 MiB | Per-Guest runtime tmpfs size cap |
-| `runtimeTmpfsQuotaInodes` | u32 | no | `1024` | 64–65536 | Per-Guest runtime tmpfs inode cap |
+| `runtimeTmpfsQuotaBytes` | u64 | no | `10485760` | 1 MiB-256 MiB | Per-Guest runtime tmpfs size cap |
+| `runtimeTmpfsQuotaInodes` | u32 | no | `1024` | 64-65536 | Per-Guest runtime tmpfs inode cap |
 
 `qemuBinaryArtifactId` resolves to a `d2b.artifacts.<id>` entry with
 `type = "provider"` or `type = "config-bundle"` containing the QEMU binary

@@ -27,10 +27,10 @@ actionable messages for **TODOs 2 and 3, including the SSH-key
 sub-step** (hostname; the Wayland user identity; the at-least-one
 SSH key under `d2b.site.userAuthorizedKeys`, which is the tail
 half of TODO 3). The remaining TODOs (1 hardware, 4 SSH-user
-echo, 5–7 network CIDRs) ship with values that PASS
+echo, 5-7 network CIDRs) ship with values that PASS
 `nix flake check` - they are gated by **your judgement**, not by
 eval. Treat the assertion-passing scaffold as a starting point that
-still requires a manual review of TODOs 5–7 before activation.
+still requires a manual review of TODOs 5-7 before activation.
 
 Why no eval-gate for the CIDR TODOs? The framework's per-env CIDR
 validator in `nixos-modules/network.nix` does pure-Nix IPv4 prefix
@@ -149,7 +149,7 @@ for the full semantics.
 ## Going further
 
 - **More VMs**: copy the `d2b.vms.corp-vm` block, give it a new
-  name and a new `index` (`10`–`250`, unique within an env).
+  name and a new `index` (`10`-`250`, unique within an env).
 - **More envs**: copy the `d2b.envs.work` block, give it a new
   name + non-overlapping `lanSubnet`/`uplinkSubnet`. VMs in
   different envs cannot talk to each other.

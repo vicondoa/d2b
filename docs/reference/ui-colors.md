@@ -56,7 +56,7 @@ palette color from the realm name. Resolved colors are always lowercase.
 
 The realm entry in `ui-colors.json` includes the canonical realm path
 (see `d2b.realms.<realm>.path`) alongside the accent so consumers can
-route colors to realm-path–qualified display targets without re-reading
+route colors to realm-path-qualified display targets without re-reading
 the realm config.
 
 If a VM border color is omitted, d2b resolves it as follows:
@@ -153,7 +153,7 @@ The `realms` object is keyed by realm id. Each entry includes:
 - `path` - the canonical realm path (`d2b.realms.<realm>.path`), written
   most-specific-first (e.g. `payments.work` for a realm whose `parent` is
   `work`). Desktop consumers use this to route the accent to
-  realm-path–qualified display targets.
+  realm-path-qualified display targets.
 - `accent` - the resolved accent color. Set via
   `d2b.realms.<realm>.network.ui.accentColor`; falls back to a
   deterministic palette color derived from the realm name.

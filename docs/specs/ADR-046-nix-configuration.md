@@ -1914,7 +1914,7 @@ Nix eval
       6. record prior generation pointer for rollback window.
 ```
 
-Steps 1–3 are fail-closed. Step 4 is atomic.
+Steps 1-3 are fail-closed. Step 4 is atomic.
 
 ### Rollback
 
@@ -2059,7 +2059,7 @@ structured audit event:
 | Controller-managed preservation | Integration | A resource carrying `managedBy=controller` exists. Activate generation 2. Verify the config-publication controller never touches that resource, regardless of ownerRef or bundle absence. |
 | API-managed preservation | Integration | A resource carrying `managedBy=api` exists. Activate generation 2. Verify the config-publication controller never enqueues it for deletion. |
 | Rollback after partial cleanup | Integration | Activate generation 2 (R absent, cleanup in progress). Before cleanup completes, roll back to generation 1. Verify R is re-adopted or re-created and returns to Ready. |
-| Retention window enforcement | Integration | Activate generations 1–5 with `retainedGenerations=3`. Verify generation 1 is pruned and no longer available for rollback after generation 4 activates. |
+| Retention window enforcement | Integration | Activate generations 1-5 with `retainedGenerations=3`. Verify generation 1 is pruned and no longer available for rollback after generation 4 activates. |
 
 
 

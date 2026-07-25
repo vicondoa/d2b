@@ -449,7 +449,7 @@ rpc OpenTransport(OpenTransportRequest) -> OpenTransportResponse
 | `endpoint_id` | `OpaqueEndpointId` | Child-local opaque endpoint-resolution token derived from the selected allocator's sealed binding; opaque to Provider; not an `Endpoint` resource |
 | `binding_id` | `OpaqueBindingId` | Child-local opaque binding identity derived from the selected allocator's sealed port allocation; opaque to Provider |
 | `role` | `TransportRole` | `Initiator` (child endpoint connects to the selected parent route endpoint) or `Responder` (child endpoint accepts that parent-facing route); never a parent Provider call |
-| `deadline_ms` | `u32` | Connect/accept deadline in ms from call arrival; range 1 000–60 000 |
+| `deadline_ms` | `u32` | Connect/accept deadline in ms from call arrival; range 1 000-60 000 |
 
 **Response fields**:
 
@@ -572,7 +572,7 @@ selected-parent allocation; the Provider never receives the raw resolution.
 | Field | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `guestRef` | `ResourceRef` | required | `Guest/<name>` in the same child Zone as the ZoneLink and selected Provider; child core resolves the local endpoint through the sealed allocation |
-| `portClass` | `string` (enum) | `"d2b-link"` | Port class; core allocates a port from the class range; `"d2b-link"` → range `14420–14499` |
+| `portClass` | `string` (enum) | `"d2b-link"` | Port class; core allocates a port from the class range; `"d2b-link"` → range `14420-14499` |
 | `connectTimeoutSeconds` | `integer` [1, 60] | `30` | Passed as `deadline_ms` in `OpenTransport` |
 
 **Forbidden fields** (rejected by schema `additionalProperties: false`):
@@ -677,7 +677,7 @@ for this child-local Provider/ZoneLink.
 | INV-VSOCK-005 | Provider never accesses or modifies ZoneLink, Guest, Route, or any other ResourceType | RBAC grants contain no resource-type verbs; Provider holds no resource API client; conformance test asserts no resource calls |
 | INV-VSOCK-006 | `spec.transportSettings` schema rejects any field carrying a raw socket address, port number, CID, path, or credential | JSON Schema `additionalProperties: false`; build-time emitter secret-key scanner |
 | INV-VSOCK-007 | Provider process: no new privileges, strict seccomp, no network namespace join, read-only root filesystem | `sandbox.seccompClass: strict`, `sandbox.noNewPrivileges: true`, `sandbox.readOnlyRoot: true` in Process template; `Provider/system-minijail` profile |
-| INV-VSOCK-008 | Port range `14420–14499` is reserved for `d2b-link` ZoneLink vsock sessions; ports 14317, 14318, 14319 are never allocated by `portClass: "d2b-link"` | Core allocator exclusion list; enforced in core, not in Provider |
+| INV-VSOCK-008 | Port range `14420-14499` is reserved for `d2b-link` ZoneLink vsock sessions; ports 14317, 14318, 14319 are never allocated by `portClass: "d2b-link"` | Core allocator exclusion list; enforced in core, not in Provider |
 | INV-VSOCK-009 | Service component receives only a dirfd into its local `service` view of its own state Volume; no raw filesystem path, no parent-directory access, no cross-component Volume mount | volume-local Provider validates `sensitivityClass: private` and `mountPath` scope before handing dirfd to process; domain isolation enforced at mount time |
 | INV-VSOCK-010 | State Volume layout principal `User/d2b-transport-vsock` is a Nix-preprovisioned `User/<name>` ResourceRef; no `ComponentPrincipal` ResourceRef used | Volume `layout[].ownerRef`/`groupRef` fields hold only `User/<name>` refs; validated at Volume admission; Nix module declares the system user |
 
@@ -1129,7 +1129,7 @@ Old and new suites never run in parallel indefinitely.
   one service Process per Provider instance, not per ZoneLink.
 - `spec.transportSettings`: `guestRef` / `portClass` fields and forbidden raw
   endpoint values; `spec.transportCredentials` must be empty.
-- Port range `14420–14499` reservation; ports 14317/14318/14319 excluded.
+- Port range `14420-14499` reservation; ports 14317/14318/14319 excluded.
 - `VsockEffectPort` injection: Provider never calls AF_VSOCK syscalls directly;
   `tokio-vsock` is NOT a Provider crate dependency.
 - Components: `d2b-transport-vsock` binary; one service process per Zone.

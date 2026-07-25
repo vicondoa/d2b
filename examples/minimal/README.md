@@ -93,7 +93,7 @@ the rebuild, on the host you will find:
 | Resource                                           | Purpose                                                                 |
 |----------------------------------------------------|-------------------------------------------------------------------------|
 | `br-personal-up`                                       | /30 point-to-point bridge: host `.1` ↔ net VM `.2`.                     |
-| `br-personal-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10–.250`. **Host has no IP on this bridge.** |
+| `br-personal-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10-.250`. **Host has no IP on this bridge.** |
 | `sys-personal-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
 | `personal-dev` (microVM)                                | Your declared workload VM. Tap on `br-personal-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
 | USBIP runners                                           | Not materialised by this headless starter unless a VM opts into `usbip.yubikey = true`; see the USBIP reference/how-to before adding YubiKey passthrough. |

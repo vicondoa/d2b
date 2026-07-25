@@ -1339,7 +1339,7 @@ pub struct UsbipStatusEntry {
 pub struct GuestAudioChannelState {
     /// True when the channel is muted (grant = off).
     pub muted: bool,
-    /// Current level 0–100; 0 when not configured or unavailable.
+    /// Current level 0-100; 0 when not configured or unavailable.
     pub level: u32,
     /// True when the level value is meaningful.
     pub level_known: bool,
@@ -1564,7 +1564,7 @@ pub enum GuestControlErrorKind {
     AudioPipeWireUnavailable,
     /// Requested audio channel is not recognised.
     AudioChannelUnknown,
-    /// Audio level value is out of the 0–100 range.
+    /// Audio level value is out of the 0-100 range.
     AudioLevelOutOfRange,
     /// PipeWire enforcement call succeeded but the policy could not be applied.
     AudioEnforcementFailed,

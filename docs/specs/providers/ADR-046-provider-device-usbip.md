@@ -32,7 +32,7 @@ contracts without USBIP.
   `packages/d2bd/src/usbipd_perenv_autostart.rs`;
 - the typed step machine in `packages/d2bd/src/usbip_state_machine.rs`;
 - the reconcile state model in `packages/d2bd/src/usbip_reconcile_state.rs`;
-- the per-env firewall carve-out in `nixos-modules/network.nix` lines 444–461;
+- the per-env firewall carve-out in `nixos-modules/network.nix` lines 444-461;
 - the guest-side module wiring in `nixos-modules/components/usbip.nix`.
 
 ---
@@ -1114,7 +1114,7 @@ the Binding's bounded status.
 ## Async reconcile loop design
 
 The controller's async reconcile loop follows
-`ADR-046-resource-reconciliation` steps 10–11:
+`ADR-046-resource-reconciliation` steps 10-11:
 
 ```
 ┌─────────────────────────────────────────────────┐

@@ -2818,7 +2818,7 @@ remote lease are released.
 | --- | --- |
 | Work item ID | `ADR046-audio-006` |
 | Dependency/owner | Depends on `ADR046-audio-001` through `ADR046-audio-005`; core ResourceImport controller; system Process Provider; AudioMediator (`ADR046-audio-007`); GuestAudioAgent (`ADR046-audio-011`); no Provider state Volume under D087 |
-| Current source | `packages/d2bd/src/audio_dispatch.rs` lines 250–end (dispatch ordering reference) |
+| Current source | `packages/d2bd/src/audio_dispatch.rs` lines 250-end (dispatch ordering reference) |
 | Reuse source | None directly; reconcile flow is new async controller |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/controller/audio_service.rs`; `src/controller/audio_binding.rs` |

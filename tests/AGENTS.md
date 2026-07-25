@@ -9,12 +9,12 @@ rule below. The human-facing structure + run instructions live in
 
 ## The one rule
 
-**New coverage MUST land as a Layer-1 test (types 1–6 below) unless it
+**New coverage MUST land as a Layer-1 test (types 1-6 below) unless it
 *provably* requires a real container, a booted VM, a live host, or physical
 hardware.** There is no "type 7/8" escape hatch: the drift gates and meta gates
 are a **closed set** - do not add a new `tests/*.sh`. If you think you need a
 shell gate, you almost certainly want a nix-unit case (type 1) or a Rust test
-(types 2–5) instead.
+(types 2-5) instead.
 
 When in doubt, push the test *down* the tiers (toward type 1), not up.
 
@@ -65,7 +65,7 @@ files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
    already covered by a **drift gate**; regenerate with the matching
    `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
-   device?** → the matching Layer-2 tier (9–12). Justify why Layer 1 cannot
+   device?** → the matching Layer-2 tier (9-12). Justify why Layer 1 cannot
    cover it; reach for the *lowest* tier that works (a native fd-passing test
    beats a container; a container beats a VM; a VM beats a live-host script).
 
@@ -105,7 +105,7 @@ tests/
     └── hardware/                                                   type 12 device tests (manual)
 ```
 
-Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
+Types 2-5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
 
 ## Layer-1 orchestration manifest

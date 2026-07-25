@@ -136,7 +136,7 @@ polling, and `quit` only after the guest is stopped and QEMU is an empty VMM.
 
 The wait is controlled by
 `d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds` (default 90,
-bounded 1–600) or
+bounded 1-600) or
 `d2b.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds`. Per-VM
 `lifecycle.gracefulShutdown.enable = false` skips the provider phase without
 creating a degraded marker. Explicit `d2b vm stop <vm> --force --apply`

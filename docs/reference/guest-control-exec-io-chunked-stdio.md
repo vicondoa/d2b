@@ -268,7 +268,7 @@ Rules:
    calls `CloseStdin`.
 
 **Interactive TTY carve-out.** The TTY path does **not** use the
-all-or-nothing + `request_id`-replay model of rules 2–4. Instead:
+all-or-nothing + `request_id`-replay model of rules 2-4. Instead:
 
 - **Partial accepted_len.** A TTY `WriteStdin` reports `accepted_len` equal to
   the bytes durably written to the PTY master, which may be **less than**

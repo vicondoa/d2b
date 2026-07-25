@@ -381,7 +381,7 @@ under the promotion test. They are not `Endpoint` resources.
 | `xattr` | bool | `false` | Passes `--xattr` |
 | `cache` | enum | `auto` | `auto` \| `always` \| `never`; maps to `--cache=<mode>` |
 | `inodeFileHandles` | enum | `never` | `never` \| `prefer` \| `mandatory`; `never` is the only tested value in v3.0 |
-| `threadPoolSize` | int or null | `null` | `null` resolves to target Guest's declared vcpu count; range 1–256 |
+| `threadPoolSize` | int or null | `null` | `null` resolves to target Guest's declared vcpu count; range 1-256 |
 | `socketGroup` | int or null | `null` | `null` uses broker-default gid (vfd principal gid); explicit value must be authorized |
 
 ---
@@ -749,7 +749,7 @@ The current baseline is `packages/d2b-host/src/virtiofsd_argv.rs`:
   thread_pool_size, sandbox, inode_file_handles, cache, posix_acl, xattr,
   readonly, extra_args.
 - `generate_virtiofsd_argv(input: &VirtiofsdArgvInput) -> Vec<String>` (14 unit tests;
-  pinned golden `argv.txt` lines 166–184).
+  pinned golden `argv.txt` lines 166-184).
 
 The 14 existing unit tests migrate verbatim to
 `packages/d2b-provider-volume-virtiofs/tests/argv_golden.rs`. The `extra_args` field is
@@ -1316,7 +1316,7 @@ status:
 
 ### 17.4 Prior-generation retention
 
-The Zone retains the last `priorGenerationCount` generations (default 3, range 1–16).
+The Zone retains the last `priorGenerationCount` generations (default 3, range 1-16).
 A Volume that has been deleted but whose generation is within the retention window may be
 reactivated via `ActivateGeneration`. Reactivation cancels in-flight Delete for the Volume
 and its owned Exports and Processes; the controller reconciles from the retained spec.

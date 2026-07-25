@@ -22,7 +22,7 @@
 #     whatever nixpkgs they pin (Mar 2026 = v50-era) - they have not
 #     yet rebased to v52, but we needed to NOW for two reasons:
 #       (a) CVE-2026-45782 (CVSS 8.9, virtio-block UAF guest→host
-#           escape) affects v21.0 – v51.1; fixed in v51.2 / v52.0.
+#           escape) affects v21.0 - v51.1; fixed in v51.2 / v52.0.
 #       (b) v52.0 is the first release to ship `--generic-vhost-user`,
 #           which the audio component (modules/d2b/audio.nix)
 #           depends on to wire vhost-device-sound into CH.

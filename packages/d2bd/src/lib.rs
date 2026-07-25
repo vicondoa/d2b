@@ -10404,14 +10404,14 @@ enum ExecWriterItem {
 /// per-connection limit on the number of ops dispatched-but-not-yet-replied -
 /// including long-polls (`ReadOutput`/`Wait`) that each pin a guest RPC. A
 /// backpressure-aware owner (the real CLI is strictly sequential - one op,
-/// await its reply, then the next) stays at 1–2 in flight and never approaches
+/// await its reply, then the next) stays at 1-2 in flight and never approaches
 /// this cap; a flooding/pipelining owner that exceeds it has its session closed
 /// promptly (the reader never blocks acquiring a permit).
 const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
 
 /// Bounded grace for the owner writer to flush its last resolved replies (e.g. a
 /// final exit-status `Wait`) during teardown before the owner socket is
-/// force–shut-down. A healthy writer exits in microseconds; this only bounds the
+/// force-shut-down. A healthy writer exits in microseconds; this only bounds the
 /// wait for a writer wedged on a blocking `send` to an owner that stopped
 /// reading, after which the socket is shut down so the send fails and the writer
 /// can exit (otherwise `join()` would hang and strand the owner thread + slot).

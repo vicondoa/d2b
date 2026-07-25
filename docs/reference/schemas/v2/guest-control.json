@@ -1382,7 +1382,7 @@
       ],
       "properties": {
         "level": {
-          "description": "Current level 0–100; 0 when not configured or unavailable.",
+          "description": "Current level 0-100; 0 when not configured or unavailable.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -1578,7 +1578,7 @@
           ]
         },
         {
-          "description": "Audio level value is out of the 0–100 range.",
+          "description": "Audio level value is out of the 0-100 range.",
           "type": "string",
           "enum": [
             "audio-level-out-of-range"

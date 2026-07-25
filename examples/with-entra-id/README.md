@@ -401,7 +401,7 @@ back into sync.
   2.0 NVRAM + EK seed that Entra/Intune treats as the device's
   hardware identity. Zeroing it forces re-enrolment and looks
   like device tampering to the IdP.
-- **First Himmelblau enrollment can take 30–60 seconds.** The
+- **First Himmelblau enrollment can take 30-60 seconds.** The
   initial AAD device-code dance + Intune policy pull is
   network-bound; subsequent logins are fast.
 - **x86_64-only.** Both the graphics component (cloud-hypervisor +

@@ -27353,27 +27353,27 @@ index 0000000..6c9d476
 +    ///
 +    /// Convergence is reached when any of the following criteria is met:
 +    ///
-+    /// 1. **No dirty pages remain** – the current iteration would transfer zero
++    /// 1. **No dirty pages remain** - the current iteration would transfer zero
 +    ///    bytes.
-+    /// 2. **Downtime budget is met** – the estimated downtime for the final
++    /// 2. **Downtime budget is met** - the estimated downtime for the final
 +    ///    (paused) iteration is within the caller-specified
 +    ///    [`VmSendMigrationData::downtime`] budget.
-+    /// 3. **Timeout** – the precopy phase has been running for at least
++    /// 3. **Timeout** - the precopy phase has been running for at least
 +    ///    [`VmSendMigrationData::timeout`]. The outcome depends on
 +    ///    [`VmSendMigrationData::timeout_strategy`]:
-+    ///    - [`TimeoutStrategy::Cancel`] – returns
-+    ///    - [`TimeoutStrategy::Ignore`] – the migration completes despite not
++    ///    - [`TimeoutStrategy::Cancel`] - returns
++    ///    - [`TimeoutStrategy::Ignore`] - the migration completes despite not
 +    ///      meeting the downtime budget.
 +    ///      [`MigratableError::MigrateSend`] so the caller can abort the
 +    ///      migration cleanly.
 +    ///
 +    /// # Returns
 +    ///
-+    /// * `Ok(true)` – convergence criterion met; the caller should stop precopy
++    /// * `Ok(true)` - convergence criterion met; the caller should stop precopy
 +    ///   iterations.
-+    /// * `Ok(false)` – not yet converged; the caller should run another
++    /// * `Ok(false)` - not yet converged; the caller should run another
 +    ///   dirty-page iteration.
-+    /// * `Err(_)` – the timeout was reached and [`TimeoutStrategy::Cancel`]
++    /// * `Err(_)` - the timeout was reached and [`TimeoutStrategy::Cancel`]
 +    ///   is in effect.
 +    fn is_precopy_converged(
 +        ctx: &MemoryMigrationContext,

@@ -165,10 +165,10 @@ spec:
 
     # Maximum number of concurrent relay sessions this Provider instance
     # may multiplex across all ZoneLinks it serves.
-    maxConcurrentSessions: 32           # 1–256; default 32
+    maxConcurrentSessions: 32           # 1-256; default 32
 
     # WebSocket connection timeout before failing.
-    connectTimeoutSeconds: 30           # 5–300; default 30
+    connectTimeoutSeconds: 30           # 5-300; default 30
 ```
 
 Config field rules:
@@ -177,8 +177,8 @@ Config field rules:
 | --- | --- | --- | --- |
 | `executionRef` | ResourceRef | Yes | Must be `Guest/<name>`; no host value accepted; all service components execute in this Guest |
 | `networkRef` | ResourceRef | Yes | Must be `Network/<name>`; used for service Process egress routing; TLS trust governed by Network policy |
-| `maxConcurrentSessions` | u32 | No | 1–256; default 32 |
-| `connectTimeoutSeconds` | u32 | No | 5–300; default 30 |
+| `maxConcurrentSessions` | u32 | No | 1-256; default 32 |
+| `connectTimeoutSeconds` | u32 | No | 5-300; default 30 |
 
 No SAS key, SAS token, bearer token, private key, connection string, or TLS
 certificate byte may appear in `config` at any path. All credential material

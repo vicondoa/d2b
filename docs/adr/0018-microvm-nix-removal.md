@@ -73,7 +73,7 @@ Pressure for removal came from three directions:
 Every microvm.* field consumed by d2b production paths gets a
 d2b-owned counterpart in `nixos-modules/options-vms.nix`. The
 mapping is established in v1.1-P8 (processes-json re-home) and
-extended through P9–P11.
+extended through P9-P11.
 
 | Upstream `microvm.*` field (per-VM)              | d2b-owned counterpart                              | Consumer                              |
 |--------------------------------------------------|--------------------------------------------------------|---------------------------------------|

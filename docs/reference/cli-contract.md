@@ -3362,7 +3362,7 @@ runs a periodic reaper for terminal records and retained-log slots.
 | Exit | Source | Meaning |
 | --- | --- | --- |
 | `0` | cli | Detached create/list/status/logs/kill succeeded. |
-| `0`–`255` | guest | Attached guest command `WIFEXITED` status passes through unchanged. |
+| `0`-`255` | guest | Attached guest command `WIFEXITED` status passes through unchanged. |
 | `128+N` | guest | An attached guest command was killed by signal `N` (`WIFSIGNALED`). |
 | `2` | cli / guest-control | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, malformed `--env`, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`guest-control-invalid-program`) for an empty/leading-`-` program. |
 | `69` | transport | The guest-control transport was unreachable, a per-op/establishment deadline elapsed, or `guestd` disappeared before the exec reported a terminal status (`guest-control-transport-unavailable`, `guest-control-timeout`, `guest-control-lost-guestd`). |

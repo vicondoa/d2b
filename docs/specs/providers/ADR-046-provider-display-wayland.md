@@ -1582,7 +1582,7 @@ where `H12 = builtins.substring 0 12 (builtins.hashString "sha256" "d2b-wlp:${zo
 Example for zone `dev`, session `corp-vm-display`:
 `d2b-wlp-` + first 12 hex chars of `sha256("d2b-wlp:dev:corp-vm-display")`.
 
-**Dynamic pool accounts:** `d2b-wlp-p${toString N}` for N in 0..(`principalPoolSize` − 1).
+**Dynamic pool accounts:** `d2b-wlp-p${toString N}` for N in 0..(`principalPoolSize` - 1).
 
 No raw UID or GID integer is set or required. The OS allocates UIDs in the
 system range automatically. The `display-controller` and the broker resolve the
