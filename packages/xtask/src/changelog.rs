@@ -663,8 +663,8 @@ fn roll_back(repo_root: &Path, txn: &Path) -> Result<(), FoldError> {
 
 /// Commit a computed fold to disk as a crash-recoverable transaction.
 ///
-/// The changelog rewrite and the fragment removals are made all-or-nothing, and
-/// - unlike a plain staging directory - the transaction survives an abrupt
+/// The changelog rewrite and the fragment removals are made all-or-nothing,
+/// and unlike a plain staging directory the transaction survives an abrupt
 /// process death: a durable journal plus a byte backup of the original
 /// changelog let a later invocation ([`recover`]) either finish a committed
 /// fold or roll an uncommitted one all the way back. No interruption can leave
