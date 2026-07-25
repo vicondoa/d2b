@@ -217,7 +217,7 @@ ensure_run_root() {
   local d="$1"
   local is_override="$2"
 
-  # Refuse a raw RUN_ROOT that is itself a symlink (round-3 behaviour):
+  # Refuse a raw RUN_ROOT that is itself a symlink (earlier behaviour):
   # we want the user to fix the symlink manually, not silently chase it
   # to wherever it points.
   if [ -L "$d" ]; then
