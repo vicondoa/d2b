@@ -710,6 +710,7 @@ d2b.zones.dev.resources.host-system = {
     providerRef    = "Provider/system-core";
     defaultDomain  = "system";
     allowedDomains = ["system" "user"];
+    defaultUserRef = "User/alice";        # required by D116: allowedDomains contains "user"
     budget         = { cpu = {}; memory = {}; pids = {}; fds = {}; io = {}; storage = {}; network = {}; };
   };
 };
@@ -733,6 +734,27 @@ spec:
   networkAttachments: []
   deviceAttachments:  []
   volumeDefaults:     {}
+```
+
+The following authored shape is **rejected at Nix eval time** by the D116
+`allowedDomains`-superset invariant. A mixed-domain Host whose `allowedDomains`
+contains `user` still admits user-domain Processes, so a user-domain Process
+whose spec omits `userRef` needs a `defaultUserRef` fallback on its target.
+Omitting `defaultUserRef` here is exactly the shape the later `ADR046-W5` Rust
+contract rejects, so W0 Nix fails closed on it too - requiring `defaultUserRef`
+only when `defaultDomain` is `user` would let this Host through:
+
+```nix
+d2b.zones.dev.resources.host-system = {
+  type = "Host";
+  spec = {
+    providerRef    = "Provider/system-core";
+    defaultDomain  = "system";
+    allowedDomains = ["system" "user"];   # admits user-domain Processes
+    # defaultUserRef intentionally omitted -> eval error (D116 superset invariant)
+    budget         = { cpu = {}; memory = {}; pids = {}; fds = {}; io = {}; storage = {}; network = {}; };
+  };
+};
 ```
 
 ### Unsafe-local Host
