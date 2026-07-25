@@ -5,6 +5,17 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 ROOT=${ROOT:-$(cd -- "$HERE/../../.." >/dev/null 2>&1 && pwd)}
 export ROOT
 
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This is a runnable type-9 container entrypoint: it does real Nix builds and
+# rootless podman work whether invoked standalone or from tests/test-integration.sh.
+# It must never bypass the sole-use heavy-gate semaphore, so instead of trusting
+# the forgeable D2B_HEAVY_GATE marker it verifies a real slot (re-using an
+# inherited one when the aggregating runner already holds it, acquiring one via
+# re-exec otherwise).
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$ROOT/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
+
 # shellcheck source=tests/integration/containers/lib.sh
 . "$HERE/lib.sh"
 
