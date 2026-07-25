@@ -323,30 +323,59 @@ changelog-fold:
 
 .PHONY: test-runtime-ledger
 
-## test-runtime-ledger - hermetic execution-budget gate. Times the Layer-1
-##   shard targets named in D2B_RUNTIME_SHARDS by re-invoking them through
-##   make, records the samples into a deterministic ledger, then enforces the
-##   per-test / per-crate / per-shard budgets against it. Set
-##   D2B_RUNTIME_BASELINE to a previously recorded ledger to also enforce the
-##   historical regression threshold. The ledger carries an operator-supplied
-##   runner label instead of a hostname so it stays portable.
-D2B_RUNTIME_SHARDS   ?= test-rust
-D2B_RUNTIME_RUNNER   ?= local
-D2B_RUNTIME_LEDGER   ?= packages/target/test-runtime-ledger.json
-D2B_RUNTIME_BASELINE ?=
+## test-runtime-ledger - hermetic execution-budget gate. Warm-builds the
+##   workspace first so compilation never lands in the timings, then collects
+##   repeated *execution-only* samples at three granularities - per test (from a
+##   libtest JSON stream), per crate, and per Layer-1 shard - across
+##   D2B_RUNTIME_REPETITIONS runs. It records them into a deterministic,
+##   portable ledger carrying an operator-supplied runner label instead of a
+##   hostname, then enforces the per-test / per-crate / per-shard budgets, a
+##   complete-census audit (non-empty scopes, matching repetition counts), and,
+##   when D2B_RUNTIME_BASELINE names a previously recorded ledger, the
+##   historical regression threshold plus baseline-id-loss detection.
+##
+##   Both cargo invocations run from packages/ (not the repo root via
+##   --manifest-path) so packages/.cargo/config.toml - and its sccache
+##   rustc-wrapper - is discovered; the ledger and baseline paths are passed as
+##   root-absolute so the working-directory change cannot misplace them.
+D2B_RUNTIME_SHARDS      ?= test-rust
+D2B_RUNTIME_CRATES      ?= d2b-core xtask
+D2B_RUNTIME_RUNNER      ?= local
+D2B_RUNTIME_REPETITIONS ?= 3
+D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
+D2B_RUNTIME_BASELINE    ?=
 test-runtime-ledger:
 	@set -eu; \
+	ledger='$(abspath $(D2B_RUNTIME_LEDGER))'; \
+	work='$(abspath packages/target/test-runtime-ledger.work)'; \
+	reps='$(D2B_RUNTIME_REPETITIONS)'; \
+	rm -rf "$$work"; mkdir -p "$$work"; \
+	echo "test-runtime-ledger: warm-building the workspace so compilation is excluded from timings"; \
+	( cd packages && cargo test --workspace --all-targets --no-run --quiet ); \
 	args=""; \
-	for shard in $(D2B_RUNTIME_SHARDS); do \
-	  start="$$(date +%s%3N)"; \
-	  $(MAKE) --no-print-directory "$$shard"; \
-	  end="$$(date +%s%3N)"; \
-	  args="$$args --shard $$shard=$$((end - start))"; \
+	rep=0; \
+	while [ "$$rep" -lt "$$reps" ]; do \
+	  rep=$$((rep + 1)); \
+	  echo "test-runtime-ledger: repetition $$rep/$$reps"; \
+	  for shard in $(D2B_RUNTIME_SHARDS); do \
+	    start="$$(date +%s%3N)"; \
+	    $(MAKE) --no-print-directory "$$shard" >/dev/null; \
+	    end="$$(date +%s%3N)"; \
+	    args="$$args --shard $$shard=$$((end - start))"; \
+	  done; \
+	  for crate in $(D2B_RUNTIME_CRATES); do \
+	    json="$$work/$$crate-$$rep.json"; \
+	    cstart="$$(date +%s%3N)"; \
+	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --quiet -- \
+	        -Z unstable-options --format=json --report-time ) > "$$json"; \
+	    cend="$$(date +%s%3N)"; \
+	    args="$$args --crate $$crate=$$((cend - cstart)) --libtest-json $$json"; \
+	  done; \
 	done; \
-	cargo run --quiet --manifest-path packages/xtask/Cargo.toml -- \
-	  test-runtime-ledger record \
-	  --runner '$(D2B_RUNTIME_RUNNER)' --output '$(D2B_RUNTIME_LEDGER)' $$args; \
+	( cd packages && cargo run --quiet -p xtask -- test-runtime-ledger record \
+	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
+	    --output "$$ledger" $$args ); \
 	baseline=""; \
-	if [ -n '$(D2B_RUNTIME_BASELINE)' ]; then baseline="--baseline $(D2B_RUNTIME_BASELINE)"; fi; \
-	cargo run --quiet --manifest-path packages/xtask/Cargo.toml -- \
-	  test-runtime-ledger check --ledger '$(D2B_RUNTIME_LEDGER)' $$baseline
+	if [ -n '$(D2B_RUNTIME_BASELINE)' ]; then baseline="--baseline $(abspath $(D2B_RUNTIME_BASELINE))"; fi; \
+	( cd packages && cargo run --quiet -p xtask -- test-runtime-ledger check \
+	    --ledger "$$ledger" $$baseline )
