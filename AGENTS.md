@@ -153,8 +153,13 @@ console. Live-host and hardware tests obey the same rule: use the gated
 live-VM smoke entrypoints (`make pre-tag` for the full gate, `make
 smoke-lite` for the lite gate) or wrap a raw live script as `cargo xtask
 heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
-Never run `D2B_LIVE=1 bash tests/integration/live/<name>.sh` directly;
-that bypasses the sole-use semaphore.
+
+Invoking a live script directly is safe but not the documented path: each
+one re-executes itself through the semaphore exactly once when
+`D2B_HEAVY_GATE` is unset, so it cannot bypass the sole-use invariant.
+**A new live, hardware, or performance entrypoint must carry that same
+self-guard block**, or the fail-closed inventory guard
+(`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.
 
 ### Spec-literal lint allowlist marker
 

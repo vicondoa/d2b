@@ -49,9 +49,15 @@ semaphore, never as a raw script. Use the gated public lane target
 (`make test-integration`, `make test-host-integration`, `make test-hardware`;
 `make pre-tag` / `make smoke-lite` for the live-VM smoke gate), or wrap an
 ad-hoc live script as `cargo xtask heavy-gate -- env D2B_LIVE=1 bash
-tests/integration/live/<name>.sh`. Running `D2B_LIVE=1 bash
-tests/integration/live/<name>.sh` directly bypasses the semaphore and can
-oversubscribe the shared Nix store, cargo target directory, and KVM device.
+tests/integration/live/<name>.sh`.
+
+Invoking a live script directly no longer bypasses the semaphore: each one
+re-executes itself through the gate exactly once when `D2B_HEAVY_GATE` is
+unset, so the shared Nix store, cargo target directory, and KVM device
+cannot be oversubscribed. **Any new live, hardware, or performance
+entrypoint must carry that same self-guard block**, or the fail-closed
+inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
+fails, since it walks the on-disk scripts and the Makefile.
 
 ## How to add a test (decision rule)
 
