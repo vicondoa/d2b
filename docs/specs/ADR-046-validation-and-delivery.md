@@ -262,7 +262,7 @@ advance.
 2. Every destination path this wave's work items name (§3.2, §7) is free of
    an open, unresolved contention flag from an earlier wave.
 3. The wave's Git Town stack (§5) has been proposed against the exact parent
-   commit named in its dependency edges (§3.4), not against a stale `main`.
+   commit named in its dependency edges (§3.4), not against a stale `v3`.
 4. The `cargo xtask heavy-gate` semaphore (§11) is available (not held past
    its 30-minute timeout by a stale prior-wave validation run).
 5. The fast hermetic suite (§10.16) passes within its execution budgets on the
@@ -299,6 +299,10 @@ snapshot (§12), never against interim implementation rounds within the wave.
 
 ## 5. Git Town stack shape and worktree/branch ownership
 
+Per D001, the protected `v3` branch is this work's integration branch. Every
+ADR 0046 slice branches from and merges back into `v3`; the v3 line never
+merges to `main`, so `main` is never a slice branch's base or target.
+
 ADR 0046 implementation is large, cross-cutting, and only partially
 file-disjoint by default (`ADR046-W0` in particular is one shared contract
 surface). It therefore follows this repository's existing
@@ -312,8 +316,8 @@ codebase's sibling ADR-0045 lineage):
    other concurrently open slice (checked against §7's contention list).
    Branch names are `adr046-w<n>-<slice>`, for example `adr046-w4-network`,
    `adr046-w6-device-tpm`, `adr046-w6-credential-entra`.
-2. **Stack only real dependencies.** A slice branch targets `main` if every
-   one of its `Depends on` specs already merged to `main`; it targets the
+2. **Stack only real dependencies.** A slice branch targets `v3` if every
+   one of its `Depends on` specs already merged to `v3`; it targets the
    exact prerequisite PR branch if that prerequisite is still open but
    dependency-complete-enough per §6's speculative rule. `ADR046-W0`'s four
    serial steps are one branch each, stacked linearly
@@ -322,7 +326,7 @@ codebase's sibling ADR-0045 lineage):
    `git town propose --stack --non-interactive --no-browser`.
 3. **`ADR046-W1`/`ADR046-W2`/`ADR046-W4`/`ADR046-W5`/`ADR046-W6` parallel
    slices** each branch from the exact merged (or, speculatively, exact
-   open) tip of their prerequisite branch and target `main` once that
+   open) tip of their prerequisite branch and target `v3` once that
    prerequisite merges — never targeting an unrelated parallel sibling slice.
 4. **The integrator owns**: shared-prep commits (§7), Cargo.toml workspace
    member list and `flake.nix` output additions, `docs/specs/ADR-046-spec-set.json`
@@ -1194,7 +1198,7 @@ merge (§13.3).
    §12.6).
 4. A wave does not advance to the next wave's entry criteria (§4) until
    every PR in its own stack has merged through GitHub — never through a
-   local octopus merge or a direct push to `main` for ADR-scale work
+   local octopus merge or a direct push to `v3` for ADR-scale work
    (per this repository's existing `AGENTS.md` "Finish-of-work invariant"
    and "Stacked PR workflow" sections, which remain binding for ADR 0046).
 
@@ -1250,9 +1254,9 @@ release, until all of:
    worktrees or branches.
 
 Only after all six hold does the auto-release mechanism already documented
-in this repository's `AGENTS.md` ("Auto-release") apply unchanged: a new
-version header merged to `main` tags `vX.Y.Z` and builds/releases the host
-binaries.
+in this repository's `AGENTS.md` ("Auto-release") apply, with `v3` as the
+integration branch in place of `main`: a new version header merged to `v3`
+tags `vX.Y.Z` and builds/releases the host binaries.
 
 ## 16. Current-code fit
 
