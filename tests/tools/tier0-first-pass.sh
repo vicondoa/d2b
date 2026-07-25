@@ -99,7 +99,14 @@ if command -v shellcheck >/dev/null 2>&1; then
   shellcheck --severity=warning -x "${shell_files[@]}"
   ok "shellcheck --severity=warning on ${#shell_files[@]} shell scripts"
 else
-  log "  SKIP: shellcheck not installed; syntax-only tier0 pass"
+  # Not a coverage gap. This is the fast local path only; the authoritative
+  # lint gate is `make test-lint`, which provisions the linter through nix
+  # when it is off PATH and fails closed when it cannot. Say so, because a
+  # bare "SKIP" reads as "the linter never ran anywhere".
+  #
+  # Note: do not begin a comment line here with the linter's own name, or it
+  # is parsed as a directive and the file fails to lint (SC1072/SC1073).
+  log "  SKIP: shellcheck not on PATH here; authoritative gate is 'make test-lint'"
 fi
 
 scan_dashes "$ROOT"
