@@ -42,15 +42,21 @@
 //!
 //! "Sole use" also means: no crate, wave, or reviewer role may add a second
 //! lock file, sleep-and-retry loop, or per-crate heavy-lane guard. Nested
-//! invocations reuse the slot already held by the outer wrapper (signalled by
-//! [`GATE_ACTIVE_ENV`]) rather than acquiring a second one, which would
-//! deadlock a two-slot semaphore against itself.
+//! invocations reuse the slot already held by the outer wrapper rather than
+//! acquiring a second one, which would deadlock a two-slot semaphore against
+//! itself. Nesting is never taken on trust: the mere presence of
+//! [`GATE_ACTIVE_ENV`] proves nothing, because any process can export it. A
+//! child is treated as nested only after the inherited slot descriptor
+//! ([`SLOT_FD_ENV`]) is verified to be an open handle on the real,
+//! currently-locked per-uid slot file it names ([`SLOT_INDEX_ENV`]); a forged,
+//! stale, closed, or unlocked marker is ignored and a real slot is acquired
+//! instead.
 
 use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -63,6 +69,7 @@ use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::libc;
 use nix::sys::signal::{SigSet, Signal, killpg};
 use nix::sys::signalfd::{SfdFlags, SignalFd};
+use nix::sys::stat::fstat;
 use nix::unistd::{Pid, getuid};
 
 /// Number of concurrent heavy lanes allowed per uid.
@@ -244,6 +251,20 @@ fn unlock(file: &File) -> std::result::Result<(), Errno> {
     fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map(drop)
 }
 
+/// Whether some *other* open file description holds a conflicting write lock on
+/// `file`.
+///
+/// `F_OFD_GETLK` reports the lock that would block a write lock placed through
+/// this descriptor. Because it never reports the calling description's own
+/// locks, querying through a freshly opened, unlocked handle answers exactly
+/// "is any other description holding this slot?" - `F_WRLCK` means yes,
+/// `F_UNLCK` means the slot is genuinely free.
+fn other_description_holds_write_lock(file: &File) -> std::result::Result<bool, Errno> {
+    let mut lock = flock_for(libc::F_WRLCK as libc::c_short);
+    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_GETLK(&mut lock))?;
+    Ok(lock.l_type != libc::F_UNLCK as libc::c_short)
+}
+
 /// Resolve the directory the gate directory is created under.
 ///
 /// Kept pure so the precedence rule is directly testable.
@@ -259,10 +280,44 @@ pub fn gate_dir_path(root: &Path, uid: u32) -> PathBuf {
     root.join(GATE_DIR_NAME).join(format!("uid-{uid}"))
 }
 
-/// A prepared, ownership-checked per-uid slot directory.
-#[derive(Clone, Debug)]
+/// Whether the shared `d2b-heavy-gates` parent can be trusted not to let a
+/// hostile peer rename another uid's slot directory out from under it.
+///
+/// The shared parent is the one directory that must tolerate several uids.
+/// Only three shapes are safe:
+///
+/// * owned by us and not group- or world-writable, so no peer can create or
+///   rename entries in it at all;
+/// * owned by root and not group- or world-writable (a locked-down shared
+///   parent an administrator provisioned); or
+/// * owned by root and sticky (like `/tmp`), so peers may create their own
+///   `uid-<uid>` entry but cannot rename ours.
+///
+/// A parent owned by a non-root peer is never trusted: as its owner that peer
+/// could rename our slot directory even with the sticky bit set, which is
+/// exactly the escape the two-slot limit exists to prevent. A group- or
+/// world-writable parent we own is also untrusted here - but [`GateDir::prepare`]
+/// first normalises an owned parent's mode to `0700`, so this predicate only
+/// rejects it when it could not be locked down. Kept pure so the whole matrix
+/// is directly testable.
+pub fn shared_parent_is_trusted(owner_uid: u32, mode: u32, current_uid: u32) -> bool {
+    let group_or_world_writable = mode & 0o022 != 0;
+    let sticky = mode & 0o1000 != 0;
+    if owner_uid == current_uid {
+        return !group_or_world_writable;
+    }
+    if owner_uid == 0 {
+        return !group_or_world_writable || sticky;
+    }
+    false
+}
+
+/// A prepared, ownership-checked per-uid slot directory anchored to a verified
+/// open directory descriptor.
+#[derive(Debug)]
 pub struct GateDir {
     path: PathBuf,
+    dir: File,
 }
 
 impl GateDir {
@@ -280,45 +335,102 @@ impl GateDir {
 
     /// Create (if needed) and validate `<root>/d2b-heavy-gates/uid-<uid>`.
     ///
-    /// The shared parent is created sticky and world-writable, exactly like
-    /// `/tmp`, so an unprivileged peer on a multi-user host cannot deny
-    /// service by winning the create race; the sticky bit stops it from
-    /// removing or renaming another uid's slot directory. The per-uid
-    /// directory itself is the real boundary: it must be a real directory
-    /// owned by this uid with no group or other access.
+    /// The shared `d2b-heavy-gates` parent is created private to us (mode
+    /// `0700`) rather than sticky and world-writable, so a peer cannot win the
+    /// create race, own the directory, and then rename our slot directory to
+    /// let us mint fresh slot inodes past the two-lane limit. If the parent
+    /// already exists it is accepted only when [`shared_parent_is_trusted`]
+    /// holds - ours-and-private, or a root-owned parent an administrator
+    /// provisioned. Every subsequent slot operation is anchored to the
+    /// directory descriptor opened here (via `/proc/self/fd`), so renaming the
+    /// path components after preparation cannot switch the semaphore namespace
+    /// mid-run.
     pub fn prepare(root: &Path, uid: u32) -> Result<Self> {
         let path = gate_dir_path(root, uid);
         let shared = path
             .parent()
             .expect("the per-uid slot directory always has a parent")
             .to_path_buf();
-        create_dir_with_mode(&shared, 0o1777)?;
-        require_directory(&shared)?;
 
-        create_dir_with_mode(&path, 0o700)?;
-        let metadata = require_directory(&path)?;
-        if metadata.uid() != uid {
+        // Create the shared parent private to us. If it already exists and we
+        // own it, normalise its mode to 0700 rather than reject: a world- or
+        // group-writable directory lets any peer rename our entries even when
+        // we own it (and non-sticky world-writable dirs let anyone rename any
+        // child), so locking it down is the actual remedy - and it repairs a
+        // stale loose-moded directory left by an older run. A parent owned by
+        // someone else is never normalised; it is verified and, unless it is a
+        // trusted root-owned parent, refused.
+        create_dir_with_mode(&shared, 0o700)?;
+        let shared_dir = open_directory(&shared)?;
+        let mut shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
+            GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
+        })?;
+        if shared_stat.st_uid == uid && (shared_stat.st_mode as u32 & 0o7777) != 0o700 {
+            let self_anchor = PathBuf::from(format!("/proc/self/fd/{}", shared_dir.as_raw_fd()));
+            fs::set_permissions(&self_anchor, fs::Permissions::from_mode(0o700)).map_err(
+                |error| {
+                    GateError::environment(format!(
+                        "cannot lock down the heavy-gate parent {}: {error}",
+                        shared.display()
+                    ))
+                },
+            )?;
+            shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
+                GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
+            })?;
+        }
+        if !shared_parent_is_trusted(shared_stat.st_uid, shared_stat.st_mode as u32, uid) {
+            return Err(GateError::environment(format!(
+                "the heavy-gate parent {} is owned by uid {} with mode {:o}; refusing to \
+                 share a semaphore namespace a peer could rename. Point XDG_RUNTIME_DIR at a \
+                 per-user runtime directory, or have an administrator provision a root-owned \
+                 (optionally sticky) {GATE_DIR_NAME} directory.",
+                shared.display(),
+                shared_stat.st_uid,
+                shared_stat.st_mode as u32 & 0o7777,
+            )));
+        }
+
+        // Create and open the per-uid directory beneath the verified shared
+        // descriptor so a swap of the shared path cannot redirect us.
+        let uid_name = format!("uid-{uid}");
+        let uid_anchor = anchored_path(&shared_dir, &uid_name);
+        create_dir_with_mode(&uid_anchor, 0o700)?;
+        let dir = open_directory(&uid_anchor)?;
+        let metadata = fstat(dir.as_raw_fd()).map_err(|errno| {
+            GateError::environment(format!("cannot stat {}: {errno}", path.display()))
+        })?;
+        if metadata.st_uid != uid {
             return Err(GateError::environment(format!(
                 "heavy-gate slot directory {} is owned by uid {}, not uid {}; \
                  refusing to share a semaphore across uids",
                 path.display(),
-                metadata.uid(),
+                metadata.st_uid,
                 uid
             )));
         }
-        if metadata.mode() & 0o077 != 0 {
+        if metadata.st_mode as u32 & 0o077 != 0 {
             return Err(GateError::environment(format!(
                 "heavy-gate slot directory {} has mode {:o}; it must not be \
                  group- or world-accessible. Remove it and rerun.",
                 path.display(),
-                metadata.mode() & 0o7777
+                metadata.st_mode as u32 & 0o7777
             )));
         }
-        Ok(Self { path })
+        Ok(Self { path, dir })
     }
 
     fn slot_path(&self, index: usize) -> PathBuf {
         self.path.join(format!("slot-{index}"))
+    }
+
+    /// The `/proc/self/fd`-anchored path to `slot-<index>`.
+    ///
+    /// Opening through the directory descriptor keeps every slot operation
+    /// bound to the inode verified in [`prepare`], even if the path components
+    /// are renamed afterwards.
+    fn slot_anchor(&self, index: usize) -> PathBuf {
+        anchored_path(&self.dir, &format!("slot-{index}"))
     }
 
     /// Verify that this filesystem really implements `F_OFD_SETLK`.
@@ -327,15 +439,17 @@ impl GateDir {
     /// the probe look like a failure. Any errno that means "unsupported"
     /// fails closed here, before a single slot is touched.
     pub fn probe_ofd_support(&self) -> Result<()> {
-        let probe_path = self.path.join(format!(".ofd-probe-{}", std::process::id()));
-        let _ = fs::remove_file(&probe_path);
+        let probe_name = format!(".ofd-probe-{}", std::process::id());
+        let probe_path = self.path.join(&probe_name);
+        let probe_anchor = anchored_path(&self.dir, &probe_name);
+        let _ = fs::remove_file(&probe_anchor);
         let probe = OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(&probe_path)
+            .open(&probe_anchor)
             .map_err(|error| {
                 GateError::environment(format!(
                     "cannot create heavy-gate probe file {}: {error}",
@@ -345,7 +459,7 @@ impl GateDir {
 
         let result = self.evaluate_probe(&probe, &probe_path);
         drop(probe);
-        let _ = fs::remove_file(&probe_path);
+        let _ = fs::remove_file(&probe_anchor);
         result
     }
 
@@ -391,7 +505,7 @@ impl GateDir {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)
+            .open(self.slot_anchor(index))
             .map_err(|error| {
                 GateError::environment(format!(
                     "cannot open heavy-gate slot file {}: {error}",
@@ -431,14 +545,60 @@ impl GateDir {
             },
         }
     }
+
+    /// Whether `fd` is genuine evidence that this process runs inside a slot an
+    /// ancestor wrapper already holds.
+    ///
+    /// Returns `true` only when every one of the following holds, so a forged
+    /// or stale [`GATE_ACTIVE_ENV`] marker can never skip acquisition:
+    ///
+    /// * `index` names a real slot (`index < SLOT_COUNT`);
+    /// * `fd` is an open descriptor (`fstat` succeeds) on a regular file owned
+    ///   by this uid;
+    /// * that descriptor's device and inode match the canonical
+    ///   `slot-<index>` file in this verified, uid-private gate directory, so
+    ///   it cannot be an attacker-controlled file elsewhere; and
+    /// * the slot is genuinely locked by some other open file description
+    ///   (the ancestor's), proven through an independent handle.
+    pub fn descriptor_is_locked_slot(&self, index: usize, fd: RawFd) -> bool {
+        if index >= SLOT_COUNT || fd < 0 {
+            return false;
+        }
+        let uid = getuid().as_raw();
+        let Ok(inherited) = fstat(fd) else {
+            return false;
+        };
+        if (inherited.st_mode & libc::S_IFMT) != libc::S_IFREG {
+            return false;
+        }
+        if inherited.st_uid != uid {
+            return false;
+        }
+        let Ok(slot) = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(self.slot_anchor(index))
+        else {
+            return false;
+        };
+        let Ok(slot_stat) = fstat(slot.as_raw_fd()) else {
+            return false;
+        };
+        if slot_stat.st_dev != inherited.st_dev || slot_stat.st_ino != inherited.st_ino {
+            return false;
+        }
+        // The independent handle proves the slot is genuinely held; a forged
+        // marker naming an unlocked slot fails here.
+        other_description_holds_write_lock(&slot).unwrap_or(false)
+    }
 }
 
 fn create_dir_with_mode(path: &Path, mode: u32) -> Result<()> {
     match fs::DirBuilder::new().mode(mode).create(path) {
         Ok(()) => {
             // `mkdir` masks the requested mode with the umask; force it back
-            // so a restrictive umask cannot turn the shared parent into a
-            // single-uid directory.
+            // so a restrictive umask cannot loosen the directory we just made.
             fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
                 GateError::environment(format!(
                     "cannot set mode {mode:o} on {}: {error}",
@@ -454,23 +614,38 @@ fn create_dir_with_mode(path: &Path, mode: u32) -> Result<()> {
     }
 }
 
-fn require_directory(path: &Path) -> Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        GateError::environment(format!("cannot stat {}: {error}", path.display()))
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(GateError::environment(format!(
-            "{} is a symlink; refusing to use it as a heavy-gate directory",
-            path.display()
-        )));
-    }
-    if !metadata.is_dir() {
-        return Err(GateError::environment(format!(
-            "{} is not a directory",
-            path.display()
-        )));
-    }
-    Ok(metadata)
+/// Open `path` as a directory, refusing a symlinked final component.
+///
+/// `O_DIRECTORY` rejects a non-directory (`ENOTDIR`) and `O_NOFOLLOW` rejects a
+/// symlink (`ELOOP`) so the returned descriptor is always a real directory,
+/// and every later operation anchored to it stays bound to that inode.
+fn open_directory(path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| match error.raw_os_error() {
+            Some(errno) if errno == libc::ELOOP => GateError::environment(format!(
+                "{} is a symlink; refusing to use it as a heavy-gate directory",
+                path.display()
+            )),
+            Some(errno) if errno == libc::ENOTDIR => {
+                GateError::environment(format!("{} is not a directory", path.display()))
+            }
+            _ => GateError::environment(format!(
+                "cannot open the heavy-gate directory {}: {error}",
+                path.display()
+            )),
+        })
+}
+
+/// A `/proc/self/fd`-anchored path to `name` beneath the open directory `dir`.
+///
+/// Resolving through the descriptor pins the operation to the exact inode the
+/// descriptor already refers to, so a rename of the path components cannot
+/// redirect it to a different directory.
+fn anchored_path(dir: &File, name: &str) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{}/{name}", dir.as_raw_fd()))
 }
 
 /// A held slot. Dropping it closes this descriptor; the underlying open file
@@ -675,30 +850,82 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
-fn execute(args: &[String]) -> Result<u8> {
-    let inside_slot = std::env::var_os(GATE_ACTIVE_ENV).is_some();
+/// How the inherited environment classifies this invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NestingMarker {
+    /// No [`GATE_ACTIVE_ENV`] marker; this is a top-level invocation.
+    TopLevel,
+    /// A marker is present and the inherited descriptor was verified to be an
+    /// open handle on the real, currently-locked slot it names.
+    VerifiedSlot,
+    /// A marker is present but does not refer to a genuinely held slot: it is
+    /// forged, stale, closed, or names an unlocked slot.
+    Unverifiable,
+}
 
+/// Read the inherited slot index and descriptor from the environment.
+fn read_nesting_env() -> Option<(usize, RawFd)> {
+    let index = std::env::var_os(SLOT_INDEX_ENV)?
+        .to_str()?
+        .parse::<usize>()
+        .ok()?;
+    let fd = std::env::var_os(SLOT_FD_ENV)?
+        .to_str()?
+        .parse::<RawFd>()
+        .ok()?;
+    Some((index, fd))
+}
+
+/// Classify this invocation against `dir`, verifying any nesting marker rather
+/// than trusting its mere presence.
+fn classify_nesting(dir: &GateDir) -> NestingMarker {
+    if std::env::var_os(GATE_ACTIVE_ENV).is_none() {
+        return NestingMarker::TopLevel;
+    }
+    match read_nesting_env() {
+        Some((index, fd)) if dir.descriptor_is_locked_slot(index, fd) => {
+            NestingMarker::VerifiedSlot
+        }
+        _ => NestingMarker::Unverifiable,
+    }
+}
+
+fn execute(args: &[String]) -> Result<u8> {
+    // The internal re-exec shim resolves and verifies its inherited slot; a
+    // forged marker cannot authorize it into running unsynchronized.
     if args.first().is_some_and(|first| first == EXEC_SHIM_FLAG) {
-        return exec_wrapped_command(&args[1..], inside_slot);
+        let dir = GateDir::resolve()?;
+        return exec_wrapped_command(&args[1..], classify_nesting(&dir));
     }
 
+    // Parse before touching the filesystem so `--help` works even where the
+    // gate directory is unusable.
     let Some(request) = Request::parse(args)? else {
         println!("{USAGE}");
         return Ok(0);
     };
 
-    if inside_slot {
-        eprintln!(
-            "heavy-gate: already inside a heavy-gate slot; reusing it instead of \
-             acquiring a second one"
-        );
-        return supervise(&request, None);
-    }
-
     let dir = GateDir::resolve()?;
-    dir.probe_ofd_support()?;
-    let guard = acquire_slot(&dir, AcquirePolicy::default(), &mut StderrProgress)?;
-    supervise(&request, Some(&guard))
+    match classify_nesting(&dir) {
+        NestingMarker::VerifiedSlot => {
+            eprintln!(
+                "heavy-gate: reusing the verified inherited slot instead of \
+                 acquiring a second one"
+            );
+            supervise(&request, None)
+        }
+        marker => {
+            if marker == NestingMarker::Unverifiable {
+                eprintln!(
+                    "heavy-gate: the inherited D2B_HEAVY_GATE marker does not refer to a \
+                     genuinely held slot; acquiring a real slot rather than trusting it"
+                );
+            }
+            dir.probe_ofd_support()?;
+            let guard = acquire_slot(&dir, AcquirePolicy::default(), &mut StderrProgress)?;
+            supervise(&request, Some(&guard))
+        }
+    }
 }
 
 /// The one-shot re-exec shim.
@@ -708,11 +935,10 @@ fn execute(args: &[String]) -> Result<u8> {
 /// its `signalfd` and then replaces itself with the real command, so the
 /// command keeps this pid and process group but starts with default signal
 /// dispositions and an empty mask. It only returns on failure.
-fn exec_wrapped_command(args: &[String], inside_slot: bool) -> Result<u8> {
+fn exec_wrapped_command(args: &[String], nesting: NestingMarker) -> Result<u8> {
     // The shim runs no slot acquisition of its own, so it must only ever be
-    // reachable from a wrapper that already holds one. That is exactly the
-    // condition the nesting rule above already treats as slot-covered.
-    if !inside_slot {
+    // reachable from a wrapper whose held slot we have actually verified.
+    if nesting != NestingMarker::VerifiedSlot {
         return Err(GateError::usage(format!(
             "{USAGE}\n\nheavy-gate takes no options"
         )));
@@ -849,58 +1075,136 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
     drop(handoff);
 
     let group = Pid::from_raw(child.id() as i32);
+
+    let outcome = supervise_loop(
+        || match child.try_wait() {
+            Ok(Some(status)) => Ok(Some(ChildExit {
+                code: status.code(),
+                signal: status.signal(),
+            })),
+            Ok(None) => Ok(None),
+            Err(error) => Err(GateError::of(
+                GateErrorKind::Spawn,
+                format!("cannot reap the heavy-lane child: {error}"),
+            )),
+        },
+        || relay.drain(),
+        |signal| {
+            eprintln!("heavy-gate: forwarding {signal} to the heavy lane process group");
+            let _ = killpg(group, signal);
+        },
+        || {
+            let _ = killpg(group, Signal::SIGKILL);
+        },
+        || sleep(POLL_INTERVAL),
+        Instant::now,
+    )?;
+
+    Ok(resolve_exit_code(
+        outcome.code,
+        outcome.signal,
+        outcome.interrupt.map(|signal| signal as i32),
+    ))
+}
+
+/// The child's terminal disposition, abstracted so the supervision loop can be
+/// driven deterministically in tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ChildExit {
+    code: Option<i32>,
+    signal: Option<i32>,
+}
+
+/// What the supervision loop observed over the wrapped lane's lifetime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SuperviseOutcome {
+    code: Option<i32>,
+    signal: Option<i32>,
+    interrupt: Option<Signal>,
+}
+
+/// The core supervision loop, factored out so its signal-drain ordering is
+/// unit-testable with injected effects.
+///
+/// The ordering is load-bearing for slot release:
+///
+/// * Drain pending signals *before* every exit check, so a terminating signal
+///   that arrives while the leader is exiting is forwarded, not lost.
+/// * Once the child is observed exited, drain *again* while the forwarded
+///   signal mask is still blocked, catching a signal delivered between the
+///   last drain and the exit.
+/// * Sweep the whole process group with `SIGKILL` whenever any interrupt was
+///   observed, so no descendant can outlive the wrapper still holding the
+///   inherited slot descriptor.
+fn supervise_loop<Poll, Drain, Forward, Sweep, Nap, Now>(
+    mut poll_exit: Poll,
+    mut drain: Drain,
+    mut forward: Forward,
+    mut sweep: Sweep,
+    mut nap: Nap,
+    mut now: Now,
+) -> Result<SuperviseOutcome>
+where
+    Poll: FnMut() -> Result<Option<ChildExit>>,
+    Drain: FnMut() -> Vec<Signal>,
+    Forward: FnMut(Signal),
+    Sweep: FnMut(),
+    Nap: FnMut(),
+    Now: FnMut() -> Instant,
+{
     let mut interrupt: Option<Signal> = None;
     let mut escalate_at: Option<Instant> = None;
 
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(error) => {
-                return Err(GateError::of(
-                    GateErrorKind::Spawn,
-                    format!("cannot reap the heavy-lane child: {error}"),
-                ));
-            }
-        }
-
-        for signal in relay.drain() {
-            eprintln!("heavy-gate: forwarding {signal} to the heavy lane process group");
-            let _ = killpg(group, signal);
+    let exit = loop {
+        for signal in drain() {
+            forward(signal);
             if interrupt.is_none() {
                 interrupt = Some(signal);
             }
             if escalate_at.is_none() {
-                escalate_at = Some(Instant::now() + TERMINATION_GRACE);
+                escalate_at = Some(now() + TERMINATION_GRACE);
             }
         }
 
+        if let Some(exit) = poll_exit()? {
+            break exit;
+        }
+
         if let Some(deadline) = escalate_at
-            && Instant::now() >= deadline
+            && now() >= deadline
         {
             eprintln!(
                 "heavy-gate: heavy lane still running {}s after the first signal; \
                  sending SIGKILL to its process group",
                 TERMINATION_GRACE.as_secs()
             );
-            let _ = killpg(group, Signal::SIGKILL);
+            sweep();
             escalate_at = None;
         }
 
-        sleep(POLL_INTERVAL);
+        nap();
     };
+
+    // The child has exited, but the forwarded-signal mask is still blocked.
+    // Drain once more so a termination signal that landed between the final
+    // drain and the exit is still recorded as an interruption.
+    for signal in drain() {
+        if interrupt.is_none() {
+            interrupt = Some(signal);
+        }
+    }
 
     if interrupt.is_some() {
         // The run was interrupted, so anything still alive in the lane's
         // process group is an orphan that would keep holding this slot.
-        let _ = killpg(group, Signal::SIGKILL);
+        sweep();
     }
 
-    Ok(resolve_exit_code(
-        status.code(),
-        status.signal(),
-        interrupt.map(|signal| signal as i32),
-    ))
+    Ok(SuperviseOutcome {
+        code: exit.code,
+        signal: exit.signal,
+        interrupt,
+    })
 }
 
 /// Map the child's disposition onto the wrapper's exit code.
@@ -1173,17 +1477,19 @@ mod tests {
 
     #[test]
     fn the_internal_exec_shim_is_not_an_operator_entry_point() {
-        // Outside a wrapper that already holds a slot the shim marker must be
-        // rejected like any other unknown option, so no lane can start
-        // unsynchronised by naming it.
-        let error = exec_wrapped_command(&["--".into(), "true".into()], false)
-            .expect_err("the shim is refused");
-        assert_eq!(error.kind(), GateErrorKind::Usage);
-        assert!(
-            !error.message().contains(EXEC_SHIM_FLAG),
-            "the internal marker must stay out of operator-visible text: {}",
-            error.message()
-        );
+        // Neither a plain top-level invocation nor an unverifiable (forged or
+        // stale) nesting marker may authorise the shim; only a verified slot
+        // may. Otherwise a lane could start unsynchronised by naming it.
+        for marker in [NestingMarker::TopLevel, NestingMarker::Unverifiable] {
+            let error = exec_wrapped_command(&["--".into(), "true".into()], marker)
+                .expect_err("the shim is refused without a verified slot");
+            assert_eq!(error.kind(), GateErrorKind::Usage);
+            assert!(
+                !error.message().contains(EXEC_SHIM_FLAG),
+                "the internal marker must stay out of operator-visible text: {}",
+                error.message()
+            );
+        }
     }
 
     // ---- slot mechanics ------------------------------------------------
@@ -1464,5 +1770,314 @@ mod tests {
             "the wrapper propagates the command's exit code and the command \
              saw a live D2B_HEAVY_GATE_SLOT_FD"
         );
+    }
+
+    // ---- nesting is verified, not trusted ------------------------------
+
+    #[test]
+    fn shared_parent_trust_matrix_admits_only_unrenameable_namespaces() {
+        let us = 1000;
+        let peer = 1001;
+        // Ours and private is fine; ours but group- or world-writable lets a
+        // peer rename our slot directory, so it is refused.
+        assert!(shared_parent_is_trusted(us, 0o700, us));
+        assert!(shared_parent_is_trusted(us, 0o755, us));
+        assert!(!shared_parent_is_trusted(us, 0o720, us));
+        assert!(!shared_parent_is_trusted(us, 0o707, us));
+        assert!(!shared_parent_is_trusted(us, 0o777, us));
+        // Root-owned is fine when locked down, or when sticky (like /tmp) so a
+        // peer can only add its own entry, never rename ours.
+        assert!(shared_parent_is_trusted(0, 0o755, us));
+        assert!(shared_parent_is_trusted(0, 0o1777, us));
+        assert!(!shared_parent_is_trusted(0, 0o777, us));
+        // A non-root peer owner is never trusted, even sticky: as owner it can
+        // rename our slot directory regardless of the sticky bit.
+        assert!(!shared_parent_is_trusted(peer, 0o700, us));
+        assert!(!shared_parent_is_trusted(peer, 0o755, us));
+        assert!(!shared_parent_is_trusted(peer, 0o1777, us));
+    }
+
+    #[test]
+    fn prepare_locks_down_an_owned_world_writable_shared_parent() {
+        // A stale or hostile-but-owned shared parent left world-writable lets
+        // any peer rename our uid directory (non-sticky world-writable dirs
+        // permit renaming any child). Because we own it, the remedy is to lock
+        // it down to 0700 rather than fail, which also repairs a directory an
+        // older build created world-writable. (A genuinely peer-*owned* parent
+        // needs a second uid to set up, which requires privilege; that half of
+        // the check is covered by
+        // `shared_parent_trust_matrix_admits_only_unrenameable_namespaces`.)
+        let scratch = Scratch::new("owned-loose-parent");
+        let shared = scratch.path().join(GATE_DIR_NAME);
+        fs::create_dir_all(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o1777)).unwrap();
+
+        let dir = GateDir::prepare(scratch.path(), getuid().as_raw())
+            .expect("an owned parent is normalised, not rejected");
+        drop(dir);
+
+        let mode = fs::metadata(&shared).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(
+            mode, 0o700,
+            "the world-writable parent was locked down so no peer can rename our slot directory"
+        );
+    }
+
+    #[test]
+    fn operations_stay_anchored_across_a_rename_of_the_gate_directory() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("rename-anchor");
+        let uid = getuid().as_raw();
+        let dir = gate_dir_under(scratch.path());
+
+        // Move the prepared directory aside and drop a fresh decoy in its old
+        // place. Because every slot operation is anchored to the descriptor
+        // opened in `prepare`, acquisition must act on the moved inode, never
+        // the decoy at the original path.
+        let original = gate_dir_path(scratch.path(), uid);
+        let moved = scratch.path().join(GATE_DIR_NAME).join("uid-moved");
+        fs::rename(&original, &moved).unwrap();
+        create_dir_with_mode(&original, 0o700).unwrap();
+
+        let guard = dir
+            .try_acquire(0)
+            .unwrap()
+            .expect("acquisition still works through the anchored descriptor");
+        assert!(
+            moved.join("slot-0").exists(),
+            "the slot file follows the anchored inode into its new path"
+        );
+        assert!(
+            !original.join("slot-0").exists(),
+            "a pathname swap cannot redirect the semaphore to a decoy directory"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn a_forged_or_stale_nesting_marker_is_never_treated_as_a_held_slot() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("forged-marker");
+        let dir = gate_dir_under(scratch.path());
+
+        // An index past the real slot count is rejected outright.
+        assert!(!dir.descriptor_is_locked_slot(SLOT_COUNT, 0));
+        // A negative descriptor is rejected.
+        assert!(!dir.descriptor_is_locked_slot(0, -1));
+        // A descriptor number that is not open (nothing was opened at it)
+        // fails the `fstat`, so a forged D2B_HEAVY_GATE_SLOT_FD is worthless.
+        assert!(!dir.descriptor_is_locked_slot(0, 4096));
+    }
+
+    #[test]
+    fn a_closed_descriptor_marker_is_rejected() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("closed-fd");
+        let dir = gate_dir_under(scratch.path());
+
+        // Open the real slot, capture its descriptor number, then close it.
+        // A marker naming a now-closed descriptor must not count as a slot.
+        let slot = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(dir.slot_anchor(0))
+            .expect("slot opens");
+        let fd = slot.as_raw_fd();
+        drop(slot);
+        assert!(
+            !dir.descriptor_is_locked_slot(0, fd),
+            "a closed descriptor fails fstat and is not a held slot"
+        );
+    }
+
+    #[test]
+    fn a_marker_naming_an_unlocked_slot_is_rejected() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("unlocked-slot");
+        let dir = gate_dir_under(scratch.path());
+
+        // A live descriptor on the real slot inode, but with no lock held by
+        // any description, must not be accepted: presence of the file is not
+        // proof the semaphore is engaged.
+        let slot = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(dir.slot_anchor(0))
+            .expect("slot opens");
+        assert!(
+            !dir.descriptor_is_locked_slot(0, slot.as_raw_fd()),
+            "an unlocked slot inode is not a held slot"
+        );
+        drop(slot);
+    }
+
+    #[test]
+    fn a_marker_naming_a_genuinely_locked_slot_is_accepted() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("locked-slot");
+        let dir = gate_dir_under(scratch.path());
+
+        // Hold the slot the way the wrapper does, then hand a duplicate to a
+        // notional child. The duplicate names the real, locked slot inode, so
+        // verification must accept it.
+        let guard = dir.try_acquire(0).unwrap().expect("slot 0 is free");
+        let child_handle = guard.duplicate_for_child().expect("duplicate succeeds");
+        assert!(
+            dir.descriptor_is_locked_slot(0, child_handle.as_raw_fd()),
+            "a live descriptor on the genuinely locked slot is accepted"
+        );
+        // A marker that points at the locked slot but names the *other* index
+        // must not verify, because its inode will not match.
+        assert!(
+            !dir.descriptor_is_locked_slot(1, child_handle.as_raw_fd()),
+            "the descriptor must match the slot index it claims"
+        );
+        drop(child_handle);
+        drop(guard);
+    }
+
+    // ---- supervision drains signals around the leader's exit -----------
+
+    #[test]
+    fn supervise_loop_sweeps_the_group_when_a_signal_races_the_leader_exit() {
+        use std::cell::Cell;
+
+        let poll_calls = Cell::new(0u32);
+        let drain_calls = Cell::new(0u32);
+        let forwarded = Cell::new(0u32);
+        let sweeps = Cell::new(0u32);
+
+        let outcome = supervise_loop(
+            || {
+                let n = poll_calls.get();
+                poll_calls.set(n + 1);
+                if n == 0 {
+                    Ok(None)
+                } else {
+                    Ok(Some(ChildExit {
+                        code: Some(0),
+                        signal: None,
+                    }))
+                }
+            },
+            || {
+                let n = drain_calls.get();
+                drain_calls.set(n + 1);
+                // The terminating signal only becomes visible on the
+                // post-exit drain: exactly the race that previously orphaned
+                // a slot holder.
+                if n == 2 {
+                    vec![Signal::SIGTERM]
+                } else {
+                    Vec::new()
+                }
+            },
+            |_signal| forwarded.set(forwarded.get() + 1),
+            || sweeps.set(sweeps.get() + 1),
+            || {},
+            Instant::now,
+        )
+        .expect("the loop completes");
+
+        assert_eq!(
+            outcome.interrupt,
+            Some(Signal::SIGTERM),
+            "a signal pending at leader exit is still recorded as an interruption"
+        );
+        assert_eq!(outcome.code, Some(0));
+        assert_eq!(
+            forwarded.get(),
+            0,
+            "a signal observed only after exit is not forwarded to a dead group"
+        );
+        assert_eq!(
+            sweeps.get(),
+            1,
+            "the group is swept once so no descendant keeps holding the slot"
+        );
+        assert_eq!(poll_calls.get(), 2);
+        assert_eq!(
+            drain_calls.get(),
+            3,
+            "drained before each poll and once after exit"
+        );
+    }
+
+    #[test]
+    fn supervise_loop_forwards_and_sweeps_a_signal_seen_while_running() {
+        use std::cell::Cell;
+
+        let poll_calls = Cell::new(0u32);
+        let drain_calls = Cell::new(0u32);
+        let forwarded = Cell::new(0u32);
+        let sweeps = Cell::new(0u32);
+
+        let outcome = supervise_loop(
+            || {
+                let n = poll_calls.get();
+                poll_calls.set(n + 1);
+                if n == 0 {
+                    Ok(None)
+                } else {
+                    Ok(Some(ChildExit {
+                        code: Some(0),
+                        signal: None,
+                    }))
+                }
+            },
+            || {
+                let n = drain_calls.get();
+                drain_calls.set(n + 1);
+                if n == 0 {
+                    vec![Signal::SIGINT]
+                } else {
+                    Vec::new()
+                }
+            },
+            |_signal| forwarded.set(forwarded.get() + 1),
+            || sweeps.set(sweeps.get() + 1),
+            || {},
+            Instant::now,
+        )
+        .expect("the loop completes");
+
+        assert_eq!(outcome.interrupt, Some(Signal::SIGINT));
+        assert_eq!(
+            forwarded.get(),
+            1,
+            "a signal seen while the lane runs is forwarded to its group"
+        );
+        assert_eq!(
+            sweeps.get(),
+            1,
+            "the interrupted run sweeps the group exactly once"
+        );
+    }
+
+    #[test]
+    fn supervise_loop_leaves_a_clean_exit_untouched() {
+        let outcome = supervise_loop(
+            || {
+                Ok(Some(ChildExit {
+                    code: Some(3),
+                    signal: None,
+                }))
+            },
+            Vec::new,
+            |_signal| panic!("no signal should be forwarded"),
+            || panic!("a clean run must not sweep the group"),
+            || {},
+            Instant::now,
+        )
+        .expect("the loop completes");
+
+        assert_eq!(outcome.interrupt, None);
+        assert_eq!(outcome.code, Some(3));
     }
 }
