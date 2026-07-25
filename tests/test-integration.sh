@@ -13,6 +13,16 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 D2B_LOG=${D2B_LOG:-/dev/null}
 export ROOT D2B_LOG
 
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This aggregating runner drives the type-9 podman container lane, which does
+# real Nix builds and rootless podman work, so it must never bypass the
+# sole-use heavy-gate semaphore. The mere presence of D2B_HEAVY_GATE is not
+# trusted: the shared helper asks the wrapper to verify this process genuinely
+# holds a slot and re-execs through the gate to acquire one when it does not.
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$ROOT/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
+
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
 

@@ -270,12 +270,71 @@ impl WaveCommand {
     }
 }
 
+impl std::fmt::Display for WaveCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for WaveCommand {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// The delivery outcome domain, pinned to a closed set.
+///
+/// A successful invocation always reports [`WorkflowStatus::Ok`]; every failure
+/// path returns [`DeliveryError`] and is rendered separately with a nonzero exit
+/// code, so `status` never widens implicitly. Keeping this a typed, single-member
+/// enum (rather than a free `String`) means adding an outcome is a deliberate wire
+/// change that the golden contract test forces to travel with a
+/// [`DELIVERY_SCHEMA_VERSION`](super::DELIVERY_SCHEMA_VERSION) bump.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkflowStatus {
+    Ok,
+}
+
+impl WorkflowStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+        }
+    }
+}
+
+impl std::fmt::Display for WorkflowStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for WorkflowStatus {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// One JSON object describing the outcome of a delivery invocation.
+///
+/// The wire shape is a pinned contract: field names, the `operation` domain
+/// (every [`WaveCommand`] wire string) and the `status` domain
+/// ([`WorkflowStatus`]) are all typed, and the complete serialization is fixed
+/// by the golden contract test in this module. Any incompatible change to the
+/// shape or either domain must travel with a
+/// [`DELIVERY_SCHEMA_VERSION`](super::DELIVERY_SCHEMA_VERSION) bump, or that test
+/// fails the build.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WorkflowOutput {
     pub schema_version: u32,
-    pub operation: String,
-    pub status: String,
+    pub operation: WaveCommand,
+    pub status: WorkflowStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidate_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,8 +389,8 @@ impl WorkflowOutput {
     pub fn ok(operation: WaveCommand) -> Self {
         Self {
             schema_version: DELIVERY_SCHEMA_VERSION,
-            operation: operation.as_str().to_owned(),
-            status: "ok".to_owned(),
+            operation,
+            status: WorkflowStatus::Ok,
             candidate_id: None,
             content_id: None,
             snapshot_sha256: None,
@@ -563,7 +622,7 @@ mod tests {
     #[test]
     fn help_lists_every_wave_stage() {
         let output = dispatch(&args(&["wave", "help"])).expect("help succeeds");
-        assert_eq!(output.operation, "help");
+        assert_eq!(output.operation.as_str(), "help");
         let listed = output
             .commands
             .iter()
@@ -818,5 +877,206 @@ mod tests {
         ]))
         .expect("parse");
         assert!(options.repository_roots().is_err());
+    }
+
+    /// Golden contract for the delivery success JSON.
+    ///
+    /// This JSON is the interface every wave's evidence import and every future
+    /// CI consumer reads. These tests pin its complete wire shape: the top-level
+    /// field names, which optional fields are omitted when empty, the
+    /// `operation` domain (every [`WaveCommand`] wire string), the `status`
+    /// domain ([`WorkflowStatus`]), and the nested [`StateHelp`] and
+    /// [`WorkflowCommandHelp`] field names.
+    ///
+    /// Any incompatible change to the shape or either domain fails these tests.
+    /// The only correct way to make them pass again is to bump
+    /// [`DELIVERY_SCHEMA_VERSION`](crate::delivery::DELIVERY_SCHEMA_VERSION) and
+    /// update the goldens below in the same change, so the wire contract moves
+    /// visibly and every downstream consumer is forced to notice.
+    mod golden_contract {
+        use super::*;
+        use crate::delivery::DELIVERY_SCHEMA_VERSION;
+        use serde_json::{Value, json};
+
+        /// The schema version the goldens below were authored against. Coupled
+        /// to the production constant by [`schema_version_moves_with_the_golden`]
+        /// so a version bump without a golden update, or a golden update without
+        /// a version bump, fails the build.
+        const GOLDEN_SCHEMA_VERSION: u32 = 1;
+
+        fn sorted_keys(value: &Value) -> Vec<String> {
+            value
+                .as_object()
+                .expect("a JSON object")
+                .keys()
+                .cloned()
+                .collect()
+        }
+
+        #[test]
+        fn schema_version_moves_with_the_golden() {
+            assert_eq!(
+                DELIVERY_SCHEMA_VERSION, GOLDEN_SCHEMA_VERSION,
+                "DELIVERY_SCHEMA_VERSION changed; update GOLDEN_SCHEMA_VERSION and every golden \
+                 in this module in the same change so the wire contract moves for consumers"
+            );
+        }
+
+        #[test]
+        fn minimal_success_output_matches_the_golden() {
+            let output = WorkflowOutput::ok(WaveCommand::Snapshot);
+            assert_eq!(
+                serde_json::to_value(&output).expect("serialize the minimal output"),
+                json!({
+                    "schema_version": GOLDEN_SCHEMA_VERSION,
+                    "operation": "snapshot",
+                    "status": "ok",
+                }),
+                "the minimal success JSON drifted from its pinned contract"
+            );
+        }
+
+        #[test]
+        fn stage_output_with_digests_and_artifact_matches_the_golden() {
+            // Build the fullest non-help envelope by field, so the golden does
+            // not depend on candidate-fixture internals; the field types are
+            // what the contract pins.
+            let mut output = WorkflowOutput::ok(WaveCommand::Seal);
+            output.candidate_id = Some("candidate-0000".to_owned());
+            output.content_id = Some("content-1111".to_owned());
+            output.snapshot_sha256 = Some("2222".to_owned());
+            output.artifact = Some("w0/candidate-0000/seal.json".to_owned());
+            assert_eq!(
+                serde_json::to_value(&output).expect("serialize the full stage output"),
+                json!({
+                    "schema_version": GOLDEN_SCHEMA_VERSION,
+                    "operation": "seal",
+                    "status": "ok",
+                    "candidate_id": "candidate-0000",
+                    "content_id": "content-1111",
+                    "snapshot_sha256": "2222",
+                    "artifact": "w0/candidate-0000/seal.json",
+                }),
+                "the stage success JSON drifted from its pinned contract"
+            );
+        }
+
+        #[test]
+        fn empty_optional_fields_are_omitted_from_the_wire() {
+            let value = serde_json::to_value(WorkflowOutput::ok(WaveCommand::Snapshot))
+                .expect("serialize the minimal output");
+            assert_eq!(
+                sorted_keys(&value),
+                vec![
+                    "operation".to_owned(),
+                    "schema_version".to_owned(),
+                    "status".to_owned(),
+                ],
+                "the minimal envelope must omit every empty optional field"
+            );
+        }
+
+        #[test]
+        fn operation_domain_is_closed_and_pinned() {
+            let domain = WAVE_COMMANDS
+                .into_iter()
+                .map(|command| {
+                    serde_json::to_value(WorkflowOutput::ok(command)).expect("serialize")
+                        ["operation"]
+                        .clone()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                Value::Array(domain),
+                json!([
+                    "snapshot",
+                    "validate-import",
+                    "panel-request",
+                    "panel-attest",
+                    "seal",
+                    "merge-target",
+                    "merge-eligibility",
+                    "help",
+                ]),
+                "the operation domain drifted; a renamed or added stage must move the schema \
+                 version and this golden together"
+            );
+        }
+
+        #[test]
+        fn status_domain_is_closed_and_pinned() {
+            let domain = [WorkflowStatus::Ok]
+                .into_iter()
+                .map(|status| serde_json::to_value(status).expect("serialize"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                Value::Array(domain),
+                json!(["ok"]),
+                "the status domain drifted; a new outcome must move the schema version and this \
+                 golden together"
+            );
+        }
+
+        #[test]
+        fn help_envelope_shape_is_pinned() {
+            let output = dispatch(&args(&["wave", "help"])).expect("help succeeds");
+            let value = serde_json::to_value(&output).expect("serialize the help output");
+            assert_eq!(
+                sorted_keys(&value),
+                vec![
+                    "commands".to_owned(),
+                    "operation".to_owned(),
+                    "schema_version".to_owned(),
+                    "state".to_owned(),
+                    "status".to_owned(),
+                ],
+                "the help envelope field set drifted from its pinned contract"
+            );
+            assert_eq!(value["schema_version"], json!(GOLDEN_SCHEMA_VERSION));
+            assert_eq!(value["operation"], json!("help"));
+            assert_eq!(value["status"], json!("ok"));
+
+            assert_eq!(
+                sorted_keys(&value["state"]),
+                vec![
+                    "chaining".to_owned(),
+                    "default_root".to_owned(),
+                    "layout".to_owned(),
+                    "override_flag".to_owned(),
+                ],
+                "the state-help field set drifted from its pinned contract"
+            );
+
+            // Every command element carries the same closed field set; the
+            // optional `schema` key appears only where a stage publishes one.
+            let commands = value["commands"].as_array().expect("commands array");
+            for command in commands {
+                let mut keys = sorted_keys(command);
+                keys.retain(|key| key != "schema");
+                assert_eq!(
+                    keys,
+                    vec![
+                        "implemented".to_owned(),
+                        "name".to_owned(),
+                        "optional_options".to_owned(),
+                        "purpose".to_owned(),
+                        "required_options".to_owned(),
+                        "synopsis".to_owned(),
+                        "work_item".to_owned(),
+                    ],
+                    "a command-help element field set drifted from its pinned contract"
+                );
+            }
+            let with_schema = commands
+                .iter()
+                .filter(|command| command.get("schema").is_some())
+                .filter_map(|command| command["name"].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                with_schema,
+                vec!["merge-target"],
+                "only merge-target publishes a hand-authored-input schema"
+            );
+        }
     }
 }

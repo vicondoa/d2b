@@ -10,7 +10,11 @@
 //! section 11:
 //!
 //! * Exactly [`SLOT_COUNT`] slots, scoped to the invoking uid, living under
-//!   `${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/d2b-heavy-gates/uid-<uid>/`.
+//!   the canonical per-uid namespace `/run/user/<uid>/d2b-heavy-gates/uid-<uid>/`
+//!   (falling back to `/tmp` only when the per-user runtime directory is
+//!   genuinely absent). The root is a fixed function of the uid, never a
+//!   caller-selectable environment variable, so two lanes for the same uid
+//!   always contend for the same two slots.
 //! * Acquisition is nonblocking (`F_OFD_SETLK`), retried every
 //!   [`RETRY_INTERVAL`] for at most [`ACQUIRE_TIMEOUT`].
 //! * Fail-closed: if the platform or filesystem does not support open file
@@ -99,6 +103,48 @@ const WAIT_NOTICE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Directory name holding every uid's slot directory.
 const GATE_DIR_NAME: &str = "d2b-heavy-gates";
+
+/// The canonical per-user runtime root. The per-uid namespace lives at
+/// `{CANONICAL_RUNTIME_ROOT}/<uid>/d2b-heavy-gates/uid-<uid>`. This is the
+/// systemd-managed per-user runtime directory (`/run/user/<uid>`, mode 0700,
+/// owned by the uid); it is a fixed function of the uid, so it cannot be
+/// pointed at a second, independent slot pool the way an environment variable
+/// could.
+const CANONICAL_RUNTIME_ROOT: &str = "/run/user";
+
+/// The fallback root when the per-user runtime directory is genuinely absent
+/// (for example a minimal container with no logind session). It is a fixed,
+/// root-owned, sticky, world-writable location, so - like the runtime root -
+/// every lane for the same uid resolves to the same `d2b-heavy-gates/uid-<uid>`
+/// directory. It is *not* selectable by the caller: the choice between it and
+/// [`CANONICAL_RUNTIME_ROOT`] is made purely on whether the runtime directory
+/// exists.
+const CANONICAL_FALLBACK_ROOT: &str = "/tmp";
+
+/// Semantic labels for the fixed heavy-gate namespace components.
+///
+/// Every operator- and CI-facing diagnostic names the directory or file by its
+/// ROLE, never by its absolute path or the caller's uid. The gate paths embed
+/// both the runtime root and the uid (`/run/user/<uid>/d2b-heavy-gates/uid-<uid>`),
+/// and these diagnostics reach stderr and CI logs verbatim, so interpolating
+/// the resolved path or the raw uid would leak them. Naming the role instead
+/// keeps the message actionable without disclosing either. The remediation
+/// text uses the shell-style `$UID` placeholder rather than the literal number.
+mod gate_label {
+    /// The canonical per-uid runtime root (`/run/user/$UID`, else `/tmp`).
+    pub const ROOT: &str = "the heavy-gate root directory";
+    /// The shared `d2b-heavy-gates` parent beneath the root.
+    pub const SHARED: &str = "the shared heavy-gate directory";
+    /// The per-uid `uid-$UID` slot directory.
+    pub const SLOT_DIR: &str = "the per-uid heavy-gate slot directory";
+    /// The process-private lock-support probe file.
+    pub const PROBE: &str = "the heavy-gate lock-probe file";
+
+    /// The `slot-<index>` file within the per-uid slot directory.
+    pub fn slot(index: usize) -> String {
+        format!("heavy-gate slot {index}")
+    }
+}
 
 /// Set in the child environment so nested lanes reuse the held slot instead
 /// of deadlocking against the same two slots.
@@ -219,6 +265,30 @@ pub enum LockOutcome {
     Environment,
 }
 
+/// The verdict of proving whether an inherited descriptor genuinely holds a
+/// heavy-gate slot.
+///
+/// This deliberately separates a legitimate "no slot is held" answer from a
+/// verifier *malfunction*. A malfunction (a lock mechanism that is unsupported
+/// here, or an environment error touching the slot file) is returned as an
+/// [`Err`] so callers can fail closed instead of mistaking it for "unheld" and
+/// re-execing forever against a broken environment. The two non-error verdicts
+/// are:
+///
+/// * [`SlotProof::Held`] - the inherited descriptor is proven to hold the slot
+///   lock, so the caller may proceed under it; and
+/// * [`SlotProof::NotHeld`] - there is no genuinely held slot to inherit (no
+///   marker, a forged or stale marker, an absent slot file, a foreign owner, a
+///   mismatched inode, or a slot another open file description holds), so the
+///   caller should acquire a real slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlotProof {
+    /// The inherited descriptor is proven to hold the slot lock.
+    Held,
+    /// No genuinely held slot backs the marker; the caller must acquire one.
+    NotHeld,
+}
+
 /// Classify an `F_OFD_SETLK` failure.
 ///
 /// `EAGAIN`/`EACCES` are the only retryable outcomes. Everything that means
@@ -269,17 +339,32 @@ fn unlock(file: &File) -> std::result::Result<(), Errno> {
     fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map(drop)
 }
 
-/// Resolve the directory the gate directory is created under.
+/// The single canonical per-uid namespace root.
 ///
-/// Kept pure so the precedence rule is directly testable.
-pub fn gate_root_from(xdg_runtime_dir: Option<&Path>, tmpdir: Option<&Path>) -> PathBuf {
-    xdg_runtime_dir
-        .or(tmpdir)
-        .unwrap_or_else(|| Path::new("/tmp"))
-        .to_path_buf()
+/// Non-overridable: the root is derived only from `uid`, never from `TMPDIR`,
+/// `XDG_RUNTIME_DIR`, or any other environment variable an attacker - or a
+/// well-meaning operator wiring up two lanes - could set differently for two
+/// concurrent invocations. That is the whole point of the semaphore: two
+/// lanes for the same uid on the same host MUST resolve to the same
+/// `d2b-heavy-gates/uid-<uid>` directory so they contend for the same two
+/// slots. An earlier form honoured `XDG_RUNTIME_DIR` then `TMPDIR`, which let
+/// two lanes each pick an independent root and each acquire two slots,
+/// defeating the global limit without forging anything.
+///
+/// `test_root` is an injectable seam used *exclusively* by this crate's own
+/// tests, which is why the function stays pure (no environment or filesystem
+/// access) and its precedence is directly unit-testable. The production caller
+/// always passes `None` (see [`GateDir::resolve`]), so a released binary has
+/// no code path that consults a caller-selected root.
+pub fn gate_root_from(uid: u32, test_root: Option<&Path>) -> PathBuf {
+    match test_root {
+        Some(root) => root.to_path_buf(),
+        None => PathBuf::from(format!("{CANONICAL_RUNTIME_ROOT}/{uid}")),
+    }
 }
 
 /// Per-uid slot directory under `root`.
+#[cfg(test)]
 pub fn gate_dir_path(root: &Path, uid: u32) -> PathBuf {
     root.join(GATE_DIR_NAME).join(format!("uid-{uid}"))
 }
@@ -320,36 +405,80 @@ pub fn shared_parent_is_trusted(owner_uid: u32, mode: u32, current_uid: u32) -> 
 /// open directory descriptor.
 #[derive(Debug)]
 pub struct GateDir {
+    /// The resolved per-uid slot directory path. Retained only for test
+    /// assertions on the filesystem layout; production diagnostics name the
+    /// directory by role, never by path, so no operator- or CI-facing surface
+    /// reads it.
+    #[cfg(test)]
     path: PathBuf,
     dir: File,
 }
 
 impl GateDir {
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Resolve and prepare the gate directory from the process environment.
+    /// Resolve and prepare the gate directory from the canonical per-uid
+    /// namespace.
+    ///
+    /// The root is a fixed function of the uid, never a caller-selected
+    /// environment variable: `/run/user/<uid>` when that per-user runtime
+    /// directory exists, otherwise the shared root-owned sticky `/tmp`. Both
+    /// are non-overridable, so two lanes for the same uid on the same host
+    /// always contend for the same two slots.
     pub fn resolve() -> Result<Self> {
-        let xdg = std::env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty());
-        let tmpdir = std::env::var_os("TMPDIR").filter(|value| !value.is_empty());
-        let root = gate_root_from(xdg.as_ref().map(Path::new), tmpdir.as_ref().map(Path::new));
-        Self::prepare(&root, getuid().as_raw())
+        let uid = getuid().as_raw();
+        // Injectable seam: honoured only in this crate's own test build, so a
+        // released binary has no code path that consults a caller-selected
+        // root. See `gate_root_from`.
+        let test_root = Self::test_root_override();
+        let root = gate_root_from(uid, test_root.as_deref());
+        // `/run/user/<uid>` is the canonical per-user runtime directory; fall
+        // back to the shared, root-owned, sticky `/tmp` only when it is
+        // genuinely absent (a minimal container without logind). The choice is
+        // made solely on existence - never on a caller-supplied value - so it
+        // cannot be steered to mint a second slot pool.
+        if test_root.is_none() && !root.is_dir() {
+            return Self::prepare(Path::new(CANONICAL_FALLBACK_ROOT), uid);
+        }
+        Self::prepare(&root, uid)
+    }
+
+    /// The test-only root override.
+    ///
+    /// In the crate's test build the child-mode helpers re-exec this same
+    /// binary with `XDG_RUNTIME_DIR` pointed at a per-test scratch directory,
+    /// so tests never touch the real per-user runtime namespace. In a released
+    /// binary this always returns `None`: the production namespace is fixed by
+    /// the uid alone and no environment variable can redirect it.
+    #[cfg(test)]
+    fn test_root_override() -> Option<PathBuf> {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+
+    #[cfg(not(test))]
+    fn test_root_override() -> Option<PathBuf> {
+        None
     }
 
     /// Create (if needed) and validate `<root>/d2b-heavy-gates/uid-<uid>`.
     ///
-    /// The selected root (`XDG_RUNTIME_DIR`, else `TMPDIR`, else `/tmp`) is
-    /// opened and `fstat`ed *first*. A root a non-root peer owns, or an
-    /// owned-but-loosely-permissioned root, is refused: otherwise that peer
-    /// could rename the whole verified `d2b-heavy-gates` directory between
-    /// invocations, so a later invocation would create a *second* semaphore
-    /// namespace and both would run two lanes each. Anchoring within a single
-    /// invocation (via `/proc/self/fd`) protects that invocation's inodes but
-    /// cannot preserve one namespace across invocations; only trusting the root
-    /// can. A root is trusted when it is ours and not group- or world-writable
-    /// (a per-user runtime directory), or root-owned and either locked down or
-    /// sticky (like `/tmp`) - exactly [`shared_parent_is_trusted`].
+    /// The canonical root (`/run/user/<uid>`, else `/tmp`; see
+    /// [`GateDir::resolve`]) is opened and `fstat`ed *first*. A root a non-root
+    /// peer owns, or an owned-but-loosely-permissioned root, is refused:
+    /// otherwise that peer could rename the whole verified `d2b-heavy-gates`
+    /// directory between invocations, so a later invocation would create a
+    /// *second* semaphore namespace and both would run two lanes each.
+    /// Anchoring within a single invocation (via `/proc/self/fd`) protects
+    /// that invocation's inodes but cannot preserve one namespace across
+    /// invocations; only trusting the root can. A root is trusted when it is
+    /// ours and not group- or world-writable (a per-user runtime directory),
+    /// or root-owned and either locked down or sticky (like `/tmp`) - exactly
+    /// [`shared_parent_is_trusted`].
     ///
     /// The shared `d2b-heavy-gates` parent is then created *relative to that
     /// anchored root descriptor* and private to us (mode `0700`) rather than
@@ -362,28 +491,26 @@ impl GateDir {
     /// renaming the path components after preparation cannot switch the
     /// semaphore namespace mid-run.
     pub fn prepare(root: &Path, uid: u32) -> Result<Self> {
+        // The resolved path is retained only for test assertions; production
+        // diagnostics name every gate component by role, never by path.
+        #[cfg(test)]
         let path = gate_dir_path(root, uid);
-        let shared = path
-            .parent()
-            .expect("the per-uid slot directory always has a parent")
-            .to_path_buf();
 
         // Anchor to the root itself before creating anything beneath it. A
         // peer-owned or owned-but-loose root is refused so the shared directory
         // cannot be renamed out from under a future invocation.
-        let root_dir = open_directory(root)?;
+        let root_dir = open_directory(root, gate_label::ROOT)?;
         let root_stat = fstat(root_dir.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!("cannot stat {}: {errno}", root.display()))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::ROOT))
         })?;
         if !shared_parent_is_trusted(root_stat.st_uid, root_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
-                "the heavy-gate root {} is owned by uid {} with mode {:o}; refusing to create a \
-                 semaphore namespace under a directory a peer could rename. Point \
-                 XDG_RUNTIME_DIR at a per-user runtime directory, or set TMPDIR to a directory \
-                 you own privately (mode 0700) or a root-owned sticky directory.",
-                root.display(),
-                root_stat.st_uid,
-                root_stat.st_mode as u32 & 0o7777,
+                "{} is owned by another user or is group- or world-writable; refusing to create \
+                 a semaphore namespace under a directory a peer could rename. Ensure the \
+                 per-user runtime directory /run/user/$UID exists and is owned by you \
+                 (mode 0700), or - where it is genuinely absent - that /tmp is the usual \
+                 root-owned sticky directory.",
+                gate_label::ROOT,
             )));
         }
 
@@ -397,34 +524,32 @@ impl GateDir {
         // normalised; it is verified and, unless it is a trusted root-owned
         // parent, refused.
         let shared_anchor = anchored_path(&root_dir, GATE_DIR_NAME);
-        create_dir_with_mode(&shared_anchor, 0o700)?;
-        let shared_dir = open_directory(&shared_anchor)?;
+        create_dir_with_mode(&shared_anchor, gate_label::SHARED, 0o700)?;
+        let shared_dir = open_directory(&shared_anchor, gate_label::SHARED)?;
         let mut shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::SHARED))
         })?;
         if shared_stat.st_uid == uid && (shared_stat.st_mode as u32 & 0o7777) != 0o700 {
             let self_anchor = PathBuf::from(format!("/proc/self/fd/{}", shared_dir.as_raw_fd()));
             fs::set_permissions(&self_anchor, fs::Permissions::from_mode(0o700)).map_err(
                 |error| {
                     GateError::environment(format!(
-                        "cannot lock down the heavy-gate parent {}: {error}",
-                        shared.display()
+                        "cannot lock down {}: {error}",
+                        gate_label::SHARED
                     ))
                 },
             )?;
             shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
-                GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
+                GateError::environment(format!("cannot stat {}: {errno}", gate_label::SHARED))
             })?;
         }
         if !shared_parent_is_trusted(shared_stat.st_uid, shared_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
-                "the heavy-gate parent {} is owned by uid {} with mode {:o}; refusing to \
-                 share a semaphore namespace a peer could rename. Point XDG_RUNTIME_DIR at a \
-                 per-user runtime directory, or have an administrator provision a root-owned \
-                 (optionally sticky) {GATE_DIR_NAME} directory.",
-                shared.display(),
-                shared_stat.st_uid,
-                shared_stat.st_mode as u32 & 0o7777,
+                "{} is owned by another user or is group- or world-writable; refusing to \
+                 share a semaphore namespace a peer could rename. Ensure the per-user runtime \
+                 directory /run/user/$UID is owned by you (mode 0700), or have an administrator \
+                 provision a root-owned (optionally sticky) {GATE_DIR_NAME} directory.",
+                gate_label::SHARED,
             )));
         }
 
@@ -432,31 +557,33 @@ impl GateDir {
         // descriptor so a swap of the shared path cannot redirect us.
         let uid_name = format!("uid-{uid}");
         let uid_anchor = anchored_path(&shared_dir, &uid_name);
-        create_dir_with_mode(&uid_anchor, 0o700)?;
-        let dir = open_directory(&uid_anchor)?;
+        create_dir_with_mode(&uid_anchor, gate_label::SLOT_DIR, 0o700)?;
+        let dir = open_directory(&uid_anchor, gate_label::SLOT_DIR)?;
         let metadata = fstat(dir.as_raw_fd()).map_err(|errno| {
-            GateError::environment(format!("cannot stat {}: {errno}", path.display()))
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::SLOT_DIR))
         })?;
         if metadata.st_uid != uid {
             return Err(GateError::environment(format!(
-                "heavy-gate slot directory {} is owned by uid {}, not uid {}; \
+                "{} is owned by a different user than the caller; \
                  refusing to share a semaphore across uids",
-                path.display(),
-                metadata.st_uid,
-                uid
+                gate_label::SLOT_DIR,
             )));
         }
         if metadata.st_mode as u32 & 0o077 != 0 {
             return Err(GateError::environment(format!(
-                "heavy-gate slot directory {} has mode {:o}; it must not be \
-                 group- or world-accessible. Remove it and rerun.",
-                path.display(),
-                metadata.st_mode as u32 & 0o7777
+                "{} has a group- or world-accessible mode; it must be private (0700). \
+                 Remove it and rerun.",
+                gate_label::SLOT_DIR,
             )));
         }
-        Ok(Self { path, dir })
+        Ok(Self {
+            #[cfg(test)]
+            path,
+            dir,
+        })
     }
 
+    #[cfg(test)]
     fn slot_path(&self, index: usize) -> PathBuf {
         self.path.join(format!("slot-{index}"))
     }
@@ -477,7 +604,6 @@ impl GateDir {
     /// fails closed here, before a single slot is touched.
     pub fn probe_ofd_support(&self) -> Result<()> {
         let probe_name = format!(".ofd-probe-{}", std::process::id());
-        let probe_path = self.path.join(&probe_name);
         let probe_anchor = anchored_path(&self.dir, &probe_name);
         let _ = fs::remove_file(&probe_anchor);
         let probe = OpenOptions::new()
@@ -488,44 +614,41 @@ impl GateDir {
             .custom_flags(libc::O_NOFOLLOW)
             .open(&probe_anchor)
             .map_err(|error| {
-                GateError::environment(format!(
-                    "cannot create heavy-gate probe file {}: {error}",
-                    probe_path.display()
-                ))
+                GateError::environment(format!("cannot create {}: {error}", gate_label::PROBE))
             })?;
 
-        let result = self.evaluate_probe(&probe, &probe_path);
+        let result = self.evaluate_probe(&probe);
         drop(probe);
         let _ = fs::remove_file(&probe_anchor);
         result
     }
 
-    fn evaluate_probe(&self, probe: &File, probe_path: &Path) -> Result<()> {
+    fn evaluate_probe(&self, probe: &File) -> Result<()> {
         match try_lock(probe) {
-            Ok(()) => unlock(probe).map_err(|errno| self.probe_error(errno, probe_path, "release")),
+            Ok(()) => unlock(probe).map_err(|errno| self.probe_error(errno, "release")),
             // A contended probe still proves the mechanism works.
             Err(Errno::EAGAIN | Errno::EACCES) => Ok(()),
-            Err(errno) => Err(self.probe_error(errno, probe_path, "acquire")),
+            Err(errno) => Err(self.probe_error(errno, "acquire")),
         }
     }
 
-    fn probe_error(&self, errno: Errno, probe_path: &Path, phase: &str) -> GateError {
+    fn probe_error(&self, errno: Errno, phase: &str) -> GateError {
         match classify_lock_errno(errno) {
             LockOutcome::Unsupported => self.unsupported_error(errno),
             _ => GateError::environment(format!(
-                "cannot {phase} the heavy-gate probe lock on {}: {errno}",
-                probe_path.display()
+                "cannot {phase} the lock on {}: {errno}",
+                gate_label::PROBE
             )),
         }
     }
 
     fn unsupported_error(&self, errno: Errno) -> GateError {
         GateError::unsupported(format!(
-            "open file description locks (F_OFD_SETLK) are unavailable on {} ({errno}). \
-             The heavy gate fails closed rather than falling back to flock or running \
-             unsynchronized; point XDG_RUNTIME_DIR or TMPDIR at a filesystem that \
-             supports them.",
-            self.path.display()
+            "open file description locks (F_OFD_SETLK) are unavailable on the filesystem backing \
+             {} ({errno}). The heavy gate fails closed rather than falling back to flock or \
+             running unsynchronized; the per-user runtime directory (/run/user/$UID, else /tmp) \
+             must live on a filesystem that supports them.",
+            gate_label::SLOT_DIR
         ))
     }
 
@@ -534,7 +657,6 @@ impl GateDir {
     /// Returns `Ok(None)` when the slot is held by another lane.
     pub fn try_acquire(&self, index: usize) -> Result<Option<SlotGuard>> {
         assert!(index < SLOT_COUNT, "slot index out of range");
-        let path = self.slot_path(index);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -544,29 +666,21 @@ impl GateDir {
             .custom_flags(libc::O_NOFOLLOW)
             .open(self.slot_anchor(index))
             .map_err(|error| {
-                GateError::environment(format!(
-                    "cannot open heavy-gate slot file {}: {error}",
-                    path.display()
-                ))
+                GateError::environment(format!("cannot open {}: {error}", gate_label::slot(index)))
             })?;
         let metadata = file.metadata().map_err(|error| {
-            GateError::environment(format!(
-                "cannot stat heavy-gate slot file {}: {error}",
-                path.display()
-            ))
+            GateError::environment(format!("cannot stat {}: {error}", gate_label::slot(index)))
         })?;
         if !metadata.is_file() {
             return Err(GateError::environment(format!(
-                "heavy-gate slot path {} is not a regular file",
-                path.display()
+                "{} is not a regular file",
+                gate_label::slot(index)
             )));
         }
         if metadata.uid() != getuid().as_raw() {
             return Err(GateError::environment(format!(
-                "heavy-gate slot file {} is owned by uid {}, not uid {}",
-                path.display(),
-                metadata.uid(),
-                getuid().as_raw()
+                "{} is owned by a different user than the caller",
+                gate_label::slot(index)
             )));
         }
 
@@ -576,19 +690,20 @@ impl GateDir {
                 LockOutcome::Busy => Ok(None),
                 LockOutcome::Unsupported => Err(self.unsupported_error(errno)),
                 LockOutcome::Environment => Err(GateError::environment(format!(
-                    "cannot lock heavy-gate slot file {}: {errno}",
-                    path.display()
+                    "cannot lock {}: {errno}",
+                    gate_label::slot(index)
                 ))),
             },
         }
     }
 
-    /// Whether `fd` is genuine evidence that this process runs inside a slot an
-    /// ancestor wrapper already holds, claiming the slot atomically as part of
-    /// the proof.
+    /// Prove whether `fd` is genuine evidence that this process runs inside a
+    /// slot an ancestor wrapper already holds, claiming the slot atomically as
+    /// part of the proof.
     ///
-    /// Returns `true` only when every one of the following holds, so a forged
-    /// or stale [`GATE_ACTIVE_ENV`] marker can never skip acquisition:
+    /// Returns [`SlotProof::Held`] only when every one of the following holds,
+    /// so a forged or stale [`GATE_ACTIVE_ENV`] marker can never skip
+    /// acquisition:
     ///
     /// * `index` names a real slot (`index < SLOT_COUNT`);
     /// * `fd` is an open descriptor (`fstat` succeeds) on a regular file owned
@@ -612,68 +727,101 @@ impl GateDir {
     /// * if any *other* open file description holds the slot, the call fails
     ///   with `EAGAIN`/`EACCES` and nesting is rejected.
     ///
+    /// A verdict of [`SlotProof::NotHeld`] covers every *legitimate* "no slot
+    /// is held" shape: a malformed marker, a closed (`EBADF`) or foreign
+    /// descriptor, an absent slot file, a mismatched inode, or a slot a
+    /// *different* description holds (`EAGAIN`/`EACCES`). A verifier
+    /// *malfunction* - a slot file that exists but cannot be opened or
+    /// stat'd, or a lock mechanism that is unsupported or errors for an
+    /// environmental reason - is returned as an [`Err`] instead of being
+    /// silently flattened into "unheld", so a caller fails closed on a broken
+    /// environment rather than re-execing forever against it.
+    ///
     /// The previous form issued `F_OFD_GETLK` on a *fresh* handle, which proved
     /// only that *some* description held the slot - not that the advertised
     /// descriptor did - so a forged unlocked descriptor passed whenever any
     /// unrelated lane happened to hold that slot, and the lock could be dropped
     /// between the query and its use. Claiming through `fd` removes both the
     /// impersonation and the TOCTOU window.
-    pub fn descriptor_is_locked_slot(&self, index: usize, fd: RawFd) -> bool {
+    pub fn descriptor_is_locked_slot(&self, index: usize, fd: RawFd) -> Result<SlotProof> {
         if index >= SLOT_COUNT || fd < 0 {
-            return false;
+            return Ok(SlotProof::NotHeld);
         }
         let uid = getuid().as_raw();
-        let Ok(inherited) = fstat(fd) else {
-            return false;
+        let inherited = match fstat(fd) {
+            Ok(stat) => stat,
+            // A closed or invalid inherited descriptor is a stale or forged
+            // marker, not a gate malfunction: acquire a real slot instead.
+            Err(Errno::EBADF) => return Ok(SlotProof::NotHeld),
+            Err(errno) => {
+                return Err(GateError::environment(format!(
+                    "cannot stat the inherited heavy-gate slot descriptor: {errno}"
+                )));
+            }
         };
         if (inherited.st_mode & libc::S_IFMT) != libc::S_IFREG {
-            return false;
+            return Ok(SlotProof::NotHeld);
         }
         if inherited.st_uid != uid {
-            return false;
+            return Ok(SlotProof::NotHeld);
         }
-        let Ok(slot) = OpenOptions::new()
+        let slot = match OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(self.slot_anchor(index))
-        else {
-            return false;
+        {
+            Ok(file) => file,
+            // No canonical slot file means there is nothing to inherit; the
+            // caller should acquire (which creates it), not fail closed.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(SlotProof::NotHeld);
+            }
+            Err(error) => {
+                return Err(GateError::environment(format!(
+                    "cannot open {} to verify ownership: {error}",
+                    gate_label::slot(index)
+                )));
+            }
         };
-        let Ok(slot_stat) = fstat(slot.as_raw_fd()) else {
-            return false;
-        };
+        let slot_stat = fstat(slot.as_raw_fd()).map_err(|errno| {
+            GateError::environment(format!("cannot stat {}: {errno}", gate_label::slot(index)))
+        })?;
         if slot_stat.st_dev != inherited.st_dev || slot_stat.st_ino != inherited.st_ino {
-            return false;
+            return Ok(SlotProof::NotHeld);
         }
         // Atomic ownership proof: claim the slot lock through the inherited
         // descriptor itself. Success means this description now holds the slot
-        // (idempotently, if it already did); contention means another
-        // description owns it and nesting must be rejected. There is no window
-        // between checking and using the lock because the check *is* the claim.
+        // (idempotently, if it already did); a Busy conflict means another
+        // description owns it and nesting must be rejected. Anything else is a
+        // verifier malfunction and fails closed. There is no window between
+        // checking and using the lock because the check *is* the claim.
         match try_lock_fd(fd) {
-            Ok(()) => true,
-            Err(_) => false,
+            Ok(()) => Ok(SlotProof::Held),
+            Err(errno) => match classify_lock_errno(errno) {
+                LockOutcome::Busy => Ok(SlotProof::NotHeld),
+                LockOutcome::Unsupported => Err(self.unsupported_error(errno)),
+                LockOutcome::Environment => Err(GateError::environment(format!(
+                    "cannot verify heavy-gate slot ownership through the inherited \
+                     descriptor: {errno}"
+                ))),
+            },
         }
     }
 }
 
-fn create_dir_with_mode(path: &Path, mode: u32) -> Result<()> {
+fn create_dir_with_mode(path: &Path, label: &str, mode: u32) -> Result<()> {
     match fs::DirBuilder::new().mode(mode).create(path) {
         Ok(()) => {
             // `mkdir` masks the requested mode with the umask; force it back
             // so a restrictive umask cannot loosen the directory we just made.
             fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
-                GateError::environment(format!(
-                    "cannot set mode {mode:o} on {}: {error}",
-                    path.display()
-                ))
+                GateError::environment(format!("cannot set mode {mode:o} on {label}: {error}"))
             })
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(GateError::environment(format!(
-            "cannot create {}: {error}",
-            path.display()
+            "cannot create {label}: {error}"
         ))),
     }
 }
@@ -683,23 +831,19 @@ fn create_dir_with_mode(path: &Path, mode: u32) -> Result<()> {
 /// `O_DIRECTORY` rejects a non-directory (`ENOTDIR`) and `O_NOFOLLOW` rejects a
 /// symlink (`ELOOP`) so the returned descriptor is always a real directory,
 /// and every later operation anchored to it stays bound to that inode.
-fn open_directory(path: &Path) -> Result<File> {
+fn open_directory(path: &Path, label: &str) -> Result<File> {
     OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
         .open(path)
         .map_err(|error| match error.raw_os_error() {
             Some(errno) if errno == libc::ELOOP => GateError::environment(format!(
-                "{} is a symlink; refusing to use it as a heavy-gate directory",
-                path.display()
+                "{label} is a symlink; refusing to use it as a heavy-gate directory"
             )),
             Some(errno) if errno == libc::ENOTDIR => {
-                GateError::environment(format!("{} is not a directory", path.display()))
+                GateError::environment(format!("{label} is not a directory"))
             }
-            _ => GateError::environment(format!(
-                "cannot open the heavy-gate directory {}: {error}",
-                path.display()
-            )),
+            _ => GateError::environment(format!("cannot open {label}: {error}")),
         })
 }
 
@@ -832,7 +976,7 @@ pub fn acquire_slot(
                      running unsynchronized. Another heavy lane is still holding both slots \
                      under {}.",
                     policy.timeout.as_secs(),
-                    dir.path().display()
+                    gate_label::SLOT_DIR
                 ),
             ));
         }
@@ -950,15 +1094,22 @@ fn read_nesting_env() -> Option<(usize, RawFd)> {
 
 /// Classify this invocation against `dir`, verifying any nesting marker rather
 /// than trusting its mere presence.
-fn classify_nesting(dir: &GateDir) -> NestingMarker {
+///
+/// A malfunction while proving the inherited descriptor (see
+/// [`GateDir::descriptor_is_locked_slot`]) propagates as an [`Err`] so the
+/// caller fails closed, rather than being flattened into an unverifiable
+/// marker that would silently acquire a fresh slot against a broken
+/// environment.
+fn classify_nesting(dir: &GateDir) -> Result<NestingMarker> {
     if std::env::var_os(GATE_ACTIVE_ENV).is_none() {
-        return NestingMarker::TopLevel;
+        return Ok(NestingMarker::TopLevel);
     }
     match read_nesting_env() {
-        Some((index, fd)) if dir.descriptor_is_locked_slot(index, fd) => {
-            NestingMarker::VerifiedSlot
-        }
-        _ => NestingMarker::Unverifiable,
+        Some((index, fd)) => match dir.descriptor_is_locked_slot(index, fd)? {
+            SlotProof::Held => Ok(NestingMarker::VerifiedSlot),
+            SlotProof::NotHeld => Ok(NestingMarker::Unverifiable),
+        },
+        None => Ok(NestingMarker::Unverifiable),
     }
 }
 
@@ -989,11 +1140,14 @@ pub const VERIFY_SLOT_UNHELD: u8 = 3;
 /// invocation, a forged or stale marker, or a marker naming an unlocked or
 /// foreign descriptor all yield [`VERIFY_SLOT_UNHELD`], so a guard that merely
 /// exported `D2B_HEAVY_GATE` is told to acquire a real slot instead of running
-/// heavy work. Resolving the gate directory itself failing is a real
-/// environment error and propagates as such.
+/// heavy work. A verifier *malfunction* - failing to resolve the gate
+/// directory, or an unsupported/environment error while proving ownership -
+/// propagates as an [`Err`] and exits with the corresponding
+/// [`GateErrorKind`] code, never [`VERIFY_SLOT_UNHELD`], so a caller can tell a
+/// genuine "not in a slot" apart from a broken environment and fail closed.
 fn verify_slot() -> Result<u8> {
     let dir = GateDir::resolve()?;
-    match classify_nesting(&dir) {
+    match classify_nesting(&dir)? {
         NestingMarker::VerifiedSlot => Ok(VERIFY_SLOT_HELD),
         _ => Ok(VERIFY_SLOT_UNHELD),
     }
@@ -1004,7 +1158,7 @@ fn execute(args: &[String]) -> Result<u8> {
     // forged marker cannot authorize it into running unsynchronized.
     if args.first().is_some_and(|first| first == EXEC_SHIM_FLAG) {
         let dir = GateDir::resolve()?;
-        return exec_wrapped_command(&args[1..], classify_nesting(&dir));
+        return exec_wrapped_command(&args[1..], classify_nesting(&dir)?);
     }
 
     // The slot-verification sub-operation reuses the atomic ownership proof
@@ -1026,7 +1180,7 @@ fn execute(args: &[String]) -> Result<u8> {
     };
 
     let dir = GateDir::resolve()?;
-    match classify_nesting(&dir) {
+    match classify_nesting(&dir)? {
         NestingMarker::VerifiedSlot => {
             eprintln!(
                 "heavy-gate: reusing the verified inherited slot instead of \
@@ -1417,10 +1571,13 @@ mod tests {
     const HOLD_ROOT_ENV: &str = "D2B_HEAVY_GATE_TEST_HOLD_ROOT";
     /// Env var selecting the in-test full-wrapper child mode.
     const WRAP_ROOT_ENV: &str = "D2B_HEAVY_GATE_TEST_WRAP_ROOT";
+    /// Env var selecting the in-test verify-slot child mode.
+    const VERIFY_ROOT_ENV: &str = "D2B_HEAVY_GATE_TEST_VERIFY_ROOT";
 
     const HOLDER_TEST: &str = "heavy_gate::tests::slot_holder_child_mode";
     const WRAPPER_TEST: &str = "heavy_gate::tests::full_wrapper_child_mode";
     const SHIM_TEST: &str = "heavy_gate::tests::exec_shim_child_mode";
+    const VERIFY_TEST: &str = "heavy_gate::tests::verify_slot_child_mode";
 
     /// Env vars carrying the wrapped command into the in-test shim.
     const SHIM_PROGRAM_ENV: &str = "D2B_HEAVY_GATE_TEST_SHIM_PROGRAM";
@@ -1514,6 +1671,36 @@ mod tests {
         GateDir::prepare(root, getuid().as_raw()).expect("gate directory is preparable")
     }
 
+    /// Asserts a gate diagnostic names components by role only. Every message
+    /// `run` prints to stderr and CI logs verbatim, so it must carry neither
+    /// an absolute path (a supplied root or a resolved runtime path) nor the
+    /// caller's numeric uid in any of the historical leak shapes. The redacted
+    /// diagnostics use role labels and the shell-style `$UID` placeholder.
+    fn assert_no_path_or_uid(message: &str, roots: &[&Path]) {
+        for root in roots {
+            let root = root.to_string_lossy();
+            assert!(
+                !message.contains(root.as_ref()),
+                "a gate diagnostic must not leak {root}: {message}"
+            );
+        }
+        assert!(
+            !message.contains("/home") && !message.contains("/target/"),
+            "a gate diagnostic must not leak HOME or a build path: {message}"
+        );
+        let uid = getuid().as_raw();
+        for leak in [
+            format!("uid {uid}"),
+            format!("uid-{uid}"),
+            format!("/run/user/{uid}"),
+        ] {
+            assert!(
+                !message.contains(&leak),
+                "a gate diagnostic must not leak the caller's uid as {leak:?}: {message}"
+            );
+        }
+    }
+
     fn wait_for(deadline: Duration, mut ready: impl FnMut() -> bool) -> bool {
         let started = Instant::now();
         while started.elapsed() < deadline {
@@ -1528,19 +1715,18 @@ mod tests {
     // ---- pure contract -------------------------------------------------
 
     #[test]
-    fn gate_root_precedence_is_xdg_then_tmpdir_then_tmp() {
+    fn gate_root_is_a_fixed_function_of_the_uid() {
+        // Production (no injected override) is always the canonical per-user
+        // runtime directory - a fixed function of the uid, never a
+        // caller-selected environment variable.
+        assert_eq!(gate_root_from(1000, None), PathBuf::from("/run/user/1000"));
+        assert_eq!(gate_root_from(1001, None), PathBuf::from("/run/user/1001"));
+        // The injectable seam (tests only) wins when present, so the crate's
+        // own tests can redirect the namespace to a scratch directory.
         assert_eq!(
-            gate_root_from(
-                Some(Path::new("/run/user/1000")),
-                Some(Path::new("/scratch"))
-            ),
-            PathBuf::from("/run/user/1000")
+            gate_root_from(1000, Some(Path::new("/scratch/gate"))),
+            PathBuf::from("/scratch/gate")
         );
-        assert_eq!(
-            gate_root_from(None, Some(Path::new("/scratch"))),
-            PathBuf::from("/scratch")
-        );
-        assert_eq!(gate_root_from(None, None), PathBuf::from("/tmp"));
     }
 
     #[test]
@@ -1774,6 +1960,35 @@ mod tests {
         );
         // Restore a sane mode so Scratch teardown can remove the tree.
         let _ = fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700));
+    }
+
+    #[test]
+    fn refused_gate_directories_name_roles_never_paths_or_the_uid() {
+        // Every GateDir::prepare refusal is printed by `run` to stderr and CI
+        // logs verbatim. Force the two representative refusals and assert each
+        // names its component by role only - never the resolved runtime path
+        // and never the caller's numeric uid. The leak escaped twice before
+        // precisely because nothing asserted on this output.
+
+        // A world- or group-writable root is untrusted (names the ROOT role).
+        let root = Scratch::new("gate-redaction-root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        let error = GateDir::prepare(root.path(), getuid().as_raw())
+            .expect_err("a world-writable root must be refused");
+        assert_eq!(error.kind(), GateErrorKind::Environment);
+        assert_no_path_or_uid(error.message(), &[root.path()]);
+        let _ = fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700));
+
+        // A pre-existing group-accessible per-uid slot directory is refused
+        // (names the slot-directory role).
+        let loose = Scratch::new("gate-redaction-slot");
+        let slot_dir = gate_dir_path(loose.path(), getuid().as_raw());
+        fs::create_dir_all(&slot_dir).unwrap();
+        fs::set_permissions(&slot_dir, fs::Permissions::from_mode(0o770)).unwrap();
+        let error = GateDir::prepare(loose.path(), getuid().as_raw())
+            .expect_err("a group-accessible slot directory must be refused");
+        assert_eq!(error.kind(), GateErrorKind::Environment);
+        assert_no_path_or_uid(error.message(), &[loose.path(), &slot_dir]);
     }
 
     #[test]
@@ -2048,7 +2263,7 @@ mod tests {
         let original = gate_dir_path(scratch.path(), uid);
         let moved = scratch.path().join(GATE_DIR_NAME).join("uid-moved");
         fs::rename(&original, &moved).unwrap();
-        create_dir_with_mode(&original, 0o700).unwrap();
+        create_dir_with_mode(&original, gate_label::SLOT_DIR, 0o700).unwrap();
 
         let guard = dir
             .try_acquire(0)
@@ -2072,12 +2287,22 @@ mod tests {
         let dir = gate_dir_under(scratch.path());
 
         // An index past the real slot count is rejected outright.
-        assert!(!dir.descriptor_is_locked_slot(SLOT_COUNT, 0));
+        assert_eq!(
+            dir.descriptor_is_locked_slot(SLOT_COUNT, 0).unwrap(),
+            SlotProof::NotHeld
+        );
         // A negative descriptor is rejected.
-        assert!(!dir.descriptor_is_locked_slot(0, -1));
+        assert_eq!(
+            dir.descriptor_is_locked_slot(0, -1).unwrap(),
+            SlotProof::NotHeld
+        );
         // A descriptor number that is not open (nothing was opened at it)
-        // fails the `fstat`, so a forged D2B_HEAVY_GATE_SLOT_FD is worthless.
-        assert!(!dir.descriptor_is_locked_slot(0, 4096));
+        // fails the `fstat` with EBADF, so a forged D2B_HEAVY_GATE_SLOT_FD is
+        // a legitimate "not held", not a malfunction.
+        assert_eq!(
+            dir.descriptor_is_locked_slot(0, 4096).unwrap(),
+            SlotProof::NotHeld
+        );
     }
 
     #[test]
@@ -2098,9 +2323,10 @@ mod tests {
             .expect("slot opens");
         let fd = slot.as_raw_fd();
         drop(slot);
-        assert!(
-            !dir.descriptor_is_locked_slot(0, fd),
-            "a closed descriptor fails fstat and is not a held slot"
+        assert_eq!(
+            dir.descriptor_is_locked_slot(0, fd).unwrap(),
+            SlotProof::NotHeld,
+            "a closed descriptor fails fstat with EBADF and is not a held slot"
         );
     }
 
@@ -2123,8 +2349,9 @@ mod tests {
             .mode(0o600)
             .open(dir.slot_anchor(0))
             .expect("slot opens");
-        assert!(
-            dir.descriptor_is_locked_slot(0, slot.as_raw_fd()),
+        assert_eq!(
+            dir.descriptor_is_locked_slot(0, slot.as_raw_fd()).unwrap(),
+            SlotProof::Held,
             "an uncontended descriptor is accepted and the slot is claimed atomically"
         );
         // Prove the lock is now genuinely held on that description: a separate
@@ -2174,8 +2401,10 @@ mod tests {
             "the separate open really does name the canonical slot inode, so only the \
              lock-ownership check can reject it"
         );
-        assert!(
-            !dir.descriptor_is_locked_slot(0, separate.as_raw_fd()),
+        assert_eq!(
+            dir.descriptor_is_locked_slot(0, separate.as_raw_fd())
+                .unwrap(),
+            SlotProof::NotHeld,
             "a descriptor from a separate open is rejected while another description holds \
              the slot, so a forged marker cannot smuggle in a third lane"
         );
@@ -2194,37 +2423,70 @@ mod tests {
         // verification must accept it.
         let guard = dir.try_acquire(0).unwrap().expect("slot 0 is free");
         let child_handle = guard.duplicate_for_child().expect("duplicate succeeds");
-        assert!(
-            dir.descriptor_is_locked_slot(0, child_handle.as_raw_fd()),
+        assert_eq!(
+            dir.descriptor_is_locked_slot(0, child_handle.as_raw_fd())
+                .unwrap(),
+            SlotProof::Held,
             "a live descriptor on the genuinely locked slot is accepted"
         );
         // A marker that points at the locked slot but names the *other* index
         // must not verify, because its inode will not match.
-        assert!(
-            !dir.descriptor_is_locked_slot(1, child_handle.as_raw_fd()),
+        assert_eq!(
+            dir.descriptor_is_locked_slot(1, child_handle.as_raw_fd())
+                .unwrap(),
+            SlotProof::NotHeld,
             "the descriptor must match the slot index it claims"
         );
         drop(child_handle);
         drop(guard);
     }
 
-    // ---- verify-slot through the real binary (the shell-guard path) ----
-    //
-    // These drive the actual `xtask heavy-gate verify-slot` binary the shell
-    // and Make guards call, not the internal Rust helper, so they prove the
-    // guard cannot be fooled by a bare `D2B_HEAVY_GATE` export. A slot
-    // descriptor is handed to the child exactly as the gate does it: an open
-    // handle with close-on-exec cleared so it survives `execve` at the same
-    // fd number the environment advertises.
+    #[test]
+    fn a_verifier_malfunction_propagates_as_an_error_not_unheld() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("verifier-malfunction");
+        let dir = gate_dir_under(scratch.path());
 
-    /// Path to the built `xtask` binary next to this unit-test binary
-    /// (`<target>/debug/xtask`), or `None` when only the library tests were
-    /// built so the binary is absent.
-    fn xtask_binary() -> Option<PathBuf> {
-        let test_exe = std::env::current_exe().ok()?;
-        let candidate = test_exe.parent()?.parent()?.join("xtask");
-        candidate.is_file().then_some(candidate)
+        // A live, uid-owned regular-file descriptor stands in for the inherited
+        // slot marker so the check gets past the fstat/ownership screen and
+        // reaches the canonical-slot open.
+        let inherited = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(scratch.path().join("inherited-marker"))
+            .expect("inherited marker opens");
+
+        // Replace the canonical slot-0 path with a *directory*. Opening it
+        // O_RDWR|O_NOFOLLOW then fails with EISDIR - not NotFound - which is a
+        // genuine verifier malfunction, not a legitimate "no slot is held".
+        fs::create_dir(dir.slot_path(0)).expect("slot path is replaceable with a directory");
+
+        let outcome = dir.descriptor_is_locked_slot(0, inherited.as_raw_fd());
+        assert!(
+            outcome.is_err(),
+            "a slot file that exists but cannot be opened as a regular file must fail closed \
+             with an error, never collapse into SlotProof::NotHeld (exit 3)"
+        );
+        drop(inherited);
     }
+
+    // ---- verify-slot through the CLI dispatch (the shell-guard path) ----
+    //
+    // These drive the real `heavy_gate::run` / `execute` CLI dispatch that the
+    // shell and Make guards reach through `xtask heavy-gate verify-slot`, so
+    // they prove the guard cannot be fooled by a bare `D2B_HEAVY_GATE` export.
+    // They run it in a re-exec of *this* test binary rather than the separately
+    // built `xtask` binary: the canonical per-uid namespace is non-overridable
+    // in a released binary (Finding 2), so only the crate's own test build
+    // honours the `XDG_RUNTIME_DIR` scratch-root seam. The exercised code path
+    // (`execute` -> `verify_slot` -> `classify_nesting` ->
+    // `descriptor_is_locked_slot`) is byte-for-byte the one the real binary
+    // runs. A slot descriptor is handed to the child exactly as the gate does
+    // it: an open handle with close-on-exec cleared so it survives `execve` at
+    // the same fd number the environment advertises.
 
     /// Clear close-on-exec so a handle is inherited by the child at the same
     /// fd number, mirroring [`SlotGuard::duplicate_for_child`].
@@ -2236,18 +2498,34 @@ mod tests {
         .expect("close-on-exec is clearable");
     }
 
-    /// Run `xtask heavy-gate verify-slot` with a controlled environment and
-    /// return its exit code. `slot` is `Some((index, fd))` to advertise a slot
-    /// marker, or `None` to export only the bare, forgeable `D2B_HEAVY_GATE`.
-    fn run_verify_slot(
-        xtask: &Path,
-        root: &Path,
-        marker: bool,
-        slot: Option<(usize, RawFd)>,
-    ) -> i32 {
-        let mut command = Command::new(xtask);
+    /// Child mode: run `verify-slot` through the real CLI dispatch against the
+    /// parent's scratch namespace. Selected by [`VERIFY_ROOT_ENV`]; a no-op in
+    /// ordinary runs. Exits with the exact code the `xtask heavy-gate
+    /// verify-slot` binary would, mapping a gate error to its kind's exit code
+    /// exactly as [`run`] does, so a verifier *malfunction* is distinguishable
+    /// from a plain "unheld".
+    #[test]
+    fn verify_slot_child_mode() {
+        if std::env::var_os(VERIFY_ROOT_ENV).is_none() {
+            return;
+        }
+        let code = match execute(&[VERIFY_SLOT_OP.to_string()]) {
+            Ok(code) => code,
+            Err(error) => error.kind().exit_code(),
+        };
+        std::process::exit(i32::from(code));
+    }
+
+    /// Run `verify-slot` through a re-exec of this test binary with a
+    /// controlled environment and return its exit code. `slot` is
+    /// `Some((index, fd))` to advertise a slot marker, or `None` to export
+    /// only the bare, forgeable `D2B_HEAVY_GATE`.
+    fn run_verify_slot(root: &Path, marker: bool, slot: Option<(usize, RawFd)>) -> i32 {
+        let mut command =
+            Command::new(std::env::current_exe().expect("the test binary path is known"));
         command
-            .args(["heavy-gate", VERIFY_SLOT_OP])
+            .args([VERIFY_TEST, "--exact", "--nocapture", "--test-threads=1"])
+            .env(VERIFY_ROOT_ENV, root)
             .env("XDG_RUNTIME_DIR", root)
             .env_remove("TMPDIR")
             .env_remove(GATE_ACTIVE_ENV)
@@ -2264,7 +2542,7 @@ mod tests {
         }
         command
             .status()
-            .expect("the verify-slot binary runs")
+            .expect("the verify-slot child runs")
             .code()
             .expect("verify-slot exits normally")
     }
@@ -2272,16 +2550,12 @@ mod tests {
     #[test]
     fn verify_slot_rejects_a_bare_marker_through_the_binary() {
         let _serial = exclusive();
-        let Some(xtask) = xtask_binary() else {
-            eprintln!("skipping: xtask binary not built next to the test binary");
-            return;
-        };
         let scratch = Scratch::new("verify-bare");
 
         // Exactly the headline bypass: export the forgeable marker with no
         // real slot descriptor. verify-slot must report no held slot so the
         // shell guard acquires a real slot instead of running heavy work.
-        let code = run_verify_slot(&xtask, scratch.path(), true, None);
+        let code = run_verify_slot(scratch.path(), true, None);
         assert_eq!(
             code, VERIFY_SLOT_UNHELD as i32,
             "a bare D2B_HEAVY_GATE export is not a held slot"
@@ -2291,9 +2565,6 @@ mod tests {
     #[test]
     fn verify_slot_rejects_a_forged_foreign_descriptor_through_the_binary() {
         let _serial = exclusive();
-        let Some(xtask) = xtask_binary() else {
-            return;
-        };
         let scratch = Scratch::new("verify-forged");
         let _dir = gate_dir_under(scratch.path());
 
@@ -2311,7 +2582,7 @@ mod tests {
             .expect("the bogus file opens");
         clear_cloexec(&bogus);
 
-        let code = run_verify_slot(&xtask, scratch.path(), true, Some((0, bogus.as_raw_fd())));
+        let code = run_verify_slot(scratch.path(), true, Some((0, bogus.as_raw_fd())));
         assert_eq!(
             code, VERIFY_SLOT_UNHELD as i32,
             "a descriptor on a foreign file is not a held slot"
@@ -2322,9 +2593,6 @@ mod tests {
     #[test]
     fn verify_slot_rejects_a_closed_descriptor_through_the_binary() {
         let _serial = exclusive();
-        let Some(xtask) = xtask_binary() else {
-            return;
-        };
         let scratch = Scratch::new("verify-closed");
         let dir = gate_dir_under(scratch.path());
 
@@ -2341,7 +2609,7 @@ mod tests {
         let fd = slot.as_raw_fd();
         drop(slot);
 
-        let code = run_verify_slot(&xtask, scratch.path(), true, Some((0, fd)));
+        let code = run_verify_slot(scratch.path(), true, Some((0, fd)));
         assert_eq!(
             code, VERIFY_SLOT_UNHELD as i32,
             "a closed descriptor is not a held slot"
@@ -2351,9 +2619,6 @@ mod tests {
     #[test]
     fn verify_slot_rejects_a_separate_open_while_another_lane_holds_it() {
         let _serial = exclusive();
-        let Some(xtask) = xtask_binary() else {
-            return;
-        };
         let scratch = Scratch::new("verify-contended");
         let dir = gate_dir_under(scratch.path());
 
@@ -2372,12 +2637,7 @@ mod tests {
             .expect("separate open succeeds");
         clear_cloexec(&separate);
 
-        let code = run_verify_slot(
-            &xtask,
-            scratch.path(),
-            true,
-            Some((0, separate.as_raw_fd())),
-        );
+        let code = run_verify_slot(scratch.path(), true, Some((0, separate.as_raw_fd())));
         assert_eq!(
             code, VERIFY_SLOT_UNHELD as i32,
             "a separate open is rejected while another description holds the slot"
@@ -2389,9 +2649,6 @@ mod tests {
     #[test]
     fn verify_slot_accepts_a_genuinely_held_slot_through_the_binary() {
         let _serial = exclusive();
-        let Some(xtask) = xtask_binary() else {
-            return;
-        };
         let scratch = Scratch::new("verify-held");
         let dir = gate_dir_under(scratch.path());
 
@@ -2401,12 +2658,7 @@ mod tests {
         let guard = dir.try_acquire(0).unwrap().expect("slot 0 is free");
         let child_handle = guard.duplicate_for_child().expect("duplicate succeeds");
 
-        let code = run_verify_slot(
-            &xtask,
-            scratch.path(),
-            true,
-            Some((0, child_handle.as_raw_fd())),
-        );
+        let code = run_verify_slot(scratch.path(), true, Some((0, child_handle.as_raw_fd())));
         assert_eq!(
             code, VERIFY_SLOT_HELD as i32,
             "a descriptor on the genuinely locked slot is a held slot"
@@ -2659,7 +2911,10 @@ mod tests {
     /// Recursively collect every heavy-entrypoint candidate under `dir`: a
     /// shell script (`.sh`) or any executable regular file. A data file that is
     /// neither is ignored, so a non-`.sh` executable entrypoint cannot slip in
-    /// unguarded. Returns an empty vec when `dir` is absent (optional lanes).
+    /// unguarded. A sourced shell library (`lib.sh`) is NOT an entrypoint - it
+    /// is loaded by an entrypoint that already holds a slot - so it is excluded
+    /// and never required to self-guard. Returns an empty vec when `dir` is
+    /// absent (optional lanes).
     fn collect_heavy_entrypoints(dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let Ok(entries) = fs::read_dir(dir) else {
@@ -2676,6 +2931,9 @@ mod tests {
             if !meta.file_type().is_file() {
                 continue;
             }
+            if path.file_name() == Some(OsStr::new("lib.sh")) {
+                continue;
+            }
             let is_sh = path.extension() == Some(OsStr::new("sh"));
             let is_exec = meta.permissions().mode() & 0o111 != 0;
             if is_sh || is_exec {
@@ -2687,14 +2945,15 @@ mod tests {
     }
 
     /// Inventory guard for the sole-use invariant: every live, hardware,
-    /// benchmark, cloud, and performance entrypoint must route through the
-    /// heavy-gate semaphore, so a future lane cannot be added that silently
-    /// bypasses it. This is a CLOSED-WORLD guard - it walks the on-disk
-    /// entrypoints recursively and parses the Makefile for every heavy lane
-    /// rather than checking a hand-maintained list. Adding a new heavy
+    /// benchmark, cloud, container, and performance entrypoint must route
+    /// through the heavy-gate semaphore, so a future lane cannot be added that
+    /// silently bypasses it. This is a CLOSED-WORLD guard - it walks the
+    /// on-disk entrypoints recursively, censuses every lane directory against
+    /// an explicit classification, and parses the Makefile for every heavy
+    /// lane rather than checking a hand-maintained list. Adding a new heavy
     /// entrypoint (a nested or non-`.sh` script, a new aggregating runner, a
-    /// new `heavy-lane-*` make target, or a new public delegation) fails this
-    /// test until it is gated.
+    /// new lane directory, a new `heavy-lane-*` make target, or a new public
+    /// delegation) fails this test until it is gated.
     #[test]
     fn every_live_and_heavy_entrypoint_routes_through_the_gate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2707,18 +2966,77 @@ mod tests {
         // than trusting the mere presence of the D2B_HEAVY_GATE variable.
         let self_guard_token = "d2b_heavy_gate_reexec";
 
-        // 1. Filesystem entrypoints. Walk every heavy-lane directory
+        // Closed-world lane classification. Trusting a hand-maintained
+        // directory list is exactly why the type-9 container lane went missing
+        // for four rounds, so every lane directory on disk must be explicitly
+        // classified. GATED lanes route through the heavy-gate and every
+        // runnable entrypoint they contain must self-guard. OUT_OF_SCOPE lanes
+        // are non-heavy (the Layer-3 distro-pin matrix self-classifies per
+        // script and is owned by another slice) and are named with the reason
+        // they hold no slot. GATED names may sit under different parents
+        // (benchmark lives directly under tests/), so the walked set is spelled
+        // out and the census cross-checks that every GATED directory on disk is
+        // actually walked.
+        const GATED_LANE_DIRS: &[&str] = &["live", "containers", "cloud", "hardware", "benchmark"];
+        const OUT_OF_SCOPE_LANE_DIRS: &[(&str, &str)] = &[(
+            "distro-matrix",
+            "Layer-3 nightly distro-pin matrix; scripts self-classify and are owned elsewhere",
+        )];
+        let walked_heavy_dirs = [
+            "tests/integration/live",
+            "tests/integration/containers",
+            "tests/integration/cloud",
+            "tests/host-integration/hardware",
+            "tests/benchmark",
+        ];
+
+        // Census: every subdirectory of the lane parents must be classified
+        // exactly once, and every GATED directory that exists must be walked.
+        for parent_rel in ["tests/integration", "tests/host-integration"] {
+            let parent = root.join(parent_rel);
+            let Ok(entries) = fs::read_dir(&parent) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.expect("a readable dir entry").path();
+                let meta = fs::symlink_metadata(&path)
+                    .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
+                if !meta.file_type().is_dir() {
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("a utf-8 lane directory name")
+                    .to_string();
+                let gated = GATED_LANE_DIRS.contains(&name.as_str());
+                let out_of_scope = OUT_OF_SCOPE_LANE_DIRS.iter().any(|(n, _)| *n == name);
+                assert!(
+                    gated ^ out_of_scope,
+                    "lane directory {parent_rel}/{name} is not classified exactly once: classify \
+                     it as GATED (add it to GATED_LANE_DIRS and to the walked heavy set so its \
+                     entrypoints self-guard) or OUT_OF_SCOPE (add it to OUT_OF_SCOPE_LANE_DIRS \
+                     with the reason it holds no slot). A new heavy lane must not appear silently \
+                     unguarded."
+                );
+                if gated {
+                    let walked = walked_heavy_dirs.iter().any(|w| root.join(w) == path);
+                    assert!(
+                        walked,
+                        "GATED lane directory {parent_rel}/{name} is classified but not in the \
+                         walked heavy set; add it so its entrypoints are required to self-guard"
+                    );
+                }
+            }
+        }
+
+        // 1. Filesystem entrypoints. Walk every GATED heavy-lane directory
         //    recursively and require an executable self-guard on each script.
         //    performance-budgets.sh lives outside those directories, so it is
         //    named explicitly. Optional directories (benchmark, cloud) are
         //    walked when present and simply contribute nothing when absent.
         let mut entrypoints: Vec<PathBuf> = Vec::new();
-        for dir in [
-            "tests/integration/live",
-            "tests/host-integration/hardware",
-            "tests/benchmark",
-            "tests/integration/cloud",
-        ] {
+        for dir in walked_heavy_dirs {
             entrypoints.extend(collect_heavy_entrypoints(&root.join(dir)));
         }
         let perf = root.join("tests/unit/gates/performance-budgets.sh");
@@ -2738,6 +3056,25 @@ mod tests {
         assert!(
             live_count >= 7,
             "expected the known live-lane scripts to be discovered; found {live_count}"
+        );
+
+        // The type-9 container lane must contribute at least its one runnable
+        // entrypoint; its sourced lib.sh must NOT (it is not an entrypoint).
+        let container_count = entrypoints
+            .iter()
+            .filter(|p| p.starts_with(root.join("tests/integration/containers")))
+            .count();
+        assert!(
+            container_count >= 1,
+            "expected the type-9 container lane entrypoints to be discovered and gated; found \
+             {container_count}"
+        );
+        assert!(
+            !entrypoints
+                .iter()
+                .any(|p| p.file_name() == Some(OsStr::new("lib.sh"))),
+            "a sourced lib.sh was collected as an entrypoint; sourced libraries must not be \
+             required to hold a slot"
         );
 
         for script in &entrypoints {
@@ -2760,10 +3097,14 @@ mod tests {
             );
         }
 
-        // 2. The aggregating runner and the layer dispatcher (which drives the
-        //    hardware and perf lanes) must also route through the same
-        //    verifying self-guard.
-        for relative in ["tests/runner.sh", "tests/tools/run-layer.sh"] {
+        // 2. The aggregating runners and the layer dispatcher (which drive the
+        //    hardware, perf, and container lanes) must also route through the
+        //    same verifying self-guard.
+        for relative in [
+            "tests/runner.sh",
+            "tests/tools/run-layer.sh",
+            "tests/test-integration.sh",
+        ] {
             let path = root.join(relative);
             let body = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));

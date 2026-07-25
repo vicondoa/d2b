@@ -586,10 +586,7 @@ pub fn attest(
 fn read_record_dir(dir: &Path) -> Result<Vec<RecordFile>> {
     let metadata = fs::symlink_metadata(dir)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(DeliveryError::new(format!(
-            "panel record path is not a directory: {}",
-            dir.display()
-        )));
+        return Err(DeliveryError::new("panel record path is not a directory"));
     }
     let mut files = Vec::new();
     for entry in fs::read_dir(dir)? {
@@ -692,18 +689,14 @@ fn ensure_distinct<'a>(values: impl Iterator<Item = &'a str>, label: &str) -> Re
 /// Reads a bounded JSON artifact from an operator-supplied path.
 pub(crate) fn read_json_file<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T> {
     let bytes = read_file_limited(path, label)?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        DeliveryError::new(format!("invalid {label} in {}: {error}", path.display()))
-    })
+    serde_json::from_slice(&bytes)
+        .map_err(|error| DeliveryError::new(format!("invalid {label}: {error}")))
 }
 
 fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(DeliveryError::new(format!(
-            "{label} is not a regular file: {}",
-            path.display()
-        )));
+        return Err(DeliveryError::new(format!("{label} is not a regular file")));
     }
     let mut bytes = Vec::new();
     File::open(path)?
@@ -711,8 +704,7 @@ fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_JSON_BYTES {
         return Err(DeliveryError::new(format!(
-            "{label} exceeds {MAX_JSON_BYTES} bytes: {}",
-            path.display()
+            "{label} exceeds {MAX_JSON_BYTES} bytes"
         )));
     }
     Ok(bytes)
@@ -729,8 +721,7 @@ pub(crate) fn ensure_same_file(supplied: &Path, expected: &Path, label: &str) ->
     if supplied != expected {
         return Err(DeliveryError::new(format!(
             "{label} must be the candidate's own artifact inside external delivery state, not \
-             {}",
-            supplied.display()
+             the supplied path"
         )));
     }
     Ok(())
@@ -744,7 +735,7 @@ pub(crate) mod tests {
         model::fixtures,
         storage::{
             SNAPSHOT_FILE,
-            tests::{Scratch, repo_root},
+            tests::{Scratch, assert_no_absolute_path, repo_root},
         },
     };
 
@@ -828,12 +819,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_refused_panel_read_names_the_label_not_the_path() {
+        // Point a bounded read at a directory. The read refuses it, and the
+        // diagnostic - which reaches operator stderr and CI logs verbatim -
+        // must name the semantic label only, never the absolute path.
+        let scratch = Scratch::new("panel-read-redaction");
+        let decoy = scratch.path.join("panel-record");
+        std::fs::create_dir_all(&decoy).expect("create the decoy directory");
+        let error = read_file_limited(&decoy, "panel record")
+            .expect_err("a directory must not read as a record file");
+        let message = error.message();
+        assert_no_absolute_path(message, &[&scratch.path, &decoy]);
+        assert!(
+            message.contains("panel record"),
+            "the diagnostic must name the semantic label: {message}"
+        );
+    }
+
+    #[test]
     fn a_request_binds_the_candidate_the_roster_and_the_model() {
         let scratch = Scratch::new("panel-request");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
 
         let output = request(&candidate, &snapshot).expect("panel request");
-        assert_eq!(output.operation, "panel-request");
+        assert_eq!(output.operation.as_str(), "panel-request");
         assert_eq!(
             output.candidate_id.as_deref(),
             Some(snapshot.candidate_id.as_str())
@@ -875,7 +884,7 @@ pub(crate) mod tests {
         let dir = write_record_dir(&scratch, &files);
 
         let output = attest(&candidate, &snapshot, &dir).expect("attest");
-        assert_eq!(output.operation, "panel-attest");
+        assert_eq!(output.operation.as_str(), "panel-attest");
         assert_eq!(candidate.list(PANEL_DIR).expect("panel dir").len(), 10);
 
         let request = stored_request(&candidate, &snapshot).expect("request");
