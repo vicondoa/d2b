@@ -215,7 +215,11 @@ mod tests {
             assert_eq!(parsed.to_string(), *value);
             assert_eq!(format!("{parsed:?}"), format!("ResourceRef(\"{value}\")"));
             let json = serde_json::to_string(&parsed).expect("serialize");
-            assert_eq!(serde_json::from_str::<ResourceRef>(&json).unwrap(), parsed);
+            assert_eq!(json, format!("\"{value}\""));
+            assert_eq!(
+                serde_json::from_str::<ResourceRef>(&format!("\"{value}\"")).unwrap(),
+                parsed
+            );
         }
         for value in INVALID_REF_VECTORS {
             assert!(ResourceRef::parse(value).is_err(), "{value}");

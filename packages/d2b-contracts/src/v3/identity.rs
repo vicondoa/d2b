@@ -16,6 +16,8 @@ pub const MAX_RESOURCE_NAME_BYTES: usize = 63;
 pub const MAX_RESOURCE_TYPE_SEGMENT_BYTES: usize = 63;
 /// Maximum byte length of a qualified ResourceType name.
 pub const MAX_QUALIFIED_RESOURCE_TYPE_BYTES: usize = 137;
+/// Domain tag for the content-addressed resource-bundle generation identity.
+pub const RESOURCE_BUNDLE_GENERATION_DOMAIN_TAG: &str = "d2b:v3:resource-bundle";
 
 const LABEL_PATTERN: &str = "^[a-z][a-z0-9-]{0,62}$";
 const QUALIFIED_RESOURCE_TYPE_PATTERN: &str =
@@ -63,11 +65,13 @@ pub enum IdentityClass {
     ServiceName,
     SchemaFingerprint,
     BindingDigest,
+    ResourceBundleGenerationId,
     TranscriptHash,
     Timestamp,
     ResourceGeneration,
     ReconnectGeneration,
     ControllerGeneration,
+    ConfigurationGeneration,
 }
 
 /// Reason a canonical identity could not be constructed.
@@ -748,6 +752,18 @@ digest_identity!(
     IdentityClass::BindingDigest,
     clear_debug = false
 );
+digest_identity!(
+    ResourceBundleGenerationId,
+    IdentityClass::ResourceBundleGenerationId,
+    clear_debug = true
+);
+
+impl ResourceBundleGenerationId {
+    /// Return the domain tag used to compute this generation identity.
+    pub const fn domain_tag() -> &'static str {
+        RESOURCE_BUNDLE_GENERATION_DOMAIN_TAG
+    }
+}
 
 macro_rules! nonzero_generation {
     ($name:ident, $class:expr) => {
@@ -794,6 +810,17 @@ macro_rules! nonzero_generation {
 nonzero_generation!(ResourceGeneration, IdentityClass::ResourceGeneration);
 nonzero_generation!(ReconnectGeneration, IdentityClass::ReconnectGeneration);
 nonzero_generation!(ControllerGeneration, IdentityClass::ControllerGeneration);
+nonzero_generation!(
+    ConfigurationGeneration,
+    IdentityClass::ConfigurationGeneration
+);
+
+impl ConfigurationGeneration {
+    /// Return the next activation ordinal, or `None` on numeric exhaustion.
+    pub fn checked_next(self) -> Option<Self> {
+        self.get().checked_add(1).map(Self)
+    }
+}
 
 /// The latest generation a controller has observed, with zero meaning none.
 #[derive(
@@ -1209,6 +1236,27 @@ mod tests {
             assert!(ZoneId::parse(value).is_err(), "{value}");
             assert!(ResourceName::parse(value).is_err(), "{value}");
         }
+
+        let maximum = format!("a{}", "z".repeat(62));
+        let too_long = format!("{maximum}z");
+        for json in [
+            serde_json::to_string("").unwrap(),
+            serde_json::to_string(&too_long).unwrap(),
+        ] {
+            assert!(serde_json::from_str::<ZoneId>(&json).is_err(), "{json}");
+            assert!(
+                serde_json::from_str::<ResourceName>(&json).is_err(),
+                "{json}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&ZoneId::parse("work").unwrap()).unwrap(),
+            "\"work\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ResourceName::parse("app").unwrap()).unwrap(),
+            "\"app\""
+        );
     }
 
     #[test]
@@ -1216,6 +1264,14 @@ mod tests {
         for value in STANDARD_RESOURCE_TYPES {
             let parsed = ResourceTypeName::parse(value).expect("standard type");
             assert!(parsed.is_standard());
+            assert_eq!(
+                serde_json::to_string(&parsed).unwrap(),
+                format!("\"{value}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<ResourceTypeName>(&format!("\"{value}\"")).unwrap(),
+                parsed
+            );
         }
         let maximum_qualified = format!("a{}.d2bus.org.A{}", "z".repeat(62), "z".repeat(62));
         for value in [
@@ -1283,7 +1339,11 @@ mod tests {
             assert_eq!(format!("{uid:?}"), "ResourceUid(<36 bytes>)");
             assert!(!format!("{uid:?}").contains(value));
             let json = serde_json::to_string(&uid).expect("serialize");
-            assert_eq!(serde_json::from_str::<ResourceUid>(&json).unwrap(), uid);
+            assert_eq!(json, format!("\"{value}\""));
+            assert_eq!(
+                serde_json::from_str::<ResourceUid>(&format!("\"{value}\"")).unwrap(),
+                uid
+            );
         }
 
         for value in INVALID_UUIDS {
@@ -1302,7 +1362,11 @@ mod tests {
             let timestamp = Timestamp::parse(value).expect("valid timestamp");
             assert_eq!(timestamp.as_str(), value);
             let json = serde_json::to_string(&timestamp).expect("serialize");
-            assert_eq!(serde_json::from_str::<Timestamp>(&json).unwrap(), timestamp);
+            assert_eq!(json, format!("\"{value}\""));
+            assert_eq!(
+                serde_json::from_str::<Timestamp>(&format!("\"{value}\"")).unwrap(),
+                timestamp
+            );
         }
         for value in [
             "",
@@ -1324,6 +1388,7 @@ mod tests {
         assert!(ResourceGeneration::new(0).is_err());
         assert!(ReconnectGeneration::new(0).is_err());
         assert!(ControllerGeneration::new(0).is_err());
+        assert!(ConfigurationGeneration::new(0).is_err());
         assert_eq!(ObservedGeneration::new(0).get(), 0);
         assert_eq!(
             ZoneRevision::new(0).checked_next(),
@@ -1331,6 +1396,66 @@ mod tests {
         );
         assert_eq!(ZoneRevision::new(u64::MAX).checked_next(), None);
         assert!(serde_json::from_str::<ResourceGeneration>("0").is_err());
+        assert_eq!(
+            serde_json::to_string(&ResourceGeneration::new(1).unwrap()).unwrap(),
+            "1"
+        );
+        assert_eq!(
+            serde_json::to_string(&ReconnectGeneration::new(2).unwrap()).unwrap(),
+            "2"
+        );
+        assert_eq!(
+            serde_json::to_string(&ControllerGeneration::new(3).unwrap()).unwrap(),
+            "3"
+        );
+        assert_eq!(
+            serde_json::to_string(&ObservedGeneration::new(0)).unwrap(),
+            "0"
+        );
+        assert_eq!(serde_json::to_string(&ZoneRevision::new(0)).unwrap(), "0");
+    }
+
+    #[test]
+    fn generation_identity_and_configuration_ordinal_are_distinct() {
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let generation_id = ResourceBundleGenerationId::parse(digest).unwrap();
+        let ordinal = ConfigurationGeneration::new(7).unwrap();
+
+        assert_eq!(
+            ResourceBundleGenerationId::domain_tag(),
+            "d2b:v3:resource-bundle"
+        );
+        assert_eq!(generation_id.as_str(), digest);
+        assert_eq!(ordinal.get(), 7);
+        assert_eq!(
+            ordinal.checked_next(),
+            Some(ConfigurationGeneration::new(8).unwrap())
+        );
+        assert_eq!(
+            ConfigurationGeneration::new(u64::MAX)
+                .unwrap()
+                .checked_next(),
+            None
+        );
+        assert_eq!(
+            format!("{generation_id:?}"),
+            format!("ResourceBundleGenerationId(\"{digest}\")")
+        );
+        assert_eq!(
+            serde_json::to_string(&generation_id).unwrap(),
+            format!("\"{digest}\"")
+        );
+        assert_eq!(serde_json::to_string(&ordinal).unwrap(), "7");
+        assert_eq!(
+            serde_json::from_str::<ResourceBundleGenerationId>(&format!("\"{digest}\"")).unwrap(),
+            generation_id
+        );
+        assert_eq!(
+            serde_json::from_str::<ConfigurationGeneration>("7").unwrap(),
+            ordinal
+        );
+        assert!(serde_json::from_str::<ResourceBundleGenerationId>("7").is_err());
+        assert!(serde_json::from_str::<ConfigurationGeneration>(&format!("\"{digest}\"")).is_err());
     }
 
     #[test]
@@ -1365,6 +1490,29 @@ mod tests {
             format!("{:?}", context.transport_binding()),
             "TransportBinding { locality: Local, binding_digest: \"<redacted>\" }"
         );
+        assert_eq!(
+            serde_json::to_value(&context).unwrap(),
+            serde_json::json!({
+                "subjectRef": "User/alice",
+                "subjectUid": "123e4567-e89b-42d3-a456-426614174000",
+                "zoneRef": "Zone/dev",
+                "evidenceClass": "unix-peer",
+                "executionRef": null,
+                "providerRef": "Provider/system-core",
+                "processRef": null,
+                "controllerGeneration": null,
+                "providerGeneration": 2,
+                "sessionPurpose": "resource-api",
+                "service": "d2b.resource.v3",
+                "schemaFingerprint": digest,
+                "transportBinding": {
+                    "locality": "local",
+                    "bindingDigest": digest
+                },
+                "reconnectGeneration": 1,
+                "transcriptHash": "5a".repeat(32)
+            })
+        );
     }
 
     #[test]
@@ -1377,5 +1525,31 @@ mod tests {
         assert!(SchemaFingerprint::parse("sha256:ABC").is_err());
         assert!(TranscriptHash::parse_hex(&"0".repeat(64)).is_ok());
         assert!(TranscriptHash::parse_hex(&"A".repeat(64)).is_err());
+
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            serde_json::to_string(&SessionPurpose::parse("resource-api").unwrap()).unwrap(),
+            "\"resource-api\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ServiceName::parse("d2b.resource.v3").unwrap()).unwrap(),
+            "\"d2b.resource.v3\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SchemaFingerprint::parse(digest).unwrap()).unwrap(),
+            format!("\"{digest}\"")
+        );
+        assert_eq!(
+            serde_json::to_string(&EvidenceClass::NativeVsock).unwrap(),
+            "\"native-vsock\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Locality::AdjacentZone).unwrap(),
+            "\"adjacent-zone\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TranscriptHash::from_bytes([0x5a; 32])).unwrap(),
+            format!("\"{}\"", "5a".repeat(32))
+        );
     }
 }
