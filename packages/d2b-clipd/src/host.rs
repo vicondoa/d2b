@@ -41,7 +41,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     }
 
     /// Update Niri state cache from an event stream event; does not produce
-    /// attribution – that happens on explicit `on_host_selection_changed`.
+    /// attribution - that happens on explicit `on_host_selection_changed`.
     pub fn apply_niri_cache_event(
         &mut self,
         event: crate::niri::NiriEvent,

@@ -3,7 +3,7 @@
 //!
 //! Background: the swtpm runner creates a Unix socket when the TPM is ready to
 //! accept connections. `unix-socket-exists` proves only that a filesystem inode
-//! exists — a stale socket from a crashed previous run satisfies it. Using
+//! exists - a stale socket from a crashed previous run satisfies it. Using
 //! `unix-socket-listening` checks for an active listener and is stale-socket-
 //! proof (issue #64).
 //!
@@ -18,7 +18,7 @@ use d2b_core::processes::{ProcessRole, ReadinessPredicate};
 
 /// Assert that every `Swtpm` node in the full fixture's processes DAG uses
 /// `unix-socket-listening` (not `unix-socket-exists`) for readiness.
-/// Fails — rather than skips — if no Swtpm node is present in a full
+/// Fails - rather than skips - if no Swtpm node is present in a full
 /// fixture that claims to have TPM enabled, so new fixture configurations
 /// cannot silently omit this check.
 #[test]
@@ -54,7 +54,7 @@ fn swtpm_readiness_uses_unix_socket_listening() {
     // that drops the TPM VM doesn't void this contract.
     assert!(
         !swtpm_nodes.is_empty(),
-        "{test}: fixture-smoke-full has no Swtpm nodes — \
+        "{test}: fixture-smoke-full has no Swtpm nodes - \
          either the corp-full VM lost tpm.enable or the fixture is stale"
     );
 
@@ -64,7 +64,7 @@ fn swtpm_readiness_uses_unix_socket_listening() {
             if matches!(pred, ReadinessPredicate::UnixSocketExists(_)) {
                 failures.push(format!(
                     "vm={vm} node={node_id}: readiness uses unix-socket-exists; \
-                     must use unix-socket-listening (issue #64 — stale-socket-proof)"
+                     must use unix-socket-listening (issue #64 - stale-socket-proof)"
                 ));
             }
         }

@@ -1,4 +1,4 @@
-# cli-json-output-contract — successor for the CLI-output golden/equivalence
+# cli-json-output-contract - successor for the CLI-output golden/equivalence
 # portion of tests/cli-json-drift.sh. The schema drift portion moved to
 # tests/unit/gates/drift-check.sh. These are bare libtest paths, one per line.
 list_output_matches_cli_json_drift_goldens

@@ -10,7 +10,7 @@
 //! The dry-run subcommands need the fixture-smoke bundle (D2B_FIXTURES) so
 //! corp-vm resolves in the manifest. The dry-run output is host-independent
 //! deterministic text (no daemon mutation), so no system-state / daemon-state
-//! sandbox is required here — only that corp-vm exists in the manifest.
+//! sandbox is required here - only that corp-vm exists in the manifest.
 //!
 //! Requires D2B_FIXTURES (the fixture-smoke output dir), delivered by the
 //! dedicated CLI-contract step in tests/tools/rust-workspace-checks.sh. When unset

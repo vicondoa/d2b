@@ -1,4 +1,4 @@
-# cli-contract-coverage — Rust successor for tests/cli-contract-coverage.sh.
+# cli-contract-coverage - Rust successor for tests/cli-contract-coverage.sh.
 # The tests live in packages/d2b/tests/cli_contract_coverage.rs and keep
 # the docs/reference/cli-contract.md parser/help drift contract plus the closed
 # host-* CLI error-golden table fail-closed under cargo nextest enumeration.

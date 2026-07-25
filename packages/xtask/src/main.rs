@@ -1187,7 +1187,7 @@ fn render_shape(item: &RustItem) -> String {
                         if variant.shape == "unit" {
                             format!("`{}`", variant.name)
                         } else {
-                            format!("`{}` — {}", variant.name, variant.shape)
+                            format!("`{}` - {}", variant.name, variant.shape)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -1397,7 +1397,7 @@ fn render_item_table(title: &str, items: &[&RustItem]) -> String {
 }
 
 /// Aggregate the `Unreleased` section of CHANGELOG.md
-/// into a versioned section. Re-runs are idempotent — if a section
+/// into a versioned section. Re-runs are idempotent - if a section
 /// for `version` already exists, the function exits with a clear
 /// error rather than duplicating it.
 ///

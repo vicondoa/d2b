@@ -17,23 +17,23 @@ let
   #
   #   * `` + ``
   #     delete the bash CLI and every per-VM systemd template the
-  #     allowlist named — there is no longer any unit shaped like
+  #     allowlist named - there is no longer any unit shaped like
   #     `d2b@<vm>` / `d2b-<vm>-*` / `d2b-sys-<env>-*`
   #     for polkit to be asked about.
   #   * The  bash fallback bridge was retired in; mutating verbs
   #     run daemon-only end-to-end. The operator-facing control plane
   #     is the daemon's public socket (group-readable to `d2bd`),
-  #     authorised at accept time via SO_PEERCRED — polkit is no
+  #     authorised at accept time via SO_PEERCRED - polkit is no
   #     longer in the per-VM lifecycle path.
   #
   # What is KEPT: the launcher-group allowlist for the two daemon-only
   # singleton units that operators still drive directly with
   # `systemctl`
   #
-  #   * `d2bd.service` — the public daemon. It may restart after a
+  #   * `d2bd.service` - the public daemon. It may restart after a
   #     `nixos-rebuild switch`; VM runners survive via KillMode=process
   #     and daemon re-adoption.
-  #   * `d2b-priv-broker.service` + `d2b-priv-broker.socket` —
+  #   * `d2b-priv-broker.service` + `d2b-priv-broker.socket` -
   #     the privileged broker pair. Socket-activated; operators may
   #     bounce them to recover from a stuck handler.
   #
@@ -46,7 +46,7 @@ let
   # Default-deny invariant: the allowlist is a literal three-element
   # array; an unknown unit name falls through the for-loop and the
   # rule returns `undefined`, which polkit treats as "this rule has
-  # no opinion" — control passes to the next rule, ultimately to the
+  # no opinion" - control passes to the next rule, ultimately to the
   # password-prompt default.
   # ---------------------------------------------------------------------------
   launcherAllowedUnits = [

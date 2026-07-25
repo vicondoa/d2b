@@ -1,4 +1,4 @@
-# d2b ACA + Wayland POC — Azure deployment (Bicep)
+# d2b ACA + Wayland POC - Azure deployment (Bicep)
 
 Infrastructure-as-code for the ADR 0032 vertical of
 [ADR 0032](../../../docs/adr/0032-d2b-v2-constellation-control-plane.md):
@@ -25,15 +25,15 @@ Every resource follows one scheme (configured in `main.bicep`):
 <prefix><workload><suffix>        compact, where '-' is forbidden (e.g. ACR)
 ```
 
-- **prefix** — a short resource-type abbreviation. Defaults follow the
+- **prefix** - a short resource-type abbreviation. Defaults follow the
   Azure Cloud Adoption Framework (CAF)
   [recommended abbreviations](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations).
   Two types CAF does not define get a d2b-chosen prefix: the Container
-  Apps sandbox group (`casbx`, in the CAF `ca*` family — `ca`/`cae`/`caj`)
+  Apps sandbox group (`casbx`, in the CAF `ca*` family - `ca`/`cae`/`caj`)
   and the Relay namespace (`relns`, mirroring CAF's `<svc>ns` convention
   such as `sbns`).
-- **workload** — a stable token for the deployment (default `d2b`).
-- **suffix** — `uniqueString(subscription().id, resourceGroup().id)`: a
+- **workload** - a stable token for the deployment (default `d2b`).
+- **suffix** - `uniqueString(subscription().id, resourceGroup().id)`: a
   deterministic hash that is stable across redeploys but unique per
   (subscription, resource group).
 
@@ -48,7 +48,7 @@ Every resource follows one scheme (configured in `main.bicep`):
 
 ## Resource group layout
 
-- **`rg-<workload>-<region>`** (e.g. `rg-d2b-centralus`) — every
+- **`rg-<workload>-<region>`** (e.g. `rg-d2b-centralus`) - every
   resource in this POC is regional, so they all live here.
 - **`rg-common`** is reserved by the scheme for genuinely subscription-global
   resources. This POC has none, so it is not created.
@@ -75,10 +75,10 @@ house style.
 
 Container Apps sandboxes use a two-plane architecture:
 
-- **ARM control plane** (`management.azure.com`) — creates/updates/deletes
+- **ARM control plane** (`management.azure.com`) - creates/updates/deletes
   the **sandbox group** (the management boundary). This is what the Bicep
   here deploys.
-- **ADC data plane** (`management.azuredevcompute.io`) — creates and manages
+- **ADC data plane** (`management.azuredevcompute.io`) - creates and manages
   individual **sandboxes**, disk images, snapshots, volumes, ports, and
   egress policies, scoped to a sandbox group. These are **not** ARM/Bicep
   resources; the realm gateway drives them at runtime using the
@@ -132,7 +132,7 @@ realm gateway.
 ## Trust-boundary notes (ADR 0032)
 
 - The Relay namespace is a ciphertext-only rendezvous. Relay SAS keys
-  authenticate relay access only — never a constellation principal.
+  authenticate relay access only - never a constellation principal.
 - The `Listen` SAS policy is held by the realm **gateway** (listener). The
   gateway mints short-lived per-sandbox **`Send`** tokens for each sandbox
   from the `Send` policy; the policy key itself never enters a sandbox. SAS

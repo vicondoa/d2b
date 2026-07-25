@@ -1,4 +1,4 @@
-# `changelog.d/` — changelog fragments
+# `changelog.d/` - changelog fragments
 
 `CHANGELOG.md` has one `## [Unreleased]` block and every branch appends to the
 bottom of it, so any two branches in flight collide there even when their
@@ -40,7 +40,7 @@ headings with your entries under them:
 - Fixed the thing that misbehaved, and the symptom that is now gone.
 ```
 
-Rules, all enforced fail-closed — a fragment that breaks one of them aborts the
+Rules, all enforced fail-closed - a fragment that breaks one of them aborts the
 fold with the file and line rather than silently dropping the entry:
 
 - Only `### Added`, `### Changed`, `### Deprecated`, `### Removed`,
@@ -63,8 +63,8 @@ The integrator runs the assembler from the repository root:
 cd packages && cargo run -q -p xtask -- changelog-fold      # or: make changelog-fold
 ```
 
-It merges every fragment into the `## [Unreleased]` block by section — all
-`### Added` bullets from all fragments collate under one `### Added` — in
+It merges every fragment into the `## [Unreleased]` block by section - all
+`### Added` bullets from all fragments collate under one `### Added` - in
 Keep a Changelog order (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`,
 `Security`), appends to whatever the block already carried, leaves released
 version sections untouched, and deletes the fragments it consumed. Fragments
@@ -79,6 +79,6 @@ computes the same fold without writing or deleting anything.
 
 `scripts/changelog-check.sh` (the `test-changelog` job) requires a code change
 to ship release notes. A pull request satisfies it with **either** an entry in
-`CHANGELOG.md` **or** a fragment in this directory — neither is not an option.
+`CHANGELOG.md` **or** a fragment in this directory - neither is not an option.
 The same gate validates the structure of every fragment present, so a malformed
 fragment fails on the pull request that introduced it rather than at fold time.

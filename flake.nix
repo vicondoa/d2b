@@ -23,7 +23,7 @@
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
     in
     {
-      # The public surface area — populated incrementally by the
+      # The public surface area - populated incrementally by the
       # refactor plan. This wires `nixosModules.default` for real
       # after refactoring `host.nix`'s `{ inputs, ... }:`
       # module-arg into a closure-passed partial application (see
@@ -34,12 +34,12 @@
       #   imports = [ inputs.d2b.nixosModules.default ];
       #
       # Future work will populate the remaining surface:
-      #   packages.<sys>       — patched cloud-hypervisor, crosvm, etc.
-      #   apps.<sys>           — the `d2b` CLI as a runnable app
-      #   templates.default    — `nix flake init -t github:vicondoa/d2b`
-      #   checks.<sys>         — flake-eval CI gates
-      #   lib                  — re-exported helpers (subnetIp, mkMac, …)
-      #   overlays.default     — adds vhostDeviceSound, crosvmPatched, …
+      #   packages.<sys>       - patched cloud-hypervisor, crosvm, etc.
+      #   apps.<sys>           - the `d2b` CLI as a runnable app
+      #   templates.default    - `nix flake init -t github:vicondoa/d2b`
+      #   checks.<sys>         - flake-eval CI gates
+      #   lib                  - re-exported helpers (subnetIp, mkMac, …)
+      #   overlays.default     - adds vhostDeviceSound, crosvmPatched, …
       nixosModules.default = import ./nixos-modules { inherit inputs; };
 
       packages = forAllSystems (system: let
@@ -287,7 +287,7 @@
       # preinstalled there) and locally.
       #
       # Scope: this layer is ONLY for things that need a foreign (non-Nix)
-      # userland — e.g. proving a static d2b binary runs on stock Ubuntu.
+      # userland - e.g. proving a static d2b binary runs on stock Ubuntu.
       # It deliberately does NOT boot systemd for daemon/socket activation;
       # that is covered natively by
       # packages/d2b-priv-broker/tests/socket_activation.rs plus nix-unit.
@@ -296,7 +296,7 @@
       # Auto-discovered from tests/integration/containers/images/*.nix: each image module is
       # `{ pkgs, self, system }: <dockerTools-built OCI image>`, so adding a new
       # container test is one new image file + its tests/integration/containers/<name>.sh
-      # runner — no edit here. x86_64-linux only (the project's CI runners +
+      # runner - no edit here. x86_64-linux only (the project's CI runners +
       # this host are x86_64; aarch64 images need an aarch64 builder).
       containerImages = forAllSystems (system:
         if system == "x86_64-linux" then
@@ -330,9 +330,9 @@
       #
       # Auto-discovered from tests/host-integration/*.nix (excluding lib.nix): each test is
       # `{ pkgs, self }: pkgs.testers.runNixOSTest { ... }`, so adding a VM test
-      # is one new file — no edit here. x86_64-linux only: a runNixOSTest VM is
+      # is one new file - no edit here. x86_64-linux only: a runNixOSTest VM is
       # built + booted for the builder's own system, and the hosted CI runners
-      # are x86_64 — aarch64 VM coverage needs an aarch64 builder.
+      # are x86_64 - aarch64 VM coverage needs an aarch64 builder.
       vmChecks = forAllSystems (system:
         if system == "x86_64-linux" then
           let
@@ -355,14 +355,14 @@
 
       templates.default = {
         path = ./templates/default;
-        description = "Minimal d2b host scaffold — one env, one headless workload VM";
+        description = "Minimal d2b host scaffold - one env, one headless workload VM";
       };
 
       # Eval-only gates for the in-tree examples + template. The
       # `system.build.toplevel.drvPath` access is enough to force a
       # full module-system instantiation (option types, assertions,
       # CIDR validators, etc.) without actually realising the closure
-      # — which is what we want from a `nix flake check` gate.
+      # - which is what we want from a `nix flake check` gate.
       #
       # `with-entra-id` is intentionally absent: it imports
       # `entrablau.nixosModules.default` from a separate sibling
@@ -513,7 +513,7 @@
         # vsock-relay, otel-host-bridge) renders into the bundle. Consumed by
         # the per-role minijail-validator contract tests. x86_64-linux only:
         # the framework's checkVmPlatform gate throws on graphics for aarch64,
-        # so this is referenced only under that guard below (lazily — never
+        # so this is referenced only under that guard below (lazily - never
         # forced on aarch64).
         fullConfigModule = { lib, ... }: {
           boot.loader.grub.enable = false;
@@ -856,7 +856,7 @@
           d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
           inherit mkEval;
           # Direct-injection handles for tests/unit/nix/eval-cases/shared.nix (the
-          # minimal lib.evalModules fast evaluator) — passing the nixpkgs
+          # minimal lib.evalModules fast evaluator) - passing the nixpkgs
           # flake input + the d2b module set avoids a `getFlake ./.`
           # (which would resolve to a non-git store path inside the flake).
           nixpkgsFlake = nixpkgs;
@@ -879,7 +879,7 @@
               {
                 inherit name;
                 ok = false;
-                detail = "expectedError must be `{ }` — this runner asserts only THAT the expr throws; tryEval cannot match a throw message. Move message-substring checks to config.assertions data.";
+                detail = "expectedError must be `{ }` - this runner asserts only THAT the expr throws; tryEval cannot match a throw message. Move message-substring checks to config.assertions data.";
               }
             else
               {
@@ -925,14 +925,14 @@
         # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
         # for the Rust layer): every pinned case name MUST still exist in the
         # corpus, so a retired bash gate's nix-unit successor can't silently
-        # vanish. Pins are system-aware — `common.txt` holds the all-systems
+        # vanish. Pins are system-aware - `common.txt` holds the all-systems
         # cases; `<system>.txt` holds extra (e.g. x86-only graphics) cases.
         # Regenerate with `make nix-unit-pin` after adding/removing cases.
         #
         # common.txt is REQUIRED and must be non-empty: deleting the pin file
         # itself (along with case files) must fail closed, not silently make
         # the pin set empty (panel W2 finding). The PER-SYSTEM file is also
-        # REQUIRED TO EXIST for the current system, but may be empty — a
+        # REQUIRED TO EXIST for the current system, but may be empty - a
         # system with no extra (e.g. graphics) cases still commits a
         # header-only file, so deleting a non-empty per-system pin file
         # (e.g. x86_64-linux.txt with its 42 graphics pins) also fails closed
@@ -944,18 +944,18 @@
           (pkgs.lib.splitString "\n" (builtins.readFile path));
         readPinsRequiredNonEmpty = path:
           if !(builtins.pathExists path) then
-            throw "nix-unit: required pin file ${toString path} is missing — run `make nix-unit-pin`"
+            throw "nix-unit: required pin file ${toString path} is missing - run `make nix-unit-pin`"
           else
             let names = pinNames path;
             in if names == [ ]
-            then throw "nix-unit: required pin file ${toString path} has no pinned cases — the corpus would be unguarded; run `make nix-unit-pin`"
+            then throw "nix-unit: required pin file ${toString path} has no pinned cases - the corpus would be unguarded; run `make nix-unit-pin`"
             else names;
         readPinsRequiredExist = path:
           # The file MUST exist (so deleting it fails closed) but MAY be empty
           # for a system with no system-specific cases (e.g. aarch64 has no
           # x86-only graphics cases).
           if !(builtins.pathExists path) then
-            throw "nix-unit: required per-system pin file ${toString path} is missing — every supported system commits one (header-only is fine); run `make nix-unit-pin`"
+            throw "nix-unit: required per-system pin file ${toString path} is missing - every supported system commits one (header-only is fine); run `make nix-unit-pin`"
           else pinNames path;
         nixUnitPinned =
           (readPinsRequiredNonEmpty ./tests/unit/nix/pinned/common.txt)
@@ -963,7 +963,7 @@
         nixUnitMissingPins =
           pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
         nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
-          (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted — restore it or run `make nix-unit-pin`)")
+          (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted - restore it or run `make nix-unit-pin`)")
           nixUnitMissingPins;
       in {
         fixture-smoke = smokeFixture;
@@ -1004,7 +1004,7 @@
             '';
 
         # W2: the "module callsites use the shared volume helpers" grep
-        # checks from volume-mounts-eval.sh — a hermetic source-wiring
+        # checks from volume-mounts-eval.sh - a hermetic source-wiring
         # invariant (the nix-unit value cases assert the helpers; this
         # asserts the production modules actually call them).
         module-helper-wiring = pkgs.runCommand "d2b-module-helper-wiring" { } ''
@@ -1335,7 +1335,7 @@
           (import ./templates/default/configuration.nix)
           ({ lib, ... }: {
             # Minimal NixOS baseline the template intentionally
-            # omits (TODO 1 — hardware-configuration). Without this
+            # omits (TODO 1 - hardware-configuration). Without this
             # the eval would fail on `fileSystems."/"`.
             boot.loader.systemd-boot.enable = lib.mkForce false;
             boot.loader.grub.enable = false;
@@ -1347,7 +1347,7 @@
             environment.etc."machine-id".text =
               "00000000000000000000000000000000";
 
-            # Sentinel overrides — these are the three fields gated
+            # Sentinel overrides - these are the three fields gated
             # by the template's assertion block. Each `mkForce`
             # replaces a sentinel with a valid stand-in so the
             # assertions pass and the rest of the module eval runs.

@@ -14,7 +14,7 @@
 //!    dropped (i.e. it really is a freshly-duplicated kernel handle,
 //!    not the broker's own descriptor).
 //! 4. The `O_CLOEXEC` flag survives the transport (this is a kernel
-//!    invariant for SCM_RIGHTS — we check it on the receiving side).
+//!    invariant for SCM_RIGHTS - we check it on the receiving side).
 
 #![cfg(feature = "fake-backends")]
 

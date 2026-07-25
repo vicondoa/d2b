@@ -13,7 +13,7 @@
 # vhost-user.md) to attach a vhost-user backend. The backend is
 # upstream `vhost-device-sound --backend pipewire`, which connects to
 # the user's PipeWire daemon and appears in plasma-pa as a client
-# named `d2b-<vm>` — giving the user a normal per-stream mute/
+# named `d2b-<vm>` - giving the user a normal per-stream mute/
 # volume UX through the Plasma mixer.
 #
 # The vhost-user protocol is 1:1 frontend<->backend, so d2bd supervises one
@@ -22,7 +22,7 @@
 # Boot-time enable: this module wires `microvm.extraArgsScript` to a
 # tiny shell helper that reads /var/lib/d2b/<vm>/audio-state.json
 # at VM start. If both mic and speaker are "off", the helper emits
-# nothing — no virtio-snd device, the guest sees no soundcard. If at
+# nothing - no virtio-snd device, the guest sees no soundcard. If at
 # least one direction is "on", the helper:
 #   1. Waits up to 5s for the vhost-user socket to appear under
 #      /run/d2b/vms/<vm>/.
@@ -58,7 +58,7 @@ let
     mic=''${_a_result#mic=}; mic=''${mic% *}
     spk=''${_a_result#* speaker=}
     if [ "$mic" != "on" ] && [ "$spk" != "on" ]; then
-      # Both directions off (or state unreadable/invalid) — no device attached.
+      # Both directions off (or state unreadable/invalid) - no device attached.
       exit 0
     fi
 
@@ -85,7 +85,7 @@ let
 in
 
 {
-  # In-guest audio user list — populated from the host-side
+  # In-guest audio user list - populated from the host-side
   # `d2b.vms.<name>.audio.users` (default `[ ssh.user ]`) via
   # the propagation pattern in host.nix. Declared as an option in
   # this module so the value resolves cleanly at guest-config eval.
@@ -142,7 +142,7 @@ in
   # pcmC0D0c,pcmC0D0p} as root:audio mode 0660. Every interactive
   # guest user that wants to play audio needs the `audio` group; for
   # the long-lived wireplumber.service (which runs under the user's
-  # systemd-user manager) this is mandatory — otherwise WP's
+  # systemd-user manager) this is mandatory - otherwise WP's
   # alsa-monitor silently fails to open the soundcard and `wpctl
   # status` shows empty Devices/Sinks/Sources.
   #
@@ -167,7 +167,7 @@ in
   #
   # The virtio-snd ALSA driver has no ACP (Audio-Card-Profile) entry,
   # so WirePlumber's default monitor falls back to "Off" and creates
-  # no Sink / Source — the card is enumerated under Devices but
+  # no Sink / Source - the card is enumerated under Devices but
   # silent.
   #
   # The card's only non-Off profile is "pro-audio" (raw multichannel
@@ -179,14 +179,14 @@ in
   #   vhost-device-sound sidecar -> host PipeWire 6ch stream ->
   #   chan-mix back to mono -> Plantronics playback_MONO -> speaker
   #
-  # This is a lot of mixing but works in practice — verified with
+  # This is a lot of mixing but works in practice - verified with
   # speaker-test and Firefox WebAudio.
   #
   # Earlier we tried `use-acp = false` alone (without pinning
   # device.profile = "pro-audio") to bypass profiles entirely;
   # that left the device in "Off" mode permanently. We also tried
   # adding `api.alsa.disable-mmap = true` (because hw_params showed
-  # MMAP_INTERLEAVED) — that caused speaker-test inside the guest
+  # MMAP_INTERLEAVED) - that caused speaker-test inside the guest
   # to fail with EINTR / xrun on the very first frame. Conclusion:
   # the working configuration is plain `device.profile = pro-audio`
   # + `use-acp = false`. Don't tinker with mmap settings.

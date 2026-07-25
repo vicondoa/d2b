@@ -1,4 +1,4 @@
-# tests/unit/smoke/smoke-eval-graphics.nix — regression test.
+# tests/unit/smoke/smoke-eval-graphics.nix - regression test.
 #
 # Mirrors tests/unit/smoke/smoke-eval.nix but declares ONE graphics-enabled VM.
 # Graphics VMs trip the cli.nix `vmLaunchScript` codepath that reads
@@ -6,7 +6,7 @@
 # revealed Spec correction #29: when the `d2b.manifest` option
 # carried both `readOnly = true` AND `default = { }`, the matching
 # `config.d2b.manifest = …` assignment in manifest.nix collided
-# with the default and produced "set multiple times" — but ONLY when
+# with the default and produced "set multiple times" - but ONLY when
 # a graphics VM was synthesized. The headless smoke-eval missed it.
 #
 # Strictly evaluating `config.d2b.manifest` here forces the
@@ -61,7 +61,7 @@ let
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        # The graphics-enabled VM is the crux of this test — it
+        # The graphics-enabled VM is the crux of this test - it
         # forces cli.nix's `vmLaunchScript` to dereference
         # `config.d2b.manifest.<name>`, which is the access
         # path that surfaced Spec correction #29.

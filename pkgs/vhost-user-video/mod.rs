@@ -111,7 +111,7 @@ impl VideoDecoderBackend {
                 let mapper_opt = shmem_mapper.lock().unwrap().take();
 
                 if let Some(mapper) = mapper_opt {
-                    // SHM mapper available — use real HostMemoryMapper for MMAP buffers.
+                    // SHM mapper available - use real HostMemoryMapper for MMAP buffers.
                     base::info!("Media: SHM mapper available, using HostMemoryMapper for MMAP");
                     use resources::address_allocator::AddressAllocator;
                     use resources::AddressRange;
@@ -143,8 +143,8 @@ impl VideoDecoderBackend {
                     base::info!("Media decoder created with SHM mapper");
                     run_worker(decoder, cmd_q, kill_r);
                 } else {
-                    // No SHM mapper — use () (MMAP will fail, only USERPTR would work).
-                    base::info!("Media: No SHM mapper, using () — MMAP will fail");
+                    // No SHM mapper - use () (MMAP will fail, only USERPTR would work).
+                    base::info!("Media: No SHM mapper, using () - MMAP will fail");
                     let decoder = VideoDecoder::new(adapter, eq, ());
                     base::info!("Media decoder created without SHM");
                     run_worker(decoder, cmd_q, kill_r);

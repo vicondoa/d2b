@@ -1,4 +1,4 @@
-# tests/unit/smoke/smoke-eval-tpm.nix — regression coverage for the TPM host-side
+# tests/unit/smoke/smoke-eval-tpm.nix - regression coverage for the TPM host-side
 # hardening surface.
 #
 # Mirrors tests/unit/smoke/smoke-eval.nix but declares one TPM-enabled graphics VM,

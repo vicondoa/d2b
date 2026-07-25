@@ -29,13 +29,13 @@ This is a documentation-only contract. It defines future
 `packages/xtask`, `packages/d2b-contract-tests`, `tests/tools/`, and
 `AGENTS.md`/`tests/AGENTS.md` changes as implementation work items per
 [Implementation work items](#implementation-work-items). It does not itself
-add a build, script, or test — that requires the separate implementation
+add a build, script, or test - that requires the separate implementation
 request every other ADR 0046 work item requires per D024.
 
 **Scope boundary.** This spec's tooling is a meta-process artifact for
 authoring and delivering the ADR 0046 spec set and its future W0-W10
 implementation work items. It is unrelated to, and does not reintroduce, any
-v3 Zone/Provider runtime architecture excluded elsewhere in the set — in
+v3 Zone/Provider runtime architecture excluded elsewhere in the set - in
 particular `ADR-046-zone-routing`'s explicit exclusion of "ADR45 delivery
 seals (xtask delivery wave / panel / seal process)" from *runtime* reuse is
 about Zone socket/spawn/credential architecture, not about this repository's
@@ -57,19 +57,19 @@ lands before that wave opens, not after.
 This spec therefore splits its work items into two tranches, not one flat
 "implementation wave":
 
-- **Tier A — shared prep.** Items that operate purely on already-committed
+- **Tier A - shared prep.** Items that operate purely on already-committed
   Markdown (schemas, extractors, lints, generators, scaffolds, process/
   reporting tooling) carry no risk to in-flight spec content: they are
   additive, read-only over the tree, and require no unresolved decision. These
   land now, before the ADR 0046 documentation set's own pre-panel gate (D014),
   because every Tier A item's underlying friction already occurred during
-  documentation authoring — waiting for a future implementation wave would let
+  documentation authoring - waiting for a future implementation wave would let
   the same friction recur in the remaining spec-set iteration and in the
   Provider dossiers that still receive corrections.
-- **Tier B — the streamline wave.** Items that can only run meaningfully
+- **Tier B - the streamline wave.** Items that can only run meaningfully
   against real Rust crates, real controller processes, or real generated
-  code — none of which exist yet, since D024 confirms ADR 0046 has delivered
-  documentation only — are deferred. This tier is the actual "implementation
+  code - none of which exist yet, since D024 confirms ADR 0046 has delivered
+  documentation only - are deferred. This tier is the actual "implementation
   wave after all product waves": it lands only after every ResourceType,
   core-controller, and Provider dossier work item across the W0-W10
   implementation range reaches its own Validation-complete state (per each
@@ -92,12 +92,12 @@ session transcript or tool/agent attribution. Counts were reproduced with
 `git log --all --oneline --grep=... -i | wc -l`, `git rev-list --count`, and
 `grep -c` against the exact tree state.
 
-### F1 — Dossier branches authored against stale foundation commits
+### F1 - Dossier branches authored against stale foundation commits
 
 Every per-dossier Provider branch that exists in this repository diverges from
 the shared foundation at the exact same commit,
 `3ca4daf598ee3e33084bccd4cc5497ee78d87bac` ("docs: define d2b 3.0 Network
-resources") — confirmed by `git merge-base <branch>
+resources") - confirmed by `git merge-base <branch>
 adr0046-provider-resource-control-plane` returning that SHA for
 `adr0046-provider-device-gpu`, `adr0046-provider-volume-virtiofs`,
 `adr0046-provider-volume-local`, `adr0046-provider-transport-vsock`, and
@@ -106,7 +106,7 @@ moving after that point through `f76787b5` ("system-core and virtiofs Provider
 dossiers"), `c8f47656` ("normalize ADR 0046 cleanup contracts"), `038b4169`,
 `b63ce675`, `3b21a7cf`, and the two foundation-harmonize commits
 `38ab1d4cd3697df19765d9a238764d98ff562b0d` /
-`dfea59933251fbfb13eb70613642f5215bbc1f74` — an identical-diff pair (same
+`dfea59933251fbfb13eb70613642f5215bbc1f74` - an identical-diff pair (same
 parent `b4e0d6c7`, same tree, same author timestamp, two different commit
 objects on two different branches) that reconciles Provider `ResourceSpec`,
 `ProviderStateSet`, and bootstrap-exception wording the stale dossier branches
@@ -116,13 +116,13 @@ prep commit. This is the exact failure mode this repository's own
 `AGENTS.md` "Integrator-prep-first pattern (W3 onwards)" section exists to
 prevent for code waves; it was not applied to this documentation wave.
 
-### F2 — Invented Process/Volume fields later rejected
+### F2 - Invented Process/Volume fields later rejected
 
 The decision register records the rejection of specific invented fields as
 normative corrections, not hypothetical risk:
 
 - `ADR-046-decision-register` D075: "Canonical Provider ResourceSpec is
-  exactly `{ artifactId; config }`" — the corresponding foundation-harmonize
+  exactly `{ artifactId; config }`" - the corresponding foundation-harmonize
   commits (`38ab1d4c`/`dfea5993`) exist because earlier dossier text (per
   `git log --all -S"rootConfig" -- docs/specs`, 15+ matching commits) carried
   an authored `rootConfig`/manifest/package/status field set that had to be
@@ -143,7 +143,7 @@ normative corrections, not hypothetical risk:
   frozen semantic `mappingClass: process-principal-root` field precisely
   because the numeric fields leaked host identity into a public spec.
 
-### F3 — ProviderStateSet representation and bootstrap-cycle confusion
+### F3 - ProviderStateSet representation and bootstrap-cycle confusion
 
 `ProviderStateSet` churned through at least four distinct representations
 before D076/D086 froze it: a `ResourceType`, a stored row, a non-Volume
@@ -170,7 +170,7 @@ removed that exception entirely by making resource `status`/the core Operation
 ledger the default state surface and Provider state Volumes optional, so no
 bootstrap state Volume and no bootstrap-storage mechanism remain.
 
-### F4 — One-resource/one-controller Volume-vs-virtiofs ownership conflict
+### F4 - One-resource/one-controller Volume-vs-virtiofs ownership conflict
 
 `a7c0ceebbddca8e98482bba3e2231a5ed3cb19ed` ("docs(specs): redesign
 volume-virtiofs dossier around Export ResourceType") is titled
@@ -179,7 +179,7 @@ resource instance has one controller (Volume.providerRef=volume-local).
 volume-virtiofs cannot reconcile or write Volume resources." This followed an
 earlier design where `volume-virtiofs` wrote Volume rows directly, violating
 the single-owner-controller invariant the resource object model already
-required. `bf8c7c04` ("correct Volume ownership — Core ProviderDeployment
+required. `bf8c7c04` ("correct Volume ownership - Core ProviderDeployment
 creates/deletes, not controller"), `dc3f3349` ("core ProviderDeployment owns
 state Volume lifecycle, not transport controller"), and `d4677af5` ("Volume
 lifecycle owned by core ProviderDeployment, not controller") show the same
@@ -187,7 +187,7 @@ one-owner violation recurring across three different Provider families before
 D083 froze `volume-local` as sole Volume-row owner and `volume-virtiofs` as an
 attachment-status-only Provider.
 
-### F5 — Transport Providers incorrectly owning ZoneLink
+### F5 - Transport Providers incorrectly owning ZoneLink
 
 D081 ("Transport Providers are carriage services only; they never own
 ZoneLink") exists because earlier transport dossier text had the Provider
@@ -202,7 +202,7 @@ dossier"). Four of the five frozen transport/observability/activation
 Providers (D049) each required a dedicated ownership-correction commit before
 converging on the core-owns-ZoneLink / Provider-returns-opaque-handle split.
 
-### F6 — Direct-broker boundary drift
+### F6 - Direct-broker boundary drift
 
 D077 ("No Provider process imports/calls the broker... Providers validate/
 decide semantics and call injected async typed EffectPort traits") exists
@@ -214,7 +214,7 @@ individual Provider dossiers (ACA, GPU, TPM, minijail) had each independently
 proposed a Provider-owned broker call site before the shared EffectPort
 pattern was frozen once and propagated.
 
-### F7 — Qualified ResourceType grammar drift
+### F7 - Qualified ResourceType grammar drift
 
 D080 froze the single qualification grammar `<provider-name>.d2bus.org.<Type>`
 for Provider-specific ResourceTypes. Before that freeze, dossiers used
@@ -226,7 +226,7 @@ shows the grammar question surfacing independently in
 foundation-harmonize commits fixed the grammar as one frozen decision (D080)
 referenced by every later dossier instead of re-derived per dossier.
 
-### F8 — Open-question leakage before the shared decision register
+### F8 - Open-question leakage before the shared decision register
 
 Individual specs invented their own per-spec decision-tracking ID prefixes
 instead of using one canonical register from the start:
@@ -244,7 +244,7 @@ section ("No unresolved foundation decision is currently recorded") is the
 end state; the 30+3+5 per-spec IDs that had to be resolved and folded in are
 the friction this closes.
 
-### F9 — `sourcePolicy`/host-path drift
+### F9 - `sourcePolicy`/host-path drift
 
 D082 froze `sourcePolicyId` as the only way a Volume `source.settings`
 references a Provider-declared host-path allowlist entry, never a raw path.
@@ -257,7 +257,7 @@ reset destroys Volume") each independently reintroduce and then retract a
 raw-path or SSH-path field on Volume `source.settings` before D082 froze the
 opaque-ID indirection as the one normative form.
 
-### F10 — Empty/no-SHA handoffs forcing duplicate reconciliation
+### F10 - Empty/no-SHA handoffs forcing duplicate reconciliation
 
 `38ab1d4cd3697df19765d9a238764d98ff562b0d` and
 `dfea59933251fbfb13eb70613642f5215bbc1f74` are byte-identical patches (same
@@ -273,7 +273,7 @@ validation result to each corrective pass would have let the second landing
 reuse the first's result instead of independently re-deriving and
 re-committing the same 24-file reconciliation.
 
-### F11 — Correction commits after branches diverged, creating avoidable conflicts
+### F11 - Correction commits after branches diverged, creating avoidable conflicts
 
 Of the 2,478 commits reachable from any `adr0046-*` branch,
 `git log --all --oneline --grep="fix\|correct\|realign\|harmonize" -i | wc -l`
@@ -288,10 +288,10 @@ had already changed, which is exactly the shape of an avoidable cherry-pick/
 rebase conflict this spec's [ADR046-streamline-010](#adr046-streamline-010--stale-basecurrent-parent-reconcile-helper)
 targets.
 
-### F12 — Manual global `rg`-shaped scans instead of generated lints
+### F12 - Manual global `rg`-shaped scans instead of generated lints
 
 `05fefffe`/`0150475f` ("harmonize Provider dossiers") each touch 24 files (588
-insertions, 402 deletions) in one commit — a full-tree sweep, not a targeted
+insertions, 402 deletions) in one commit - a full-tree sweep, not a targeted
 per-dossier fix. `a7c0ceeb`'s "full architectural realignment" is the same
 shape. No `packages/d2b-contract-tests/tests/policy_*.rs`-equivalent lint
 exists over `docs/specs/` today (`packages/d2b-contract-tests/tests/`
@@ -301,20 +301,20 @@ phase/source-policy invariants this ADR's own decision register freezes).
 Every one of these sweeps had to be re-derived by reading every dossier file
 rather than run as one generated check.
 
-### F13 — Repetitive per-dossier state-Volume boilerplate
+### F13 - Repetitive per-dossier state-Volume boilerplate
 
 `grep -l "ProviderStateSet" docs/specs/providers/*.md | wc -l` returns 27 (all
 committed Provider dossiers). `grep -c
 "persistenceClass\|stateSchema\|sensitivityClass" docs/specs/providers/*.md`
 sums to 314 matching lines across those 27 files (`docs/specs/providers/`
-totals 44,006 lines). The same canonical state-Volume field block —
+totals 44,006 lines). The same canonical state-Volume field block -
 `kind: state`, `persistenceClass: persistent`, nonzero `quotaBytes`/
 `maxBytes`/`maxInodes`, `identityMarker`, `sourcePolicyId`, `mounts` with
-`required: true` — is hand-authored in each dossier rather than emitted from
+`required: true` - is hand-authored in each dossier rather than emitted from
 one canonical snippet, which is also why F2/F3/F9's per-dossier drift was
 possible: each hand-copy was an independent chance to diverge.
 
-### F14 — Inability to validate Markdown-embedded YAML against canonical schemas
+### F14 - Inability to validate Markdown-embedded YAML against canonical schemas
 
 Every ResourceType/Provider spec's "Nix authoring and configuration cleanup"
 section embeds fenced YAML/JSON `ResourceSpec` examples (README.md
@@ -324,7 +324,7 @@ F2/F3/F9 was caught by a human reviewer reading prose, not by a validator
 comparing the fenced example against `ADR-046-decision-register` D057/D058's
 canonical rendering rules.
 
-### F15 — Current-source old Realm/Workload terminology confusing target authors
+### F15 - Current-source old Realm/Workload terminology confusing target authors
 
 `ADR-046-terminology-and-identities.md` and `ADR-046-current-code-migration-map.md`
 exist specifically to map old `Realm`/`Workload` vocabulary (still the live
@@ -338,7 +338,7 @@ for Guest state") and `af7a33fe` ("specify Zone, ZoneLink, Provider, Role,
 and RoleBinding ResourceTypes") both post-date the D050 rename and had to
 re-terminology-check every Guest-state reference against it.
 
-### F16 — Tracking database not automatically bound to the git tree
+### F16 - Tracking database not automatically bound to the git tree
 
 This ADR's authoring session state (todo/task tracking) is not itself part of
 the committed tree and carries no enforced binding to a base SHA, branch, or
@@ -347,7 +347,7 @@ between a plan and `git log`. `ADR-046-decision-register`'s own
 "Implementation work items" section (`ADR046-decisions-001`) has no such
 binding either, and no other spec's work-item table declares one.
 
-### F17 — Docs-only tier0 catches syntax but not schema/cross-link/work-item consistency
+### F17 - Docs-only tier0 catches syntax but not schema/cross-link/work-item consistency
 
 `tests/tools/tier0-first-pass.sh` runs `bash -n` and `shellcheck` over
 `tests/`, `scripts/`, and `harness/ubuntu/*.sh` only (confirmed by reading the
@@ -420,12 +420,12 @@ with their eventual test-type destination, not promoted early.
 Every test type below follows the taxonomy `tests/AGENTS.md` defines; this
 spec introduces no new top-level `tests/*.sh` gate.
 
-### Type 1 — eval cases (`tests/unit/nix/cases/`)
+### Type 1 - eval cases (`tests/unit/nix/cases/`)
 
 Not applicable: this spec's tooling operates on `docs/specs/**` Markdown and
 Rust, not NixOS module evaluation.
 
-### Type 2 — unit tests (`packages/<crate>/src/**`)
+### Type 2 - unit tests (`packages/<crate>/src/**`)
 
 | Test | Asserts |
 | --- | --- |
@@ -438,7 +438,7 @@ Rust, not NixOS module evaluation.
 | `decision_id_validator::single_prefix` | Every "decision-required" marker anywhere under `docs/specs/**` uses the `D0xx`/`DR0xx`-equivalent single canonical prefix this spec fixes, not a per-spec prefix (regression test seeded from the F8 `DR-NC-`/`D-NETWORK-`/`DR-CLI-` examples) |
 | `provider_catalog::frozen_family_membership` | Every dossier under `docs/specs/providers/` maps to exactly one D043-D049 frozen Provider family; an unmapped or duplicate-mapped dossier fails |
 
-### Type 3 — integration tests (`packages/<crate>/tests/*.rs`)
+### Type 3 - integration tests (`packages/<crate>/tests/*.rs`)
 
 | Test | Asserts |
 | --- | --- |
@@ -447,14 +447,14 @@ Rust, not NixOS module evaluation.
 | `reconcile_helper_reports_stale_base` | Given two fixture branches sharing a synthetic foundation commit where one branch's tip is behind the foundation's current tip, the reconcile helper reports the exact commit range the stale branch is missing, without performing any git mutation |
 | `handoff_manifest_rejects_incomplete_record` | A handoff manifest JSON missing any of `assigned_files`/`commit_sha`/`test_result`/`base_sha` is rejected with the exact missing field named |
 
-### Type 4 — contract tests (`packages/d2b-contract-tests/tests/*.rs`)
+### Type 4 - contract tests (`packages/d2b-contract-tests/tests/*.rs`)
 
 | Test | Asserts |
 | --- | --- |
 | `spec_registry_json_schema_matches_doc` | The generated `docs/specs/ADR-046-spec-set.json`/`ADR-046-work-items.json` shape matches this and the parent `docs/specs/README.md`'s documented fields exactly (drift gate) |
 | `provider_catalog_matches_frozen_families` | The generated `docs/specs/ADR-046-provider-catalog.md` table matches `ADR-046-decision-register` D043-D049 membership exactly |
 
-### Type 5 — policy lints (`packages/d2b-contract-tests/tests/policy_*.rs`)
+### Type 5 - policy lints (`packages/d2b-contract-tests/tests/policy_*.rs`)
 
 | Test | Asserts |
 | --- | --- |
@@ -467,11 +467,11 @@ Rust, not NixOS module evaluation.
 | `policy_test_placement` | Every `src/` `#[cfg(test)]` module and crate `tests/*.rs` file is hermetic (D094): no process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build, KVM, hardware, live cloud, or non-tiny filesystem tree, and no `#[ignore]`; such needs must move to `integration/` |
 | `policy_test_determinism` | No hermetic-tier test uses wall-clock sleep/retry (D094); a deterministic fake clock/RNG is used instead, except for explicitly allow-listed crypto/property tests with a declared per-test budget and capped case count |
 
-### Type 6 — flake checks (`tests/unit/smoke/`)
+### Type 6 - flake checks (`tests/unit/smoke/`)
 
 Not applicable: no NixOS module surface is introduced.
 
-### Type 9 — container (`tests/integration/containers/`, `make test-integration`)
+### Type 9 - container (`tests/integration/containers/`, `make test-integration`)
 
 | Test | Asserts |
 | --- | --- |
@@ -487,32 +487,32 @@ items requiring these are specified per-item in
 
 Each item below uses the bespoke field set this meta-spec requires instead of
 the standard ResourceType/Provider work-item table, because none of these
-items reuse or replace v3 runtime code — they are new tooling with no current
+items reuse or replace v3 runtime code - they are new tooling with no current
 v3 source to extract from.
 
-### ADR046-streamline-001 — Generated spec registry, dependency graph, and implementation DAG
+### ADR046-streamline-001 - Generated spec registry, dependency graph, and implementation DAG
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-streamline-001` |
 | Tier | A (shared prep) |
 | Observed friction evidence | F1, F8, F11: dossier branches diverged from a superseded foundation commit with no generated way to detect it; three different per-spec decision-ID prefixes existed with no generated cross-reference; launch order and parallelism were re-derived from prose per round |
-| Desired behavior | A generated, deterministic JSON registry enumerating every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-*.md` file's metadata-table fields and `Depends on` edges, rendered as an acyclic dependency graph; and, per D095, a generated machine-readable implementation DAG (`ADR-046-implementation-graph.json` + human view `ADR-046-implementation-graph.md`) mapping every member spec and every work item to a `W0`–`W7` launch wave, a file-disjoint parallel group, typed edges, and a topological rank |
+| Desired behavior | A generated, deterministic JSON registry enumerating every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-*.md` file's metadata-table fields and `Depends on` edges, rendered as an acyclic dependency graph; and, per D095, a generated machine-readable implementation DAG (`ADR-046-implementation-graph.json` + human view `ADR-046-implementation-graph.md`) mapping every member spec and every work item to a `W0`-`W7` launch wave, a file-disjoint parallel group, typed edges, and a topological rank |
 | Destination | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json`, `docs/specs/ADR-046-implementation-graph.json`, `docs/specs/ADR-046-implementation-graph.md` (generated, committed non-member artifacts; named in `docs/specs/README.md`) |
 | Owner/dependencies | `packages/xtask` owner; no dependency on any other streamline item |
 | Dependency/owner | `packages/xtask` owner; no dependency on any other streamline item |
-| Current source | None — net-new ADR 0046 spec tooling; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new ADR 0046 spec tooling; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Implementation shape | New `cargo run -p xtask -- spec-registry` subcommand parsing every spec's metadata table + work-item tables with a Markdown-table parser, emitting `ADR-046-spec-set.json` and `ADR-046-work-items.json`; a companion `cargo run -p xtask -- implementation-graph` reads those two manifests plus the `ADR-046-validation-and-delivery.md` §3 wave topology and emits `ADR-046-implementation-graph.json` and its rendered `.md`; both wired into the existing `gen-*`/`run_task` dispatch pattern in `packages/xtask/src/main.rs` |
 | Detailed design | New `cargo run -p xtask -- spec-registry` subcommand parsing every spec's metadata table + work-item tables with a Markdown-table parser, emitting the two manifest JSON files; the `implementation-graph` generator then maps every member spec and every work item exactly once to a wave and file-disjoint parallel group, emits typed edges (`spec-depends-on`, `work-item-depends-on`, `implements-spec`, `shared-contract`, `file-overlap-order`), computes topological rank, and renders the Mermaid/table human view; output is deterministic with sorted keys and no timestamps or host paths |
 | Integration | `tests/unit/gates/` drift gate (`xtask spec-registry`/`xtask implementation-graph` + `git diff --exit-code`) added to the existing drift-gate set; the graph is consumed by ADR046-streamline-005/006/008/013 and the ready-wave query in `ADR-046-validation-and-delivery` instead of each re-parsing Markdown independently |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `spec_registry::parse_metadata_table`, `spec_registry::acyclic_dependency_graph`, `xtask_spec_registry_regenerates_clean`, `spec_registry_json_schema_matches_doc`, `implementation_graph::every_spec_and_work_item_mapped_once`, `implementation_graph::acyclic_and_wave_monotonic`, `implementation_graph::parallel_groups_are_file_disjoint`, `implementation_graph_regenerates_clean` |
 | Adoption timing | Immediately; first Tier A item, since every other generator/lint below consumes its output |
 | Removal/supersession | None; this is the foundational generator for the remaining items |
-| Removal proof | None — net-new; no prior owner to remove; this is the foundational generator for the remaining items |
+| Removal proof | None - net-new; no prior owner to remove; this is the foundational generator for the remaining items |
 
-### ADR046-streamline-002 — Canonical schema/snippet generator
+### ADR046-streamline-002 - Canonical schema/snippet generator
 
 | Field | Value |
 | --- | --- |
@@ -528,13 +528,13 @@ v3 source to extract from.
 | Implementation shape | Tier A: author the schema JSON once per primitive directly from the already-frozen decision-register entries (D010, D032, D075, D076, D080); Tier B: `xtask gen-spec-schemas` derives the same JSON from real Rust `#[derive(JsonSchema)]`-equivalent types once they land, replacing the hand-authored Tier A source without changing its consumers |
 | Detailed design | Tier A: author the schema JSON once per primitive directly from the already-frozen decision-register entries (D010, D032, D075, D076, D080); Tier B: `xtask gen-spec-schemas` derives the same JSON from real Rust `#[derive(JsonSchema)]`-equivalent types once they land, replacing the hand-authored Tier A source without changing its consumers Primary reuse disposition: `create`. Preserved source-plan detail: net-new Tier A schema source; later replace source with generated output from real d2b-core ResourceType types without changing consumers. |
 | Integration | Consumed by ADR046-streamline-003 as the validation target and by ADR046-streamline-004's scaffold as the snippet source |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `spec_schema_check::canonical_field_set` |
 | Adoption timing | Tier A ships now; Tier B graduation happens only after the owning implementation work item for `d2b-core` resource schemas reaches Validation-complete |
 | Removal/supersession | Tier A hand-authored JSON is superseded (not deleted) by Tier B generated JSON once real Rust types exist; consumers are unaffected since the file shape is identical |
 | Removal proof | Tier A hand-authored JSON is superseded (not deleted) by Tier B generated JSON once real Rust types exist; consumers are unaffected since the file shape is identical |
 
-### ADR046-streamline-003 — Markdown fenced-YAML/JSON extractor and schema validator
+### ADR046-streamline-003 - Markdown fenced-YAML/JSON extractor and schema validator
 
 | Field | Value |
 | --- | --- |
@@ -545,18 +545,18 @@ v3 source to extract from.
 | Destination | `packages/xtask/src/bin/spec_schema_check.rs`; wired as a Layer-1 policy lint at `packages/d2b-contract-tests/tests/policy_spec_schema.rs` |
 | Owner/dependencies | ADR046-streamline-001, ADR046-streamline-002 |
 | Dependency/owner | ADR046-streamline-001, ADR046-streamline-002 |
-| Current source | None — net-new spec Markdown/schema lint; no existing fenced ResourceSpec extractor |
+| Current source | None - net-new spec Markdown/schema lint; no existing fenced ResourceSpec extractor |
 | Reuse action | create |
 | Implementation shape | Reuse the CommonMark parser already available to the Rust toolchain (the same class of dependency `xtask`'s existing `gen-*` commands already use for structured generation) to walk fenced blocks; classify each block by its enclosing heading (`## Nix authoring and configuration cleanup` vs. any other heading) to apply the current-evidence exclusion without a manual per-block marker |
 | Detailed design | Reuse the CommonMark parser already available to the Rust toolchain (the same class of dependency `xtask`'s existing `gen-*` commands already use for structured generation) to walk fenced blocks; classify each block by its enclosing heading (`## Nix authoring and configuration cleanup` vs. any other heading) to apply the current-evidence exclusion without a manual per-block marker Primary reuse disposition: `create`. Preserved source-plan detail: net-new; reuse only the established xtask dispatch pattern and Rust Markdown-parser dependency class. |
 | Integration | Added to `tests/tools/tier0-first-pass.sh` as an additional fast pre-check (closes F17) and to the standing `packages/d2b-contract-tests` policy-lint suite |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `spec_schema_check::extract_fenced_blocks`, `spec_schema_check::canonical_field_set`, `policy_spec_schema` (Type 4/5) |
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate, so any remaining spec iteration is caught before, not after, panel |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-004 — Provider dossier scaffold/template
+### ADR046-streamline-004 - Provider dossier scaffold/template
 
 | Field | Value |
 | --- | --- |
@@ -567,18 +567,18 @@ v3 source to extract from.
 | Destination | `docs/specs/providers/TEMPLATE.md` (committed, non-normative reference); `packages/xtask/src/bin/new_provider_dossier.rs` (`cargo run -p xtask -- new-provider-dossier --name <provider-name>`) |
 | Owner/dependencies | ADR046-streamline-001, ADR046-streamline-002 |
 | Dependency/owner | ADR046-streamline-001, ADR046-streamline-002 |
-| Current source | None — net-new provider-dossier scaffold; canonical snippets come from ADR046-streamline-002 |
+| Current source | None - net-new provider-dossier scaffold; canonical snippets come from ADR046-streamline-002 |
 | Reuse action | create |
 | Implementation shape | Scaffold generator emits the template pre-filled with the requesting Provider's name, D080 qualification-grammar examples, and the canonical state-Volume snippet; does not attempt to author Provider-specific semantic sections (those remain the dossier author's normative content) |
 | Detailed design | Scaffold generator emits the template pre-filled with the requesting Provider's name, D080 qualification-grammar examples, and the canonical state-Volume snippet; does not attempt to author Provider-specific semantic sections (those remain the dossier author's normative content) Primary reuse disposition: `create`. Preserved source-plan detail: net-new scaffold; reuse canonical schema/snippet source from ADR046-streamline-002. |
 | Integration | Referenced from `docs/specs/README.md` "Required metadata" section (a follow-up doc edit outside this task's scope, tracked as a required cross-reference) |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `xtask_new_provider_dossier_scaffold`; the emitted scaffold must independently pass `spec_schema_check`/`work_item_validator` on first generation |
 | Adoption timing | Immediately; used for any future new Provider dossier and for re-basing an existing dossier onto the corrected shape during its next revision |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-005 — Cross-spec vocabulary/ownership/finalizer/phase/source-policy lint
+### ADR046-streamline-005 - Cross-spec vocabulary/ownership/finalizer/phase/source-policy lint
 
 | Field | Value |
 | --- | --- |
@@ -594,13 +594,13 @@ v3 source to extract from.
 | Implementation shape | Four focused lint files (one invariant family per file, matching the existing `packages/d2b-contract-tests/tests/policy_*.rs` one-concern-per-file convention) each scanning the registry output plus raw Markdown text for the specific violation patterns named in F2/F4/F5/F7/F9 |
 | Detailed design | Four focused lint files (one invariant family per file, matching the existing `packages/d2b-contract-tests/tests/policy_*.rs` one-concern-per-file convention) each scanning the registry output plus raw Markdown text for the specific violation patterns named in F2/F4/F5/F7/F9 Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lints over generated registry and raw Markdown. |
 | Integration | Standing Layer-1 policy-lint suite; runs on every PR touching `docs/specs/**` |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `policy_spec_vocabulary`, `policy_spec_ownership`, `policy_spec_finalizer_phase`, `policy_spec_source_policy` (all Type 5) |
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate |
 | Removal/supersession | None; graduates to permanent per [Permanent methodology](#permanent-methodology-after-accepted) |
-| Removal proof | None — net-new; no prior owner to remove; graduates to permanent per [Permanent methodology](#permanent-methodology-after-accepted) |
+| Removal proof | None - net-new; no prior owner to remove; graduates to permanent per [Permanent methodology](#permanent-methodology-after-accepted) |
 
-### ADR046-streamline-006 — ProviderStateSet/status-first/one-controller graph checker
+### ADR046-streamline-006 - ProviderStateSet/status-first/one-controller graph checker
 
 | Field | Value |
 | --- | --- |
@@ -611,18 +611,18 @@ v3 source to extract from.
 | Destination | `packages/d2b-resource-store-redb/tests/provider_state_graph.rs` (or the eventual crate implementing Zone resource storage) |
 | Owner/dependencies | The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
 | Dependency/owner | The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
-| Current source | None — real Zone resource-store/controller-registration graph not implemented yet; doc-level invariant source is ADR046-streamline-005 |
+| Current source | None - real Zone resource-store/controller-registration graph not implemented yet; doc-level invariant source is ADR046-streamline-005 |
 | Reuse action | create |
 | Implementation shape | A graph-walk over the real controller-registration/resource-ownership index (not Markdown) asserting the D076/D086/D087 invariants; the doc-level half of this check (dossier text describing the invariant correctly) is covered now by ADR046-streamline-005's `policy_spec_ownership` |
 | Detailed design | A graph-walk over the real controller-registration/resource-ownership index (not Markdown) asserting the D076/D086/D087 invariants; the doc-level half of this check (dossier text describing the invariant correctly) is covered now by ADR046-streamline-005's `policy_spec_ownership` Primary reuse disposition: `create`. Preserved source-plan detail: net-new future runtime graph checker. |
 | Integration | Runs as a Type 3 integration test against the real resource-store crate once it exists |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New test asserting: zero `ProviderStateSet` rows in the store; every state Volume corresponds to a declared component namespace; no empty identity-only Volume; no bootstrap state Volume or bootstrap-storage mechanism exists |
 | Adoption timing | Streamline wave (Tier B); lands after the Zone resource-store and core-controller implementation work items reach Validation-complete |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-007 — EffectPort/broker and worker-bus boundary lint
+### ADR046-streamline-007 - EffectPort/broker and worker-bus boundary lint
 
 | Field | Value |
 | --- | --- |
@@ -638,13 +638,13 @@ v3 source to extract from.
 | Implementation shape | Static source scan (import-graph/symbol-use analysis) over compiled Provider crates, mirroring the existing `policy_broker_dispositions.rs` pattern already proven against `packages/d2bd`/`packages/d2b-priv-broker` |
 | Detailed design | Static source scan (import-graph/symbol-use analysis) over compiled Provider crates, mirroring the existing `policy_broker_dispositions.rs` pattern already proven against `packages/d2bd`/`packages/d2b-priv-broker` Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing policy-broker lint pattern to Provider/Worker boundary checks. |
 | Integration | Standing Layer-1 policy lint once Provider crates exist |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New tests asserting zero direct-broker-import matches in any Provider crate; zero disallowed-capability matches in any Worker binary |
 | Adoption timing | Streamline wave (Tier B); lands after the first Provider-toolkit implementation work item reaches Validation-complete, so there is real Provider crate source to lint |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-008 — Work-item schema and unique-ID/dependency validator
+### ADR046-streamline-008 - Work-item schema and unique-ID/dependency validator
 
 | Field | Value |
 | --- | --- |
@@ -655,18 +655,18 @@ v3 source to extract from.
 | Destination | `packages/d2b-contract-tests/tests/policy_work_items.rs` |
 | Owner/dependencies | ADR046-streamline-001 |
 | Dependency/owner | ADR046-streamline-001 |
-| Current source | None — no existing work-item required-field or unique-ID validator |
+| Current source | None - no existing work-item required-field or unique-ID validator |
 | Reuse action | create |
 | Implementation shape | Consumes `docs/specs/ADR-046-work-items.json` (generated by ADR046-streamline-001); flags duplicate IDs, missing/placeholder fields, and dangling cross-references |
 | Detailed design | Consumes `docs/specs/ADR-046-work-items.json` (generated by ADR046-streamline-001); flags duplicate IDs, missing/placeholder fields, and dangling cross-references Primary reuse disposition: `create`. Preserved source-plan detail: net-new validator consuming ADR046-streamline-001 output. |
 | Integration | Standing Layer-1 policy lint |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `work_item_validator::unique_ids`, `work_item_validator::required_fields` |
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate (D014's "set cannot become Accepted while it contains... a work item without exact v3 source and future destination paths" precondition) |
 | Removal/supersession | None; graduates to permanent |
-| Removal proof | None — net-new; no prior owner to remove; graduates to permanent |
+| Removal proof | None - net-new; no prior owner to remove; graduates to permanent |
 
-### ADR046-streamline-009 — Provider catalog/index generator
+### ADR046-streamline-009 - Provider catalog/index generator
 
 | Field | Value |
 | --- | --- |
@@ -677,18 +677,18 @@ v3 source to extract from.
 | Destination | `docs/specs/ADR-046-provider-catalog.md` (generated, committed) |
 | Owner/dependencies | ADR046-streamline-001 |
 | Dependency/owner | ADR046-streamline-001 |
-| Current source | None — no existing generated Provider catalog/index |
+| Current source | None - no existing generated Provider catalog/index |
 | Reuse action | create |
 | Implementation shape | `cargo run -p xtask -- gen-provider-catalog` reads the registry and decision-register D043-D049 rows and renders the table; drift-gated like the existing `gen-schemas`/`gen-migration-ledger` pattern |
 | Detailed design | `cargo run -p xtask -- gen-provider-catalog` reads the registry and decision-register D043-D049 rows and renders the table; drift-gated like the existing `gen-schemas`/`gen-migration-ledger` pattern Primary reuse disposition: `create`. Preserved source-plan detail: net-new generator consuming registry and decision-register rows. |
 | Integration | `tests/unit/gates/` drift gate |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `provider_catalog::frozen_family_membership`, `provider_catalog_matches_frozen_families` |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-010 — Stale-base/current-parent reconcile helper
+### ADR046-streamline-010 - Stale-base/current-parent reconcile helper
 
 | Field | Value |
 | --- | --- |
@@ -699,18 +699,18 @@ v3 source to extract from.
 | Destination | `tests/tools/reconcile-stale-base.sh` (reporting only) plus a documented `git town sync`/`git town` restack procedure this report feeds into, since this repository does not yet use Git Town and F1/F11 show plain rebase/cherry-pick was insufficient to prevent duplicate reconciliation |
 | Owner/dependencies | ADR046-streamline-001 |
 | Dependency/owner | ADR046-streamline-001 |
-| Current source | None — no existing stale-base/current-parent reconcile helper |
+| Current source | None - no existing stale-base/current-parent reconcile helper |
 | Reuse action | adapt |
 | Implementation shape | `git merge-base <branch> <foundation-tip>` plus `git diff --name-only` intersection reporting; emits a JSON report (branch, divergence SHA, commits-behind count, file-overlap list) consumed by ADR046-streamline-013's ready/launched/blocker report |
 | Detailed design | `git merge-base <branch> <foundation-tip>` plus `git diff --name-only` intersection reporting; emits a JSON report (branch, divergence SHA, commits-behind count, file-overlap list) consumed by ADR046-streamline-013's ready/launched/blocker report Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new read-only git report. |
 | Integration | Referenced from `AGENTS.md` once graduated (see [Permanent methodology](#permanent-methodology-after-accepted)); used manually before opening or restacking any future dossier branch |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `reconcile_helper_reports_stale_base` |
 | Adoption timing | Immediately; this is the single highest-value item given F1 shows 100% of checked dossier branches were affected |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-011 — Agent handoff manifest
+### ADR046-streamline-011 - Agent handoff manifest
 
 | Field | Value |
 | --- | --- |
@@ -719,20 +719,20 @@ v3 source to extract from.
 | Observed friction evidence | F10: two independent byte-identical 1-commit and 24-file reconciliation passes landed on separate branches with no cross-reference to each other's SHA or test result |
 | Desired behavior | Every parallel-authoring handoff (a sub-agent or contributor returning a completed spec/dossier slice to the integrator) is accompanied by a manifest naming the exact assigned file set, the commit SHA it produced, the validation/test result obtained, and the base SHA it started from, so a second corrective pass can detect it is duplicating already-reconciled work instead of re-deriving it |
 | Destination | `packages/xtask/src/bin/handoff_manifest.rs` (schema/validator only); manifest instances are per-round artifacts referenced from PR bodies, not committed to the tree (consistent with this repository's "Screenshot and visual artifact hygiene"-style external-evidence posture) |
-| Owner/dependencies | None — no prerequisite work item; owned by this spec |
+| Owner/dependencies | None - no prerequisite work item; owned by this spec |
 | Dependency/owner | No prerequisite; `packages/xtask` schema/validator owner |
-| Current source | None — no existing agent handoff manifest schema or validator |
+| Current source | None - no existing agent handoff manifest schema or validator |
 | Reuse action | create |
 | Implementation shape | A small JSON schema (`assigned_files: [string]`, `commit_sha: string`, `test_result: {command, exit_code}`, `base_sha: string`) plus a validator rejecting incomplete records; no attribution field for any AI/tool/model, consistent with this repository's commit/PR-body attribution rule |
 | Detailed design | A small JSON schema (`assigned_files: [string]`, `commit_sha: string`, `test_result: {command, exit_code}`, `base_sha: string`) plus a validator rejecting incomplete records; no attribution field for any AI/tool/model, consistent with this repository's commit/PR-body attribution rule Primary reuse disposition: `create`. Preserved source-plan detail: net-new schema and validator. |
 | Integration | Referenced from `AGENTS.md` "Worktrees for parallel agents" once graduated |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `handoff_manifest_rejects_incomplete_record` |
 | Adoption timing | Immediately, for any remaining ADR 0046 spec-set round and for the future W0-W10 implementation phase's parallel scopes |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-012 — Task DB↔git consistency import
+### ADR046-streamline-012 - Task DB↔git consistency import
 
 | Field | Value |
 | --- | --- |
@@ -743,18 +743,18 @@ v3 source to extract from.
 | Destination | `tests/tools/import-task-db-consistency.sh` |
 | Owner/dependencies | ADR046-streamline-011 (shares the manifest schema for commit-SHA binding) |
 | Dependency/owner | ADR046-streamline-011 (shares the manifest schema for commit-SHA binding) |
-| Current source | None — no existing task DB to git consistency importer |
+| Current source | None - no existing task DB to git consistency importer |
 | Reuse action | create |
 | Implementation shape | Reads the session database's todo table, resolves each `done` row's expected file set against `git log --name-only` for the current branch, and reports mismatches; read-only, no database or git mutation |
 | Detailed design | Reads the session database's todo table, resolves each `done` row's expected file set against `git log --name-only` for the current branch, and reports mismatches; read-only, no database or git mutation Primary reuse disposition: `create`. Preserved source-plan detail: net-new read-only importer/checker. |
 | Integration | Run manually at the end of each authoring round and before any pre-panel gate |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New test seeding a synthetic task DB with one orphaned "done" row and confirming the importer flags it |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-013 — Anti-serialization ready/launched/blocker report
+### ADR046-streamline-013 - Anti-serialization ready/launched/blocker report
 
 | Field | Value |
 | --- | --- |
@@ -765,18 +765,18 @@ v3 source to extract from.
 | Destination | `tests/tools/anti-serialization-report.sh` |
 | Owner/dependencies | ADR046-streamline-001, ADR046-streamline-010 |
 | Dependency/owner | ADR046-streamline-001, ADR046-streamline-010 |
-| Current source | None — no existing anti-serialization ready/launched/blocker report |
+| Current source | None - no existing anti-serialization ready/launched/blocker report |
 | Reuse action | adapt |
 | Implementation shape | Cross-references the spec registry's dependency graph (ADR046-streamline-001) against the set of currently open `adr0046-*` branches and the reconcile helper's (ADR046-streamline-010) staleness report; emits a per-scope ready/launched/blocked classification |
 | Detailed design | Cross-references the spec registry's dependency graph (ADR046-streamline-001) against the set of currently open `adr0046-*` branches and the reconcile helper's (ADR046-streamline-010) staleness report; emits a per-scope ready/launched/blocked classification Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new report combining registry, branch, and staleness data. |
 | Integration | Run at the start of each authoring round and after any foundation-spec change |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New test seeding a synthetic registry + branch list with one ready-but-unlaunched scope and confirming it is reported |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-014 — Bounded parallel test/fake-dependency harness
+### ADR046-streamline-014 - Bounded parallel test/fake-dependency harness
 
 | Field | Value |
 | --- | --- |
@@ -792,13 +792,13 @@ v3 source to extract from.
 | Implementation shape | Extend the existing `layer1-jobs.py` bounded-parallel-shard pattern with a per-Provider-crate shard definition; fake dependency crates implement the same `EffectPort`/`ResourceClient` trait surface with in-memory stand-ins |
 | Detailed design | Extend the existing `layer1-jobs.py` bounded-parallel-shard pattern with a per-Provider-crate shard definition; fake dependency crates implement the same `EffectPort`/`ResourceClient` trait surface with in-memory stand-ins Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bounded-parallel shard pattern; add net-new fake EffectPort/ResourceClient crates. |
 | Integration | `make test-unit`/`make check` shard addition once Provider crates exist |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New integration test proving a single Provider crate's test run succeeds with zero other Provider crates built |
 | Adoption timing | Streamline wave (Tier B); lands after the Provider-toolkit implementation work item reaches Validation-complete |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-015 — Conflict-aware generated-artifact regeneration
+### ADR046-streamline-015 - Conflict-aware generated-artifact regeneration
 
 | Field | Value |
 | --- | --- |
@@ -814,13 +814,13 @@ v3 source to extract from.
 | Implementation shape | Each generator hashes its input set before writing; if a concurrent regeneration on a sibling branch (detected via the reconcile helper's file-overlap report) would produce a different hash for the same output path, the generator refuses to overwrite and reports the divergent input set |
 | Detailed design | Each generator hashes its input set before writing; if a concurrent regeneration on a sibling branch (detected via the reconcile helper's file-overlap report) would produce a different hash for the same output path, the generator refuses to overwrite and reports the divergent input set Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing generator/drift-gate pattern with net-new input-hash conflict detection. |
 | Integration | Wired into every drift gate this spec and ADR046-streamline-001/009 introduce |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New test simulating two divergent input sets producing conflicting output for the same generated file and confirming the conflict is reported, not silently resolved |
 | Adoption timing | Tier A part ships alongside ADR046-streamline-001/009; the Tier B part (real generated Rust artifacts) ships in the streamline wave once code generation exists |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-016 — Pre-panel zero-open-decision gate
+### ADR046-streamline-016 - Pre-panel zero-open-decision gate
 
 | Field | Value |
 | --- | --- |
@@ -836,13 +836,13 @@ v3 source to extract from.
 | Implementation shape | Scans registry output plus raw Markdown for `decision-required`, `TBD`, `TODO`, and any decision-ID-shaped token (`[A-Z]+-\d+`) not matching the canonical `D\d+` register numbering |
 | Detailed design | Scans registry output plus raw Markdown for `decision-required`, `TBD`, `TODO`, and any decision-ID-shaped token (`[A-Z]+-\d+`) not matching the canonical `D\d+` register numbering Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint and precondition script. |
 | Integration | Required precondition before requesting the ADR 0046 documentation set's panel round (D014) |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `policy_no_leaked_decision_prefix` |
 | Adoption timing | Immediately; this is a precondition for the ADR 0046 documentation set's own remaining panel gate, not deferred tooling |
 | Removal/supersession | None; graduates to permanent panel-gate precondition |
-| Removal proof | None — net-new; no prior owner to remove; graduates to permanent panel-gate precondition |
+| Removal proof | None - net-new; no prior owner to remove; graduates to permanent panel-gate precondition |
 
-### ADR046-streamline-017 — External evidence command planning
+### ADR046-streamline-017 - External evidence command planning
 
 | Field | Value |
 | --- | --- |
@@ -851,20 +851,20 @@ v3 source to extract from.
 | Observed friction evidence | F11, F17: correction commits and full-tree sweeps happened without a documented, reusable command sequence a reviewer or future author could re-run to reproduce the same evidence; each investigation (as in this spec's own [Observed friction evidence](#observed-friction-evidence)) was ad hoc |
 | Desired behavior | A committed, reusable list of exact `git`/`grep`/`xtask` commands that reproduce every metric and evidence citation in this spec (and any future evidence-grounded spec), so panel reviewers and future authors can independently reproduce the evidence without re-deriving the search strategy |
 | Destination | `docs/specs/ADR-046-streamline-evidence-commands.md` (a follow-up artifact outside this task's file scope; tracked here as a required future addition, not authored by this spec) |
-| Owner/dependencies | None — no prerequisite work item; owned by this spec |
+| Owner/dependencies | None - no prerequisite work item; owned by this spec |
 | Dependency/owner | No prerequisite; `docs/specs` evidence-command documentation owner |
 | Current source | This spec's Observed friction evidence command prose; no reusable evidence-command artifact exists yet |
 | Reuse action | adapt |
 | Implementation shape | A plain Markdown list of the exact commands used to produce each F1-F17 citation above (already reproduced verbatim in this spec's prose), organized by friction ID, so re-running them is copy-paste rather than re-derivation |
 | Detailed design | A plain Markdown list of the exact commands used to produce each F1-F17 citation above (already reproduced verbatim in this spec's prose), organized by friction ID, so re-running them is copy-paste rather than re-derivation Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt the already-cited evidence commands into a net-new documentation artifact. |
 | Integration | Referenced from PR bodies as external evidence per this repository's "PR bodies contain... check-status summaries only... may link to external evidence" convention |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Manual reviewer re-run of at least one command per friction ID during panel, confirmed to reproduce the cited count/SHA |
 | Adoption timing | Immediately, as a follow-up documentation artifact; does not gate any other item in this spec |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-018 — Worktree/disk/target cleanup reporting
+### ADR046-streamline-018 - Worktree/disk/target cleanup reporting
 
 | Field | Value |
 | --- | --- |
@@ -880,13 +880,13 @@ v3 source to extract from.
 | Implementation shape | `git worktree list --porcelain` plus `du -sh` per worktree's `packages/target/`; output is a report only, never a `git worktree remove`/`rm -rf` invocation |
 | Detailed design | `git worktree list --porcelain` plus `du -sh` per worktree's `packages/target/`; output is a report only, never a `git worktree remove`/`rm -rf` invocation Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing disk-hygiene reporting concepts into a net-new non-mutating script. |
 | Integration | Run manually before requesting garbage collection or worktree removal, consistent with this repository's existing "Disk hygiene contract"-equivalent operator guidance for code waves |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New test confirming the reporting script's exit code and output never include a mutating command string, and confirming it correctly flags a fixture worktree with a real (non-symlink) `packages/target/` |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-019 — Docs source-evidence old→new terminology helper
+### ADR046-streamline-019 - Docs source-evidence old→new terminology helper
 
 | Field | Value |
 | --- | --- |
@@ -902,20 +902,20 @@ v3 source to extract from.
 | Implementation shape | Parses every "Current-code fit" table's "Current anchor" cell for symbol/crate names, cross-references against the migration map's disposition rows, and flags any current-source citation absent from the map |
 | Detailed design | Parses every "Current-code fit" table's "Current anchor" cell for symbol/crate names, cross-references against the migration map's disposition rows, and flags any current-source citation absent from the map Primary reuse disposition: `create`. Preserved source-plan detail: net-new terminology checker over existing mapping specs. |
 | Integration | Standing Layer-1 policy lint once wired; also usable ad hoc when authoring a new dossier's evidence section |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | New test seeding a fixture spec citing a current-source symbol absent from the migration map and confirming it is flagged |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-020 — Hermetic test placement lint
+### ADR046-streamline-020 - Hermetic test placement lint
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-streamline-020` |
 | Tier | A |
 | Observed friction evidence | D094: without a lint, a slow scenario needing a real process/container/network silently lands in a `src/`/`tests/` hermetic tier and inflates the inner loop |
-| Desired behavior | A policy lint asserting every `src/` `#[cfg(test)]` module and crate `tests/*.rs` file is hermetic — no process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM hardware, live cloud, or filesystem tree beyond tiny temp fixtures; any such need must move to `integration/`, never gain a sleep, larger timeout, or `#[ignore]` |
+| Desired behavior | A policy lint asserting every `src/` `#[cfg(test)]` module and crate `tests/*.rs` file is hermetic - no process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM hardware, live cloud, or filesystem tree beyond tiny temp fixtures; any such need must move to `integration/`, never gain a sleep, larger timeout, or `#[ignore]` |
 | Destination | `packages/d2b-contract-tests/tests/policy_test_placement.rs` |
 | Owner/dependencies | ADR046-streamline-001 |
 | Dependency/owner | ADR046-streamline-001 |
@@ -924,13 +924,13 @@ v3 source to extract from.
 | Implementation shape | Scans hermetic-tier Rust sources for banned API surfaces (`std::process::Command`, socket/container/DBus/systemd helpers, `#[ignore]`) and for `integration/`-only markers appearing outside `integration/` |
 | Detailed design | Scans hermetic-tier Rust sources for banned API surfaces (`std::process::Command`, socket/container/DBus/systemd helpers, `#[ignore]`) and for `integration/`-only markers appearing outside `integration/` Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint. |
 | Integration | `make test-policy` row; no new top-level `tests/*.sh` gate |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Fixture crate with an intentional process-spawning hermetic test is rejected naming the file/line; a correct crate passes |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-021 — Deterministic-clock/sleep lint
+### ADR046-streamline-021 - Deterministic-clock/sleep lint
 
 | Field | Value |
 | --- | --- |
@@ -946,13 +946,13 @@ v3 source to extract from.
 | Implementation shape | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property exceptions are allow-listed by explicit name with a declared per-test budget |
 | Detailed design | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property exceptions are allow-listed by explicit name with a declared per-test budget Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint layered on ADR046-streamline-020. |
 | Integration | `make test-policy` row |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Fixture hermetic test using `thread::sleep` is rejected; a classified crypto test on the allow-list passes |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-022 — Test-runtime ledger and timing gate
+### ADR046-streamline-022 - Test-runtime ledger and timing gate
 
 | Field | Value |
 | --- | --- |
@@ -968,13 +968,13 @@ v3 source to extract from.
 | Implementation shape | Parses per-test JSON timings, aggregates per test/crate/shard, compares against pinned budgets and the previous ledger, and fails on regression beyond the threshold |
 | Detailed design | Parses per-test JSON timings, aggregates per test/crate/shard, compares against pinned budgets and the previous ledger, and fails on regression beyond the threshold Primary reuse disposition: `adapt`. Preserved source-plan detail: share/adapt ADR046-delivery-007 timing-ledger implementation for this gate. |
 | Integration | Consumed by wave entry/exit (`ADR-046-validation-and-delivery` §4/§10.16); `make test-rust` and Layer-1 shards run concurrently |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Synthetic timing regression fails the gate; ledger output is deterministic and machine-readable |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-023 — Legacy-test retirement generator
+### ADR046-streamline-023 - Legacy-test retirement generator
 
 | Field | Value |
 | --- | --- |
@@ -987,16 +987,16 @@ v3 source to extract from.
 | Dependency/owner | ADR046-streamline-008, ADR046-streamline-022 |
 | Current source | Current-code migration-map disposition rows and existing gate manifests; no legacy-test retirement generator exists yet |
 | Reuse action | adapt |
-| Implementation shape | Reads the migration map's disposition rows, cross-references the live `tests/layer1-jobs.json`/gate manifests, and emits the delete set plus an absence assertion; never deletes automatically — it produces the gated checklist and the failing test that proves incomplete retirement |
-| Detailed design | Reads the migration map's disposition rows, cross-references the live `tests/layer1-jobs.json`/gate manifests, and emits the delete set plus an absence assertion; never deletes automatically — it produces the gated checklist and the failing test that proves incomplete retirement Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new generator reading existing migration rows and gate manifests without mutating them. |
+| Implementation shape | Reads the migration map's disposition rows, cross-references the live `tests/layer1-jobs.json`/gate manifests, and emits the delete set plus an absence assertion; never deletes automatically - it produces the gated checklist and the failing test that proves incomplete retirement |
+| Detailed design | Reads the migration map's disposition rows, cross-references the live `tests/layer1-jobs.json`/gate manifests, and emits the delete set plus an absence assertion; never deletes automatically - it produces the gated checklist and the failing test that proves incomplete retirement Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new generator reading existing migration rows and gate manifests without mutating them. |
 | Integration | `make test-policy`/`make test-drift` row; wired to every current-code migration work item's removal proof |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Fixture with a replaced behavior whose old selector still appears in `tests/layer1-jobs.json` fails; once removed, the absence assertion passes |
 | Adoption timing | Immediately |
-| Removal/supersession | None — net-new; no prior owner to remove |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal/supersession | None - net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
-### ADR046-streamline-024 — Implementation-graph generator and duplicate-generator reconciliation
+### ADR046-streamline-024 - Implementation-graph generator and duplicate-generator reconciliation
 
 | Field | Value |
 | --- | --- |
@@ -1007,12 +1007,12 @@ v3 source to extract from.
 | Destination | `packages/xtask/src/bin/implementation_graph.rs` (`cargo run -p xtask -- implementation-graph`); folds the spec-set and test-runtime emitters into the one `xtask` dispatch |
 | Owner/dependencies | ADR046-streamline-001 |
 | Dependency/owner | ADR046-streamline-001 |
-| Current source | The graph is regenerated by hand today; `ADR-046-spec-set.json` and the test-runtime ledger (ADR046-delivery-007) each have their own emitter — duplicate-generator finding, retained here for reconciliation |
+| Current source | The graph is regenerated by hand today; `ADR-046-spec-set.json` and the test-runtime ledger (ADR046-delivery-007) each have their own emitter - duplicate-generator finding, retained here for reconciliation |
 | Reuse action | create |
 | Implementation shape | Reads the two manifests plus §3 wave topology, maps every member spec and every work item exactly once to a wave/parallel-group, emits typed edges and topological rank, renders the Mermaid/table `.md`, and is wired into the existing `gen-*` drift gate; the spec-set and test-runtime emitters become subcommands of the same `xtask` binary so there is one canonical generator, not three |
 | Detailed design | Deterministic (sorted keys, no timestamps/host paths); regenerated after any spec or work-item change and after the two manifests; a drift gate runs it and `git diff --exit-code`. Retains the duplicate-generator findings for the spec-set manifest and the test-runtime ledger and reconciles them to the single `xtask` path rather than leaving three independent emitters Primary reuse disposition: `create`. Preserved source-plan detail: net-new generator that consumes the two manifests and the wave topology; folds the duplicate spec-set/test-runtime emitters into one canonical path. |
 | Integration | `tests/unit/gates/` drift gate alongside `xtask spec-registry`; consumed by the ready-wave query in `ADR-046-validation-and-delivery` §3.5.1 |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `implementation_graph::every_spec_and_work_item_mapped_once`; `implementation_graph::acyclic_and_wave_monotonic`; `implementation_graph::parallel_groups_are_file_disjoint`; `implementation_graph_regenerates_clean`; duplicate-generator reconciliation asserts one canonical emitter path for spec-set and test-runtime |
 | Adoption timing | Immediately after ADR046-streamline-001 |
 | Removal/supersession | Supersedes the hand-regeneration and the separate spec-set/test-runtime emitters once the single `xtask` path is green |

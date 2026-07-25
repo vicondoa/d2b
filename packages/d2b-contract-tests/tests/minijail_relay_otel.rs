@@ -20,7 +20,7 @@
 //!   * The bash gates' profile-shape assertions that the otel gate performed via
 //!     `jq` over the LIVE host profile JSON (caps empty, no `/dev` binds,
 //!     `seccompPolicyRef`) port as RENDERED checks over the real fixture
-//!     `RoleProfile`s — a strictly stronger guarantee than re-reading a live
+//!     `RoleProfile`s - a strictly stronger guarantee than re-reading a live
 //!     host's `/etc/d2b/minijail-profiles/*.json`, which the bash gate
 //!     skipped when absent. The rendered checks additionally pin the documented
 //!     bind set, cgroup placement, namespace isolation, and socat argv shape.
@@ -74,7 +74,7 @@ fn grep_after(content: &str, start_pat: &str, after: usize) -> Option<String> {
 ///   * it declares a `profileIdFor name "vsock-relay"` profile block,
 ///   * within that block (the bash `grep -A 25` window) it declares the
 ///     explicit `capabilities = [ ]` empty-cap form AND carries no `"CAP_*"`
-///     token (the bash gate's hard-fail branch — kernel-r2-4: caps must be
+///     token (the bash gate's hard-fail branch - kernel-r2-4: caps must be
 ///     empty because the relay operates on pre-opened fds passed via
 ///     SCM_RIGHTS, so no in-role `AF_VSOCK socket()` call is needed),
 ///   * the block sets `seccompPolicyRef = "w1-vsock-relay"`.
@@ -100,13 +100,13 @@ fn vsock_relay_profile_source_shape() {
     // line 661); only when that explicit form is ABSENT does the CAP_*
     // hard-fail branch run. Pass iff (explicit empty) OR (no CAP_* token),
     // matching the bash quirk that the 25-line window also overlaps the
-    // adjacent usbip block's `CAP_NET_RAW` — the explicit `[ ]` short-circuits
+    // adjacent usbip block's `CAP_NET_RAW` - the explicit `[ ]` short-circuits
     // before that token is ever inspected.
     let explicit_empty_caps = any_line_matches(&block, r"capabilities = \[ \]");
     let has_cap_token = any_line_matches(&block, r#"capabilities = \[[^\]]*"CAP_"#);
     assert!(
         explicit_empty_caps || !has_cap_token,
-        "vsock-relay profile has non-empty caps (kernel-r2-4: must be empty — pre-opened fds only)"
+        "vsock-relay profile has non-empty caps (kernel-r2-4: must be empty - pre-opened fds only)"
     );
     assert!(
         any_line_matches(&block, r#"seccompPolicyRef = "w1-vsock-relay""#),
@@ -118,7 +118,7 @@ fn vsock_relay_profile_source_shape() {
 /// shape. The bash gate's Layer-1 `jq`/grep checks (empty caps, seccomp ref) and
 /// header-documented bind set ("per-VM /var/lib/d2b/vms/<vm>/vsock.sock, no
 /// /dev binds") are asserted here as typed `RoleProfile` field checks against
-/// the real `vm-corp-full-vsock-relay` profile — strictly stronger than the bash
+/// the real `vm-corp-full-vsock-relay` profile - strictly stronger than the bash
 /// gate re-grepping a synthetic live-host profile JSON.
 #[test]
 fn vsock_relay_rendered_profile_shape() {
@@ -145,7 +145,7 @@ fn vsock_relay_rendered_profile_shape() {
                 node.role
             );
 
-            // Caps: empty (pre-opened fds only — no AF_VSOCK socket creation).
+            // Caps: empty (pre-opened fds only - no AF_VSOCK socket creation).
             assert!(
                 p.caps.is_empty(),
                 "vsock-relay {} (vm {}) must declare EMPTY caps (kernel-r2-4); got {:?}",

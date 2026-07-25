@@ -16,7 +16,7 @@ BASELINE_FIXTURE=${BASELINE_FIXTURE:-$BASELINE_DIR/vms.json-$BASE_COMMIT}
 cd "$ROOT"
 
 if [ ! -f packages/d2b-core/src/bundle.rs ] || [ ! -d docs/reference/schemas/v1 ]; then
-  log "no W1 bundle schemas — skipping vms-json-parity (W1 unstaged)"
+  log "no W1 bundle schemas - skipping vms-json-parity (W1 unstaged)"
   exit 0
 fi
 

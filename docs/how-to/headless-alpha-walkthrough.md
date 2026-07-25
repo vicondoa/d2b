@@ -2,7 +2,7 @@
 
 This how-to walks a clean Ubuntu 24.04 host from "no d2b
 installed" to "a running headless Cloud Hypervisor VM on the v1.0
-daemon/broker control-plane path (ADR 0015 daemon-only — the
+daemon/broker control-plane path (ADR 0015 daemon-only - the
 historical three-mode bridge was retired in v1.0)".
 
 **Status:** the wire + pure layer is still the foundation, but
@@ -32,7 +32,7 @@ the full removal list.
   default; otherwise add `experimental-features = nix-command flakes`
   to `~/.config/nix/nix.conf`).
 
-## Step 1 — Install d2b
+## Step 1 - Install d2b
 
 ```bash
 nix profile install github:vicondoa/d2b#d2b
@@ -52,7 +52,7 @@ sudo cp ~/.nix-profile/share/d2b/daemon-config.json /etc/d2b/
 sudo systemctl daemon-reload
 ```
 
-## Step 2 — Define a VM
+## Step 2 - Define a VM
 
 Place a minimal manifest under `/etc/d2b/bundle.json` describing
 one headless VM. The bundle ships with the `examples/minimal`
@@ -70,12 +70,12 @@ The example declares one VM (`corp-vm`) in the `work` env with one
 TAP interface, four virtiofs shares (`ro-store`, `d2b-meta`,
 `d2b-hkeys`, `d2b-ssh-host`), and no TPM / GPU / observability roles.
 
-## Step 3 — Prepare the host
+## Step 3 - Prepare the host
 
 ```bash
 d2b host prepare --dry-run
 # `--apply` is not yet wired: it returns the typed `daemon-down`
-# envelope (exit 1) today — use `--dry-run` for now.
+# envelope (exit 1) today - use `--dry-run` for now.
 d2b host prepare --apply
 ```
 
@@ -88,7 +88,7 @@ staged in the broker executor; the remaining rollout work is the
 public daemon-backed `host prepare --apply` surface that dispatches
 them, so `--apply` returns `daemon-down` (exit 1) until that ships.
 
-## Step 4 — Inspect the DAG
+## Step 4 - Inspect the DAG
 
 ```bash
 d2b vm start corp-vm --dry-run --json
@@ -122,7 +122,7 @@ is stable; `--apply` routes through the daemon-native dispatch
 }
 ```
 
-## Step 5 — Start the VM
+## Step 5 - Start the VM
 
 ```bash
 sudo systemctl start d2bd.service
@@ -132,16 +132,16 @@ d2b vm start corp-vm --apply
 The native DAG is still the same 5-node sequence, but the behavior
 is different from the original draft:
 
-1. `host-reconcile` — the production broker dispatcher now resolves
+1. `host-reconcile` - the production broker dispatcher now resolves
    bundle intent refs and runs live `ApplyNftables` / `ApplyRoute` /
    `ApplySysctl` / `UpdateHostsFile` handlers.
-2. `store-preflight` — the same runner-shape preflight still guards
+2. `store-preflight` - the same runner-shape preflight still guards
    the virtiofs / runner surface before launch.
-3. `virtiofsd-ro-store` + `ch` — the broker's non-bootstrap
+3. `virtiofsd-ro-store` + `ch` - the broker's non-bootstrap
    `SpawnRunner` handler is live and returns pidfds over SCM_RIGHTS;
    the daemon can re-open / re-adopt them through the live
    `OpenPidfd` path.
-4. `guest-control-health` — the daemon runs the authenticated
+4. `guest-control-health` - the daemon runs the authenticated
    guest-control Health probe (Hello + token challenge-response +
    Health over the guest-control vsock) on guest-control-capable VMs.
    It fails closed and is the guest-readiness gate; SSH is a compat
@@ -159,7 +159,7 @@ native-handler-deferred surfaces `not-yet-implemented` (exit-78).
 The historical `D2B_NATIVE_ONLY=1` and `D2B_LEGACY_BASH_OPT_IN=1`
 env vars are no-ops; the bash CLI itself was retired in v1.0.
 
-## Step 6 — Observe runtime state
+## Step 6 - Observe runtime state
 
 ```bash
 d2b vm list --json
@@ -175,7 +175,7 @@ the per-VM manifest + service view including any `[pending restart]`
 annotation. `audit` streams the broker's append-only audit log
 (`/var/lib/d2b/audit/broker-<utc-date>.jsonl`).
 
-## Step 7 — Stop / restart (v1.0 daemon-only routing)
+## Step 7 - Stop / restart (v1.0 daemon-only routing)
 
 ```bash
 d2b vm stop corp-vm --apply
@@ -190,21 +190,21 @@ walks the DAG in reverse topo order, signalling each pidfd with
 `D2B_LEGACY_BASH_OPT_IN=1` env vars from the three-mode bridge
 are no-ops in v1.0; the bash CLI itself was retired in v1.0.
 
-## Reference shape — what's live today
+## Reference shape - what's live today
 
 | Component                 | Wire-stable | Live today | Remaining rollout |
 |---------------------------|:-----------:|:----------:|:-----------------:|
-| `ch_argv` generator       | ✅                  | ✅         | — |
+| `ch_argv` generator       | ✅                  | ✅         | - |
 | virtiofsd argv / shares   | ✅                  | ✅         | emitted by `nixos-modules/processes-json.nix`; see `docs/reference/store-virtiofs.md` |
-| `swtpm_argv` generator    | ✅                  | ✅ (opt-in)| — |
+| `swtpm_argv` generator    | ✅                  | ✅ (opt-in)| - |
 | Supervisor DAG executor   | ✅                  | ✅ (pure)  | native-only end-to-end ownership |
 | Broker host-reconcile ops (`ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile`) | ✅ | ✅ (non-bootstrap dispatch) | public `host prepare --apply` rollout |
 | Broker `OpenPidfd` op     | ✅                  | ✅ (non-bootstrap dispatch) | broader operator surfacing |
 | Broker `SpawnRunner` op   | ✅                  | ✅ (non-bootstrap dispatch) | full native-only CLI rollout |
 | Daemon state persistence  | ✅                  | ✅ (pure)  | native-only end-to-end ownership |
-| Daemon `[pending restart]`| ✅                  | ✅         | — |
+| Daemon `[pending restart]`| ✅                  | ✅         | - |
 | `d2b vm` CLI verbs    | ✅                  | ✅ (`--dry-run`; `--apply` uses daemon-only routing) | native-only lifecycle rollout |
-| Ubuntu Tier-1 smoke       | ✅ (docs)           | —          | repeated live-host green runs |
+| Ubuntu Tier-1 smoke       | ✅ (docs)           | -          | repeated live-host green runs |
 
 The wire-stable column means the JSON/argv shape and the typed
 envelope shape are pinned today; future changes follow the
@@ -213,9 +213,9 @@ wire-skew contract (`PROTOCOL_VERSION` bump + version-skew gate).
 ## References
 
 - [Daemon lifecycle explanation](../explanation/daemon-lifecycle.md)
-- [Runner-shape audit](../reference/runner-shape-audit.md) —
+- [Runner-shape audit](../reference/runner-shape-audit.md) -
   the parity oracle the generator matches.
 - [Daemon API reference](../reference/daemon-api.md)
-- [Error codes](../reference/error-codes.md) — the typed envelope
+- [Error codes](../reference/error-codes.md) - the typed envelope
   catalog including `daemon-down` / `not-yet-implemented` /
   `--apply-or-dry-run-required` used by mutating verbs.

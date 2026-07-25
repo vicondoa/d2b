@@ -54,7 +54,7 @@ whose name matches `broker-YYYY-MM-DD.jsonl`, optionally filtered by
 5. **Orphan rule.** A `decision = "errored"` record MUST carry a
    non-null `error_kind`. A populated `error_kind` MUST NOT appear
    alongside `decision = "allowed"`. (Denied decisions may carry an
-   `error_kind` — that's the broker's authz rejection reason and is
+   `error_kind` - that's the broker's authz rejection reason and is
    not an orphan.)
 
 The check is read-only and hermetic. It never invokes the broker,
@@ -87,7 +87,7 @@ Response: `200 OK`, `Content-Type: application/json`, body is the
 }
 ```
 
-When defects are present the response is still `200 OK` — the sweep
+When defects are present the response is still `200 OK` - the sweep
 ran to completion, so the request itself succeeded; the report's
 `defects` array tells the operator which lines tripped which
 assertion. `d2b host doctor` consumes the same JSON and

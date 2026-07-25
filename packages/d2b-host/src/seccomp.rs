@@ -111,7 +111,7 @@ fn jmp(code: u16, k: u32, jt: u8, jf: u8) -> BpfInstruction {
 ///
 /// # Panics
 ///
-/// Panics if the deduplicated allowlist length exceeds 251 — the BPF
+/// Panics if the deduplicated allowlist length exceeds 251 - the BPF
 /// jump offsets would overflow `u8`.  In practice the v1.2 per-role
 /// maximum is < 30.
 pub fn compile_ioctl_policy_to_bpf(device_classes: &[DeviceClass]) -> CompiledSeccompProgram {
@@ -131,7 +131,7 @@ pub fn compile_ioctl_policy_to_bpf(device_classes: &[DeviceClass]) -> CompiledSe
     // jf = N+2) must fit.  N ≤ 251 keeps N+2 ≤ 253 ≤ u8::MAX.
     assert!(
         n <= 251,
-        "ioctl allowlist has {n} entries — exceeds u8 BPF jump range"
+        "ioctl allowlist has {n} entries - exceeds u8 BPF jump range"
     );
 
     // Edge case: when the allowlist is empty after sentinel filtering
@@ -141,7 +141,7 @@ pub fn compile_ioctl_policy_to_bpf(device_classes: &[DeviceClass]) -> CompiledSe
     // a permissive program that allows all syscalls including ioctl.
     //
     // This preserves the post-D4 invariant that the filter is INSTALLED
-    // (Seccomp: 2 visible in /proc/<pid>/status — needed by D18 doctor
+    // (Seccomp: 2 visible in /proc/<pid>/status - needed by D18 doctor
     // probe), without imposing a deny-all-ioctl policy that the
     // declarative matrix never authorized.
     if n == 0 {
@@ -172,10 +172,10 @@ pub fn compile_ioctl_policy_to_bpf(device_classes: &[DeviceClass]) -> CompiledSe
         instrs.push(jmp(BPF_JMP | BPF_JEQ | BPF_K, req, jt, 0));
     }
 
-    // 3+N: deny — unrecognised ioctl kills the process.
+    // 3+N: deny - unrecognised ioctl kills the process.
     instrs.push(stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
 
-    // 3+N+1: allow — all other syscalls (and matched ioctls).
+    // 3+N+1: allow - all other syscalls (and matched ioctls).
     instrs.push(stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
 
     CompiledSeccompProgram {
@@ -216,7 +216,7 @@ mod tests {
     fn empty_device_classes_produces_allow_all_when_no_constraints() {
         // v1.2 D4 regression fix: when the declarative allowlist is empty
         // (e.g. Fuse with only the FUSE_NO_IOCTL sentinel), the program
-        // must NOT deny all ioctls — virtiofsd needs ioctls (FUSE mount
+        // must NOT deny all ioctls - virtiofsd needs ioctls (FUSE mount
         // handshake, file flags) that the matrix never authorized as
         // restrictions. Emit a single RET_ALLOW so the filter is
         // installed (Seccomp:2 in /proc/<pid>/status, D18 doctor probe

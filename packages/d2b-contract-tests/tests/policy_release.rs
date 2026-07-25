@@ -55,8 +55,7 @@ fn changelog_keeps_unreleased_above_latest_dated_release() {
 
     // The latest release header must carry a YYYY-MM-DD cut date.
     let cut_date_re =
-        Regex::new(r"^## \[[0-9]+\.[0-9]+(\.[0-9]+)?\]\s+[—-]\s+[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-            .unwrap();
+        Regex::new(r"^## \[[0-9]+\.[0-9]+(\.[0-9]+)?\]\s+-\s+[0-9]{4}-[0-9]{2}-[0-9]{2}$").unwrap();
     assert!(
         cut_date_re.is_match(latest_header),
         "latest release header missing 'YYYY-MM-DD' cut date: {latest_header}"
@@ -236,7 +235,7 @@ fn vfsd_watchdog_units_retired_from_store_module() {
 // Asserts `flake.nix` does not declare `inputs.microvm`. The original bash gate
 // SKIP-ed at v1.1-rc1 (the input drop was the last phase of the substrate
 // replacement). The substrate replacement has since landed (ADR 0018 removed
-// the microvm.nix flake input), so this test asserts the invariant strictly —
+// the microvm.nix flake input), so this test asserts the invariant strictly -
 // see the "Spec correction" note in the migration commit body.
 // ---------------------------------------------------------------------------
 

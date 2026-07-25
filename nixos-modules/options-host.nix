@@ -1,4 +1,4 @@
-# d2b.host.* — host-level infrastructure knobs for d2b subsystems
+# d2b.host.* - host-level infrastructure knobs for d2b subsystems
 # that are owned at the host layer (not per-VM or per-env). Currently
 # contains the USB security-key proxy configuration.
 #

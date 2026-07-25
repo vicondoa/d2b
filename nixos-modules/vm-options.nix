@@ -13,7 +13,7 @@
 # The fields enumerated here are the subset consumed by
 # `nixos-modules/processes-json.nix` (via the
 # `d2bLib.vmRunner config name` helper in lib.nix). Anything not
-# listed is intentionally left out — the broker SpawnRunner
+# listed is intentionally left out - the broker SpawnRunner
 # pipeline generates runner argv in Rust
 # (`packages/d2b-host/src/ch_argv.rs` + sibling
 # `*_argv.rs` modules), so the Nix side only needs to surface

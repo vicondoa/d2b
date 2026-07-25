@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-flake-list.sh — `make test-flake-list`: print the native-system
+# tests/test-flake-list.sh - `make test-flake-list`: print the native-system
 # flake check names as a compact JSON array on stdout (all logs go to stderr).
 #
 # The CI dynamic matrix consumes this to fan `make test-flake D2B_FLAKE_CHECK=<n>`
@@ -26,7 +26,7 @@ flake_ref="git+file://$ROOT"
 native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
 echo "test-flake-list: enumerating checks.$native.*" >&2
 
-# attrNames forces only the keys of the checks attrset (cheap) — it does not
+# attrNames forces only the keys of the checks attrset (cheap) - it does not
 # evaluate each check's derivation. Keep every check in the dynamic matrix; if
 # an evaluator segfaults, tests/test-flake.sh emits grouped diagnostics and a
 # gdb backtrace for the failing evaluator command.

@@ -1,11 +1,11 @@
-# `with-entra-id` — composing d2b with `entrablau`
+# `with-entra-id` - composing d2b with `entrablau`
 
 This example is the **integration showcase** for using
 [`vicondoa/d2b`][d2b] together with the framework-agnostic
 [`vicondoa/entrablau.nix`][entrablau] flake to spin up an
 Entra-ID-joined work microVM on a NixOS host.
 
-The two flakes are deliberately decoupled — neither imports the
+The two flakes are deliberately decoupled - neither imports the
 other. This directory is the **consumer-side composition** that
 wires them together in your top-level `flake.nix`.
 
@@ -19,7 +19,7 @@ work environment with one Entra-joined VM:
 | Bridges / NAT / firewall | d2b          | Per-env isolated /24 LAN, /30 uplink, NAT egress     |
 | Net VM (`sys-work-net`)  | d2b          | Auto-declared dnsmasq + nftables NAT router          |
 | swtpm 2.0                | d2b          | Software TPM exposed to guest at `/dev/tpmrm0`       |
-| Wayland / audio / GPU    | d2b          | (Off in this minimal example — TPM-only headless VM) |
+| Wayland / audio / GPU    | d2b          | (Off in this minimal example - TPM-only headless VM) |
 | YubiKey USBIP backend    | d2b          | (Available; toggle `usbip.yubikey = true` per VM)    |
 | Himmelblau daemon + PAM  | entrablau        | Linux-native Entra ID client (TPM-enabled rebuild)   |
 | Intune compliance shims  | entrablau        | `dmiOverride` / `osReleaseOverride`, `FileDescriptorStoreMax` for PRT survival |
@@ -62,7 +62,7 @@ configure the VM itself.
 | `d2b.vms.<vm>.usbip.yubikey`      | `flake.nix`         | YubiKey USBIP passthrough (off in this example) |
 | `d2b.vms.<vm>.env`, `index`       | `flake.nix`         | Bind VM into the env's LAN; derive MAC + IP     |
 | `d2b.vms.<vm>.ssh.user`           | `flake.nix`         | SSH user the CLI uses to talk into the VM       |
-| `d2b.vms.<vm>.config.imports`     | `flake.nix`         | **The composition seam** — guest NixOS modules  |
+| `d2b.vms.<vm>.config.imports`     | `flake.nix`         | **The composition seam** - guest NixOS modules  |
 
 ### Options that live in `entrablau.*` (from the other flake)
 
@@ -76,13 +76,13 @@ the [`entrablau` README][entrablau-readme].
 | `entrablau.domain`                        | Tenant domain(s) (`listOf str`)                                    |
 | `entrablau.userMap.<local> = <UPN>`       | Local-user → Entra UPN mapping (`/etc/himmelblau/user-map`)        |
 | `entrablau.joinType`                      | `"join"` (Intune-enrolled) or `"register"` (BYOD)                  |
-| `entrablau.localUser`                     | Diagnostic — name of the local user that maps to the UPN           |
+| `entrablau.localUser`                     | Diagnostic - name of the local user that maps to the UPN           |
 | `entrablau.intuneCompliance.enable`       | Turn on/off the Intune compliance shim                             |
 | `entrablau.intuneCompliance.dmiOverride`      | SMBIOS values bind-mounted into himmelblau's mount ns              |
 
 ### The seam
 
-The two trees meet at exactly one place — `flake.nix`:
+The two trees meet at exactly one place - `flake.nix`:
 
 ```nix
 d2b.vms.work-entra = {
@@ -99,7 +99,7 @@ d2b.vms.work-entra = {
 `config` is a regular NixOS module. It gets merged into the VM's
 internal NixOS configuration by d2b's `host.nix` translation
 into `microvm.vms.<name>`. From the imported modules' perspective,
-they're being evaluated as a normal NixOS system — they neither
+they're being evaluated as a normal NixOS system - they neither
 know nor care that they're inside a microVM.
 
 ## Why TPM 2.0 is mandatory
@@ -161,7 +161,7 @@ restarts should keep the same device identity.
 
 > **DO NOT wipe this directory.** It holds the Intune device-bound
 > TPM credentials. Wiping it forces a fresh device-registration on
-> next boot — Entra/Intune may register that as a tamper signal in
+> next boot - Entra/Intune may register that as a tamper signal in
 > your IT's compliance feed, and you'll need to clean up the old
 > stale device entry from the tenant. Back it up the same way you
 > back up the rest of d2b state (each `microvm.stateDir` /
@@ -173,7 +173,7 @@ restarts should keep the same device identity.
 This is **compatibility, not bypass**.
 
 The `intuneCompliance` shim makes a Linux/microVM guest *look* to
-Intune the way a supported corporate device would — same DMI override
+Intune the way a supported corporate device would - same DMI override
 strings, same `/etc/os-release` shape, same `FileDescriptorStoreMax`
 behaviour the Windows / macOS clients rely on for PRT survival
 across restarts. That gets you past the device-compliance gate so
@@ -192,7 +192,7 @@ Himmelblau:
   validating attestation provenance (Microsoft Defender for
   Identity, conditional access policies inspecting TPM EK
   thumbprints) will flag this device as "Linux with software TPM."
-- The vendored DMI override values are static text — they will not
+- The vendored DMI override values are static text - they will not
   satisfy any compliance check that cross-references a
   Manufacturer-Vendor-ID against a hardware database.
 
@@ -205,8 +205,8 @@ the technical compliance check passes.
 `entrablau` was written to support migrating a corporate
 workstation off Windows onto NixOS, with the IT department's
 explicit awareness. That's the supported use case. If you need to
-actually circumvent enterprise controls, this is the wrong tool
-— and the wrong approach.
+actually circumvent enterprise controls, this is the wrong tool -
+and the wrong approach.
 
 ## Quick start
 
@@ -240,7 +240,7 @@ sudo -A nixos-rebuild build  --flake .#demo
 ```
 
 The first build pulls in `entrablau`'s TPM-enabled Himmelblau
-rebuild — ~10 minutes of Rust compile on a cold cache, cached
+rebuild - ~10 minutes of Rust compile on a cold cache, cached
 afterwards. **Do not skip the `build` step**: a broken Entra config
 that switches live is harder to recover from than one that fails
 loudly at build time.
@@ -254,7 +254,7 @@ sudo -A nixos-rebuild switch --flake .#demo
 This creates `/var/lib/d2b/keys/work-entra_ed25519`, spawns
 `sys-work-net` (the per-env net VM), materialises the
 `br-work-up` + `br-work-lan` bridges, and installs the `d2b`
-CLI on `$PATH`. The work VM itself is **not** started — graphics
+CLI on `$PATH`. The work VM itself is **not** started - graphics
 VMs and Entra VMs both expect interactive launch.
 
 After activation, `d2b list` / `d2b status` should look
@@ -285,7 +285,7 @@ sidecar wired up by `d2b.vms.work-entra.tpm.enable = true`.
 
 ### 4. Bring the VM up
 
-From a Plasma / Wayland terminal (not over SSH — see
+From a Plasma / Wayland terminal (not over SSH - see
 [d2b's README, "Common gotchas"][d2b-readme] for why):
 
 ```bash
@@ -350,23 +350,23 @@ journalctl -b -u var.mount -u local-fs.target --no-pager
 
 ## Customising
 
-- **Other tenants** — swap `contoso.com` for your domain and
+- **Other tenants** - swap `contoso.com` for your domain and
   update `userMap` + `localUser`. Read the
   [`entrablau` README quick start][entrablau-readme]
   for tenant prerequisites (admin role, Conditional Access caveats,
   `dmidecode` for realistic `dmiOverride` values).
-- **Add graphics** — set `d2b.vms.work-entra.graphics.enable =
+- **Add graphics** - set `d2b.vms.work-entra.graphics.enable =
   true` in `flake.nix` and the VM gains a virtio-gpu + Wayland
   forward to the host compositor (a `foot` terminal auto-launches
   inside the guest on boot). Requires `d2b.site.waylandUser`
-  to be non-null on the host — already set in this example.
-- **Add YubiKey passthrough** — set
+  to be non-null on the host - already set in this example.
+- **Add YubiKey passthrough** - set
   `d2b.vms.work-entra.usbip.yubikey = true` and run
   `d2b usb attach work-entra <busid> --apply` to redirect a plugged YubiKey from the
   host's USB controller to the VM via USBIP. Useful for the MFA
   prompt during `aad-tool auth-test` and any downstream FIDO2
   flow.
-- **BYOD / no Intune** — set `entrablau.joinType = "register"`
+- **BYOD / no Intune** - set `entrablau.joinType = "register"`
   and `entrablau.intuneCompliance.enable = false`. The TPM is
   still useful (PRT survival), but the compliance shim drops out
   of the picture.
@@ -379,7 +379,7 @@ This example targets **`x86_64-linux`**. The flake declares
 
 The framework itself is multi-arch (headless VMs eval on
 `aarch64-linux`); d2b's platform gate fires on `graphics.enable`
-+ `audio.enable` only — **not on `tpm.enable`** — so a future
++ `audio.enable` only - **not on `tpm.enable`** - so a future
 `aarch64`-clean variant of this example would be possible if
 upstream Himmelblau gained an `aarch64` cargo build. Today,
 `entrablau`'s TPM-enabled Himmelblau package is wired for
@@ -401,7 +401,7 @@ back into sync.
   2.0 NVRAM + EK seed that Entra/Intune treats as the device's
   hardware identity. Zeroing it forces re-enrolment and looks
   like device tampering to the IdP.
-- **First Himmelblau enrollment can take 30–60 seconds.** The
+- **First Himmelblau enrollment can take 30-60 seconds.** The
   initial AAD device-code dance + Intune policy pull is
   network-bound; subsequent logins are fast.
 - **x86_64-only.** Both the graphics component (cloud-hypervisor +
@@ -426,22 +426,22 @@ running VM runners are re-adopted rather than cycled. After rebuilding,
 `d2b list` flags any VM whose declared closure has drifted from the
 running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
-[`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
+[`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
 for the exact predicate.
 
 ## See also
 
-- [`examples/minimal`](../minimal/) — read-and-copy headless starter
-- [`examples/graphics-workstation`](../graphics-workstation/) — desktop VM with Wayland + audio + USBIP
-- [`examples/multi-env`](../multi-env/) — two isolated envs (work + personal)
-- [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
-- [`vicondoa/entrablau.nix`][entrablau] — the Entra/Himmelblau
+- [`examples/minimal`](../minimal/) - read-and-copy headless starter
+- [`examples/graphics-workstation`](../graphics-workstation/) - desktop VM with Wayland + audio + USBIP
+- [`examples/multi-env`](../multi-env/) - two isolated envs (work + personal)
+- [`templates/default`](../../templates/default/) - scaffold via `nix flake init`
+- [`vicondoa/entrablau.nix`][entrablau] - the Entra/Himmelblau
   module bundle. Read its README for tenant prerequisites,
   detailed enrolment troubleshooting, and the full `entrablau.*`
   schema.
-- [`vicondoa/d2b` README][d2b-readme] — quick start, common
+- [`vicondoa/d2b` README][d2b-readme] - quick start, common
   gotchas, full option index.
 
 [d2b]: https://github.com/vicondoa/d2b

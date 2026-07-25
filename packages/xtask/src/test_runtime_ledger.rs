@@ -492,7 +492,7 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     }
     for finding in &findings {
         eprintln!(
-            "{}:{}: {} — {}",
+            "{}:{}: {} - {}",
             finding.path, finding.line, finding.rule, finding.detail
         );
     }

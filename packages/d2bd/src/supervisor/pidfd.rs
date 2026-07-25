@@ -101,7 +101,7 @@ impl RunnerExitInfo {
 
     /// Returns `true` iff the runner exited cleanly: `exit_code == 0`
     /// and no killing signal. Anything else (non-zero exit, signal
-    /// termination, or — defensively — both fields `None`) is an
+    /// termination, or - defensively - both fields `None`) is an
     /// **unexpected** exit and should trigger degradation.
     pub fn is_clean(&self) -> bool {
         matches!(self.exit_code, Some(0)) && self.signal.is_none()
@@ -122,7 +122,7 @@ pub enum SupervisorEvent {
         role_id: String,
         exit: RunnerExitInfo,
     },
-    /// Per-share virtiofs mount degraded — the dependent CH runner
+    /// Per-share virtiofs mount degraded - the dependent CH runner
     /// cannot serve guest filesystem traffic for that share. The
     /// integrator surfaces this in `d2b status <vm>` and the
     /// per-VM degraded counter for observability.
@@ -148,7 +148,7 @@ pub enum SupervisorEvent {
 
 /// Audit record persisted to the broker audit log so post-mortems can
 /// reconstruct what the watchdog decided. The shape is deliberately
-/// minimal and self-describing — the integrator wraps it into the
+/// minimal and self-describing - the integrator wraps it into the
 /// existing `OpAuditRecord` envelope when the audit-log writer surfaces
 /// this event; the typed event is available immediately for in-process
 /// logging.

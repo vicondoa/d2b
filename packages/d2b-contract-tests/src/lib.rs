@@ -41,7 +41,7 @@ pub fn load_manifest_value_from_env() -> serde_json::Value {
 }
 
 /// The feature-rich `fixture-smoke-full` output dir (D2B_FIXTURES_FULL), or
-/// `None` when unset — e.g. the plain `cargo test` pass, or a non-x86_64 host
+/// `None` when unset - e.g. the plain `cargo test` pass, or a non-x86_64 host
 /// where the graphics platform gate makes the fixture unavailable. Per-role
 /// minijail-validator contract tests that need feature-specific profiles
 /// (gpu/swtpm/audio/video/usbip/vsock-relay/wayland-proxy/otel-host-bridge)
@@ -88,7 +88,7 @@ pub fn load_bundle_resolver_from_env() -> BundleResolver {
     let host: HostJson = parse_fixture("host.json");
     let processes: ProcessesJson = parse_fixture("processes.json");
     // Parse the manifest via the production `ManifestV04::from_slice`, which
-    // enforces MANIFEST_VERSION_CURRENT — generic serde (parse_fixture) would
+    // enforces MANIFEST_VERSION_CURRENT - generic serde (parse_fixture) would
     // accept a stale rendered manifest that `BundleResolver::load` rejects,
     // letting the contract test pass on a version the daemon/broker refuse.
     let manifest_bytes = read_fixture("manifest.json");

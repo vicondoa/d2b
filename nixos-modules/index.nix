@@ -754,7 +754,7 @@ let
       };
       # Cross-realm external network attachment conflict data.
       # A non-empty list indicates realms sharing an attachment interface;
-      # this is advisory metadata — hard assertions live in assertions.nix.
+      # this is advisory metadata - hard assertions live in assertions.nix.
       externalNetworkConflicts = crossRealmExternalNetworkConflicts;
     };
   };

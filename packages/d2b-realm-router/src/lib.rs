@@ -10,8 +10,8 @@
 //!   field.
 //! - **Idempotency + dedup ownership**: the router is the single dedup
 //!   owner for its scope. Per ADR 0032 the dedup record is keyed by the
-//!   full operation namespace — `(realm, principal, node, operation kind,
-//!   idempotency key)` — NOT the idempotency key alone, so the same opaque
+//!   full operation namespace - `(realm, principal, node, operation kind,
+//!   idempotency key)` - NOT the idempotency key alone, so the same opaque
 //!   caller key reused under a different principal/realm/node/kind can never
 //!   collide. A mutating operation MUST carry an idempotency key;
 //!   same-key/same-request is a replay (carrying the original
@@ -24,7 +24,7 @@
 //! **Single-owner / shared scope.** The router is the dedup owner for the
 //! node/gateway scope it is constructed at, NOT a per-session object. A peer
 //! session binds a *shared* router (e.g. behind `Arc<Mutex<_>>`) so reconnect
-//! retries on a fresh session still hit the same dedup state — a fresh
+//! retries on a fresh session still hit the same dedup state - a fresh
 //! per-session router would let reconnect retries bypass dedup and
 //! double-dispatch. See `d2bd`'s `PeerOperationRouter` for the wiring.
 //!
@@ -279,7 +279,7 @@ enum DedupState {
     /// Accepted and executing; never expires by retention (a long-running
     /// operation must not be dropped out from under an in-flight retry).
     /// `since` records when the lease was taken so a stale lease can be
-    /// *surfaced* for provider-side reconciliation — never auto-dropped.
+    /// *surfaced* for provider-side reconciliation - never auto-dropped.
     InProgress { since: Instant },
     /// Completed; the retention clock (for `Replay` vs expiry) runs from
     /// `since`. Carries the recorded result for `Replay`.
@@ -558,7 +558,7 @@ impl<C: Clock> OperationRouter<C> {
     /// for **provider-side reconciliation**. This is read-only: it surfaces a
     /// stale lease but never resolves it. An unknown / timed-out operation
     /// stays `InProgress` until the gateway reconciles it against the
-    /// provider's durable state — recording the durable id with
+    /// provider's durable state - recording the durable id with
     /// [`Self::mark_completed`] if it took effect, or clearing it with
     /// [`Self::mark_failed`] if it provably did not. Auto-dropping or
     /// auto-completing a lease would risk a double side effect or a lost

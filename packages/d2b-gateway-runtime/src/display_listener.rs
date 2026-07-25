@@ -1,4 +1,4 @@
-//! `RelayDisplayListener` — the production [`DisplayListener`] adapter that arms
+//! `RelayDisplayListener` - the production [`DisplayListener`] adapter that arms
 //! the host-side Azure Relay listener gating the display byte stream behind the
 //! per-session handshake (ADR 0032, P0).
 //!

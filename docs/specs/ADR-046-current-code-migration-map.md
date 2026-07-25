@@ -11,7 +11,7 @@
 | Owners | Integrator; current-code migration/disposition map |
 | Depends on | None |
 | Supersedes | None |
-| Foundation | `fd5b0067` — docs: establish d2b 3.0 Provider control-plane foundation |
+| Foundation | `fd5b0067` - docs: establish d2b 3.0 Provider control-plane foundation |
 | Main reuse | Permitted (copy/adapt); main is not current-state evidence |
 
 ---
@@ -60,8 +60,8 @@ Target columns use **ADR 0046 names**. This table is the authoritative translati
 | `Workload` / `WorkloadId` (realm workload) | `Guest` ResourceType (VM / sandbox / cloud / remote execution parent) | D050 |
 | `d2b.vms.<vm>` (legacy NixOS VM) | `Guest` ResourceSpec under `d2b.zones.<zone>` | VM execution → Guest |
 | `d2b.realms.<r>.workloads.<w>` (realm-native) | `Guest` / `Process` ResourceSpec under `d2b.zones.<z>` | Classify per runtime.kind |
-| `unsafe-local` workload (kind="unsafe-local" in `d2b.realms.<r>.workloads.<w>`) | `Host` ResourceType (not Guest; not a separate Provider) reconciled by `Provider/system-core`; `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`; child processes use normal Process Providers | D042 — unsafe-local IS the Host, it does not go inside a Guest |
-| `IsolationPosture::UnsafeLocal` / `WorkloadProviderKind::UnsafeLocal` in public surface | Explicit no-isolation posture PRESERVED in `Host` status, CLI/UI warnings, and authoritative audit events only — must NOT be silently dropped in v3; must NOT be carried into OTEL metrics labels, span attributes, or log fields | D042 — no-isolation posture is a visible Host characteristic in status/CLI/audit; not a telemetry dimension |
+| `unsafe-local` workload (kind="unsafe-local" in `d2b.realms.<r>.workloads.<w>`) | `Host` ResourceType (not Guest; not a separate Provider) reconciled by `Provider/system-core`; `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`; child processes use normal Process Providers | D042 - unsafe-local IS the Host, it does not go inside a Guest |
+| `IsolationPosture::UnsafeLocal` / `WorkloadProviderKind::UnsafeLocal` in public surface | Explicit no-isolation posture PRESERVED in `Host` status, CLI/UI warnings, and authoritative audit events only - must NOT be silently dropped in v3; must NOT be carried into OTEL metrics labels, span attributes, or log fields | D042 - no-isolation posture is a visible Host characteristic in status/CLI/audit; not a telemetry dimension |
 | Physical local execution parent | `Host` ResourceType | New in ADR 0046; no current counterpart |
 | `ProcessRole` / `VmProcessDag` runner | `Process` or `EphemeralProcess` ResourceType | Classify per evidence below |
 | `storage.json` / filesystem-view / store-view | `Volume` layout/views/attachments | Where storage lifecycle applies; locks remain mechanisms |
@@ -71,7 +71,7 @@ Target columns use **ADR 0046 names**. This table is the authoritative translati
 | `WorkloadProviderKind` enum | **`UnsafeLocal` variant → `Host` ResourceType** (not `Guest.spec.providerRef`); `LocalVm`/`QemuMedia`/`ProviderManaged` variants → `Guest.spec.providerRef` pointing to respective Provider resource | D042/D050; UnsafeLocal selects Host not Guest |
 | `WorkloadExecutionPosture` | `ExecutionPolicy` fields shared by Host and Guest | `d2b-realm-core/src/workload.rs:83` |
 | Provider traits/adapters/factories | Zone-local `Provider` resource + controller/service/worker Processes | |
-| guest-control ttrpc/vsock | current evidence of guestd vsock protocol; target is ComponentSession/d2b-bus | D001 — ComponentSession copies from main `a1cc0b2d` |
+| guest-control ttrpc/vsock | current evidence of guestd vsock protocol; target is ComponentSession/d2b-bus | D001 - ComponentSession copies from main `a1cc0b2d` |
 | `d2b-realm-router` session types | REPLACE target; current v3 session impl to be removed | Do NOT copy from v3 |
 | `AllocatorEngine` / `HostResourceKind` leases | Zone bootstrap resource provisioning (Network/CgroupSubtree) | Currently schema-only |
 
@@ -114,22 +114,22 @@ Rules:
 - Generated Nix option types, defaults, and documentation are derived from the same
   ResourceTypeSchema and signed Provider schema used for build-time validation; the two sources
   must never diverge (enforced by `make test-drift` / `xtask gen-nix-options` + schema drift gate).
-- Derivation-valued inputs — Provider binary artifacts, guest NixOS system closures, and other
-  build derivations — are NOT permitted inside `spec.*`. Use `d2b.artifacts.<id>` (see
+- Derivation-valued inputs - Provider binary artifacts, guest NixOS system closures, and other
+  build derivations - are NOT permitted inside `spec.*`. Use `d2b.artifacts.<id>` (see
   §0.2 Artifact catalog below) and reference by `spec.artifactId = "<id>"` (Provider) or
   `spec.systemArtifactId = "<id>"` (Guest). Placing a derivation directly in `spec` is a
   Nix type error enforced by the generated option type.
 
 The spec must include all four of:
 
-1. **Eval-time validation** — The Nix module accepts `d2b.zones.<zone>.resources.<name>` as a
+1. **Eval-time validation** - The Nix module accepts `d2b.zones.<zone>.resources.<name>` as a
    Nix attrset. At eval time: `type` is a known ResourceType in the Zone's locked
    ResourceTypeSchema; every required `spec.*` field is present; `providerRef` is a valid
    `Provider/<name>` declared in the Zone; domain, owner, bounds, and conflict rules from the
    ResourceTypeSchema are enforced; missing required fields produce actionable eval errors with
    source location.
 
-2. **Build-time JSON validation** — The build renders the canonical JSON ResourceSpec (with
+2. **Build-time JSON validation** - The build renders the canonical JSON ResourceSpec (with
    `metadata.name`, `metadata.zone`, `apiVersion` filled in; `status` absent) and validates it
    against the committed ResourceTypeSchema (`docs/reference/schemas/v3/<kind>.json` pinned by
    `xtask gen-schemas`). Provider-specific fields inside `spec` are additionally validated
@@ -142,12 +142,12 @@ The spec must include all four of:
    actual type. Store paths from the artifact catalog must not appear in the rendered
    ResourceSpec, status, or audit events.
 
-3. **Credential refs for secrets** — Any spec field whose value is a secret byte sequence must
+3. **Credential refs for secrets** - Any spec field whose value is a secret byte sequence must
    be a `Credential/<name>` ResourceRef string. Inline secret bytes in Nix config are a
    build-time error enforced by the signed Provider schema (`credentialRef: true` marker on
    every secret-typed field in the schema).
 
-4. **Minimal Nix example + rendered JSON** — The spec includes a working Nix snippet using
+4. **Minimal Nix example + rendered JSON** - The spec includes a working Nix snippet using
    `d2b.zones.<zone>.resources.<name> = { type = "..."; spec = { ... }; }` and the exact
    canonical JSON the build renders from it, confirming field names are identical between Nix
    and schema. If the spec uses `artifactId` or `systemArtifactId`, the example also shows the
@@ -195,7 +195,7 @@ Authoring rules:
    (`<kind>/<name>`), and emits one **integrity-pinned Zone resource bundle** whose generation
    ID equals the SHA-256 digest of the sorted canonical JSON of the full configured set.
 
-2. The build emits one **integrity-pinned Zone resource bundle** per generation — an immutable
+2. The build emits one **integrity-pinned Zone resource bundle** per generation - an immutable
    artifact of canonical sorted ResourceSpec JSON installed at `root:d2bd` 0640 under
    `<zone-state-dir>/bundle/generation-<N>.json`; `current-generation` names the active pointer.
    The bundle contains only the plain ResourceSpec fields (type, spec, metadata.name,
@@ -208,25 +208,25 @@ Authoring rules:
 
 ### Cleanup contract
 
-1. **Configuration-managed vs controller-created vs API-created** — Core sets
+1. **Configuration-managed vs controller-created vs API-created** - Core sets
    `metadata.managedBy` only on persisted activated records, never in the Nix bundle itself:
-   - `managedBy: configuration` — resource originated from the Nix-authored bundle; subject to
+   - `managedBy: configuration` - resource originated from the Nix-authored bundle; subject to
      generation-sweep Delete when absent from a new generation.
-   - `managedBy: controller` — resource created at runtime by an owner controller (dynamic
+   - `managedBy: controller` - resource created at runtime by an owner controller (dynamic
      children, auto-provisioned Network/Volume/Device resources, etc.); **never** deleted solely
      because absent from the Nix-configured set; reconciled and deleted by the owning controller
      in response to parent resource changes.
-   - `managedBy: api` — resource created through an explicit API call (e.g. `resource apply`);
+   - `managedBy: api` - resource created through an explicit API call (e.g. `resource apply`);
      persists until an explicit `Delete` request; **never** generation-swept regardless of
      whether the resource appears in a Nix bundle.
 
-2. **Absent-resource async Delete on generation change** — When a new generation activates,
+2. **Absent-resource async Delete on generation change** - When a new generation activates,
    the Zone runtime enqueues an asynchronous `Delete` for every `metadata.managedBy:
    configuration` resource present in the prior generation but absent from the new generation.
    The Delete follows the normal resource Delete path including finalizer and owner-child safe
    deletion: children are deleted before the parent; finalizers are cleared first.
 
-3. **Non-blocking activation** — New generation activation does not block on cleanup. The Zone
+3. **Non-blocking activation** - New generation activation does not block on cleanup. The Zone
    reports `phase: Ready` (all pending cleanup complete) or `phase: Degraded` (cleanup in
    progress) and emits condition `{type: PendingCleanup, status: True, reason: PendingCleanup,
    message: "<N> resources awaiting deletion"}` until all absent resources complete deletion and
@@ -234,7 +234,7 @@ Authoring rules:
    condition clears and the Zone transitions to `phase: Ready`. `d2b op inspect` surfaces the
    degraded-state condition during cleanup.
 
-4. **Owner-child and finalizer safety** — When a resource is requested for deletion,
+4. **Owner-child and finalizer safety** - When a resource is requested for deletion,
    `deletionRequestedAt` is set and the resource enters `phase: Pending` (or `phase: Degraded`
    if active finalizers or controller-managed children remain). The owning controller is
    responsible for reconciling children to deletion in response to `deletionRequestedAt` being
@@ -244,21 +244,21 @@ Authoring rules:
    `ResourceDeleted` audit is appended afterward from that committed revision with
    dedup; there is no persisted `phase: Deleted` row.
 
-5. **Prior generation retention** — The Zone runtime retains prior generation bundles in the
+5. **Prior generation retention** - The Zone runtime retains prior generation bundles in the
    Zone state store up to the per-Zone configured count (`d2b.zones.<zone>.retainedGenerations`,
    default `3`, range `1..16`). Bundles beyond that count are pruned oldest-first after all
    cleanup for their generation is complete. Emergency rollback re-activates any retained prior
    generation pointer without reprovisioning: resources that survived deletion are
    re-reconciled; already-deleted resources are re-created by reconciliation.
 
-6. **Status, errors, and audit** — Every resource whose `deletionRequestedAt` is set due to
+6. **Status, errors, and audit** - Every resource whose `deletionRequestedAt` is set due to
    absence from the new generation must emit:
    - A `ResourceDeletionRequested` audit event: fields `resource`, `zone`, `generation_removed`,
      `reason: absent-from-configuration`.
    - A resource status condition:
      `{type: ConfigurationOwned, status: False, reason: AbsentFromGeneration, generation: <N>}`.
    - On successful deletion: a `ResourceDeleted` audit event; the resource row and index entry
-     are removed atomically at this point — there is no intermediate observable state after this
+     are removed atomically at this point - there is no intermediate observable state after this
      event.
    - On deletion failure: `phase: Degraded, conditions: [{type: DeletionComplete,
      status: False, reason: <error-kind>}]`; message fields are redacted (no paths,
@@ -271,13 +271,13 @@ Every spec work item must include test coverage for:
 | Test Kind | Required Assertion |
 |-----------|-------------------|
 | Nix eval | Valid config evaluates without error; invalid `type`/`providerRef`/bounds produce the exact expected error message with source location |
-| Build — schema | Rendered JSON passes ResourceTypeSchema validation; provider-specific `spec.*` fields pass signed Provider schema; inline secret bytes fail build |
-| Build — bundle | Two identical configs produce identical generation IDs; field-order variation in Nix config does not change generation ID; any field change changes generation ID |
-| Cleanup — basic | Remove resource from Nix config, rebuild, activate: `deletionRequestedAt` is set; final store transaction writes the `Deleted` revision and removes row/index atomically; `ResourceDeleted` audit append follows the committed revision with dedup |
-| Cleanup — no false delete | Controller-managed dynamic child is NOT deleted when its configuration-managed parent is updated but not removed |
-| Cleanup — owner-child safety | Configuration-managed parent with controller-managed children: parent has `deletionRequestedAt` set and stays `phase: Pending` or `phase: Degraded` until owner controller deletes all children; row removed atomically only after children clear |
-| Cleanup — non-blocking | New generation activates and routes requests while prior-generation cleanup is in progress; `PendingCleanup: True` condition visible in `d2b op inspect` |
-| Cleanup — prior retention | Prior bundle files present on disk up to `retainedGenerations` count; oldest pruned after cleanup complete once count exceeded |
+| Build - schema | Rendered JSON passes ResourceTypeSchema validation; provider-specific `spec.*` fields pass signed Provider schema; inline secret bytes fail build |
+| Build - bundle | Two identical configs produce identical generation IDs; field-order variation in Nix config does not change generation ID; any field change changes generation ID |
+| Cleanup - basic | Remove resource from Nix config, rebuild, activate: `deletionRequestedAt` is set; final store transaction writes the `Deleted` revision and removes row/index atomically; `ResourceDeleted` audit append follows the committed revision with dedup |
+| Cleanup - no false delete | Controller-managed dynamic child is NOT deleted when its configuration-managed parent is updated but not removed |
+| Cleanup - owner-child safety | Configuration-managed parent with controller-managed children: parent has `deletionRequestedAt` set and stays `phase: Pending` or `phase: Degraded` until owner controller deletes all children; row removed atomically only after children clear |
+| Cleanup - non-blocking | New generation activates and routes requests while prior-generation cleanup is in progress; `PendingCleanup: True` condition visible in `d2b op inspect` |
+| Cleanup - prior retention | Prior bundle files present on disk up to `retainedGenerations` count; oldest pruned after cleanup complete once count exceeded |
 | Rollback | Emergency rollback re-activates any retained prior generation; surviving resources re-reconcile without reprovisioning |
 | Audit hygiene | All `ResourceDeletionRequested` and `ResourceDeleted` events present in audit segment; `ResourceDeleted` is the final event for each resource; message fields contain no paths, identifiers, or argv |
 
@@ -314,17 +314,17 @@ completes in ≤2 s warm-cache execution time (compilation excluded). They use a
 fake clock/RNG and the toolkit fakes only; no process spawn, container, network, DBus, systemd,
 broker daemon, Nix eval/build, KVM, hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. A test needing any of those is a placement violation and MUST move to
-`integration/` — never gain a sleep, larger timeout, or `#[ignore]`. Bounded crypto/property
+`integration/` - never gain a sleep, larger timeout, or `#[ignore]`. Bounded crypto/property
 tests are the only classified exception and declare a capped case count and a higher per-test
 budget by name.
 
-- ResourceType controller conformance tests — assert every declared ResourceType is reconciled
+- ResourceType controller conformance tests - assert every declared ResourceType is reconciled
   correctly from `spec` to `status` phase transitions.
-- Service/worker lifecycle tests — assert each service and worker Process starts, reports
+- Service/worker lifecycle tests - assert each service and worker Process starts, reports
   Ready, handles termination signals, and emits correct audit events.
-- Provider conformance kit — run `check_provider_conformance` from `d2b-provider-toolkit`
+- Provider conformance kit - run `check_provider_conformance` from `d2b-provider-toolkit`
   against every `ProviderType` axis the Provider implements; assert zero `ConformanceError`.
-- Fault injection — assert correct `phase: Degraded` / `phase: Failed` and condition reporting
+- Fault injection - assert correct `phase: Degraded` / `phase: Failed` and condition reporting
   when a controller-spawned Process exits unexpectedly or a required resource is unavailable.
 - No container daemon, real Host, or real Guest required; mocks and `FakeProvider` fixtures
   from `d2b-provider-toolkit` are the hermetic boundary.
@@ -341,7 +341,7 @@ manual tier.
   container; resource lifecycle under real broker calls.
 - Host/Guest cross-process scenarios: Provider Process spawned as a real child process;
   inter-process ComponentSession handshake verified.
-- Provider–system interaction fixtures: real `Provider/system-core` or `Provider/system-minijail`
+- Provider-system interaction fixtures: real `Provider/system-core` or `Provider/system-minijail`
   involvement where the Provider depends on it.
 - Cleanup contract scenarios: Nix generation change triggers correct async Delete and
   audit events for this Provider's ResourceTypes (§0.2 cleanup contract, integration tier).
@@ -354,7 +354,7 @@ Documents the Provider dossier. Must include all of:
 
 | Section | Required Content |
 |---------|-----------------|
-| Provider identity | `Provider/<name>` canonical ResourceRef; `ProviderType` axis (D043–D049); crate path |
+| Provider identity | `Provider/<name>` canonical ResourceRef; `ProviderType` axis (D043-D049); crate path |
 | Nix config schema | `d2b.zones.<zone>.resources.<name>` snippet with this Provider's `spec.*` fields; rendered canonical JSON; Credential ref fields identified |
 | ResourceTypes | Table: ResourceType name, lifecycle phases, `owner` value, finalizer contract |
 | Controllers/services/workers/binaries | Table: name, binary or library entry point, executionRef (Host or Guest), cgroup placement |
@@ -373,27 +373,27 @@ Documents the Provider dossier. Must include all of:
 
 | Symbol / File | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |--------------|----------|------------------------------|-------------|--------|-----------|
-| `host.rs` — `HostJson` top-level fields (hostname, site_policy, ch_config) | production-reachable | Physical host config struct; callers: `bundle_resolver.rs`, `d2b-priv-broker/src/runtime.rs` | ADAPT | `Host` ResourceSpec fields in `d2b-contracts/src/v3/resources/host.rs` | `ADR046-primitives-002` |
-| `host.rs` — `HostJson.vm_runtimes: Vec<VmRuntimeRow>` | production-reachable | One `VmRuntimeRow` per declared VM (vm name, tap, bridge, static_ip, state_dir, env, net_vm); callers: broker TAP ops, bundle_resolver | ADAPT | `Guest` ResourceSpec per VM in Zone resource store; TAP/bridge → Network resource attachment | `ADR046-primitives-002` |
-| `host.rs` — `VmRuntimeRow` struct | production-reachable | Per-VM TAP/bridge/IP/state assignment; `d2b-priv-broker/src/ops/tap.rs:1006` | ADAPT | `Guest` ResourceSpec (vm name, state_dir) + `Network` attachment (tap, bridge, static_ip) | `ADR046-primitives-002` |
-| `host.rs` — `HostJson.environments: Vec<NetEnv>` | production-reachable | Per-env network fabric list; callers: `bundle_resolver.rs`, `net_route_preflight.rs` | ADAPT | `Network` resource per env (bridge, host_uplink_ip, net_uplink_ip, mtu, mss_clamp, LanPolicy) + Host/Guest `networkAttachments` | `ADR046-primitives-002` |
-| `host.rs` — `NetEnv` struct | production-reachable | Per-env bridge name, LAN policy, MTU, MSS, USBIP firewall IPs; `d2b-core/src/host.rs:293` | ADAPT | `Network` ResourceSpec (bridge, policy, MTU/MSS clamp) | `ADR046-primitives-002` |
-| `host.rs` — `HostQemuMedia` / `QemuMediaSourceIntent` | production-reachable | QEMU media registry/slot config; callers: broker QEMU media ops | ADAPT | Provider-specific config in `Guest.spec` under `runtime-qemu-media` Provider | `ADR046-primitives-002` |
+| `host.rs` - `HostJson` top-level fields (hostname, site_policy, ch_config) | production-reachable | Physical host config struct; callers: `bundle_resolver.rs`, `d2b-priv-broker/src/runtime.rs` | ADAPT | `Host` ResourceSpec fields in `d2b-contracts/src/v3/resources/host.rs` | `ADR046-primitives-002` |
+| `host.rs` - `HostJson.vm_runtimes: Vec<VmRuntimeRow>` | production-reachable | One `VmRuntimeRow` per declared VM (vm name, tap, bridge, static_ip, state_dir, env, net_vm); callers: broker TAP ops, bundle_resolver | ADAPT | `Guest` ResourceSpec per VM in Zone resource store; TAP/bridge → Network resource attachment | `ADR046-primitives-002` |
+| `host.rs` - `VmRuntimeRow` struct | production-reachable | Per-VM TAP/bridge/IP/state assignment; `d2b-priv-broker/src/ops/tap.rs:1006` | ADAPT | `Guest` ResourceSpec (vm name, state_dir) + `Network` attachment (tap, bridge, static_ip) | `ADR046-primitives-002` |
+| `host.rs` - `HostJson.environments: Vec<NetEnv>` | production-reachable | Per-env network fabric list; callers: `bundle_resolver.rs`, `net_route_preflight.rs` | ADAPT | `Network` resource per env (bridge, host_uplink_ip, net_uplink_ip, mtu, mss_clamp, LanPolicy) + Host/Guest `networkAttachments` | `ADR046-primitives-002` |
+| `host.rs` - `NetEnv` struct | production-reachable | Per-env bridge name, LAN policy, MTU, MSS, USBIP firewall IPs; `d2b-core/src/host.rs:293` | ADAPT | `Network` ResourceSpec (bridge, policy, MTU/MSS clamp) | `ADR046-primitives-002` |
+| `host.rs` - `HostQemuMedia` / `QemuMediaSourceIntent` | production-reachable | QEMU media registry/slot config; callers: broker QEMU media ops | ADAPT | Provider-specific config in `Guest.spec` under `runtime-qemu-media` Provider | `ADR046-primitives-002` |
 | `bundle_resolver.rs` | production-reachable | Resolves all bundle artifacts from `/etc/d2b/`; primary callers: broker, d2bd init | ADAPT | Zone bootstrap bundle resolution; paths change to Zone-scoped layout | `ADR046-primitives-002` |
 | `privileges.rs` | production-reachable | `BrokerOperation` / `BrokerRequest` typed enums (§3 below); callers: broker dispatch | ADAPT | Provider operation catalog; broker-to-provider RPC shape | `ADR046-provider-003` |
-| `workload_identity.rs` — `WorkloadIdentity` | production-reachable | `workload_id: WorkloadId`, `realm_id: RealmId`, `workload_name`; used in public wire types | ADAPT | `ResourceRef<Guest>` in `d2b-contracts/src/v3/identity.rs`; `WorkloadId` → label-shaped `ResourceName` within Zone | `ADR046-identities-001` |
-| `workload_identity.rs` — `WorkloadTarget` (`= RealmTarget`) | production-reachable | DNS-label address `<workload>.<realmPath>.d2b`; callers: CLI, daemon dispatch | ADAPT | `ResourceRef` with Zone path + resource name; canonical address format changes | `ADR046-identities-001` |
-| `workload_identity.rs` — `WorkloadBackend` / `LocalVmBackendConfig` / `LocalQemuMediaBackendConfig` / `WorkloadRuntimeIntent` | production-reachable | Per-workload runtime config (backend kind, VM path, QEMU media slot); callers: bundle_resolver | ADAPT | `Guest.spec.providerRef` + Provider-specific runtime config in private bundle | `ADR046-primitives-002` |
+| `workload_identity.rs` - `WorkloadIdentity` | production-reachable | `workload_id: WorkloadId`, `realm_id: RealmId`, `workload_name`; used in public wire types | ADAPT | `ResourceRef<Guest>` in `d2b-contracts/src/v3/identity.rs`; `WorkloadId` → label-shaped `ResourceName` within Zone | `ADR046-identities-001` |
+| `workload_identity.rs` - `WorkloadTarget` (`= RealmTarget`) | production-reachable | DNS-label address `<workload>.<realmPath>.d2b`; callers: CLI, daemon dispatch | ADAPT | `ResourceRef` with Zone path + resource name; canonical address format changes | `ADR046-identities-001` |
+| `workload_identity.rs` - `WorkloadBackend` / `LocalVmBackendConfig` / `LocalQemuMediaBackendConfig` / `WorkloadRuntimeIntent` | production-reachable | Per-workload runtime config (backend kind, VM path, QEMU media slot); callers: bundle_resolver | ADAPT | `Guest.spec.providerRef` + Provider-specific runtime config in private bundle | `ADR046-primitives-002` |
 | `realm_controller_config.rs` | production-reachable | `RealmControllerConfig` read by realm controller init; allocator socket ref | ADAPT | Zone runtime bootstrap config; realm controller config → Zone runtime config | `ADR046-core-001` |
 | `realm_workloads_launcher.rs` | production-reachable | `LauncherWorkloadSummary`, launcher item catalog; callers: `d2b-clipd`, launcher verbs | ADAPT | `Guest` resource launcher items in Provider catalog | `ADR046-provider-001` |
 | `host_json.nix` (emitter) | nix-emitted | Emits `/etc/d2b/host.json`; read by broker and d2bd | ADAPT | Zone resource store bootstrap inputs; rename/split per Host/Guest/Network split | `ADR046-primitives-002` |
-| All other `d2b-core` modules | production-reachable | Error types, audit, tracing, security checks | RETAIN / ADAPT | Keep in `d2b-core`; update import paths | — |
+| All other `d2b-core` modules | production-reachable | Error types, audit, tracing, security checks | RETAIN / ADAPT | Keep in `d2b-core`; update import paths | - |
 
 ### 1.2 `d2bd`
 
 | Symbol / File | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |--------------|----------|------------------------------|-------------|--------|-----------|
-| `lib.rs` — daemon entry, `AdminRequest` dispatch | production-reachable | `SO_PEERCRED`-gated admin socket; dispatches `ExecOp`, `ShellOp`, `ConsoleOp`, `KeysOp`, `UserdOp` | ADAPT | Zone runtime public socket; add `ResourceOp` dispatch path per resource-API spec | `ADR046-api-001` |
+| `lib.rs` - daemon entry, `AdminRequest` dispatch | production-reachable | `SO_PEERCRED`-gated admin socket; dispatches `ExecOp`, `ShellOp`, `ConsoleOp`, `KeysOp`, `UserdOp` | ADAPT | Zone runtime public socket; add `ResourceOp` dispatch path per resource-API spec | `ADR046-api-001` |
 | `realm_stubs.rs` | production-reachable | Thin stubs for `WorkloadProvider` and `ProtocolCodec` (codec for vsock); callers: realm connection path | REPLACE | Provider process worker; codec moves to `d2b-bus` transport | `ADR046-session-001` |
 | `workload_target_index.rs` | production-reachable | Index of `WorkloadTarget` → provider route; callers: admin dispatch for workload ops | ADAPT | Zone-local resource index; target becomes `ResourceRef`-keyed | `ADR046-core-001` |
 | `realm_access_resolver.rs` | production-reachable | Resolves realm access tokens for workload connection; callers: `d2bd` exec/shell paths | ADAPT | Zone resource authz resolver; token format changes to ComponentSession bootstrap | `ADR046-session-001` |
@@ -401,49 +401,49 @@ Documents the Provider dossier. Must include all of:
 | `exec_session*.rs` | production-reachable | Detached exec session table; guest-control vsock exec; `SO_PEERCRED` admin gate | RETAIN/ADAPT | Keep semantics; replace vsock transport with ComponentSession bootstrap | `ADR046-session-001` |
 | `console_session.rs` | production-reachable | Console stream; callers: `ConsoleOp` handler | ADAPT | Replace with ComponentSession `Console` service | `ADR046-session-001` |
 | `shell_handler.rs` (if present) | production-reachable | Shell op handler; delegates to unsafe-local helper via `d2bd/src/unsafe_local_helper.rs`; `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` protocol; metric label `provider = "unsafe-local"` in current tracing | ADAPT | Route `ShellOp` to user-only `Host` resource under `Provider/system-core`; preserve no-isolation posture in authoritative audit only; remove/redact `provider="unsafe-local"` from OTEL metrics, spans, and logs | `ADR046-primitives-003` |
-| All test fixtures (realm JSON stubs) | test-only | Hardcoded `/run/d2b/allocator.sock`, controller configs | UPDATE | Update paths to Zone-scoped layout | — |
+| All test fixtures (realm JSON stubs) | test-only | Hardcoded `/run/d2b/allocator.sock`, controller configs | UPDATE | Update paths to Zone-scoped layout | - |
 
 ### 1.3 `d2b-realm-core`
 
 | Symbol / File | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |--------------|----------|------------------------------|-------------|--------|-----------|
-| `ids.rs` — `RealmId` | production-reachable | Label-shaped `^[a-z][a-z0-9-]*$` realm identifier; callers: realm routing, registry, config | EXTRACT/ADAPT | `ZoneId` in `d2b-contracts/src/v3/identity.rs`; rename only | `ADR046-identities-001` |
-| `ids.rs` — `WorkloadId` | production-reachable | Label-shaped workload identifier within a realm; callers: `WorkloadIdentity`, `WorkloadTarget` | EXTRACT/ADAPT | `ResourceName` (label-shaped) within Zone-scoped `ResourceRef`; same validation shape | `ADR046-identities-001` |
-| `ids.rs` — `NodeId` | production-reachable | Node/host identifier; callers: `NodeSummary`, constellation routing | EXTRACT/ADAPT | Node identifier in `d2b-contracts/src/v3/identity.rs` | `ADR046-identities-001` |
-| `ids.rs` — `ProviderId` | production-reachable | Provider identifier; callers: `ProviderRegistryEntry` | EXTRACT/ADAPT | `ResourceName` for Provider resource | `ADR046-identities-001` |
-| `ids.rs` — `GatewayId`, `ExecutionId`, `StreamId`, `PrincipalId` | production-reachable | Opaque session/stream identifiers; callers: session routing | EXTRACT/ADAPT | Corresponding types in `d2b-contracts/src/v3/identity.rs` | `ADR046-identities-001` |
-| `ids.rs` — `AllocatorLeaseId`, `HostResourceId` | schema-only | Used only in xtask schema generation; no d2bd caller | EXTRACT/ADAPT | Zone resource provisioning lease identifiers; move to `d2b-contracts/src/v3/` | `ADR046-identities-001` |
-| `realm.rs` — `RealmPath` | production-reachable | `Vec<RealmId>` path labels for nested realms; callers: realm routing, config | EXTRACT/ADAPT | Zone path in `ZoneRef`; same structural shape, rename | `ADR046-identities-001` |
-| `realm.rs` — `EntrypointMode` | production-reachable | Realm controller entrypoint variant; callers: realm config | ADAPT | Zone runtime entrypoint config | `ADR046-core-001` |
-| `realm.rs` — `RealmControllerPlacement` | production-reachable | `HostLocal` / remote placement; callers: realm controller config | ADAPT | Zone placement in Zone ResourceSpec; `HostLocal` → Zone runtime on `Host` | `ADR046-core-001` |
-| `workload.rs` — `WorkloadProviderKind` | production-reachable | Enum `LocalVm \| QemuMedia \| ProviderManaged \| UnsafeLocal`; callers: `d2b-clipd`, `realm_workloads_launcher.rs`, `d2b-contracts/public_wire.rs` | ADAPT | **`UnsafeLocal` variant → `Host` ResourceSpec** (not Guest) with `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`, reconciled by `Provider/system-core`; `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.spec.providerRef` per D050 | `ADR046-primitives-002` |
-| `workload.rs` — `IsolationPosture` | production-reachable | Enum `VirtualMachine \| ProviderManaged \| UnsafeLocal`; callers: `WorkloadExecutionPosture`, public wire; test fixture `workload-execution-posture-v1.json`; `IsolationPosture::UnsafeLocal` serializes as `"isolation":"unsafe-local"` | ADAPT | `VirtualMachine`/`ProviderManaged` → Provider-specific isolation field in `Guest.spec`; **`UnsafeLocal` → preserved as explicit no-isolation posture in `Host.status`, `Host` resource conditions, CLI/UI warnings, and authoritative audit events (`isolation:"unsafe-local"`) — must NOT be silently dropped or generalized; must NOT appear as an OTEL metric label, span attribute, or log field** | `ADR046-primitives-002` |
-| `workload.rs` — `WorkloadExecutionPosture` | production-reachable | Five posture fields (isolation, environment, display, identity, session_persistence); callers: `WorkloadPublicSummary`, clipd; `unsafe_local_posture_round_trips_as_closed_typed_fields` test (`workload.rs:205`) validates `isolation:"unsafe-local"` round-trip | ADAPT | `ExecutionPolicy` fields shared by `Host` and `Guest` ResourceSpec; **`IsolationPosture::UnsafeLocal` in posture is the primary no-isolation signal: preserved verbatim in `Host` status surface, CLI warning display, and authoritative audit events; callers must not remap it to a generic "unmanaged" label in those surfaces; OTEL metrics, span attributes, and logs must not carry `isolation` or `provider="unsafe-local"` labels** | `ADR046-primitives-002` |
-| `workload.rs` — `WorkloadState` | production-reachable | Enum (`Running`, `Stopped`, `Starting`, etc.) used in `WorkloadPublicSummary` / `d2b-contracts/src/public_wire.rs:266` | ADAPT | Maps to `Guest.status.runtimeState` (running/stopped/starting/etc.) and associated `Guest.status.detail` / `Guest.status.conditions`; current enum values become `runtimeState` values, NEVER `status.phase` values; common Resource `status.phase` uses standard Ready/Pending/Degraded/Failed phases only | `ADR046-reconcile-001` |
-| `workload.rs` — `WorkloadSummary` | dead-reachable | Used in `WorkloadProvider.list()` trait method and mock; no live production path in d2bd | ADAPT | `Guest.status` (runtimeState + detail + conditions); common `status.phase` is standard Ready/Pending/Degraded/Failed — not workload-specific running/stopped values; handler wiring in Zone runtime required | `ADR046-api-001` |
-| `workload.rs` — `WorkloadSelector` | dead-reachable | `All \| ByTarget` selector; callers: mock and conformance only | ADAPT | `ResourceListFilter` in resource-API; no current production caller | `ADR046-api-001` |
-| `workload.rs` — `LauncherItemKind` / `LauncherIcon` / `LauncherItemSummary` | production-reachable | Per-workload launcher item metadata; callers: public_wire, clipd, launcher | ADAPT | Provider catalog item in Zone resource store | `ADR046-provider-001` |
-| `workload.rs` — `WorkloadPlacement` / `WorkloadPlacementSummary` | schema-only | Used only in xtask schema; no production caller outside xtask | DELETE | Fold into `Guest.spec.providerRef` / provider-specific `Guest.spec.*` fields / `Guest.status` and `ZoneLink` routing; delete old schema after migration to Guest resource model | `ADR046-primitives-002` |
-| `registry.rs` — `ProviderRegistryEntry` | schema-only | Used only in xtask schema generation | ADAPT | Provider resource registry entry in Zone store | `ADR046-provider-001` |
-| `allocator.rs` — `HostResourceKind` | schema-only | Enum: Bridge, Tap, VethPair, NftablesTable, NftablesPartition, CgroupSubtree, HostFilePartition, NamespaceBoundary; callers: xtask schema only | ADAPT | Zone bootstrap resource provisioning kinds; maps to `Network`/`Device`/`Volume` resource pre-requisites | `ADR046-primitives-002` |
-| `allocator_engine.rs` — `AllocatorEngine` | schema-only | Lease decision engine with `HostResourceKind` leases; callers: xtask only; socket at `/run/d2b/allocator.sock` is config-referenced but engine not live in d2bd at `b5ddbed6` | ADAPT | Functionality integrates into fixed core controllers and Zone runtime resource contracts; no separate allocator service or socket; Network/Volume/Device provisioning handled by respective Providers (`Provider/network-local`, `Provider/volume-local`, `Provider/device-*`) | `ADR046-core-001` |
-| `allocator.rs` — `AllocatorLease` / `LeaseAllocationRequest` / `LeaseAllocationResult` | schema-only | Lease allocation request/response types; callers: xtask schema only | ADAPT | Zone resource lease protocol types | `ADR046-core-001` |
-| `capability.rs` — `Capability` / `CapabilitySet` / `CapabilityNegotiation` | production-reachable | Protocol capability negotiation between realm router and workload; callers: session handshake | ADAPT | ComponentSession capability negotiation; reuse shape from main `a1cc0b2d` | `ADR046-session-001` |
-| `route_engine.rs` — `RouteEngine` | production-reachable | Realm router routing decisions; callers: `d2b-realm-router` | REPLACE | Zone-local resource routing in Zone runtime | `ADR046-core-001` |
+| `ids.rs` - `RealmId` | production-reachable | Label-shaped `^[a-z][a-z0-9-]*$` realm identifier; callers: realm routing, registry, config | EXTRACT/ADAPT | `ZoneId` in `d2b-contracts/src/v3/identity.rs`; rename only | `ADR046-identities-001` |
+| `ids.rs` - `WorkloadId` | production-reachable | Label-shaped workload identifier within a realm; callers: `WorkloadIdentity`, `WorkloadTarget` | EXTRACT/ADAPT | `ResourceName` (label-shaped) within Zone-scoped `ResourceRef`; same validation shape | `ADR046-identities-001` |
+| `ids.rs` - `NodeId` | production-reachable | Node/host identifier; callers: `NodeSummary`, constellation routing | EXTRACT/ADAPT | Node identifier in `d2b-contracts/src/v3/identity.rs` | `ADR046-identities-001` |
+| `ids.rs` - `ProviderId` | production-reachable | Provider identifier; callers: `ProviderRegistryEntry` | EXTRACT/ADAPT | `ResourceName` for Provider resource | `ADR046-identities-001` |
+| `ids.rs` - `GatewayId`, `ExecutionId`, `StreamId`, `PrincipalId` | production-reachable | Opaque session/stream identifiers; callers: session routing | EXTRACT/ADAPT | Corresponding types in `d2b-contracts/src/v3/identity.rs` | `ADR046-identities-001` |
+| `ids.rs` - `AllocatorLeaseId`, `HostResourceId` | schema-only | Used only in xtask schema generation; no d2bd caller | EXTRACT/ADAPT | Zone resource provisioning lease identifiers; move to `d2b-contracts/src/v3/` | `ADR046-identities-001` |
+| `realm.rs` - `RealmPath` | production-reachable | `Vec<RealmId>` path labels for nested realms; callers: realm routing, config | EXTRACT/ADAPT | Zone path in `ZoneRef`; same structural shape, rename | `ADR046-identities-001` |
+| `realm.rs` - `EntrypointMode` | production-reachable | Realm controller entrypoint variant; callers: realm config | ADAPT | Zone runtime entrypoint config | `ADR046-core-001` |
+| `realm.rs` - `RealmControllerPlacement` | production-reachable | `HostLocal` / remote placement; callers: realm controller config | ADAPT | Zone placement in Zone ResourceSpec; `HostLocal` → Zone runtime on `Host` | `ADR046-core-001` |
+| `workload.rs` - `WorkloadProviderKind` | production-reachable | Enum `LocalVm \| QemuMedia \| ProviderManaged \| UnsafeLocal`; callers: `d2b-clipd`, `realm_workloads_launcher.rs`, `d2b-contracts/public_wire.rs` | ADAPT | **`UnsafeLocal` variant → `Host` ResourceSpec** (not Guest) with `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`, reconciled by `Provider/system-core`; `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.spec.providerRef` per D050 | `ADR046-primitives-002` |
+| `workload.rs` - `IsolationPosture` | production-reachable | Enum `VirtualMachine \| ProviderManaged \| UnsafeLocal`; callers: `WorkloadExecutionPosture`, public wire; test fixture `workload-execution-posture-v1.json`; `IsolationPosture::UnsafeLocal` serializes as `"isolation":"unsafe-local"` | ADAPT | `VirtualMachine`/`ProviderManaged` → Provider-specific isolation field in `Guest.spec`; **`UnsafeLocal` → preserved as explicit no-isolation posture in `Host.status`, `Host` resource conditions, CLI/UI warnings, and authoritative audit events (`isolation:"unsafe-local"`) - must NOT be silently dropped or generalized; must NOT appear as an OTEL metric label, span attribute, or log field** | `ADR046-primitives-002` |
+| `workload.rs` - `WorkloadExecutionPosture` | production-reachable | Five posture fields (isolation, environment, display, identity, session_persistence); callers: `WorkloadPublicSummary`, clipd; `unsafe_local_posture_round_trips_as_closed_typed_fields` test (`workload.rs:205`) validates `isolation:"unsafe-local"` round-trip | ADAPT | `ExecutionPolicy` fields shared by `Host` and `Guest` ResourceSpec; **`IsolationPosture::UnsafeLocal` in posture is the primary no-isolation signal: preserved verbatim in `Host` status surface, CLI warning display, and authoritative audit events; callers must not remap it to a generic "unmanaged" label in those surfaces; OTEL metrics, span attributes, and logs must not carry `isolation` or `provider="unsafe-local"` labels** | `ADR046-primitives-002` |
+| `workload.rs` - `WorkloadState` | production-reachable | Enum (`Running`, `Stopped`, `Starting`, etc.) used in `WorkloadPublicSummary` / `d2b-contracts/src/public_wire.rs:266` | ADAPT | Maps to `Guest.status.runtimeState` (running/stopped/starting/etc.) and associated `Guest.status.detail` / `Guest.status.conditions`; current enum values become `runtimeState` values, NEVER `status.phase` values; common Resource `status.phase` uses standard Ready/Pending/Degraded/Failed phases only | `ADR046-reconcile-001` |
+| `workload.rs` - `WorkloadSummary` | dead-reachable | Used in `WorkloadProvider.list()` trait method and mock; no live production path in d2bd | ADAPT | `Guest.status` (runtimeState + detail + conditions); common `status.phase` is standard Ready/Pending/Degraded/Failed - not workload-specific running/stopped values; handler wiring in Zone runtime required | `ADR046-api-001` |
+| `workload.rs` - `WorkloadSelector` | dead-reachable | `All \| ByTarget` selector; callers: mock and conformance only | ADAPT | `ResourceListFilter` in resource-API; no current production caller | `ADR046-api-001` |
+| `workload.rs` - `LauncherItemKind` / `LauncherIcon` / `LauncherItemSummary` | production-reachable | Per-workload launcher item metadata; callers: public_wire, clipd, launcher | ADAPT | Provider catalog item in Zone resource store | `ADR046-provider-001` |
+| `workload.rs` - `WorkloadPlacement` / `WorkloadPlacementSummary` | schema-only | Used only in xtask schema; no production caller outside xtask | DELETE | Fold into `Guest.spec.providerRef` / provider-specific `Guest.spec.*` fields / `Guest.status` and `ZoneLink` routing; delete old schema after migration to Guest resource model | `ADR046-primitives-002` |
+| `registry.rs` - `ProviderRegistryEntry` | schema-only | Used only in xtask schema generation | ADAPT | Provider resource registry entry in Zone store | `ADR046-provider-001` |
+| `allocator.rs` - `HostResourceKind` | schema-only | Enum: Bridge, Tap, VethPair, NftablesTable, NftablesPartition, CgroupSubtree, HostFilePartition, NamespaceBoundary; callers: xtask schema only | ADAPT | Zone bootstrap resource provisioning kinds; maps to `Network`/`Device`/`Volume` resource pre-requisites | `ADR046-primitives-002` |
+| `allocator_engine.rs` - `AllocatorEngine` | schema-only | Lease decision engine with `HostResourceKind` leases; callers: xtask only; socket at `/run/d2b/allocator.sock` is config-referenced but engine not live in d2bd at `b5ddbed6` | ADAPT | Functionality integrates into fixed core controllers and Zone runtime resource contracts; no separate allocator service or socket; Network/Volume/Device provisioning handled by respective Providers (`Provider/network-local`, `Provider/volume-local`, `Provider/device-*`) | `ADR046-core-001` |
+| `allocator.rs` - `AllocatorLease` / `LeaseAllocationRequest` / `LeaseAllocationResult` | schema-only | Lease allocation request/response types; callers: xtask schema only | ADAPT | Zone resource lease protocol types | `ADR046-core-001` |
+| `capability.rs` - `Capability` / `CapabilitySet` / `CapabilityNegotiation` | production-reachable | Protocol capability negotiation between realm router and workload; callers: session handshake | ADAPT | ComponentSession capability negotiation; reuse shape from main `a1cc0b2d` | `ADR046-session-001` |
+| `route_engine.rs` - `RouteEngine` | production-reachable | Realm router routing decisions; callers: `d2b-realm-router` | REPLACE | Zone-local resource routing in Zone runtime | `ADR046-core-001` |
 | `routing.rs` | production-reachable | Route types (`RouteEntry`, `RouteTarget`); callers: route_engine, realm-router | REPLACE | Resource routing in Zone runtime | `ADR046-core-001` |
 | `execution.rs` | production-reachable | Execution context types for running workloads | ADAPT | `EphemeralProcess` execution context | `ADR046-primitives-002` |
 | `shell.rs` | dead-reachable | Shell session types (persistent shell); callers: mock only for `PersistentShellProvider` | REPLACE | Persistent shell under `Provider/system-core` user-only Host per D042/D051 | `ADR046-primitives-003` |
-| `node.rs` — `NodeKind` / `NodeSummary` | production-reachable | Constellation node kinds; callers: router, constellation | ADAPT | Host/Zone resource node summary | `ADR046-identities-001` |
+| `node.rs` - `NodeKind` / `NodeSummary` | production-reachable | Constellation node kinds; callers: router, constellation | ADAPT | Host/Zone resource node summary | `ADR046-identities-001` |
 | `frame.rs` / `payload.rs` / `mux.rs` / `stream.rs` | production-reachable | Transport framing types; callers: realm-router, session | REPLACE | ComponentSession transport framing from main `a1cc0b2d` | `ADR046-session-001` |
 | `access.rs` | production-reachable | Access token types; callers: realm-router, daemon | REPLACE | ComponentSession bootstrap credentials | `ADR046-session-001` |
 | `audit.rs` | production-reachable | Audit event types; callers: broker, daemon | RETAIN/ADAPT | Keep audit types; update realm→Zone field names | `ADR046-identities-001` |
 | `token.rs` | production-reachable | Token types; callers: session handshake | REPLACE | ComponentSession handshake tokens from main | `ADR046-session-001` |
-| `trace_context.rs` | production-reachable | W3C TraceContext propagation | RETAIN | Keep as-is | — |
+| `trace_context.rs` | production-reachable | W3C TraceContext propagation | RETAIN | Keep as-is | - |
 | `migration.rs` | production-reachable | Workload state migration helpers | ADAPT | Guest resource state migration | `ADR046-reconcile-001` |
 | `enrollment.rs` | production-reachable | Realm enrollment / gateway credential types | ADAPT | Zone gateway enrollment; update realm→Zone | `ADR046-core-001` |
 | `identity_store.rs` / `identity_config.rs` | production-reachable | Realm controller identity; callers: realm controller init | ADAPT | Zone runtime identity store | `ADR046-core-001` |
 
-### 1.4 `d2b-realm-provider` — Trait Definitions
+### 1.4 `d2b-realm-provider` - Trait Definitions
 
 All trait definitions live in `d2b-realm-provider/src/provider.rs`.
 Evidence class applies to **implementations** found outside the trait file and `mock.rs`.
@@ -466,20 +466,20 @@ Evidence class applies to **implementations** found outside the trait file and `
 | `ObservabilitySinkProvider` | dead-reachable | No live implementation outside mock | DELETE | Replaced by `Provider/observability-otel` (D049); not Zone runtime; delete trait after `Provider/observability-otel` is operational | `ADR046-provider-001` |
 | `InfrastructureProvider` | dead-reachable | No live implementation outside mock | DELETE | Semantics map to Guest runtime Providers, principally `Provider/runtime-azure-virtual-machine`; delete trait after Guest runtime Provider mapping is complete | `ADR046-provider-001` |
 | `NodeProvider` | dead-reachable | No live implementation outside mock | DELETE | Node discovery/status handled by `Host`/`Guest`/`ZoneLink` resource status and their controllers; no separate Provider family; delete trait | `ADR046-core-001` |
-| `RelayProvider` (d2b-realm-provider trait) | dead-reachable | **No implementation found**; `AzureRelayTransportProvider` implements `TransportProvider`, not `RelayProvider` | DELETE | Dead trait; relay behavior covered by `TransportProvider` | — |
+| `RelayProvider` (d2b-realm-provider trait) | dead-reachable | **No implementation found**; `AzureRelayTransportProvider` implements `TransportProvider`, not `RelayProvider` | DELETE | Dead trait; relay behavior covered by `TransportProvider` | - |
 
 ### 1.5 Provider Crates
 
 | Crate / Symbol | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |---------------|----------|------------------------------|-------------|--------|-----------|
-| `d2b-provider-aca` — `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | production-reachable | ACA-managed VM lifecycle; guest-control vsock connect; callers: realm connection path | REPLACE | `Provider/runtime-azure-container-apps` controller Process; ComponentSession replaces vsock direct; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-session-001` |
-| `d2b-provider-aca` — `AcaRelayTransportConfig` | production-reachable | ACA relay transport config | ADAPT | ZoneLink transport config under `Provider/runtime-azure-container-apps` | `ADR046-provider-001` |
-| `d2b-provider-relay` — `AzureRelayTransportProvider` | production-reachable | Implements `TransportProvider` for Azure Relay; callers: realm relay path | REPLACE | `Provider/transport-azure-relay` Zone-link transport Process | `ADR046-provider-001` |
+| `d2b-provider-aca` - `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | production-reachable | ACA-managed VM lifecycle; guest-control vsock connect; callers: realm connection path | REPLACE | `Provider/runtime-azure-container-apps` controller Process; ComponentSession replaces vsock direct; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-session-001` |
+| `d2b-provider-aca` - `AcaRelayTransportConfig` | production-reachable | ACA relay transport config | ADAPT | ZoneLink transport config under `Provider/runtime-azure-container-apps` | `ADR046-provider-001` |
+| `d2b-provider-relay` - `AzureRelayTransportProvider` | production-reachable | Implements `TransportProvider` for Azure Relay; callers: realm relay path | REPLACE | `Provider/transport-azure-relay` Zone-link transport Process | `ADR046-provider-001` |
 | `d2b-host-providers` | production-reachable | Thin adapter: `HostSubstrateProvider`, `RuntimeProvider`, `DisplayProvider`; caller: d2bd host-local setup | REPLACE | `Provider/system-core` (substrate), `Provider/runtime-cloud-hypervisor` (VM execution lifecycle), and `Provider/display-wayland` (Wayland cross-domain) controllers | `ADR046-primitives-003` |
 | `d2b-daemon-access` | production-reachable | `DaemonAccessApi` implementation; used by d2b CLI and external clients to reach d2bd | ADAPT | Zone runtime access client; update to ResourceOp dispatch | `ADR046-api-001` |
 | `d2b-realm-codec-protobuf` | production-reachable | Protobuf `ProtocolCodec` impl; callers: realm-router codec path | REPLACE | ComponentSession wire codec from main `a1cc0b2d` | `ADR046-session-001` |
 
-### 1.6 `d2b-realm-router` — Session Types (REPLACE all)
+### 1.6 `d2b-realm-router` - Session Types (REPLACE all)
 
 All session types in `d2b-realm-router/src/` are the **current v3 session implementation**.
 They are the replacement target, not a reuse source. ComponentSession copies from main `a1cc0b2d`.
@@ -503,12 +503,12 @@ They are the replacement target, not a reuse source. ComponentSession copies fro
 
 | Symbol / File | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |--------------|----------|------------------------------|-------------|--------|-----------|
-| `public_wire.rs` — `WorkloadOp` / `WorkloadOpResponse` / `WorkloadPublicSummary` / `WorkloadListResult` | dead-reachable | Wire types exist; **no `WorkloadOp` handler found in d2bd** at `b5ddbed6` | DELETE | Deleted at clean v3 cutover; no compatibility window; `ResourceOp{list,get,watch}` for `Guest` resource type replaces; removal proof: handler-wire integration test passes via `ResourceOp` path | `ADR046-api-001` |
-| `public_wire.rs` — `ShellOp` / `ShellOpResponse` / `ShellListResult` / `ShellName` | production-reachable | Callers: `d2bd/src/wire.rs:720` | ADAPT | Shell operations under `Provider/system-core` user-only Host per D042 | `ADR046-primitives-003` |
-| `public_wire.rs` — `ConsoleProviderKind` / `ConsoleReadOutputResult` | production-reachable | Callers: `d2bd/src/console_session.rs:30` | ADAPT | Console service under Provider Process | `ADR046-provider-001` |
-| `public_wire.rs` — `ExecOp` / `ExecOpResponse` | production-reachable | Guest-control exec; callers: d2bd exec_session | ADAPT | ComponentSession `Exec` service bootstrap | `ADR046-session-001` |
-| `broker_wire.rs` — `RunnerRole` / `ChildExitStatus` / `ChildReapedNotification` | production-reachable | Callers: `d2bd/src/supervisor/` | ADAPT | Process lifecycle protocol in Zone runtime; `RunnerRole` → ProcessRole classification below | `ADR046-core-001` |
-| `provider_registry_v2.rs` | production-reachable | Current provider registry (canonical IDs and opaque bundle intents); callers: Nix bundle emitter, broker | ADAPT | Zone-local Provider registry; extend for frozen Provider family per D043–D049 | `ADR046-provider-001` |
+| `public_wire.rs` - `WorkloadOp` / `WorkloadOpResponse` / `WorkloadPublicSummary` / `WorkloadListResult` | dead-reachable | Wire types exist; **no `WorkloadOp` handler found in d2bd** at `b5ddbed6` | DELETE | Deleted at clean v3 cutover; no compatibility window; `ResourceOp{list,get,watch}` for `Guest` resource type replaces; removal proof: handler-wire integration test passes via `ResourceOp` path | `ADR046-api-001` |
+| `public_wire.rs` - `ShellOp` / `ShellOpResponse` / `ShellListResult` / `ShellName` | production-reachable | Callers: `d2bd/src/wire.rs:720` | ADAPT | Shell operations under `Provider/system-core` user-only Host per D042 | `ADR046-primitives-003` |
+| `public_wire.rs` - `ConsoleProviderKind` / `ConsoleReadOutputResult` | production-reachable | Callers: `d2bd/src/console_session.rs:30` | ADAPT | Console service under Provider Process | `ADR046-provider-001` |
+| `public_wire.rs` - `ExecOp` / `ExecOpResponse` | production-reachable | Guest-control exec; callers: d2bd exec_session | ADAPT | ComponentSession `Exec` service bootstrap | `ADR046-session-001` |
+| `broker_wire.rs` - `RunnerRole` / `ChildExitStatus` / `ChildReapedNotification` | production-reachable | Callers: `d2bd/src/supervisor/` | ADAPT | Process lifecycle protocol in Zone runtime; `RunnerRole` → ProcessRole classification below | `ADR046-core-001` |
+| `provider_registry_v2.rs` | production-reachable | Current provider registry (canonical IDs and opaque bundle intents); callers: Nix bundle emitter, broker | ADAPT | Zone-local Provider registry; extend for frozen Provider family per D043-D049 | `ADR046-provider-001` |
 
 ### 1.9 `d2b-state`
 
@@ -521,9 +521,9 @@ They are the replacement target, not a reuse source. ComponentSession copies fro
 
 | Symbol / Binary | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |----------------|----------|------------------------------|-------------|--------|-----------|
-| `d2b-guestd` — PAM login, workload user exec, `ExecOp` handler | production-reachable | Guest-control ttrpc/vsock server; callers: d2bd exec_session via guest-control | REPLACE | ComponentSession `Exec` service inside Guest; vsock transport → ComponentSession bootstrap | `ADR046-session-001` |
-| `d2b-guestd` — detached runner / unit lifecycle | production-reachable | Detached exec jobs under transient user scope | ADAPT | `EphemeralProcess` worker inside Guest; keep PAM login semantics | `ADR046-primitives-002` |
-| `d2b-userd` — `main.rs` exits 78 for service mode; `lib.rs`: `UserExecSession` trait (attach/resize), `UserSocketPolicy`/`UserdTransport`, `UserdConfig`, `UserSessionIdentity`, `UserAttachRequest`, `UserOutputCursor`, `UserdError`; `USERD_LISTENS_ON_VSOCK = false` | production-reachable | Main exits 78 (`"service mode is not implemented"`); lib defines user exec/session traits consumed by d2bd attach path; callers: d2bd user attach handler | REPLACE | Fixed user supervisor Process (`Provider/system-systemd` user domain) + `Provider/system-systemd` user Process effects; remove public `d2b userd` verb and stub after parity | `ADR046-primitives-003` |
+| `d2b-guestd` - PAM login, workload user exec, `ExecOp` handler | production-reachable | Guest-control ttrpc/vsock server; callers: d2bd exec_session via guest-control | REPLACE | ComponentSession `Exec` service inside Guest; vsock transport → ComponentSession bootstrap | `ADR046-session-001` |
+| `d2b-guestd` - detached runner / unit lifecycle | production-reachable | Detached exec jobs under transient user scope | ADAPT | `EphemeralProcess` worker inside Guest; keep PAM login semantics | `ADR046-primitives-002` |
+| `d2b-userd` - `main.rs` exits 78 for service mode; `lib.rs`: `UserExecSession` trait (attach/resize), `UserSocketPolicy`/`UserdTransport`, `UserdConfig`, `UserSessionIdentity`, `UserAttachRequest`, `UserOutputCursor`, `UserdError`; `USERD_LISTENS_ON_VSOCK = false` | production-reachable | Main exits 78 (`"service mode is not implemented"`); lib defines user exec/session traits consumed by d2bd attach path; callers: d2bd user attach handler | REPLACE | Fixed user supervisor Process (`Provider/system-systemd` user domain) + `Provider/system-systemd` user Process effects; remove public `d2b userd` verb and stub after parity | `ADR046-primitives-003` |
 
 ### 1.11 `d2b-clipd`
 
@@ -539,7 +539,7 @@ These crates have separate lockfiles and are excluded from the main `packages/Ca
 | Crate / Binary | Evidence | Current Function | Disposition | Target | Work Item |
 |---------------|----------|-----------------|-------------|--------|-----------|
 | `d2b-priv-broker` | production-reachable | Privileged broker: TAP, cgroup, nftables, swtpm, store_view_farm, virtiofsd, QEMU media, activation; callers: d2bd via `BrokerRequest` socket | ADAPT | Zone-local privileged broker; update `BrokerOperation` catalog per §3; TAP/bridge → Network provisioning | `ADR046-provider-003` |
-| `d2b-unsafe-local-helper` | production-reachable | Unsafe-local helper binary; `ScopeRuntime<M>`, `HelperSnapshot`, `HelperLaunchRequest`; protocol: `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` (`d2b-contracts/src/unsafe_local_wire.rs`); scope ledger at `~/.local/state/d2b/unsafe-local-scopes.json`; per-user socket; callers: `d2bd/src/unsafe_local_helper.rs` | ADAPT | **Remains the runtime agent for user-only `Host` resource child processes**; child process sessions become `Process` resources under normal Process Providers; no-isolation posture (`isolation:"unsafe-local"`) preserved in authoritative audit events and `Host.status` only; `provider="unsafe-local"` in current OTEL tracing is removed/redacted — must NOT appear in v3 OTEL metrics, span attributes, or logs; protocol wire types in `unsafe_local_wire.rs` adapt for ComponentSession handshake | `ADR046-primitives-003` |
+| `d2b-unsafe-local-helper` | production-reachable | Unsafe-local helper binary; `ScopeRuntime<M>`, `HelperSnapshot`, `HelperLaunchRequest`; protocol: `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` (`d2b-contracts/src/unsafe_local_wire.rs`); scope ledger at `~/.local/state/d2b/unsafe-local-scopes.json`; per-user socket; callers: `d2bd/src/unsafe_local_helper.rs` | ADAPT | **Remains the runtime agent for user-only `Host` resource child processes**; child process sessions become `Process` resources under normal Process Providers; no-isolation posture (`isolation:"unsafe-local"`) preserved in authoritative audit events and `Host.status` only; `provider="unsafe-local"` in current OTEL tracing is removed/redacted - must NOT appear in v3 OTEL metrics, span attributes, or logs; protocol wire types in `unsafe_local_wire.rs` adapt for ComponentSession handshake | `ADR046-primitives-003` |
 | `d2b-guest-shell-runner` | production-reachable | Static guest helper for persistent shell feasibility; callers: unsafe-local shell path in d2bd | REPLACE | Persistent shell becomes a `Process` child of user-only `Host`; uses normal Process Providers; no-isolation warning required in CLI output and audit; no Guest involvement | `ADR046-primitives-003` |
 
 ---
@@ -615,24 +615,24 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 
 | Module / Option | Evidence | Current Function | Disposition | Target Option / Artifact | Work Item |
 |----------------|----------|-----------------|-------------|--------------------------|-----------|
-| `options-realms.nix` — `options.d2b.realms` | nix-emitted | Realm declaration schema; attr set of realm configs | ADAPT | **`d2b.zones`** option; direct rename + schema update; add `retainedGenerations` sub-option (default `3`, range `1..16`) for cleanup contract | `ADR046-identities-002` |
-| `options-realms-workloads.nix` — `d2b.realms.<r>.workloads.<w>` | nix-emitted | Realm-native workload declaration (runtime.kind: nixos/qemu-media); wraps legacy `d2b.vms.<vm>` | ADAPT | Flat `d2b.zones.<z>.resources.<name> = { type = "Guest"; spec = { ... }; }` (or `type = "Process"`) declarations; guest NixOS system closure moves to `d2b.artifacts.<id>` (`type = "nixos-system"`); Guest spec uses `spec.systemArtifactId = "<id>"`; any inline `nixosSystem`/derivation field inside `spec` is removed | `ADR046-identities-002` |
-| `options-realms-workloads.nix` — `vmsRef` link to `d2b.vms.<vm>` | nix-emitted | Compatibility bridge: realm workload wraps legacy VM entry | DELETE | Remove after `d2b.vms` entries migrate to Zone Guest resources | `ADR046-identities-002` |
-| `options.nix` / `options-*.nix` — `d2b.vms.<vm>` | nix-emitted | Legacy NixOS VM declaration; many fields per-VM | ADAPT | Flat `d2b.zones.<z>.resources.<name> = { type = "Guest"; spec = { ... }; }` under the target zone; direct rename migration; NixOS system closure moves to `d2b.artifacts.<id>` (`type = "nixos-system"`); Guest spec uses `spec.systemArtifactId = "<id>"`; any inline derivation field inside `spec` is removed | `ADR046-identities-002` |
-| `options.nix` — `d2b.site.*` | nix-emitted | Site-wide policy options | RETAIN/ADAPT | `Host` ResourceSpec site policy | `ADR046-primitives-002` |
-| `default.nix` — module aggregator | nix-emitted | Imports all nixos-modules; wires options to activation | ADAPT | Update imports for renamed modules and Zone layout | `ADR046-identities-002` |
+| `options-realms.nix` - `options.d2b.realms` | nix-emitted | Realm declaration schema; attr set of realm configs | ADAPT | **`d2b.zones`** option; direct rename + schema update; add `retainedGenerations` sub-option (default `3`, range `1..16`) for cleanup contract | `ADR046-identities-002` |
+| `options-realms-workloads.nix` - `d2b.realms.<r>.workloads.<w>` | nix-emitted | Realm-native workload declaration (runtime.kind: nixos/qemu-media); wraps legacy `d2b.vms.<vm>` | ADAPT | Flat `d2b.zones.<z>.resources.<name> = { type = "Guest"; spec = { ... }; }` (or `type = "Process"`) declarations; guest NixOS system closure moves to `d2b.artifacts.<id>` (`type = "nixos-system"`); Guest spec uses `spec.systemArtifactId = "<id>"`; any inline `nixosSystem`/derivation field inside `spec` is removed | `ADR046-identities-002` |
+| `options-realms-workloads.nix` - `vmsRef` link to `d2b.vms.<vm>` | nix-emitted | Compatibility bridge: realm workload wraps legacy VM entry | DELETE | Remove after `d2b.vms` entries migrate to Zone Guest resources | `ADR046-identities-002` |
+| `options.nix` / `options-*.nix` - `d2b.vms.<vm>` | nix-emitted | Legacy NixOS VM declaration; many fields per-VM | ADAPT | Flat `d2b.zones.<z>.resources.<name> = { type = "Guest"; spec = { ... }; }` under the target zone; direct rename migration; NixOS system closure moves to `d2b.artifacts.<id>` (`type = "nixos-system"`); Guest spec uses `spec.systemArtifactId = "<id>"`; any inline derivation field inside `spec` is removed | `ADR046-identities-002` |
+| `options.nix` - `d2b.site.*` | nix-emitted | Site-wide policy options | RETAIN/ADAPT | `Host` ResourceSpec site policy | `ADR046-primitives-002` |
+| `default.nix` - module aggregator | nix-emitted | Imports all nixos-modules; wires options to activation | ADAPT | Update imports for renamed modules and Zone layout | `ADR046-identities-002` |
 | `assertions.nix` | nix-emitted | Eval-time invariants: CIDR overlap, platform gate, VM-name regex | RETAIN/ADAPT | Update realm→Zone references; add Zone ResourceSpec invariants | `ADR046-identities-002` |
-| `index.nix` — `cfg._index.realms.*` | nix-emitted | Internal normalized realm/workload/env index; callers: many modules | ADAPT | `cfg._index.zones.*` — rename all internal index keys | `ADR046-identities-002` |
+| `index.nix` - `cfg._index.realms.*` | nix-emitted | Internal normalized realm/workload/env index; callers: many modules | ADAPT | `cfg._index.zones.*` - rename all internal index keys | `ADR046-identities-002` |
 | `network.nix` / `net.nix` | nix-emitted | Per-env bridges + auto-declared net VM; `lib.mkForce` neutralization | RETAIN/ADAPT | Update `NetEnv` → `Network` resource wiring | `ADR046-primitives-002` |
 | `store.nix` | nix-emitted | Per-VM `/nix/store` hardlink farm; `virtiofsd --shared-dir` | RETAIN/ADAPT | `Volume` resource (store-view farm) per Guest; keep security semantics | `ADR046-primitives-002` |
-| `manifest.nix` | nix-emitted | `manifestVersion`-pinned JSON manifest; emits `/etc/d2b/manifest.json` | RETAIN | Keep manifest contract; bump `manifestVersion` on field changes | — |
+| `manifest.nix` | nix-emitted | `manifestVersion`-pinned JSON manifest; emits `/etc/d2b/manifest.json` | RETAIN | Keep manifest contract; bump `manifestVersion` on field changes | - |
 | `realm-controller-config-json.nix` | nix-emitted | Emits `realm-controllers.json` for each enabled realm; includes allocator socket ref | ADAPT | Emit `zones.json` Zone resource entries; rename artifact | `ADR046-identities-002` |
 | `allocator-json.nix` | nix-emitted | Emits `/etc/d2b/allocator.json` (`rootSocket`, `configPath`) | DELETE | No separate allocator service; remove artifact; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-001` |
 | `host-broker.nix` | nix-emitted | Declares local-root broker socket+service units; per-realm socket units (`d2b-r-<realm>-broker.socket`) as socket-activated PID1 units at `b5ddbed6` | ADAPT | Per-Zone socket units → parent-spawned Zone broker `Process`; per ADR 0046 D006 remove per-realm PID1 socket units; keep local-root `d2b-priv-broker.socket` only | `ADR046-core-001` |
 | `host-controller.nix` | nix-emitted | Declares `d2bd.socket`, `d2bd.service` (local-root controller) | RETAIN/ADAPT | Keep local-root `d2bd.service`; update to Zone runtime entrypoint | `ADR046-core-001` |
 | `host-activation.nix` | nix-emitted | Activation helper setup; key generation; polkit rules | RETAIN/ADAPT | Keep activation; update to Zone resource model | `ADR046-primitives-003` |
 | `host-users.nix` | nix-emitted | `d2b` group; per-VM users (`d2b-<vm>-*`); polkit surface | RETAIN/ADAPT | Keep `d2b` group authz surface; per-Guest principal generation | `ADR046-primitives-002` |
-| `host-keys.nix` | nix-emitted | Framework-owned SSH keys `${keysDir}/<vm>_ed25519` | RETAIN/ADAPT | Per-Guest key in Zone key store | — |
+| `host-keys.nix` | nix-emitted | Framework-owned SSH keys `${keysDir}/<vm>_ed25519` | RETAIN/ADAPT | Per-Guest key in Zone key store | - |
 | `bundle-artifacts.nix` | nix-emitted | Central bundle artifact install table (`root:d2bd` 0640) | RETAIN/ADAPT | Add Zone resource bundle artifacts; keep install semantics | `ADR046-primitives-002` |
 | `processes-json.nix` | nix-emitted | Emits `processes.json` (per-VM `ProcessRole` spawn config) | ADAPT | Zone Process resource spawn config | `ADR046-primitives-002` |
 | `storage.json` Nix emitter | nix-emitted | Per-VM storage lifecycle contract (`ADR 0034`) | ADAPT | `Volume` resource lifecycle config per Guest | `ADR046-primitives-002` |
@@ -641,7 +641,7 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 | `components/tpm.nix` | nix-emitted | Per-VM swtpm 2.0 | RETAIN/ADAPT | TPM Device resource per Guest | `ADR046-primitives-002` |
 | `components/usbip.nix` | nix-emitted | USBIP passthrough eval-time gating | RETAIN/ADAPT | `Device` resource (USBIP) per Guest/Host | `ADR046-primitives-002` |
 | `components/audio/{guest,host}.nix` | nix-emitted | vhost-user-sound + PipeWire mediation | RETAIN/ADAPT | Audio Device/Provider resource | `ADR046-provider-001` |
-| `components/home-manager.nix` | nix-emitted | HM-as-NixOS-module inside guest | RETAIN | Guest NixOS config; no framework changes | — |
+| `components/home-manager.nix` | nix-emitted | HM-as-NixOS-module inside guest | RETAIN | Guest NixOS config; no framework changes | - |
 | `minijail-profiles.nix` | nix-emitted | virtiofsd minijail profiles; `requiresStartRoot = false`; user-NS mapping | RETAIN/ADAPT | `Provider/system-minijail` bootstrap profiles per D051; keep zero-cap semantics | `ADR046-primitives-003` |
 
 ### 4.2 Generated JSON Artifacts (at `/etc/d2b/`)
@@ -650,20 +650,20 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 |----------|---------|---------------------|-------|
 | `host.json` | `host-json.nix` | ADAPT → split into `host.json` (Host ResourceSpec) + `zones/<zone>/zone.json` | VmRuntimeRow → Guest entry per Zone |
 | `realm-controllers.json` | `realm-controller-config-json.nix` | RENAME/ADAPT → `zones.json` | RealmPath → ZoneId in all entries |
-| `allocator.json` | `allocator-json.nix` | DELETE — no separate allocator service | No allocator socket; provisioning integrates into core controllers |
+| `allocator.json` | `allocator-json.nix` | DELETE - no separate allocator service | No allocator socket; provisioning integrates into core controllers |
 | `processes.json` | `processes-json.nix` | ADAPT → Zone-scoped Process resource specs | ProcessRole → ResourceSpec field |
 | `storage.json` | storage Nix emitter | ADAPT → Volume resource specs per Guest | Keep ADR 0034 lifecycle semantics |
 | `manifest.json` | `manifest.nix` | RETAIN; bump `manifestVersion` | Schema + emitter move together |
-| `provider-registry-v2.json` | `provider-registry-v2-json.nix` | ADAPT → extend for frozen Provider family | D043–D049 frozen catalog |
+| `provider-registry-v2.json` | `provider-registry-v2-json.nix` | ADAPT → extend for frozen Provider family | D043-D049 frozen catalog |
 | `privileges.json` | privileges emitter | ADAPT → BrokerOperation catalog update | Per §3 target operations |
 | `ui-colors.json` / `ui-colors.css` | `ui-colors.nix` / `niri-vm-borders.nix` | RETAIN | Not affected by Zone rename |
 | `unsafe-local-workloads.json` | `unsafe-local-workloads-json.nix` | ADAPT → user-only `Host` ResourceSpec; `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef=User/<name>`; no-isolation posture field explicit | D042 |
 | `closures.json` | `closures-json.nix` | RETAIN | Per-Guest Nix closure inventory |
 | `minijail-profiles.json` | `minijail-profiles.nix` | ADAPT → Provider/system-minijail profiles | D051 |
-| `zones/<zone>/bundle/generation-<N>.json` | new Zone bundle emitter | NEW — integrity-pinned Zone resource bundle; canonical sorted ResourceSpec JSON (type, spec, metadata.name, metadata.zone, apiVersion only); generation ID = SHA-256 of sorted canonical JSON; `metadata.managedBy` and `metadata.configurationGeneration` are NOT in the bundle — core sets them on persisted records at activation | §0.2 bundle/generation emission contract |
-| `zones/<zone>/bundle/current-generation` | new Zone bundle emitter | NEW — active generation pointer (symlink or ID file) | §0.2 cleanup contract; prior bundles retained up to `retainedGenerations` count (default 3, range 1..16) |
-| `zones/<zone>/providers/<name>/settings-<N>.json` | new Provider settings emitter | NEW — signed provider-specific settings artifact per Provider per generation; covers `providerRef + provider-specific spec fields + generation`; validated by Zone runtime before activation | §0.2 signed Provider schema validation |
-| `/etc/d2b/artifact-catalog.json` | new artifact catalog emitter | NEW — private integrity-pinned artifact catalog; maps each `d2b.artifacts.<id>` to `type`, SHA-256 content digest, `storePath`, and closure metadata; installed `root:d2bd` 0640 by Nix activation; `storePath` is private catalog data — must NOT appear in any public ResourceSpec field, status field, audit event, log line, metric label, or span attribute | §0.2 artifact catalog |
+| `zones/<zone>/bundle/generation-<N>.json` | new Zone bundle emitter | NEW - integrity-pinned Zone resource bundle; canonical sorted ResourceSpec JSON (type, spec, metadata.name, metadata.zone, apiVersion only); generation ID = SHA-256 of sorted canonical JSON; `metadata.managedBy` and `metadata.configurationGeneration` are NOT in the bundle - core sets them on persisted records at activation | §0.2 bundle/generation emission contract |
+| `zones/<zone>/bundle/current-generation` | new Zone bundle emitter | NEW - active generation pointer (symlink or ID file) | §0.2 cleanup contract; prior bundles retained up to `retainedGenerations` count (default 3, range 1..16) |
+| `zones/<zone>/providers/<name>/settings-<N>.json` | new Provider settings emitter | NEW - signed provider-specific settings artifact per Provider per generation; covers `providerRef + provider-specific spec fields + generation`; validated by Zone runtime before activation | §0.2 signed Provider schema validation |
+| `/etc/d2b/artifact-catalog.json` | new artifact catalog emitter | NEW - private integrity-pinned artifact catalog; maps each `d2b.artifacts.<id>` to `type`, SHA-256 content digest, `storePath`, and closure metadata; installed `root:d2bd` 0640 by Nix activation; `storePath` is private catalog data - must NOT appear in any public ResourceSpec field, status field, audit event, log line, metric label, or span attribute | §0.2 artifact catalog |
 
 ---
 
@@ -690,7 +690,7 @@ ADR 0046 target: parent-spawned Zone broker and controller processes (not PID1 u
 | `d2b-r-<realm>-broker.socket` | nix-emitted; PID1 socket activation | DELETE | Allocator pre-binds and parent-spawns Zone broker per ADR 0046 D006 |
 | `d2b-r-<realm>-broker.service` | nix-emitted; PID1 service | DELETE | Replaced by parent-spawned `d2bbr-r-<zone-id>` process |
 | `d2b-r-<realm>-controller.service` | nix-emitted; PID1 service | DELETE | Replaced by parent-spawned `d2bd-r-<zone-id>` process |
-| Removal proof: no `d2b-r-*` units in `systemctl list-units` on updated host | — | Required | — |
+| Removal proof: no `d2b-r-*` units in `systemctl list-units` on updated host | - | Required | - |
 
 ### 5.3 Per-VM Sidecar Units (ADAPT to Zone-scoped Processes)
 
@@ -707,9 +707,9 @@ ADR 0046 target: parent-spawned Zone broker and controller processes (not PID1 u
 
 | Unit | Disposition |
 |------|-------------|
-| `d2b-activation-helper.service` | RETAIN/ADAPT — activation `EphemeralProcess` |
+| `d2b-activation-helper.service` | RETAIN/ADAPT - activation `EphemeralProcess` |
 | `d2b-sysctl.service` | RETAIN |
-| `d2b-network@<env>.service` | ADAPT — Network resource provisioning |
+| `d2b-network@<env>.service` | ADAPT - Network resource provisioning |
 | `d2b-keys-init.service` | RETAIN |
 
 ---
@@ -720,7 +720,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 
 | Current CLI Verb | Evidence | Current Handler | Disposition | Target ResourceOp / Notes |
 |-----------------|----------|-----------------|-------------|--------------------------|
-| `d2b vm list` | production-reachable | `WorkloadOp::List` in wire; **no d2bd handler** at `b5ddbed6` | ADAPT | `resource list Guest` — wire handler wiring required | `ADR046-api-001` |
+| `d2b vm list` | production-reachable | `WorkloadOp::List` in wire; **no d2bd handler** at `b5ddbed6` | ADAPT | `resource list Guest` - wire handler wiring required | `ADR046-api-001` |
 | `d2b vm status <workload>.<realm>.d2b` | production-reachable | `WorkloadOp::Status`; **no d2bd handler** | ADAPT | `resource get Guest/<name>` in Zone scope | `ADR046-api-001` |
 | `d2b vm up/down/switch` | production-reachable | VM lifecycle; d2bd admin handler | ADAPT | `resource apply/delete Guest/<name>` | `ADR046-api-001` |
 | `d2b vm exec [-d] <vm> -- <cmd>` | production-reachable | `ExecOp`; `exec_session.rs` | ADAPT | ComponentSession `Exec` service; keep admin gate | `ADR046-session-001` |
@@ -729,7 +729,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `d2b launch <item>` | production-reachable | Launcher item from private bundle; admin gate | ADAPT | `EphemeralProcess` launch via Provider catalog | `ADR046-provider-001` |
 | `d2b keys rotate [<vm>]` | production-reachable | `KeysOp`; broker `KeyRotation` | RETAIN/ADAPT | Keep; route through `Provider/system-core` key resource | `ADR046-primitives-003` |
 | `d2b host prepare [--apply]` | production-reachable | `HostPrepare` broker op; nftables/bridge/cgroup setup | ADAPT | `Host` resource initialize; Zone bootstrap | `ADR046-primitives-002` |
-| `d2b op inspect` | production-reachable | Operation trace/status | RETAIN | Keep bounded inspect per observability spec | — |
+| `d2b op inspect` | production-reachable | Operation trace/status | RETAIN | Keep bounded inspect per observability spec | - |
 | `d2b realm list` / `d2b realm inspect` | production-reachable | Lists realm controller status | ADAPT | `resource list Zone` / `resource get Zone/<name>` | `ADR046-api-001` |
 | `d2b userd *` | production-reachable | Stub exits 78; lib has `UserExecSession`/`UserSocketPolicy` traits | DELETE | Remove public `d2b userd` verb and service stub after parity with fixed user supervisor Process under `Provider/system-systemd` user domain | `ADR046-primitives-003` |
 | `d2b wayland-proxy *` | production-reachable | Wayland cross-domain proxy verbs | ADAPT | Provider process worker in graphics Provider | `ADR046-provider-001` |
@@ -747,7 +747,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `/run/d2b/d2bd.sock` | `d2bd.socket` | RETAIN | Zone runtime public socket | |
 | `/run/d2b/broker.sock` | `d2b-priv-broker.socket` | RETAIN | Local-root broker socket | |
 | `/run/d2b/allocator.sock` | config ref; engine not live at `b5ddbed6` | DELETE | No separate allocator socket; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-001` |
-| `/run/d2b/r-<realm>/` | per-realm runtime directory | ADAPT | `/run/d2b/z-<zone-id>/` — rename | |
+| `/run/d2b/r-<realm>/` | per-realm runtime directory | ADAPT | `/run/d2b/z-<zone-id>/` - rename | |
 | `/run/d2b/r-<realm>/broker.sock` | per-realm broker socket | ADAPT | Pre-bound by Zone runtime allocator per ADR 0046; move to Zone runtime directory | `ADR046-core-001` |
 | `/sys/fs/cgroup/d2b.slice/` | broker cgroup delegation | RETAIN | Zone-scoped cgroup leaves; no top-level rename needed | |
 | `${XDG_RUNTIME_DIR}/d2b-runtime-systemd-user.sock` | `d2b-unsafe-local-helper` (user-owned) | ADAPT | user-only `Host` runtime socket; ComponentSession replaces helper protocol per D042/D051; no-isolation posture label preserved in all socket-level audit | |
@@ -790,7 +790,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `WorkloadOp` / `WorkloadListResult` / `WorkloadPublicSummary` wire types | `resource list Guest` integration test passes via `ResourceOp` path; `grep -r WorkloadOp packages/ --include='*.rs'` returns zero results |
 | `RelayProvider` trait (dead trait deletion) | `grep -r RelayProvider packages/ --include='*.rs'` returns zero results |
 
-### 8.3 Cleanup Contract Tests (§0.2 — required for every spec work item)
+### 8.3 Cleanup Contract Tests (§0.2 - required for every spec work item)
 
 Each spec work item must add tests at the locations below. These are the minimum; specs may
 add additional layer for their ResourceType-specific cleanup semantics.
@@ -851,9 +851,9 @@ ADR 0045 assumptions must NOT be carried over.
 
 ---
 
-### 9.1 `d2b-session` — ComponentSession v2 Runtime
+### 9.1 `d2b-session` - ComponentSession v2 Runtime
 
-Main crate: `packages/d2b-session/` — crate-level doc: "Portable ComponentSession v2 runtime.
+Main crate: `packages/d2b-session/` - crate-level doc: "Portable ComponentSession v2 runtime.
 Transport-specific socket and descriptor handling is intentionally outside this crate."
 Not present on v3 baseline.
 
@@ -894,7 +894,7 @@ Not present on v3 baseline.
 
 ---
 
-### 9.2 `d2b-session-unix` — Unix/vsock Transport Adapters
+### 9.2 `d2b-session-unix` - Unix/vsock Transport Adapters
 
 Main crate: `packages/d2b-session-unix/`. Not present on v3 baseline.
 
@@ -924,37 +924,37 @@ Main crate: `packages/d2b-session-unix/`. Not present on v3 baseline.
 
 ---
 
-### 9.3 `d2b-contracts` — Wire Contract Modules
+### 9.3 `d2b-contracts` - Wire Contract Modules
 
-**`v2_component_session.rs`** — All constants and binary contract types.
+**`v2_component_session.rs`** - All constants and binary contract types.
 
 | Symbol Group (a1cc0b2d) | Symbols | v3 Destination | Excluded Assumptions |
 |------------------------|---------|----------------|----------------------|
-| Protocol constants | `PREFACE_MAGIC`, `COMPONENT_SESSION_MAJOR/MINOR`, `MAX_HANDSHAKE_OFFER_BYTES`, `HANDSHAKE_OFFER_CANONICAL_LEN`, `ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN`, `MAX_PROTECTED_CIPHERTEXT_BYTES`, `NOISE_TAG_BYTES`, `RECORD_LENGTH_BYTES`, `MAX_PROTECTED_PLAINTEXT_BYTES`, `MAX_LOGICAL_MESSAGE_BYTES` | `packages/d2b-contracts/src/v2_component_session.rs` (copy entire file) | None — these are wire protocol constants |
-| Stream/attachment limits | `MAX_ACTIVE_NAMED_STREAMS`, `MAX_PACKET_ATTACHMENTS`, `MAX_REQUEST_ATTACHMENTS`, `MAX_OPERATION_ATTACHMENTS`, `MAX_SESSION_ATTACHMENTS`, `MAX_PROCESS_ATTACHMENT_CREDITS`, `MAX_HOST_ATTACHMENT_CREDITS`, `RESERVED_CONTROL_FDS` | same | `MAX_HOST_ATTACHMENT_CREDITS` = 8192 — do not lower for v3 |
+| Protocol constants | `PREFACE_MAGIC`, `COMPONENT_SESSION_MAJOR/MINOR`, `MAX_HANDSHAKE_OFFER_BYTES`, `HANDSHAKE_OFFER_CANONICAL_LEN`, `ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN`, `MAX_PROTECTED_CIPHERTEXT_BYTES`, `NOISE_TAG_BYTES`, `RECORD_LENGTH_BYTES`, `MAX_PROTECTED_PLAINTEXT_BYTES`, `MAX_LOGICAL_MESSAGE_BYTES` | `packages/d2b-contracts/src/v2_component_session.rs` (copy entire file) | None - these are wire protocol constants |
+| Stream/attachment limits | `MAX_ACTIVE_NAMED_STREAMS`, `MAX_PACKET_ATTACHMENTS`, `MAX_REQUEST_ATTACHMENTS`, `MAX_OPERATION_ATTACHMENTS`, `MAX_SESSION_ATTACHMENTS`, `MAX_PROCESS_ATTACHMENT_CREDITS`, `MAX_HOST_ATTACHMENT_CREDITS`, `RESERVED_CONTROL_FDS` | same | `MAX_HOST_ATTACHMENT_CREDITS` = 8192 - do not lower for v3 |
 | Queue limits | `MAX_NAMED_STREAM_QUEUE_BYTES`, `MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES`, `MAX_TTRPC_CONTROL_QUEUE_BYTES`, `MAX_SESSION_CONTROL_QUEUE_BYTES` | same | None |
 | Timing constants | `MAX_CLOCK_SKEW_MS`, `MAX_REQUEST_LIFETIME_MS`, `LOCAL_HANDSHAKE_DEADLINE_MS`, `REMOTE_HANDSHAKE_DEADLINE_MS`, `LOCAL_RECONNECT_DEADLINE_MS`, `REMOTE_RECONNECT_DEADLINE_MS`, `MAX_RECONNECT_ATTEMPTS`, `MAX_RECONNECT_WINDOW_MS`, `MAX_KEEPALIVE_INTERVAL_MS`, `MAX_KEEPALIVE_TIMEOUT_MS` | same | None |
 | Guest credential constants | `GUEST_SESSION_CREDENTIAL_MAGIC`, `GUEST_SESSION_CREDENTIAL_SCHEMA_VERSION`, all `GUEST_SESSION_CREDENTIAL_*_BYTES`, `MAX_GUEST_BOOTSTRAP_CREDENTIAL_LIFETIME_MS`, `GUEST_SESSION_CREDENTIAL_FLAG_*` | same | None |
 | Wire types | `ComponentSessionPreface`, `LimitProfile`, `AttachmentPolicy`, `TransportBinding`, `HandshakeOffer`, `EndpointPolicy`, `EndpointPolicyIdentity`, `HandshakeAccept`, `HandshakeReject`, `ChannelId`, `RecordHeader`, `FragmentHeader`, `CloseRecord`, `CloseReason`, `KeepaliveRecord`, `RequestEnvelope`, `AdmittedDeadline`, `CancelRequest`, `CancelAck`, `AttachmentDescriptor`, `BootstrapPskBinding`, `GuestBootstrapPsk`, `GuestBootstrapCredentialV1`, `GuestSessionCredentialV1`, `GuestIdentityBindingV1`, `BootstrapPskState`, `BoundedVec<T,MIN,MAX>` | same | `HandshakeOffer.channel_binding` may contain `RealmId` / `ZoneId` encoded bytes; adapt field name in v3 |
 
-**`v2_provider.rs`** — Provider contract.
+**`v2_provider.rs`** - Provider contract.
 
 | Symbol Group (a1cc0b2d) | Symbols | v3 Destination | Excluded Assumptions |
 |------------------------|---------|----------------|----------------------|
 | Constants | `PROVIDER_SCHEMA_VERSION`, `PROVIDER_API_MAJOR/MINOR`, `MAX_PROVIDER_CAPABILITIES`, `MAX_PROVIDER_REGISTRY_ENTRIES`, `MAX_PROVIDER_PLAN_RESOURCES`, `MAX_CREDENTIAL_OPERATION_CLASSES`, `MAX_PROVIDER_REQUEST_LIFETIME_MS`, `MAX_PROVIDER_LEASE_LIFETIME_MS`, `MAX_PROVIDER_DRAIN_MS`, `MAX_OBSERVABILITY_*`, `MAX_SAFE_JSON_INTEGER`, `PROVIDER_CONTRACT_FINGERPRINT` | `packages/d2b-contracts/src/v2_provider.rs` | None |
-| `ProviderType` enum | 11 variants: `Runtime, Infrastructure, Transport, Substrate, Credential, Display, Network, Storage, Device, Audio, Observability` | same | Do NOT add variants; frozen catalog per D043–D049 |
+| `ProviderType` enum | 11 variants: `Runtime, Infrastructure, Transport, Substrate, Credential, Display, Network, Storage, Device, Audio, Observability` | same | Do NOT add variants; frozen catalog per D043-D049 |
 | `ProviderMethod` enum | All ~50 methods across all axes (Runtime*, Infrastructure*, Transport*, Substrate*, Credential*, Display*, Network*, Storage*, Device*, Audio*, Observability*) | same | Frozen; do NOT add methods |
 | Core types | `ProviderDescriptor`, `ProviderCapabilitySet`, `ProviderCapability`, `ProviderFactoryKey`, `ProviderApiVersion`, `ProviderAuthority`, `NetworkPosture`, `DeviceMediationPosture`, `ProviderContractError` | same | `ProviderAuthority` may reference main-specific realm auth; review for v3 |
 
-**`v2_services.rs`** — Service inventory.
+**`v2_services.rs`** - Service inventory.
 
 | Symbol Group (a1cc0b2d) | Symbols | v3 Destination | Excluded Assumptions |
 |------------------------|---------|----------------|----------------------|
-| Service constants | `MAX_PROTOBUF_MESSAGE_BYTES`, `MAX_SERVICE_STRING_BYTES`, `MAX_PAGE_CURSOR_BYTES`, `MAX_PAGE_SIZE`, `MAX_OBSERVATIONS`, `DIGEST_BYTES`, `MAX_ALLOCATOR_*`, `MAX_REALM_CHILD_FDS`, `CONTROLLER/BROKER_PIDFD_ATTACHMENT_INDEX`, all `MAX_DAEMON_*` | `packages/d2b-contracts/src/v2_services.rs` | `MAX_DAEMON_REALMS`/`MAX_DAEMON_WORKLOADS` — update counts for Zone model |
+| Service constants | `MAX_PROTOBUF_MESSAGE_BYTES`, `MAX_SERVICE_STRING_BYTES`, `MAX_PAGE_CURSOR_BYTES`, `MAX_PAGE_SIZE`, `MAX_OBSERVATIONS`, `DIGEST_BYTES`, `MAX_ALLOCATOR_*`, `MAX_REALM_CHILD_FDS`, `CONTROLLER/BROKER_PIDFD_ATTACHMENT_INDEX`, all `MAX_DAEMON_*` | `packages/d2b-contracts/src/v2_services.rs` | `MAX_DAEMON_REALMS`/`MAX_DAEMON_WORKLOADS` - update counts for Zone model |
 | `ServiceSpec`, `SERVICE_INVENTORY` | Static service spec array with all ~20 services (daemon, guest, realm, provider_*, clipboard, shell, terminal, security_key, wayland, notify, activation, tty, user, runtime_systemd_user) | same | `SERVICE_INVENTORY` references service names by string; update service names that change with Zone rename |
 | `StrictWireMessage` trait | Used by `serve_ttrpc_services` and generated clients | same | Clean copy |
 
-**`generated_v2_services/`** — Generated protobuf+ttrpc bindings. Copy all 26 files:
+**`generated_v2_services/`** - Generated protobuf+ttrpc bindings. Copy all 26 files:
 
 | Files (a1cc0b2d) | v3 Destination | Excluded ADR 0045 Assumptions |
 |-----------------|----------------|-------------------------------|
@@ -987,13 +987,13 @@ Main crate: `packages/d2b-session-unix/`. Not present on v3 baseline.
 
 ---
 
-### 9.4 `d2b-provider` — Provider Runtime
+### 9.4 `d2b-provider` - Provider Runtime
 
 Main crate: `packages/d2b-provider/`. Not present on v3 baseline.
 
 | File (a1cc0b2d) | Symbols to Copy/Adapt | Selected Behavior | v3 Destination | Excluded Assumptions |
 |----------------|----------------------|------------------|----------------|----------------------|
-| `d2b-provider/src/registry.rs` | `ProviderRegistry`, `ProviderRegistryBuilder` (with `limits`, `register_factory`, `register_instance`, `register_constructed`, `finish`), `ProviderRegistryManager`, `AdmittedProvider`, `InFlightPermit`, `RegistryLimits`, `AdmissionOptions`, `RegistryLifecycle`, `ProviderRegistrySnapshot` | Thread-safe provider registry with limits; atomic swap via `ProviderRegistryManager`; per-request admission permits; lifecycle snapshot | `packages/d2b-provider/src/registry.rs` | `ProviderRegistryV2` import — v3 uses `provider_registry_v2.json`; update registry entry type to v3 bundle format |
+| `d2b-provider/src/registry.rs` | `ProviderRegistry`, `ProviderRegistryBuilder` (with `limits`, `register_factory`, `register_instance`, `register_constructed`, `finish`), `ProviderRegistryManager`, `AdmittedProvider`, `InFlightPermit`, `RegistryLimits`, `AdmissionOptions`, `RegistryLifecycle`, `ProviderRegistrySnapshot` | Thread-safe provider registry with limits; atomic swap via `ProviderRegistryManager`; per-request admission permits; lifecycle snapshot | `packages/d2b-provider/src/registry.rs` | `ProviderRegistryV2` import - v3 uses `provider_registry_v2.json`; update registry entry type to v3 bundle format |
 | `d2b-provider/src/rpc.rs` | `RpcProviderProxy`, `AuthenticatedProviderRpc` trait, `RpcOperation`, `RpcCall<'a>`, `RpcResponse`, `SessionIdentity`, `ProviderClock` trait, `SystemProviderClock` | Over-session provider RPC proxy: dispatches operations through a live ComponentSession to a remote provider-agent; `SessionIdentity` binds the session to a provider call | `packages/d2b-provider/src/rpc.rs` | `SessionIdentity` includes `RealmId` / `ZoneId` field; adapt field name |
 | `d2b-provider/src/instance.rs` | `ProviderInstance` enum (local vs proxy), `ProviderFactory` trait | Unified in-process / over-session provider dispatch; `ProviderFactory` for registry-constructed instances | `packages/d2b-provider/src/instance.rs` | No domain assumptions |
 | `d2b-provider/src/context.rs` | `OwnedOperationContext`, `CancellationToken`, all context methods (`operation`, `cancellation`, `is_cancelled`, `remaining`, `call_context`) | Deadline-aware operation context propagated to provider implementations | `packages/d2b-provider/src/context.rs` | No domain assumptions; clean copy |
@@ -1017,7 +1017,7 @@ Main crate: `packages/d2b-provider/`. Not present on v3 baseline.
 
 ---
 
-### 9.5 `d2b-provider-toolkit` — Provider-Agent Adapter and Conformance
+### 9.5 `d2b-provider-toolkit` - Provider-Agent Adapter and Conformance
 
 Main crate: `packages/d2b-provider-toolkit/`. Not present on v3 baseline.
 
@@ -1039,13 +1039,13 @@ Main crate: `packages/d2b-provider-toolkit/`. Not present on v3 baseline.
 
 ---
 
-### 9.6 `d2b-gateway-runtime` — Provider-Agent Process Binary
+### 9.6 `d2b-gateway-runtime` - Provider-Agent Process Binary
 
 Main crate: `packages/d2b-gateway-runtime/`. Not present on v3 baseline.
 
 | File (a1cc0b2d) | Symbols to Copy/Adapt | Selected Behavior | v3 Destination | Excluded Assumptions |
 |----------------|----------------------|------------------|----------------|----------------------|
-| `d2b-gateway-runtime/src/provider_agent.rs` | `ProviderAgentProcess`, `from_registry`, `from_registry_with`, `service_names`, `audit_snapshot`, `run_registered`, `run`, `ProviderAgentAuditEvent`, `ProviderAgentAuditOutcome`, `ProviderAgentError` | Top-level provider-agent binary lifecycle: builds `GeneratedProviderServiceServer` from `ProviderAgentAdapter`, accepts ComponentSession connections, drives ttrpc service dispatch, emits bounded audit events | `packages/d2b-gateway-runtime/src/provider_agent.rs` (or new `packages/d2b-provider-agent/src/`) | Do NOT copy `aca_workload.rs` — ACA-specific; do NOT copy `d2b-gateway/` (orchestrator uses main's Zone model); do NOT copy `production.rs` if it references main-specific registry V3 or gateway enrollment paths |
+| `d2b-gateway-runtime/src/provider_agent.rs` | `ProviderAgentProcess`, `from_registry`, `from_registry_with`, `service_names`, `audit_snapshot`, `run_registered`, `run`, `ProviderAgentAuditEvent`, `ProviderAgentAuditOutcome`, `ProviderAgentError` | Top-level provider-agent binary lifecycle: builds `GeneratedProviderServiceServer` from `ProviderAgentAdapter`, accepts ComponentSession connections, drives ttrpc service dispatch, emits bounded audit events | `packages/d2b-gateway-runtime/src/provider_agent.rs` (or new `packages/d2b-provider-agent/src/`) | Do NOT copy `aca_workload.rs` - ACA-specific; do NOT copy `d2b-gateway/` (orchestrator uses main's Zone model); do NOT copy `production.rs` if it references main-specific registry V3 or gateway enrollment paths |
 | `d2b-gateway-runtime/src/audit_jsonl.rs` | JSONL audit writer | Bounded audit event sink for provider-agent | same target | No domain assumptions |
 
 **Tests**:
@@ -1067,14 +1067,14 @@ routing inside d2bd and are reuse sources for the Zone runtime's provider dispat
 | File (a1cc0b2d) | Symbols to Copy/Adapt | Selected Behavior | v3 Destination | Excluded Assumptions |
 |----------------|----------------------|------------------|----------------|----------------------|
 | `d2bd/src/provider_registry.rs` | `HostProviderComposition`, `compose_host_provider_registry`, `AgentProviderComposition`, `compose_agent_provider_registry`, `StartupProviderRegistry` (with `registry()`, `runtime_route()`), `HostProviderBinding`, `AgentProviderBinding`, `RuntimeLifecycleInvocation`, `ProviderLifecycleDeadline`, `invoke_runtime_lifecycle`, `probe_startup_registry`, `load_provider_registry_v2`, `compose_startup_registry_with_policy` | Load `provider_registry_v2.json` from bundle; compose `ProviderRegistry` from host-resident and agent-provider bindings; manage startup probe and lifecycle invocation; `runtime_route(vm)` resolves which provider serves a given workload | `packages/d2bd/src/provider_registry.rs` | `ProviderRegistryEntryV2` references `WorkloadId` / `RealmId` keys; adapt to Zone-scoped Guest reference; `vm: &str` arg → `ResourceRef<Guest>` |
-| `d2bd/src/provider_effects.rs` | `DaemonEffectAdapters`, `DaemonEffectAdaptersBuilder`, all per-axis effect/query adapters (`DeviceEffectAdapter`, `AudioEffectAdapter`, `ObservabilityEffectAdapter`, `ProviderLifecycleDispatch`, etc.) | Effect adapter layer: translates provider operation results into d2bd-internal side effects (device state, audio session, observability export); isolated from wire framing | `packages/d2bd/src/provider_effects.rs` | `DeviceEffectPort`, `AudioEffectPort`, etc. — these trait bounds may reference main-specific effect types; verify each port trait's dependency on main vs v3 symbols |
-| `d2bd/src/control_services/provider.rs` | `DaemonServiceV2<H>`, `serve_daemon_session`, `DaemonSeqpacketTransport`, `daemon_endpoint_policy`, `daemon_channel_binding`, `DaemonPeerRole`, `DaemonAdapter`, `DaemonMethod`, `DaemonServiceFailure`, `DaemonCallContext`, `DaemonOperationHandler` trait | ComponentSession-based daemon public socket handler: accept seqpacket, build `UnixSeqpacketTransport`, negotiate handshake, dispatch `DaemonAdapter` methods (workload list, exec, shell, console, realm, provider, etc.) | `packages/d2bd/src/control_services/provider.rs` (rename to `daemon.rs` in v3 or merge with existing `lib.rs` dispatcher) | `daemon_channel_binding(uid, gid)` — binding includes `RealmId`-derived component; review computation for v3 identity model |
+| `d2bd/src/provider_effects.rs` | `DaemonEffectAdapters`, `DaemonEffectAdaptersBuilder`, all per-axis effect/query adapters (`DeviceEffectAdapter`, `AudioEffectAdapter`, `ObservabilityEffectAdapter`, `ProviderLifecycleDispatch`, etc.) | Effect adapter layer: translates provider operation results into d2bd-internal side effects (device state, audio session, observability export); isolated from wire framing | `packages/d2bd/src/provider_effects.rs` | `DeviceEffectPort`, `AudioEffectPort`, etc. - these trait bounds may reference main-specific effect types; verify each port trait's dependency on main vs v3 symbols |
+| `d2bd/src/control_services/provider.rs` | `DaemonServiceV2<H>`, `serve_daemon_session`, `DaemonSeqpacketTransport`, `daemon_endpoint_policy`, `daemon_channel_binding`, `DaemonPeerRole`, `DaemonAdapter`, `DaemonMethod`, `DaemonServiceFailure`, `DaemonCallContext`, `DaemonOperationHandler` trait | ComponentSession-based daemon public socket handler: accept seqpacket, build `UnixSeqpacketTransport`, negotiate handshake, dispatch `DaemonAdapter` methods (workload list, exec, shell, console, realm, provider, etc.) | `packages/d2bd/src/control_services/provider.rs` (rename to `daemon.rs` in v3 or merge with existing `lib.rs` dispatcher) | `daemon_channel_binding(uid, gid)` - binding includes `RealmId`-derived component; review computation for v3 identity model |
 | `d2bd/src/provider_shutdown.rs` | `ProviderKind`, `ProviderShutdownTarget`, `ProviderRequestOutcome`, `ProviderGuestState`, `ProviderVmmExitOutcome`, `GracefulVmShutdown` trait, `CloudHypervisorShutdown` | Graceful VM shutdown via Provider RPC; maps provider-level guest states to d2bd VMM lifecycle | `packages/d2bd/src/provider_shutdown.rs` | `ProviderGuestState` field names may reference `WorkloadId`; adapt |
 | `d2bd/src/child_realm_controller_bootstrap.rs` | `ControllerBootstrap`, `ControllerBootstrapError` | Bootstrap a child realm controller process: pre-bind sockets, spawn, deliver FDs | `packages/d2bd/src/child_realm_controller_bootstrap.rs` | `RealmId` / `ZoneId` in controller bootstrap identity fields; adapt |
 
 ---
 
-### 9.8 `d2b-realm-router` at Main — Routing and Exec Table
+### 9.8 `d2b-realm-router` at Main - Routing and Exec Table
 
 The main version of `d2b-realm-router` has been significantly rewritten from v3 baseline.
 The following additions are reuse sources:
@@ -1089,30 +1089,30 @@ The following additions are reuse sources:
 
 ---
 
-### 9.9 `d2b-daemon-access` — ComponentSession Daemon Access
+### 9.9 `d2b-daemon-access` - ComponentSession Daemon Access
 
 Main additions to this crate (the v3 baseline `d2b-daemon-access` implemented `DaemonAccessApi`
 with TLS/relay; main adds the ComponentSession path).
 
 | File (a1cc0b2d) | Symbols to Copy/Adapt | Selected Behavior | v3 Destination | Excluded Assumptions |
 |----------------|----------------------|------------------|----------------|----------------------|
-| `d2b-daemon-access/src/component_session.rs` | `LocalDaemonSession`, `daemon()`, `guest(workload)` | Authenticated ComponentSession construction for local Unix socket; wraps `HostSocketConnector` + session engine; exposes `DaemonClient` and `GuestClient` | `packages/d2b-daemon-access/src/component_session.rs` | `guest(workload: &str)` — `workload` is a `WorkloadName` string; adapt to `ResourceRef<Guest>` address format |
-| `d2b-daemon-access/src/lib.rs` additions | `LocalUnixAdmissionSource`, `RemoteDaemonAccessAdmissionSource`, `RelayDaemonAccessAdmissionSource`, `LOCAL_UNIX_DAEMON_ACCESS_TRANSPORT_ID`, admission credential types | Admission source abstraction: local unix vs relay vs TLS; `LocalUnixAdmissionSource` is the primary v3 path | `packages/d2b-daemon-access/src/lib.rs` | Do NOT copy `direct_tls.rs` or `relay.rs` from main — those reference main's certificate infrastructure and relay credentials not present on v3 |
+| `d2b-daemon-access/src/component_session.rs` | `LocalDaemonSession`, `daemon()`, `guest(workload)` | Authenticated ComponentSession construction for local Unix socket; wraps `HostSocketConnector` + session engine; exposes `DaemonClient` and `GuestClient` | `packages/d2b-daemon-access/src/component_session.rs` | `guest(workload: &str)` - `workload` is a `WorkloadName` string; adapt to `ResourceRef<Guest>` address format |
+| `d2b-daemon-access/src/lib.rs` additions | `LocalUnixAdmissionSource`, `RemoteDaemonAccessAdmissionSource`, `RelayDaemonAccessAdmissionSource`, `LOCAL_UNIX_DAEMON_ACCESS_TRANSPORT_ID`, admission credential types | Admission source abstraction: local unix vs relay vs TLS; `LocalUnixAdmissionSource` is the primary v3 path | `packages/d2b-daemon-access/src/lib.rs` | Do NOT copy `direct_tls.rs` or `relay.rs` from main - those reference main's certificate infrastructure and relay credentials not present on v3 |
 
 ---
 
-### 9.10 `d2b-client` — Typed Async Client
+### 9.10 `d2b-client` - Typed Async Client
 
 Main crate: `packages/d2b-client/`. Not present on v3 baseline.
 
 | File (a1cc0b2d) | Symbols to Copy/Adapt | Selected Behavior | v3 Destination | Excluded Assumptions |
 |----------------|----------------------|------------------|----------------|----------------------|
-| `d2b-client/src/client.rs` | `Client<R,C,W>`, `ConnectedClient`, `MetadataInput`, `RetryPolicy`, `CallOptions`, `CancellationToken`, `Response`, `WallClock` trait, `SystemClock` | Typed async client: resolver-agnostic, connector-agnostic; retry policy; correlation/trace/idempotency metadata injection | `packages/d2b-client/src/client.rs` | `R: TargetResolver` — resolver type depends on v3 address format; `WorkloadName` in `DaemonLifecycleRequest::guest_proxy` → adapt to `ResourceRef<Guest>` |
+| `d2b-client/src/client.rs` | `Client<R,C,W>`, `ConnectedClient`, `MetadataInput`, `RetryPolicy`, `CallOptions`, `CancellationToken`, `Response`, `WallClock` trait, `SystemClock` | Typed async client: resolver-agnostic, connector-agnostic; retry policy; correlation/trace/idempotency metadata injection | `packages/d2b-client/src/client.rs` | `R: TargetResolver` - resolver type depends on v3 address format; `WorkloadName` in `DaemonLifecycleRequest::guest_proxy` → adapt to `ResourceRef<Guest>` |
 | `d2b-client/src/session.rs` | `ConnectedSession`, `ComponentSessionConnector` trait, `NamedStream`, `SessionFailure`, `SessionCall`, `SessionReply`, `SharedDriver` | Session-level client: drives `ComponentSessionDriver` for typed RPC; `NamedStream` for streaming services; `ComponentSessionConnector` for connection factory injection | `packages/d2b-client/src/session.rs` | No domain assumptions |
 | `d2b-client/src/service.rs` | `ServiceHandle`, `GeneratedClient` enum, `MethodHandle`, `ServiceKind` | Per-service typed handle; `GeneratedClient` dispatches to the right generated protobuf client for each service kind | `packages/d2b-client/src/service.rs` | `ServiceKind` and `GeneratedClient` reference `SERVICE_INVENTORY` and all generated service clients from `v2_services`; copy together |
 | `d2b-client/src/target.rs` | `TargetResolver` trait, `ResolvedTarget`, `ServiceOwner`, `TargetInput`, `RouteRecord`, `TransportKind`, `TransportSelection` | Target resolution: maps `TargetInput` to `ResolvedTarget` with a specific transport; extensible for local/relay/TLS | `packages/d2b-client/src/target.rs` | `ServiceOwner` enum may reference `RealmId` for realm-owned services; adapt |
-| `d2b-client/src/host_socket.rs` | `HostSocketConnector`, `local_daemon_endpoint_identity` | `ComponentSessionConnector` impl that connects to local `d2bd.sock`; computes endpoint identity from `SO_PEERCRED` | `packages/d2b-client/src/host_socket.rs` | Socket path is `PUBLIC_SOCKET_PATH` constant — matches v3 `/run/d2b/d2bd.sock`; no change needed |
-| `d2b-client/src/daemon_service.rs` | `DaemonClient`, `DaemonLifecycleRequest`, `DaemonMethod`, `DaemonTerminal`, `GuestClient`, `GuestOperation`, `GuestInspectCall`, `GuestCancelCall`, `GuestRetainedLogCall` | Typed daemon and guest service clients built on `ConnectedSession`; exec start/attach/logs/cancel; daemon lifecycle ops | `packages/d2b-client/src/daemon_service.rs` | `DaemonLifecycleRequest::guest_proxy(workload: &WorkloadName)` — adapt `WorkloadName` to `ResourceRef<Guest>` address; `GuestClient` field names may reference ADR 0045 guest types |
+| `d2b-client/src/host_socket.rs` | `HostSocketConnector`, `local_daemon_endpoint_identity` | `ComponentSessionConnector` impl that connects to local `d2bd.sock`; computes endpoint identity from `SO_PEERCRED` | `packages/d2b-client/src/host_socket.rs` | Socket path is `PUBLIC_SOCKET_PATH` constant - matches v3 `/run/d2b/d2bd.sock`; no change needed |
+| `d2b-client/src/daemon_service.rs` | `DaemonClient`, `DaemonLifecycleRequest`, `DaemonMethod`, `DaemonTerminal`, `GuestClient`, `GuestOperation`, `GuestInspectCall`, `GuestCancelCall`, `GuestRetainedLogCall` | Typed daemon and guest service clients built on `ConnectedSession`; exec start/attach/logs/cancel; daemon lifecycle ops | `packages/d2b-client/src/daemon_service.rs` | `DaemonLifecycleRequest::guest_proxy(workload: &WorkloadName)` - adapt `WorkloadName` to `ResourceRef<Guest>` address; `GuestClient` field names may reference ADR 0045 guest types |
 | `d2b-client/src/error.rs` | `ClientError`, `RemoteErrorKind`, `RetryClass` | Client error taxonomy with retry classification | `packages/d2b-client/src/error.rs` | Clean copy |
 
 **Tests**:
@@ -1129,7 +1129,7 @@ ComponentSession uses **Noise-NK** (static host key, ephemeral initiator key).
 Every Zone runtime endpoint must have a static Noise keypair. Key generation:
 - Must NOT be stored in Nix config or bundle (private key is never in a Nix store path)
 - Provisioned through `d2b keys rotate` equivalent for Zone runtime identity
-- Main uses `d2b-realm-core/src/identity_store.rs` + `identity_config.rs` for this path — copy/adapt those files alongside the session crates
+- Main uses `d2b-realm-core/src/identity_store.rs` + `identity_config.rs` for this path - copy/adapt those files alongside the session crates
 - Exact key storage path and rotation mechanism → `ADR046-session-001`
 
 ---
@@ -1141,12 +1141,12 @@ per-symbol sign-off. Each exclusion states the exact reason.
 
 | Main Symbol / File | Reason Excluded |
 |-------------------|----------------|
-| `d2b-gateway/src/orchestrator.rs` — `GatewayOrchestrator` | References main's Zone resource model and `d2b.zones` Nix inputs; v3 has no Zone runtime |
+| `d2b-gateway/src/orchestrator.rs` - `GatewayOrchestrator` | References main's Zone resource model and `d2b.zones` Nix inputs; v3 has no Zone runtime |
 | `d2b-gateway-runtime/src/aca_workload.rs` | ACA-specific workload lifecycle; depends on main's ACA Provider V2 registration path |
 | `d2b-gateway-runtime/src/production.rs` | May reference main's `provider_registry_v3.rs` or Zone-scoped enrollment; verify before copy |
 | `d2b-daemon-access/src/direct_tls.rs` | Direct TLS certificate infrastructure not present on v3 |
 | `d2b-daemon-access/src/relay.rs` | Relay credential format changed on main; v3 uses `d2b-provider-relay` format |
-| `d2b-contracts/src/v2_identity.rs` `ZoneId` field | v3 has `RealmId`; adapt field names during copy — do NOT change v3's `RealmId` type |
+| `d2b-contracts/src/v2_identity.rs` `ZoneId` field | v3 has `RealmId`; adapt field names during copy - do NOT change v3's `RealmId` type |
 | `d2b-contracts/src/v2_guest_services.rs` | References main's ADR 0045 Guest service model; v3 guest service ops use `WorkloadOp` |
 | `d2b-contracts/src/v2_guest_configured_launches.rs` | References main's configured launch model; adapt after `ADR046-provider-001` resolves |
 | `d2b-contracts/src/v2_state.rs` | Main's resource-store state types; redb schema may differ from v3 D006 embedding |

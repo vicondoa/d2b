@@ -19,10 +19,10 @@
 #     cloud-hypervisor version (v52) than upstream spectrum currently
 #     ships patches for (their latest patch tarball is for v50).
 #     Spectrum's git HEAD still tracks `pkgs.cloud-hypervisor` from
-#     whatever nixpkgs they pin (Mar 2026 = v50-era) — they have not
+#     whatever nixpkgs they pin (Mar 2026 = v50-era) - they have not
 #     yet rebased to v52, but we needed to NOW for two reasons:
 #       (a) CVE-2026-45782 (CVSS 8.9, virtio-block UAF guest→host
-#           escape) affects v21.0 – v51.1; fixed in v51.2 / v52.0.
+#           escape) affects v21.0 - v51.1; fixed in v51.2 / v52.0.
 #       (b) v52.0 is the first release to ship `--generic-vhost-user`,
 #           which the audio component (modules/d2b/audio.nix)
 #           depends on to wire vhost-device-sound into CH.
@@ -80,7 +80,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
     # duplicate shmem_map/shmem_unmap, etc.). Replaced with a single
     # minimal compat patch that adds just the two symbols the CH GPU
     # patch consumes: `VhostSharedMemoryRegion` and
-    # `get_shared_memory_regions()` — both implemented as adapters
+    # `get_shared_memory_regions()` - both implemented as adapters
     # over upstream `VhostUserShMemConfig` / `get_shmem_config()`.
     ./vhost/0003-shared-memory-region-compat.patch
   ];
@@ -100,7 +100,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
 
     # devices/src/tpm.rs at v52 logs every CRB locality request/relinquish
     # at WARN level. The kernel's TPM CRB driver writes locality-request (1)
-    # before each command and locality-relinquish (2) after — i.e. two of
+    # before each command and locality-relinquish (2) after - i.e. two of
     # these messages per TPM command. The result is the host console
     # spamming hundreds of lines per second during Himmelblau / tpm2-tools
     # activity. Demote to debug! so they only appear when the user opts in
@@ -179,7 +179,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   # sidecar). The reason is that `store.nix` references this package
   # unconditionally via `environment.systemPackages` for the
   # `ch-remote` watchdog tool, and Nix's check-meta runs at eval
-  # time the moment we override `meta` here — which would break the
+  # time the moment we override `meta` here - which would break the
   # headless-on-aarch64 invariant we explicitly preserve.
   # nixpkgs's own `pkgs.cloud-hypervisor` already carries
   # `meta.platforms = [ "x86_64-linux" ]`; we inherit that

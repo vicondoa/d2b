@@ -35,7 +35,7 @@ generation.
 
 ## Stop daemon-owned lifecycle on NixOS
 
-In v1.1 every VM is daemon-supervised by `d2bd` — there is no
+In v1.1 every VM is daemon-supervised by `d2bd` - there is no
 `d2b.vms.<vm>.supervisor` option to switch back to a systemd
 backend (the option was removed in v1.1 per ADR 0015; setting it fails
 eval). To stop using `d2bd` as the VM owner without fully
@@ -54,7 +54,7 @@ uninstalling:
    ```
 
    There are no per-VM `d2b@<vm>.service` / `microvm@<vm>.service`
-   units to stop — the daemon supervises every VM in-process.
+   units to stop - the daemon supervises every VM in-process.
 
 3. to keep the VM declared but not auto-started, set
    `d2b.vms.<vm>.autostart = false` and rebuild:

@@ -4,30 +4,30 @@
 # upgrading from a pre-public version of d2b, see CHANGELOG.md for
 # the manual migration steps.
 #
-#   * d2bSbctlBackup    — host-specific (maintainer's sbctl pipeline);
+#   * d2bSbctlBackup    - host-specific (maintainer's sbctl pipeline);
 #                             no public framework concern. Move
 #                             *-backup.tar.gz files out of $HOME by hand
 #                             if you ever ran the maintainer setup.
-#   * d2bStoreChownRepair — one-shot fix for a past chown bug that
+#   * d2bStoreChownRepair - one-shot fix for a past chown bug that
 #                             leaked group=kvm into /nix/store inodes via
 #                             the per-VM hardlink farm. Run the repair
 #                             script from the historical /etc/nixos commit
 #                             once, then forget about it. New installs are
 #                             unaffected.
-#   * d2bMigrateState   — one-shot renamer (/var/lib/microvms →
+#   * d2bMigrateState   - one-shot renamer (/var/lib/microvms →
 #                             /var/lib/d2b/vms, plus /var/lib/swtpm
 #                             → vms/<vm>/swtpm). New installs land on
 #                             the new layout from the start. Existing
 #                             consumers should use the migration script.
 #
 # What remains here
-#   - d2bVmStatePerms       — per-graphics-VM ACLs on the state dir so the
+#   - d2bVmStatePerms       - per-graphics-VM ACLs on the state dir so the
 #                                 d2b-<vm>-gpu sidecar user (not
 #                                 microvm) can read/write it. Directory
 #                                 posture is tmpfiles-owned.
-#   - d2bNetVmVarImgPerms   — compatibility tombstone; net-VM var.img
+#   - d2bNetVmVarImgPerms   - compatibility tombstone; net-VM var.img
 #                                 creation/posture is broker DiskInit-owned.
-#   - d2bMigrateOwnership   — repair orphan swtpm-state UIDs after
+#   - d2bMigrateOwnership   - repair orphan swtpm-state UIDs after
 #                                 service-user renames, gated on
 #                                 `tpm.enable` and skipped for running VMs.
 { config, pkgs, lib, ... }:
@@ -316,13 +316,13 @@ in
   # dir so they can reach the per-VM subdirectories owned by their
   # respective uid/gid. Without these ACLs, the 0750 parent mode
   # blocks traversal for users not in the `d2bd` group (which
-  # is most sidecar users — they're per-VM-scoped and never in
+  # is most sidecar users - they're per-VM-scoped and never in
   # d2bd group).
   #
   # The enumeration mirrors the user list documented in
   # `docs/reference/privileges.md` § "v1.1- state-dir ACL
   # contract". Each entry is a `--x` (execute-only / traversal)
-  # grant — the sidecar user can `chdir` into the directory but
+  # grant - the sidecar user can `chdir` into the directory but
   # not read its contents; per-VM subdirectories under it have
   # their own ACLs scoped to the same sidecar user (see
   # d2bVmStatePerms above).
@@ -344,7 +344,7 @@ in
     # 0640 root:d2b with a named-group ACL granting
     # read). Pre-v1.2fu58 the state-dir had no traversal grant
     # for `d2b`, so `d2b vm exec` failed
-    # `stat(2)` on the key path before reaching the file — even
+    # `stat(2)` on the key path before reaching the file - even
     # though the key existed and the operator was in the group.
     #
     # This is `--x` ONLY (chdir, no list / no read). Per-VM
@@ -664,7 +664,7 @@ in
               # created in the VM dir inherit the per-UID rwx
               # default ACL set on lines 308-309 below
               # (setfacl -d -m). Existing pre-fu19 files keep
-              # their previous ACL — operators must do one
+              # their previous ACL - operators must do one
               # `d2b vm restart <vm>` after upgrade so the
               # broker-spawned CH re-creates disk-image-shaped
               # files with the inherited ACL. Documented in the
@@ -988,7 +988,7 @@ in
   # altname for each user-visible bridge. Tolerates missing
   # mappings (e.g. during the first activation before the bundle
   # is staged) and re-runs cleanly on every activation (altname
-  # add is idempotent — exits 17 if the altname already exists).
+  # add is idempotent - exits 17 if the altname already exists).
   #  unified-naming compatibility. Add altnames to
   # the user-visible NixOS-created bridges so the broker's
   # ApplyRoute / ApplyNftables ops (which reference derivedIfname
@@ -1007,7 +1007,7 @@ in
   # (the altname). If `$derived` already resolves to a DIFFERENT
   # interface (foreign collision), refuse and log loudly. The
   # only acceptable failure is "altname already exists on this
-  # same interface" — re-add returns EEXIST in that case.
+  # same interface" - re-add returns EEXIST in that case.
   system.activationScripts.d2bW3IfNameAltnames = lib.stringAfter [ "users" ] ''
     if [ -f /etc/d2b/host.json ] && [ -x ${pkgs.jq}/bin/jq ] && [ -x ${pkgs.iproute2}/bin/ip ]; then
       ${pkgs.jq}/bin/jq -c '.ifNameMappings // [] | .[] | select(.derivedIfname != .userVisibleName)' \
@@ -1061,7 +1061,7 @@ in
   # re-enforce here. Legacy `store`/`store-meta` are postured only when
   # present (migrated VMs). Host-only `store-view/state`,
   # `store-view/gcroots`, and `store-view/sync.lock` are NOT touched
-  # here — they are broker-owned `d2bd:d2b`.
+  # here - they are broker-owned `d2bd:d2b`.
   #
   # Replace the `[ ! -L ] && chown && chmod` shell pattern with calls to
   # d2b-activation-helper which use O_DIRECTORY|O_NOFOLLOW +
@@ -1099,7 +1099,7 @@ in
           # directory to serve, but it must NOT recurse into the live
           # hardlink pool and must NOT touch broker-owned host-only state
           # (store-view/state, store-view/gcroots, store-view/sync.lock,
-          # integrity leaves) — those are `d2bd:d2b` and managed
+          # integrity leaves) - those are `d2bd:d2b` and managed
           # by the broker StoreSync path, never `users 0755`. Posture
           # only the runner-readable top-level paths here.
           for sub in store-view store-view/live store-view/meta; do

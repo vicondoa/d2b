@@ -1,4 +1,4 @@
-# d2b.observability.* — host-wide observability surface. Split into
+# d2b.observability.* - host-wide observability surface. Split into
 # its own file for the v0.2.0 observability track so future PRs can
 # extend the feature without reopening the baseline option schema.
 { config, lib, pkgs, ... }:

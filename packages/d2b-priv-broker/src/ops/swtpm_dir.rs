@@ -522,7 +522,7 @@ fn create_fresh_swtpm_dir(
     )
     .map_err(|_| reasons::CREATE_FAILED)?;
     // Confirm we opened a freshly-created directory (not a racing
-    // symlink/file swapped in between mkdirat and openat — openat2
+    // symlink/file swapped in between mkdirat and openat - openat2
     // NOFOLLOW already refuses a symlink, but assert the type).
     let fd_stat = path_safe::fstat_fd(dir_fd.as_fd()).map_err(|_| reasons::CREATE_FAILED)?;
     if (fd_stat.st_mode & libc::S_IFMT) != libc::S_IFDIR {

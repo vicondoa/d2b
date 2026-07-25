@@ -3,7 +3,7 @@
 - Status: Implemented in v1.1
 - Date: 2026-05-31
 - Wave: v1.1-P1 (landed)
-- Plan slice: v1.1 §"v1.1-P1 — Eliminate `exec_legacy_passthrough` and every bash fallback path"
+- Plan slice: v1.1 §"v1.1-P1 - Eliminate `exec_legacy_passthrough` and every bash fallback path"
 - Companion ADRs: [ADR 0007](0007-bash-coexistence-and-migration.md), [ADR 0010](0010-wire-protocol-and-typed-errors.md), [ADR 0015](0015-daemon-only-clean-break.md)
 - Verification: `tests/no-bash-exec-eval.sh` (3 modes); commit `3c1c019`.
 
@@ -38,7 +38,7 @@ Two residual surfaces survived into v1.0 as dead/stub code:
 2. **`should_fallback_to_legacy(args)` in `packages/d2b/src/lib.rs:3897`.**
    A predicate used by the early-dispatch path (`lib.rs:1413`) to
    route certain unrecognized argv shapes to the stub above. Its
-   allow-list was chiselled down across P0–P7 until the function
+   allow-list was chiselled down across P0-P7 until the function
    returns `false` for every shape the v1.0 CLI declares native,
    but the function and the dispatch arm remain.
 
@@ -98,8 +98,8 @@ exit codes are normative there.
 
 The `#not-yet-implemented` envelopes set `target_wave: "post-v1.1"` for
 `cmd_console`, `cmd_audio`, and audit `--strict` because their
-daemon-side implementation is NOT in the v1.1 phase plan (P1..P13)
-— v1.0 only retired the bash fallback for the *unreachable* path,
+daemon-side implementation is NOT in the v1.1 phase plan (P1..P13) -
+v1.0 only retired the bash fallback for the *unreachable* path,
 and v1.1 lands the typed-envelope rendering + remediation contract
 (per the call-site table above) but NOT the underlying verb
 implementations. v1.1-P1 retires the residual offline-fallback
@@ -118,7 +118,7 @@ not the verb implementation.
 The human-readable remediation for every `#daemon-down` and
 `#not-yet-implemented` envelope on these verbs cross-links the
 v1.1 migration guide
-(`docs/how-to/migrate-d2b-v0-to-v1.md` — future, v1.1-P12)
+(`docs/how-to/migrate-d2b-v0-to-v1.md` - future, v1.1-P12)
 so a v1.0 operator who relied on the silent-fail stub has a
 single-click path to the behaviour-delta explanation. The
 cross-link is **authoritatively wired through
@@ -141,17 +141,17 @@ tests under
   paragraph) so terminals < 80 cols do not split the path mid-
   string. **The authoritative rendering format is defined in
   [`docs/reference/error-codes.md`](../reference/error-codes.md)
-  "Remediation rendering conventions"** (resolves R22 software-r22-1
-  — the v1.1-P0 ADR/reference cross-reference contract). That
+  "Remediation rendering conventions"** (resolves R22 software-r22-1 -
+  the v1.1-P0 ADR/reference cross-reference contract). That
   reference defines TWO format variants per the deferred-verb
   category split:
-  - **Category 1 (truly deferred — `console`, `audio`,
+  - **Category 1 (truly deferred - `console`, `audio`,
     `audit --strict`)**: 5-line block emitting
     `This subcommand was queued for v1.2+ (unscheduled).` +
     `See the operator migration runbook:` + a
     repository-relative path on its own indented line +
     `Specifically the "<verb-specific anchor>" section.`
-  - **Category 2 (daemon-down only — `audit` (non-strict),
+  - **Category 2 (daemon-down only - `audit` (non-strict),
     `keys list`, `keys show`)**: 6-line block emitting
     `d2bd is not reachable. Start the daemon and re-run:`
     + two `sudo systemctl start ...` lines + `For full v1.0
@@ -210,14 +210,14 @@ without manually prepending `docs/how-to/`.
 ### CI enforcement
 
 A new eval gate `tests/no-bash-exec-eval.sh` (future, v1.1-P1)
-enforces the invariant at every commit. The gate is *layered* —
+enforces the invariant at every commit. The gate is *layered* -
 syntactic grep is the first defence and an allowlist is the
 authoritative one. Negative fixtures are stored as text-only
 `.rs.fixture` files that the Rust compiler never sees, so the
 exclusion-vs-coverage contradiction the R2 panel flagged does
 not arise.
 
-**Layer 1 — syntactic grep (fast).** Reject any of:
+**Layer 1 - syntactic grep (fast).** Reject any of:
 
 ```
 ripgrep -P 'Command::new\("(/bin/)?(ba)?sh"\)|spawn.*"/bin/sh"|/usr/bin/env\s+bash|Command::new\("d2b-legacy"\)|d2b-legacy\b|#\[path\s*=\s*"\.\./tests/fixtures/no-bash-exec/'
@@ -235,7 +235,7 @@ production `#[path = "../tests/fixtures/no-bash-exec/..."]`
 attempt to `include!` a fixture into the binary crate (the
 fixture-bypass attack the R2 security reviewer flagged).
 
-**Layer 2 — Command::new allowlist (authoritative).** A
+**Layer 2 - Command::new allowlist (authoritative).** A
 test-mode-only inventory check parses `cargo metadata --format-version 1`
 to enumerate the binary-crate compile units (Layer 2 covers
 `packages/d2b/src/`, including any `mod` files reached
@@ -319,7 +319,7 @@ negative-fixture coverage assertion:
   drops the fixture-tree exclusion and reads every `.rs.fixture`
   file as if it were `.rs`. Asserts each fixture is caught by the
   layer documented in the per-fixture coverage table below (NOT
-  by both layers blanket — different attack classes are intentionally
+  by both layers blanket - different attack classes are intentionally
   caught by different layers; the syntactic Layer 1 catches direct
   literals while Layer 2 catches indirection).
 
@@ -343,7 +343,7 @@ with explicit per-fixture expected-catch table:
 | `libc_clone.rs.fixture`                                       | direct clone syscall               | ❌              | ✅               | `libc::clone` (Layer 2 direct-syscall pass)                   |
 | `nix_execv.rs.fixture`                                        | nix crate execv                    | ❌              | ✅               | `nix::unistd::execv` (Layer 2 direct-syscall pass)            |
 | `production_include_bypass.rs.fixture`                        | `#[path]` production bypass        | ✅ (Layer 1 catches the attribute itself) | n/a (this attack would never compile into the binary if Layer 1 is in place) | `#[path = "../tests/fixtures/no-bash-exec/` (Layer 1) |
-| `macro_command_new.rs.fixture`                                | declarative macro expansion        | ✅ (CI-gate syn AST walk on cargo-expanded output catches macro-emitted `Command::new` literals; see below) | ✅ (same — both layers run the same AST walk; both fail if the literal is shell-like AND no allowlist entry exists) | `macro_rules! spawn_shell` (or ANY declarative macro emitting `Command::new(<shell-like>)`) not in `cli-spawn-wrappers-allowlist.json` → fails |
+| `macro_command_new.rs.fixture`                                | declarative macro expansion        | ✅ (CI-gate syn AST walk on cargo-expanded output catches macro-emitted `Command::new` literals; see below) | ✅ (same - both layers run the same AST walk; both fail if the literal is shell-like AND no allowlist entry exists) | `macro_rules! spawn_shell` (or ANY declarative macro emitting `Command::new(<shell-like>)`) not in `cli-spawn-wrappers-allowlist.json` → fails |
 | `macro_indirect_command_new.rs.fixture`                       | declarative macro w/ `concat!`-built target    | ✅ (AST walk fully expands `concat!()` and inspects the resulting string literal) | ✅ (same)        | `macro_rules! spawn_indirect { () => { Command::new(concat!("ba","sh")) } }` → caught after macro + concat expansion |
 
 The `macro_command_new` and `macro_indirect_command_new`
@@ -352,18 +352,18 @@ concern that grep-based macro coverage can fail open if the
 macro uses `concat!`, `format!`, or any other compile-time
 string construction. v1.1-P1 closes this with a
 **dedicated `tests/no-bash-exec-eval.sh syn-ast-walk` test
-mode** (NOT a build.rs gate — the R5 test reviewer correctly
+mode** (NOT a build.rs gate - the R5 test reviewer correctly
 flagged that build.rs invoking `cargo expand` on the same crate
 recursively re-runs the build script and is not a safe
 compile-time gate). The new test-mode contract:
 
 1. The eval gate has THREE invocations:
-   - `tests/no-bash-exec-eval.sh check` — normal CI: Layer 1
+   - `tests/no-bash-exec-eval.sh check` - normal CI: Layer 1
      grep + Layer 2 direct-literal/alias/syscall passes on
      unmodified source.
-   - `tests/no-bash-exec-eval.sh fixture-coverage` — negative
+   - `tests/no-bash-exec-eval.sh fixture-coverage` - negative
      fixture coverage (per-fixture expected-catch table).
-   - `tests/no-bash-exec-eval.sh syn-ast-walk` — macro expansion
+   - `tests/no-bash-exec-eval.sh syn-ast-walk` - macro expansion
      pass (the formerly-proposed build.rs gate, moved to a
      dedicated test-mode invocation to avoid the build-script
      recursion).
@@ -381,8 +381,8 @@ compile-time gate). The new test-mode contract:
    `concat!()` already collapsed by `cargo expand`, `const`-folded
    `&str` refs) using `syn::Expr::Lit` recursion; non-constant
    arguments (function args, runtime expressions) are checked
-   against the wrapper allowlist (`cli-spawn-wrappers-allowlist.json`)
-   — the wrapper MUST declare every literal target it forwards.
+   against the wrapper allowlist (`cli-spawn-wrappers-allowlist.json`) -
+   the wrapper MUST declare every literal target it forwards.
 4. The fail-closed contract: any unresolved/dynamic
    `Command::new(<not-statically-determinable>)` whose enclosing
    function is NOT in the wrapper allowlist causes the eval gate
@@ -397,7 +397,7 @@ is provisioned via the **flake-pinned** devShell that
 nix develop .#cargoExpandShell --command cargo expand --bin d2b --no-default-features
 ```
 
-(uses `nix develop` not `nix shell` — `.#cargoExpandShell` is a
+(uses `nix develop` not `nix shell` - `.#cargoExpandShell` is a
 `devShells.<system>.cargoExpandShell` flake-output declared in
 `flake.nix`, NOT a `packages.<system>.cargoExpandShell`. The R7
 test reviewer correctly flagged this distinction). The devShell
@@ -413,7 +413,7 @@ outputs = { self, nixpkgs, rust-overlay, ... }:
       overlays = [ rust-overlay.overlays.default ];
     };
     stableRust = pkgs.rust-bin.stable."1.94.1".default;
-    # Concrete nightly date pin — bumped only by panel-approved
+    # Concrete nightly date pin - bumped only by panel-approved
     # `v11-PNfuM` commit. The exact date below MUST match
     # tests/no-bash-exec-eval.sh's `expected_nightly` assertion.
     nightlyRust = pkgs.rust-bin.nightly."2026-04-15".default;
@@ -432,9 +432,9 @@ outputs = { self, nixpkgs, rust-overlay, ... }:
   };
 ```
 
-The nightly date `2026-04-15` is normative — `flake.nix`
+The nightly date `2026-04-15` is normative - `flake.nix`
 records the exact date; `flake.lock` pins the **`rust-overlay`**
-flake input (NOT the `nixpkgs` flake input — rust-overlay is
+flake input (NOT the `nixpkgs` flake input - rust-overlay is
 what provides `pkgs.rust-bin.nightly."2026-04-15"`; per the
 R8 test reviewer, the prior draft's "nixpkgs flake-input rev"
 wording was incorrect). `tests/no-bash-exec-eval.sh` asserts:
@@ -499,7 +499,7 @@ adversarial proc-macros. The hardening:
   **Committed `.cargo/config.toml` source replacement** at the
   workspace level is also denied: Cargo source replacement is
   configured in `.cargo/config.toml` files (NOT in `Cargo.toml`
-  package manifests — the R10 security reviewer flagged the
+  package manifests - the R10 security reviewer flagged the
   prior incorrect spec). Workspace `.cargo/config.toml` is read
   by Cargo even with a sanitized `CARGO_HOME` (the
   per-test-run `CARGO_HOME` strips host-level config, but the
@@ -533,7 +533,7 @@ adversarial proc-macros. The hardening:
   inspects the package's `targets[]` array and selects every
   package whose `targets[].kind` array contains `"proc-macro"`
   (Cargo metadata represents proc-macros as a target kind on
-  the package, NOT as a dependency `kind` — the prior draft
+  the package, NOT as a dependency `kind` - the prior draft
   saying `dependencies[].kind == "proc-macro"` was incorrect
   per R10 rust-r10-1 and would fail open or be unimplementable
   as written). Each identified proc-macro package is then
@@ -559,7 +559,7 @@ adversarial proc-macros. The hardening:
   tests/tools/no-bash-ast-walker/    @d2b-panel-rust @d2b-panel-security
   ```
   This makes the walker source as audit-controlled as the
-  allowlist itself — any modification triggers the two
+  allowlist itself - any modification triggers the two
   discipline reviewers' approval at PR-merge time.
 - The combination (cargo-expand walk + proc-macro allowlist
   with registry-url + sanitized environment + `.cargo/config*`
@@ -569,15 +569,15 @@ adversarial proc-macros. The hardening:
   macros are covered by the AST walk (provably); proc-macros
   are covered by the allowlist (governance over what crates
   can ship a spawn-emitting proc-macro) AND the sanitized
-  environment (no source-replacement attack — committed
+  environment (no source-replacement attack - committed
   `.cargo/config.toml` source replacements are scanned for and
   rejected; the prior summary saying "Cargo.toml [source] denial"
   was incorrect per R10 security-r10-1 and R11 security-r11-1:
   Cargo source replacement is declared in `.cargo/config.toml`,
   not in package `Cargo.toml` manifests); the walker
   itself is covered by the CODEOWNERS panel review. The
-  remaining gap — a malicious allowlisted proc-macro that
-  hides spawn calls from `cargo expand` — is mitigated by panel
+  remaining gap - a malicious allowlisted proc-macro that
+  hides spawn calls from `cargo expand` - is mitigated by panel
   review at allowlist edit time, and acknowledged as a residual
   risk in the v1.1 threat model. Operators who want zero
   residual risk can patch their consumer flake to deny ALL
@@ -620,7 +620,7 @@ proc-macro file, NOT in the wrapper file). Schema:
 }
 ```
 
-The `review_required_on_change: true` field is normative —
+The `review_required_on_change: true` field is normative -
 every entry MUST set it; the CODEOWNERS gate cross-references
 the entries to ensure the per-path panel review is enforced.
 `tests/no-bash-exec-eval.sh` validates the exempt-path file
@@ -647,7 +647,7 @@ end-to-end (resolves R8 security minor + R8 test minor):
    normal gate (which is the desired signal: add the
    exemption with a panel-approved rationale).
 The `macro_rules!`-name grep fallback documented in the R3
-draft is REMOVED — it was vulnerable to false positives on
+draft is REMOVED - it was vulnerable to false positives on
 non-spawning macros (e.g., `spawn_log!`) and false negatives on
 non-spawn-named macros (e.g., `cmd_factory!`) per the R4
 security review. The `syn-ast-walk` test-mode AST walk (NOT a
@@ -662,7 +662,7 @@ no-bash-exec invocations** (`check`, `fixture-coverage`,
 (`tests/proc-macro-allowlist-eval.sh`), AND the dev-tool
 proc-macro allowlist eval
 (`tests/dev-tool-proc-macro-allowlist-eval.sh`) are
-**release-blocking CI steps** — they MUST be green before any
+**release-blocking CI steps** - they MUST be green before any
 merge to `phase-daemon-only` or release tag.
 
 **Sandbox-guard scope** (resolves R12 test-r12-2): only the
@@ -681,15 +681,15 @@ proc-macro / dev-tool allowlist gates
 so the sandbox is not required for them and direct invocation
 is correct. The required CI invocation order is:
 
-1. `tests/proc-macro-allowlist-eval.sh` — direct invocation
+1. `tests/proc-macro-allowlist-eval.sh` - direct invocation
    (no sandbox needed; metadata + lock parsing only). Runs
    FIRST so an unallowlisted production proc-macro fails
    fast without invoking cargo-expand.
-2. `tests/dev-tool-proc-macro-allowlist-eval.sh` — direct
+2. `tests/dev-tool-proc-macro-allowlist-eval.sh` - direct
    invocation (same reasoning; metadata + lock parsing for
    `tests/tools/no-bash-ast-walker/` and, in v1.1-P10+,
    `tests/tools/baseline-exception-validator/`).
-3. `tests/no-bash-exec-eval-sandbox-guard.sh check` — wraps
+3. `tests/no-bash-exec-eval-sandbox-guard.sh check` - wraps
    `tests/no-bash-exec-eval.sh check` (Layer 1 grep + Layer 2
    direct/alias/syscall passes on raw source). Note: this
    mode does NOT invoke cargo-expand but the guard wrapper
@@ -698,7 +698,7 @@ is correct. The required CI invocation order is:
    any direct invocation of `no-bash-exec-eval.sh`).
 4. `tests/no-bash-exec-eval-sandbox-guard.sh syn-ast-walk`
    (wraps `tests/no-bash-exec-eval.sh syn-ast-walk`;
-   cargo-expand + syn AST walk under the sandbox — the
+   cargo-expand + syn AST walk under the sandbox - the
    sandbox is structurally required HERE because of
    cargo-expand).
 5. `tests/no-bash-exec-eval-sandbox-guard.sh fixture-coverage`
@@ -719,7 +719,7 @@ dev-only binary the `syn-ast-walk` mode invokes) is
 **exempt** from the no-bash gate via an entry in the dedicated
 `tests/fixtures/no-bash-exec-exempt-paths.json` file (per the
 schema documented in the "Dev-tool exempt-path allowlist file
-location" subsection above — NOT in `cli-proc-macro-allowlist.json`,
+location" subsection above - NOT in `cli-proc-macro-allowlist.json`,
 which is a separate proc-macro governance concern).
 
 The sibling exemption for
@@ -735,7 +735,7 @@ would fail at P1 because the directory does not yet exist.
 
 Both walker crates' source is governed by **commit-time
 panel-level rust + security review** via `.github/CODEOWNERS`
-(or equivalent) — this is stricter than the
+(or equivalent) - this is stricter than the
 allowlist-edit-time review documented in earlier drafts; any
 modification under `tests/tools/no-bash-ast-walker/` (and
 later, under `tests/tools/baseline-exception-validator/` once
@@ -759,7 +759,7 @@ tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml @d2b-panel-rust @d2b-
 
 The combined coverage (commit-time CODEOWNERS for walker
 source + allowlist files; rust+security panel for any change)
-closes the recursion of "the gate verifying itself" — both
+closes the recursion of "the gate verifying itself" - both
 walkers (once the second one lands) cannot weaken the gate
 without panel approval at PR-merge time.
 
@@ -794,17 +794,17 @@ under Cargo control. A malicious dep's build.rs or proc-macro
 could write to the filesystem, open network sockets, or read
 ambient CI secrets (Cargo `--offline` only prevents Cargo's own
 fetches; arbitrary `connect(2)` from build.rs is unaffected). The
-v1.1 sandbox is **fail-closed** on three axes — network isolation,
+v1.1 sandbox is **fail-closed** on three axes - network isolation,
 environment whitelisting, and CI assertion that the controls
 were applied:
 
-- **Network isolation** — the cargo-expand process MUST run inside
+- **Network isolation** - the cargo-expand process MUST run inside
   a `bwrap --unshare-net` (or `nsjail` with an actual network-
   namespace drop: `nsjail --disable_clone_newnet` is INCORRECT
   because that flag DISABLES the namespace; the correct nsjail
   posture is to let the default network-namespace dropping behave
   AND assert it via the nsjail config flag `mode: ONCE` + setting
-  `clone_newnet: true` in the nsjail config — i.e., explicit
+  `clone_newnet: true` in the nsjail config - i.e., explicit
   request for a fresh, empty network namespace). The earlier
   draft listed `--disable_no_new_privs` as an "equivalent" which
   was incorrect: that is the seccomp/no-new-privs flag and has
@@ -816,7 +816,7 @@ were applied:
   treated as a defense-in-depth flag, NOT the primary network
   control. Any `connect(2)` from build.rs or proc-macros will
   see ENETUNREACH; CI secrets cannot be exfiltrated even if read.
-- **Environment whitelisting** — the cargo-expand process MUST be
+- **Environment whitelisting** - the cargo-expand process MUST be
   launched via `env -i` with an **explicit whitelist** of
   required vars: `PATH` (set to a sandbox-internal value pointing
   at the flake-pinned toolchain), `HOME=/sandbox-home`,
@@ -827,11 +827,11 @@ were applied:
   override pair documented elsewhere. CI secrets (`GITHUB_TOKEN`,
   `CARGO_REGISTRIES_*_TOKEN`, `SSH_AUTH_SOCK`, etc.) MUST NOT be
   in the whitelist; `env -i` with the whitelist strips them.
-- **Filesystem confinement** — the workspace is `bwrap --ro-bind`
+- **Filesystem confinement** - the workspace is `bwrap --ro-bind`
   read-only; `target/` and `CARGO_TARGET_DIR` are a tmpfs;
   `/tmp` and `/home` are tmpfs; build scripts can only write to
   scratch.
-- **CI assertion** — the gate invocation MUST be wrapped by a CI
+- **CI assertion** - the gate invocation MUST be wrapped by a CI
   guard script `tests/no-bash-exec-eval-sandbox-guard.sh` (lands
   in v1.1-P1 alongside the gate). The guard `set -e` asserts: (a)
   the `bwrap`/`nsjail` argv contains `--unshare-net` (or the
@@ -841,7 +841,7 @@ were applied:
   AND additionally asserts at runtime that the launched
   cargo-expand process's `/proc/<pid>/ns/net` symlink target is
   a different inode from the host's `/proc/self/ns/net` (proving
-  the netns was actually created — the R10 security reviewer
+  the netns was actually created - the R10 security reviewer
   required asserting network isolation directly, not merely
   asserting the requesting flag was passed); (b) the wrapping
   shell-prefix is `env -i ...` with the documented whitelist
@@ -913,7 +913,7 @@ toggle.
   closed: bash entrypoints can race the daemon for `/run/d2b`
   state.
 - Support break-glass is served by the typed envelopes themselves
-  (`daemon-down` envelope tells the operator exactly what to do —
+  (`daemon-down` envelope tells the operator exactly what to do -
   start the daemon).
 
 ## Consequences

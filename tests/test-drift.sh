@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tests/test-drift.sh — `make test-drift`: generated-artifact + rendered-vs-doc
+# tests/test-drift.sh - `make test-drift`: generated-artifact + rendered-vs-doc
 # drift gates. Fail closed when a committed generated file is stale.
 #
-#   * tests/unit/gates/drift-check.sh  — consolidated xtask gen-* drift
+#   * tests/unit/gates/drift-check.sh  - consolidated xtask gen-* drift
 #                                        (error-codes, daemon-api, schemas, …)
-#   * tests/unit/gates/vms-json-parity.sh — rendered vms.json vs manifest parity
-#   * tests/tools/layer1-jobs.py check-workflow — generated CI workflow drift
+#   * tests/unit/gates/vms-json-parity.sh - rendered vms.json vs manifest parity
+#   * tests/tools/layer1-jobs.py check-workflow - generated CI workflow drift
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 

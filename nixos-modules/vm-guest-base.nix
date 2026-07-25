@@ -26,7 +26,7 @@
 # substrate actually needs. The upstream module pulled in
 # `microvm.runner`, `boot-disk`, `store-disk`, `interfaces`,
 # `pci-devices`, `virtiofsd`, `graphics`, `rosetta`, `ssh-deploy`,
-# `vsock-ssh` — none of those are needed for the daemon-native
+# `vsock-ssh` - none of those are needed for the daemon-native
 # substrate because the broker owns hypervisor argv generation
 # (`packages/d2b-host/src/*_argv.rs`) and runtime supervision.
 { config, lib, pkgs, ... }:
@@ -35,7 +35,7 @@ let
   cfg = config.microvm;
   d2bLib = import ./lib.nix { inherit lib; };
 
-  # Find the host-store share (source == "/nix/store") — required
+  # Find the host-store share (source == "/nix/store") - required
   # to be present by `store.nix` / `host.nix`'s composeVm pass; it
   # produces a virtiofs share with tag e.g. "store" mounted at
   # `/nix/.ro-store` (or whatever the consumer picked) so the
@@ -143,7 +143,7 @@ in
       # The broker attaches store-overlay.img to CH with serial=rootfs
       # (see nixos-modules/processes-json.nix), so the guest sees
       # /dev/disk/by-id/virtio-rootfs.  Mount it at the overlay path
-      # so the upperdir/workdir live on a real filesystem (ext4 — the
+      # so the upperdir/workdir live on a real filesystem (ext4 - the
       # broker's DiskInit op runs mkfs.ext4 when creating the image;
       # see packages/d2b-priv-broker/src/ops/disk_init.rs).
       # Without this mount the overlay upper/work live on the rootfs

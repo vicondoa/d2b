@@ -11,7 +11,7 @@
 { config, lib, ... }:
 
 {
-  # microvm.nix wires the share — see store.nix. Guest just consumes.
+  # microvm.nix wires the share - see store.nix. Guest just consumes.
   services.openssh = lib.mkIf config.services.openssh.enable {
     # Disable the upstream NixOS activation script that runs
     # `ssh-keygen -A` and writes into /etc/ssh/. Without this the

@@ -1,6 +1,6 @@
 //! The semantic `ConstellationFrame` preserved by the realm-native model.
 //! This is the codec-neutral frame API: protocol codecs map bytes to/from these
-//! types, and the operation/routing layer depends only on this module — never
+//! types, and the operation/routing layer depends only on this module - never
 //! on a wire encoding (`prost`, protobuf-generated types, etc.).
 
 use crate::audit::AdmissionAuditRecord;
@@ -159,7 +159,7 @@ impl OperationKind {
     /// derived from trusted code. `None` means the kind is authorized by
     /// node enrollment / session identity rather than a workload
     /// capability (node-control + read-only health). Callers MUST derive
-    /// the required capability from the kind — never from a caller-supplied
+    /// the required capability from the kind - never from a caller-supplied
     /// field.
     pub fn required_capability(self) -> Option<Capability> {
         match self {
@@ -243,7 +243,7 @@ impl OperationKind {
 /// opaque, bounded payload that a higher layer encodes; the routing/authz
 /// layer reasons over the typed envelope fields only.
 ///
-/// The required capability is NOT a wire field — it is derived from
+/// The required capability is NOT a wire field - it is derived from
 /// [`OperationKind::required_capability`] in trusted code so a peer cannot
 /// downgrade it. The authenticated session principal MUST match
 /// [`OperationRequest::principal`]; the router rejects a mismatch.
@@ -337,8 +337,8 @@ impl OperationRequest {
     /// The canonical, deterministic byte input the dedup owner hashes to
     /// detect a *same-key, same-request* replay vs a *same-key,
     /// different-request* conflict. It includes exactly the
-    /// request-identifying fields — `kind`, `realm`, `node`, `workload`,
-    /// `principal`, and `body` — and deliberately EXCLUDES `operation_id`
+    /// request-identifying fields - `kind`, `realm`, `node`, `workload`,
+    /// `principal`, and `body` - and deliberately EXCLUDES `operation_id`
     /// (per-attempt), `correlation_id`, `idempotency_key`, and `trace`.
     /// The dedup owner (the gateway/router, never the provider) hashes
     /// this with a collision-resistant digest.

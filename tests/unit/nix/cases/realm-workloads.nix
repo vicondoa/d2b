@@ -965,7 +965,7 @@ in
     };
   };
 
-  # ── launcher JSON: duplicate icon — iconGroupKey identical across realms ───────
+  # ── launcher JSON: duplicate icon - iconGroupKey identical across realms ───────
   # Two workloads in different realms with the same icon.id must have identical
   # iconGroupKey values so desktop consumers can use it as a cluster key for
   # duplicate-app chooser semantics.
@@ -1012,7 +1012,7 @@ in
     };
   };
 
-  # ── launcher JSON: duplicate icon/label — both rows preserved ─────────────────
+  # ── launcher JSON: duplicate icon/label - both rows preserved ─────────────────
   # Two workloads in different realms sharing the same icon and label must both
   # appear in the emitted workloads list (no silent deduplication).
   "realm-workloads/launcher-json-no-implicit-dedup" = {
@@ -1403,7 +1403,7 @@ in
     expected = true;
   };
 
-  # ── cross-realm vsock CID: same VM in two realms — assertion does NOT fire ────
+  # ── cross-realm vsock CID: same VM in two realms - assertion does NOT fire ────
   # When both workloads reference the SAME VM, the cross-realm assertion must
   # not fire (same-VM CID sharing is intentional).
   "realm-workloads/cross-realm-same-vm-no-cid-collision" = {

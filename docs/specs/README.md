@@ -36,7 +36,7 @@ manifests, and the generated implementation-graph artifacts
 
 **Foundation and platform (15):**
 
-- [`ADR-046-decision-register`](ADR-046-decision-register.md) — resolved
+- [`ADR-046-decision-register`](ADR-046-decision-register.md) - resolved
   decisions (through D098)
 - [`ADR-046-terminology-and-identities`](ADR-046-terminology-and-identities.md)
 - [`ADR-046-resource-object-model`](ADR-046-resource-object-model.md)
@@ -53,22 +53,22 @@ manifests, and the generated implementation-graph artifacts
 - [`ADR-046-nix-configuration`](ADR-046-nix-configuration.md)
 - [`ADR-046-current-code-migration-map`](ADR-046-current-code-migration-map.md)
 
-**Resource catalog (6)** — the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
+**Resource catalog (6)** - the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
 `Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `Host`, `Guest`,
 `Process`, `EphemeralProcess`, `Volume`, `Network`, `Device`, `User`,
 `Credential`, `Endpoint`, `ResourceExport`, `ResourceImport`) have the
 following exclusive ResourceType owners. Foundation specs define shared
 contracts but do not co-own these types:
 
-- [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) —
+- [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) -
   `Zone`, `ZoneLink`, `Provider`, `Role`, `RoleBinding`, `Quota`,
   `EmergencyPolicy`, `ResourceExport`, `ResourceImport`
-- [`ADR-046-resources-host-guest-process-user`](ADR-046-resources-host-guest-process-user.md) —
+- [`ADR-046-resources-host-guest-process-user`](ADR-046-resources-host-guest-process-user.md) -
   `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`, `Endpoint`
-- [`ADR-046-resources-volume`](ADR-046-resources-volume.md) — `Volume`
-- [`ADR-046-resources-network`](ADR-046-resources-network.md) — `Network`
-- [`ADR-046-resources-device`](ADR-046-resources-device.md) — `Device`
-- [`ADR-046-resources-credential`](ADR-046-resources-credential.md) — `Credential`
+- [`ADR-046-resources-volume`](ADR-046-resources-volume.md) - `Volume`
+- [`ADR-046-resources-network`](ADR-046-resources-network.md) - `Network`
+- [`ADR-046-resources-device`](ADR-046-resources-device.md) - `Device`
+- [`ADR-046-resources-credential`](ADR-046-resources-credential.md) - `Credential`
 
 **Cross-cutting (3):**
 
@@ -83,7 +83,7 @@ contracts but do not co-own these types:
 - [`ADR-046-validation-and-delivery`](ADR-046-validation-and-delivery.md)
 - [`ADR-046-streamline`](ADR-046-streamline.md)
 
-**Provider dossiers (27)** — one dossier per installed `Provider/<name>`
+**Provider dossiers (27)** - one dossier per installed `Provider/<name>`
 resource, indexed with owned/exported ResourceTypes and component placement in
 [`providers/README.md`](providers/README.md).
 
@@ -115,7 +115,7 @@ removed after regeneration; `ADR046-delivery-004` and
   d2b-adr-implementation-graph`, `schemaVersion` 1) and its rendered human view
   `ADR-046-implementation-graph.md` are the D095 machine-readable
   implementation DAG. They map every one of the 55 member specs and every work
-  item exactly once to a `W0`–`W7` launch wave and a file-disjoint parallel
+  item exactly once to a `W0`-`W7` launch wave and a file-disjoint parallel
   group, with typed edges, owner/destinations, entry contracts, prerequisites,
   blockers, exit gate, and topological rank. They are generated from the two
   manifests above plus the 8-wave topology in

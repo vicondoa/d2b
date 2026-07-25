@@ -526,9 +526,9 @@ spec:
   artifact's Nix closure. There is no ambient host GTK4 dependency.
 - Picker sends exactly one `Select(item_digest)` or `Cancel` message back to
   the controller via the same stream. No clipboard content transits this stream.
-- `successfulTtl: "1h"` — completed/cancelled picker retained 1 hour for
+- `successfulTtl: "1h"` - completed/cancelled picker retained 1 hour for
   debug correlation.
-- `failedTtl: "24h"` — failed picker retained 24 hours for incident hold.
+- `failedTtl: "24h"` - failed picker retained 24 hours for incident hold.
 - Controller writes status to the EphemeralProcess resource; never to
   `Provider/clipboard-wayland` directly.
 
@@ -770,13 +770,13 @@ payload inspection is performed.
 
 Every SCM_RIGHTS-received FD is validated before use:
 
-1. `fstat(2)` — confirm `st_nlink == 1`, `st_size ≤ maxItemBytes`, expected
+1. `fstat(2)` - confirm `st_nlink == 1`, `st_size ≤ maxItemBytes`, expected
    `st_mode` (regular file or pipe as declared by attachment class).
-2. `fstatfs(2)` — confirm filesystem type is not a network filesystem.
-3. `MSG_CMSG_CLOEXEC` — set at `recvmsg` call; validated before use.
-4. `MSG_CTRUNC` — if set, the ancillary message was truncated; fail closed,
+2. `fstatfs(2)` - confirm filesystem type is not a network filesystem.
+3. `MSG_CMSG_CLOEXEC` - set at `recvmsg` call; validated before use.
+4. `MSG_CTRUNC` - if set, the ancillary message was truncated; fail closed,
    do not proceed with partial FD set.
-5. Size guard — read at most `maxItemBytes` bytes before treating as oversized
+5. Size guard - read at most `maxItemBytes` bytes before treating as oversized
    and closing the FD without adding an entry.
 
 FDs are never duplicated after validation, never sent downstream, and are
@@ -861,7 +861,7 @@ their operational state is bounded, non-secret, and derivable from
 `Provider/clipboard-wayland.status`, the core Operation ledger, component
 readiness, and external compositor/guest observation after restart. Provider
 configuration is delivered exclusively via the sealed LaunchTicket config FD at
-Process start — not through any Volume.
+Process start - not through any Volume.
 
 The clipboard-wayland controller (`Process/clipboard-controller`) does not
 create, own, watch, update, delete, or mount Provider state Volumes, and does
@@ -1083,7 +1083,7 @@ pub struct ClipboardAuditEvent {
     pub source_zone_id: Option<BoundedId>,  // max 63 chars; no path/payload
     pub dest_zone_id: Option<BoundedId>,
     pub mime_type: Option<AllowedMime>,     // from MIME allowlist only; null if rejected before check
-    pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1–64K, 64K–1M, >1M; never exact size
+    pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1-64K, 64K-1M, >1M; never exact size
     pub reason: ReasonCode,
     pub attribution_quality: AttributionQuality,
     pub occurred_at: OffsetDateTime,
@@ -1105,7 +1105,7 @@ pub enum ClipboardEventType {
     PickerSessionFailed,
 }
 
-// closed enum — no fallback/unknown variant that accepts arbitrary strings
+// closed enum - no fallback/unknown variant that accepts arbitrary strings
 pub enum ReasonCode {
     Ok,
     MimeRejected,
@@ -1165,7 +1165,7 @@ window titles, user identifiers, or zone credentials appear in spans or metrics.
 | `clipboard_operations_total` | Counter | `operation`, `reason`, `direction` | Clipboard operations by type and outcome. |
 | `clipboard_active_fds` | Gauge | `direction` | Currently in-flight SCM_RIGHTS FDs. |
 | `clipboard_history_entries` | Gauge | `source` (`host`/`guest`) | Current history entry count. |
-| `clipboard_history_bytes_total` | Gauge | — | Total in-memory history bytes. |
+| `clipboard_history_bytes_total` | Gauge | - | Total in-memory history bytes. |
 | `clipboard_picker_sessions_total` | Counter | `outcome` (`selected`/`cancelled`/`timed_out`/`failed`) | Picker session outcomes. |
 | `clipboard_mime_rejections_total` | Counter | `reason` | MIME rejections by reason code. |
 
@@ -1270,18 +1270,18 @@ violated by any implementation:
 
 ## Work items
 
-### ADR046-clipboard-001 — Crate skeleton
+### ADR046-clipboard-001 - Crate skeleton
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR-046-provider-model-and-packaging; Provider/clipboard-wayland crate owner |
-| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent for the provider crate skeleton |
+| Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent for the provider crate skeleton |
 | Reuse action | create |
 | Destination | packages/d2b-provider-clipboard-wayland/ with src, tests, integration, README.md, and binaries clipboard-controller, clipd-host, picker-session |
 | Detailed design | Create the provider crate skeleton, required source layout, three binaries, and README covering purpose, component map, local build instructions, test commands, and display-wayland fake dependency for integration tests. |
 | Integration | Workspace package manifest and Provider artifact catalog consume the crate; provider packaging registers component templates for core ProviderDeployment. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Workspace provider layout policy plus README content review and follow-on make test-rust -p d2b-provider-clipboard-wayland once implementation exists. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
 **Type:** implementation  
 **Inputs:** This dossier, `ADR-046-provider-model-and-packaging`
@@ -1294,7 +1294,7 @@ source layout section of this dossier. Binaries: `clipboard-controller`,
 `README.md` must include: purpose, component map, local build instructions,
 test commands, dependency on display-wayland fake in integration tests.
 
-### ADR046-clipboard-002 — Service process (clipd-host)
+### ADR046-clipboard-002 - Service process (clipd-host)
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-001; clipd-host service owner |
@@ -1328,18 +1328,18 @@ binary. Key changes from baseline:
 
 Conformance gates: `make test-rust -p d2b-provider-clipboard-wayland`.
 
-### ADR046-clipboard-003 — Controller process (clipboard-controller)
+### ADR046-clipboard-003 - Controller process (clipboard-controller)
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-001; clipboard-controller owner |
-| Current source | None — net-new v3 controller; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 controller; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-clipboard-wayland/src/controller/ and clipboard-controller binary |
 | Detailed design | Implement Process/clipboard-controller as a system-domain system-minijail Process serving d2b.clipboard.picker-coord.v3, creating picker EphemeralProcesses from the signed picker-session template, observing picker status, relaying Guest lifecycle messages to clipd-host, creating clipboard RBAC Roles and RoleBindings, writing only bounded redacted operational observations through the optimistic status writer, and never owning or mounting Provider state Volumes. Primary reuse disposition: `create`. Preserved source-plan detail: net-new controller using existing resource API and ComponentSession contracts. |
 | Integration | Core ProviderDeployment creates the controller Process; controller uses Zone resource API for EphemeralProcess and RBAC resources and ComponentSession to clipd-host for picker and purge or suspend coordination. |
 | Data migration | Full d2b 3.0 reset; no controller durable state import because ProviderStateSet is empty |
 | Validation | Controller unit tests for picker request validation, EphemeralProcess spec shape, terminal status callback, GuestStopped and GuestLocked handling, RBAC resources, status bounds, and empty ProviderStateSet. |
-| Removal proof | None — net-new; no prior controller owner to remove |
+| Removal proof | None - net-new; no prior controller owner to remove |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-001
@@ -1364,7 +1364,7 @@ Process. Responsibilities:
 - Does not own, export, reconcile, or mount any Provider state Volume; the
   ProviderStateSet is empty under D087.
 
-### ADR046-clipboard-004 — EphemeralProcess picker binary
+### ADR046-clipboard-004 - EphemeralProcess picker binary
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-001 and ADR046-clipboard-003; picker worker owner |
@@ -1406,16 +1406,16 @@ Implement `picker-session` worker binary. Invariants:
 Contract test: picker binary must fail to bind `zwlr_data_control_manager_v1`
 (absent from seccomp allowlist and restricted compositor portal).
 
-### ADR046-clipboard-005 — ComponentSession service definitions
+### ADR046-clipboard-005 - ComponentSession service definitions
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-001; ADR-046-componentsession-and-bus; clipboard service contract owner |
-| Current source | None — net-new clipboard-wayland ComponentSession service definitions; display-wayland client stubs are consumed from the display-wayland contract |
+| Current source | None - net-new clipboard-wayland ComponentSession service definitions; display-wayland client stubs are consumed from the display-wayland contract |
 | Reuse action | create |
 | Destination | packages/d2b-provider-clipboard-wayland service descriptors and generated Rust async ttrpc bindings, plus any shared contracts crate selected by ADR-046-componentsession-and-bus |
 | Detailed design | Generate stubs for d2b.clipboard.bridge.v3, d2b.clipboard.picker-coord.v3, and d2b.clipboard.v3, consume display-wayland d2b.display.host-clipboard.v3 client stubs, reject service-name collisions, and declare attachment classes clipboard-transfer-fd, host-selection-transfer-fd, and host-selection-supply-fd in the signed descriptor for ComponentSession handshake validation. Primary reuse disposition: `create`. Preserved source-plan detail: net-new generation of service stubs and named-stream types. |
 | Integration | Service registry, Zone ComponentSession enrollment, clipd-host, clipboard-controller, display-wayland wayland-proxy, and CLI/operator clients all consume the generated bindings. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Contract tests for wire format, service-name collision rejection, attachment class matching, and descriptor handshake validation. |
 | Removal proof | Shared filesystem bridge path and SO_PEERCRED contract tests are removed in ADR046-clipboard-011 after ComponentSession contracts pass. |
 
@@ -1438,7 +1438,7 @@ All attachment class definitions (`clipboard-transfer-fd`,
 `host-selection-transfer-fd`, `host-selection-supply-fd`) must be declared in
 the signed service descriptor and validated at ComponentSession handshake.
 
-### ADR046-clipboard-006 — Provider Nix configuration
+### ADR046-clipboard-006 - Provider Nix configuration
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR-046-nix-configuration; Provider/clipboard-wayland Nix owner |
@@ -1466,18 +1466,18 @@ Implement the d2b Nix module for `Provider/clipboard-wayland`:
 - Remove `nixos-modules/clipboard.nix` in the same commit as the new module
   lands (see ADR046-clipboard-012).
 
-### ADR046-clipboard-007 — RBAC resources
+### ADR046-clipboard-007 - RBAC resources
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-003; clipboard RBAC owner |
-| Current source | None — net-new Zone RBAC resources for clipboard-wayland; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new Zone RBAC resources for clipboard-wayland; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-clipboard-wayland/src/controller/rbac.rs or equivalent controller reconcile module |
 | Detailed design | Controller creates Role/clipboard-admin, Role/clipboard-viewer, Role/clipboard-bridge-peer, Role/clipboard-picker-worker and RoleBindings display-wayland-bridge, host-admin-clipboard, picker-session-worker, all Zone-scoped, owned by Process/clipboard-controller, selector-bound for Process/picker-*, and cleaned up when Provider is deleted. |
 | Integration | Resource API stores RBAC resources; ComponentSession authorization checks consume Roles and RoleBindings for management, bridge, and picker worker services. |
 | Data migration | Full d2b 3.0 reset; no v2 RBAC state import |
 | Validation | Controller RBAC reconcile tests for create, idempotent update, provider deletion cleanup, selector scoping, bridge peer authorization, and denied unauthorized management calls. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-003; RBAC section of this dossier
@@ -1493,7 +1493,7 @@ All Roles and RoleBindings are Zone-scoped, owned by
 `Process/clipboard-controller`, and are cleaned up when the Provider is
 deleted.
 
-### ADR046-clipboard-008 — Audit and telemetry
+### ADR046-clipboard-008 - Audit and telemetry
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-002; ADR-046-telemetry-audit-and-support; clipboard observability owner |
@@ -1521,7 +1521,7 @@ Implement `ClipboardAuditEvent` and fail-closed queue in `service/audit.rs`:
 - Implement OTEL spans with allowed/excluded attribute lists from the Spans
   section above.
 
-### ADR046-clipboard-009 — Hermetic unit tests
+### ADR046-clipboard-009 - Hermetic unit tests
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-001 through ADR046-clipboard-008; clipboard test owner |
@@ -1530,7 +1530,7 @@ Implement `ClipboardAuditEvent` and fail-closed queue in `service/audit.rs`:
 | Destination | packages/d2b-provider-clipboard-wayland/tests/ |
 | Detailed design | Create hermetic unit and Cargo integration tests covering closed MIME policy, secret-hint suppression, FD validation and bounds, LRU and TTL history, fail-closed audit, lifecycle purge and suspend, picker EphemeralProcess invariants, no filesystem bridge, core-created Processes, empty ProviderStateSet, no state mounts or state-layout principals, status-first observation, and no clipboard bytes in status, audit, metrics, Operations, or Volumes. Primary reuse disposition: `extract`. Preserved source-plan detail: extract semantic assertions into hermetic provider tests. |
 | Integration | cargo test -p d2b-provider-clipboard-wayland --lib --tests consumes the provider crate and fake clocks/effect ports without live Wayland, systemd, broker, or Nix eval. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | All tests listed in the Required test coverage table must pass under make test-rust -p d2b-provider-clipboard-wayland. |
 | Removal proof | Replaced current-code tests receive explicit keep/adapt/move/delete dispositions and old duplicate tests are deleted once successor coverage passes. |
 
@@ -1565,18 +1565,18 @@ Required test coverage (in `packages/d2b-provider-clipboard-wayland/tests/`):
 | `state::test_status_first_operational_state` | Bounded non-secret operational observations live in revisioned status/core Operation ledger and are re-verified after restart |
 | `state::test_no_clipboard_bytes_in_status` | No clipboard bytes, entry data, FD content, socket path, or authority handle appears in status, audit, metrics, Operations, or any Volume |
 
-### ADR046-clipboard-010 — Integration tests
+### ADR046-clipboard-010 - Integration tests
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-009; display-wayland fake and clipboard integration owner |
-| Current source | None — net-new v3 provider integration scenarios; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 provider integration scenarios; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-clipboard-wayland/integration/ |
 | Detailed design | Implement e2e paste, host capture, bridge backpressure, rate limiting, echo suppression, dependency absent host-only mode, GuestDestroyed purge, audit fail-closed, picker start timeout, and cross-zone denied scenarios using fake d2b.display.host-clipboard.v3 server and fake wayland-proxy bridge client without requiring a live compositor. Primary reuse disposition: `create`. Preserved source-plan detail: net-new integration suite with fake display-wayland and fake wayland-proxy. |
 | Integration | Provider integration lane exercises clipd-host, clipboard-controller, generated ComponentSession services, fake display-wayland service, and fake bridge client end-to-end. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | All integration scenarios in the dossier table pass and assert no live Wayland compositor dependency. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
 **Type:** test  
 **Inputs:** ADR046-clipboard-009; display-wayland fake
@@ -1599,7 +1599,7 @@ Required integration test scenarios (in `packages/d2b-provider-clipboard-wayland
 Integration tests use a fake `d2b.display.host-clipboard.v3` server and a
 fake wayland-proxy bridge client. They do not require a live Wayland compositor.
 
-### ADR046-clipboard-011 — Contract tests
+### ADR046-clipboard-011 - Contract tests
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-005; packages/d2b-contract-tests owner |
@@ -1608,7 +1608,7 @@ fake wayland-proxy bridge client. They do not require a live Wayland compositor.
 | Destination | packages/d2b-contract-tests/tests/policy_clipboard.rs |
 | Detailed design | Add contract tests for d2b.clipboard.bridge.v3 and d2b.clipboard.picker-coord.v3 wire formats, ReasonCode numeric stability, and attachment class descriptor names while removing tests that assume shared filesystem bridge paths or SO_PEERCRED config. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt contract tests and delete obsolete filesystem bridge assumptions. |
 | Integration | Contract test suite consumes generated service descriptors and guards downstream ComponentSession consumers. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | packages/d2b-contract-tests policy_clipboard.rs passes with v3 wire format and attachment descriptor assertions. |
 | Removal proof | Tests for shared filesystem bridge paths and SO_PEERCRED config are removed from policy_clipboard.rs after v3 ComponentSession contract coverage lands. |
 
@@ -1624,7 +1624,7 @@ Update `packages/d2b-contract-tests/tests/policy_clipboard.rs`:
 - Verify attachment class names match descriptor declarations.
 - Remove tests that assume shared filesystem bridge paths or SO_PEERCRED config.
 
-### ADR046-clipboard-012 — Remove nixos-modules/clipboard.nix
+### ADR046-clipboard-012 - Remove nixos-modules/clipboard.nix
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-clipboard-006; Nix/module removal owner |
@@ -1660,11 +1660,11 @@ ADR 0042):
 
 | Source | Destination | Notes |
 | --- | --- | --- |
-| `src/policy.rs` — `ALLOWED_MIME_TYPES`, `SECRET_HINT_MIME_TYPES`, `ReasonCode`, `AttributionQuality` | `service/policy.rs` | Exact port; rename `source_realm`/`dest_realm` → `_zone_id` |
-| `src/fd.rs` — `FdCapModel`, `FdSafetyError`, MSG_CTRUNC validation | `service/fd.rs` | Exact port |
-| `src/audit.rs` — `AuditEvent`, fail-closed queue | `service/audit.rs` | Port; adapt zone field names; add `SizeBucket` |
-| `src/framing.rs` — `PICKER_TO_DAEMON_MAX_FRAME_BYTES`, encode/decode | `service/picker_coord.rs` | Adapt to ComponentSession named-stream framing |
-| `packages/d2b-wayland-proxy/src/clipboard.rs` — `ClipboardMimePolicy`, `ClipboardRoute`, `ClipboardObjectForwarding` | wayland-proxy crate (display-wayland Provider) | Not ported here; clipboard-wayland consumes via bridge service |
+| `src/policy.rs` - `ALLOWED_MIME_TYPES`, `SECRET_HINT_MIME_TYPES`, `ReasonCode`, `AttributionQuality` | `service/policy.rs` | Exact port; rename `source_realm`/`dest_realm` → `_zone_id` |
+| `src/fd.rs` - `FdCapModel`, `FdSafetyError`, MSG_CTRUNC validation | `service/fd.rs` | Exact port |
+| `src/audit.rs` - `AuditEvent`, fail-closed queue | `service/audit.rs` | Port; adapt zone field names; add `SizeBucket` |
+| `src/framing.rs` - `PICKER_TO_DAEMON_MAX_FRAME_BYTES`, encode/decode | `service/picker_coord.rs` | Adapt to ComponentSession named-stream framing |
+| `packages/d2b-wayland-proxy/src/clipboard.rs` - `ClipboardMimePolicy`, `ClipboardRoute`, `ClipboardObjectForwarding` | wayland-proxy crate (display-wayland Provider) | Not ported here; clipboard-wayland consumes via bridge service |
 
 The following are **not** ported and must be rewritten:
 
@@ -1707,7 +1707,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-clipboard-wayland --lib --tests`
 completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1721,7 +1721,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

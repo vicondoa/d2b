@@ -37,7 +37,7 @@
             # Per-env network knobs on the `work` env:
             #   * MTU clamp to 1400 (tunneled uplink reference).
             #   * MSS clamp on the net VM's nft forward chain.
-            #   * East-west between workload LAN ports — double
+            #   * East-west between workload LAN ports - double
             #     opt-in with site.allowUnsafeEastWest above.
             d2b.envs.work.mtu = lib.mkForce 1400;
             d2b.envs.work.mssClamp = lib.mkForce true;

@@ -205,7 +205,7 @@ in
         `validated = true` eval assertion and by `d2b host
         validate`. (Historically these files also gated the
         `d2b.daemonExperimental.enable` default-flip; that gate is
-        retired — `daemonExperimental.enable` now simply defaults
+        retired - `daemonExperimental.enable` now simply defaults
         `true` and is no longer evidence-auto-flipped.) The default
         `/var/lib/d2b/validated`
         is the canonical operator-host location; the option is
@@ -236,7 +236,7 @@ in
         within each phase (net VMs first, then workloads). The
         daemon clamps values < 1 to 1.
 
-        Net VM failures do NOT abort the sequence — workloads in the
+        Net VM failures do NOT abort the sequence - workloads in the
         same env are marked `degraded` and the daemon continues
         serving status/doctor/audit. See
         docs/reference/daemon-autostart.md for the full contract.

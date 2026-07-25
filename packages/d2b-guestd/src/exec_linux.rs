@@ -10,7 +10,7 @@
 //! `rustix`'s safe `kill_process_group`. No first-party `unsafe` is used.
 //!
 //! When no workload user is configured the spawner is disabled and every
-//! non-TTY create fails closed (`ExecError::ExecDisabled`) — there is no
+//! non-TTY create fails closed (`ExecError::ExecDisabled`) - there is no
 //! root-exec fallback.
 
 use std::os::unix::process::ExitStatusExt;

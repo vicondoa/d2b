@@ -27,7 +27,7 @@ is in the interaction Provider catalog and is independently specified.
 Every physical backing a `Device` represents is a D097 authority: the Device (and
 its owning Device Provider) declares a signed `AuthorityDescriptor` with
 `authorityScope: physical-device`, an **opaque** `authorityKey` class (a digest
-of vendor/product/bus selectors — never a raw path/serial/address),
+of vendor/product/bus selectors - never a raw path/serial/address),
 `cardinality: zero-or-one` per physical backing, and the appropriate
 `arbitration`: `exclusive` for a full-device/DRM-primary/VFIO GPU, a physical
 TPM, a security key's hidraw, or an exclusive USB/USBIP passthrough; `shared`
@@ -126,11 +126,11 @@ status:
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `providerRef` | ResourceRef | yes | — | must resolve to an installed Provider | Selects the device Provider |
-| `deviceClass` | enum | yes | — | `physical` \| `emulated` | Physical devices exist in sysfs/udev; emulated devices are created by the Provider |
-| `arbitration` | enum | yes | — | `exclusive` \| `shared` | Whether the device may be simultaneously claimed by more than one holder |
-| `maxConcurrentClaims` | uint | no | 1 | 1–16 | Maximum simultaneous claimants; must equal 1 when `arbitration=exclusive` |
-| `inventory` | object | yes | — | see below | Physical or emulated device selector |
+| `providerRef` | ResourceRef | yes | - | must resolve to an installed Provider | Selects the device Provider |
+| `deviceClass` | enum | yes | - | `physical` \| `emulated` | Physical devices exist in sysfs/udev; emulated devices are created by the Provider |
+| `arbitration` | enum | yes | - | `exclusive` \| `shared` | Whether the device may be simultaneously claimed by more than one holder |
+| `maxConcurrentClaims` | uint | no | 1 | 1-16 | Maximum simultaneous claimants; must equal 1 when `arbitration=exclusive` |
+| `inventory` | object | yes | - | see below | Physical or emulated device selector |
 | `provider` | object? | no | `null` | canonical `{schemaId,schemaVersion,settings}` | Optional selected-Provider extension envelope (D089). `settings` carries Provider-validated implementation-only device configuration (`<provider>.d2bus.org/Device/spec`); strict deny-unknown, bounded. MUST NOT shadow a base field. |
 
 ### Inventory selector
@@ -142,7 +142,7 @@ An inventory selector is a discriminated union keyed on `busClass`. The
 
 ```yaml
 inventory:
-  # Emulated device — selector must be absent or {}
+  # Emulated device - selector must be absent or {}
   selector: {}
 
   # USB device
@@ -206,8 +206,8 @@ devices:
 
 | Field | Type | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `deviceRef` | ResourceRef | yes | — | Same-Zone Device resource |
-| `claim` | enum | yes | — | `exclusive` \| `read-shared` \| `provider-managed` |
+| `deviceRef` | ResourceRef | yes | - | Same-Zone Device resource |
+| `claim` | enum | yes | - | `exclusive` \| `read-shared` \| `provider-managed` |
 | `passthrough` | string | no | null | Provider-specific passthrough kind (e.g., `tpm-socket`, `usbip-export`, `virtiofs-hidraw`, `gpu-virtio`, `gpu-render-node`) |
 | `settings` | object | no | `{}` | Provider-specific per-attachment settings |
 
@@ -444,7 +444,7 @@ From D046 and the v3 baseline:
    inside d2bd (`packages/d2bd/src/lib.rs:start_sk_accept_loop`,
    `packages/d2bd/src/security_key.rs`): the daemon calls the broker for the
    hidraw fd via SCM_RIGHTS, binds a vsock-proxy Unix socket, and spawns an
-   async accept loop — there is no separate relay process. **v3 target:** this
+   async accept loop - there is no separate relay process. **v3 target:** this
    relay logic is extracted into a dedicated unprivileged relay Process under
    the device-security-key Provider. The relay Process receives the hidraw fd
    from the broker over SCM_RIGHTS and proxies CTAP HID traffic to the Guest
@@ -453,7 +453,7 @@ From D046 and the v3 baseline:
    `packages/d2b-sk-frontend/src/` (static, implemented-and-reachable), running
    inside the Guest VM as a guest systemd service (`d2b-sk-frontend.service`)
    declared in `nixos-modules/components/security-key-guest.nix`. It is NOT
-   a current ProcessRole or Zone Process — the ProcessRole name
+   a current ProcessRole or Zone Process - the ProcessRole name
    `SecurityKeyFrontend` refers to the HOST accept loop, not this guest binary.
    **v3 target:** the `d2b-sk-frontend` binary becomes a Zone Process resource
    (name `device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`) owned by
@@ -586,9 +586,9 @@ Device (emulated, exclusive, TPM class).
 
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
-| `logLevel` | uint | 20 | 1–20 | swtpm `--log level` value |
-| `startupClear` | bool | true | — | Emit `--flags startup-clear`; requires pre-start flush |
-| `stateDirPath` | null | provider-derived | — | Overrides are rejected; path is always derived from Volume/state owner |
+| `logLevel` | uint | 20 | 1-20 | swtpm `--log level` value |
+| `startupClear` | bool | true | - | Emit `--flags startup-clear`; requires pre-start flush |
+| `stateDirPath` | null | provider-derived | - | Overrides are rejected; path is always derived from Volume/state owner |
 
 swtpm and swtpm_ioctl binaries are dependencies bundled inside the
 `d2b-provider-device-tpm` package closure. Their executable paths are resolved
@@ -662,8 +662,8 @@ accidental deletion cascade.
 
 ### Broker operations consumed
 
-- `PrepareSwtpmDir` (hardening/tamper-marker) — once per start cycle.
-- `SpawnRunner` (swtpm role) — for each long-lived swtpm Process.
+- `PrepareSwtpmDir` (hardening/tamper-marker) - once per start cycle.
+- `SpawnRunner` (swtpm role) - for each long-lived swtpm Process.
 
 ### Nix options (v3 successors)
 
@@ -730,7 +730,7 @@ Device (physical, exclusive per Guest attachment).
 | --- | --- | --- | --- | --- |
 | `usbipHostKernelModule` | string | `usbip-host` | fixed | Host kernel module |
 | `vhciHcdKernelModule` | string | `vhci_hcd` | fixed | Guest kernel module |
-| `backendPort` | uint16 | provider-derived | 1–65535 | Per-env deterministic USBIP backend port |
+| `backendPort` | uint16 | provider-derived | 1-65535 | Per-env deterministic USBIP backend port |
 
 The usbip host and guest binaries are dependencies bundled inside the
 `d2b-provider-device-usbip` package closure. Their executable paths are resolved
@@ -794,7 +794,7 @@ step maps to a broker operation or host-side action:
 | Step | Action | Broker op |
 | --- | --- | --- |
 | `modprobe` | Load `usbip-host` kernel module | EphemeralProcess (modprobe) |
-| `lock` | Acquire per-busid OFD lock | — |
+| `lock` | Acquire per-busid OFD lock | - |
 | `withhold` | Prevent OS auto-claim of device | sysfs write via broker |
 | `firewall` | Ensure on acquisition; Remove on detach/finalize | `UsbipBindFirewallRule { action: Ensure \| Remove }` |
 | `backend` | Start per-env usbipd daemon | `SpawnRunner` (usbip role) |
@@ -867,13 +867,13 @@ Device (physical, exclusive per-session lease).
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
 | `devices` | list | [] | max 16 | Per-device selector entries |
-| `devices[].label` | string | — | `^[a-z][a-z0-9-]{0,62}$` | Stable selector label |
-| `devices[].vendorId` | uint16 | — | — | USB vendor ID |
-| `devices[].productId` | uint16 | — | — | USB product ID |
+| `devices[].label` | string | - | `^[a-z][a-z0-9-]{0,62}$` | Stable selector label |
+| `devices[].vendorId` | uint16 | - | - | USB vendor ID |
+| `devices[].productId` | uint16 | - | - | USB product ID |
 | `devices[].serial` | string \| null | null | max 128 chars | Optional serial filter |
-| `vsockPort` | uint16 | 14320 | 1–65535 | AF_VSOCK port for host↔guest relay |
-| `sessionRingSize` | uint | 32 | 8–256 | Bounded recent-session ring size |
-| `leaseTimeoutSecs` | uint | 300 | 30–3600 | Session-level lease timeout |
+| `vsockPort` | uint16 | 14320 | 1-65535 | AF_VSOCK port for host↔guest relay |
+| `sessionRingSize` | uint | 32 | 8-256 | Bounded recent-session ring size |
+| `leaseTimeoutSecs` | uint | 300 | 30-3600 | Session-level lease timeout |
 
 The `vsockPort` default 14320 is stable and matches `security-key-guest.nix`
 option `d2b.securityKey.vsockPort` default.
@@ -925,7 +925,7 @@ The relay process:
 - Restarts on disconnect; clears its lease on clean exit.
 
 **Current implementation note:** In the v3 baseline the relay is NOT a separate
-spawned process — it is a daemon-internal async accept loop in d2bd
+spawned process - it is a daemon-internal async accept loop in d2bd
 (`packages/d2bd/src/lib.rs:10456` `start_sk_accept_loop` and
 `packages/d2bd/src/security_key.rs`). ProcessRole::SecurityKeyFrontend is
 handled as a ReadinessOnly node that triggers this daemon coroutine rather than
@@ -1052,15 +1052,15 @@ Device (physical, exclusive per Guest, GPU/video combined).
 
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
-| `renderNodeOnly` | bool | false | — | If true, use render-node-only mode (no full virtio-gpu bind-mount) |
-| `videoSidecar` | bool | false | — | If true, spawn crosvm video-decoder alongside GPU worker |
-| `videoNvidiaDecode` | bool | false | — | If true, expose `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm` to video worker |
+| `renderNodeOnly` | bool | false | - | If true, use render-node-only mode (no full virtio-gpu bind-mount) |
+| `videoSidecar` | bool | false | - | If true, spawn crosvm video-decoder alongside GPU worker |
+| `videoNvidiaDecode` | bool | false | - | If true, expose `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm` to video worker |
 | `contextTypes` | list | [virgl, virgl2, cross-domain] | closed set | GPU context types: `virgl`, `virgl2`, `cross-domain` |
 | `displays` | list | [{hidden: true}] | max 8 | Virtual display config |
-| `egl` | bool | true | — | EGL rendering |
-| `vulkan` | bool | true | — | Vulkan rendering |
-| `crossDomainTrusted` | bool | false | — | Enable trusted cross-domain context (Wayland proxy path) |
-| `virglVideo` | bool | false | — | Experimental virglrenderer video forwarding; separate from videoSidecar |
+| `egl` | bool | true | - | EGL rendering |
+| `vulkan` | bool | true | - | Vulkan rendering |
+| `crossDomainTrusted` | bool | false | - | Enable trusted cross-domain context (Wayland proxy path) |
+| `virglVideo` | bool | false | - | Experimental virglrenderer video forwarding; separate from videoSidecar |
 
 ### Device spec
 
@@ -1231,10 +1231,10 @@ test for each limit is required in `packages/d2b-contract-tests/`):
 | Broker operation | Rate limit | FD quota | Notes |
 | --- | --- | --- | --- |
 | `SecurityKeyOpenDevice` | 1 concurrent per device label | 1 | One active hidraw session per Device at a time |
-| `SecurityKeyApplyUdevRules` | Activation-only | — | One batch per Provider activation; not a hot path |
-| `UsbipBindFirewallRule { action: Ensure \| Remove }` | One bounded batch per acquisition or release | — | Ownership-marker check prevents duplicate rules; Remove is idempotent |
-| `SpawnRunner` (swtpm) | 1 per Device per Guest start cycle | — | Idempotent; broker verifies tamper marker |
-| `SpawnRunner` (gpu/video) | 1 per Device (one GPU worker set per Guest) | — | One GPU worker set per Device |
+| `SecurityKeyApplyUdevRules` | Activation-only | - | One batch per Provider activation; not a hot path |
+| `UsbipBindFirewallRule { action: Ensure \| Remove }` | One bounded batch per acquisition or release | - | Ownership-marker check prevents duplicate rules; Remove is idempotent |
+| `SpawnRunner` (swtpm) | 1 per Device per Guest start cycle | - | Idempotent; broker verifies tamper marker |
+| `SpawnRunner` (gpu/video) | 1 per Device (one GPU worker set per Guest) | - | One GPU worker set per Device |
 | `OpenDevice` (gpu) | Per-spawn call only | ≤8 per Process launch | Opened before clone; counted per-spawn |
 
 ## Audit and OTEL
@@ -1261,8 +1261,8 @@ and any credential material.
 
 ### OTEL spans
 
-Device reconcile telemetry attribute placement — including span vs resource
-attribute classification and full label-set boundaries — is specified in
+Device reconcile telemetry attribute placement - including span vs resource
+attribute classification and full label-set boundaries - is specified in
 `ADR-046-telemetry-audit-and-support`. `d2b.zone` and `d2b.provider` are
 bounded OTEL resource attributes, never metric labels. This spec does not
 define competing telemetry decisions. Device Provider implementations must
@@ -1322,8 +1322,8 @@ d2b.zones.<zone>.resources.<name> = {
     deviceClass   = "emulated";             # "emulated" | "physical"
     arbitration   = "exclusive";            # "exclusive" | "shared"
 
-    # Optional — defaults shown
-    maxConcurrentClaims = 1;               # 1–16; must be 1 when arbitration=exclusive
+    # Optional - defaults shown
+    maxConcurrentClaims = 1;               # 1-16; must be 1 when arbitration=exclusive
 
     inventory.selector = {};               # emulated: {} or absent
     # inventory.selector.busClass = "usb" | "hidraw" | "drm" | "pci" | "tpm";
@@ -1352,8 +1352,8 @@ d2b.zones.<zone>.resources.<name> = {
 | `metadata.createdAt` / `updatedAt` | Set by Core |
 | `metadata.finalizers` | Written by Provider controllers |
 | `metadata.deletionRequestedAt` | Set by Core on Delete |
-| `metadata.managedBy` | `"configuration"` — set by Core when activating the Nix bundle; closed enum: `configuration \| controller \| api`; Nix input omits it |
-| `metadata.configurationGeneration` | NixOS system generation number — set by Core at activation |
+| `metadata.managedBy` | `"configuration"` - set by Core when activating the Nix bundle; closed enum: `configuration \| controller \| api`; Nix input omits it |
+| `metadata.configurationGeneration` | NixOS system generation number - set by Core at activation |
 | `status` | Entirely read-only; managed by Provider controller |
 
 **Nix option types, defaults, and documentation** are generated from the
@@ -1380,7 +1380,7 @@ d2b.artifacts.<id> = {
 **Key invariants:**
 
 - ResourceSpec fields that reference catalog entries use a plain bounded ID
-  (`artifactId` or `systemArtifactId` — **not** `*Ref`, because `Artifact` is
+  (`artifactId` or `systemArtifactId` - **not** `*Ref`, because `Artifact` is
   not a ResourceType). For example, a Provider resource's `spec.artifactId`
   references its own `d2b-provider-device-*` package; a Guest resource's
   `spec.systemArtifactId` references its NixOS system derivation.
@@ -1427,7 +1427,7 @@ check` time against the committed ResourceTypeSchema:
 | `spec.arbitration=exclusive` ⟹ `spec.maxConcurrentClaims = 1` | `exclusive-max-claims-conflict` |
 | `spec.arbitration=shared` ⟹ `spec.deviceClass=physical` | `emulated-shared-arbitration` |
 | `spec.arbitration=shared` + GPU Provider ⟹ `spec.provider.settings.renderNodeOnly=true` | `shared-arbitration-requires-render-node-only` |
-| `spec.maxConcurrentClaims` ∈ 1–16 | `max-claims-out-of-bounds` |
+| `spec.maxConcurrentClaims` ∈ 1-16 | `max-claims-out-of-bounds` |
 | No two Device resources in the same Zone share the same `spec.inventory.selector.label` | `duplicate-device-label` |
 | USBIP and security-key Provider both referencing same selector label | `usbip-sk-mutual-exclusion` |
 | `spec.provider.settings` validates against the Provider's signed JSON Schema | `invalid-provider-settings` |
@@ -1450,10 +1450,10 @@ Device Providers have no `artifactId` field in their `spec.provider.settings`; b
 paths are resolved from Provider package closures (see "Artifact catalog").
 
 ```nix
-# Correct — sensitive value via Credential ref
+# Correct - sensitive value via Credential ref
 spec.provider.settings.exampleSecret = { credentialRef = "Credential/device-example-key"; };
 
-# Rejected at eval time — inline string in a credentialRef-constrained field
+# Rejected at eval time - inline string in a credentialRef-constrained field
 spec.provider.settings.exampleSecret = "raw-secret-value";
 ```
 
@@ -1812,14 +1812,14 @@ under generation N+1. Resources added in N+1 are reconciled immediately.
 The Zone runtime retains prior generation bundles for diagnostics and rollback
 reference. Retention is count-based:
 
-- `d2b.zones.<zone>.retainedGenerations` — number of prior generations
+- `d2b.zones.<zone>.retainedGenerations` - number of prior generations
   to retain; default `3`; valid range `1..16`.
 - When the count of retained prior generations would exceed the configured value,
   the oldest fully-cleaned generation is pruned first.
 - A generation is eligible for pruning only after all `managedBy=configuration`
   resources it declared that are absent from the successor generation have reached
   phase `Deleted` (or been removed from the store).
-- Operator explicit prune via `d2b zone gc <zone>` — prunes all fully-cleaned
+- Operator explicit prune via `d2b zone gc <zone>` - prunes all fully-cleaned
   generations beyond the retention count immediately.
 
 Re-applying a prior bundle requires explicit operator action.
@@ -1859,8 +1859,8 @@ Provider controller's existing per-op audit path.
 - `tests/unit/nix/cases/device-usbip-eval.nix`: USBIP discriminated-union selector validation; unknown-field rejection.
 - `tests/unit/nix/cases/device-security-key-eval.nix`: security-key mutual-exclusion assertion; Credential-ref requirement.
 - `tests/unit/nix/cases/device-gpu-eval.nix`: GPU + video settings validation; shared-arbitration render-node-only enforcement.
-- `tests/unit/nix/cases/device-schema-validation.nix`: eval-time rule corpus — one test per validation row in the eval-time validation table; each must reject with the documented error slug.
-- `tests/unit/nix/cases/device-gen-cleanup-eval.nix`: generation diff — resource removed from Nix config appears in `pendingDeletion`; resource absent from prior generation does not appear; bundle `contentDigest` changes.
+- `tests/unit/nix/cases/device-schema-validation.nix`: eval-time rule corpus - one test per validation row in the eval-time validation table; each must reject with the documented error slug.
+- `tests/unit/nix/cases/device-gen-cleanup-eval.nix`: generation diff - resource removed from Nix config appears in `pendingDeletion`; resource absent from prior generation does not appear; bundle `contentDigest` changes.
 - `tests/unit/nix/cases/device-bundle-canonical.nix`: bundle JSON is canonical (sorted keys, sorted resources, stable contentDigest); two identical config subtrees produce identical digests.
 - `tests/unit/nix/cases/device-inline-secret-rejected.nix`: inline string in settings field with `credentialRef` constraint fails eval with `inline-secret-in-settings`.
 - `tests/unit/nix/cases/device-artifact-catalog.nix`: store path absent from all Device ResourceSpec JSON outputs; `spec.provider.settings` for TPM/USBIP carries no `artifactId` field; private catalog structure (type/digest/closure) is not present in the emitted resource bundle.
@@ -1879,32 +1879,32 @@ Provider controller's existing per-op audit path.
 | New: `packages/d2b-contract-tests/tests/device_bundle_canonical.rs` | Bundle JSON canonical form: sorted keys, sorted resources, stable contentDigest, duplicate-(type,name) rejection, digest mismatch fails |
 | New: `packages/d2b-contract-tests/tests/device_gen_cleanup.rs` | Generation lifecycle: `managedBy=configuration` set on emitted resources; `managedBy=controller` on controller-created resources; `managedBy=api` on API-created resources; stale `managedBy=configuration` resource receives DeleteRequest; `managedBy=controller` and `managedBy=api` resources never receive generation-Delete |
 
-### Layer-1 Rust (Provider tests — `src/` colocated unit tests)
+### Layer-1 Rust (Provider tests - `src/` colocated unit tests)
 
 Colocated `#[cfg(test)]` modules within each Provider crate's `src/`:
 
-- `packages/d2b-provider-device-tpm/src/` — swtpm argv golden vectors, state-dir
+- `packages/d2b-provider-device-tpm/src/` - swtpm argv golden vectors, state-dir
   hardening, tamper-marker detection, flush → start sequencing, finalizer
   non-deletion invariant.
-- `packages/d2b-provider-device-usbip/src/` — bus ID corpus (31-char max, metachar
+- `packages/d2b-provider-device-usbip/src/` - bus ID corpus (31-char max, metachar
   rejection, leading-zero segments), firewall rule ownership-marker format,
   bind/unbind EphemeralProcess creation.
-- `packages/d2b-provider-device-security-key/src/` — lease acquire/release
+- `packages/d2b-provider-device-security-key/src/` - lease acquire/release
   transitions, session ring eviction at capacity, broker op path-free invariant,
   CID translation round-trip.
-- `packages/d2b-provider-device-gpu/src/` — GPU/video process role selection,
+- `packages/d2b-provider-device-gpu/src/` - GPU/video process role selection,
   wire-constant snapshot stability, render-node vs full-GPU path branching.
 
-### Layer-1 Rust (Provider tests — `tests/` hermetic Cargo integration)
+### Layer-1 Rust (Provider tests - `tests/` hermetic Cargo integration)
 
 Each Provider crate's `tests/` directory; run with `cargo test -p d2b-provider-device-<name>`:
 
 | Crate | Tests |
 | --- | --- |
-| `d2b-provider-device-tpm/tests/` | `controller_state_machine.rs` — flush→swtpm→Ready cycle with fake broker; `conformance.rs` — spec/status serde vs ResourceTypeSchema; `fault_swtpm_missing.rs` — swtpm absent → phase Degraded |
-| `d2b-provider-device-usbip/tests/` | `arbitration_conflict.rs` — second-claim rejects; `conformance.rs` — spec/settings serde; `firewall_marker.rs` — ownership marker preserved in rule; `explicit_attach_split.rs` — EphemeralProcess bind vs declared Process |
-| `d2b-provider-device-security-key/tests/` | `lease_state_machine.rs` — full acquire/cancel/expire cycle; `session_ring.rs` — ring wrap and eviction; `mutual_exclusion.rs` — USBIP+SK resolve the same token to an identical Core-derived physical backing tuple and the second claimant fails before effects; `conformance.rs` — spec/status serde; `guest_frontend_process.rs` — frontend Process resource fields |
-| `d2b-provider-device-gpu/tests/` | `combined_reconcile.rs` — gpu+video combined state machine; `render_node_enforcement.rs` — shared+renderNodeOnly=false rejected; `wire_constant_snapshot.rs` — byte-stable wire-contract constants; `conformance.rs` — spec/settings serde |
+| `d2b-provider-device-tpm/tests/` | `controller_state_machine.rs` - flush→swtpm→Ready cycle with fake broker; `conformance.rs` - spec/status serde vs ResourceTypeSchema; `fault_swtpm_missing.rs` - swtpm absent → phase Degraded |
+| `d2b-provider-device-usbip/tests/` | `arbitration_conflict.rs` - second-claim rejects; `conformance.rs` - spec/settings serde; `firewall_marker.rs` - ownership marker preserved in rule; `explicit_attach_split.rs` - EphemeralProcess bind vs declared Process |
+| `d2b-provider-device-security-key/tests/` | `lease_state_machine.rs` - full acquire/cancel/expire cycle; `session_ring.rs` - ring wrap and eviction; `mutual_exclusion.rs` - USBIP+SK resolve the same token to an identical Core-derived physical backing tuple and the second claimant fails before effects; `conformance.rs` - spec/status serde; `guest_frontend_process.rs` - frontend Process resource fields |
+| `d2b-provider-device-gpu/tests/` | `combined_reconcile.rs` - gpu+video combined state machine; `render_node_enforcement.rs` - shared+renderNodeOnly=false rejected; `wire_constant_snapshot.rs` - byte-stable wire-contract constants; `conformance.rs` - spec/settings serde |
 
 ### Layer-2 integration tests
 
@@ -1915,7 +1915,7 @@ Each Provider crate's `tests/` directory; run with `cargo test -p d2b-provider-d
 - `tests/integration/containers/device-usbip-arbitration.sh`: second-claim
   conflict rejection.
 - `tests/integration/containers/device-gen-cleanup.sh`: full generation cleanup
-  cycle — apply generation N with two Devices, apply generation N+1 removing one
+  cycle - apply generation N with two Devices, apply generation N+1 removing one
   Device, verify: (a) Zone transitions to `Degraded/pending-cleanup`, (b) removed
   Device enters finalizer sequence, (c) child Processes of removed Device are
   deleted by Device finalizer (not by Core), (d) Zone remains operational for the
@@ -1939,10 +1939,10 @@ Provider they test:
 
 | Crate `integration/` path | Scenarios |
 | --- | --- |
-| `d2b-provider-device-tpm/integration/` | `provision_and_reboot/` — full TPM provision → Guest boot → reboot cycle; `tamper_marker_survives/` — marker present after Provider restart; `finalizer_no_delete/` — Volume not deleted on Device finalizer |
-| `d2b-provider-device-usbip/integration/` | `arbitration_conflict/` — second Host claim rejected at runtime; `busid_bind_cycle/` — full modprobe→lock→withhold→firewall→bind→proxy bringup; `network_firewall_coexistence/` — Provider firewall rule does not clobber Network rules |
-| `d2b-provider-device-security-key/integration/` | `lease_acquire_cancel/` — full acquire → cancel → re-acquire cycle; `session_ring_capacity/` — ring wraps correctly under real vsock load; `guest_frontend_connect/` — Guest frontend Process connects and authenticates over AF_VSOCK |
-| `d2b-provider-device-gpu/integration/` | `gpu_worker_start/` — GPU worker Process obtains broker tokens and becomes Ready; `render_node_shared/` — two Guests share render-node Device simultaneously; `video_dependency/` — video-decoder Process starts only after gpu worker Process is Ready |
+| `d2b-provider-device-tpm/integration/` | `provision_and_reboot/` - full TPM provision → Guest boot → reboot cycle; `tamper_marker_survives/` - marker present after Provider restart; `finalizer_no_delete/` - Volume not deleted on Device finalizer |
+| `d2b-provider-device-usbip/integration/` | `arbitration_conflict/` - second Host claim rejected at runtime; `busid_bind_cycle/` - full modprobe→lock→withhold→firewall→bind→proxy bringup; `network_firewall_coexistence/` - Provider firewall rule does not clobber Network rules |
+| `d2b-provider-device-security-key/integration/` | `lease_acquire_cancel/` - full acquire → cancel → re-acquire cycle; `session_ring_capacity/` - ring wraps correctly under real vsock load; `guest_frontend_connect/` - Guest frontend Process connects and authenticates over AF_VSOCK |
+| `d2b-provider-device-gpu/integration/` | `gpu_worker_start/` - GPU worker Process obtains broker tokens and becomes Ready; `render_node_shared/` - two Guests share render-node Device simultaneously; `video_dependency/` - video-decoder Process starts only after gpu worker Process is Ready |
 
 ### Feasibility proofs
 
@@ -1973,8 +1973,8 @@ integration is live and all current tests pass against the new resource model.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | **Process/DAG**: `packages/d2b-core/src/processes.rs` (ProcessRole enum: Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video; VmProcessDag/VmProcessInvariants structs — old Workload DAG names); `packages/d2b-core/src/bundle_resolver.rs` (process exec names, device token sets, USBIP intents); `packages/d2b-host/src/swtpm_argv.rs`, `gpu_argv.rs`, `video_argv.rs`; **swtpm state**: `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`; **Contracts/broker ops**: `packages/d2b-contracts/src/security_key.rs`, `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation enum: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule); **Security-key relay (daemon-internal)**: `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED auth, hidraw async fd, accept loop, lease; lives inside d2bd, NOT a separate spawned process); `packages/d2bd/src/lib.rs:10456` (`start_sk_accept_loop` — ProcessRole::SecurityKeyFrontend is handled as a daemon-internal coroutine: broker fetches hidraw fd, daemon binds vsock-proxy socket, spawns async accept loop); **Guest binary**: `packages/d2b-sk-frontend/src/` (static binary for in-guest UHID virtual HID device; connects over AF_VSOCK to the daemon accept loop; NOT related to the ProcessRole name); **USBIP state machine**: `packages/d2bd/src/usbip_state_machine.rs` (typed per-busid bring-up plan and executor; canonical step order: modprobe→lock→withhold→firewall→backend→bind→proxy); `packages/d2bd/src/usbip_reconcile_state.rs` (restart-safe reconciler state model; internal to daemon, not yet wired to reconciler); `packages/d2bd/src/usbipd_perenv_autostart.rs` (per-env usbipd daemon autostart via broker SpawnRunner, retiring legacy systemd units in `nixos-modules/network.nix`); **Workload/Realm capability surface (old names)**: `packages/d2b-realm-core/src/capability.rs` (old Realm Capability enum: GpuAccel, Usb, Hid, Hotplug — current inter-Realm device capability assertion, target maps to Device ResourceType claims); `packages/d2b-realm-core/src/stream.rs` (StreamKind::DeviceHid → Capability::Hid, StreamKind::DeviceUsb → Capability::Usb); `packages/d2bd/src/realm_access_resolver.rs` (maps old Workload ops: `ops.media.usb_hotplug` → Capability::Usb + Capability::Hotplug, `ops.display.graphics` → Capability::GpuAccel); **Workload manifest (old name)**: `packages/d2b-core/src/manifest_v04.rs` VmEntry fields: `tpm: bool`, `usbip_yubikey: bool`, `security_key: bool`, `graphics: bool`, `gpu_socket: Option<String>` (per-Workload device-enable flags in the v04 manifest; these are the current per-VM device declarations); **Runtime capability surface**: `packages/d2b-core/src/runtime.rs` (RuntimeServiceRole enum maps ProcessRoles to public roles: Tpm←Swtpm/SwtpmPreStartFlush, Display←Gpu/GpuRenderNode, Video←Video, Usb←Usbip+SecurityKeyFrontend; RuntimeMediaCapabilities: `usb_hotplug`; RuntimeDisplayCapabilities: `graphics`/`video`); **Nix options (old Workload namespace)**: `nixos-modules/options-realms-workloads.nix` (`d2b.vms.<vm>.tpm.enable`, `d2b.vms.<vm>.graphics.enable` — current Nix Workload device options; v3 target is `d2b.zones.<zone>.resources.<name> = { type = "Device"; ... }`); `nixos-modules/components/tpm.nix`, `usbip.nix`, `security-key-guest.nix`, `video/guest.nix`, `graphics.nix` |
-| Evidence class | ProcessRole enum (ProcessRole, VmProcessDag): **implemented-and-reachable**. swtpm/gpu/video argv generators: **implemented-and-reachable**. swtpm_dir hardening and tamper marker: **implemented-and-reachable**. Security-key broker ops DTOs (`security_key.rs`, `broker_wire.rs` W3BrokerOperation): **implemented-and-reachable** (NOT unwired stubs — the full CTAPHID relay runs in `packages/d2bd/src/security_key.rs` and `packages/d2bd/src/lib.rs:start_sk_accept_loop`). USBIP state machine (`usbip_state_machine.rs`): **implemented-and-reachable**. USBIP reconcile state model (`usbip_reconcile_state.rs`): **implemented-but-unwired** (future restart-safe reconciler, internal state model). USBIP per-env autostart (`usbipd_perenv_autostart.rs`): **implemented-and-reachable**. Realm Capability enum (GpuAccel/Usb/Hid/Hotplug): **implemented-and-reachable** (old Workload/Realm names; in-process capability assertion). StreamKind::DeviceHid/DeviceUsb: **implemented-and-reachable**. realm_access_resolver.rs (Workload ops → Capabilities): **implemented-and-reachable**. manifest_v04.rs VmEntry device fields: **generated-or-eval-contract** (bundle/manifest-driven per-Workload flags). runtime.rs RuntimeServiceRole/RuntimeCapabilities: **implemented-and-reachable** (current public service role and capability surface). d2b-sk-frontend guest binary: **implemented-and-reachable** (guest static binary, not a Zone Process). Nix options-realms-workloads.nix device options: **generated-or-eval-contract**. Device ResourceType schema: **ADR-only**. Provider crates (d2b-provider-device-*): **ADR-only**. |
+| Current anchor | **Process/DAG**: `packages/d2b-core/src/processes.rs` (ProcessRole enum: Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video; VmProcessDag/VmProcessInvariants structs - old Workload DAG names); `packages/d2b-core/src/bundle_resolver.rs` (process exec names, device token sets, USBIP intents); `packages/d2b-host/src/swtpm_argv.rs`, `gpu_argv.rs`, `video_argv.rs`; **swtpm state**: `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`; **Contracts/broker ops**: `packages/d2b-contracts/src/security_key.rs`, `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation enum: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule); **Security-key relay (daemon-internal)**: `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED auth, hidraw async fd, accept loop, lease; lives inside d2bd, NOT a separate spawned process); `packages/d2bd/src/lib.rs:10456` (`start_sk_accept_loop` - ProcessRole::SecurityKeyFrontend is handled as a daemon-internal coroutine: broker fetches hidraw fd, daemon binds vsock-proxy socket, spawns async accept loop); **Guest binary**: `packages/d2b-sk-frontend/src/` (static binary for in-guest UHID virtual HID device; connects over AF_VSOCK to the daemon accept loop; NOT related to the ProcessRole name); **USBIP state machine**: `packages/d2bd/src/usbip_state_machine.rs` (typed per-busid bring-up plan and executor; canonical step order: modprobe→lock→withhold→firewall→backend→bind→proxy); `packages/d2bd/src/usbip_reconcile_state.rs` (restart-safe reconciler state model; internal to daemon, not yet wired to reconciler); `packages/d2bd/src/usbipd_perenv_autostart.rs` (per-env usbipd daemon autostart via broker SpawnRunner, retiring legacy systemd units in `nixos-modules/network.nix`); **Workload/Realm capability surface (old names)**: `packages/d2b-realm-core/src/capability.rs` (old Realm Capability enum: GpuAccel, Usb, Hid, Hotplug - current inter-Realm device capability assertion, target maps to Device ResourceType claims); `packages/d2b-realm-core/src/stream.rs` (StreamKind::DeviceHid → Capability::Hid, StreamKind::DeviceUsb → Capability::Usb); `packages/d2bd/src/realm_access_resolver.rs` (maps old Workload ops: `ops.media.usb_hotplug` → Capability::Usb + Capability::Hotplug, `ops.display.graphics` → Capability::GpuAccel); **Workload manifest (old name)**: `packages/d2b-core/src/manifest_v04.rs` VmEntry fields: `tpm: bool`, `usbip_yubikey: bool`, `security_key: bool`, `graphics: bool`, `gpu_socket: Option<String>` (per-Workload device-enable flags in the v04 manifest; these are the current per-VM device declarations); **Runtime capability surface**: `packages/d2b-core/src/runtime.rs` (RuntimeServiceRole enum maps ProcessRoles to public roles: Tpm←Swtpm/SwtpmPreStartFlush, Display←Gpu/GpuRenderNode, Video←Video, Usb←Usbip+SecurityKeyFrontend; RuntimeMediaCapabilities: `usb_hotplug`; RuntimeDisplayCapabilities: `graphics`/`video`); **Nix options (old Workload namespace)**: `nixos-modules/options-realms-workloads.nix` (`d2b.vms.<vm>.tpm.enable`, `d2b.vms.<vm>.graphics.enable` - current Nix Workload device options; v3 target is `d2b.zones.<zone>.resources.<name> = { type = "Device"; ... }`); `nixos-modules/components/tpm.nix`, `usbip.nix`, `security-key-guest.nix`, `video/guest.nix`, `graphics.nix` |
+| Evidence class | ProcessRole enum (ProcessRole, VmProcessDag): **implemented-and-reachable**. swtpm/gpu/video argv generators: **implemented-and-reachable**. swtpm_dir hardening and tamper marker: **implemented-and-reachable**. Security-key broker ops DTOs (`security_key.rs`, `broker_wire.rs` W3BrokerOperation): **implemented-and-reachable** (NOT unwired stubs - the full CTAPHID relay runs in `packages/d2bd/src/security_key.rs` and `packages/d2bd/src/lib.rs:start_sk_accept_loop`). USBIP state machine (`usbip_state_machine.rs`): **implemented-and-reachable**. USBIP reconcile state model (`usbip_reconcile_state.rs`): **implemented-but-unwired** (future restart-safe reconciler, internal state model). USBIP per-env autostart (`usbipd_perenv_autostart.rs`): **implemented-and-reachable**. Realm Capability enum (GpuAccel/Usb/Hid/Hotplug): **implemented-and-reachable** (old Workload/Realm names; in-process capability assertion). StreamKind::DeviceHid/DeviceUsb: **implemented-and-reachable**. realm_access_resolver.rs (Workload ops → Capabilities): **implemented-and-reachable**. manifest_v04.rs VmEntry device fields: **generated-or-eval-contract** (bundle/manifest-driven per-Workload flags). runtime.rs RuntimeServiceRole/RuntimeCapabilities: **implemented-and-reachable** (current public service role and capability surface). d2b-sk-frontend guest binary: **implemented-and-reachable** (guest static binary, not a Zone Process). Nix options-realms-workloads.nix device options: **generated-or-eval-contract**. Device ResourceType schema: **ADR-only**. Provider crates (d2b-provider-device-*): **ADR-only**. |
 | Behavior retained | Swtpm user-namespace/zero-host-caps (ADR 0021), tamper-marker/fail-closed, umask=7 socket ACL; GPU broker token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; USBIP bus ID validation; security-key hidraw-only broker access; eval-time mutual-exclusion assertions |
 | Required delta | Device ResourceType schema, four Provider crates, controller reconcile loops, RBAC roles, hot-plug observe interval, Guest frontend Process resolution, consolidated process name templates |
 | Reuse path | Extract swtpm_argv.rs, swtpm_dir.rs, gpu_argv.rs, video_argv.rs unmodified into device-tpm/device-gpu crates. Adapt security_key.rs DTOs with Zone ResourceRef identifiers. Adapt usbip.rs with v3 enum changes. Copy ProcessRole disposition table verbatim into Provider dossiers. |
@@ -2043,7 +2043,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
-| Current source | `packages/d2b-contracts/src/security_key.rs` (SecurityKeyStatusResponse, SecurityKeySession, SecurityKeyLeaseState, SecurityKeyVmSessionState DTOs; implemented-and-reachable), `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule — implemented-and-reachable); `packages/d2b-core/src/manifest_v04.rs` VmEntry device fields (tpm, usbip_yubikey, security_key, graphics — old Workload manifest, generated-or-eval-contract) |
+| Current source | `packages/d2b-contracts/src/security_key.rs` (SecurityKeyStatusResponse, SecurityKeySession, SecurityKeyLeaseState, SecurityKeyVmSessionState DTOs; implemented-and-reachable), `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule - implemented-and-reachable); `packages/d2b-core/src/manifest_v04.rs` VmEntry device fields (tpm, usbip_yubikey, security_key, graphics - old Workload manifest, generated-or-eval-contract) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/device.rs` |
 | Detailed design | Device ResourceType schema (spec/status/conditions/claims/inventory); closed-set error codes; Device RBAC verbs; broker operation effect-limit constants; shared Device telemetry contract requires fixed semantic metric labels with no Zone/resource-name-derived identity and retains `d2b.zone`/`d2b.provider` only as OTEL resource attributes. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
@@ -2071,7 +2071,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-device-001; device-usbip provider owner |
-| Current source | `packages/d2b-contracts/src/usbip.rs` (USBIP DTOs, SYSFS_BUS_ID_MAX, bus-ID validation — implemented-and-reachable); `packages/d2b-core/src/bundle_resolver.rs` USBIP intents; `packages/d2b-core/src/privileges.rs` authz rows; `packages/d2bd/src/usbip_state_machine.rs` (typed per-busid bring-up state machine, step order: modprobe→lock→withhold→firewall→backend→bind→proxy — implemented-and-reachable); `packages/d2bd/src/usbipd_perenv_autostart.rs` (per-env usbipd daemon autostart — implemented-and-reachable); `packages/d2bd/src/usbip_reconcile_state.rs` (restart-safe reconciler state model — implemented-but-unwired); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.usbip.*` (generated-or-eval-contract); `nixos-modules/components/usbip.nix` |
+| Current source | `packages/d2b-contracts/src/usbip.rs` (USBIP DTOs, SYSFS_BUS_ID_MAX, bus-ID validation - implemented-and-reachable); `packages/d2b-core/src/bundle_resolver.rs` USBIP intents; `packages/d2b-core/src/privileges.rs` authz rows; `packages/d2bd/src/usbip_state_machine.rs` (typed per-busid bring-up state machine, step order: modprobe→lock→withhold→firewall→backend→bind→proxy - implemented-and-reachable); `packages/d2bd/src/usbipd_perenv_autostart.rs` (per-env usbipd daemon autostart - implemented-and-reachable); `packages/d2bd/src/usbip_reconcile_state.rs` (restart-safe reconciler state model - implemented-but-unwired); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.usbip.*` (generated-or-eval-contract); `nixos-modules/components/usbip.nix` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-usbip/src/` (controller, daemon Process, bind/unbind EphemeralProcess, firewall); `packages/d2b-provider-device-usbip/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-usbip/integration/` (container/Host scenarios); `packages/d2b-provider-device-usbip/README.md` |
 | Detailed design | Device spec/status; bus ID validation; firewall rule ownership-marker; bind/unbind EphemeralProcess; per-Device daemon Process (owned by device-usbip; Network supplies dependency/firewall interface); Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
@@ -2085,7 +2085,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-device-001; device-security-key provider owner |
-| Current source | `packages/d2b-contracts/src/security_key.rs` (DTOs — implemented-and-reachable); `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation — implemented-and-reachable); **KEY: relay is in d2bd** — `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED, hidraw async fd, accept loop — implemented-and-reachable) and `packages/d2bd/src/lib.rs:start_sk_accept_loop` (ProcessRole::SecurityKeyFrontend dispatch — implemented-and-reachable); **guest binary**: `packages/d2b-sk-frontend/src/` (static UHID frontend — implemented-and-reachable); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.security_key.*`; `nixos-modules/components/security-key-guest.nix` |
+| Current source | `packages/d2b-contracts/src/security_key.rs` (DTOs - implemented-and-reachable); `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation - implemented-and-reachable); **KEY: relay is in d2bd** - `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED, hidraw async fd, accept loop - implemented-and-reachable) and `packages/d2bd/src/lib.rs:start_sk_accept_loop` (ProcessRole::SecurityKeyFrontend dispatch - implemented-and-reachable); **guest binary**: `packages/d2b-sk-frontend/src/` (static UHID frontend - implemented-and-reachable); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.security_key.*`; `nixos-modules/components/security-key-guest.nix` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-security-key/src/` (controller, relay Process, guest frontend Process, lease/session ring); `packages/d2b-provider-device-security-key/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-security-key/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-security-key/README.md` |
 | Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
@@ -2113,10 +2113,10 @@ error listing the missing paths. There is no opt-out mechanism.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-device-001 through ADR046-device-005; Nix integrator |
-| Current source | `nixos-modules/components/tpm.nix`, `usbip.nix`, `security-key-guest.nix`, `video/guest.nix`, `graphics.nix`; `nixos-modules/assertions.nix`; **old Workload Nix namespace**: `nixos-modules/options-realms-workloads.nix` (`d2b.vms.<vm>.tpm.enable`, `d2b.vms.<vm>.graphics.enable`, `d2b.vms.<vm>.usbip.*` — generated-or-eval-contract; v3 replaces `d2b.vms.*` with `d2b.zones.*`) |
+| Current source | `nixos-modules/components/tpm.nix`, `usbip.nix`, `security-key-guest.nix`, `video/guest.nix`, `graphics.nix`; `nixos-modules/assertions.nix`; **old Workload Nix namespace**: `nixos-modules/options-realms-workloads.nix` (`d2b.vms.<vm>.tpm.enable`, `d2b.vms.<vm>.graphics.enable`, `d2b.vms.<vm>.usbip.*` - generated-or-eval-contract; v3 replaces `d2b.vms.*` with `d2b.zones.*`) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/resources-device.nix`; `nixos-modules/bundle-artifacts.nix` (bundle emission for resource store); `nixos-modules/assertions.nix` (six eval-time device assertions) |
-| Detailed design | Nix authoring shape `d2b.zones.<zone>.resources.<name> = { type = "Device"; metadata.ownerRef = ...; spec = { ...exact ResourceSpec fields... }; };` as specified in "Nix configuration" section; `metadata.name`/`metadata.zone`/`apiVersion` derived automatically; `status` and Core management fields (`managedBy`, `configurationGeneration`, uid, generation, revision, timestamps, finalizers) omitted from emitted JSON; `spec` field names/types/defaults identical to ResourceTypeSchema with no renaming; per-Provider `spec.provider.settings` validated against signed Provider schema; no `artifactId` or store-path fields in Device `spec.provider.settings` — binary paths are resolved from Provider package closures; Credential-ref enforcement; artifact catalog emitted as a separate private integrity-pinned map (ID→type/digest/closure) by its own emitter; six eval-time validation assertions; canonical sorted-key full resource-envelope JSON emission (`apiVersion`, `type`, `metadata`, `spec` only); Zone resource bundle with `contentDigest` as specified in "Zone resource bundle/generation" section; Core sets `metadata.managedBy=configuration` and `metadata.configurationGeneration` at activation |
+| Detailed design | Nix authoring shape `d2b.zones.<zone>.resources.<name> = { type = "Device"; metadata.ownerRef = ...; spec = { ...exact ResourceSpec fields... }; };` as specified in "Nix configuration" section; `metadata.name`/`metadata.zone`/`apiVersion` derived automatically; `status` and Core management fields (`managedBy`, `configurationGeneration`, uid, generation, revision, timestamps, finalizers) omitted from emitted JSON; `spec` field names/types/defaults identical to ResourceTypeSchema with no renaming; per-Provider `spec.provider.settings` validated against signed Provider schema; no `artifactId` or store-path fields in Device `spec.provider.settings` - binary paths are resolved from Provider package closures; Credential-ref enforcement; artifact catalog emitted as a separate private integrity-pinned map (ID→type/digest/closure) by its own emitter; six eval-time validation assertions; canonical sorted-key full resource-envelope JSON emission (`apiVersion`, `type`, `metadata`, `spec` only); Zone resource bundle with `contentDigest` as specified in "Zone resource bundle/generation" section; Core sets `metadata.managedBy=configuration` and `metadata.configurationGeneration` at activation |
 | Integration | Resource store Nix emitter; artifact catalog emitted separately by Provider/system resource emitter (not by this emitter); device resource JSON output; Zone generation object including `priorGeneration`, `pendingDeletion`, `cleanupStatus` fields; cleanup contract logic belongs in the Core configuration handler (`packages/d2b-core-controller/src/configuration.rs`) consuming the generation from this emitter |
 | Data migration | Consumers migrate from per-VM options to Zone Device declarations; data migration guide references "Nix configuration" section migration table |
 | Validation | nix-unit: `device-tpm-eval.nix`, `device-usbip-eval.nix`, `device-security-key-eval.nix`, `device-gpu-eval.nix`, `device-schema-validation.nix`, `device-gen-cleanup-eval.nix`, `device-bundle-canonical.nix`, `device-inline-secret-rejected.nix`, `device-artifact-catalog.nix`; contract tests: `device_resource_schema.rs`, `device_bundle_canonical.rs`, `device_gen_cleanup.rs` |
@@ -2130,22 +2130,22 @@ error listing the missing paths. There is no opt-out mechanism.
 | Current source | None (new work; no equivalent in v3 baseline or main a1cc0b2d) |
 | Reuse action | create |
 | Destination | `packages/d2b-core-controller/src/configuration.rs`; `packages/d2b-contract-tests/tests/device_gen_cleanup.rs` |
-| Detailed design | Implement the cleanup contract described in "Zone generation and cleanup": (1) on new generation activation, diff `resources` against prior generation's `resources` by (type, name) — resources absent from new generation that have `managedBy=configuration` go into `pendingDeletion`; (2) Zone phase transitions to `Degraded/pending-cleanup` until all items in `pendingDeletion` reach terminal Delete; (3) items in `pendingDeletion` with `managedBy=controller` or `managedBy=api` are rejected with `cleanup-config-ownership-mismatch`; (4) `managedBy=controller` and `managedBy=api` resources are never touched by generation cleanup — `cleanup-controller-resource-protected` emitted if attempted; `managedBy=api` resources persist until explicit Delete; (5) prior generations retained by count: default 3, range 1..16, configured via `d2b.zones.<zone>.retainedGenerations`; (6) each deletion is non-blocking; (7) finalizer-stuck timeout emits `cleanup-finalizer-stuck` and leaves Zone in `Degraded/pending-cleanup`; (8) all deletions emit `config-resource-deletion-requested` audit record with digested resource identity |
+| Detailed design | Implement the cleanup contract described in "Zone generation and cleanup": (1) on new generation activation, diff `resources` against prior generation's `resources` by (type, name) - resources absent from new generation that have `managedBy=configuration` go into `pendingDeletion`; (2) Zone phase transitions to `Degraded/pending-cleanup` until all items in `pendingDeletion` reach terminal Delete; (3) items in `pendingDeletion` with `managedBy=controller` or `managedBy=api` are rejected with `cleanup-config-ownership-mismatch`; (4) `managedBy=controller` and `managedBy=api` resources are never touched by generation cleanup - `cleanup-controller-resource-protected` emitted if attempted; `managedBy=api` resources persist until explicit Delete; (5) prior generations retained by count: default 3, range 1..16, configured via `d2b.zones.<zone>.retainedGenerations`; (6) each deletion is non-blocking; (7) finalizer-stuck timeout emits `cleanup-finalizer-stuck` and leaves Zone in `Degraded/pending-cleanup`; (8) all deletions emit `config-resource-deletion-requested` audit record with digested resource identity |
 | Integration | Consumes Zone resource bundle from ADR046-device-006 emitter; drives Device Provider finalizers via normal resource-Delete protocol; feeds Zone status conditions `GenerationCleanPending` and `GenerationCleanError` |
 | Data migration | Full d2b 3.0 reset; no prior generation cleanup state or v2 Device resource import |
-| Validation | Fast hermetic (D094): in-process Rust selectors under the owning crate `tests/` — `packages/d2b-core-controller/tests/gen_cleanup.rs`, `packages/d2b-core-controller/tests/gen_cleanup_controller_protected.rs`, `packages/d2b-core-controller/tests/gen_cleanup_audit.rs` — driven by a fake Zone store/clock with deterministic ordering and no wall-clock sleep; slower coverage reuses the existing integration directory scenarios `tests/integration/containers/device-gen-cleanup.sh`, `device-controller-resource-protected.sh`, and `device-gen-cleanup-audit.sh`; feasibility proof: generation cleanup with fake Zone runtime. No new top-level shell gate is added. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Validation | Fast hermetic (D094): in-process Rust selectors under the owning crate `tests/` - `packages/d2b-core-controller/tests/gen_cleanup.rs`, `packages/d2b-core-controller/tests/gen_cleanup_controller_protected.rs`, `packages/d2b-core-controller/tests/gen_cleanup_audit.rs` - driven by a fake Zone store/clock with deterministic ordering and no wall-clock sleep; slower coverage reuses the existing integration directory scenarios `tests/integration/containers/device-gen-cleanup.sh`, `device-controller-resource-protected.sh`, and `device-gen-cleanup-audit.sh`; feasibility proof: generation cleanup with fake Zone runtime. No new top-level shell gate is added. |
+| Removal proof | None - net-new; no prior owner to remove |
 
 ### ADR046-device-008
 
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-device-002 through ADR046-device-005; workspace/tooling maintainer |
-| Current source | `packages/xtask/src/main.rs` (existing `gen-*` and `check-*` commands — implemented-and-reachable); `packages/d2b-contract-tests/tests/workspace_policy.rs` (existing workspace policy tests — implemented-and-reachable) |
+| Current source | `packages/xtask/src/main.rs` (existing `gen-*` and `check-*` commands - implemented-and-reachable); `packages/d2b-contract-tests/tests/workspace_policy.rs` (existing workspace policy tests - implemented-and-reachable) |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/main.rs` (`check-provider-layout` subcommand); `packages/d2b-contract-tests/tests/workspace_policy.rs` (provider-layout policy assertions) |
 | Detailed design | Add `cargo xtask check-provider-layout`: enumerate workspace members matching `d2b-provider-*`; for each, assert `src/`, `tests/`, `integration/`, and `README.md` all exist relative to the crate root; report all missing paths before failing; no opt-out flag. Add companion test in `workspace_policy.rs` that asserts the same invariant against the static crate list in `Cargo.toml`. Wire `cargo xtask check-provider-layout` into `make test-policy` alongside existing workspace naming and sort checks. The check must also run in CI as part of the policy gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend. |
 | Integration | `make test-policy`; `make check`; GitHub CI policy job |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy gate passes once all four Device Provider crates exist with required paths; gate fails predictably when any path is removed from a Provider crate fixture; test fixture crate with one missing path must produce a named error identifying the exact missing path |
 | Removal proof | N/A (new tooling; not removed) |

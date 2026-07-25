@@ -7,7 +7,7 @@ use d2b_realm_core::{ConstellationError, ErrorKind};
 
 /// A gateway display-orchestration failure. Each variant maps to exactly one
 /// [`ErrorKind`]; the gateway never surfaces a raw provider/relay error string
-/// (those are redacted at the boundary — see the audit contract).
+/// (those are redacted at the boundary - see the audit contract).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     /// The target's realm has no entrypoint in the table.

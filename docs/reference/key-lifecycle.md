@@ -108,7 +108,7 @@ emits a daily JSONL audit record under
 
 Use `d2b audit` / `d2b audit --json` to inspect those records. If the
 CLI had to fall back to the legacy bash path, rely on shell history, sudo/journal
-logs, and your config history instead — only broker-handled requests land in the
+logs, and your config history instead - only broker-handled requests land in the
 broker audit log.
 
 ## Upgrading from bash d2b

@@ -12,7 +12,7 @@
 #     The host program connects to the BASE UDS (`<base>`), sends
 #     `CONNECT <port>\n`, reads back `OK <local-port>\n`, then
 #     bidirectional bytes flow. There is NO per-port file for
-#     host-initiated connections — CH does not create
+#     host-initiated connections - CH does not create
 #     `<base>_<port>` as a LISTENer when the guest does VSOCK-LISTEN.
 #
 # Pre-v0.2.0 the framework's host-bridge and per-VM relay tried to

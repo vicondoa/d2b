@@ -37,9 +37,9 @@ use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 /// `ExecCreate` uses a separate fresh per-op deadline (`ExecOpDeadlines`).
 ///
 /// The establish phase has six sequential operations, each capped at
-/// `GUEST_CONTROL_ATTEMPT_CAP` (3 s). Under heavy guest load — for example,
+/// `GUEST_CONTROL_ATTEMPT_CAP` (3 s). Under heavy guest load - for example,
 /// while a GUI application (Firefox, etc.) is doing its initial virtiofs burst
-/// loading hundreds of shared libraries — every operation can approach its
+/// loading hundreds of shared libraries - every operation can approach its
 /// per-op cap, requiring up to 6 × 3 s = 18 s of budget. 20 s leaves 2 s of
 /// headroom for scheduling jitter without changing the per-op cap or protocol.
 pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -167,7 +167,7 @@ impl ExecGuestConnector for RealExecConnector {
 /// This runs AFTER a successful authenticated handshake, so the guest is a
 /// guest-control generation that is up and reachable. A guest that does not
 /// advertise the exec capabilities here therefore has exec **disabled or not
-/// built in** (`guest.exec.enable = false`, or a partial generation) — it is
+/// built in** (`guest.exec.enable = false`, or a partial generation) - it is
 /// NOT the genuine "no guestd / old generation" case, which is detected earlier
 /// at connect/probe time. Surface the capability slug (exit 70, no SSH
 /// fallback) whose remediation points at enabling guest-control exec.
@@ -182,7 +182,7 @@ fn gate_capabilities(
             .any(|value| value == cap)
     };
     // The guest authenticated but advertises no attached-exec capability: exec
-    // is disabled or not built in (NOT old-generation — that is a connect-time
+    // is disabled or not built in (NOT old-generation - that is a connect-time
     // failure). Fail closed to the capability slug, whose remediation points at
     // `guest.exec.enable = true`.
     if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED) {
@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn no_exec_capability_is_capability_unavailable_after_auth() {
         // A guest advertising only health/capabilities (no exec) has reached
-        // this gate AFTER authenticating, so it is up and reachable — exec is
+        // this gate AFTER authenticating, so it is up and reachable - exec is
         // disabled or not built in, NOT a genuine old generation (that is a
         // connect-time failure). Fail closed to the capability slug (exit 70,
         // NO SSH fallback) whose remediation points at `guest.exec.enable`.
@@ -754,7 +754,7 @@ mod tests {
     /// connector cannot reach the guest vsock (absent socket / an old
     /// generation that never shipped guest-control), `establish` fails CLOSED
     /// with the typed unreachable error. It never returns `Ok`, never proxies
-    /// an exec op, and never falls back to SSH — the connector has exactly one
+    /// an exec op, and never falls back to SSH - the connector has exactly one
     /// success path, which requires a live authenticated handshake.
     ///
     /// This drives the REAL `establish` path through `new_for_tests`, whose
@@ -774,7 +774,7 @@ mod tests {
 
         // Sanity: the relaxed-directory connect reaches the genuine
         // socket-missing branch (NOT a directory pre-validation failure) for
-        // this exact (tempdir, absent socket) shape — so the establish failure
+        // this exact (tempdir, absent socket) shape - so the establish failure
         // below is the real transport-unreachable path, not a false positive.
         let probe = crate::guest_control_vsock::connect_guest_control_vsock_for_tests(
             &absent_socket,

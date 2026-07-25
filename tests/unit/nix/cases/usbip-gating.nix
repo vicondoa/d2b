@@ -2,7 +2,7 @@
 #
 # Host-side USBIP gating: the per-env usbipd backend/proxy systemd units,
 # the proxy socket, and the per-env iptables carve-outs were all deleted in
-# the daemon-only end state — the broker now spawns
+# the daemon-only end state - the broker now spawns
 # `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd}` and places the
 # firewall carve-outs at runtime via the `UsbipBindFirewallRule` op. The
 # only host-side gating that still survives at NixOS eval time is the
@@ -241,7 +241,7 @@ in
   };
 
   # --- usbip-enabled: host + VM both opt in. Backend/proxy/socket and
-  # firewall carve-outs are still absent (daemon-only — broker
+  # firewall carve-outs are still absent (daemon-only - broker
   # SpawnRunner / UsbipBindFirewallRule); only the usbip-host kernel
   # module survives at eval time. ------------------------------------
   "usbip-gating/enabled-backend-absent" = {
@@ -271,7 +271,7 @@ in
 
   # --- usbip-multi-env-scoped: host enabled, dev-vm opts in, work-vm
   # does not. All per-env units / sockets / firewall carve-outs are
-  # absent (daemon-only — broker SpawnRunner / UsbipBindFirewallRule).
+  # absent (daemon-only - broker SpawnRunner / UsbipBindFirewallRule).
   "usbip-gating/multi-env-dev-backend-absent" = {
     expr = hasService multiEnv "d2b-sys-dev-usbipd-backend";
     expected = false;

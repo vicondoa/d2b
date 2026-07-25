@@ -90,7 +90,7 @@ d2b status work-vm
 
 - group names for the important device nodes match the support matrix defaults
   (`kvm`, `fuse`);
-- some Fedora hosts need an explicit `vhost_net` load on first boot — let
+- some Fedora hosts need an explicit `vhost_net` load on first boot - let
   `host check --strict` be the deciding signal;
 - keep the `launcherUsers` / `adminUsers` sets small; on the current public
   socket, that boundary is what matters most.

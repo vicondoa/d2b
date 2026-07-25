@@ -6,8 +6,8 @@
 
 Realm declarations now produce a private bundle artifact that describes how
 host-local realm controllers are named and separated. NixOS materializes the
-host-local control-plane scaffolding from that contract — principals, unit
-names, socket paths, tmpfiles directories, and ACL metadata — while the
+host-local control-plane scaffolding from that contract - principals, unit
+names, socket paths, tmpfiles directories, and ACL metadata - while the
 access/routing/identity runtime remains intentionally narrow.
 
 ## Why a separate controller artifact exists

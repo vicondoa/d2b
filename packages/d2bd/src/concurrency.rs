@@ -4,16 +4,16 @@
 //! hermetically-testable types so the accept-loop and dispatch paths in
 //! `lib.rs` stay thin:
 //!
-//! 1. [`ConnSemaphore`] — a non-blocking, bounded admission gate for
+//! 1. [`ConnSemaphore`] - a non-blocking, bounded admission gate for
 //!    in-flight connection-handler threads. The accept loop performs a
 //!    NON-blocking [`ConnSemaphore::try_acquire`]; on a miss it refuses
 //!    the connection immediately (typed-busy) instead of ever blocking
 //!    `accept()`. The returned [`ConnPermit`] is an RAII token that is
 //!    moved INTO the handler thread (and, for an attached exec session,
 //!    into the owner closure) so the slot is released exactly when the
-//!    handler — not the accept loop — finishes.
+//!    handler - not the accept loop - finishes.
 //!
-//! 2. [`OpLockManager`] — per-VM and global in-process locks so a
+//! 2. [`OpLockManager`] - per-VM and global in-process locks so a
 //!    mutating lifecycle op (vm start/stop/restart, …) cannot race
 //!    another op on the same VM, and a global op (host prepare, keys
 //!    rotate, …) is mutually exclusive with every per-VM op. Read-only
@@ -108,7 +108,7 @@ impl Drop for ConnPermit {
 /// mutating verbs are mutually exclusive with everything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpLockClass {
-    /// No lock — read-only / status / session-managed verbs.
+    /// No lock - read-only / status / session-managed verbs.
     ReadOnly,
     /// Per-VM mutating verb; serialized against other ops on this VM.
     PerVm(String),
@@ -147,7 +147,7 @@ impl OpLockManager {
     }
 
     /// Acquire the lock appropriate to `class`, blocking the CALLING
-    /// (worker) thread — never the accept loop — until it is available.
+    /// (worker) thread - never the accept loop - until it is available.
     pub fn acquire(&self, class: &OpLockClass) -> OpLockGuard {
         match class {
             OpLockClass::ReadOnly => OpLockGuard::None,

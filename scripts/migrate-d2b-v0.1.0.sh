@@ -18,8 +18,8 @@
 # Idempotent. Has --dry-run and --rollback.
 #
 # This script is also distributed inside the public flake at
-# `scripts/migrate-d2b-v0.1.0.sh` —
-# https://github.com/vicondoa/d2b — so consumers can `nix
+# `scripts/migrate-d2b-v0.1.0.sh` -
+# https://github.com/vicondoa/d2b - so consumers can `nix
 # flake archive` or `git clone` the flake and run the script
 # directly from the resulting checkout. Path examples below assume
 # a typical consumer who imported the flake as input `d2b`:
@@ -109,7 +109,7 @@ SNAPSHOT_TPM_DIR=""
 
 _log_to_file() {
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    # Silent on failure — the script is sometimes invoked as a non-root
+    # Silent on failure - the script is sometimes invoked as a non-root
     # user (e.g. for --help) where /var/log isn't writable.
     { mkdir -p "$(dirname "$LOG")" && printf '%s\n' "$*" >>"$LOG"; } 2>/dev/null || true
   fi
@@ -121,7 +121,7 @@ err()   { local m="[ERROR] $*";  printf '%s\n' "$m" >&2; _log_to_file "$m"; }
 dry()   { local m="[DRY]   $*";  printf '%s\n' "$m" >&2; _log_to_file "$m"; }
 step()  { local m="[STEP]  $*";  printf '\n%s\n' "$m" >&2; _log_to_file "$m"; }
 
-# fail MSG... — fatal in real mode, warning-and-continue in dry-run.
+# fail MSG... - fatal in real mode, warning-and-continue in dry-run.
 # Pre-flight checks use this so --dry-run shows the full plan even
 # when a check would normally abort.
 fail() {
@@ -134,7 +134,7 @@ fail() {
   exit 1
 }
 
-# run CMD...   — execute in normal mode, log-only in dry-run.
+# run CMD...   - execute in normal mode, log-only in dry-run.
 run() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dry "$*"
@@ -144,7 +144,7 @@ run() {
   "$@"
 }
 
-# run_shell "shell pipeline"   — eval a shell pipeline; respects dry-run.
+# run_shell "shell pipeline"   - eval a shell pipeline; respects dry-run.
 run_shell() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dry "(shell) $*"
@@ -233,7 +233,7 @@ read_marker_version() {
   #   - on parseable marker:   the numeric version, exit 0
   #   - on corrupt marker:     calls fail() with prescriptive recovery
   # F6: a present-but-unparseable marker must NOT be silently treated as
-  # "no marker" — that would silently re-run a completed migration.
+  # "no marker" - that would silently re-run a completed migration.
   if [[ ! -f "$MARKER_FILE" ]]; then
     return 0
   fi
@@ -289,7 +289,7 @@ atomic_write_file() {
   dir="$(dirname "$target")"
   base="$(basename "$target")"
   install -d -m 755 "$dir"
-  # Note: explicit failure check on mktemp — `set -e` does not catch
+  # Note: explicit failure check on mktemp - `set -e` does not catch
   # command-substitution failures inside an assignment, so we must
   # validate the result explicitly before setting the cleanup trap.
   if ! tmp="$(mktemp "${dir}/.${base}.tmp.XXXXXX")"; then
@@ -343,7 +343,7 @@ EOF
     err "Failed to write migration marker: $MARKER_FILE"
     err ""
     err "Current state: migration is COMPLETE but the marker write failed."
-    err "This is an idempotency hazard — the next run would re-execute everything."
+    err "This is an idempotency hazard - the next run would re-execute everything."
     err ""
     err "Recovery:"
     err "  1. Verify the rename succeeded by inspecting:"
@@ -351,7 +351,7 @@ EOF
     err "  2. Write the marker by hand using the JSON template above (see"
     err "     the dry-run output for an example, or run this script with"
     err "     --dry-run to print it again)."
-    err "  3. Do NOT re-run forward — the rename has already happened."
+    err "  3. Do NOT re-run forward - the rename has already happened."
     exit 1
   fi
 }
@@ -409,7 +409,7 @@ check_clean_git() {
   out="$(git -C "$repo" status --porcelain 2>&1 || true)"
   if [[ -n "$out" ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      warn "(dry-run) /etc/nixos has uncommitted changes — would fail in real mode:"
+      warn "(dry-run) /etc/nixos has uncommitted changes - would fail in real mode:"
       printf '%s\n' "$out" >&2
     else
       err "$repo has uncommitted changes:"
@@ -656,7 +656,7 @@ snapshot_tpm_getcap() {
     svc="microvm@${vm}.service"
     if check_unit_inactive "$svc"; then
       if [[ "$DRY_RUN" -eq 1 ]]; then
-        dry "VM $vm is stopped — record swtpm_setup --print-capabilities to $out"
+        dry "VM $vm is stopped - record swtpm_setup --print-capabilities to $out"
       else
         {
           printf 'vm=%s\n' "$vm"
@@ -673,9 +673,9 @@ snapshot_tpm_getcap() {
       fi
     else
       if [[ "$DRY_RUN" -eq 1 ]]; then
-        dry "VM $vm is running — capture in-guest tpm2_getcap to $out"
+        dry "VM $vm is running - capture in-guest tpm2_getcap to $out"
       else
-        info "VM $vm is running — capturing in-guest tpm2_getcap"
+        info "VM $vm is running - capturing in-guest tpm2_getcap"
         ssh -o StrictHostKeyChecking=accept-new \
             -o UserKnownHostsFile="${STATE_DIR}/known_hosts.d2b" \
             -i "${STATE_DIR}/${vm}_ed25519" \
@@ -693,12 +693,12 @@ snapshot_phase() {
   # rename was recorded, the existing snapshot is the authoritative
   # reference. Re-hashing now (post-rename) would just capture the new
   # layout and break verification. If renames.tsv is absent/empty, the
-  # previous run hadn't moved anything yet — safe to re-hash against
+  # previous run hadn't moved anything yet - safe to re-hash against
   # the current (post-stop, post-sync) state.
   local renames_file="${SNAPSHOT_DIR}/renames.tsv"
   if [[ -s "$renames_file" ]]; then
     info "Resuming with renames already recorded ($(wc -l <"$renames_file") entries)."
-    info "Preserving original snapshot hashes — they are the verification anchor."
+    info "Preserving original snapshot hashes - they are the verification anchor."
   else
     snapshot_swtpm_state
     snapshot_tpm_getcap
@@ -772,14 +772,14 @@ safe_rename() {
     # F7: any failure in the temp/hash/diff path must be fatal BEFORE
     # we touch the source. Previously, mktemp failure (e.g., snapshot
     # dir full) would skip the diff check and proceed to `rm -rf $src`
-    # — losing data unverified.
+    # - losing data unverified.
     if [[ "$DRY_RUN" -eq 0 ]]; then
       local tmp_src tmp_dst
       if ! tmp_src="$(mktemp -p "$SNAPSHOT_DIR" .crossfs-src.XXXXXX)"; then
         err "FATAL: failed to create temp file in $SNAPSHOT_DIR for cross-FS verify."
         err ""
         err "Current state: $dst now exists (copy succeeded). $src is still intact."
-        err "No data lost — but the script will not delete the source unverified."
+        err "No data lost - but the script will not delete the source unverified."
         err ""
         err "Recovery:"
         err "  1. Free space in $SNAPSHOT_DIR's filesystem:"
@@ -795,7 +795,7 @@ safe_rename() {
         err ""
         err "Current state: $dst now exists (copy succeeded). $src is still intact."
         err ""
-        err "Recovery: same as above — free space, rm -rf $dst, re-run."
+        err "Recovery: same as above - free space, rm -rf $dst, re-run."
         exit 1
       fi
       if ! hash_dir "$src" "$tmp_src"; then
@@ -894,7 +894,7 @@ rename_phase() {
   rename_net_vms
   rename_swtpm_public
   rename_swtpm_private
-  step "sync — flushing pending writes before verification"
+  step "sync - flushing pending writes before verification"
   run sync
   info "Rename complete."
 }
@@ -922,7 +922,7 @@ fail_critical_stop() {
   err ""
   err "Why this is fatal: $svc holds open file handles on TPM / virtiofs / GPU"
   err "state that we're about to mv. If we proceed while it's running, we risk"
-  err "corrupting persistent TPM enrollment — Entra-ID will treat the device"
+  err "corrupting persistent TPM enrollment - Entra-ID will treat the device"
   err "as tampered and Intune will force re-enrollment + raise a security alert."
   err ""
   err "What to do:"
@@ -981,7 +981,7 @@ stop_unit_or_fail() {
 # When a new flake commit has already been applied before running this script), the new units may
 # be present and active, holding the listener ports we need free.
 discover_new_usbipd_units() {
-  # Skip privileged enumeration in dry-run as non-root — `systemctl
+  # Skip privileged enumeration in dry-run as non-root - `systemctl
   # list-units` is fine but the patterns might match nothing on the
   # author's host; we still want to print the discovery step.
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -1013,7 +1013,7 @@ stop_old_sidecars() {
   local all_vms=( "${WORKLOAD_VMS[@]}" "${NET_VMS_OLD[@]}" )
   for vm in "${all_vms[@]}"; do
     for tmpl in "${svcs_per_vm[@]}"; do
-      # tmpl is a hard-coded format string like "swtpm@%s.service" — use
+      # tmpl is a hard-coded format string like "swtpm@%s.service" - use
       # bash substitution rather than printf to avoid SC2059 (variable
       # in printf format string).
       svc="${tmpl//%s/$vm}"
@@ -1026,7 +1026,7 @@ stop_old_sidecars() {
     stop_unit_or_fail "$svc"
   done
   # F4: new-naming USBIPD units that may already be loaded on a
-  # partially-migrated host. Discover dynamically — the env list isn't
+  # partially-migrated host. Discover dynamically - the env list isn't
   # hardcoded here because future flake changes might add more.
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dry "enumerate d2b-sys-*-usbipd-* units and stop any that are active"
@@ -1043,9 +1043,9 @@ stop_old_sidecars() {
 # during the snapshot/rename window, then syncs the disk so any
 # in-flight writes are durable before we hash.
 pre_rename_stop_phase() {
-  step "Pre-rename stop phase (stop sidecars before snapshot — F1 fix for the swtpm-outlives-microvm race)"
+  step "Pre-rename stop phase (stop sidecars before snapshot - F1 fix for the swtpm-outlives-microvm race)"
   stop_old_sidecars
-  step "sync — flushing pending writes before snapshot"
+  step "sync - flushing pending writes before snapshot"
   run sync
 }
 
@@ -1100,7 +1100,7 @@ verify_swtpm_hashes() {
     err "  sudo -A bash $0 --rollback"
     err ""
     err "Do NOT proceed to nixos-rebuild. Do NOT boot the work-aad VM in"
-    err "this state — Entra-ID will treat it as device tampering and"
+    err "this state - Entra-ID will treat it as device tampering and"
     err "force re-enrollment."
     exit 1
   fi
@@ -1141,7 +1141,7 @@ record_disabled_unit() {
 disable_unit_if_present() {
   local unit="$1"
   # F3: "unit not found" is an acceptable no-op during the disable
-  # phase — the unit was named in the script's worst-case list but
+  # phase - the unit was named in the script's worst-case list but
   # doesn't exist on this particular host. This is the ONLY phase
   # where unit-not-found is benign; pre-rename stop already handled
   # actually-running units fatally.
@@ -1158,7 +1158,7 @@ disable_unit_if_present() {
   if ! systemctl disable --now "$unit"; then
     # F3: critical sidecars (swtpm/virtiofsd/gpu) must not silently
     # fail to disable. By this phase the rename and verification have
-    # already succeeded, so data is safe — but a phantom unit on next
+    # already succeeded, so data is safe - but a phantom unit on next
     # boot could try to bind ports or open files we've moved.
     if is_critical_sidecar "$unit"; then
       err ""
@@ -1207,10 +1207,10 @@ unit_disable_phase() {
   step "Unit-disable phase (old names that the new flake won't recreate)"
 
   local vm tmpl unit
-  # Per-VM instance units (workload VMs only — net VMs handled separately).
+  # Per-VM instance units (workload VMs only - net VMs handled separately).
   for vm in "${WORKLOAD_VMS[@]}"; do
     for tmpl in "${OLD_INSTANCE_UNITS_PER_VM[@]}"; do
-      # tmpl is a hard-coded format string like "swtpm@%s.service" — use
+      # tmpl is a hard-coded format string like "swtpm@%s.service" - use
       # bash substitution rather than printf to avoid SC2059 (variable
       # in printf format string).
       unit="${tmpl//%s/$vm}"
@@ -1310,7 +1310,7 @@ forward_run() {
     # this script knows how to handle (no prior migration version
     # exists today). Fail loudly rather than silently re-run.
     fail "Marker file reports migrationVersion=$v, which is older than this script's CURRENT_VERSION=$CURRENT_VERSION.
-This is unexpected — no prior migration version of this script has ever been shipped.
+This is unexpected - no prior migration version of this script has ever been shipped.
 
 Current state: unclear. Either an older version of this script ran (none exists)
 or the marker was hand-edited.
@@ -1516,13 +1516,13 @@ rollback_run() {
   if [[ -z "$snap" ]]; then
     err "No snapshot reference found. Cannot --rollback automatically."
     err ""
-    err "Current state: unknown — neither the in-progress marker nor the"
+    err "Current state: unknown - neither the in-progress marker nor the"
     err "completed-migration marker references a snapshot path."
     err "  checked: ${IN_PROGRESS_FILE}  (absent or no snapshotPath= line)"
     err "  checked: ${MARKER_FILE}        (absent or no snapshotPath JSON field)"
     err ""
     err "What to do:"
-    err "  1. Find a snapshot dir under ${BACKUP_ROOT}/ — they're named"
+    err "  1. Find a snapshot dir under ${BACKUP_ROOT}/ - they're named"
     err "     by UTC timestamp (e.g. ${BACKUP_ROOT}/20250118T141500Z):"
     err "       ls -1t ${BACKUP_ROOT}/ 2>/dev/null"
     err "  2. Recreate the in-progress marker pointing at the most recent one:"
@@ -1554,7 +1554,7 @@ rollback_run() {
   SNAPSHOT_TPM_DIR="$SNAPSHOT_DIR/tpm2_getcap"
   info "Rolling back using snapshot: $SNAPSHOT_DIR"
 
-  # Stop net VMs first if running — they may be holding the new state-dir
+  # Stop net VMs first if running - they may be holding the new state-dir
   # paths open. Workload VMs being up would have failed the forward run
   # too, but be defensive.
   local vm svc
@@ -1641,11 +1641,11 @@ rollback_run() {
     err "                  LC_ALL=C sort -z | xargs -0 sha256sum | sort)"
     err "  2. Restore from off-host backup if you have one"
     err "  3. Accept re-enrollment as a last resort (this triggers Intune"
-    err "     device-tampering alerts — coordinate with your IT/Security team)."
+    err "     device-tampering alerts - coordinate with your IT/Security team)."
     exit 1
   fi
 
-  # Drop the marker — we're back to pre-migration state.
+  # Drop the marker - we're back to pre-migration state.
   if [[ -f "$MARKER_FILE" ]]; then
     info "Removing migration marker: $MARKER_FILE"
     run rm -f "$MARKER_FILE"
@@ -1688,7 +1688,7 @@ EOF
 
 main() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "=== DRY RUN MODE — no changes will be made ==="
+    info "=== DRY RUN MODE - no changes will be made ==="
   fi
 
   # Root check must run before acquire_lock; the lock file lives under

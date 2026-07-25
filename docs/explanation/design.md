@@ -3,10 +3,10 @@
 Threat model and design rationale for [`vicondoa/d2b`][d2b].
 This document sits in the *explanation* quadrant of the [Diataxis]
 structure: it answers "why is d2b shaped this way?" rather than
-"how do I configure it?". Companion documents — the manifest schema
+"how do I configure it?". Companion documents - the manifest schema
 ([`../reference/manifest-schema.md`](../reference/manifest-schema.md)),
 the CLI contract ([`../reference/cli-contract.md`](../reference/cli-contract.md)),
-and the [`CHANGELOG.md`](../../CHANGELOG.md) — describe the *what*.
+and the [`CHANGELOG.md`](../../CHANGELOG.md) - describe the *what*.
 
 The doc tracks the implementation as it exists today (pre-v0.1.0).
 Where a defense is incomplete, or where a design tradeoff has known
@@ -24,7 +24,7 @@ the code.
 - [3. Architecture](#3-architecture)
 - [4. Defenses in depth](#4-defenses-in-depth)
 - [5. Limitations and known gaps](#5-limitations-and-known-gaps)
-- [6. Why not X — design rationale FAQ](#6-why-not-x--design-rationale-faq)
+- [6. Why not X - design rationale FAQ](#6-why-not-x--design-rationale-faq)
 - [6.5 Portability roadmap](#65-portability-roadmap)
 - [Observability](#observability)
 - [7. References](#7-references)
@@ -32,8 +32,8 @@ the code.
 ## 1. The problem d2b solves
 
 A single-user NixOS desktop wants more than one workspace on the
-same physical machine — typically "work", "personal", and "risky
-dev / browsing" — each with its own credentials, network identity,
+same physical machine - typically "work", "personal", and "risky
+dev / browsing" - each with its own credentials, network identity,
 USB device attachments, and disk state, and none of which should
 be able to observe or interfere with another. The Wayland session
 on the host is the one trusted surface the human actually
@@ -46,7 +46,7 @@ networks (the consumer wires bridges by hand), it does not manage
 SSH keys for the operator, it does not provide a single CLI that
 behaves like a unit-of-work boundary, and its sidecar processes
 (crosvm GPU forward, swtpm, vhost-device-sound, virtiofsd) run as
-whatever the consumer's NixOS config sets — typically a shared
+whatever the consumer's NixOS config sets - typically a shared
 user with broader permissions than necessary.
 
 D2b is an **opinionated workspace framework that owns its
@@ -199,8 +199,8 @@ Five distinct boundaries:
 ### Threats addressed
 
 **Compromised guest userspace.** A browser RCE, a malicious
-container, an exploited package manager — anything that gets
-code execution inside the guest — is bounded by the KVM
+container, an exploited package manager - anything that gets
+code execution inside the guest - is bounded by the KVM
 boundary. Within its env, the workload cannot reach peer
 workloads by default (bridge isolation), cannot reach the
 host's primary LAN (hostBlocklist), and cannot reach a
@@ -209,7 +209,7 @@ different env at all (distinct bridges + distinct net VMs). If
 isolation guarantee is intentionally relaxed and a compromised
 workload can scan or attack its same-env peers. It *can* reach
 the public internet, NAT'd through its env's net VM; that is
-intentional — a workspace VM without internet is rarely useful.
+intentional - a workspace VM without internet is rarely useful.
 
 **Compromised sidecar.** The GPU sidecar in particular runs
 cloud-hypervisor and crosvm-device-gpu, both of which are
@@ -223,7 +223,7 @@ each backend requires, `DevicePolicy=closed`, and an explicit
 `DeviceAllow` list. A compromise of `d2b-<vm>-gpu` can
 touch `/dev/kvm`, `/dev/dri/renderD128`, the per-VM state dir
 under `/var/lib/d2b/vms/<vm>/`, and the bind-mounted
-wayland socket — and nothing else.
+wayland socket - and nothing else.
 
 **Guest kernel exploit.** A privilege escalation from guest
 userspace to the in-VM kernel does not cross the KVM boundary;
@@ -232,7 +232,7 @@ view is still restricted to the VM's own closure (see *Per-VM
 nix store* below).
 
 **Cross-VM lateral movement.** A workload in env A cannot reach
-a workload in env B. There is no shared bridge — `br-A-lan` and
+a workload in env B. There is no shared bridge - `br-A-lan` and
 `br-B-lan` are distinct interfaces, each net VM is a separate
 sandbox, and CIDR overlap is rejected at eval time
 ([`nixos-modules/network.nix:220-275`](../../nixos-modules/network.nix)
@@ -282,7 +282,7 @@ D2b is deliberately not a defense against any of the following.
 Pretending otherwise would be dishonest.
 
 - **Physical attacker with host access.** Disk encryption, TPM
-  unlock, secure boot, evil-maid attacks — all out of scope.
+  unlock, secure boot, evil-maid attacks - all out of scope.
   Treat d2b's threat model as "host is up, host is trusted,
   attacker is on the wire or inside a guest."
 - **Compromised host kernel.** D2b is a host-trusted
@@ -294,7 +294,7 @@ Pretending otherwise would be dishonest.
 - **Supply chain attacks against nixpkgs, microvm.nix, or any
   upstream input.** Deferred to the consumer's own pin / audit
   discipline. The flake lock is the operator's responsibility.
-- **TPM hardware backdoor or firmware attack.** Out of scope —
+- **TPM hardware backdoor or firmware attack.** Out of scope -
   the swtpm emulator we ship for VMs is software, but the host
   TPM (if used at all) is not d2b's concern.
 - **Multi-user trust separation on the host.** D2b assumes a
@@ -309,19 +309,19 @@ Pretending otherwise would be dishonest.
   `d2b` group who is also listed in `d2b.site.launcherUsers`
   can connect to `/run/d2b/public.sock` and run the daemon's
   read-only verbs (`vm list`, `vm status`, `host check`,
-  `auth status`, `keys list`/`keys show`), and — because the per-VM
-  SSH keys are group-readable — read every per-VM SSH private key.
+  `auth status`, `keys list`/`keys show`), and - because the per-VM
+  SSH keys are group-readable - read every per-VM SSH private key.
   The v1.0 authorisation surface ([§4](#4-defenses-in-depth)) is
   `SO_PEERCRED` at `/run/d2b/public.sock` accept time: the
   `d2b` group plus `launcherUsers` is the *connection* gate, and
   the daemon's per-verb authorisation table is the *role* gate. The
   legacy polkit per-VM allowlist that previously narrowed which unit
   names launchers could start was retired in v1.0 (per ADR 0015).
-  Every mutating verb — lifecycle (`vm start`/`vm stop`/`vm restart`/
+  Every mutating verb - lifecycle (`vm start`/`vm stop`/`vm restart`/
   `switch`), host-prepare, key rotation, USBIP bind, store verify,
   config sync (`readGuestConfig`), and the destructive
   guest-control exec verb (`vm exec`, which runs commands as the VM's
-  workload user in a PAM login session — never as root) — is gated to
+  workload user in a PAM login session - never as root) - is gated to
   the admin role
   (`d2b.site.adminUsers`, checked via `SO_PEERCRED` at accept
   time), so a launcher-only member cannot reach them. The daemon does
@@ -366,8 +366,8 @@ than a d2b one.
 
 [ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md)
 adds a v2 constellation layer on top of the existing v1 substrate.
-The local fast path — the host daemon, the broker, and local VM
-lifecycle — is unchanged when constellation is disabled or when a
+The local fast path - the host daemon, the broker, and local VM
+lifecycle - is unchanged when constellation is disabled or when a
 relay or provider is unreachable. The following threat-model
 properties govern the constellation extension.
 
@@ -468,7 +468,7 @@ through `nixos-modules/default.nix`. The consumer imports
 `d2b.site.*`, `d2b.envs.<env>.*`, and `d2b.vms.<vm>.*`.
 Everything else is derived.
 
-### `d2b@<vm>.service` — the legacy per-VM wrapper (retired in v1.0)
+### `d2b@<vm>.service` - the legacy per-VM wrapper (retired in v1.0)
 
 > **v1.0 status (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)):**
 > The per-VM `d2b@<vm>.service` template and the wrapper module
@@ -489,7 +489,7 @@ template, `d2b@.service`, declared in
 - `BindsTo + After microvm@%i`: if microvm.nix stops the
   underlying VM, the wrapper follows.
 - Explicit `ExecStart`/`ExecStop` that calls
-  `systemctl start|stop microvm@%i.service` — so
+  `systemctl start|stop microvm@%i.service` - so
   `systemctl start d2b@<vm>` and `systemctl stop d2b@<vm>`
   symmetrically drive the underlying unit. `BindsTo` alone only
   propagates the bound→wrapper direction.
@@ -542,11 +542,11 @@ gated by the per-VM component toggles. `d2bd` starts each long-lived
 runner through the broker's typed `SpawnRunner` operation and tracks it
 by pidfd:
 
-- `virtiofsd` — mediates the per-VM `/nix/store` share and any
+- `virtiofsd` - mediates the per-VM `/nix/store` share and any
   virtiofs shares the consumer adds.
-- `store-virtiofs-preflight` — verifies the per-VM hardlink-farm marker
+- `store-virtiofs-preflight` - verifies the per-VM hardlink-farm marker
   before virtiofsd starts; the daemon owns the sync path.
-- `wayland-proxy` — present when
+- `wayland-proxy` - present when
   `d2b.vms.<vm>.graphics.enable = true`,
   `graphics.crossDomainTrusted = true`, and
   `graphics.waylandProxy.enable = true`. Runs the
@@ -555,36 +555,36 @@ by pidfd:
   compositor socket; it listens on
   `/run/d2b-wlproxy/<vm>/wayland-0` for the GPU sidecar and
   enforces the proxy policy before forwarding to the compositor.
-- `gpu` / `gpu-render-node` — present when
+- `gpu` / `gpu-render-node` - present when
   `d2b.vms.<vm>.graphics.enable = true`. Runs the patched crosvm
   GPU sidecar and gates Cloud Hypervisor startup on the GPU socket.
   When the Wayland proxy is active the GPU sidecar connects to
   `/run/d2b-wlproxy/<vm>/wayland-0` (the proxy socket), not to
   the real host compositor socket directly.
-- `video` — present only when
+- `video` - present only when
   `d2b.vms.<vm>.graphics.videoSidecar = true`. Runs the patched
   crosvm `device video-decoder --backend vaapi` sidecar as
   `RunnerRole::Video`, exposes `/run/d2b-video/<vm>/video.sock`,
   and is consumed by the patched Cloud Hypervisor
   `--vhost-user-media` device.
-- `audio` — present when `d2b.vms.<vm>.audio.enable = true`.
+- `audio` - present when `d2b.vms.<vm>.audio.enable = true`.
   Runs vhost-device-sound and exposes `/run/d2b/vms/<vm>/snd.sock`.
-- `swtpm` — present when `d2b.vms.<vm>.tpm.enable = true`.
+- `swtpm` - present when `d2b.vms.<vm>.tpm.enable = true`.
   Per-VM software TPM emulator, state under
   `/var/lib/d2b/vms/<vm>/swtpm/`. The `d2bVmStatePerms`
   activation script
   ([`nixos-modules/host-activation.nix`](../../nixos-modules/host-activation.nix))
   grants `d2b-<vm>-swtpm` a traversal-only ACL (`--x`) on
-  the parent state dir so the swtpm process — which runs in its
-  own `StateDirectory=` subdir under `microvm:kvm 2770` — can
+  the parent state dir so the swtpm process - which runs in its
+  own `StateDirectory=` subdir under `microvm:kvm 2770` - can
   reach `tpm2-00.permall`. Required because TPM-bound creds
   (Entra device join, Intune compliance) must survive any
   framework upgrade or user rename without re-enrollment.
 
 #### Why all per-VM sidecars carry `restartIfChanged = false`
 
-Every per-VM lifecycle service — `d2b@<vm>`, `microvm@<vm>`,
-`microvm-virtiofsd@<vm>`, `d2b-<vm>-{gpu,video,snd,swtpm}` — sets
+Every per-VM lifecycle service - `d2b@<vm>`, `microvm@<vm>`,
+`microvm-virtiofsd@<vm>`, `d2b-<vm>-{gpu,video,snd,swtpm}` - sets
 `restartIfChanged = false` (the same opt-out upstream microvm.nix
 applies to `microvm@.service`). A `nixos-rebuild switch` that
 touches any of these units updates the file in
@@ -592,7 +592,7 @@ touches any of these units updates the file in
 
 The motivating constraint is graphics VMs: the GPU sidecar IS the
 cloud-hypervisor process. Restarting it kills CH, evaporating
-every in-RAM piece of session state — Wayland clients,
+every in-RAM piece of session state - Wayland clients,
 interactive logins, Entra device-bound tokens, virtiofsd socket
 handshakes. For headless VMs the damage is smaller (no Wayland
 session to lose) but still material (network connections drop,
@@ -601,10 +601,10 @@ filesystem caches discard).
 The trade-off is that consumers must explicitly opt into picking
 up sidecar config changes. The framework provides two paths:
 
-- `d2b vm restart <vm> --apply` — clean `down` + `up` of the existing
+- `d2b vm restart <vm> --apply` - clean `down` + `up` of the existing
   closure. Use this when `d2b list` flags a VM as
   `[pending restart]` after a `nixos-rebuild switch`.
-- `d2b switch <vm> --apply` — full per-VM closure rebuild + live
+- `d2b switch <vm> --apply` - full per-VM closure rebuild + live
   activation through the daemon's authenticated guest-control path
   (no VM reboot). Use this when you edited the VM's own NixOS module.
   The host publishes the prepared toplevel into the VM's store view;
@@ -616,27 +616,27 @@ up sidecar config changes. The framework provides two paths:
 Two per-VM symlinks track the closure the VM is *running* vs the
 closure the host *declares*:
 
-- `/var/lib/d2b/vms/<vm>/current` — points at the latest
+- `/var/lib/d2b/vms/<vm>/current` - points at the latest
   declared closure (`microvm-cloud-hypervisor-<vm>` for graphics,
   `microvm-qemu-<vm>` for headless). Updated at every
   `nixos-rebuild switch`.
-- `/var/lib/d2b/vms/<vm>/booted` — points at the closure the
+- `/var/lib/d2b/vms/<vm>/booted` - points at the closure the
   running VM actually exec'd. Updated either by upstream
   microvm.nix's `microvm-set-booted@<vm>.service` (headless +
-  net VMs) or — new in v0.1.5 — by the `d2b-<vm>-gpu.service`
+  net VMs) or - new in v0.1.5 - by the `d2b-<vm>-gpu.service`
   `ExecStartPre` (graphics VMs).
 
 When `booted != current` AND the VM is running, the pending-
 restart predicate fires: `d2b list` adds `[pending restart]`
 to the STATUS column, and `d2b status <vm>` prints both
 store paths plus the remediation command. A first-boot VM has
-no `booted` yet — that's not "pending" — and a stopped VM has
+no `booted` yet - that's not "pending" - and a stopped VM has
 nothing to apply.
 
 Per-env sidecars (one set per declared env, not per VM):
 
 - (legacy only) `d2b-sys-<env>-usbipd-backend.service` and
-  `d2b-sys-<env>-usbipd-proxy.{socket,service}` — per-env USBIP
+  `d2b-sys-<env>-usbipd-proxy.{socket,service}` - per-env USBIP
   sidecars. Retired as host singletons; in v1.0 (per
   [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the daemon
   spawns the same `usbipd` backend + socket-proxy via the broker's
@@ -646,7 +646,7 @@ Per-env sidecars (one set per declared env, not per VM):
   on the per-env DAG. See
   [`docs/reference/privileges.md`](../reference/privileges.md) for
   the broker enum + audit shape.
-- (legacy only) `d2b-net-route-preflight.service` — the singleton
+- (legacy only) `d2b-net-route-preflight.service` - the singleton
   was retired in v1.0 (per
   [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the equivalent
   fail-closed self-check lives inside `d2bd`'s startup path and
@@ -661,7 +661,7 @@ Each `d2b.envs.<env>` causes
 materialise:
 
 - Two host-side bridges (`br-<env>-up` /30 point-to-point host↔net,
-  `br-<env>-lan` /24 net↔workloads — host has NO IP on the LAN
+  `br-<env>-lan` /24 net↔workloads - host has NO IP on the LAN
   bridge by design).
 - A headless net VM `sys-<env>-net`, declared as a regular
   `d2b.vms.<netName>` and therefore subject to the same
@@ -677,7 +677,7 @@ materialise:
   that bridge isolation and adds a matching LAN→LAN forward rule
   in the env's net VM.
 
-The net VM's lifecycle is no more privileged than a workload's —
+The net VM's lifecycle is no more privileged than a workload's -
 it is a regular d2b VM that happens to autostart, sit on both
 bridges, and run NAT.
 
@@ -779,7 +779,7 @@ flowchart TD
     root["/var/lib/d2b/"]
     root --> vms["vms/"]
     vms --> vm["&lt;vm&gt;/"]
-    vm --> swtpm["swtpm/<br/>TPM2 state (NEVER wipe — IdP-bound creds)"]
+    vm --> swtpm["swtpm/<br/>TPM2 state (NEVER wipe - IdP-bound creds)"]
     vm --> varimg["var.img<br/>guest /var disk image (microvm.nix-owned)"]
     vm --> store["store/<br/>per-VM /nix/store hardlink farm"]
     vm --> storemeta["store-meta/<br/>per-VM generation metadata"]
@@ -800,7 +800,7 @@ flowchart TD
 /var/lib/d2b/
 ├── vms/
 │   └── <vm>/
-│       ├── swtpm/              TPM2 state (NEVER wipe — IdP-bound creds)
+│       ├── swtpm/              TPM2 state (NEVER wipe - IdP-bound creds)
 │       ├── var.img             guest /var disk image (microvm.nix-owned)
 │       ├── store/              per-VM /nix/store hardlink farm
 │       ├── store-meta/         per-VM generation metadata
@@ -853,7 +853,7 @@ patterns, see [the naming conventions reference](../reference/naming-conventions
 
 D2b deliberately does **not** ship per-domain modules (Entra ID
 device-join, corporate VPN clients, vendor identity glue). Those live
-in sibling flakes that are framework-agnostic — they can in principle
+in sibling flakes that are framework-agnostic - they can in principle
 be imported into any NixOS configuration, microVM or bare metal.
 [`vicondoa/entrablau.nix`](https://github.com/vicondoa/entrablau.nix)
 is the canonical example.
@@ -877,7 +877,7 @@ The split:
   ```
 
   D2b does not depend on `entrablau`, and `entrablau`
-  does not depend on d2b — they meet only in the consumer
+  does not depend on d2b - they meet only in the consumer
   flake's `config.imports`.
 
 Why: d2b stays minimal and framework-agnostic. Domain flakes
@@ -891,7 +891,7 @@ the full composition pattern (one work VM with `tpm.enable = true`
 ## 4. Defenses in depth
 
 For each defense below, the threat it addresses is named explicitly.
-The list is not exhaustive — it covers the load-bearing controls.
+The list is not exhaustive - it covers the load-bearing controls.
 
 ### Per-VM dedicated system users
 
@@ -954,12 +954,12 @@ audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
 guest-control verbs are the exception: `readGuestConfig`
 (config sync) reads the guest's config over the typed guest-control
 channel rather than mutating the host, and `vm exec`
-proxies a guest-control exec session — running as the VM's workload
-user (`ssh.user`, never root) in a PAM login session — whose
+proxies a guest-control exec session - running as the VM's workload
+user (`ssh.user`, never root) in a PAM login session - whose
 establishment and termination are
 recorded as *leak-safe daemon-side* lifecycle events in
 `daemon-events-<utc-date>.jsonl` (VM name, admin peer uid, and tty
-shape only — never argv, env, cwd, or stdio bytes), not as broker
+shape only - never argv, env, cwd, or stdio bytes), not as broker
 `OpAuditRecord`s. Unknown / out-of-scope verbs surface a typed
 `not-yet-implemented` (exit 78) or `daemon-down` (exit 1)
 envelope. There is no per-VM allowlist at this layer; the
@@ -993,9 +993,9 @@ was the previous check and missed real overlaps like `10.0.0.0/16
 ### Route preflight, fail-closed
 
 **Threat:** a stale or operator-added static route on the host
-sends an env's LAN traffic via the wrong interface — typically
+sends an env's LAN traffic via the wrong interface - typically
 because an env's CIDR was changed and the old route was never
-withdrawn — and the workload's traffic ends up egressing the
+withdrawn - and the workload's traffic ends up egressing the
 host's primary LAN instead of the env's net VM.
 
 **Control (v1.0 daemon-only per [ADR 0015](../adr/0015-daemon-only-clean-break.md)):**
@@ -1008,7 +1008,7 @@ autostart dependency gating degrades that env's workloads. Focused
 network repair remains `d2b host reconcile --network --apply` after
 operator remediation. The legacy `d2b-net-route-preflight.service` host singleton and the
 per-VM `d2b@<vm>.service Requires=` wiring were retired in v1.0
-when the daemon took ownership of every host-mutation path — see
+when the daemon took ownership of every host-mutation path - see
 the "Net-route preflight & network reconcile" section of
 [`host-prepare.md`](../how-to/host-prepare.md) for the v1.0 operator
 flow.
@@ -1088,7 +1088,7 @@ required for that path.
 
 The trade is honest: the private key is readable by every member
 of `d2b`. That is intentional within the single-user
-threat model — the launcher group is the human and the human's
+threat model - the launcher group is the human and the human's
 own service principals. It is not a defense against a second
 human on the same machine.
 
@@ -1152,7 +1152,7 @@ model is honest about its incomplete edges:
   each reach the net VM (and via NAT, the upstream LAN) but
   cannot directly reach each other. Setting
   `d2b.envs.<env>.lan.allowEastWest = true` clears that
-  isolation and allows peer traffic — which also means a
+  isolation and allows peer traffic - which also means a
   compromised workload VM can scan or attack other VMs in the
   same env.
 - **No static lint for the `mkOption { default = …; readOnly =
@@ -1162,7 +1162,7 @@ model is honest about its incomplete edges:
   by humans, not tooling. A future grep-level lint should cover
   this. Note that `store.nix` legitimately carries
   `readOnly + default` on options that have NO matching
-  `config.<…>` assignment, so a two-of-three match is fine —
+  `config.<…>` assignment, so a two-of-three match is fine -
   only the full three is a bug.
 - **`pkgs/spectrum-ch/default.nix` deliberately omits
   `meta.platforms`.** The other patched packages
@@ -1183,7 +1183,7 @@ model is honest about its incomplete edges:
   [`nixos-modules/components/audio/host.nix:432-469`](../../nixos-modules/components/audio/host.nix)),
   so a guest cannot reach the host's microphone or speakers when its
   side is set to `off`. The remaining caveat is that this enforcement
-  lives in the host user's PipeWire session, not in the kernel — a
+  lives in the host user's PipeWire session, not in the kernel - a
   privileged adversary on the host's session bus could in principle
   inspect stream presence (not content) via PipeWire introspection.
   Considered acceptable: the host's session bus is already in the
@@ -1208,7 +1208,7 @@ evaluation, so it is contained on three independent axes (see
   over the real nixpkgs NixOS module set with those namespaces
   redeclared as detector options, and reports a violation by
   *definition-existence* (`options.<ns>.isDefined`) rather than by
-  trusting the module system's reported source file — so `imports`,
+  trusting the module system's reported source file - so `imports`,
   `builtins.toFile`-generated modules, and `_file` spoofing are all
   caught. A guest can change its own OS, never the host's
   substrate/framework control of it. This is a *best-effort* namespace
@@ -1223,11 +1223,11 @@ evaluation, so it is contained on three independent axes (see
   user-local staging copy and is never evaluated until an operator
   reviews (`config diff`) and approves it onto an operator-named
   target. The host never auto-locates or writes the operator's config
-  tree. An approved file is trusted, operator-reviewed host Nix — no
+  tree. An approved file is trusted, operator-reviewed host Nix - no
   more privileged than config the operator writes by hand.
 - **No new attack surface.** The transport is a host-initiated read
   over the authenticated guest-control vsock (the daemon's
-  `ReadGuestConfig` → guestd `ReadGuestFile` path) — no virtiofs share,
+  `ReadGuestConfig` → guestd `ReadGuestFile` path) - no virtiofs share,
   no new socket, no writable host-backed mount; the guest never
   initiates a connection into the host control plane, and there is no
   SSH fallback (an old-generation guest that does not advertise
@@ -1236,12 +1236,12 @@ evaluation, so it is contained on three independent axes (see
 
 The residual sharp edge is the same one that governs all host-owned
 config: an operator who approves a config that errors at eval will see
-their `d2b switch` fail (not their host rebuild — the per-VM eval
+their `d2b switch` fail (not their host rebuild - the per-VM eval
 is the failure boundary). Guest-built `/nix/store` paths are never
 trusted into the host; an in-guest `nixos-rebuild` (guest-build mode)
 remains a separate future spike.
 
-## 6. Why not X — design rationale FAQ
+## 6. Why not X - design rationale FAQ
 
 These are the questions that came up most often during the
 refactor that brought d2b out of a personal NixOS host into
@@ -1258,15 +1258,15 @@ the audit conventions, and a single CLI that operates on those
 abstractions. A `d2b.vms.<vm>` declaration is ~10 lines.
 Doing the same thing by hand with microvm.nix is ~150 lines of
 bridge plumbing, networkd rules, swtpm setup, sidecar
-hardening, and key-management activation scripts — and every
+hardening, and key-management activation scripts - and every
 one of those is an opportunity for a config drift across VMs.
 
 ### Why not multi-user / multi-tenant?
 
 The trust-boundary work to make `d2b` a real
-multi-principal grant — narrowing *which* user can drive
+multi-principal grant - narrowing *which* user can drive
 *which* VM, splitting `keysDir` access per principal, modelling
-cross-user audit — multiplies the option surface and breaks
+cross-user audit - multiplies the option surface and breaks
 several of the simplifying assumptions the CLI makes today
 (global flock files, shared `known_hosts`, single Wayland
 user). D2b targets the single-user desktop. Multi-tenant
@@ -1282,7 +1282,7 @@ socket boundary. Wayland's per-app socket model maps cleanly to
 per-VM forwarding: one wayland-0 per guest, mediated by a
 patched crosvm GPU sidecar, ACL'd to the per-VM sidecar user.
 The framework also does not want to maintain an X11 fallback
-in parallel — the threat-modelling on it would be
+in parallel - the threat-modelling on it would be
 substantially weaker than the Wayland path, and shipping a
 weaker default just to support X is a bad trade.
 
@@ -1316,8 +1316,8 @@ Three reasons:
    trims what isn't pinned by any VM's generation.
 
 The cross-mount hardlink trick (described in §3) is the cost
-of admission. It is bounded — a single sync helper runs in a
-private mount namespace — and the payoff is that the
+of admission. It is bounded - a single sync helper runs in a
+private mount namespace - and the payoff is that the
 isolation property is structural rather than policy-based.
 
 ### Why not Spectrum or Qubes?
@@ -1346,7 +1346,7 @@ Two cleaner-looking alternatives both have real problems.
 
 The first is `networkConfig.DHCP = lib.mkForce "no"` on the
 catch-all. That works, but the network is then still
-materialised — systemd-networkd writes a `.network` file, the
+materialised - systemd-networkd writes a `.network` file, the
 name still sorts lex-first, and a future workload-VM
 extension that wants the catch-all back has to undo a
 `mkForce` instead of just setting it. Per-attribute overrides
@@ -1357,11 +1357,11 @@ The second is removing the catch-all entirely via
 `systemd.network.networks."10-eth-dhcp" = lib.mkForce { }` or
 `lib.mkOverride 30 null`. Removing a whole attribute is fiddly
 in the nixpkgs module system and tends to lose attribute
-provenance — future readers see a hole where there used to be
+provenance - future readers see a hole where there used to be
 a config and don't know it came from base.nix.
 
-The MAC sentinel — `lib.mkForce { matchConfig.MACAddress =
-"00:00:00:00:00:00"; }` — keeps the entry materialised (so
+The MAC sentinel - `lib.mkForce { matchConfig.MACAddress =
+"00:00:00:00:00:00"; }` - keeps the entry materialised (so
 future overlays compose), leaves the original intent visible
 (the file is still called `10-eth-dhcp`, still imported by the
 same base), and produces an unambiguous "this matches nothing"
@@ -1375,13 +1375,13 @@ Every per-VM lifecycle service in the framework carries
 `restartIfChanged = false`. The motivating constraint is
 graphics VMs: the GPU sidecar IS the cloud-hypervisor process.
 Restarting it on every `nixos-rebuild switch` would terminate
-CH, evaporating in-RAM session state — interactive Wayland
+CH, evaporating in-RAM session state - interactive Wayland
 clients, in-flight Entra device-bound tokens, virtiofsd socket
 handshakes. For a single-user desktop workspace where the VM
 is sometimes the user's primary working environment for hours
 at a time, that loss is unacceptable to take silently on
 every framework-internal config change (NixOS adds many of
-these automatically — environment vars, X-Restart-Triggers,
+these automatically - environment vars, X-Restart-Triggers,
 home-manager regeneration ripple-throughs).
 
 The trade is that consumers must opt into picking up sidecar
@@ -1400,13 +1400,13 @@ signal:
   `d2b boot <vm> --apply` for offline staging instead of host-side
   activation.
 
-The alternative — letting NixOS bounce VMs on every rebuild —
+The alternative - letting NixOS bounce VMs on every rebuild -
 was the v0.1.0 behavior; v0.1.5 changed it after migration
 testing showed silent VM restarts caused unacceptable
 session-state loss. The pending-restart indicator means
 consumers no longer have to *guess* whether their rebuild
 affected a VM: the CLI tells them. See
-[`docs/reference/cli-contract.md` — Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015)
+[`docs/reference/cli-contract.md` - Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015)
 for the exact predicate.
 
 ## Observability
@@ -1456,8 +1456,8 @@ The consequential choice is the transport. **Option A** was to let each
 workload VM push OTLP to the observability VM over IP. That sounds
 conventional, but it breaks d2b's per-env deny-by-default network
 shape: every workload environment would need a route into the
-observability environment. The obvious mitigation — multi-homing the
-obs VM into `work`, `personal`, and every future env — was also the
+observability environment. The obvious mitigation - multi-homing the
+obs VM into `work`, `personal`, and every future env - was also the
 framing in the upstream issue, and it was rejected for the same reason:
 it turns the observability VM into a network bridge between trust
 domains that are supposed to stay separate.
@@ -1489,8 +1489,8 @@ That does not make vsock "free"; it concentrates more importance in the
 host's virtio boundary. But the attack surface here is the kernel's
 virtio-vsock driver and Cloud Hypervisor's existing device mediation,
 which is not qualitatively worse than the virtio devices d2b
-already relies on. The design goal was not zero trust in the host —
-that is impossible in this architecture — but to avoid inventing a new
+already relies on. The design goal was not zero trust in the host -
+that is impossible in this architecture - but to avoid inventing a new
 cross-VM trust path on top of the host-mediated one we already have.
 
 ### Why relays still exist.
@@ -1534,7 +1534,7 @@ identity before storage.
   It remains an external dependency and a future aspiration rather than
   a prerequisite for the bundled stack.
 
-### CLI lifecycle metadata — labels, not strings.
+### CLI lifecycle metadata - labels, not strings.
 
 The lifecycle-metadata design is intentionally austere about attributes.
 Optional spans and structured events carry labels such as `vm.name`,
@@ -1600,21 +1600,21 @@ The current model assumes the privilege boundary is the
 `d2b` group plus the daemon's per-verb role table. The
 portability work splits that into three layers:
 
-1. **The public CLI socket** at `/run/d2b/public.sock` —
+1. **The public CLI socket** at `/run/d2b/public.sock` -
    ACL'd `0660 d2bd:d2b` so the `d2b` group is the
    *connection* gate (daily read-only lifecycle), authenticated by
    `SO_PEERCRED` at `accept(2)` time. The daemon then resolves the
    peer uid against `d2b.site.launcherUsers` (connection) and
    `d2b.site.adminUsers` (the *role* gate for destructive /
    host-prepare / key-rotation / guest-control verbs). There is no
-   separate `d2b-admin` socket or group — admin is a
+   separate `d2b-admin` socket or group - admin is a
    `SO_PEERCRED`-derived role on the single public socket, not a
    second endpoint. See ADR 0002.
-2. **The private broker socket** at `/run/d2b/priv.sock` —
+2. **The private broker socket** at `/run/d2b/priv.sock` -
    reachable only by the `d2bd` service uid; the broker takes
    no daemon-supplied paths, uids, or capabilities and re-derives
    everything from a root-owned bundle. See ADR 0002 and ADR 0006.
-3. **Per-role minijail profiles** — every VM runner, virtiofsd
+3. **Per-role minijail profiles** - every VM runner, virtiofsd
    instance, swtpm, GPU/video/audio sidecar, USBIP helper, store-sync
    helper, and observability relay runs as a dedicated non-root role
    user inside a minijail with declared uid/gid, capabilities, bind
@@ -1731,17 +1731,17 @@ authority-bearing primitives this work introduces.
 
 ### Preserved invariants
 
-- The broker opaque-ID contract — every mutating broker variant
+- The broker opaque-ID contract - every mutating broker variant
   carries only bundle-derived references; the daemon never names
   raw authority. The contract extends to spawn requests.
-- The pidfd contract — raw-pid control is forbidden outside
+- The pidfd contract - raw-pid control is forbidden outside
   reconciliation; reconciliation validates `(pid, start_time)`
   before re-adoption.
-- The audit-pipeline contract — every broker variant including
+- The audit-pipeline contract - every broker variant including
   `SpawnRunner` writes an `OpAuditRecord` to the daily file with
   its bundle-resolved subject/scope/decision. Broker-side execution
   must preserve this.
-- The "no auto-restart" invariant — `d2bd` never auto-restarts
+- The "no auto-restart" invariant - `d2bd` never auto-restarts
   a running child on config change; drift surfaces as
   `[pending restart]` in `d2b list` / `status`; this extends to
   the daemon binary itself.
@@ -1750,43 +1750,43 @@ authority-bearing primitives this work introduces.
 
 Inside this repo:
 
-- [`docs/reference/manifest-schema.md`](../reference/manifest-schema.md) —
+- [`docs/reference/manifest-schema.md`](../reference/manifest-schema.md) -
   prose walkthrough of the per-VM JSON manifest at
   `/run/current-system/sw/share/d2b/vms.json`, plus the
   `manifestVersion = 2` compatibility policy.
-- [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json) —
+- [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json) -
   the canonical JSON Schema Draft 2020-12 for the manifest.
-- [`docs/reference/components-observability.md`](../reference/components-observability.md) —
+- [`docs/reference/components-observability.md`](../reference/components-observability.md) -
   option surface, ports/CIDs/UDS, unit inventory, security boundaries,
   and retention defaults for the observability subsystem.
-- [`docs/how-to/enable-observability.md`](../how-to/enable-observability.md) —
+- [`docs/how-to/enable-observability.md`](../how-to/enable-observability.md) -
   step-by-step enablement, verification, tuning, and troubleshooting
   for observability on an existing d2b deployment.
-- [`docs/reference/cli-contract.md`](../reference/cli-contract.md) —
+- [`docs/reference/cli-contract.md`](../reference/cli-contract.md) -
   the behavioural contract for any `d2b` CLI implementation
   (subcommand inventory, lifecycle FSM, exit codes, signal
   semantics, JSON vs human output).
-- [`CHANGELOG.md`](../../CHANGELOG.md) — version history,
+- [`CHANGELOG.md`](../../CHANGELOG.md) - version history,
   breaking changes, and the *Known gaps* section that feeds
   [§5](#5-limitations-and-known-gaps).
-- [`examples/`](../../examples/) — runnable starters that
+- [`examples/`](../../examples/) - runnable starters that
   demonstrate the design in practice (`minimal`,
   `graphics-workstation`, `multi-env`, `with-entra-id`).
-- [`templates/default/`](../../templates/default/) —
+- [`templates/default/`](../../templates/default/) -
   `nix flake init` scaffold with sentinel TODOs.
 
 Upstream:
 
-- [microvm.nix][microvm.nix] — the KVM-based microVM framework
+- [microvm.nix][microvm.nix] - the KVM-based microVM framework
   d2b composes on top of.
-- [Spectrum OS][Spectrum] — origin of the patched cloud-
+- [Spectrum OS][Spectrum] - origin of the patched cloud-
   hypervisor with virtio-gpu cross-domain support
   (`pkgs/spectrum-ch`).
-- [systemd hardening reference][systemd-hardening] — the canon
+- [systemd hardening reference][systemd-hardening] - the canon
   for the unit options used throughout
   `nixos-modules/host-sidecars.nix` and
   `nixos-modules/components/*.nix`.
-- [Qubes OS][qubes] — different design point, referenced for
+- [Qubes OS][qubes] - different design point, referenced for
   contrast in [§6](#why-not-spectrum-or-qubes).
 
 [systemd-hardening]: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html

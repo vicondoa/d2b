@@ -33,7 +33,7 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `d2b.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
-| `d2b.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
+| `d2b.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker - a privileged-container escape could attack the host compositor via cross-domain. |
 | `d2b.vms.<vm>.graphics.waylandProxy.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-proxy` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
 | `d2b.vms.<vm>.graphics.waylandProxy.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side proxy runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
 | `d2b.vms.<vm>.graphics.waylandProxy.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side proxy runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
@@ -136,7 +136,7 @@ The matching guest-visible option lives in the imported
   use the closed device set needed by cloud-hypervisor/crosvm; the
   render-node-only profile uses broker-prepared fd passing instead of
   broad host device access.
-- **fontconfig defaults** — `dejavu_fonts`, `liberation_ttf`,
+- **fontconfig defaults** - `dejavu_fonts`, `liberation_ttf`,
   `noto-fonts` are added to `fonts.packages` so the guest's monospace
   alias resolves to DejaVu Sans Mono and `foot` doesn't warn.
 - **Eval-time assertion** that `passthru.testedWithCrosvmRev` on the
@@ -164,7 +164,7 @@ The matching guest-visible option lives in the imported
 - `microvm.graphics.crosvmPackage` = either `crosvmPatched`
   (cross-domain trusted) or a shell shim around `crosvmPatched` that
   strips `cross-domain` from `--params`.
-- `systemd.user.services.wayland-proxy` — when
+- `systemd.user.services.wayland-proxy` - when
   `crossDomainTrusted = true`, runs `wl-cross-domain-proxy` for the
   guest-side virtio-gpu cross-domain bridge.
 - `environment.sessionVariables` pinning `WAYLAND_DISPLAY`,
@@ -185,7 +185,7 @@ The matching guest-visible option lives in the imported
 - The guest cannot reach the host compositor outside of virtio-gpu
   cross-domain (no Wayland socket bind-mount into the guest).
 - With `crossDomainTrusted = false`, every `--params` payload reaching
-  `crosvm device gpu` has `cross-domain` stripped — verifiable via
+  `crosvm device gpu` has `cross-domain` stripped - verifiable via
   `ps -fC crosvm` on the host.
 - With `graphics.virglVideo = true`, the GPU process node carries the
   non-blocking status marker
@@ -240,13 +240,13 @@ The spectrum-ch CH build itself carries upstream spectrum-os
 sandboxing; the crosvm device gpu seccomp `.bpf` files are present
 in the closure but not yet loaded at runtime (the `crosvm device gpu`
 subcommand exposes no `--seccomp-policy-dir` flag in the pinned
-nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
+nixpkgs rev - defence-in-depth payload waiting on an upstream knob).
 
 ## Common gotchas / failure modes
 
 - **Black screen / no guest window.** The host `wayland-0` socket
   must be reachable as the user named by `d2b.site.waylandUser`.
-  `d2b vm start <vm>` must be invoked from a Plasma session terminal —
+  `d2b vm start <vm>` must be invoked from a Plasma session terminal -
   never as root, never over SSH (`autostart = true` is also wrong
   for graphics VMs and triggers an assertion in the audio module if
   audio is enabled).
@@ -274,12 +274,12 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 ## See also
 
 - [Design / threat model](../explanation/design.md)
-- [Manifest schema](./manifest-schema.md) — graphics state is surfaced
+- [Manifest schema](./manifest-schema.md) - graphics state is surfaced
   through the evaluated bundle and daemon status, not a per-VM
   systemd unit.
-- [CLI contract](./cli-contract.md) — `d2b vm start <vm>` /
+- [CLI contract](./cli-contract.md) - `d2b vm start <vm>` /
   `d2b vm stop <vm>` lifecycle.
-- [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
+- [`examples/graphics-workstation`](../../examples/graphics-workstation/) -
   end-to-end example with graphics + audio + USBIP YubiKey.
-- [`examples/with-entra-id`](../../examples/with-entra-id/) — graphics
+- [`examples/with-entra-id`](../../examples/with-entra-id/) - graphics
   VM composed with the sibling `entrablau` flake.

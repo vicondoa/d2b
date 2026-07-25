@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/tools/run-layer.sh <make_target> — run all not-yet-ported legacy
+# tests/tools/run-layer.sh <make_target> - run all not-yet-ported legacy
 # scripts assigned to a `make` target in tests/migration-ledger.toml.
 #
 # W0: targets delegate to the legacy bash scripts (grouped by the ledger).
@@ -55,7 +55,7 @@ fi
 echo "run-layer[$target]: ${#scripts[@]} legacy script(s)"
 rc=0
 for s in "${scripts[@]}"; do
-  [ -f "$ROOT/$s" ] || { echo "  MISSING $s (ledger drift — re-run check-inventory)" >&2; rc=1; continue; }
+  [ -f "$ROOT/$s" ] || { echo "  MISSING $s (ledger drift - re-run check-inventory)" >&2; rc=1; continue; }
   printf '  -> %s\n' "$s"
   if ! bash "$ROOT/$s"; then
     echo "  FAIL $s" >&2

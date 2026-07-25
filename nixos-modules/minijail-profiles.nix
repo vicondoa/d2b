@@ -32,7 +32,7 @@ let
   # transparently.
   #
   # Pure-ephemeral principals (no corresponding system user)
-  # still get a unique UID — they're served by the
+  # still get a unique UID - they're served by the
   # `d2bRoleUidAcls` activation script in
   # `host-activation.nix` that walks the bundle and grants
   # per-VM-dir traversal for every distinct role UID.
@@ -78,7 +78,7 @@ let
       # spawned child before execve. None inherits the broker's
       # umask (current behavior). Roles binding shared Unix sockets
       # (vhost-user-sound, crosvm-gpu, swtpm) declare 0o007 so the
-      # bound socket has mode 0660 — combined with the per-VM
+      # bound socket has mode 0660 - combined with the per-VM
       # runtime default ACL, cloud-hypervisor's named-user entry
       # then becomes effective (mask:rw instead of mask:---).
       umask ? null,
@@ -301,7 +301,7 @@ let
         # the broker pre-opens /dev/net/tun (broker runs as root,
         # outside the minijail sandbox), so CH never needs the
         # device node and the bind is omitted. /dev/vhost-net is
-        # always bound — CH opens it directly for accelerated
+        # always bound - CH opens it directly for accelerated
         # virtio networking regardless of tap-handoff mode.
         #
         # The /dev/net/tun bind (persistent-tap only) exposure
@@ -311,7 +311,7 @@ let
         #     the time CH attaches.
         # (b) the declarative `DeviceClass::NetTun` ioctl allowlist
         #     (packages/d2b-host/src/ioctl_policy.rs) is
-        #     tightened to [TUNSETIFF, TUNSETGROUP] — the broker is
+        #     tightened to [TUNSETIFF, TUNSETGROUP] - the broker is
         #     the only legitimate caller of TUNSETPERSIST/TUNSETOWNER
         #     and bypasses the per-role policy via raw libc::ioctl.
         # (c) seccomp BPF compilation from the
@@ -348,7 +348,7 @@ let
     // lib.optionalAttrs vm.tpm.enable {
       # Swtpm + SwtpmFlush minijail profiles.
       #
-      # The capability set is EMPTY — mkProfile
+      # The capability set is EMPTY - mkProfile
       # defaults `capabilities = [ ]`; do NOT add a `capabilities`
       # override below. CRITICAL SUBSYSTEM (AGENTS.md): the writable
       # paths declared here are a stable RW bind of
@@ -396,7 +396,7 @@ let
         # inside the NS with zero host capabilities. Direct
         # translation of the virtiofsd broker-pre-NS model (ADR 0021).
         # swtpm has zero device binds + zero host caps + Unix socket
-        # only — the smallest surface of all sidecars.
+        # only - the smallest surface of all sidecars.
         userNamespace = {
           hostUidForZero = stablePrincipalId "d2b-${name}-swtpm";
           hostGidForZero = stablePrincipalId "d2b-${name}-swtpm";
@@ -410,7 +410,7 @@ let
         principal = "d2b-${name}-gpu";
         # Caps stay EMPTY (the original
         # matrix carried CAP_SYS_NICE; the per-role smoke proves no
-        # NICE is needed at runtime — virgl/venus/cross-domain run
+        # NICE is needed at runtime - virgl/venus/cross-domain run
         # under SCHED_OTHER on this host's NVIDIA Quadro T1000).
         capabilities = [ ];
         seccompPolicyRef = "w1-gpu";
@@ -484,7 +484,7 @@ let
       #
       # SCM_RIGHTS / fd-passing justification
       # Render nodes (/dev/dri/renderD128) bypass DRM master authentication
-      # entirely — DRM_IOCTL_SET_MASTER and DRM_IOCTL_AUTH_MAGIC are NOT
+      # entirely - DRM_IOCTL_SET_MASTER and DRM_IOCTL_AUTH_MAGIC are NOT
       # required. The broker pre-opens the fd in the parent process (before
       # clone3(CLONE_NEWUSER)), dup2's it to RENDER_NODE_INHERITED_FD (10)
       # in the child, and passes /proc/self/fd/10 as --gpu-device-node.
@@ -537,7 +537,7 @@ let
       # GPU sidecar and the real host compositor socket. It runs as a
       # dedicated `d2b-<vm>-wlproxy` principal with:
       #   - empty host capabilities (mandatory);
-      #   - mandatory seccompPolicyRef (w1-wayland-proxy) — the proxy
+      #   - mandatory seccompPolicyRef (w1-wayland-proxy) - the proxy
       #     parses untrusted guest Wayland bytes while holding the host
       #     compositor socket so a null seccomp policy is rejected fail-closed
       #     in the broker SpawnRunner handler;
@@ -590,7 +590,7 @@ let
         # (spa-alsa-monitor) for backend probe. In a user-NS-only spawn,
         # ns_capable(net->user_ns, CAP_NET_RAW) checks the initial user NS
         # (the new net NS is owned by the initial user NS, not the process's
-        # new user NS) — bind would fail with EPERM.
+        # new user NS) - bind would fail with EPERM.
         #
         # Tier 1 (PIPEWIRE config elimination: PIPEWIRE_LATENCY, PIPEWIRE_NODE
         # and similar env vars) investigated and rejected: the AF_NETLINK open
@@ -601,7 +601,7 @@ let
         # unshare(CLONE_NEWNET) executed inside the user NS. The resulting
         # net NS is owned by the new user NS; ns_capable(net->user_ns,
         # CAP_NET_RAW) then succeeds against the new user NS. No changes to
-        # RunnerIsolationSpec or sys.rs are required — NamespaceSet.net = true
+        # RunnerIsolationSpec or sys.rs are required - NamespaceSet.net = true
         # feeds the existing unshare_namespace_flags path (CLONE_NEWNET).
         # vhost-device-sound's PipeWire + vhost-user sockets are AF_UNIX and
         # are unaffected by net NS isolation.
@@ -618,7 +618,7 @@ let
         # /run/user/<waylandUid> writable so connect succeeds.
         # The PipeWire socket file is still ACL-grant'd
         # individually by host-activation.nix's
-        # d2bRoleUidAcls script — this writablePaths just
+        # d2bRoleUidAcls script - this writablePaths just
         # ensures the mount-namespace doesn't drop it to RO.
         readOnlyPaths = [ ];
         writablePaths = [
@@ -655,7 +655,7 @@ let
       # are required in-role. See docs/reference/privileges.md
       # for the "pre-opened fds only" contract.
       #
-      # seccompPolicyRef = "w1-vsock-relay" — must deny socket(AF_VSOCK)
+      # seccompPolicyRef = "w1-vsock-relay" - must deny socket(AF_VSOCK)
       # and ptrace; tests/minijail-validator-vsock-relay.sh asserts
       # both invariants on the live host.
       "${profileIdFor name "vsock-relay"}" = mkProfile {
@@ -837,7 +837,7 @@ let
 
   # Detect stablePrincipalId collisions at eval time.
   # stablePrincipalId = 50000 + first-24
-  # bits of sha256(principal) — that's only 16.7M slots, so two
+  # bits of sha256(principal) - that's only 16.7M slots, so two
   # principals hashing to the same UID is improbable but possible
   # (birthday bound on ~5000 principals is ~99% safe; on ~12000
   # it's ~50%). Without an eval-time check, a UID collision
@@ -902,7 +902,7 @@ in
              every per-role subdir). Operators MUST drain the VM,
              rename the state dir to the new name, and let the
              daemon re-link the hardlink farm on next start. This
-             is bigger than a config rename — plan accordingly.
+             is bigger than a config rename - plan accordingly.
 
           2. Rename a colliding host-singleton principal (e.g.
              `d2b-otel-bridge`). These principals live only in

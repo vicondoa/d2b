@@ -1,4 +1,4 @@
-# cli-host-check — `d2b host check` CLI-contract integration tests
+# cli-host-check - `d2b host check` CLI-contract integration tests
 # (host_check_contract.rs). Successor of the retired
 # cli-rust-native-host-check.sh gate: drive the real `d2b host check
 # --read-only` binary with every probe pinned through

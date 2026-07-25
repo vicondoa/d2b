@@ -2,17 +2,17 @@
 
 How the test suite is organized, where each kind of test lives, and how to run
 and add them. For the **decision rule on where a new test goes** (and the rule
-that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md)
-— that is the binding contract; this file is the human quick-start.
+that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md) -
+that is the binding contract; this file is the human quick-start.
 
 ## Two layers
 
-- **Layer 1 — static gate.** Hermetic, fast, deterministic; no live host, VM, or
+- **Layer 1 - static gate.** Hermetic, fast, deterministic; no live host, VM, or
   container. Runs on every PR and locally via `make check`. This is where the
   overwhelming majority of tests live (Nix eval cases, Rust unit/integration/
   contract/policy-lint tests, flake checks, and a small closed set of drift +
   meta gates).
-- **Layer 2 — integration tiers.** Real systemd / kernel / userland: podman
+- **Layer 2 - integration tiers.** Real systemd / kernel / userland: podman
   containers, runNixOSTest VMs, live-host scripts, and hardware tests. Used only
   when Layer 1 *provably* cannot cover the behaviour.
 
@@ -41,7 +41,7 @@ tests/
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
-Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
+Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 `packages/<crate>/`, **not** here.
 
 ## Running tests
@@ -98,12 +98,12 @@ PR is opened; those manual integration tiers are not replaced by PR pipeline
 jobs.
 
 Useful knobs:
-- `D2B_NO_SCCACHE=1` — disable sccache in the rust gate.
-- `D2B_CI_SCCACHE=1` — opt the rust gate back into sccache under CI (off by
+- `D2B_NO_SCCACHE=1` - disable sccache in the rust gate.
+- `D2B_CI_SCCACHE=1` - opt the rust gate back into sccache under CI (off by
   default there; `pr-l1-static-fast` sets it and backs `SCCACHE_DIR` with
-  `actions/cache`, using sccache's local-disk backend — never the native GHA
+  `actions/cache`, using sccache's local-disk backend - never the native GHA
   backend, which would export `ACTIONS_RUNTIME_TOKEN` into the build env).
-- `D2B_NO_PARALLEL_BROKER=1` — run the broker feature passes serially.
+- `D2B_NO_PARALLEL_BROKER=1` - run the broker feature passes serially.
 - The rust gate uses **sccache** (a shared per-crate compilation cache) and
   runs the broker's three feature passes (default / layer1-bootstrap /
   fake-backends) concurrently with the main workspace, on deterministic target
@@ -129,12 +129,12 @@ Layer 1:
 
 Only reach for Layer 2 (containers / VMs / live-host / hardware) when a foreign
 userland, a real systemd boot, a live host, or a physical device is genuinely
-required — and pick the lowest tier that works.
+required - and pick the lowest tier that works.
 
 ## Conventions
 
 - **Commit before building.** `nix flake check` and the eval gates resolve the
-  flake via `git+file://`, which only sees git-tracked files — an untracked new
+  flake via `git+file://`, which only sees git-tracked files - an untracked new
   module/test is invisible until committed.
 - **Retiring a test is ledger-tracked** (`tests/migration-state.d/<name>.toml` +
   `tests/tools/gen-migration-ledger.sh --check`); fail-closed native successors

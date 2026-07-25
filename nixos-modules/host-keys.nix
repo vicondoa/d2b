@@ -13,7 +13,7 @@
 #
 #  2. Per-VM host-keys staging dir
 #     (`<stateDir>/vms/<vm>/host-keys/`):
-#     The activation script also stages two files there per VM —
+#     The activation script also stages two files there per VM -
 #     `host.pub` (the framework-managed pubkey) and
 #     `user-authorized-keys` (the resolved content of
 #     `cfg.site.userAuthorizedKeys` and
@@ -146,7 +146,7 @@ in
     set -u
 
     # Serialise: two concurrent nixos-rebuild switches must not race
-    # on ssh-keygen for the same VM. 60s timeout is generous — keygen
+    # on ssh-keygen for the same VM. 60s timeout is generous - keygen
     # is essentially instant; the lock is only ever contended in CI /
     # parallel rebuild scenarios.
     exec 9>"${cfg.site.keysDir}/.lock"

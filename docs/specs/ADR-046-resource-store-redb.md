@@ -103,9 +103,9 @@ operational state (D087) and is stored inside the resource envelope, not in a
 side stream. Status has the frozen three-layer shape (D088): the universal
 `ResourceStatus` base, the ResourceType-common `status.resource` object, and an
 optional Provider-specific `status.provider` extension. A status write is
-validated per layer before storage — total canonical serialized status ≤ 64 KiB,
+validated per layer before storage - total canonical serialized status ≤ 64 KiB,
 `status.resource` typed detail ≤ 32 KiB, `status.provider.details` ≤ 32 KiB, and
-bounded condition/list/map cardinality — and a `status.provider` is validated
+bounded condition/list/map cardinality - and a `status.provider` is validated
 against the installed Provider's registered, signed extension schema
 (`schemaId`/`schemaVersion`) with strict unknown-field denial. An over-limit
 write fails closed with `status-oversize`, an unregistered/unknown-field
@@ -369,7 +369,7 @@ authorization, or audit cannot be weakened to pass.
 | Destination | `packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs` |
 | Detailed design | replay/live no-gap watch, cursors, owner hints, compaction floor, expired relist |
 | Integration | d2b-bus named streams; controller toolkit |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | deterministic watch/compaction/disconnect/fan-in tests |
 | Removal proof | Not applicable |
 

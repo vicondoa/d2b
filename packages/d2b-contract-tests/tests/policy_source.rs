@@ -4,8 +4,8 @@
 //! `git ls-files` enumeration) and asserts a structural / source / doc
 //! invariant. This crate runs only from `tests/tools/rust-workspace-checks.sh`
 //! against the real checkout (it is excluded from the hermetic Nix sandbox
-//! workspace build), so repo-file access — and shelling out to `git` for the
-//! gitignore-respecting file enumeration that the bash gates got from `rg` — is
+//! workspace build), so repo-file access - and shelling out to `git` for the
+//! gitignore-respecting file enumeration that the bash gates got from `rg` - is
 //! sound here.
 //!
 //! Migrated gates:
@@ -18,7 +18,7 @@
 //! `packages/` while excluding any path with a `target/`, `tests/`, or `.git/`
 //! directory component. This Rust port file lives under
 //! `packages/d2b-contract-tests/tests/`, i.e. under a `tests/` component,
-//! so it is excluded from its own scan — the forbidden-pattern regex string it
+//! so it is excluded from its own scan - the forbidden-pattern regex string it
 //! carries can never flag itself.
 //!
 //! syn-ast-walk note (no-bash-exec): the bash gate's third mode handed off to
@@ -204,7 +204,7 @@ fn no_bash_exec_check() {
     assert!(
         violations.is_empty(),
         "no-bash-exec-eval[check]: found bash exec sites not in allow-list \
-         (ADR 0017 — the Rust CLI must never invoke bash; allow-list additions \
+         (ADR 0017 - the Rust CLI must never invoke bash; allow-list additions \
          require panel review):\n{}",
         violations.join("\n")
     );
@@ -221,7 +221,7 @@ fn no_bash_exec_fixture_coverage() {
     }
     assert!(
         stale.is_empty(),
-        "no-bash-exec-eval[fixture-coverage]: stale allow-list entries (files missing) — \
+        "no-bash-exec-eval[fixture-coverage]: stale allow-list entries (files missing) - \
          remove them from {EXEMPT_PATHS_FIXTURE}:\n{}",
         stale.join("\n")
     );
@@ -232,7 +232,7 @@ fn no_bash_exec_fixture_coverage() {
 //
 // Asserts the host-prep DAG module + broker wire scaffolds + daemon wiring +
 // docs carry the documented step set, public API, ordering edges, and
-// broker-op mapping. Static gate — no nixpkgs eval required.
+// broker-op mapping. Static gate - no nixpkgs eval required.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -506,7 +506,7 @@ fn host_prep_dag_documentation() {
     //
     // Spec correction: the bash gate asserted the doc *content* contains the
     // substring "host-prep-dag" via `grep -qF "host-prep-dag"`. In the current
-    // repo that substring appears in the doc body at exactly one place — a
+    // repo that substring appears in the doc body at exactly one place - a
     // reference to the gate's own `tests/host-prep-dag-eval.sh` filename. That
     // `.sh` is being retired by this migration and the integrator may rewrite
     // that reference, so relying on the `.sh` filename as a content marker is

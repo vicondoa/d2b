@@ -24,7 +24,7 @@
 //! The pure check function [`run_net_route_preflight`] takes a
 //! [`HostJson`] and a [`BridgeProbe`] (filesystem-injectable
 //! seam) and returns a [`PreflightReport`]. The default production
-//! probe ([`SysClassNetProbe`]) reads `/sys/class/net/<bridge>` —
+//! probe ([`SysClassNetProbe`]) reads `/sys/class/net/<bridge>` -
 //! existence + `operstate != down` is enough to catch the regression
 //! the legacy bash form caught (the LAN bridge isn't there or is
 //! administratively down, so `ip route get` returned no result or
@@ -157,10 +157,10 @@ pub trait BridgeProbe {
 /// sufficiently up for d2b's routing requirements.
 ///
 /// Accepted values (all case-insensitive):
-/// - `"up"` — fully operational.
-/// - `"unknown"` — drivers that don't implement carrier detection;
+/// - `"up"` - fully operational.
+/// - `"unknown"` - drivers that don't implement carrier detection;
 ///   common on virtual bridges with no active ports.
-/// - `"no-carrier"` — bridge is administratively up but has no
+/// - `"no-carrier"` - bridge is administratively up but has no
 ///   active member ports, which is normal on cold-boot environments
 ///   before any VM has started (D16). The kernel raises this instead
 ///   of `"down"` when the interface was explicitly brought up but
@@ -170,7 +170,7 @@ pub trait BridgeProbe {
 /// (`br-<env>-lan` / `br-<env>-up`). All callers of
 /// [`SysClassNetProbe`] flow through [`run_net_route_preflight`]
 /// which sources bridge names exclusively from the daemon's
-/// `HostJson` artifact — verified in `lib.rs` at startup.
+/// `HostJson` artifact - verified in `lib.rs` at startup.
 fn operstate_acceptable(trimmed: &str) -> bool {
     trimmed.eq_ignore_ascii_case("up")
         || trimmed.eq_ignore_ascii_case("unknown")
@@ -314,7 +314,7 @@ impl PreflightHistory {
             match serde_json::from_str::<PreflightHistoryRecord>(&line) {
                 Ok(r) => out.push(r),
                 Err(_) => {
-                    // Tolerate one malformed line — the daemon must
+                    // Tolerate one malformed line - the daemon must
                     // never refuse to start because of a corrupt
                     // log entry. The pure-Rust replacement is
                     // additive over the bash singleton and the

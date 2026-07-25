@@ -52,7 +52,7 @@ const HELPER_BIN: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 /// 1. Try the build in-process. On hosts where `/nix/store` and
 ///    `/var/lib/d2b` are the same mount (and in unit tests against
 ///    a `tempdir`) this succeeds directly with no subprocess.
-/// 2. If — and only if — the in-process attempt fails with
+/// 2. If - and only if - the in-process attempt fails with
 ///    [`HardlinkFarmError::CrossMountLink`] (the `link(2)` EXDEV on the
 ///    *same* `st_dev` that a `/nix/store` self-bind-mount produces),
 ///    retry the build in a private mount namespace where `/nix/store`
@@ -61,7 +61,7 @@ const HELPER_BIN: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 ///
 /// A genuine distinct-`st_dev` [`HardlinkFarmError::DifferentFilesystem`]
 /// is FATAL (the farm root and `/nix/store` are truly different
-/// filesystems) and is NOT retried — unmounting `/nix/store` there would
+/// filesystems) and is NOT retried - unmounting `/nix/store` there would
 /// expose the covered mount directory and could hardlink the wrong
 /// inodes. All other errors (collision / marker / genuine I/O) propagate
 /// unchanged. Returns the generation directory on success.
@@ -79,7 +79,7 @@ pub fn build_farm_cross_mount_safe(
         Err(HardlinkFarmError::CrossMountLink { .. }) => {
             build_farm_via_namespace(farm_root, generation, closure_paths, marker)
         }
-        // Genuine distinct-`st_dev` mismatch is FATAL — the farm root and
+        // Genuine distinct-`st_dev` mismatch is FATAL - the farm root and
         // `/nix/store` are different filesystems, so no namespace/unmount
         // can make `link(2)` succeed. Propagate instead of masking it by
         // unmounting `/nix/store` (which would expose the covered mount
@@ -95,10 +95,10 @@ fn farm_build_argv(helper_bin: &str) -> Vec<String> {
 /// Run the hardlink-farm build inside a private mount namespace where
 /// `/nix/store` is lazily detached.
 ///
-/// Errors are surfaced as the typed [`HardlinkFarmError`] — recovered
+/// Errors are surfaced as the typed [`HardlinkFarmError`] - recovered
 /// from the helper's stdout JSON when the failure was a farm-build
 /// error (collision / different-filesystem / marker), or wrapped as
-/// [`HardlinkFarmError::Io`] for spawn / protocol failures — so callers
+/// [`HardlinkFarmError::Io`] for spawn / protocol failures - so callers
 /// keep their existing `map_hardlink_farm_error` / `?` mapping.
 fn build_farm_via_namespace(
     farm_root: &Path,
@@ -131,7 +131,7 @@ fn build_farm_via_namespace(
         })?;
 
     // Write the request on a dedicated thread and close stdin so the
-    // helper sees EOF, while the main thread drains stdout/stderr —
+    // helper sees EOF, while the main thread drains stdout/stderr -
     // avoids a pipe-buffer deadlock if the request exceeds the stdin
     // pipe capacity.
     let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
@@ -191,7 +191,7 @@ fn build_farm_via_namespace(
 /// Returns the top-level link/skip accounting. This materialises `live/`,
 /// `meta/generations/<id>/`, `state/generations/<id>/`, and the
 /// `gcroots/generation-<id>` root; it does NOT swap `state/current` /
-/// `meta/current` or plant the live marker — the broker performs those
+/// `meta/current` or plant the live marker - the broker performs those
 /// in-process publish steps after a successful materialisation.
 pub fn build_store_view_cross_mount_safe(
     farm_root: &Path,

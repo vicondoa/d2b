@@ -184,7 +184,7 @@ possible, recycling only realization and owned ephemeral Processes/endpoints;
 `Replace` of the resource-row identity is used only when explicitly required and
 planned with ownership/state transfer. The signed capability matrix and base
 conformance suite (D089) additionally cover currency states, disruption classes,
-and the expedited (`waitForReconcile`) path — a controller performs no external
+and the expedited (`waitForReconcile`) path - a controller performs no external
 effect, finalizer release, or status mutation on an expedited mutation until it
 receives Core's `CommittedRevisionProof`, and it returns a bounded
 disposition/projection for the one expedited pass. Upgrade disruption policy is
@@ -272,7 +272,7 @@ component's static Process (per the signed manifest's component descriptors)
 and, before launching that Process, only the state Volumes the component has
 **declared** under the storage-need test, as part of the Provider's optional
 **ProviderStateSet** (`ADR-046-provider-state`: the logical, query-time
-grouping of the *declared* Volume resources owned by `Provider/<name>` — not a
+grouping of the *declared* Volume resources owned by `Provider/<name>` - not a
 ResourceType or a stored artifact of its own, and empty for a Provider that
 declares no state Volume). Bounded non-secret operational state belongs in the
 owning resource's `status` subresource and the core Operation ledger by default
@@ -608,7 +608,7 @@ Cross-Zone export is deny-by-default. The initial classification is:
 | `security-key.d2bus.org.SecurityKeyService` / `security-key.d2bus.org.SecurityKeyBinding` | `device-security-key` | exportable |
 | `telemetry.d2bus.org.TelemetryService` / `telemetry.d2bus.org.TelemetryBinding` | `observability-otel` | exportable |
 | `usb.d2bus.org.UsbService` / `usb.d2bus.org.UsbBinding` | `device-usbip` | policy-gated exportable; Provider, Zone, export, and device policy all opt in |
-| every other semantic type / frozen initial Provider | — | forbidden unless a later reviewed semantic contract adds a pair and a conformant Provider binds it |
+| every other semantic type / frozen initial Provider | - | forbidden unless a later reviewed semantic contract adds a pair and a conformant Provider binds it |
 
 Approval applies to the qualified Service only. A matching Binding, its backing
 Device/Endpoint, Credentials, and internal session/stream records are never
@@ -678,7 +678,7 @@ cannot alias, rename, or vendor-qualify the base types.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-provider-001; shared semantic Service/Binding contract owner |
-| Current source | None — D098 common semantic Service/Binding bases are net-new ADR 0046 contracts |
+| Current source | None - D098 common semantic Service/Binding bases are net-new ADR 0046 contracts |
 | Reuse action | create |
 | Destination | `packages/d2b-contracts/src/v3/semantic_services/{mod,audio,security_key,telemetry,usb}.rs`; generated schema artifacts for the eight exact qualified ResourceTypes |
 | Detailed design | Define one shared strict base spec/status DTO and schema contract for each frozen D098 Service/Binding pair, including exact semantic type/schema IDs, versions, fingerprints, minimal valid base fixtures without `spec.provider`, authority/projection Service union, same-Zone Binding `serviceRef`/target rules, D088 `status.resource` layering, status-only observations, and projection-factory type binding. A Core-generated projection permits only `providerRef`, semantic base/import fields, and ResourceImport ownership; it rejects `spec.provider`. Register no implementation-qualified or former `*State` alias. |

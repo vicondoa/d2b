@@ -2,20 +2,20 @@
 //!
 //! Implements the four-step kernel-module probe order:
 //!
-//! 1. `/proc/sys/kernel/modules_disabled` — if `1`, every `required`
+//! 1. `/proc/sys/kernel/modules_disabled` - if `1`, every `required`
 //!    module that is neither built-in nor loaded forces a closed-fail
 //!    `host-modules-locked` finding.
-//! 2. `/proc/modules` + `/sys/module/<name>/` — loaded-module detection.
+//! 2. `/proc/modules` + `/sys/module/<name>/` - loaded-module detection.
 //! 3. `/lib/modules/$(uname -r)/modules.builtin` (preferred) or
-//!    `modules.builtin.bin` — built-in detection.
-//! 4. `/boot/config-$(uname -r)` or `/proc/config.gz` — secondary
+//!    `modules.builtin.bin` - built-in detection.
+//! 4. `/boot/config-$(uname -r)` or `/proc/config.gz` - secondary
 //!    `CONFIG_*` evidence only.
 //!
 //! `br_netfilter` post-step-2 detection drives the
 //! `bridge-nf-call-iptables=0` / `bridge-nf-call-ip6tables=0`
 //! recommendation surfaced in the probe result.
 //!
-//! Mutation (`modprobe`) lives in the broker — see
+//! Mutation (`modprobe`) lives in the broker - see
 //! `d2b_priv_broker::ops::modprobe`. This module is pure read-only
 //! preflight and exposes deterministic parsers so the canary matrix can
 //! drive it with fixtures.
@@ -346,7 +346,7 @@ fn skip_cstring(bytes: &[u8], start: usize) -> Result<usize, GzipError> {
 }
 
 /// Errors emitted by [`gunzip_inflate`]. Stays in this module because
-/// kernel-config is secondary evidence — callers map every variant to
+/// kernel-config is secondary evidence - callers map every variant to
 /// `None` and fall through to the loaded+builtin path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GzipError {
@@ -413,7 +413,7 @@ pub struct BridgeNfRecommendation {
     pub rationale: String,
 }
 
-/// Inputs to [`probe_with`] — bundled so the L1c canaries can drive
+/// Inputs to [`probe_with`] - bundled so the L1c canaries can drive
 /// the deterministic probe without touching `/proc`.
 #[derive(Debug, Clone)]
 pub struct ProbeInputs {
@@ -735,7 +735,7 @@ mod tests {
         // Construct a tiny gzip stream by prepending the RFC1952 fixed
         // header to a precomputed raw DEFLATE block produced by the
         // standard zlib compressor for the text `CONFIG_KVM=y\n`. The
-        // raw block here is the stored (BTYPE=00) form — a valid
+        // raw block here is the stored (BTYPE=00) form - a valid
         // DEFLATE block with no compression that miniz_oxide will
         // emit verbatim.
         let payload = b"CONFIG_KVM=y\n";
@@ -756,7 +756,7 @@ mod tests {
             0xff, // OS
         ];
         gz.extend_from_slice(&stored_block);
-        // 8-byte trailer (CRC32 + ISIZE) — values are not validated by
+        // 8-byte trailer (CRC32 + ISIZE) - values are not validated by
         // `gunzip_inflate`, so any 8 bytes will do.
         gz.extend_from_slice(&[0u8; 8]);
 

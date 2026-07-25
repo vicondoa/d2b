@@ -1075,7 +1075,7 @@ mod tests {
     // Management verbs (list/logs/status/kill) dispatch INLINE on d2bd's
     // multi-threaded runtime request thread. `run_detached_request` MUST bridge
     // through `block_on_future` (block_in_place + the ambient `Handle`), NOT
-    // build a fresh `Runtime` and `block_on` it — the latter panics ("Cannot
+    // build a fresh `Runtime` and `block_on` it - the latter panics ("Cannot
     // start a runtime from within a runtime") and took down the whole daemon
     // (status=101) on every management call. The hook-based routing tests below
     // short-circuit before `run_real`/`run_detached_request`, so only this test

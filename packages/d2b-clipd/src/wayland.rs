@@ -346,7 +346,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WlState {
     }
 }
 
-// wl_seat – we only need it to exist; we don't act on capability events.
+// wl_seat - we only need it to exist; we don't act on capability events.
 delegate_noop!(WlState: ignore wl_seat::WlSeat);
 
 // ─── ext_data_control_manager_v1 ─────────────────────────────────────────────

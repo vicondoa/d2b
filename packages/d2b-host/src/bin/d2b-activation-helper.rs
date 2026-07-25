@@ -58,7 +58,7 @@ use d2b_host::hardlink_farm::{
 /// v1.1.2fu24 panel-security R5 critical must-fix: open `path`
 /// with `openat2(AT_FDCWD, path, { O_NOFOLLOW + ..., RESOLVE_NO_SYMLINKS })`.
 /// `RESOLVE_NO_SYMLINKS` refuses ANY symlink encountered during
-/// path resolution — final segment AND every intermediate
+/// path resolution - final segment AND every intermediate
 /// component. This closes the symlink-swap-of-ancestor TOCTOU
 /// class that plain `O_NOFOLLOW` (which only protects the final
 /// component) cannot defend against.
@@ -141,7 +141,7 @@ fn require<T>(field: &str, value: Option<T>) -> Result<T, String> {
 
 fn print_help() {
     eprintln!(
-        "d2b-activation-helper — fd-safe activation primitives\n\
+        "d2b-activation-helper - fd-safe activation primitives\n\
          \n\
          USAGE:\n  \
            d2b-activation-helper ensure-regular-file --path P --uid U --gid G --mode M --size-mib N\n  \
@@ -623,7 +623,7 @@ fn cmd_clear_acl_on_path(args: &Args) -> ExitCode {
 /// fstats to read the existing uid:gid, looks them up against
 /// /etc/passwd + /etc/group, and only chowns when the existing
 /// owner string matches the marker (or when getpwuid/getgrgid
-/// returns NULL — the "UNKNOWN" case).
+/// returns NULL - the "UNKNOWN" case).
 fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
@@ -651,7 +651,7 @@ fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
     // (intermediate or final) can be a symlink. fchown(2)
     // does NOT work on O_PATH fds (kernel returns EBADF), so
-    // use O_RDONLY + O_NONBLOCK (no FIFO hang) — the helper
+    // use O_RDONLY + O_NONBLOCK (no FIFO hang) - the helper
     // adds O_NOFOLLOW + O_CLOEXEC implicitly.
     let raw_fd = match open_no_symlinks(path, OFlags::RDONLY | OFlags::NONBLOCK) {
         Ok(fd) => fd,

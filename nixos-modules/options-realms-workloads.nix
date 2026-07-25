@@ -1,4 +1,4 @@
-# d2b.realms.<realm>.workloads.<workload> — realm-native workload
+# d2b.realms.<realm>.workloads.<workload> - realm-native workload
 # declaration schema.
 #
 # This file is imported as a fragment inside the d2b.realms.<realm>
@@ -7,15 +7,16 @@
 #
 # Supported kinds
 # ---------------
-# "local-vm"   — NixOS guest running on Cloud Hypervisor, managed by
+# "local-vm"   - NixOS guest running on Cloud Hypervisor, managed by
 #                d2bd.  Mirrors d2b.vms.<vm> with runtime.kind = "nixos".
-# "qemu-media" — External-media QEMU runner.  Mirrors
+# "qemu-media" - External-media QEMU runner.  Mirrors
 #                d2b.vms.<vm> with runtime.kind = "qemu-media".
 # "provider-placeholder"
-#              — Placeholder for a provider-managed workload whose
+#              - Placeholder for a provider-managed workload whose
 #                runtime is not instantiated locally.  Schema foundation
 #                only; no daemon process is started.
-# "unsafe-local"— Host-user process runtime with no isolation boundary.
+# "unsafe-local"
+#              - Host-user process runtime with no isolation boundary.
 #                Requires explicit realm policy opt-in.
 #
 # State path policy
@@ -223,14 +224,14 @@ let
           description = ''
             Runtime family for this workload.
 
-            `local-vm`            — NixOS guest on Cloud Hypervisor; d2bd
+            `local-vm`             - NixOS guest on Cloud Hypervisor; d2bd
                                     supervises the lifecycle DAG.
-            `qemu-media`          — External-media QEMU runner for live/
+            `qemu-media`           - External-media QEMU runner for live/
                                     installer media or opaque OS images.
-            `provider-placeholder`— Schema-only placeholder for a
+            `provider-placeholder` - Schema-only placeholder for a
                                     provider-managed workload; no local
                                     runtime process is started.
-            `unsafe-local`         — Host-user process runtime with no
+            `unsafe-local`         - Host-user process runtime with no
                                     isolation boundary. Requires explicit
                                     realm policy opt-in.
           '';

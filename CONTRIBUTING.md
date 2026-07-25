@@ -147,7 +147,7 @@ Contributors touching anything in `packages/d2b-host/`,
 docs (`docs/how-to/host-prepare.md`,
 `docs/how-to/host-prepare.d/*.md`,
 `docs/reference/{cgroup-delegation,inet-d2b-chains,privileges,support-matrix}.md`,
-ADRs 0011–0014) MUST run the host-prepare Layer-1 gate set before
+ADRs 0011-0014) MUST run the host-prepare Layer-1 gate set before
 submitting:
 
 ```bash

@@ -23,7 +23,7 @@ let
   obsCfg = cfg.observability;
   # graphics + audio components both
   # transitively depend on x86_64-only packages (crosvm-patched,
-  # spectrum-ch, vhost-device-sound — see their meta.platforms).
+  # spectrum-ch, vhost-device-sound - see their meta.platforms).
   # Headless workload VMs (no graphics, no audio) are arch-agnostic
   # and SHOULD evaluate on aarch64-linux per the published refactor
   # plan. The translation below throws an eval-time error with a
@@ -38,7 +38,7 @@ let
     if x86 || !(vm.graphics.enable || vm.audio.enable) then vm
     else throw ''
       d2b.vms.${name}: graphics/audio components are
-      x86_64-linux only — refusing to evaluate on ${hostSystem}.
+      x86_64-linux only - refusing to evaluate on ${hostSystem}.
       The cloud-hypervisor + crosvm + vhost-device-sound pipeline
       (pkgs/spectrum-ch, pkgs/crosvm-patched, pkgs/vhost-device-sound)
       is gated to x86_64-linux via meta.platforms. Disable
@@ -48,7 +48,7 @@ let
     '';
 
   # Per-workload-VM derived values. Returns null when the VM has no
-  # env (legacy mode — caller falls back to the VM's own
+  # env (legacy mode - caller falls back to the VM's own
   # microvm.interfaces / systemd.network).
   vmDerive = name: vm:
     if vm.env == null || !(envMeta ? ${vm.env}) then null
@@ -121,7 +121,7 @@ let
     else [ ];
 
   # Graphics VMs run via d2b-<vm>-gpu.service (the GPU sidecar IS
-  # the CH runner — they bypass microvm@). Headless VMs use microvm@.
+  # the CH runner - they bypass microvm@). Headless VMs use microvm@.
   # Both runners need to start the per-VM relay so the host-side vsock
   # bridge actually connects. Templated systemd units can't have
   # per-instance BindsTo/Wants, so we wire per-VM `wants` on each
@@ -222,7 +222,7 @@ in
           # sync` it back. The read-only baseline always reflects the
           # currently-approved guestConfigFile; a writable working copy
           # is seeded once (tmpfiles `C` = copy-if-absent) for the SSH
-          # user to edit. No new host surface — it rides the normal
+          # user to edit. No new host surface - it rides the normal
           # read-only closure (no virtiofs share).
           ++ lib.optional (vm'.guestConfigFile != null) (
             { lib, ... }: let
@@ -354,7 +354,7 @@ in
         # resolves instead of false-positiving. Forbidden namespaces are
         # detected by definition-existence (imports / generated modules /
         # `_file` spoofing all caught). This is NOT an eval-time security
-        # sandbox — see lib.nix + docs/adr/0024 for the trust model.
+        # sandbox - see lib.nix + docs/adr/0024 for the trust model.
         guestForbidden =
           if vm'.guestConfigFile == null then [ ]
           else d2bLib.guestConfigForbiddenNamespaces
@@ -366,7 +366,7 @@ in
       })
     normalNixosVms';
 
-  # Fail-fast stub `microvm@<vm>.service` units are no longer needed —
+  # Fail-fast stub `microvm@<vm>.service` units are no longer needed -
   # `microvm@<vm>.service` doesn't exist anymore
   # (the upstream microvm.nix host module that declared it is no
   # longer imported). Operators interacting via systemctl get
@@ -385,12 +385,12 @@ in
   # `d2b.site.yubikey.enable` (the option was previously declared but
   # unused).
   services.udev.extraRules = ''
-    # H5 — lock KVM device to kvm group, no longer world-accessible
+    # H5 - lock KVM device to kvm group, no longer world-accessible
     KERNEL=="kvm", GROUP="kvm", MODE="0660"
   '' + lib.optionalString config.d2b.site.yubikey.enable ''
-    # Yubico YubiKey — hidraw (FIDO/U2F)
+    # Yubico YubiKey - hidraw (FIDO/U2F)
     SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1050", GROUP="kvm", MODE="0660", TAG+="uaccess"
-    # Yubico YubiKey — raw USB device
+    # Yubico YubiKey - raw USB device
     SUBSYSTEM=="usb", ATTRS{idVendor}=="1050", GROUP="kvm", MODE="0660", TAG+="uaccess"
   '';
 
@@ -453,14 +453,14 @@ in
     # so launcher-group members can also flock it from `d2b trust`.
     "f ${cfg.site.stateDir}/known_hosts.d2b.lock 0660 root d2b -"
     # keys directory for d2b-managed SSH keys.
-    # Created root:root 0700 — the generator activation script
+    # Created root:root 0700 - the generator activation script
     # (deferred) will populate it.
     "d ${cfg.site.keysDir} 0710 root d2b -"
     "D ${cfg.site.tmpDir} 0755 root root -"
   ]
   # /run/d2b/alloy is created at service-start time by
   # alloy.service's `RuntimeDirectory=d2b/alloy` directive, not
-  # via tmpfiles — the alloy account is a systemd DynamicUser whose
+  # via tmpfiles - the alloy account is a systemd DynamicUser whose
   # UID/GID is only allocated at start, and tmpfiles cannot chown
   # to that user at activation time. d2b-otel-host-bridge's
   # ExecStartPre setfacl runs AFTER alloy.service (After= + bindsTo)

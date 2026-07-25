@@ -9,7 +9,7 @@
 //! ownership / mode / ACL operations across that subtree propagate
 //! INTO `/nix/store` via the shared inodes, which breaks the openssh
 //! `safe_path()` checks on per-VM ssh host keys (the canonical
-//! regression hit on personal-dev — see plan.md §"Ownership matrix
+//! regression hit on personal-dev - see plan.md §"Ownership matrix
 //! for `/var/lib/d2b/vms/<vm>/`" critical-detail note).
 //!
 //! The enforcer therefore:
@@ -105,7 +105,7 @@ pub struct Ownership {
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum OwnershipMismatch {
     /// `stat(2)` (`symlink_metadata`, no-follow) failed on the declared
-    /// path. `not_found` distinguishes `ENOENT` (the path is absent —
+    /// path. `not_found` distinguishes `ENOENT` (the path is absent -
     /// for `required = false` entries this is never emitted; for
     /// `required = true` entries it is emitted but treated as a
     /// migration-window warning by the preflight) from every other
@@ -239,7 +239,7 @@ pub fn check_ownership_matrix(
                         });
                     }
                 } else {
-                    // EACCES / EIO / ELOOP / … — always fail-closed,
+                    // EACCES / EIO / ELOOP / … - always fail-closed,
                     // independent of `required`.
                     drifts.push(OwnershipMismatch::StatFailed {
                         path: target,

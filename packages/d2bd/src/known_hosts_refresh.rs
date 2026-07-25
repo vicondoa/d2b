@@ -17,7 +17,7 @@
 //!
 //! The daemon-only end state moves the side effect into the typed
 //! broker `RunRotateKnownHost` op (reachable today via the public
-//! `rotateKnownHost` verb — see
+//! `rotateKnownHost` verb - see
 //! `dispatch_broker_rotate_known_host` in `lib.rs`). This module
 //! splits that work into:
 //!
@@ -33,7 +33,7 @@
 //! Idempotency contract: same `(vm, manifest)` always yields the
 //! same `RefreshIntent`, and re-running `refresh_known_hosts`
 //! against a broker that itself is idempotent (the existing
-//! `RunRotateKnownHost` handler is — it only rewrites
+//! `RunRotateKnownHost` handler is - it only rewrites
 //! `known_hosts.d2b` when the line actually differs) produces
 //! the same `RefreshOutcome` on every call. The
 //! `RunRotateKnownHostResponse::removed` field surfaces whether
@@ -80,7 +80,7 @@ impl SkipReason {
 /// Pure description of "refresh known_hosts for VM X" derived
 /// from the loaded manifest. Two equal inputs always yield two
 /// equal `RefreshIntent`s (the broker request's
-/// `bundle_rotate_known_host_intent_ref` is deterministic — it
+/// `bundle_rotate_known_host_intent_ref` is deterministic - it
 /// hashes only the VM name via [`intent_id_rotate_known_host`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefreshIntent {
@@ -346,7 +346,7 @@ mod tests {
 
     /// Fake broker that records every `rotate` call and returns a
     /// deterministic response. Used to drive the idempotency
-    /// assertion below — the same input must produce the same
+    /// assertion below - the same input must produce the same
     /// outcome, and the broker must see exactly one call per
     /// `refresh_known_hosts` invocation regardless of the call
     /// count.
@@ -413,7 +413,7 @@ mod tests {
     /// produce two structurally identical `Rotated` outcomes (the
     /// only difference allowed is the broker's `removed` field,
     /// which mirrors the file-touching behaviour of the legacy
-    /// flock-protected shell script — first call writes, second
+    /// flock-protected shell script - first call writes, second
     /// is a no-op). No spurious rotation is signalled by the pure
     /// intent layer.
     #[test]
@@ -445,7 +445,7 @@ mod tests {
         assert!(r1.removed, "first refresh writes the line");
         assert!(!r2.removed, "second refresh is a no-op (idempotent)");
 
-        // Both broker invocations were structurally identical —
+        // Both broker invocations were structurally identical -
         // the daemon never re-derives a different request for the
         // same `(vm, manifest)` pair.
         let calls = broker.calls.borrow();

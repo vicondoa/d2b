@@ -24,7 +24,7 @@
 //!     tests that require root, a live host, and the role binaries. They are
 //!     NOT contract-test material and intentionally do not port. (The virtiofsd
 //!     Layer-2 negative path is, in fact, skipped even by the bash gate itself
-//!     — it returns early with "seccomp blob not materialized".)
+//!     - it returns early with "seccomp blob not materialized".)
 //!
 //! Spec corrections / smoke-fixture gaps:
 //!   * cloud-hypervisor Phase-1b (persistent-tap mode -> `["CAP_NET_ADMIN"]`)
@@ -119,7 +119,7 @@ fn cloud_hypervisor_tap_fd_profile_declares_empty_capabilities() {
     }
     assert!(
         seen > 0,
-        "fixture has no cloud-hypervisor-runner node — every VM emits one (regression)"
+        "fixture has no cloud-hypervisor-runner node - every VM emits one (regression)"
     );
 }
 
@@ -155,7 +155,7 @@ fn cloud_hypervisor_persistent_tap_cap_net_admin_source_logic() {
 /// gate documents: device binds, cgroup placement, namespace isolation,
 /// seccomp reference). In the default tap-fd mode CH never touches
 /// `/dev/net/tun` (the broker pre-opens it), so the device-bind set must NOT
-/// expose the tun node — the security-relevant half of the D4a cap-drop.
+/// expose the tun node - the security-relevant half of the D4a cap-drop.
 #[test]
 fn cloud_hypervisor_rendered_jail_shape() {
     let resolver = load_bundle_resolver_from_env();
@@ -223,7 +223,7 @@ fn cloud_hypervisor_rendered_jail_shape() {
 
 /// Layer-1 `assert_profile_source`: the virtiofsd profile in
 /// `nixos-modules/minijail-profiles.nix` MUST match the ADR-0021 broker-pre-NS
-/// shape exactly — the carve-out marker string + `exceptionRef`, zero host
+/// shape exactly - the carve-out marker string + `exceptionRef`, zero host
 /// `CAP_*` tokens inside the profile block, `requiresStartRoot = false`, a
 /// `userNamespace = { hostUidForZero, hostGidForZero }` mapping, and the closed
 /// `seccompPolicyRef = "w1-virtiofsd"` allowlist.
@@ -352,7 +352,7 @@ fn virtiofsd_rendered_profiles_match_broker_pre_ns_shape() {
     }
     assert!(
         seen > 0,
-        "fixture has no virtiofsd node — every VM emits virtiofs shares (regression)"
+        "fixture has no virtiofsd node - every VM emits virtiofs shares (regression)"
     );
 }
 
@@ -420,7 +420,7 @@ fn virtiofsd_ro_store_rendered_adr_0021_invariants() {
     }
     assert!(
         ro_store_seen > 0,
-        "fixture has no virtiofsd ro-store share — every VM serves a read-only store (regression)"
+        "fixture has no virtiofsd ro-store share - every VM serves a read-only store (regression)"
     );
 }
 

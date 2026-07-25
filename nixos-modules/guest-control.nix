@@ -257,7 +257,7 @@ in
               # The reachable exec paths (interactive PTY + non-interactive pipe)
               # run the command as the workload user in a PAM login session via
               # systemd-run, using the exec-runner PTY helper, so both binary
-              # paths are wired whenever exec is enabled — not only for detached.
+              # paths are wired whenever exec is enabled - not only for detached.
               # guestd treats the two paths as a both-or-neither bundle.
               execRuntimeFlags =
                 lib.optionalString execEnabledUser (

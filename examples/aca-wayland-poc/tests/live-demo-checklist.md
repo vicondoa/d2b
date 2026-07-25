@@ -1,4 +1,4 @@
-# Live demo checklist — ACA sandbox + Wayland forwarding (ADR 0032)
+# Live demo checklist - ACA sandbox + Wayland forwarding (ADR 0032)
 
 This is a **Layer 2, manual** procedure (it provisions real Azure resources
 and needs a live Wayland compositor). It is the reproducible record behind
@@ -8,12 +8,12 @@ display byte carried over an **Azure Relay** hybrid connection.
 
 It is intentionally not wired into `make test-unit` / `make test-host-integration`;
 run it by hand and capture the screenshot/logs into a scratch dir (do **not**
-commit raw artifacts — they can leak resource metadata).
+commit raw artifacts - they can leak resource metadata).
 
 ## Prerequisites
 - `az` logged in to the target subscription; `waypipe` and a running
   Wayland compositor on the host (versions of waypipe must match the image,
-  which pins the host nixpkgs — both ends were 0.11.0 in the reference run).
+  which pins the host nixpkgs - both ends were 0.11.0 in the reference run).
 - The `aca` sandbox data-plane CLI (the public preview build), used to drive
   the sandbox (ACA sandboxes do not run the image entrypoint).
 - `podman` (or `docker`) + `nix` to build and push the image.

@@ -113,8 +113,8 @@ pub struct AuditEntry<'a> {
 /// Structured audit log writer for daily-rotated JSONL records under
 /// `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. The legacy
 /// single-file `/var/lib/d2b/broker-audit.log` path was retired:
-/// every record — `write_entry` (`AuditEntry` shape) and
-/// `write_op_record` (`OpAuditRecord` shape) alike — lands in the day's
+/// every record - `write_entry` (`AuditEntry` shape) and
+/// `write_op_record` (`OpAuditRecord` shape) alike - lands in the day's
 /// `broker-<utc-date>.jsonl` file. `ExportBrokerAudit` consumers and
 /// the `broker-export-audit.sh` / `broker-socket-acl.sh` Layer-1 gates
 /// migrate atomically: they now read the day's daily file (or the full
@@ -135,7 +135,7 @@ pub struct AuditLog {
     /// `docs/reference/daemon-api.md` "Audit" and `AGENTS.md` "Control
     /// plane"). Operators that need bounded retention have it: prune
     /// runs on every day-boundary rotation in `append_to_daily` and on
-    /// `open()`. Pruning is best-effort — errors are logged via the
+    /// `open()`. Pruning is best-effort - errors are logged via the
     /// broker tracing but do not fail the write path.
     retention_days: u32,
     write_limiter: Mutex<AuditWriteLimiter>,
@@ -271,8 +271,8 @@ impl AuditLog {
     /// Legacy short-record writer. New op dispatch arms call
     /// [`Self::write_op_record`] instead. The `AuditEntry` JSONL shape
     /// is still produced for back-compat with the `broker-socket-acl.sh`
-    /// gate (which greps `caller_uid`); all records — `AuditEntry` and
-    /// `OpAuditRecord` alike — land in the day's daily file under
+    /// gate (which greps `caller_uid`); all records - `AuditEntry` and
+    /// `OpAuditRecord` alike - land in the day's daily file under
     /// `audit_dir`.
     pub fn write_entry(
         &self,
@@ -553,7 +553,7 @@ impl AuditLog {
     /// of files removed (debug aid; the runtime tracing uses this to
     /// surface retention activity).
     ///
-    /// Filename is the source of truth — we never parse JSON to
+    /// Filename is the source of truth - we never parse JSON to
     /// inspect record timestamps. Operators who manually drop in
     /// `broker-<utc-date>.jsonl` files retain the same semantics.
     /// Files that don't match the expected name format are left
@@ -1072,7 +1072,7 @@ mod tests {
         let old_50d = ymd_from_unix(today_unix - 86_400 * 50);
 
         let log = make_audit_with_files(14, &[old_50d]);
-        // Seed an operator note + an export tarball — both should
+        // Seed an operator note + an export tarball - both should
         // survive pruning.
         let note = log.audit_dir.join("NOTES-operator.txt");
         let tar = log.audit_dir.join("export-2024-01-01.tar.gz");

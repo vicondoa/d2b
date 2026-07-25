@@ -11,7 +11,7 @@
 # Tag:      vhost-device-sound-v0.3.0
 #
 # The package's NixOS expression itself doesn't change (CLI is
-# compatible — same --socket / --backend flags). We override .version,
+# compatible - same --socket / --backend flags). We override .version,
 # .src, .cargoBuildFlags (disable the new gst-backend that needs
 # additional gstreamer libs), and .cargoHash on top of nixpkgs.
 { pkgs }:
@@ -31,7 +31,7 @@ pkgs.vhost-device-sound.overrideAttrs (old: rec {
   };
   # v0.3.0 enables a new gst-backend feature by default which pulls in
   # gstreamer dependencies (glib-2.0.pc etc). We don't need GStreamer
-  # — `--backend pipewire` is what we use. Disable default features
+  # - `--backend pipewire` is what we use. Disable default features
   # and enable just alsa-backend + pw-backend.
   cargoBuildFlags = [
     "--package" "vhost-device-sound"

@@ -56,7 +56,7 @@ impl TargetResolution {
 pub enum TargetResolutionError {
     /// A canonical target (`something.d2b`) was supplied but is not in the index.
     NotFound { target: String },
-    /// A workload id matched more than one workload — fail closed on ambiguity.
+    /// A workload id matched more than one workload - fail closed on ambiguity.
     AliasConflict {
         workload_id: String,
         candidates: Vec<String>,
@@ -87,7 +87,7 @@ impl TargetResolutionError {
 /// Lightweight index built from realm controller workload metadata.
 ///
 /// Build with [`WorkloadTargetIndex::build_from_controllers`] once per public
-/// request. The index is intentionally cheap to construct — it does only two
+/// request. The index is intentionally cheap to construct - it does only two
 /// HashMap inserts per workload entry.
 #[derive(Debug, Default, Clone)]
 pub struct WorkloadTargetIndex {
@@ -146,7 +146,7 @@ impl WorkloadTargetIndex {
     ///
     /// Resolution order:
     /// 1. If the string ends with `.d2b`, treat it as a canonical workload
-    ///    target and look it up by exact match — returns `NotFound` if absent.
+    ///    target and look it up by exact match - returns `NotFound` if absent.
     /// 2. If the string is a known legacy VM name (present in
     ///    `known_legacy_vm_names`), pass it through unchanged.
     /// 3. Otherwise try the string as a workload id short alias:
@@ -176,7 +176,7 @@ impl WorkloadTargetIndex {
             };
         }
 
-        // Step 2: already a known legacy VM name — fast path.
+        // Step 2: already a known legacy VM name - fast path.
         if known_legacy_vm_names.contains(target) {
             return Ok(TargetResolution::LegacyVmName(target.to_owned()));
         }
@@ -459,7 +459,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Target resolution — canonical target
+    // Target resolution - canonical target
     // ------------------------------------------------------------------
 
     #[test]
@@ -491,7 +491,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Target resolution — legacy VM name fast path
+    // Target resolution - legacy VM name fast path
     // ------------------------------------------------------------------
 
     #[test]
@@ -506,7 +506,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Target resolution — workload id alias
+    // Target resolution - workload id alias
     // ------------------------------------------------------------------
 
     #[test]
@@ -572,7 +572,7 @@ mod tests {
     fn resolve_unknown_target_falls_through_to_legacy_vm_name() {
         let config = controllers_json_no_workloads();
         let index = WorkloadTargetIndex::build_from_controllers(&config);
-        // Not a .d2b target, not known, not in index — falls through.
+        // Not a .d2b target, not known, not in index - falls through.
         let result = index
             .resolve_target("nonexistent-vm", &known_vms(&[]))
             .expect("unknown target falls through as legacy VM name");
@@ -593,7 +593,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Restart/adoption invariants — W16 requirement
+    // Restart/adoption invariants - W16 requirement
     //
     // These tests prove the fundamental invariant the W13/W16 plan requires:
     // workload identity in the read model (list/status) is **config-driven**,
@@ -601,7 +601,7 @@ mod tests {
     //
     //   1. Runner adoption uses (pid, start_time_ticks) from snapshot records
     //      in `supervisor/state.rs`; those records deliberately carry no
-    //      workload identity — the process is adopted, not the identity.
+    //      workload identity - the process is adopted, not the identity.
     //   2. The `WorkloadTargetIndex` is rebuilt from `realm-controllers.json`
     //      on every public request, so as long as the config file is stable
     //      across restart, the workload identity returned by `identity_for_vm`
@@ -632,7 +632,7 @@ mod tests {
         // Simulate post-restart daemon: rebuild index from the same config.
         let index_after = WorkloadTargetIndex::build_from_controllers(&config);
 
-        // Both indices must return the same identity for each workload — the
+        // Both indices must return the same identity for each workload - the
         // restart is a no-op for the read model.
         for vm in &["corp-vm", "dev-vm"] {
             let before = index_before
@@ -731,7 +731,7 @@ mod tests {
     }
 
     /// Mixed config: explicit workloads (with identity) and transitional
-    /// workloads (without identity) both survive the restart cycle correctly —
+    /// workloads (without identity) both survive the restart cycle correctly -
     /// identity workloads return their identity, transitional ones remain None.
     #[test]
     fn mixed_config_restart_preserves_identity_only_for_explicit_workloads() {

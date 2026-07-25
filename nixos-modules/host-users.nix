@@ -86,7 +86,7 @@ in
 
   users.users = lib.mkMerge [
     # d2b lifecycle group membership for any user the site
-    # declares. We ONLY add the supplementary group — the user
+    # declares. We ONLY add the supplementary group - the user
     # must already exist (declared elsewhere in the consumer's
     # NixOS config). The assertions module enforces that.
     #

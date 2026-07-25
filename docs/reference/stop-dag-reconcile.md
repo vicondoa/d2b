@@ -76,7 +76,7 @@ unit tests populate it directly to simulate drift.
 ### `ReconcileReport`
 
 Deterministic, sorted by intent id / busid. `is_noop()` returns true
-when both action vectors are empty — the supervisor uses that to
+when both action vectors are empty - the supervisor uses that to
 skip the broker dispatch on a clean restart.
 
 ## When the supervisor calls it
@@ -109,9 +109,9 @@ skip the broker dispatch on a clean restart.
 
 ## See also
 
-- [`docs/reference/host-prep-dag.md`](./host-prep-dag.md) —
+- [`docs/reference/host-prep-dag.md`](./host-prep-dag.md) -
   startup-side DAG (mirror image of the stop-DAG).
-- [`docs/reference/privileges.md`](./privileges.md) — broker op
+- [`docs/reference/privileges.md`](./privileges.md) - broker op
   catalogue (`ApplyNftables`, `UsbipBind`, `UsbipUnbind`).
-- [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
-  — daemon restart contract this planner feeds into.
+- [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md) -
+  daemon restart contract this planner feeds into.

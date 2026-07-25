@@ -83,7 +83,7 @@ fn classify(rest: &str, id: &str) -> &'static str {
     } else if trimmed.starts_with('(') {
         "parenthetical title"
     } else {
-        "em-dash title"
+        "dash title"
     }
 }
 
@@ -572,7 +572,7 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
         census,
         BTreeMap::from([
             ("bare", 356),
-            ("em-dash title", 112),
+            ("dash title", 112),
             ("colon title", 51),
             ("parenthetical title", 24),
         ]),
@@ -858,10 +858,12 @@ mod fixtures {
         format!("{heading} {id}: fixture\n\n{}\n", table(id, extra))
     }
 
-    /// The repository is about to replace every em-dash with a plain hyphen,
-    /// which rewrites 112 of the 543 headings into a spelling whose separator
-    /// is character-identical to the hyphens inside the ids. All five title
-    /// spellings, dashed or not, must keep yielding the declared id intact.
+    /// The repository replaced every em-dash with a plain hyphen, which
+    /// rewrote 112 of the 543 headings into a spelling whose separator is
+    /// character-identical to the hyphens inside the ids. All five title
+    /// spellings, dashed or not, must keep yielding the declared id intact;
+    /// the em-dash spelling stays covered (as an escape, never a literal)
+    /// because the parser still has to tolerate it in inbound Markdown.
     #[test]
     fn every_title_spelling_yields_the_declared_id() {
         for id in ["ADR046-core-001", "ADR046-security-key-012"] {

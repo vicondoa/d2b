@@ -3,7 +3,7 @@
 This guide is for **operators** running d2b v0.4.x (the last pre-1.0
 release with the `legacy-systemd` / `daemon-experimental` /
 `daemon-default` three-mode bridge) who are upgrading to v1.0 (the
-daemon-only end-state). It does **not** cover fresh installs — those
+daemon-only end-state). It does **not** cover fresh installs - those
 follow [`headless-alpha-walkthrough.md`](./headless-alpha-walkthrough.md)
 or [`install-nixos-tier1.md`](./install-nixos-tier1.md).
 
@@ -41,7 +41,7 @@ architectural decision. The short version:
   lifecycle authorisation surface.
 - The manifest contract bumps from `manifestVersion: 2` to the current
   value documented in `docs/reference/manifest-schema.md`. There is no
-  auto-rewriter — `ManifestV04::from_slice` rejects stale bundles
+  auto-rewriter - `ManifestV04::from_slice` rejects stale bundles
   outright with the typed `manifest-parse-error` /
   `manifest-version-mismatch` envelope.
 
@@ -58,22 +58,22 @@ consumer flakes pinning pre-v1.0 manifests.)
 These reference docs cover the individual cut-overs in depth; this
 guide cross-links them and gives operators the migration recipe.
 
-- [ADR 0015 — Daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
-- [`docs/reference/host-validate.md`](../reference/host-validate.md)
-  — the `d2b host validate` umbrella preflight.
-- [`docs/reference/cli-contract.md`](../reference/cli-contract.md)
-  — the post-clean-break Rust CLI surface.
-- [`docs/reference/default-switch-and-deprecation.md`](../reference/default-switch-and-deprecation.md)
-  — the post-clean-break compatibility table + default-switch auto-flip gate.
-- [`docs/reference/privileges.md`](../reference/privileges.md) —
+- [ADR 0015 - Daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
+- [`docs/reference/host-validate.md`](../reference/host-validate.md) -
+  the `d2b host validate` umbrella preflight.
+- [`docs/reference/cli-contract.md`](../reference/cli-contract.md) -
+  the post-clean-break Rust CLI surface.
+- [`docs/reference/default-switch-and-deprecation.md`](../reference/default-switch-and-deprecation.md) -
+  the post-clean-break compatibility table + default-switch auto-flip gate.
+- [`docs/reference/privileges.md`](../reference/privileges.md) -
   daemon-only broker op catalogue + retired-unit obituary tables.
 - [`docs/reference/manifest-schema.md`](../reference/manifest-schema.md)
-  + [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json)
-  — current manifest contract.
-- [`docs/reference/desktop-wrapper.md`](../reference/desktop-wrapper.md)
-  — daemon-native `.desktop` wrapper contract.
-- [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
-  — daemon DAG executor, pidfd handoff, supervisor reconciliation.
+  + [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json) -
+  current manifest contract.
+- [`docs/reference/desktop-wrapper.md`](../reference/desktop-wrapper.md) -
+  daemon-native `.desktop` wrapper contract.
+- [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md) -
+  daemon DAG executor, pidfd handoff, supervisor reconciliation.
 
 ## Before you begin
 
@@ -95,7 +95,7 @@ git -C /etc/nixos push --tags    # if your config is in a remote repo
 ```
 
 Bump the d2b input in your `flake.nix` to v1.0.0 **after** you
-have applied every change in §§1–7 below. The `supervisor` option's
+have applied every change in §§1-7 below. The `supervisor` option's
 v1.0-intended hard removal + eval-time rejection assertion is
 **scheduled for v1.1** (per ADR 0015 § Decision); v1.0 retains the
 option for backward-compat with consumer flakes
@@ -141,7 +141,7 @@ changed.
 d2b host validate --dry-run --json | jq '.waves[] | select(.wave=="p2")'
 ```
 
-Then, once §§2–7 are complete:
+Then, once §§2-7 are complete:
 
 ```bash
 sudo d2b host validate --apply --wave p2
@@ -269,7 +269,7 @@ surfaces as the typed envelope (exit 78);
 are gone; the function still accepts `legacy_args` /
 `legacy_fallback_warning` parameters for binary compatibility with
 its eight call sites, but they are unused. Setting
-`D2B_LEGACY_BASH_OPT_IN=1` has **no effect** — the env var is
+`D2B_LEGACY_BASH_OPT_IN=1` has **no effect** - the env var is
 silently dropped. `D2B_NATIVE_ONLY=1` is preserved as a
 documented no-op.
 
@@ -288,7 +288,7 @@ sudo grep -rIn \
 
 Remove the env-var setting. If a verb was previously kept working
 only by `D2B_LEGACY_BASH_OPT_IN=1`, that verb is now either
-shipped daemon-native (the common case — lifecycle verbs landed
+shipped daemon-native (the common case - lifecycle verbs landed
 natively) or it is a legitimate gap to file as an
 issue. `D2B_NATIVE_ONLY=1` can stay; it does nothing in v1.0
 but it is not an error.
@@ -304,7 +304,7 @@ D2B_LEGACY_BASH_OPT_IN=1 D2B_LEGACY_CLI_PATH=/bin/false \
 sudo systemctl start d2bd.service
 ```
 
-Layer-1 gate: `packages/d2b/tests/vm_verbs_contract.rs` (poison-pill case —
+Layer-1 gate: `packages/d2b/tests/vm_verbs_contract.rs` (poison-pill case -
 asserts no bash exec even with `D2B_LEGACY_CLI_PATH` and
 `D2B_LEGACY_BASH_OPT_IN=1` set).
 
@@ -321,18 +321,18 @@ generation built against v0.4.x.
 
 Every VM declared a constellation of root-owned systemd units:
 
-- `d2b@<vm>.service` — lifecycle wrapper.
-- `microvm@<vm>.service` — upstream microvm.nix template.
+- `d2b@<vm>.service` - lifecycle wrapper.
+- `microvm@<vm>.service` - upstream microvm.nix template.
 - `microvm-virtiofsd@<vm>.service`,
   `microvm-tap-interfaces@<vm>.service`,
   `microvm-pci-devices@<vm>.service`,
-  `microvm-set-booted@<vm>.service` — upstream sidecars.
+  `microvm-set-booted@<vm>.service` - upstream sidecars.
 - `d2b-<vm>-gpu.service`, `d2b-<vm>-snd.service`,
   `d2b-<vm>-video.service`, `d2b-<vm>-swtpm.service`,
-  `d2b-<vm>-store-sync.service` — per-VM d2b sidecars.
+  `d2b-<vm>-store-sync.service` - per-VM d2b sidecars.
 - `d2b-known-hosts-refresh@<vm>.service`,
   `d2b-vfsd-watchdog@<vm>.{service,timer}`,
-  `d2b-otel-relay@<vm>.service` — auxiliary loops.
+  `d2b-otel-relay@<vm>.service` - auxiliary loops.
 
 The per-VM `d2b.vms.<vm>.supervisor` option chose between
 `"systemd"` (the legacy template path) and `"d2bd"` (daemon
@@ -452,15 +452,15 @@ d2b flake input back to v0.4.x and `nixos-rebuild switch
 Four host-singleton framework services + one aggregator target
 were declared by `nixos-modules/host-*.nix`:
 
-- `d2b-net-route-preflight.service` — kernel route table
+- `d2b-net-route-preflight.service` - kernel route table
   preflight before `d2bd` could start.
-- `d2b-audit-check.service` + `d2b-audit-check.timer` —
+- `d2b-audit-check.service` + `d2b-audit-check.timer` -
   periodic audit-log rotation + integrity check.
-- `d2b-ch-exporter.service` — cloud-hypervisor Prometheus
+- `d2b-ch-exporter.service` - cloud-hypervisor Prometheus
   exporter on `127.0.0.1:9101`.
-- `d2b-otel-host-bridge.service` — OTLP host-relay bridge for
+- `d2b-otel-host-bridge.service` - OTLP host-relay bridge for
   the observability stack.
-- `microvms.target` — upstream aggregator for `microvm@<vm>`.
+- `microvms.target` - upstream aggregator for `microvm@<vm>`.
 
 ### After
 
@@ -471,7 +471,7 @@ All five surfaces are gone. Their work moved as follows:
 | `d2b-net-route-preflight.service` | `d2bd` startup self-check + `d2b host reconcile --network --apply`; typed envelope `net-route-preflight-degraded` (exit 66). |
 | `d2b-audit-check.{service,timer}` | broker `ExportBrokerAudit` op + `d2b host doctor`. Doctor's `checks[]` array reports the audit-rotation health. |
 | `d2b-ch-exporter.service` | `d2bd`'s own Prometheus exposition at `127.0.0.1:9101/metrics`. |
-| `d2b-otel-host-bridge.service` | broker `SpawnRunner{role: OtelHostBridge}` — runs as a daemon-supervised runner, not a persistent root service. |
+| `d2b-otel-host-bridge.service` | broker `SpawnRunner{role: OtelHostBridge}` - runs as a daemon-supervised runner, not a persistent root service. |
 | `microvms.target` | retired with `microvm@<vm>`; the upstream `microvm.autostart` / `systemd.targets.microvms.wants` cascade is suppressed in `host.nix`. |
 
 ### Migration steps
@@ -481,7 +481,7 @@ them. You only need to audit external scrapers / dashboards /
 alerting rules that referenced them by name:
 
 ```bash
-# Prometheus scrape config — replace the ch-exporter target:
+# Prometheus scrape config - replace the ch-exporter target:
 sudo grep -rIn \
   -e 'd2b-ch-exporter' \
   -e 'd2b-net-route-preflight' \
@@ -529,7 +529,7 @@ Layer-1 gates: `tests/observability-eval.sh`,
 
 ### Rollback
 
-There is no in-place rollback for the host singletons — the units
+There is no in-place rollback for the host singletons - the units
 no longer exist in v1.0. Pin the flake input to v0.4.x and
 `nixos-rebuild switch --rollback` if you need the singleton-based
 posture back.
@@ -560,7 +560,7 @@ the JS rule are gone. Per-VM lifecycle flows through
 
 The `d2b` group is preserved as the privilege
 boundary for daemon-singleton restarts; the **`d2b`
-group** (note the plural — declared in `nixos-modules/host-users.nix`)
+group** (note the plural - declared in `nixos-modules/host-users.nix`)
 is the authorisation surface for the daemon socket.
 
 ### Migration steps
@@ -612,7 +612,7 @@ allowlist names exactly the three daemon-only singletons).
 
 ### Rollback
 
-Same as §4 — the polkit retirement ships in the same release as
+Same as §4 - the polkit retirement ships in the same release as
 the per-VM template deletion. There is no in-place rollback.
 
 ## 7. Final preflight + default-switch auto-flip
@@ -623,7 +623,7 @@ Validation / Rollback* layout for the default-switch auto-flip itself.
 ### Before
 
 - `d2b.daemonExperimental.enable` defaults to `false` even though
-  every individual breaking change in §§1–6 has landed in the running
+  every individual breaking change in §§1-6 has landed in the running
   config.
 - The default-switch readiness option set
   (`d2b.defaultSwitchReadiness.<wave>.{implemented,validated}`)
@@ -663,7 +663,7 @@ sudo d2b host validate --apply
 # 4. d2b.daemonExperimental.enable now defaults to `true`
 #    because every <wave>.json record exists with the canonical
 #    schema. A second nixos-rebuild switch picks up the default
-#    flip (operator overrides — explicit `= true` / `= false` —
+#    flip (operator overrides - explicit `= true` / `= false` -
 #    still win).
 sudo nixos-rebuild switch --flake .#myhost
 ```
@@ -698,19 +698,19 @@ The default-switch auto-flip is a default change driven by an evaluator predicat
 not a destructive op. Rollback is therefore three orthogonal levers:
 
 ```bash
-# Option A — keep the daemon-only end-state but pin the flag
+# Option A - keep the daemon-only end-state but pin the flag
 #            explicitly to false in your consumer config:
 #   d2b.daemonExperimental.enable = lib.mkForce false;
 # (Then `nixos-rebuild switch` to apply.)
 sudo nixos-rebuild switch --flake .#myhost
 
-# Option B — remove the evidence files; the default predicate sees
+# Option B - remove the evidence files; the default predicate sees
 #            them missing and flips back to false on the next eval.
 sudo rm -rf /var/lib/d2b/validated
 sudo nixos-rebuild switch --flake .#myhost
 
-# Option C — full v0.4.x rollback (see §8 below). Recommended only
-#            if §§1–6 also need to be undone.
+# Option C - full v0.4.x rollback (see §8 below). Recommended only
+#            if §§1-6 also need to be undone.
 ```
 
 ## 8. Whole-migration rollback
@@ -746,7 +746,7 @@ last broker audit log under `/var/lib/d2b/audit/broker-<utc-date>.jsonl`.
 > distinct verb categories that share the same multi-line
 > `Remediation:` block format:
 >
-> 1. **Truly deferred — operator implementation queued for
+> 1. **Truly deferred - operator implementation queued for
 >    v1.2+ (unscheduled); v1.1 only delivers the typed-envelope
 >    rendering + remediation per ADR 0017**
 >    (emits `#not-yet-implemented` exit 78 in v1.0 AND v1.1
@@ -755,7 +755,7 @@ last broker audit log under `/var/lib/d2b/audit/broker-<utc-date>.jsonl`.
 >    the non-strict `audit` invocation is daemon-backed per
 >    Category 2).
 > 2. **v1.0 daemon-backed verbs** that emit `#daemon-down` (exit 1)
->    only when the broker is stopped — they otherwise work normally
+>    only when the broker is stopped - they otherwise work normally
 >    in v1.0: `audit` (non-strict only), `keys list`, `keys show`.
 >    The multi-line rendering only fires on the rare daemon-down
 >    case for these three; the v1.0 successful-call path is
@@ -765,13 +765,13 @@ last broker audit log under `/var/lib/d2b/audit/broker-<utc-date>.jsonl`.
 > for the authoritative per-verb v1.0 disposition.
 
 <a id="v11-deferred-verbs-audit"></a>
-### `d2b audit` (mixed disposition — see per-subverb detail)
+### `d2b audit` (mixed disposition - see per-subverb detail)
 
 `d2b audit` has two distinct dispositions in v1.0 per
 `cli-contract.md` § `audit` and `ADR 0017` § "Migration target
 table":
 
-- **Without `--strict`**: **v1.0 daemon-backed** (Category 2 —
+- **Without `--strict`**: **v1.0 daemon-backed** (Category 2 -
   daemon-down rendering pointer). Returns audit data normally
   when the broker is running; the multi-line remediation-rendering
   convention applies only when the broker is stopped
@@ -787,12 +787,12 @@ table":
   is queued for a future release (v1.2+ or later); there is no
   v1.1 P<N> TDD row for the implementation work.
 
-**Category 2 (`d2b audit` no `--strict`) — Resolution when
+**Category 2 (`d2b audit` no `--strict`) - Resolution when
 daemon-down**: start the daemon
 (`sudo systemctl start d2b-priv-broker.socket` followed by
 `sudo systemctl start d2bd.service`); re-run the verb.
 
-**Category 1 (`d2b audit --strict`) — operator workaround**:
+**Category 1 (`d2b audit --strict`) - operator workaround**:
 strict-audit semantics are queued for a future release
 (post-v1.1, unscheduled). Operators who need strict-audit-like
 behavior in v1.0/v1.1 must read the raw broker audit JSON
@@ -820,13 +820,13 @@ sudo cat /var/lib/d2b/audit/broker-$(date -u +%Y-%m-%d).jsonl | jq .
 ```
 
 <a id="v11-deferred-verbs-console"></a>
-### `d2b console` (truly deferred — operator implementation queued for v1.2+ unscheduled)
+### `d2b console` (truly deferred - operator implementation queued for v1.2+ unscheduled)
 
 `d2b console <vm>` returns `#not-yet-implemented` (exit 78)
 in v1.0 AND v1.1 unconditionally (v1.1 only delivers the typed-
 envelope rendering + remediation per ADR 0017; the underlying
 per-VM serial-console attach operator implementation is queued
-for v1.2+ unscheduled — not in the v1.1 implementation plan). The
+for v1.2+ unscheduled - not in the v1.1 implementation plan). The
 cloud-hypervisor VM is running under the broker
 `SpawnRunner{role: Hypervisor}` per
 [ADR 0018](../adr/0018-microvm-nix-removal.md) Hypervisor row;
@@ -857,13 +857,13 @@ v1.1 TDD row for the implementation work; the v1.1 deliverable is
 the rendering + remediation contract only.
 
 <a id="v11-deferred-verbs-audio"></a>
-### `d2b audio` (truly deferred — operator CLI implementation queued for v1.2+ unscheduled)
+### `d2b audio` (truly deferred - operator CLI implementation queued for v1.2+ unscheduled)
 
 `d2b audio status|mic|speaker|off` returns
 `#not-yet-implemented` (exit 78) in v1.0 AND v1.1 unconditionally
 (v1.1 only delivers the typed-envelope rendering + remediation
 per ADR 0017; the underlying per-VM audio device-state mutation
-CLI surface is queued for v1.2+ unscheduled — not in the v1.1
+CLI surface is queued for v1.2+ unscheduled - not in the v1.1
 implementation plan). The `SpawnRunner{role: Audio}` (per
 [ADR 0018](../adr/0018-microvm-nix-removal.md)) IS in the
 v1.1 role matrix (gated by `audio.enable = true` in the
@@ -882,7 +882,7 @@ exposed in v1.0.
 subverbs depend on (per ADR 0018 § "Disposition matrix" Audio
 row). The role lands; the operator-facing CLI subverbs
 (`d2b audio mic|speaker|off`) themselves are **NOT** in the
-v1.1 implementation set — they retain the typed
+v1.1 implementation set - they retain the typed
 `#not-yet-implemented` envelope (exit 78) in v1.1 per ADR 0017
 + cli-contract.md, with the v1.1 multi-line `Remediation:` block
 pointing at this guide section. The audio CLI subverbs' actual
@@ -917,11 +917,11 @@ operators can read the on-disk key store directly under
 
 ## See also
 
-- [ADR 0015 — Daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
-- [`docs/how-to/migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md)
-  — per-VM `supervisor = "systemd" → "d2bd"` move (v0.4.x only).
-- [`docs/how-to/migrating-from-microvm.md`](./migrating-from-microvm.md)
-  — raw microvm.nix → d2b (new installs).
+- [ADR 0015 - Daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
+- [`docs/how-to/migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md) -
+  per-VM `supervisor = "systemd" → "d2bd"` move (v0.4.x only).
+- [`docs/how-to/migrating-from-microvm.md`](./migrating-from-microvm.md) -
+  raw microvm.nix → d2b (new installs).
 - [`docs/how-to/uninstall-d2b.md`](./uninstall-d2b.md)
 - [`docs/reference/host-validate.md`](../reference/host-validate.md)
 - [`docs/reference/cli-contract.md`](../reference/cli-contract.md)

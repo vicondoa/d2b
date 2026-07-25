@@ -95,7 +95,7 @@ fn auth_status_roles_match_schema_and_authz() {
     let none_fixture = write_fixture(tmp.path(), "auth-none.json", NONE_FIXTURE);
     let admin_fixture = write_fixture(tmp.path(), "auth-admin.json", ADMIN_FIXTURE);
 
-    // Case 1 — launcher: gains launcher-allowed verbs (e.g. `up`) but keeps
+    // Case 1 - launcher: gains launcher-allowed verbs (e.g. `up`) but keeps
     // `audit` denied.
     let launcher = parse_json(&run_auth_status(
         &launcher_fixture,
@@ -119,7 +119,7 @@ fn auth_status_roles_match_schema_and_authz() {
         launcher.denied_subcommands
     );
 
-    // Case 2 — none: read-only surface only.
+    // Case 2 - none: read-only surface only.
     let none = parse_json(&run_auth_status(&none_fixture, 2000, &[], true));
     assert_eq!(none.role, AuthRoleV2::None, "uid 2000 -> none");
     let mut none_allowed = none.allowed_subcommands.clone();
@@ -138,7 +138,7 @@ fn auth_status_roles_match_schema_and_authz() {
         "none role stays read-only"
     );
 
-    // Case 3 — admin: gains `audit`, denies nothing.
+    // Case 3 - admin: gains `audit`, denies nothing.
     let admin = parse_json(&run_auth_status(
         &admin_fixture,
         2001,
@@ -157,7 +157,7 @@ fn auth_status_roles_match_schema_and_authz() {
         admin.allowed_subcommands
     );
 
-    // Case 4 — --human (launcher): summarizes the role and the denied audit.
+    // Case 4 - --human (launcher): summarizes the role and the denied audit.
     let human = run_auth_status(
         &launcher_fixture,
         1000,

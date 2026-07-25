@@ -407,7 +407,7 @@ spec:
 
 The **ProviderStateSet** for `Provider/activation-nixos` is the set of all
 `Volume` resources in the Zone whose `metadata.ownerRef` resolves to
-`Provider/activation-nixos`. It is a logical, query-time grouping — not a
+`Provider/activation-nixos`. It is a logical, query-time grouping - not a
 ResourceType or stored artifact:
 
 ```text
@@ -666,7 +666,7 @@ resource field.
 ### 6.4 retainedGenerations Nix option
 
 `d2b.zones.<zone>.retainedGenerations` is a Zone-level Nix option (default 3,
-range 1–16). It is the **sole** location where the retention bound is declared.
+range 1-16). It is the **sole** location where the retention bound is declared.
 It flows into `Provider.spec.config.retainedGenerations` only. It is not
 duplicated in any `NixosGeneration` spec, nor in any other resource field.
 
@@ -863,7 +863,7 @@ ComponentSession.
 | ResourceType | Create | Read | Update | Delete |
 | --- | --- | --- | --- | --- |
 | `activation-nixos.d2bus.org.NixosGeneration` | configuration (bundle) / admin (CLI) | read | admin | admin (retention via controller) |
-| `Volume` | — | — | — | — |
+| `Volume` | - | - | - | - |
 
 The activation-nixos controller has **no** `Volume` resource rights. Volume
 create/delete and reconciliation are not part of this Provider's state model:
@@ -884,7 +884,7 @@ runners.
 The controller runs under:
 
 - `User/d2b-activation-nixos`; system domain; `noNewPrivileges: true`
-- `seccompClass: activation-nixos-controller` — allowlist defined in the
+- `seccompClass: activation-nixos-controller` - allowlist defined in the
   signed Provider package; no syscalls that operate outside the controller's
   state `dirfd` or the d2b-bus socket
 - No host network; no devices; no store-path access
@@ -1067,14 +1067,14 @@ Required adaptations (work item `ADR046-activation-001`):
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR-046-resource-object-model and ADR-046-core-controllers; d2b-contracts activation-nixos owner |
-| Current source | None — net-new v3 ResourceType; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 ResourceType; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json and packages/d2b-contracts/src/activation_nixos.rs |
 | Detailed design | Define JSON schema and Rust DTOs for activation-nixos.d2bus.org.NixosGeneration, with systemArtifactId as the only artifact reference, no store path fields, activationDetail as a closed status.resource enum absent from spec, and phase constrained to the common framework enum values. Primary reuse disposition: `create`. Preserved source-plan detail: net-new schema and DTOs. |
 | Integration | Resource API, resource store, Nix compiler, activation-nixos controller, and CLI projections consume the schema and DTOs. |
 | Data migration | Full d2b 3.0 reset; no v2 generation resource import |
 | Validation | Schema golden vectors, serde unknown-field rejection, phase enum tests, activationDetail-not-in-spec test, and no-store-path-in-spec-or-status test. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
 **Scope:** `docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json`,
 `packages/d2b-contracts/src/activation_nixos.rs`
@@ -1250,7 +1250,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-activation-nixos --lib --tests`
 completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1295,7 +1295,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

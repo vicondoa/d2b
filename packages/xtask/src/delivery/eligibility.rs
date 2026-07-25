@@ -12,8 +12,8 @@
 //! # Where the check statuses come from
 //!
 //! This stage performs no network I/O and shells out to nothing. It reads one
-//! merge-target artifact the integrator produces out of band — in practice
-//! from `gh pr view --json` or `gh api` — describing the wave's current
+//! merge-target artifact the integrator produces out of band - in practice
+//! from `gh pr view --json` or `gh api` - describing the wave's current
 //! pull-request stack: each pull request's repository, number, base and head
 //! refs and object IDs, and its list of required checks with their
 //! conclusions, plus the current integrated material. Everything the gate

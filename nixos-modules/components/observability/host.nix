@@ -23,7 +23,7 @@ let
   otelRuntimeDir = "/run/d2b/otel";
   hostEgressSocket = "${otelRuntimeDir}/host-egress.sock";
   # OTLP ingest lives in its own subdirectory so the collector's write
-  # authority for bind(2) cannot reach host-egress.sock — unlink/rename
+  # authority for bind(2) cannot reach host-egress.sock - unlink/rename
   # authority is parent-directory scoped (ADR 0033).
   otelIngestDir = "${otelRuntimeDir}/ingest";
   hostOtlpSocket = "${otelIngestDir}/host-otlp.sock";

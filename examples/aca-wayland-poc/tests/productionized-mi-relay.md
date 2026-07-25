@@ -1,4 +1,4 @@
-# Historical live reproduction — MI-auth ACA + Wayland forwarding probe
+# Historical live reproduction - MI-auth ACA + Wayland forwarding probe
 
 **Layer 2, manual** (provisions real Azure + needs a live Wayland
 compositor). This is the reproducible record behind the productionized
@@ -25,7 +25,7 @@ does too. Don't reintroduce a sender-side id.
 
 ## Prerequisites
 - `az` logged in; `waypipe` + a running Wayland compositor on the host
-  (the image pins waypipe to the host nixpkgs — both ends 0.11.0 here).
+  (the image pins waypipe to the host nixpkgs - both ends 0.11.0 here).
 - The `aca` sandbox data-plane CLI (ACA sandboxes don't run the image
   entrypoint; drive them via `aca sandbox exec`).
 - `podman` + `nix` to build/push the image.

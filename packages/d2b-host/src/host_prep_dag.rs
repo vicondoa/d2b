@@ -339,7 +339,7 @@ impl std::error::Error for CycleError {}
 ///   `SeedDnsmasqLease`.
 ///
 /// Steps unrelated to the VM's optional sidecars (obs / usbip /
-/// gpu) are intentionally not part of the host-prep DAG — those are
+/// gpu) are intentionally not part of the host-prep DAG - those are
 /// handled inside the per-VM process DAG (`supervisor::dag`) once
 /// host-prep completes.
 ///
@@ -383,7 +383,7 @@ pub fn build_host_prep_dag_for_runtime(
 
     let mut steps = Vec::with_capacity(10);
 
-    // Preflights — no upstream deps; siblings of one another.
+    // Preflights - no upstream deps; siblings of one another.
     if !is_qemu_media {
         steps.push(HostPrepStep {
             id: id(HostPrepStepKind::SshHostKeyPreflight),

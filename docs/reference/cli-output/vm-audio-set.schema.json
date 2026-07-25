@@ -32,7 +32,7 @@
       "type": "string"
     },
     "level": {
-      "description": "Channel level after the operation (0–100), if known.",
+      "description": "Channel level after the operation (0-100), if known.",
       "anyOf": [
         {
           "$ref": "#/definitions/LevelPercent"

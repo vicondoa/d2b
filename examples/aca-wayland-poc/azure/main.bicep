@@ -1,4 +1,4 @@
-// d2b ACA + Wayland POC — Azure deployment (ADR 0032, Wave P0).
+// d2b ACA + Wayland POC - Azure deployment (ADR 0032, Wave P0).
 //
 // Subscription-scoped orchestrator. Every resource in this POC is regional
 // (each has a location), so they all live in the regional resource group
@@ -7,8 +7,8 @@
 // resources; this POC has none, so it is not created here.
 //
 // Two modules deploy into the regional group:
-//   1. registry.bicep — container registry + managed identity (+ AcrPull)
-//   2. sandbox.bicep  — Container Apps sandbox group + Azure Relay (+ the
+//   1. registry.bicep - container registry + managed identity (+ AcrPull)
+//   2. sandbox.bicep  - Container Apps sandbox group + Azure Relay (+ the
 //                       SandboxGroup Data Owner role for the identity)
 // The Wayland image is pushed to the registry and registered as a sandbox
 // disk image through the data plane; the repo's deploy.sh sequences

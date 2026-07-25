@@ -219,7 +219,7 @@ spec:
   hostRef: Host/host-system
   userRef: User/alice              # user whose compositor session the proxy connects to
   policyRef: display-wayland.d2bus.org.WaylandPolicy/default
-  # UI identity metadata — compositor-agnostic
+  # UI identity metadata - compositor-agnostic
   identity:
     label: "corp-vm"              # max 64 chars; validated against Guest name
     activeColor: "#7fc8ff"        # #rrggbb hex; required
@@ -248,22 +248,22 @@ status: {}
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `guestRef` | ResourceRef | yes | — | `Guest/<name>` | Target Guest |
-| `hostRef` | ResourceRef | yes | — | `Host/<name>` | Host running the proxy Process |
-| `userRef` | ResourceRef | yes | — | `User/<name>` | User whose compositor session the proxy connects to; used by `display-user-portal` to acquire the compositor fd |
-| `policyRef` | ResourceRef | yes | — | `display-wayland.d2bus.org.WaylandPolicy/<name>` | Resolved policy template; fully qualified ResourceRef |
-| `identity.label` | string | yes | — | 1..64 chars; `^[a-z][a-z0-9-]*$` | Authenticated display label; matches Guest name by default |
-| `identity.activeColor` | string | yes | — | `^#[0-9a-fA-F]{6}$` | Active/focused identity color |
+| `guestRef` | ResourceRef | yes | - | `Guest/<name>` | Target Guest |
+| `hostRef` | ResourceRef | yes | - | `Host/<name>` | Host running the proxy Process |
+| `userRef` | ResourceRef | yes | - | `User/<name>` | User whose compositor session the proxy connects to; used by `display-user-portal` to acquire the compositor fd |
+| `policyRef` | ResourceRef | yes | - | `display-wayland.d2bus.org.WaylandPolicy/<name>` | Resolved policy template; fully qualified ResourceRef |
+| `identity.label` | string | yes | - | 1..64 chars; `^[a-z][a-z0-9-]*$` | Authenticated display label; matches Guest name by default |
+| `identity.activeColor` | string | yes | - | `^#[0-9a-fA-F]{6}$` | Active/focused identity color |
 | `identity.inactiveColor` | string | no | `activeColor` | `^#[0-9a-fA-F]{6}$` | Inactive/unfocused identity color |
 | `identity.urgentColor` | string | no | `activeColor` | `^#[0-9a-fA-F]{6}$` | Urgent state identity color |
-| `identity.border.enable` | bool | no | `true` | — | Proxy-drawn identity rail |
+| `identity.border.enable` | bool | no | `true` | - | Proxy-drawn identity rail |
 | `identity.border.railWidth` | u32 | no | `9` | 0..64 | Left rail width in logical pixels; 0 disables the rail |
-| `identity.label.enable` | bool | no | `true` | — | Proxy-drawn identity label |
+| `identity.label.enable` | bool | no | `true` | - | Proxy-drawn identity label |
 | `identity.label.text` | string? | no | `null` | max 64 chars | `null` uses `identity.label`; `""` suppresses the label text |
 | `identity.label.position` | enum | no | `top-left` | `top-left \| top-center` | Label position |
-| `crossDomainTrusted` | bool | yes | — | must be `true` | Explicit opt-in for cross-domain Wayland forwarding; `false` is rejected at spec admission |
-| `virglVideo` | bool | no | `false` | — | Opt-in experimental virglrenderer video path; gated by `device-gpu` descriptor |
-| `filter.debugLogging` | bool | no | `false` | — | Verbose Wayland protocol trace logging; structurally redacted output only (message shape and global names; no payload bytes, argument values, or surface content); not for production |
+| `crossDomainTrusted` | bool | yes | - | must be `true` | Explicit opt-in for cross-domain Wayland forwarding; `false` is rejected at spec admission |
+| `virglVideo` | bool | no | `false` | - | Opt-in experimental virglrenderer video path; gated by `device-gpu` descriptor |
+| `filter.debugLogging` | bool | no | `false` | - | Verbose Wayland protocol trace logging; structurally redacted output only (message shape and global names; no payload bytes, argument values, or surface content); not for production |
 | `filter.denyGlobals` | `[string]` | no | `[]` | max 128 items; each max 63 chars | Additional globals to deny beyond policy defaults |
 | `filter.allowGlobals` | `[string]` | no | `[]` | max 128 items; each max 63 chars | Globals to allow; clipboard-boundary globals are ignored and produce audit advisory |
 | `filter.maxVersions` | `map<string,u32>` | no | `{}` | max 128 entries | Per-interface version caps |
@@ -569,8 +569,8 @@ No capabilities. No PipeWire/Pulse socket access.
   d2b-bus and holds no d2b-bus socket.
 - No compositor socket path, GPU device node path, or cross-provider socket path
   ever enters the proxy binary's address space.
-- `seccompClass: w1-wayland-proxy` — Provider-signed seccomp catalog entry.
-- `startRoot: false` — never holds root inside or outside the namespace.
+- `seccompClass: w1-wayland-proxy` - Provider-signed seccomp catalog entry.
+- `startRoot: false` - never holds root inside or outside the namespace.
 
 **Startup sequence (fail-closed):**
 1. Read sealed config and compiled `WaylandPolicy` digest from the in-jail config
@@ -893,12 +893,12 @@ status: {}
 | `maxVersions` | `map<string,u32>` | no | `{}` | max 512 entries | Zone-wide per-interface version caps |
 | `dmabufAllow` | `[string]` | no | `[]` | max 256 items | Zone-wide dmabuf allow rules |
 | `dmabufDeny` | `[string]` | no | `[]` | max 256 items | Zone-wide dmabuf deny rules |
-| `defaults.acceleratedRendering` | `allow \| deny` | no | `allow` | — | Default action for `AcceleratedRendering`-classified globals |
-| `defaults.clipboardBoundary` | `virtualize \| deny` | no | `virtualize` | — | `virtualize`: synthesize clipboard locally; `deny`: hide all clipboard globals |
-| `defaults.highRisk` | `allow \| deny` | no | `deny` | — | Default action for `HighRisk`-classified globals |
-| `defaults.appDefaults` | `allow \| deny` | no | `allow` | — | Default action for `AppDefault`-classified globals |
-| `defaults.offDefaults` | `allow \| deny` | no | `deny` | — | Default action for `OffDefault`-classified globals |
-| `defaults.unclassified` | `allow \| deny` | no | `deny` | — | Default action for unclassified globals; overrides to `allow` produce audit advisory |
+| `defaults.acceleratedRendering` | `allow \| deny` | no | `allow` | - | Default action for `AcceleratedRendering`-classified globals |
+| `defaults.clipboardBoundary` | `virtualize \| deny` | no | `virtualize` | - | `virtualize`: synthesize clipboard locally; `deny`: hide all clipboard globals |
+| `defaults.highRisk` | `allow \| deny` | no | `deny` | - | Default action for `HighRisk`-classified globals |
+| `defaults.appDefaults` | `allow \| deny` | no | `allow` | - | Default action for `AppDefault`-classified globals |
+| `defaults.offDefaults` | `allow \| deny` | no | `deny` | - | Default action for `OffDefault`-classified globals |
+| `defaults.unclassified` | `allow \| deny` | no | `deny` | - | Default action for unclassified globals; overrides to `allow` produce audit advisory |
 
 `WaylandSession.spec.filter.*` fields override the Zone-wide `WaylandPolicy`
 for that session. Per-session overrides take precedence over Zone policy.
@@ -910,18 +910,18 @@ Neither per-session nor Zone policy can override the Required-baseline layer
 The policy engine uses a four-layer classified allowlist (from lowest to
 highest priority):
 
-1. **Required-baseline** — core globals d2b needs for cross-domain Wayland
+1. **Required-baseline** - core globals d2b needs for cross-domain Wayland
    graphics. These cannot be denied from config; a per-session `denyGlobals`
    entry for a Required-baseline global produces a `W-DENY-BASELINE` audit
    advisory and the entry is silently ignored.
 
-2. **Secure feature defaults** — named classification bundles with safe
+2. **Secure feature defaults** - named classification bundles with safe
    defaults. Defaults are governed by `WaylandPolicy.spec.defaults.*`.
 
-3. **Zone policy** — `WaylandPolicy` per-session overrides applied to all
+3. **Zone policy** - `WaylandPolicy` per-session overrides applied to all
    sessions referencing this policy.
 
-4. **Session overrides** — `WaylandSession.spec.filter.*` per-session
+4. **Session overrides** - `WaylandSession.spec.filter.*` per-session
    overrides with highest priority.
 
 Unknown globals (not in any layer) are denied by default. **Unknown interface
@@ -1305,9 +1305,9 @@ enums; no Zone UID or resource name is a metric dimension.
 
 OTEL spans are emitted for the following controller operations:
 
-- `display_wayland.session.reconcile` — reconcile a single `WaylandSession`;
-- `display_wayland.proxy.start` — proxy Process spawn ticket issue;
-- `display_wayland.policy.compile` — policy compilation from `WaylandPolicy`.
+- `display_wayland.session.reconcile` - reconcile a single `WaylandSession`;
+- `display_wayland.proxy.start` - proxy Process spawn ticket issue;
+- `display_wayland.policy.compile` - policy compilation from `WaylandPolicy`.
 
 Zone, Provider, component, and resource identity remain only in the OTEL
 resource attributes below and permitted audit fields. No span carries those
@@ -1582,7 +1582,7 @@ where `H12 = builtins.substring 0 12 (builtins.hashString "sha256" "d2b-wlp:${zo
 Example for zone `dev`, session `corp-vm-display`:
 `d2b-wlp-` + first 12 hex chars of `sha256("d2b-wlp:dev:corp-vm-display")`.
 
-**Dynamic pool accounts:** `d2b-wlp-p${toString N}` for N in 0..(`principalPoolSize` − 1).
+**Dynamic pool accounts:** `d2b-wlp-p${toString N}` for N in 0..(`principalPoolSize` - 1).
 
 No raw UID or GID integer is set or required. The OS allocates UIDs in the
 system range automatically. The `display-controller` and the broker resolve the
@@ -1774,7 +1774,7 @@ produces the guest binary (see §19 removal table).
 | Destination | `packages/d2b-provider-display-wayland/src/audit.rs`, `packages/d2b-provider-display-wayland/src/metrics.rs` |
 | Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed semantic label sets with no Zone UID/name or resource-name-derived key; retain Zone identity in `d2b.zone` resource attributes; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Providers emit via Zone telemetry emitter; audit records committed before operation completion |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Redaction contract tests (`policy_observability.rs` pattern), audit record schema tests, structural label-policy tests asserting exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus WaylandSession/Zone-name canary absence |
 | Removal proof | N/A (new code) |
 
@@ -1788,7 +1788,7 @@ produces the guest binary (see §19 removal table).
 | Destination | `packages/d2b-provider-display-wayland/integration/` |
 | Detailed design | Container/Host/Guest/cross-process integration fixtures for: (a) end-to-end WaylandSession create → proxy Process ready → guest frontend ready; (b) GPU endpoint unavailable → Pending; (c) proxy crash → Failed backoff; (d) policy policy warning production; (e) clipboard boundary denial; (f) crossDomainTrusted=false admission rejection. Follows `ADR-046-provider-model-and-packaging` integration/ convention. |
 | Integration | Invoked by existing repository test orchestration (`make test-integration` / container lane) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All six scenarios above pass; no socket paths in test output |
 | Removal proof | N/A (new code) |
 
@@ -1815,7 +1815,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1831,7 +1831,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-display-wayland --lib --tests` completes
 in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which

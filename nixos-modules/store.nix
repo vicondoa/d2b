@@ -10,7 +10,7 @@
 # This module replaces that share with a per-VM hardlink farm under
 # /var/lib/d2b/vms/<vm>/store/ containing ONLY the paths in that VM's
 # `system.build.toplevel` closure. Bytes are shared with the host's
-# real /nix/store via hard links — zero extra disk usage beyond
+# real /nix/store via hard links - zero extra disk usage beyond
 # directory entries.
 #
 # Layout (per VM, under /var/lib/d2b/vms/<vm>/)
@@ -118,7 +118,7 @@ let
   # plus their transitive closure (bash, supervisord, virtiofsd, ...).
   # These run on the HOST, not the guest, BUT they must be reachable
   # via /nix/store inside the daemon's mount namespace once we
-  # bind-mount our per-VM store on top of /nix/store — otherwise
+  # bind-mount our per-VM store on top of /nix/store - otherwise
   # systemd's ExecStart= can't resolve the runner script via the
   # symlink at /var/lib/d2b/vms/<vm>/current/bin/virtiofsd-run.
   # Including the runner closure as additional hardlinks costs zero
@@ -155,7 +155,7 @@ let
   #      and sed-patch its hard-coded virtiofsd flags
   #
   #        --inode-file-handles=prefer  ->  --inode-file-handles=never
-  #          (C1b — eliminates the daemon's runtime need for
+  #          (C1b - eliminates the daemon's runtime need for
   #          CAP_DAC_READ_SEARCH, which means we can drop that cap
   #          from the bounding set entirely below.)
   #
@@ -233,7 +233,7 @@ let
       # Security hardening.
       #
       # NEVER create or chmod
-      # /run/d2b here — host-daemon.nix owns that path when the
+      # /run/d2b here - host-daemon.nix owns that path when the
       # daemon is enabled, and host.nix's tmpfiles owns it in the
       # pre-daemon path. We only touch the per-VM leaf under it.
       HARDENED=/run/d2b/${name}/hardened
@@ -387,7 +387,7 @@ let
 
   # ---------------------------------------------------------------------------
   # The host-side sync helper. One script, invoked from systemd and
-  # from `d2b build/switch/...`. Idempotent — re-running is cheap.
+  # from `d2b build/switch/...`. Idempotent - re-running is cheap.
   #
   # Usage
   #   d2b-store-sync <vm> <generation-dir>
@@ -462,12 +462,12 @@ let
       # Same-filesystem guard. Hardlinks require source and destination
       # on the same fs. If someone moves /var/lib/d2b onto a
       # separate volume (NFS, separate LUKS dev, btrfs subvol, ...)
-      # this whole approach breaks — fail loud rather than silently
+      # this whole approach breaks - fail loud rather than silently
       # degrade to copies.
       NIX_FS=$(stat -f -c '%T' /nix/store)
       STATE_FS=$(stat -f -c '%T' "$STATE_DIR")
       if [ "$NIX_FS" != "$STATE_FS" ]; then
-        echo "d2b-store-sync: /nix/store ($NIX_FS) and $STATE_DIR ($STATE_FS) on different filesystems — cannot hardlink." >&2
+        echo "d2b-store-sync: /nix/store ($NIX_FS) and $STATE_DIR ($STATE_FS) on different filesystems - cannot hardlink." >&2
         echo "  Move /var/lib/d2b back onto the same volume as /nix/store, or rebuild the per-VM store layout for cross-fs." >&2
         exit 3
       fi
@@ -556,7 +556,7 @@ let
         NEW_COUNT=$((NEW_COUNT + 1))
       done < "$GEN_SRC/store-paths"
 
-      # Move staged paths into store/ — directory rename within the
+      # Move staged paths into store/ - directory rename within the
       # same parent is atomic per entry.
       if [ "$NEW_COUNT" -gt 0 ]; then
         for d in "$STAGE_DIR"/*; do
@@ -719,7 +719,7 @@ let
       # d2b creates (the per-VM /var/lib/d2b/vms/<vm>/store-view tree).
       # Recursive chmod or chown on the files would change the
       # hardlinked /nix/store inodes too, violating Nix store
-      # immutability — a virtiofsd RCE that escapes the per-VM bind
+      # immutability - a virtiofsd RCE that escapes the per-VM bind
       # could then locate the same inodes via name_to_handle_at and
       # have writable+exec perms (or unexpected group ownership) on
       # them. File inodes retain their upstream Nix store ownership
@@ -783,7 +783,7 @@ in
     # let-bindings directly. Both bindings remain available for the
     # daemon-native StoreSync surface, which will plumb them through
     # bundle.nix / processes-json.nix instead of re-exposing a
-    # readOnly NixOS option (issue #6 — see tests/static.sh trio lint).
+    # readOnly NixOS option (issue #6 - see tests/static.sh trio lint).
     # ---------------------------------------------------------------------------
   };
 
@@ -817,7 +817,7 @@ in
     # both want to write under /nix/store. The overlay layers a tmpfs
     # writable upper over the read-only lower, so those writes go to
     # tmpfs and the activation step completes. Overlay contents are
-    # ephemeral (wiped each VM reboot) which is fine — anything the
+    # ephemeral (wiped each VM reboot) which is fine - anything the
     # host needs to be persistent lives in the per-VM hardlink farm and
     # is rebuilt on the next `d2b-store-sync`.
     #
@@ -886,7 +886,7 @@ in
     # host-daemon.nix tmpfiles (root:d2b 1770 with ACLs) under
     # daemonExperimental, or host.nix tmpfiles (root:d2b
     # 0775) without it. This activation hook MUST NOT touch the parent
-    # `/run/d2b` directory — only per-VM leaves.
+    # `/run/d2b` directory - only per-VM leaves.
     # ---------------------------------------------------------------------------
     system.activationScripts.d2bStoreSync = lib.stringAfter [ "specialfs" "users" ] ''
       set -u
@@ -966,7 +966,7 @@ in
                        | tail -1 \
                        | ${pkgs.gnused}/bin/sed 's|^ExecStart=||')
             if [ -n "$cur_path" ] && [ -n "$new_path" ] && [ "$cur_path" != "$new_path" ]; then
-              echo "d2b: WARNING — microvm-virtiofsd@${name}.service ExecStart changed (was: $cur_path; now: $new_path) AND microvm@${name}.service is active."
+              echo "d2b: WARNING - microvm-virtiofsd@${name}.service ExecStart changed (was: $cur_path; now: $new_path) AND microvm@${name}.service is active."
               echo "d2b:   The activation will restart virtiofsd, but cloud-hypervisor will lose its vhost-user backend."
               echo "d2b:   You must restart the VM after this rebuild: sudo systemctl stop microvm@${name}.service && d2b up ${name}"
               echo "d2b:   (the d2b-vfsd-watchdog@${name}.timer will detect the wedge and stop microvm@ within ~60s.)"

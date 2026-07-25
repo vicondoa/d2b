@@ -1,4 +1,4 @@
-# Makefile — d2b repository top-level convenience targets.
+# Makefile - d2b repository top-level convenience targets.
 #
 # Maintainer-facing targets only; CI converges on this stable make-target
 # interface incrementally during the test rearchitecture.
@@ -27,38 +27,38 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 #   make check          L1 PR-equivalent gate, locally parallelized.
 #   make check-static   Legacy monolithic tests/static.sh full-static gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
-#   make check-all      check-ci + test-hardware + perf — full local NixOS gate.
+#   make check-all      check-ci + test-hardware + perf - full local NixOS gate.
 #   make test-<layer>   focused per-layer run (ledger-driven).
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
 #   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
-#   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough — NixOS host only.
+#   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough - NixOS host only.
 #   make heavy-<lane>      the same lane, serialized through the two-slot
 #                          per-uid heavy-gate semaphore (see "Heavy lanes").
 # ===========================================================================
 
-## check — the Layer-1 PR-equivalent done-gate. The manifest runner executes
+## check - the Layer-1 PR-equivalent done-gate. The manifest runner executes
 ##          check-tier0 first, then safe L1 sub-targets in parallel, then
 ##          drift after the parallel phase. Tune with D2B_CHECK_JOBS and
 ##          D2B_FLAKE_JOBS.
 check:
 	bash tests/tools/layer1-jobs run-local
 
-## check-static — legacy/full-static monolithic gate retained for explicit use.
+## check-static - legacy/full-static monolithic gate retained for explicit use.
 check-static:
 	bash tests/static.sh
 
-## check-ci — W0: run check, then skip or run legacy G-ci on a suitable host.
+## check-ci - W0: run check, then skip or run legacy G-ci on a suitable host.
 check-ci:
 	$(MAKE) check
 	$(MAKE) test-integration
 
-## check-all — the full local gate on a NixOS host with devices.
+## check-all - the full local gate on a NixOS host with devices.
 check-all:
 	$(MAKE) check-ci
 	$(MAKE) test-hardware
 	$(MAKE) perf
 
-## check-fast / check-tier0 — fast PR-loop subsets.
+## check-fast / check-tier0 - fast PR-loop subsets.
 ## check-fast is superseded by `make test-unit` (the new umbrella); left for
 ## back-compat but now aliases to test-unit.
 check-fast: test-unit
@@ -87,22 +87,22 @@ test-unit:
 # Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
 # ===========================================================================
 
-## test-lint — preflight + nix-instantiate --parse + shellcheck (no eval, no cargo).
+## test-lint - preflight + nix-instantiate --parse + shellcheck (no eval, no cargo).
 test-lint:
 	bash tests/test-lint.sh
 
-## test-rust — the comprehensive Rust gate (fmt, clippy, cargo test, contract
+## test-rust - the comprehensive Rust gate (fmt, clippy, cargo test, contract
 ## tests with D2B_FIXTURES, CLI-contract layer, no-bash-ast-walker, broker
 ## workspace ×3 feature passes, schema-gen reproducibility, cargo-deny/audit,
 ## stub-no-socket, assert-pinned-tests).
 test-rust:
 	bash tests/test-rust.sh
 
-## test-proofs — standalone proof crates under proofs/ (not members of packages/).
+## test-proofs - standalone proof crates under proofs/ (not members of packages/).
 test-proofs:
 	bash tests/test-proofs.sh
 
-## test-flake — `nix flake check --no-build` for the native system (bounded
+## test-flake - `nix flake check --no-build` for the native system (bounded
 ## memory). CI shards the x86_64 leg one-job-per-check via a dynamic matrix:
 ## set D2B_FLAKE_CHECK=<name> to instantiate just that one check (the matrix
 ## enumerates names with `make test-flake-list`); the aarch64 PR leg runs only a
@@ -111,35 +111,35 @@ test-proofs:
 test-flake:
 	bash tests/test-flake.sh
 
-## test-flake-list — emit the native-system flake check names as a JSON array on
+## test-flake-list - emit the native-system flake check names as a JSON array on
 ## stdout (CI dynamic-matrix plumbing for the sharded test-flake; see
 ## .github/workflows/pr-l1-static-fast.yml). Invoke as `make -s test-flake-list`.
 test-flake-list:
 	@bash tests/test-flake-list.sh
 
-## test-nix-unit — build all sharded nix-unit corpus checks (focused convenience
+## test-nix-unit - build all sharded nix-unit corpus checks (focused convenience
 ## target; already covered by test-flake, so NOT in test-unit to avoid double work).
 test-nix-unit:
 	bash tests/test-nix-unit.sh
 
-## test-drift — generated-artifact drift gates (xtask gen-*, vms-json parity).
+## test-drift - generated-artifact drift gates (xtask gen-*, vms-json parity).
 test-drift:
 	bash tests/test-drift.sh
 
-## test-policy — meta gates that guard the test architecture + cross-cutting
+## test-policy - meta gates that guard the test architecture + cross-cutting
 ## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
 test-policy:
 	bash tests/test-policy.sh
 
-## test-integration — L2 podman container integration tests.
+## test-integration - L2 podman container integration tests.
 test-integration:
 	bash tests/test-integration.sh
 
-## layer1-workflow — regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
+## layer1-workflow - regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
 layer1-workflow:
 	bash tests/tools/layer1-jobs render-workflow --write
 
-## layer1-workflow-check — fail if the generated Layer-1 PR workflow is stale.
+## layer1-workflow-check - fail if the generated Layer-1 PR workflow is stale.
 layer1-workflow-check:
 	bash tests/tools/layer1-jobs check-workflow
 
@@ -147,20 +147,20 @@ layer1-workflow-check:
 # Additional targets (helper utilities, legacy aliases, meta gates).
 # ===========================================================================
 
-## check-inventory — fail-closed ledger drift check for CI.
+## check-inventory - fail-closed ledger drift check for CI.
 check-inventory:
 	bash tests/tools/gen-migration-ledger.sh --check
 
-## ledger-regen — regenerate tests/migration-ledger.toml in place for humans.
+## ledger-regen - regenerate tests/migration-ledger.toml in place for humans.
 ledger-regen:
 	bash tests/tools/gen-migration-ledger.sh
 
-## nix-unit-pin — regenerate the fail-closed nix-unit case-presence pins
+## nix-unit-pin - regenerate the fail-closed nix-unit case-presence pins
 ## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
 nix-unit-pin:
 	bash tests/tools/gen-nix-unit-pins.sh
 
-## flake-matrix-pin — regenerate the fail-closed CI flake-check-matrix pin
+## flake-matrix-pin - regenerate the fail-closed CI flake-check-matrix pin
 ## (tests/golden/flake-check-matrix/<system>.txt) after adding/removing a flake
 ## check. The drift gate (run by `make test-drift`) fails closed until this is
 ## rerun, so the sharded x86 CI matrix can't silently change coverage.
@@ -171,11 +171,11 @@ flake-matrix-pin:
 pr-checklist-gate:
 	bash tests/unit/meta/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
 
-## test-host-integration — G-host: runNixOSTest VM integration tests (the
+## test-host-integration - G-host: runNixOSTest VM integration tests (the
 ## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
 ## real NixOS VM with the d2b daemon surface and asserts live broker /
 ## daemon / host-posture behaviour (socket activation, bridge isolation,
-## state-dir ACLs, broker privilege posture) — the hermetic, non-destructive
+## state-dir ACLs, broker privilege posture) - the hermetic, non-destructive
 ## successor to the `D2B_LIVE`-against-the-real-host scripts. Needs KVM (a local
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
@@ -187,7 +187,7 @@ test-host-integration:
 	exit 0; \
 	fi; \
 	if [ ! -e /dev/kvm ]; then \
-	echo "test-host-integration: /dev/kvm absent — runNixOSTest will fall back to slow TCG emulation"; \
+	echo "test-host-integration: /dev/kvm absent - runNixOSTest will fall back to slow TCG emulation"; \
 	fi; \
 	root="$$(pwd)"; \
 	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
@@ -200,7 +200,7 @@ test-host-integration:
 	echo "==> nix build .#vmChecks.$$system.$$name"; \
 	nix build --no-link --print-build-logs ".#vmChecks.$$system.$$name"; \
 	done
-## test-hardware — G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
+## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 test-hardware:    ; bash tests/tools/run-layer.sh test-hardware
 perf:             ; bash tests/tools/run-layer.sh perf
@@ -223,67 +223,67 @@ HEAVY_GATE_TARGET_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/
 HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
-## heavy-gate-build — build the semaphore wrapper. Runs from packages/ so the
+## heavy-gate-build - build the semaphore wrapper. Runs from packages/ so the
 ## workspace cargo config (and its rustc wrapper) applies.
 heavy-gate-build:
 	@cd packages && cargo build --quiet -p xtask
 
-## heavy-check — the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
+## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
 heavy-check: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) check
 
-## heavy-test-integration — L2 podman container integration under the semaphore.
+## heavy-test-integration - L2 podman container integration under the semaphore.
 heavy-test-integration: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) test-integration
 
-## heavy-test-host-integration — runNixOSTest VM checks under the semaphore.
+## heavy-test-host-integration - runNixOSTest VM checks under the semaphore.
 heavy-test-host-integration: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) test-host-integration
 
-## heavy-test-hardware — real GPU/YubiKey/TPM passthrough under the semaphore.
+## heavy-test-hardware - real GPU/YubiKey/TPM passthrough under the semaphore.
 heavy-test-hardware: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) test-hardware
 
-## heavy-cargo-test — the Rust workspace test suite under the semaphore.
+## heavy-cargo-test - the Rust workspace test suite under the semaphore.
 ##                    Override the selector with HEAVY_CARGO_TEST_ARGS.
 HEAVY_CARGO_TEST_ARGS ?= --workspace --all-targets
 heavy-cargo-test: heavy-gate-build
 	cd packages && $(HEAVY_GATE) cargo test $(HEAVY_CARGO_TEST_ARGS)
 
-## heavy-flake-check — the building `nix flake check` under the semaphore.
+## heavy-flake-check - the building `nix flake check` under the semaphore.
 ##                     `make test-flake` is the cheap --no-build sibling.
 heavy-flake-check: heavy-gate-build
 	$(HEAVY_GATE) $(NIX_FLAKE) flake check --print-build-logs
 
 # --- pre-existing maintainer targets ---------------------------------------
 
-## i3-check — verify no v1.3 deferrals authored (ADR 0022 I3 invariant).
+## i3-check - verify no v1.3 deferrals authored (ADR 0022 I3 invariant).
 ##            Wired into pre-tag and tests/static.sh per panel-docs R1 MF-1.
 i3-check:
 	bash tests/unit/meta/no-new-deferral.sh
 
-## pre-tag — run the full live-VM smoke gate before tagging a release.
+## pre-tag - run the full live-VM smoke gate before tagging a release.
 ##           Requires: KVM, d2b active, both personal-dev and work-aad VMs declared.
 ##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/d2b-smoke-run-log.txt.
 ##           ALSO runs the I3 invariant grep gate (ADR 0022 + panel-docs R1).
 pre-tag: i3-check
 	bash tests/integration/live/live-vm-smoke.sh --full
 
-## smoke-lite — run the single-VM lite smoke gate (≤5 min).
+## smoke-lite - run the single-VM lite smoke gate (≤5 min).
 ##              Used at every panel-round HEAD per I5.
 smoke-lite:
 	bash tests/integration/live/live-vm-smoke.sh --lite
 
 .PHONY: test-changelog changelog-fold
 
-## test-changelog — the changelog policy gate (also the CI test-changelog job).
+## test-changelog - the changelog policy gate (also the CI test-changelog job).
 ##                  Requires code changes to ship release notes as either a
 ##                  CHANGELOG.md entry or a changelog.d/ fragment, and validates
 ##                  the structure of every fragment present.
 test-changelog:
 	bash scripts/changelog-check.sh
 
-## changelog-fold — fold every changelog.d/ fragment into the CHANGELOG.md
+## changelog-fold - fold every changelog.d/ fragment into the CHANGELOG.md
 ##                  '## [Unreleased]' block and delete the consumed fragments.
 ##                  Run at merge time; see changelog.d/README.md.
 changelog-fold:
@@ -292,7 +292,7 @@ changelog-fold:
 
 .PHONY: test-runtime-ledger
 
-## test-runtime-ledger — hermetic execution-budget gate. Times the Layer-1
+## test-runtime-ledger - hermetic execution-budget gate. Times the Layer-1
 ##   shard targets named in D2B_RUNTIME_SHARDS by re-invoking them through
 ##   make, records the samples into a deterministic ledger, then enforces the
 ##   per-test / per-crate / per-shard budgets against it. Set

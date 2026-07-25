@@ -613,7 +613,7 @@
           ]
         },
         "level": {
-          "description": "New level (0–100 inclusive). Validated at the wire boundary.",
+          "description": "New level (0-100 inclusive). Validated at the wire boundary.",
           "allOf": [
             {
               "$ref": "#/definitions/LevelPercent"
@@ -2132,7 +2132,7 @@
           }
         },
         {
-          "description": "Explicit-attach: bind a present sysfs busid for a USB-capable VM without requiring static bundle firewall/bind intent refs.\n\nThe daemon has already validated: (1) the busid is present in sysfs, (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no other active claim holds this busid. The broker validates the busid shape, acquires the per-busid OFD lock, and runs the `usbip bind` helper.\n\nCurrently a typed stub (`Unimplemented`) — the live handler wires the per-device backend path without restarting shared per-env backends.",
+          "description": "Explicit-attach: bind a present sysfs busid for a USB-capable VM without requiring static bundle firewall/bind intent refs.\n\nThe daemon has already validated: (1) the busid is present in sysfs, (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no other active claim holds this busid. The broker validates the busid shape, acquires the per-busid OFD lock, and runs the `usbip bind` helper.\n\nCurrently a typed stub (`Unimplemented`) - the live handler wires the per-device backend path without restarting shared per-env backends.",
           "type": "object",
           "required": [
             "kind",
@@ -2260,7 +2260,7 @@
           }
         },
         {
-          "description": "Broker-provisioned disk-image creation.\n\nThe daemon dispatches this before `SpawnRunner` for any runner whose bundle ProcessNode has `DiskInit` plan-ops (currently CH when `writableStoreOverlay` is enabled). The broker resolves the target path, size, mode, and ownership from the trusted bundle — the daemon names only the opaque `vm_id`.",
+          "description": "Broker-provisioned disk-image creation.\n\nThe daemon dispatches this before `SpawnRunner` for any runner whose bundle ProcessNode has `DiskInit` plan-ops (currently CH when `writableStoreOverlay` is enabled). The broker resolves the target path, size, mode, and ownership from the trusted bundle - the daemon names only the opaque `vm_id`.",
           "type": "object",
           "required": [
             "kind",
@@ -2279,7 +2279,7 @@
           }
         },
         {
-          "description": "Open the FIDO/CTAP hidraw node for the named device selector.\n\nThe broker resolves the stable device label against the trusted bundle security-key device table, performs sysfs-presence and FIDO-class checks, opens the exact hidraw node, and returns the fd via `SCM_RIGHTS`. The daemon holds the fd for the CTAP relay session lifetime.\n\nTyped stub — live handler target: `live_security_key_open_device`.",
+          "description": "Open the FIDO/CTAP hidraw node for the named device selector.\n\nThe broker resolves the stable device label against the trusted bundle security-key device table, performs sysfs-presence and FIDO-class checks, opens the exact hidraw node, and returns the fd via `SCM_RIGHTS`. The daemon holds the fd for the CTAP relay session lifetime.\n\nTyped stub - live handler target: `live_security_key_open_device`.",
           "type": "object",
           "required": [
             "kind",
@@ -2298,7 +2298,7 @@
           }
         },
         {
-          "description": "Apply udev group grants for configured FIDO hidraw nodes.\n\nWrites broker-generated udev rules granting the `d2b-security-key` group ownership of the configured vendor/product/serial-matched hidraw nodes. Called once during host activation or when the device selector list changes.\n\nTyped stub — live handler target: `live_security_key_apply_udev_rules`.",
+          "description": "Apply udev group grants for configured FIDO hidraw nodes.\n\nWrites broker-generated udev rules granting the `d2b-security-key` group ownership of the configured vendor/product/serial-matched hidraw nodes. Called once during host activation or when the device selector list changes.\n\nTyped stub - live handler target: `live_security_key_apply_udev_rules`.",
           "type": "object",
           "required": [
             "kind",
@@ -3405,7 +3405,7 @@
       ]
     },
     "ConsoleReadOutputArgs": {
-      "description": "Read console output from a ring-buffer–backed session.",
+      "description": "Read console output from a ring-buffer-backed session.",
       "type": "object",
       "required": [
         "maxLen",
@@ -3677,7 +3677,7 @@
       "additionalProperties": false
     },
     "DelegateCgroupV2Request": {
-      "description": "The slice path is pinned by the bundle (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller input — the broker reads it from its own bundle copy via `scope_id`.",
+      "description": "The slice path is pinned by the bundle (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller input - the broker reads it from its own bundle copy via `scope_id`.",
       "type": "object",
       "required": [
         "scopeId"
@@ -4977,7 +4977,7 @@
       ]
     },
     "ExecStream": {
-      "description": "Output stream selector for `ReadOutput`. A closed enum — the daemon never forwards an unspecified stream to the guest.",
+      "description": "Output stream selector for `ReadOutput`. A closed enum - the daemon never forwards an unspecified stream to the guest.",
       "type": "string",
       "enum": [
         "stdout",
@@ -5006,7 +5006,7 @@
       "additionalProperties": false
     },
     "ExecTerminalStatus": {
-      "description": "Terminal disposition of the guest command. `Exited` carries the WIFEXITED code (0–255); `Signaled` carries the terminating signal number; `Error` carries a closed-enum guest error slug for an abnormal terminal state.",
+      "description": "Terminal disposition of the guest command. `Exited` carries the WIFEXITED code (0-255); `Signaled` carries the terminating signal number; `Error` carries a closed-enum guest error slug for an abnormal terminal state.",
       "oneOf": [
         {
           "type": "object",
@@ -6649,7 +6649,7 @@
           "type": "string"
         },
         "workloadIdentity": {
-          "description": "Realm-native workload identity. Present for workloads that have been associated with a realm; `None` for classical `d2b.vms` entries that have not yet been adopted into a realm. Additive field — old daemons omit it; new CLI consumers must tolerate its absence.",
+          "description": "Realm-native workload identity. Present for workloads that have been associated with a realm; `None` for classical `d2b.vms` entries that have not yet been adopted into a realm. Additive field - old daemons omit it; new CLI consumers must tolerate its absence.",
           "anyOf": [
             {
               "$ref": "#/definitions/WorkloadIdentity"
@@ -6725,7 +6725,7 @@
       "additionalProperties": false
     },
     "ModprobeIfAllowedRequest": {
-      "description": "`module_name` stays as the (already-validated) [`ModuleName`] newtype because it is genuinely a public input — the broker still looks it up in the trusted kernel-module matrix and refuses anything not in the allow list. The matrix itself never crosses the wire.",
+      "description": "`module_name` stays as the (already-validated) [`ModuleName`] newtype because it is genuinely a public input - the broker still looks it up in the trusted kernel-module matrix and refuses anything not in the allow list. The matrix itself never crosses the wire.",
       "type": "object",
       "required": [
         "moduleName"
@@ -8727,7 +8727,7 @@
       "additionalProperties": false
     },
     "ReadGuestConfigResponse": {
-      "description": "`read guest config` response payload. `contentBase64` is the standard padded base64 of the RAW guest config bytes. The encoded payload is bounded by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and ttRPC frames. The CLI decodes it and computes size + sha256 from the DECODED bytes — never from any guest-reported value.",
+      "description": "`read guest config` response payload. `contentBase64` is the standard padded base64 of the RAW guest config bytes. The encoded payload is bounded by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and ttRPC frames. The CLI decodes it and computes size + sha256 from the DECODED bytes - never from any guest-reported value.",
       "type": "object",
       "required": [
         "contentBase64"
@@ -9222,7 +9222,7 @@
           ]
         },
         {
-          "description": "CH `--net fd=N` value when running under [`crate::broker_wire::CreateTapFdRequest`] — the daemon references the SCM_RIGHTS slot the broker handed back in the matching CreateTapFd response.",
+          "description": "CH `--net fd=N` value when running under [`crate::broker_wire::CreateTapFdRequest`] - the daemon references the SCM_RIGHTS slot the broker handed back in the matching CreateTapFd response.",
           "type": "string",
           "enum": [
             "tap-fd-slot"
@@ -10808,7 +10808,7 @@
           "type": "string"
         },
         "role": {
-          "description": "Role selector — picks the argv generator the broker applies to the bundle row anchored by `bundle_runner_intent_ref`.",
+          "description": "Role selector - picks the argv generator the broker applies to the bundle row anchored by `bundle_runner_intent_ref`.",
           "allOf": [
             {
               "$ref": "#/definitions/RunnerRole"
@@ -10816,7 +10816,7 @@
           ]
         },
         "roleId": {
-          "description": "Per-VM role this runner fills. Must be unique across the VM's active runners — the daemon's pidfd table is keyed on `(vm_id, role_id)` and a duplicate registration fails closed.",
+          "description": "Per-VM role this runner fills. Must be unique across the VM's active runners - the daemon's pidfd table is keyed on `(vm_id, role_id)` and a duplicate registration fails closed.",
           "type": "string"
         },
         "runtimeAllocations": {
@@ -10839,7 +10839,7 @@
           "type": "string"
         },
         "workloadIdentity": {
-          "description": "Universal workload identity from the realm-native model.\n\nAdditive: present for VMs that are declared as realm workloads; absent (`None`) for VMs that predate realm workload declarations. The broker treats `None` as \"no realm identity available\" and does not reject the request — this field is for audit, observability, and routing purposes only. The backend-specific runtime config (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`) is always carried in the existing typed fields, never inside this identity.",
+          "description": "Universal workload identity from the realm-native model.\n\nAdditive: present for VMs that are declared as realm workloads; absent (`None`) for VMs that predate realm workload declarations. The broker treats `None` as \"no realm identity available\" and does not reject the request - this field is for audit, observability, and routing purposes only. The backend-specific runtime config (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`) is always carried in the existing typed fields, never inside this identity.",
           "anyOf": [
             {
               "$ref": "#/definitions/WorkloadIdentity"
@@ -10879,7 +10879,7 @@
           "format": "int32"
         },
         "pidfdIndex": {
-          "description": "Index into the SCM_RIGHTS fd vector the daemon should treat as the spawned process's pidfd. Always `0` today — kept explicit so future multi-fd spawn responses (e.g. CH API socket + pidfd) have an existing wire slot.",
+          "description": "Index into the SCM_RIGHTS fd vector the daemon should treat as the spawned process's pidfd. Always `0` today - kept explicit so future multi-fd spawn responses (e.g. CH API socket + pidfd) have an existing wire slot.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -10975,7 +10975,7 @@
       ]
     },
     "StoreSyncRequest": {
-      "description": "Store-sync request. The broker resolves the closure intent row from the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation_token` does not match the bundle's resolved generation. The token is a content-derived stable equality value (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed. It is a display/wire token only and is never used as the on-disk generation key — the broker derives the collision-free `generation_id` (full closure identity, ADR 0027) from its trusted closure copy.",
+      "description": "Store-sync request. The broker resolves the closure intent row from the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation_token` does not match the bundle's resolved generation. The token is a content-derived stable equality value (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed. It is a display/wire token only and is never used as the on-disk generation key - the broker derives the collision-free `generation_id` (full closure identity, ADR 0027) from its trusted closure copy.",
       "type": "object",
       "required": [
         "bundleClosureRef",
@@ -12447,7 +12447,7 @@
           "type": "string"
         },
         "workloadIdentity": {
-          "description": "Realm-native workload identity. Present for workloads that have been associated with a realm; `None` for classical `d2b.vms` entries that have not yet been adopted into a realm. Additive field — old daemons omit it; new CLI consumers must tolerate its absence.",
+          "description": "Realm-native workload identity. Present for workloads that have been associated with a realm; `None` for classical `d2b.vms` entries that have not yet been adopted into a realm. Additive field - old daemons omit it; new CLI consumers must tolerate its absence.",
           "anyOf": [
             {
               "$ref": "#/definitions/WorkloadIdentity"
@@ -12558,7 +12558,7 @@
           ]
         },
         "realmPath": {
-          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "description": "Realm path (most-specific first) - the label sequence after the workload in the canonical target address.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/RealmId"

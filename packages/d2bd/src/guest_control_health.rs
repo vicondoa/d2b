@@ -40,8 +40,8 @@ pub enum GuestControlHealthError {
 /// An absolute-deadline budget for a single guest-control probe / config
 /// read attempt.
 ///
-/// Each sub-operation — connect, CONNECT-ACK, every ttRPC unary, and
-/// every broker `sign` — draws `min(cap, deadline - now)` from the same
+/// Each sub-operation - connect, CONNECT-ACK, every ttRPC unary, and
+/// every broker `sign` - draws `min(cap, deadline - now)` from the same
 /// budget via [`AttemptBudget::next`], so the whole attempt is bounded
 /// by its absolute deadline instead of running connect + N ttRPC + 2
 /// signs each at the full per-attempt timeout (which let one attempt run
@@ -423,7 +423,7 @@ where
 }
 
 /// Typed outcome of an authenticated `ReadGuestFile` read. Each variant maps to
-/// an operator-actionable CLI error — never a blind retry. The
+/// an operator-actionable CLI error - never a blind retry. The
 /// transport/auth/protocol variants reuse the Health probe's failure taxonomy;
 /// `CapabilityUnavailable` is the fail-closed result for an authenticated guest
 /// that never advertised `ReadGuestFile` (an old/partial guest).
@@ -700,7 +700,7 @@ fn map_guest_audio_error(kind: pb::GuestControlErrorKind) -> GuestAudioSetError 
 /// handshake) and read the editable guest config working copy via the typed
 /// `ReadGuestFile { GuestConfig }` RPC on the SAME authenticated connection.
 ///
-/// The negotiated `ReadGuestFile` capability is REQUIRED — an
+/// The negotiated `ReadGuestFile` capability is REQUIRED - an
 /// authenticated guest that never advertised it fails closed
 /// (`CapabilityUnavailable`) instead of being probed for a config file.
 ///
@@ -1648,7 +1648,7 @@ mod tests {
         assert!(guest_control_health_ready(&Ok(evidence_with_state(
             pb::HealthState::HEALTH_STATE_DEGRADED
         ))));
-        // Any other reported state is never ready (defense in depth — the probe
+        // Any other reported state is never ready (defense in depth - the probe
         // already rejects these, but the decision is fail-closed regardless).
         assert!(!guest_control_health_ready(&Ok(evidence_with_state(
             pb::HealthState::HEALTH_STATE_UNAVAILABLE_OLD_GENERATION
@@ -1659,8 +1659,8 @@ mod tests {
         assert!(!guest_control_health_ready(&Ok(evidence_with_state(
             pb::HealthState::HEALTH_STATE_UNSPECIFIED
         ))));
-        // Every probe failure — old generation, unreachable, auth failure,
-        // timeout, protocol violation, stale session — fails closed.
+        // Every probe failure - old generation, unreachable, auth failure,
+        // timeout, protocol violation, stale session - fails closed.
         for error in [
             GuestControlHealthError::TransportIo,
             GuestControlHealthError::Ttrpc,

@@ -478,7 +478,7 @@ pub fn attested_records(
 /// preserve that review: `candidate_id` and `content_id` are digests over
 /// content-only material, so their equality is the byte-identical proof the
 /// reuse rests on. `snapshot_sha256` moves with the base and head object IDs
-/// and is deliberately not compared here — comparing it would force a fresh
+/// and is deliberately not compared here - comparing it would force a fresh
 /// ten-role panel after every rebase, which is exactly what section 12.6
 /// exists to avoid.
 ///

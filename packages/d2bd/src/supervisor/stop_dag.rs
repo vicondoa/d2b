@@ -58,7 +58,7 @@ pub enum NftablesDriftReason {
     HashMismatch { observed: String, desired: String },
 }
 
-/// A single nftables reconcile action — maps 1:1 to
+/// A single nftables reconcile action - maps 1:1 to
 /// `BrokerRequest::ApplyNftables` for the named intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NftablesReconcileAction {
@@ -73,14 +73,14 @@ pub struct NftablesReconcileAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsbipDriftReason {
     /// Bundle declares the busid bound to a live VM but no carrier
-    /// is present — emit `UsbipBind`.
+    /// is present - emit `UsbipBind`.
     CarrierMissing { vm: String, env: String },
     /// Host has a carrier for a busid whose owning VM is not in
-    /// `active_vms` (the VM died or was removed from the bundle) —
+    /// `active_vms` (the VM died or was removed from the bundle) -
     /// emit `UsbipUnbind`.
     OwnerInactive { last_owner: Option<String> },
     /// Host has a carrier for a busid that the bundle no longer
-    /// declares at all — emit `UsbipUnbind`.
+    /// declares at all - emit `UsbipUnbind`.
     Undeclared,
 }
 
@@ -122,7 +122,7 @@ impl StopDagOwner {
     /// Production callers obtain `ObservedHostState` from the host
     /// runtime snapshot; the planner itself never touches the
     /// filesystem. Returned actions are dispatched via the existing
-    /// broker ops (`ApplyNftables`, `UsbipBind`, `UsbipUnbind`) — no
+    /// broker ops (`ApplyNftables`, `UsbipBind`, `UsbipUnbind`) - no
     /// new wire variants are introduced.
     pub fn reconcile_on_restart(resolver: &BundleResolver) -> ReconcileReport {
         Self::reconcile(resolver, &ObservedHostState::empty())

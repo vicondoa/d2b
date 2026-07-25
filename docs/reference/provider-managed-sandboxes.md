@@ -54,7 +54,7 @@ key differences:
 
 ---
 
-## Capability matrix — Azure Container Apps adapter
+## Capability matrix - Azure Container Apps adapter
 
 Capabilities are positive assertions. A capability absent from this
 table is not supported; operations requiring it receive
@@ -129,8 +129,8 @@ provider reports a complete, non-secret guestd-compatible bootstrap contract:
 4. The sandbox has a workload identity suitable for acquiring its scoped relay
    sender material.
 5. The persistent-shell helper is available in the sandbox image.
-6. The agent reports bounded effective shell limits (`maxSessions` 1–256,
-   `maxAttached` 1–64, and `maxAttached <= maxSessions`).
+6. The agent reports bounded effective shell limits (`maxSessions` 1-256,
+   `maxAttached` 1-64, and `maxAttached <= maxSessions`).
 7. Health and capability advertisement come from the in-sandbox agent, with
    generation metadata for the guest boot, guestd instance, and shell daemon.
 
@@ -358,16 +358,16 @@ the capability matrix above.
 ## Cross-references
 
 - [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md) - the live core contract for persistent shells on remote/provider targets.
-- [Remote full-host nodes](./remote-full-host-nodes.md) — the model
+- [Remote full-host nodes](./remote-full-host-nodes.md) - the model
   for nodes that run their own `d2bd`/broker/guest-control stack.
-- [Azure Relay transport](./transport-azure-relay.md) — the Relay
+- [Azure Relay transport](./transport-azure-relay.md) - the Relay
   WebSocket transport used for sandbox sender connections.
-- [Realm core](./realm-core.md) — typed error shapes,
+- [Realm core](./realm-core.md) - typed error shapes,
   capability model, audit redaction, and idempotency contract.
-- [Transport conformance matrix](./transport-conformance-matrix.md) —
+- [Transport conformance matrix](./transport-conformance-matrix.md) -
   cross-transport capability and conformance requirements.
-- [Host substrate providers](./host-substrate-providers.md) — discovery
+- [Host substrate providers](./host-substrate-providers.md) - discovery
   adapters for host-owned capability reporting (distinct from
   provider-managed nodes).
-- [Privileges reference](./privileges.md) — broker op catalogue (not
+- [Privileges reference](./privileges.md) - broker op catalogue (not
   applicable to provider-managed nodes, which bypass the broker).

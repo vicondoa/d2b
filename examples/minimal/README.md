@@ -1,21 +1,21 @@
-# `examples/minimal` — single headless VM, single env
+# `examples/minimal` - single headless VM, single env
 
 The "is d2b for me?" sanity test. About 25 lines of `flake.nix`
 plus a small `configuration.nix` get you:
 
 - one isolated network environment named `personal`,
 - one headless workload VM named `personal-dev` joined to that env,
-- and the full per-env plumbing rendered around them — bridges,
+- and the full per-env plumbing rendered around them - bridges,
   an auto-declared net VM, dnsmasq, NAT, USBIP proxy.
 
-No graphics, no audio, no TPM, no USBIP — those are layered on top
+No graphics, no audio, no TPM, no USBIP - those are layered on top
 in the `graphics-workstation` example. Start here.
 
 ## The flake (25 lines)
 
 ```nix
 {
-  description = "Minimal d2b example — one headless workload VM in one env";
+  description = "Minimal d2b example - one headless workload VM in one env";
 
   inputs = {
     d2b.url   = "github:vicondoa/d2b/v0.1.0";  # ← use this in real consumers
@@ -43,7 +43,7 @@ Two things to note:
    nixpkgs keeps option types aligned between framework and consumer.
    Mixing nixpkgs revisions is a common source of subtle eval errors.
 
-> **Note on the in-tree path** — the version of `flake.nix` checked
+> **Note on the in-tree path** - the version of `flake.nix` checked
 > into this directory uses `d2b.url = "path:../..";` so the
 > example can be evaluated against the in-tree framework without a
 > network. When you copy this layout into your own repo, swap it for
@@ -80,7 +80,7 @@ d2b.vms.personal-dev = {
 
 `waylandUser = null` is the explicit "I have no compositor" signal.
 Flip it to a real username only when you start declaring graphics or
-audio VMs — until then, leaving it null keeps the assertion gate
+audio VMs - until then, leaving it null keeps the assertion gate
 honest: any future VM that turns on `graphics.enable` or
 `audio.enable` will fail eval until you supply a session user.
 
@@ -93,7 +93,7 @@ the rebuild, on the host you will find:
 | Resource                                           | Purpose                                                                 |
 |----------------------------------------------------|-------------------------------------------------------------------------|
 | `br-personal-up`                                       | /30 point-to-point bridge: host `.1` ↔ net VM `.2`.                     |
-| `br-personal-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10–.250`. **Host has no IP on this bridge.** |
+| `br-personal-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10-.250`. **Host has no IP on this bridge.** |
 | `sys-personal-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
 | `personal-dev` (microVM)                                | Your declared workload VM. Tap on `br-personal-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
 | USBIP runners                                           | Not materialised by this headless starter unless a VM opts into `usbip.yubikey = true`; see the USBIP reference/how-to before adding YubiKey passthrough. |
@@ -126,13 +126,13 @@ checkout).
 
 ## What to do next
 
-- **Add components** — `examples/graphics-workstation` shows how to
+- **Add components** - `examples/graphics-workstation` shows how to
   set `d2b.site.waylandUser`, then flip `graphics.enable`,
   `audio.enable`, and `usbip.yubikey` on a workload VM.
-- **Add a second env** — `examples/multi-env` demonstrates two
+- **Add a second env** - `examples/multi-env` demonstrates two
   parallel `d2b.envs.<name>` instances with no cross-traffic
   between them.
-- **Add Entra ID** — `examples/with-entra-id` consumes the sibling
+- **Add Entra ID** - `examples/with-entra-id` consumes the sibling
   `entrablau` flake to put a domain-joined VM behind d2b
   without the framework knowing about Himmelblau.
 
@@ -159,9 +159,9 @@ d2b status
 # br-personal-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
 # STATUS legend:
-#   running      — supervised by d2bd with a live runner.
+#   running      - supervised by d2bd with a live runner.
 #                  Net VMs are tagged `running (net-vm)`.
-#   stopped      — not running.
+#   stopped      - not running.
 
 d2b vm start personal-dev --apply
 ssh -i /var/lib/d2b/keys/personal-dev_ed25519 alice@10.99.0.10 hostname
@@ -196,14 +196,14 @@ running VM runners are re-adopted rather than cycled. After rebuilding,
 `d2b list` flags any VM whose declared closure has drifted from the
 running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
-[`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
+[`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
 for the exact predicate.
 
 ## See also
 
-- [`examples/graphics-workstation`](../graphics-workstation/) — desktop VM with Wayland + audio + USBIP
-- [`examples/multi-env`](../multi-env/) — two isolated envs (work + personal)
-- [`examples/with-entra-id`](../with-entra-id/) — Entra-ID composition via the sibling flake
-- [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
+- [`examples/graphics-workstation`](../graphics-workstation/) - desktop VM with Wayland + audio + USBIP
+- [`examples/multi-env`](../multi-env/) - two isolated envs (work + personal)
+- [`examples/with-entra-id`](../with-entra-id/) - Entra-ID composition via the sibling flake
+- [`templates/default`](../../templates/default/) - scaffold via `nix flake init`

@@ -191,12 +191,12 @@ status: {}
 
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `providerRef` | ResourceRef | Yes | — | Must resolve to a Ready Provider in the same Zone implementing Volume |
-| `source.executionRef` | ResourceRef | Yes | — | Must resolve to a Host or Guest in the same Zone |
-| `source.settings` | object | Yes | — | Validated against Provider-specific source schema |
-| `source.settings.kind` | SourceKind enum | Yes | — | `local-path`, `block-image`, `tmpfs` |
-| `source.settings.sourcePolicyId` | string | conditional | — | Opaque bounded ID for `local-path`/`block-image`; references an entry in volume-local's private allowlisted root policy. Never a raw host path; never exposed in public status or audit. |
-| `kind` | VolumeKind enum | Yes | — | `durable`, `ephemeral`, `state`, `tmp`, `cache` |
+| `providerRef` | ResourceRef | Yes | - | Must resolve to a Ready Provider in the same Zone implementing Volume |
+| `source.executionRef` | ResourceRef | Yes | - | Must resolve to a Host or Guest in the same Zone |
+| `source.settings` | object | Yes | - | Validated against Provider-specific source schema |
+| `source.settings.kind` | SourceKind enum | Yes | - | `local-path`, `block-image`, `tmpfs` |
+| `source.settings.sourcePolicyId` | string | conditional | - | Opaque bounded ID for `local-path`/`block-image`; references an entry in volume-local's private allowlisted root policy. Never a raw host path; never exposed in public status or audit. |
+| `kind` | VolumeKind enum | Yes | - | `durable`, `ephemeral`, `state`, `tmp`, `cache` |
 | `layout` | LayoutEntry[] | Yes | `[]` | Anchored relative paths; must be non-overlapping; max 1024 entries |
 | `views` | map<ViewName, ViewSpec> | Yes | `{}` | ViewName matches `^[a-z][a-z0-9-]*$`; max 64 Views |
 | `attachments` | Attachment[] | No | `[]` | Max 64 attachments; at most one `read-write` at any time; `shared-write` requires Provider `supportsSharedWrite: true` |
@@ -222,12 +222,12 @@ traversal (when noFollow is true), or drive-letter form is accepted.
 
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `path` | relative path string | Yes | — | Anchored; `""` = volume root; no leading `/`; no `..` |
-| `type` | EntryType enum | Yes | — | `directory`, `file`, `symlink`, `unix-socket`; each is first-class with independent lifecycle policies |
-| `ownerRef` | ResourceRef | Yes | — | Must resolve to a `User/<name>` ResourceRef in the same Zone; no numeric UID accepted |
-| `groupRef` | ResourceRef | Yes | — | Must resolve to a `User/<name>` ResourceRef in the same Zone; no numeric GID accepted |
-| `mode` | octal string | Yes | — | Four-octet string, e.g. `"0700"`, `"0640"`, `"0660"` |
-| `target` | relative path string | conditional | — | Required for `symlink` type only; relative to Volume root; no `..`, no leading `/`, no null bytes; must resolve within Volume root |
+| `path` | relative path string | Yes | - | Anchored; `""` = volume root; no leading `/`; no `..` |
+| `type` | EntryType enum | Yes | - | `directory`, `file`, `symlink`, `unix-socket`; each is first-class with independent lifecycle policies |
+| `ownerRef` | ResourceRef | Yes | - | Must resolve to a `User/<name>` ResourceRef in the same Zone; no numeric UID accepted |
+| `groupRef` | ResourceRef | Yes | - | Must resolve to a `User/<name>` ResourceRef in the same Zone; no numeric GID accepted |
+| `mode` | octal string | Yes | - | Four-octet string, e.g. `"0700"`, `"0640"`, `"0660"` |
+| `target` | relative path string | conditional | - | Required for `symlink` type only; relative to Volume root; no `..`, no leading `/`, no null bytes; must resolve within Volume root |
 | `accessAcl` | AclGrant[] | No | `[]` | Named access ACL; continuously reconciled during every repair cycle |
 | `defaultAcl` | AclGrant[] | No | `[]` | Default ACL applied to all new children; continuously reconciled; `foreignChildPolicy` governs unlisted children |
 | `foreignChildPolicy` | `preserve` or `fail` | No | `preserve` | For `directory` entries: `preserve` retains unexpected child ACL entries; `fail` sets `ForeignAclViolation` condition |
@@ -273,7 +273,7 @@ time and re-resolves on any User resource revision change that affects the UID b
 | Value | Semantics | Baseline `StorageLifecycle` analog |
 | --- | --- | --- |
 | `create-if-absent` | Create the entry if it does not exist | `Config`, `Persistent` |
-| `create-if-never-provisioned` | Create only if a prior-provision marker is absent; preserve existing content | — (swtpm/state hardening model) |
+| `create-if-never-provisioned` | Create only if a prior-provision marker is absent; preserve existing content | - (swtpm/state hardening model) |
 | `always-recreate` | Always remove and recreate; use only for process-scoped entries | `ProcessScoped` |
 | `observe-only` | Do not create; observe and report phase but do not mutate | `ExternalObserveOnly` |
 
@@ -421,9 +421,9 @@ mounts:
 
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `volumeRef` | ResourceRef | Yes | — | Must resolve to a Ready Volume in the same Zone |
-| `view` | ViewName | Yes | — | Must exist in the Volume spec |
-| `mountPath` | absolute path string | Yes | — | Inside the Process sandbox; no overlap with other mounts |
+| `volumeRef` | ResourceRef | Yes | - | Must resolve to a Ready Volume in the same Zone |
+| `view` | ViewName | Yes | - | Must exist in the Volume spec |
+| `mountPath` | absolute path string | Yes | - | Inside the Process sandbox; no overlap with other mounts |
 | `access` | `read-only` or `read-write` | No | `read-only` | Must be compatible with View rights |
 | `optional` | bool | No | `false` | If true, absent/Degraded Volume does not prevent Process start |
 
@@ -445,7 +445,7 @@ path never appears in Process ResourceSpec, status, or audit.
 `source.settings.sourcePolicyId` is a required field for `local-path` and
 `block-image`. It is an opaque bounded string ID (never a raw path) that
 references one entry in volume-local's own private `config.allowedHostPaths`
-policy catalog — each catalog entry carries its own `id` plus the actual root
+policy catalog - each catalog entry carries its own `id` plus the actual root
 path. The Provider process and its controller see only the ID; path
 resolution happens exclusively inside volume-local's private Nix/bundle/effect
 authority, and the resolved path is handed to the caller only as an opaque FD
@@ -453,9 +453,9 @@ via `VolumeSourceEffectPort` at attach/launch time. It never appears in
 public status, audit records, or CLI output. The allowlisted roots in the
 v3.0 initial policy are:
 
-- `id: state-root`, root `$stateDir` (default `/var/lib/d2b`) — durable and state Volumes
-- `id: ephemeral-root`, root `/run/d2b` — ephemeral and tmp Volumes
-- `id: cache-root`, root `/var/cache/d2b` — cache Volumes
+- `id: state-root`, root `$stateDir` (default `/var/lib/d2b`) - durable and state Volumes
+- `id: ephemeral-root`, root `/run/d2b` - ephemeral and tmp Volumes
+- `id: cache-root`, root `/var/cache/d2b` - cache Volumes
 
 Operator root config binds `stateDir` at Nix compile time.
 
@@ -481,11 +481,11 @@ attachments:
 
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `executionRef` | ResourceRef | Yes | — | Host or Guest in same Zone |
-| `transport` | AttachmentTransport enum | Yes | — | `virtiofs` for filesystem shares; `virtio-blk` for `block-image` source Volumes |
-| `view` | ViewName | Yes | — | Must exist in the Volume spec |
+| `executionRef` | ResourceRef | Yes | - | Host or Guest in same Zone |
+| `transport` | AttachmentTransport enum | Yes | - | `virtiofs` for filesystem shares; `virtio-blk` for `block-image` source Volumes |
+| `view` | ViewName | Yes | - | Must exist in the Volume spec |
 | `access` | `read-only`, `read-write`, or `shared-write` | No | `read-only` | `read-write`: single writer enforced by controller; `shared-write`: requires Provider `supportsSharedWrite: true`; must be compatible with View rights |
-| `mountPath` | absolute path string | Yes | — | Guest-side mount path |
+| `mountPath` | absolute path string | Yes | - | Guest-side mount path |
 | `settings` | typed attachment-options object | No | `{}` | Volume base nested attachment (mount) options defined by the Volume base schema (`posixAcl`, `xattr`, `cache`, `threadPoolSize`, `inodeFileHandles`, `socketGroup`) and validated against it; a ResourceType-common structure, not a Provider extension. Genuinely implementation-only tuning uses `spec.provider.settings`, never this base object. |
 
 The Volume controller creates one owned virtiofsd Process per attachment when
@@ -553,7 +553,7 @@ The virtiofsd worker has:
   `ProcessLaunchEffectPort`, and ProviderSupervisor dispatches
   `clone3(CLONE_NEWUSER)` to the broker to write a single-entry UID/GID map
   (`in-NS 0 → stable principal UID`) before virtiofsd's first instruction
-  runs. The mapping principal is `User/vol-<volume-name>-vfd` — a dedicated
+  runs. The mapping principal is `User/vol-<volume-name>-vfd` - a dedicated
   per-Volume User resource.
 - **`--sandbox=chroot`**: permitted because `CAP_SYS_ADMIN` is available inside
   the user namespace.
@@ -569,7 +569,7 @@ The virtiofsd worker has:
   the target Guest's vcpu count.
 - The worker's own runtime/control state (export socket, control files) is a
   private runtime path under the Zone/Guest runtime root directory (not a
-  Volume — see `path:vm-run:<vm>` in the current-code migration table),
+  Volume - see `path:vm-run:<vm>` in the current-code migration table),
   computed and handed to the worker only through its LaunchTicket. It is
   never an authored `mounts` entry and never a raw writable sandbox path.
 - Read access to `/nix/store` for the virtiofsd binary's own execution is
@@ -888,7 +888,7 @@ actual host path is rejected for any caller without the
 `volume-local/source-policy-resolve` permission claim, which authorizes only a
 `VolumeSourceEffectPort` call. This permission is granted only to
 ProviderSupervisor acting on behalf of `Provider/volume-local`'s controller
-process — never to the controller process performing the resolution itself.
+process - never to the controller process performing the resolution itself.
 
 ## Security invariants
 
@@ -966,8 +966,8 @@ owning resource's `status` subresource and the core Operation ledger (D087),
 and per-Volume provisioning markers for `state`-kind Volumes are broker-
 maintained outside any Volume tree. Their `ProviderStateSet` is therefore
 empty. The "State" rows below describe the ResourceType-owned data each
-Provider keeps — in resource status and the layout it manages for *other*
-Providers' declared Volumes — not a state Volume of its own.
+Provider keeps - in resource status and the layout it manages for *other*
+Providers' declared Volumes - not a state Volume of its own.
 `ProviderStateSet` is an optional query-time grouping of a Provider's declared
 Volumes, not a separate stored artifact, and it never duplicates the resource
 store's own authority over layout/attachment status.
@@ -993,13 +993,13 @@ optional state Volume, but it declares no state Volume of its own. Because the
 first `volume-local-controller` instance on each execution target keeps its
 bounded non-secret operational state in `status`/the core Operation ledger and
 declares no state Volume, no component needs a Volume before that instance is
-Ready — so there is no bootstrap state-Volume cycle, no per-execution-target
+Ready - so there is no bootstrap state-Volume cycle, no per-execution-target
 local bootstrap storage mechanism, and no bootstrap-storage exception (D086,
 superseded by D087; see "No bootstrap state Volume" in
 `ADR-046-components-processes-and-sandbox`). A Guest bootstraps its own
 Guest-local `volume-local` instance without any parent-Host dirfd or resource
 handle, and that instance reaches Ready from Guest-local primitives and its own
-status alone. Every Provider's declared state Volume — on any target — is
+status alone. Every Provider's declared state Volume - on any target - is
 provisioned only through the normal Core ProviderDeployment → volume-local
 create/reconcile path.
 
@@ -1079,7 +1079,7 @@ The virtiofsd worker is tested by:
 | `packages/d2b-priv-broker/src/ops/store_view_posture.rs`: `posture_store_view_matrix_paths`, `plant_live_marker_with_matrix_posture` | `implemented-and-reachable` | No-recursion posture for `state/`, `gcroots/`, `sync.lock` at store-view root; hardlink-farm-no-recursion invariant enforced here; migrates to volume-local repair policy |
 | `packages/d2b-priv-broker/src/ops/state_dir.rs`: `PrepareStateDir`, `PrepareRuntimeDir`, `PrepareDirRequest`, `DirKind` | `implemented-and-reachable` | Broker op that fchown/fchmod per-VM state/runtime dirs without ambient path traversal; migrates to volume-local `ProvisionLayoutEntry` op |
 | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`: swtpm provisioning, fail-closed marker, reconcile-in-place, ancestor traverse ACL, `seccomp_policy_ref: "w1-swtpm"` | `implemented-and-reachable` | Migrated to volume-local `create-if-never-provisioned` + fail-closed repair for TPM Volume |
-| `packages/d2b-host/src/virtiofsd_argv.rs`: `VirtiofsdArgvInput`, `generate_virtiofsd_argv` (14 unit tests, golden `argv.txt` lines 166–184) | `implemented-and-reachable` | Extracted to volume-virtiofs virtiofsd-worker template; all 14 existing tests migrated |
+| `packages/d2b-host/src/virtiofsd_argv.rs`: `VirtiofsdArgvInput`, `generate_virtiofsd_argv` (14 unit tests, golden `argv.txt` lines 166-184) | `implemented-and-reachable` | Extracted to volume-virtiofs virtiofsd-worker template; all 14 existing tests migrated |
 | `nixos-modules/minijail-profiles.nix`: `virtiofsdProfiles`; principal `d2b-<vm>-runner` (normal shares); principal `d2b-<vm>-gctlfs` (d2b-gctl share); exception `"ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS"` | `generated-or-eval-contract` | Becomes virtiofsd worker sandbox spec; ADR 0021 invariants preserved; principal names → `User/<name>` ResourceRef (typed ResourceRef only; no numeric form) |
 | `nixos-modules/processes-json.nix`: `virtiofsdRunner` shape; `roStoreSharedDir` redirect sentinel `share.source == "/nix/store"` → `store-view/live` | `generated-or-eval-contract` | Replaced by volume-virtiofs controller-owned Process resource; store-view/live redirect preserved |
 | `packages/d2bd/src/supervisor/dag.rs`: virtiofsd `VmProcessDag` node supervised as `ProcessRole::Virtiofsd` dag entry under a WorkloadId (current `d2b-realm-core::WorkloadId`-keyed dag) | `implemented-and-reachable` | Replaced by Process controller lifecycle in v3 |
@@ -1120,21 +1120,21 @@ or to controller-internal OFD locks not exposed as Volume resources.
 ## Nix configuration
 
 > **Note**: The Nix option namespace `d2b.zones.<zone>` shown below is the
-> **v3 ADR-only target API** — it does not exist in the current baseline
+> **v3 ADR-only target API** - it does not exist in the current baseline
 > (`b5ddbed6`). Current Nix API uses `d2b.vms.<vm>` (options-vms.nix) and
 > `d2b.realms.<realm>` (options-realms.nix). The v3 resource compiler
 > (ADR046-volume-004) emits Volume resource JSON from an evolved Nix surface.
 
 ### Resource shape
 
-All resources — Volume, Provider, Credential, User, Guest, Host — use one
+All resources - Volume, Provider, Credential, User, Guest, Host - use one
 uniform Nix shape that mirrors the canonical ResourceSpec JSON nearly identically:
 
 ```nix
 d2b.zones."<zone>".resources."<name>" = {
   type = "ResourceType";   # required; matches canonical spec
   spec = {
-    # exact ResourceType spec fields — same keys and nesting as canonical JSON
+    # exact ResourceType spec fields - same keys and nesting as canonical JSON
   };
   # Optional authoritative metadata fields:
   # metadata.ownerRef = "ResourceType/name";   # authoritative ownership
@@ -1148,20 +1148,20 @@ d2b.zones."<zone>".resources."<name>" = {
 
 Nix option types, defaults, and docs for `spec.*` are generated from the same
 ResourceTypeSchema JSON the runtime uses. Build validation compares the canonical
-rendered JSON against the schema — there is no second bespoke Nix vocabulary and
+rendered JSON against the schema - there is no second bespoke Nix vocabulary and
 Provider-specific fields are never renamed or renested. The Zone self-resource is
 runtime-created with `spec = {}`; it is not authored through Nix. Child resources
 live under `d2b.zones."<zone>".resources.*`.
 
 ### Artifact catalog
 
-Derivation-valued inputs — Provider binaries, NixOS system images, and other
-executables — are registered in a separate global artifact catalog, not inside
+Derivation-valued inputs - Provider binaries, NixOS system images, and other
+executables - are registered in a separate global artifact catalog, not inside
 any ResourceSpec. ResourceSpecs use plain bounded IDs to reference artifacts.
 `Artifact` is not a ResourceType; `artifactId` is not a `*Ref` field.
 
 ```nix
-# Artifact catalog — derivations and their type/trust metadata live here only.
+# Artifact catalog - derivations and their type/trust metadata live here only.
 # Store paths are private catalog implementation data; they never appear in any
 # resource spec, status field, or audit record.
 d2b.artifacts."volume-local-provider" = {
@@ -1216,7 +1216,7 @@ d2b.zones."dev".resources."volume-virtiofs" = {
 };
 ```
 
-### Volume resource configuration — minimal state Volume
+### Volume resource configuration - minimal state Volume
 
 ```nix
 d2b.zones."dev".resources."work-state" = {
@@ -1341,14 +1341,14 @@ above renders as:
 Rights are sorted lexicographically. All keys are sorted. Defaults are always
 present. `sourcePolicyId` is a plain opaque bounded string in the emitted
 JSON, exactly like any other spec field; there is no raw `hostPath` field,
-injected or otherwise — a raw host path never exists anywhere in the Volume
+injected or otherwise - a raw host path never exists anywhere in the Volume
 ResourceSpec, envelope JSON, or emitted bundle.
 
 ### Nix eval/build validation
 
 Every Volume resource is fully validated during NixOS eval (before `nix build`).
 A failed assertion emits a structured `throw` that includes the Volume name,
-field path, and error class — never host paths or secret values.
+field path, and error class - never host paths or secret values.
 
 Validation steps in order:
 
@@ -1369,8 +1369,8 @@ Validation steps in order:
 15. **Conflict detection**: two `local-path`/`block-image` Volumes bound to the
     same `sourcePolicyId` root may not declare overlapping resolved subtrees.
     The Nix resource compiler checks the set of all resolved host paths across
-    Volumes in the Zone — using the private `allowedHostPaths` catalog entry
-    each `sourcePolicyId` resolves to, never a spec-authored path — and aborts
+    Volumes in the Zone - using the private `allowedHostPaths` catalog entry
+    each `sourcePolicyId` resolves to, never a spec-authored path - and aborts
     the build on overlap.
 
 All validation errors are fatal and prevent `nix build`. They produce a structured JSON error block written to stderr, never to a path.
@@ -1671,7 +1671,7 @@ audit record.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-volume-001; Nix integrator |
-| Current source | `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`, `nixos-modules/options-vms.nix` (`d2b.vms.<vm>.*` — current VM Nix option namespace; virtiofs shares and TPM enable are configured here), `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.stateDir` — current realm workload state root), `packages/d2b-realm-core/src/workload.rs` (`WorkloadProviderKind::LocalVm`/`QemuMedia`/`UnsafeLocal` — informs which WorkloadIds need store-view Volumes vs. no Volume) |
+| Current source | `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`, `nixos-modules/options-vms.nix` (`d2b.vms.<vm>.*` - current VM Nix option namespace; virtiofs shares and TPM enable are configured here), `nixos-modules/options-realms-workloads.nix` (`d2b.realms.<realm>.stateDir` - current realm workload state root), `packages/d2b-realm-core/src/workload.rs` (`WorkloadProviderKind::LocalVm`/`QemuMedia`/`UnsafeLocal` - informs which WorkloadIds need store-view Volumes vs. no Volume) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/resources-volume.nix`, `nixos-modules/options-volumes.nix` |
 | Detailed design | Nix resource compiler for Volume/LayoutEntry/View/Attachment from d2b.zones config; strict schema validation; emit canonical JSON per Volume; generate store-view Volume per Guest (from current `d2b.vms.<vm>` → future flat `d2b.zones.<zone>.resources.<name>` with `type = "Guest"`) with hardlink-farm layout (gcroots/, state/ at root per `hardlink_farm.rs`); generate swtpm Volume for TPM-enabled Guests; emit volume-virtiofs attachment spec per virtiofs share; migration: store-view stateDir root configuration |
@@ -1692,7 +1692,7 @@ audit record.
 | Integration | Each sub-item produces a focused spec amendment; resolved decisions already reflected in spec revision 2 |
 | Data migration | Per-sub-item; block-image and tmpfs are new capabilities with no legacy migration required |
 | Validation | (1) `VirtioblkArgvInput` unit tests; block-image integration fixture. (2) Quota-enforcement fixture with FS-without-quota; hard-enforcement failure test. (3) EphemeralProcess snapshot lifecycle test; content-migration parity test. (4) Single-writer rejection test; shared-write capability gate test. (5) tmpfs mount/unmount lifecycle test; memory-budget accounting assertion. (6) Schema bound rejection tests (1025 entries, 65 views, 65 attachments). (7) File/symlink independent lifecycle tests; target validation (absolute rejected, `..` rejected, escape rejected). (8) ACL principal ResourceRef validation; numeric form rejected; User revision trigger test. (9) foreignChildPolicy preserve/fail tests; continuous repair cycle test. (10) Socket path invariant test; no-status-leak assertion. |
-| Removal proof | None — net-new capabilities; no prior owner to remove |
+| Removal proof | None - net-new capabilities; no prior owner to remove |
 
 ### ADR046-volume-006
 
@@ -1705,5 +1705,5 @@ audit record.
 | Detailed design | **Nix eval/build validation**: implement all 15 validation steps in §Nix eval/build validation as Nix assertions; abort build on any failure with structured error (Volume name + field path + error class); provider-specific settings schema (`root-config.schema.json`, `attachment.schema.json`) read from the private artifact catalog entry for each Provider's `artifactId` by the resource compiler; validate against `lib.evalModules`-compatible schema; emit canonical sorted JSON with all defaults materialized; compute SHA-256 per resource; emit Zone resource bundle with `generationId` and `bundleDigest`. **Config-publication handler cleanup**: on new bundle activation, diff resources with `metadata.managedBy = "configuration"` between new and prior bundle; issue async Delete for resources absent from new bundle; mark deleted resources with `ConfigurationRemoved` condition; track pending-cleanup set in Zone status; Zone status is `Degraded/PendingCleanup` while prior-generation deletions are in progress; activation is immediate but Zone readiness reflects cleanup completion. **Config-owned vs controller-created distinction**: `metadata.managedBy = "configuration"` is the authoritative marker set by core at activation; the bundle index carries only digests; controller-created resources have `metadata.managedBy = "controller"` and are never touched by the configuration cleanup pass. **Prior generation retention**: retain `priorGenerationCount` prior generations (default 3, range 1..16); no time-based TTL; when count is exceeded prune oldest generation from the store with a tamper-evident audit record. **Generation reactivation**: re-activate any retained prior bundle via `ActivateGeneration` operation; cancel in-flight Deletes for resources being reinstated; issue Deletes for resources added by the aborted new generation. |
 | Integration | `nixos-modules/default.nix` wires resources-volume.nix; `d2b-core-controller` config-publication handler consumes the bundle; all Volume controllers observe `ConfigurationRemoved` condition and respond to finalizer triggers |
 | Data migration | Full d2b 3.0 reset; no partial import of prior generation state |
-| Validation | Tests per §Cleanup contract — Tests for removed-resource cleanup table (10 tests); nix-unit: `volume_canonical_json_golden_vector`, `volume_bundle_digest_covers_all_resources`, `provider_schema_validation_rejects_unknown_fields`, `symlink_target_escape_rejected_at_eval`, `tmpfs_without_quota_rejected_at_eval`, `layout_bounds_1025_entries_rejected`, `attachment_bounds_65_rejected`, `conflicting_host_paths_rejected`; integration: cleanup audit redaction, generation reactivation, prior-generation pruning |
+| Validation | Tests per §Cleanup contract - Tests for removed-resource cleanup table (10 tests); nix-unit: `volume_canonical_json_golden_vector`, `volume_bundle_digest_covers_all_resources`, `provider_schema_validation_rejects_unknown_fields`, `symlink_target_escape_rejected_at_eval`, `tmpfs_without_quota_rejected_at_eval`, `layout_bounds_1025_entries_rejected`, `attachment_bounds_65_rejected`, `conflicting_host_paths_rejected`; integration: cleanup audit redaction, generation reactivation, prior-generation pruning |
 | Removal proof | Old `storage-json.nix` schema assertions removed only after Nix eval-time Volume validation covers all prior `lib.asserts` paths; old config-activation code in `d2bd` removed after config-publication handler is live |

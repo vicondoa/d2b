@@ -271,7 +271,7 @@ pub fn install_crypto_provider() {
 /// WebSocket stream. This is the host/gateway-side connect; it uses the
 /// public webpki roots (the ACA egress-proxy CA is only needed *inside* the
 /// sandbox, not on the gateway). The Entra bearer, when present, is sent in
-/// the `ServiceBusAuthorization` header — never in the URL.
+/// the `ServiceBusAuthorization` header - never in the URL.
 pub async fn connect(
     endpoint: &RelayEndpoint,
     role: RelayRole,

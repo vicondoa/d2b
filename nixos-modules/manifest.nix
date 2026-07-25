@@ -1,4 +1,4 @@
-# nixos-modules/manifest.nix — typed JSON manifest contract.
+# nixos-modules/manifest.nix - typed JSON manifest contract.
 #
 # Builds the per-VM JSON manifest that the (current bash, future Rust)
 # d2b CLI consumes at runtime. The manifest is the stable contract
@@ -33,7 +33,7 @@
 # ...
 #   }
 #
-# `_manifest` is a reserved sentinel key — leading underscore disqualifies
+# `_manifest` is a reserved sentinel key - leading underscore disqualifies
 # it as a VM name (the assertions.nix `vmNameOk` regex requires a
 # leading lowercase letter), so the wrapper is non-colliding for any
 # valid consumer config. All CLI jq filters use `--arg n` + `.[$n]`
@@ -175,7 +175,7 @@ let
       # `config.d2b.site.keysDir` (or `vm.ssh.keyPath` when the
       # consumer overrides it) at Nix-eval time and bakes the
       # per-VM mapping into the shell wrapper. Consumers
-      # reimplementing the CLI should mirror that — read
+      # reimplementing the CLI should mirror that - read
       # `d2b.site.keysDir` from their own privileged config
       # access, not from this world-readable file. The PUBLIC key
       # is fine to expose; if a future use case warrants it, add
@@ -548,7 +548,7 @@ let
         type = lib.types.bool;
         description = ''
           True iff `d2b.vms.<name>.audio.enable` is set. Live audio
-          grant state lives in `audioStateFile`, not here — this flag
+          grant state lives in `audioStateFile`, not here - this flag
           only carries the capability bit.
         '';
       };
@@ -589,7 +589,7 @@ let
         description = ''
           Env this VM is in, or null for legacy hand-rolled VMs. For
           net VMs, this is the env they SERVE (not the env they're
-          IN — net VMs are themselves the env's gateway).
+          IN - net VMs are themselves the env's gateway).
         '';
       };
 
@@ -757,7 +757,7 @@ in
       (lib/modules.nix `evalOptionValue`: `defs' = [defaultDef] ++
       defs`), so a `default = { }` alongside the `config` assignment
       would trip `length defs' > 1` and abort eval the moment any
-      caller forced the option — which is exactly what cli.nix's
+      caller forced the option - which is exactly what cli.nix's
       `vmLaunchScript` does for every graphics-enabled VM. The
       smoke-eval test never declared a graphics VM and so never
       exposed this; the graphics-workstation example surfaced it.
@@ -778,20 +778,20 @@ in
       Set in `manifest.nix`; consumers should not override.
 
       Version history:
-        * 0 — pre-documented schema. Schema was
+        * 0 - pre-documented schema. Schema was
           undocumented and changed without bumps (e.g. the
           `isRouter`→`isNetVm` / `routerVm`→`netVm` rename).
-        * 1 — first documented, externally-stable version. Locks in
+        * 1 - first documented, externally-stable version. Locks in
           the baseline per-VM field set documented in
           `docs/reference/manifest-schema.{md,json}`.
-        * 2 — observability schema expansion. Adds the always-emitted
+        * 2 - observability schema expansion. Adds the always-emitted
           per-VM `observability` block and the top-level
           `_observability` sentinel.
-        * 3 — daemon-only end-state break. Drops per-VM systemd-unit
+        * 3 - daemon-only end-state break. Drops per-VM systemd-unit
           reference fields that become meaningless once supervisor
           mode is retired and the daemon owns every per-VM lifecycle
           transition.
-        * 4 — base Cloud Hypervisor vsock semantics. Keeps the v3
+        * 4 - base Cloud Hypervisor vsock semantics. Keeps the v3
           shape, but defines per-VM `observability.vsockCid` and
           `observability.vsockHostSocket` as the host-owned base
           vsock device used by observability today and guest control in
@@ -800,7 +800,7 @@ in
           broker / daemon refuse any other value with a
           `manifest-version-mismatch` typed error (no legacy
           compatibility window).
-        * 5 — combines two independent contract changes that each
+        * 5 - combines two independent contract changes that each
           landed as a `4` on separate branches: the base Cloud
           Hypervisor vsock semantics above, and the native SigNoz
           observability backend, which replaces the top-level
@@ -810,12 +810,12 @@ in
           `signozOtlpHttpPort`). The vsock transport contract is
           unchanged. Pinned by
           `d2b_core::manifest_v04::MANIFEST_VERSION_CURRENT`.
-        * 6 — adds per-VM runtime/provider metadata and provider
+        * 6 - adds per-VM runtime/provider metadata and provider
           capability summaries, and makes provider-specific socket/vsock
           fields nullable so qemu-media entries do not fabricate Cloud
           Hypervisor, guest-control, SSH, store-sync, key, or
           in-guest-observability artifacts.
-        * 7 — adds per-VM lifecycle.gracefulShutdown metadata so d2bd
+        * 7 - adds per-VM lifecycle.gracefulShutdown metadata so d2bd
           can apply VM-specific graceful guest-shutdown policy while
           preserving old-manifest compatibility during the v6→v7 rollout.
     '';

@@ -71,7 +71,7 @@ fn clipd_is_not_a_thread_park_scaffold() {
     let main_src = include_str!("../src/main.rs");
     assert!(
         !main_src.contains("thread::park()"),
-        "d2b-clipd/src/main.rs uses thread::park() — this is a scaffold placeholder. \
+        "d2b-clipd/src/main.rs uses thread::park() - this is a scaffold placeholder. \
          Implement the real daemon event loop (picker IPC + bridge socket serving). \
          ADR 0042 requires d2b-clipd to own picker supervision and transfer FD dispatch."
     );
@@ -87,7 +87,7 @@ fn clipd_is_not_a_thread_park_scaffold() {
 fn picker_protocol_handshake_proves_picker_works() {
     let picker_path = match std::env::var("CLIPD_TEST_PICKER") {
         Ok(p) if !p.is_empty() => p,
-        _ => return, // not configured — skip
+        _ => return, // not configured - skip
     };
 
     use std::io::{BufRead, BufReader};

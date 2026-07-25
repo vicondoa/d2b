@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-integration.sh — `make test-integration`: Layer-2 podman container
+# tests/test-integration.sh - `make test-integration`: Layer-2 podman container
 # integration tests. Each tests/integration/containers/*.sh builds its Nix-built
 # OCI image (containerImages.<system>.<name>, NOT swept by `nix flake check`) and
 # runs it with rootless podman. Scope is foreign-userland portability only (e.g.

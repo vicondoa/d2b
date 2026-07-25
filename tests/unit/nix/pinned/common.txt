@@ -1,4 +1,4 @@
-# nix-unit case-presence pins (common — present on every system).
+# nix-unit case-presence pins (common - present on every system).
 # Regenerate with: make nix-unit-pin
 activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask
 activation-runtime-tmpfiles/audio-acls-in-tmpfiles-not-activation

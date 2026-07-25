@@ -587,7 +587,7 @@ pub struct ReadGuestConfigRequest {
 /// by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from
 /// `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and
 /// ttRPC frames. The CLI decodes it and computes size + sha256 from the
-/// DECODED bytes — never from any guest-reported value.
+/// DECODED bytes - never from any guest-reported value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadGuestConfigResponse {
@@ -600,7 +600,7 @@ pub struct ReadGuestConfigResponse {
 /// single exec op never approaches the frame cap.
 pub const EXEC_MAX_CHUNK_BYTES: u64 = crate::guest_wire::DEFAULT_MAX_CHUNK_BYTES;
 
-/// Output stream selector for `ReadOutput`. A closed enum — the daemon never
+/// Output stream selector for `ReadOutput`. A closed enum - the daemon never
 /// forwards an unspecified stream to the guest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1007,7 +1007,7 @@ pub struct ExecControlResult {
 }
 
 /// Terminal disposition of the guest command. `Exited` carries the WIFEXITED
-/// code (0–255); `Signaled` carries the terminating signal number; `Error`
+/// code (0-255); `Signaled` carries the terminating signal number; `Error`
 /// carries a closed-enum guest error slug for an abnormal terminal state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
@@ -1594,7 +1594,7 @@ impl fmt::Debug for ConsoleWriteStdinArgs {
     }
 }
 
-/// Read console output from a ring-buffer–backed session.
+/// Read console output from a ring-buffer-backed session.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConsoleReadOutputArgs {
@@ -1917,7 +1917,7 @@ pub struct AudioSetVolumeArgs {
     pub vm: String,
     /// Which audio channel to adjust.
     pub channel: AudioChannel,
-    /// New level (0–100 inclusive). Validated at the wire boundary.
+    /// New level (0-100 inclusive). Validated at the wire boundary.
     pub level: LevelPercent,
 }
 
@@ -2524,7 +2524,7 @@ pub struct ListEntry {
     pub vm: String,
     /// Realm-native workload identity. Present for workloads that have been
     /// associated with a realm; `None` for classical `d2b.vms` entries that
-    /// have not yet been adopted into a realm. Additive field — old daemons
+    /// have not yet been adopted into a realm. Additive field - old daemons
     /// omit it; new CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workload_identity: Option<WorkloadIdentity>,
@@ -2560,7 +2560,7 @@ pub struct VmStatus {
     pub vm: String,
     /// Realm-native workload identity. Present for workloads that have been
     /// associated with a realm; `None` for classical `d2b.vms` entries that
-    /// have not yet been adopted into a realm. Additive field — old daemons
+    /// have not yet been adopted into a realm. Additive field - old daemons
     /// omit it; new CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workload_identity: Option<WorkloadIdentity>,
@@ -3458,7 +3458,7 @@ mod tests {
         );
         assert_eq!(value["payload"]["result"]["ringBufferStartOffset"], 0);
         // session must not be present in the serialized output (it is, but must
-        // be redacted in Debug output — verify Debug does not leak it).
+        // be redacted in Debug output - verify Debug does not leak it).
         let debug_str = format!("{attach_response:?}");
         assert!(
             !debug_str.contains("opaque-console"),
@@ -3693,7 +3693,7 @@ mod tests {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbSecurityKeyStatusRequest {
-    // no parameters — always returns full proxy status
+    // no parameters - always returns full proxy status
 }
 
 /// Health of one physical security key as seen by the host broker.
@@ -3779,7 +3779,7 @@ pub struct UsbSecurityKeyStatusResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbSecurityKeySessionsRequest {
-    // no parameters — returns all recent and active sessions
+    // no parameters - returns all recent and active sessions
 }
 
 /// Outcome of one completed or active security-key session.

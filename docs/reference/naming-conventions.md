@@ -30,8 +30,8 @@ The broker emits `peer_role` / caller-role values into
 
 | Label | Class | Stability |
 | --- | --- | --- |
-| `d2b-launcher` | lifecycle/launcher principal (members authorized by the daemon to call `public.sock`) | **Stable** — permanent audit-class identifier |
-| `d2b-admin` | administrative principal | **Stable** — permanent audit-class identifier |
+| `d2b-launcher` | lifecycle/launcher principal (members authorized by the daemon to call `public.sock`) | **Stable** - permanent audit-class identifier |
+| `d2b-admin` | administrative principal | **Stable** - permanent audit-class identifier |
 
 These are stable broker audit/authz class labels. They are distinct
 from the live Unix group name (`d2b` from v1.2 onward; previously
@@ -154,7 +154,7 @@ names from realm paths.
 
 Host prepare introduces a separate name space for the bridges and TAPs
 the privileged broker creates on the host on behalf of a daemon-backed
-VM (per ADR 0012 — IPv6-off sysctl set, hash-derived IfName,
+VM (per ADR 0012 - IPv6-off sysctl set, hash-derived IfName,
 bridge-port defaults):
 
 - Every broker-created host interface is named
@@ -211,11 +211,11 @@ directly. Both directions of the mapping ship in the
 `IfNameMapping` DTO of `bundle/host.json` and are surfaced to
 operators in two CLI outputs:
 
-- `d2b host check --json` — emits the full per-env, per-VM,
+- `d2b host check --json` - emits the full per-env, per-VM,
   per-role mapping under `.host.ifnameMapping[]`. Use this to look
   up a `d2b-*`/`d2bv-*` name observed in `ip link`, `nft list ruleset`,
   or a broker audit record back to `(env, vm, role)`.
-- `d2b status <vm> --json` — emits the same mapping scoped to one
+- `d2b status <vm> --json` - emits the same mapping scoped to one
   VM under `.vm.ifnames[]`.
 
 The mapping is keyed on `(kind, env, vm, role)` so the human-visible
@@ -230,5 +230,5 @@ unambiguously.
 - [Realm core model reference](./realm-core.md)
 - [USB/IP component reference](./components-usbip.md)
 - [tests/README.md](../../tests/README.md)
-- [ADR 0012 — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
+- [ADR 0012 - IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
 - [Host-prepare how-to](../how-to/host-prepare.md)

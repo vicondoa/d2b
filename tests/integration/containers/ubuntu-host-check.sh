@@ -11,7 +11,7 @@ export ROOT
 cd "$NLC_ROOT"
 
 if ! command -v nix >/dev/null 2>&1; then
-  nlc_log "SKIP: nix unavailable — ubuntu-host-check needs nix to build the static binary"
+  nlc_log "SKIP: nix unavailable - ubuntu-host-check needs nix to build the static binary"
   exit 0
 fi
 

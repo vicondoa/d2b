@@ -181,7 +181,7 @@ Then update the `include` line in `config.kdl` accordingly.
    not be running. For qemu-media VMs, qemu-media itself should start
    only after the per-VM Wayland proxy is ready.
 
-4. Confirm the niri border rule is active by switching focus to a VM window —
+4. Confirm the niri border rule is active by switching focus to a VM window -
    the active border should wrap the proxy rail and guest content in the
    configured color.
 

@@ -1,4 +1,4 @@
-# `d2b host validate` — composite default-switch readiness preflight
+# `d2b host validate` - composite default-switch readiness preflight
 
 `d2b host validate` is the operator-facing one-command preflight
 the operator runs after `nixos-rebuild switch` to record per-wave
@@ -7,7 +7,7 @@ per-wave evidence records consumed by the per-wave
 `defaultSwitchReadiness.<wave>.validated` assertion
 (`nixos-modules/options-daemon.nix:validationEvidencePresent`).
 (`d2b.daemonExperimental.enable` defaults `true` and no longer
-depends on this evidence — it is no longer evidence-auto-flipped — but
+depends on this evidence - it is no longer evidence-auto-flipped - but
 it still functionally gates the daemon control plane, so leave it at
 its default.)
 
@@ -30,8 +30,8 @@ its default.)
    `/var/lib/d2b/validated/<wave>.json` for every `ready`
    wave; the default-switch gate then accepts that wave as `validated`.
 
-The verb does NOT execute the per-wave shell validators itself
-— those are Layer-2 integration tests that typically require live
+The verb does NOT execute the per-wave shell validators itself -
+those are Layer-2 integration tests that typically require live
 host state, sudo, and external hardware (GPU, YubiKey, swtpm). The
 operator runs them out-of-band; the validators that already
 emit their own per-role evidence file (e.g.
@@ -53,7 +53,7 @@ d2b host validate (--dry-run | --apply)
 
 Exactly one of `--dry-run` or `--apply` is required (the verb
 returns the `--apply-or-dry-run-required` envelope, exit 78, if
-neither is given — matching every other `host *` verb).
+neither is given - matching every other `host *` verb).
 
 | Flag | Meaning |
 | --- | --- |
@@ -104,7 +104,7 @@ or whose `timestamp` / `operatorSignature` are absent or empty.
 | `p7` | _(no per-host validator; readiness is gate-output only)_ |
 
 The two `(no validator)` waves report status `no-validators`. They
-intentionally do not write an evidence file — the default-switch
+intentionally do not write an evidence file - the default-switch
 readiness gate for `p6`/`p7` is driven entirely by Layer-1 panel output
 (`tests/legacy-unit-denylist-eval.sh`, `tests/static.sh` green, the
 v1.0 docs blast-radius pass), not by per-host attestation.
@@ -114,7 +114,7 @@ v1.0 docs blast-radius pass), not by per-host attestation.
 | Exit | Meaning |
 | --- | --- |
 | `0` | Success. Every wave the operator asked about is `ready`, `attested`, `skipped`, or `no-validators`. |
-| `1` | At least one evidence write failed (typically EACCES — re-run via `sudo`). |
+| `1` | At least one evidence write failed (typically EACCES - re-run via `sudo`). |
 | `78` | Refused. Either `--dry-run`/`--apply` was missing, `--wave <name>` named an unknown wave, or `--apply` ran with at least one `missing` wave. The operator must address the surfaced reason and re-run. |
 
 ## Operator workflow
@@ -157,8 +157,8 @@ implementation has already shipped in-tree.
 
 ## Related
 
-- [`AGENTS.md` § "Critical subsystems / Control plane"](../../AGENTS.md) — default-switch contract.
-- [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) — per-wave evidence gate reference.
-- [`docs/reference/error-codes.md`](./error-codes.md) — `--apply-or-dry-run-required` and `unknown-wave` envelopes.
-- [`tests/host-validate-verb-eval.sh`](../../tests/host-validate-verb-eval.sh) — Layer-1 regression gate.
-- [`packages/d2b/src/host_validate.rs`](../../packages/d2b/src/host_validate.rs) — verb implementation + per-wave catalog.
+- [`AGENTS.md` § "Critical subsystems / Control plane"](../../AGENTS.md) - default-switch contract.
+- [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) - per-wave evidence gate reference.
+- [`docs/reference/error-codes.md`](./error-codes.md) - `--apply-or-dry-run-required` and `unknown-wave` envelopes.
+- [`tests/host-validate-verb-eval.sh`](../../tests/host-validate-verb-eval.sh) - Layer-1 regression gate.
+- [`packages/d2b/src/host_validate.rs`](../../packages/d2b/src/host_validate.rs) - verb implementation + per-wave catalog.

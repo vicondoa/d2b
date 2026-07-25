@@ -8,20 +8,20 @@
 //! The per-env dnsmasq.conf is rendered from three bundle-owned intent
 //! sources:
 //!
-//! * `hosts_intent[host]` — `/etc/hosts` managed block (one line per
+//! * `hosts_intent[host]` - `/etc/hosts` managed block (one line per
 //!   env / bridge / MTU) ← `BundleResolver::find_hosts_intent`.
-//! * `nft_intent[env:<env>]` — per-env nftables subset whose
+//! * `nft_intent[env:<env>]` - per-env nftables subset whose
 //!   `desired_hash` already digests every bridge port-flag /
 //!   forward-blocklist line that informs DHCP visibility.
-//! * `route_intent[env:<env>:*]` — per-env route specs the net VM
+//! * `route_intent[env:<env>:*]` - per-env route specs the net VM
 //!   relies on for its uplink view.
 //!
 //! When the bundle is updated (e.g. workloads added, an env's bridge
 //! flags flipped, the route table changed) the dnsmasq.conf the net
 //! VM consumes must be re-rendered in lock-step. The render itself
 //! is owned by a host singleton (or, in the legacy world, a systemd
-//! oneshot). If the render step fails — or, worse, was never
-//! triggered — the running net VM would silently serve a stale lease
+//! oneshot). If the render step fails - or, worse, was never
+//! triggered - the running net VM would silently serve a stale lease
 //! table to its workloads, leaving the bundle's intent and the
 //! observable network behaviour out of sync.
 //!

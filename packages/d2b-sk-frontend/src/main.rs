@@ -109,7 +109,7 @@ async fn run(config: &Config) {
                     config.vm_id
                 );
                 // Drain lifecycle events (UHID_START / UHID_OPEN) before
-                // starting the relay — these arrive before the first actual
+                // starting the relay - these arrive before the first actual
                 // HID transaction and must not be forwarded as CTAPHID frames.
                 relay_loop(&mut dev, config, backoff).await;
                 eprintln!(
@@ -175,7 +175,7 @@ where
 {
     loop {
         tokio::select! {
-            // Direction: host→guest — receive from vsock, inject into UHID.
+            // Direction: host→guest - receive from vsock, inject into UHID.
             vsock_result = read_frame(vsock_rx) => {
                 match vsock_result {
                     Ok(Some(report)) => {
@@ -193,7 +193,7 @@ where
                     }
                 }
             }
-            // Direction: guest→host — read from UHID, send over vsock.
+            // Direction: guest→host - read from UHID, send over vsock.
             uhid_result = dev.read_event() => {
                 match uhid_result {
                     Ok(Some(UhidEvent::Output { data, .. })) => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/tools/gen-nix-unit-pins.sh — regenerate the fail-closed nix-unit
+# tests/tools/gen-nix-unit-pins.sh - regenerate the fail-closed nix-unit
 # case-presence pins (tests/unit/nix/pinned/{common,<system>}.txt).
 #
 # `common.txt`        = case names present on EVERY system.
@@ -16,12 +16,12 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 
-# Supported systems, derived from the flake's own `checks` (forAllSystems) —
-# the same source of truth the gate uses — rather than hardcoded, so adding
+# Supported systems, derived from the flake's own `checks` (forAllSystems) -
+# the same source of truth the gate uses - rather than hardcoded, so adding
 # a system to flake.nix's `systems` automatically pins it. Sorted, so the
 # first (the lexically-smallest, e.g. aarch64-linux) is the "base" whose case
 # set defines common.txt; the others contribute a per-system delta. (This
-# assumes the base's case set is a subset of every other system's — true
+# assumes the base's case set is a subset of every other system's - true
 # while extra cases are x86-only graphics guards.)
 mapfile -t SYSTEMS < <(
   nix eval --no-warn-dirty --raw "$ROOT#checks" \
@@ -66,7 +66,7 @@ done
 
 base="${SYSTEMS[0]}"
 {
-  echo "# nix-unit case-presence pins (common — present on every system)."
+  echo "# nix-unit case-presence pins (common - present on every system)."
   echo "# Regenerate with: make nix-unit-pin"
   cat "$tmp/$base.names"
 } > "$PIN_DIR/common.txt"

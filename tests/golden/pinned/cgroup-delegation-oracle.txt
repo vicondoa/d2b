@@ -1,4 +1,4 @@
-# cgroup-delegation-oracle — d2b-host cgroup v2 delegation canaries +
+# cgroup-delegation-oracle - d2b-host cgroup v2 delegation canaries +
 # broker ops::cgroup delegation/audit canaries. Successor of
 # tests/cgroup-delegation-oracle.sh, which ran
 # `cargo test -p d2b-host --all-features --lib cgroup::` and

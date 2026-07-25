@@ -31,14 +31,14 @@ it:
 This Provider does **not**:
 
 - reconcile `Network`, `Volume`, `Device`, or `Credential` resources;
-- open broker sockets or issue broker operations directly — all privileged
+- open broker sockets or issue broker operations directly - all privileged
   effects are mediated by the selected `Process` Provider
   (`Provider/system-minijail`);
-- expose or manage virtiofsd processes — those belong to
+- expose or manage virtiofsd processes - those belong to
   `Provider/volume-virtiofs` per the Volume spec;
-- manage swtpm state Volumes — the `device-tpm` Provider owns the swtpm
+- manage swtpm state Volumes - the `device-tpm` Provider owns the swtpm
   `Process` and its persistent `Volume`;
-- embed GPU/video/audio/display/transport child resources — those are reconciled
+- embed GPU/video/audio/display/transport child resources - those are reconciled
   by their respective Providers which expose `Device` and other ResourceTypes to
   this Guest's bootstrap graph as dependencies.
 
@@ -61,7 +61,7 @@ not enforced by the policy gate.
 - `src/`: controller binary, guest-bootstrap actor, VMM process template
   builder, reconcile/observe/finalize handlers, config schema, internal
   modules, and colocated unit tests.
-- `tests/`: hermetic Cargo integration tests — ResourceType conformance,
+- `tests/`: hermetic Cargo integration tests - ResourceType conformance,
   fault/retry/restart scenarios, redaction, schema golden vectors, fake-port
   bus tests, and pidfd adoption property tests.
 - `integration/`: heavier container/Host/Guest/cross-process fixtures invoked
@@ -134,8 +134,8 @@ All other fields are optional and bounded. Secrets are never root config values.
 
 ### 3.3 Provider status
 
-The aggregate Provider status — `phase`, conditions (`ControllerRunning`,
-`ArtifactTrusted`, `ConformancePassed`), and component readiness — is managed
+The aggregate Provider status - `phase`, conditions (`ControllerRunning`,
+`ArtifactTrusted`, `ConformancePassed`), and component readiness - is managed
 entirely by the **ProviderDeployment** framework component, not by the
 controller process. The controller process writes only `Guest.status` fields
 and creates/updates/deletes child `Process` resources; it does not write to
@@ -290,7 +290,7 @@ controller-created `Guest/<network-name>-net-vm`.
 
 #### Process: `<name>-vmm`
 
-- **Template**: `cloud-hypervisor-runner` — declared in the Process spec as
+- **Template**: `cloud-hypervisor-runner` - declared in the Process spec as
   `spec.template`; the system-minijail supervisor resolves the executable from
   the template's artifact catalog entry. No `artifactId` field appears in the
   Process spec.
@@ -299,7 +299,7 @@ controller-created `Guest/<network-name>-net-vm`.
 - **Sandbox**: minijail, `clone3(CLONE_PIDFD)`,
   `namespaceClasses: [pid, mount, ipc]`, `readOnlyRoot: true`,
   `noNewPrivileges: true`, `startRoot: false`, `capabilityClasses: []`
-  (empty — zero capabilities beyond baseline), `seccompClass: vmm-default`
+  (empty - zero capabilities beyond baseline), `seccompClass: vmm-default`
   (required; fixed by the signed template; cannot be overridden by Guest
   settings), `environmentClass: minimal`.
 - **pidfd**: mandatory; d2b owns wait/reap for this template.
@@ -311,7 +311,7 @@ controller-created `Guest/<network-name>-net-vm`.
   The LaunchTicket inherits that precreated fd; the VMM itself has no ambient
   egress.
 - **deviceUsage**: one entry per `deviceAttachments` entry plus a required
-  `Device/kvm` entry (purpose `kvm-fd`, access `shared` — KVM is safely
+  `Device/kvm` entry (purpose `kvm-fd`, access `shared` - KVM is safely
   shareable across multiple VMs). TPM and other exclusive devices use access
   `exclusive` exactly as declared in the Guest `deviceAttachments`. The Device
   Provider owns each passthrough socket/fd; only `deviceRef`, `access`, and
@@ -350,7 +350,7 @@ The controller enforces this ordering by watching resource statuses through
    `Provider/volume-virtiofs` before the VMM Process is created.
 
 When all conditions hold in the same reconcile turn, the controller creates the
-VMM Process immediately — no intermediate EphemeralProcess steps. These
+VMM Process immediately - no intermediate EphemeralProcess steps. These
 dependency checks are declared as explicit `dependency` watch selectors in the
 controller descriptor; the reconcile loop receives `dependency-ready` triggers
 and re-evaluates in constant time.
@@ -906,15 +906,15 @@ Note:
   `spec.provider.settings`. The rendered JSON confirms this placement.
 - No store path, kernel path, initrd path, or any derivation value appears
   anywhere in the JSON envelope.
-- `spec.provider.settings` contains only the closed bounded fields — `vcpus`,
-  `memoryMb`, `machineType`, `consoleType` — from the signed Guest
+- `spec.provider.settings` contains only the closed bounded fields - `vcpus`,
+  `memoryMb`, `machineType`, `consoleType` - from the signed Guest
   schema extension. No `cmdlineExtra`, no `seccompOverride`, no free-form fields.
 - `Device/dev-vm-kvm` appears in `deviceAttachments` without `exclusive`; KVM
   is a shared device.
 
 ### 12.5 Eval-time validation rules
 
-Rules 1–17 from `ADR-046-nix-configuration` apply to every Guest resource. The
+Rules 1-17 from `ADR-046-nix-configuration` apply to every Guest resource. The
 following are additional rules enforced specifically for `runtime-cloud-hypervisor`
 Guests:
 
@@ -1035,7 +1035,7 @@ spec:
     readOnlyRoot: true
     noNewPrivileges: true
     startRoot: false
-    capabilityClasses: []              # empty — zero capability classes beyond baseline
+    capabilityClasses: []              # empty - zero capability classes beyond baseline
     seccompClass: vmm-default          # required; fixed by signed template; not caller-settable
     environmentClass: minimal
   networkUsage:                        # single object; not a list
@@ -1292,13 +1292,13 @@ ProviderStateSet(zone, "runtime-cloud-hypervisor") =
 ```
 
 `Provider/runtime-cloud-hypervisor`'s controller declares **no** Provider state
-Volume; its `ProviderStateSet` is empty. All application-level recovery data —
-resource generations, watch cursors, adoption tokens — is derivable from the
+Volume; its `ProviderStateSet` is empty. All application-level recovery data -
+resource generations, watch cursors, adoption tokens - is derivable from the
 Zone resource store, the core Operation ledger, and independent external
 observation (running VMM/virtiofsd processes re-adopted from declared cgroup
 leaves and fresh pidfds) at restart time. Its bounded non-secret operational
-state — reconcile stage, per-Guest launch/adoption observations, bounded
-counters, and closed-enum error detail — lives in the owning resource's
+state - reconcile stage, per-Guest launch/adoption observations, bounded
+counters, and closed-enum error detail - lives in the owning resource's
 `status` subresource and the core Operation ledger (D087). Because that state is
 fully derivable and duplicating it would create a split-brain risk on restart,
 the controller payload fails the storage-need test: there is no controller
@@ -1314,7 +1314,7 @@ in any Provider state Volume.
 The Guest itself has no Provider-owned Volume. All durable per-Guest state
 (swtpm NVRAM, persistent storage, the `/nix/store` farm) belongs to the
 Volume resources declared in the Zone configuration, owned by their respective
-Providers (`Provider/device-tpm`, `Provider/volume-local`) — these are genuine
+Providers (`Provider/device-tpm`, `Provider/volume-local`) - these are genuine
 durable payloads (large/secret/private) that pass the storage-need test and are
 retained unchanged. The controller reads their status but does not write to
 them.
@@ -1380,7 +1380,7 @@ name, guest-control locator, or credential material appears in any audit field. 
 
 virtiofsd Process resources created by `Provider/volume-virtiofs` for Guests
 managed by this Provider must declare:
-- `capabilityClasses: []` (empty — zero capability classes beyond baseline);
+- `capabilityClasses: []` (empty - zero capability classes beyond baseline);
 - `seccompClass: virtiofsd-default` (required);
 - `startRoot: false`;
 - `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal
@@ -1484,8 +1484,8 @@ status:
 
 | Code | Phase | Condition | Meaning |
 | --- | --- | --- | --- |
-| `system-artifact-required` | Failed | — | `systemArtifactId` is null for a CH Guest |
-| `system-artifact-type-mismatch` | Failed | — | Referenced artifact is not `nixos-system` |
+| `system-artifact-required` | Failed | - | `systemArtifactId` is null for a CH Guest |
+| `system-artifact-type-mismatch` | Failed | - | Referenced artifact is not `nixos-system` |
 | `guest-control-endpoint-conflict` | Failed | PolicyValid=False | Guest-control Endpoint identity conflicts with an existing resource in this Zone |
 | `vmm-process-exited` | Degraded | BootstrapReady=False, GuestReachable=False | Unexpected VMM exit |
 | `guest-control-health-failed` | Degraded | GuestReachable=False | Authenticated health check failed |
@@ -1663,7 +1663,7 @@ bundle and are never swept by configuration generation cleanup.
 | `d2b-host/src/swtpm_argv.rs` | production-reachable | `d2bd` swtpm start | MOVE | `packages/d2b-provider-device-tpm/src/swtpm_argv.rs`; no work item for this Provider dossier |
 | `d2b-host/src/virtiofsd_argv.rs` | production-reachable | `d2bd` virtiofsd start | MOVE | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs` |
 | `nixos-modules/processes-json.nix` (CloudHypervisor/Swtpm/NetVm node emitters) | nix-emitted | Bundle artifact consumer | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/` Nix builder per `ADR-046-nix-configuration`; current emitters deleted after integration |
-| `nixos-modules/store.nix` | nix-emitted | Per-VM hardlink farm setup | REPLACE | `Provider/volume-local` owns Volume with `VolumeKind: state` for store farm; the controller watches Volume readiness via ResourceClient before creating the VMM Process — no EphemeralProcess preflight |
+| `nixos-modules/store.nix` | nix-emitted | Per-VM hardlink farm setup | REPLACE | `Provider/volume-local` owns Volume with `VolumeKind: state` for store farm; the controller watches Volume readiness via ResourceClient before creating the VMM Process - no EphemeralProcess preflight |
 | `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` | test-only | `tests/virtiofsd-argv-shape.sh`, `tests/video-contract-eval.sh` | COPY/ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/tests/vmm_argv_golden_test.rs`; new golden vectors for v3 spec-driven argv; old shell golden tests adapted to `integration/` |
 | `tests/video-sidecar-hardening-eval.sh` | test-only | `make test-policy` | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/integration/video_sidecar_integration_test.rs`; device-gpu Provider must also have a corresponding test |
 | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*` with `vm=` label) | production-reachable | Current Prometheus hand-roll | REPLACE | `d2b_runtime_ch_*` metrics from §18.3; `vm=` label removed from metric labels; VM identity stays in OTEL resource attributes only |
@@ -1677,7 +1677,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-runtime-cloud-hypervisor --lib --tests`
 completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1727,7 +1727,7 @@ per-test budget.
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs`; `tests/vmm_argv_golden_test.rs` |
 | Detailed design | `VmmArgvInput` derived from validated `GuestSpec.spec.provider.settings`; kernel/initrd/rootfs paths resolved privately from artifact catalog at dispatch time; no path in spec/status; tap argv accepts only the declared child fd slot inherited from the sealed LaunchTicket, with no runtime-selected handoff mode or host tap name; golden tests for headless/q35/microvm/gpu/video/macvtap variants Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT. |
 | Integration | ProviderSupervisor LaunchTicket resolution, including direct inheritance of the precreated connected tap fd |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; tap vector accepts only the declared LaunchTicket child fd slot; redaction test (no store path in Debug output) |
 | Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; the old network-handoff mode and tap-name branches have no v3 callers; old golden test files adapted |
 
@@ -1742,7 +1742,7 @@ per-test budget.
 | Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; Guest-control `Endpoint` resource emitted without raw locator; `make test-drift` gate for schema/Nix drift Primary reuse disposition: `adapt`. Preserved source-plan detail: ADAPT and REPLACE. |
 | Integration | Zone resource bundle emission; private artifact catalog; `xtask gen-resource-nix-options` for auto-generated Nix option types |
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
-| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1–17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
+| Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1-17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
 | Removal proof | `options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `nixos-modules/store.nix` removed after integration parity |
 
 ### ADR046-ch-005 (guest-control health and adoption)
@@ -1755,7 +1755,7 @@ per-test budget.
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
 | Detailed design | Authenticated KK ComponentSession health check over vsock; adoption verification (pid/cgroup/executable/generation) within `adoptionWindow`; ambiguity → Unknown/Degraded, never broad kill; graceful shutdown via guest-control session before SIGTERM |
 | Integration | ComponentSession enrolled KK; guest bootstrap credential from `d2b-gctl` virtiofs share; `GuestReachable` condition write |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Fake guest-control server test; health check timeout/failure/retry; adoption property test (ambiguity, gone, stale pid); graceful shutdown ordering |
 | Removal proof | `ProcessRole::GuestControlHealth` observation path; `ProcessRole::GuestSshReadiness` deleted at cutover |
 
@@ -1778,10 +1778,10 @@ per-test budget.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-ch-001; `ADR046-pstate-001` (common status types) |
-| Current source | `packages/d2b-core/src/storage.rs` (`StoragePathSpec`, `SensitivityClass`) — to be retired |
+| Current source | `packages/d2b-core/src/storage.rs` (`StoragePathSpec`, `SensitivityClass`) - to be retired |
 | Reuse action | replace |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs` |
-| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) — the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs). |
+| Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) - the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs). |
 | Integration | The controller reads Volume/Device/Network dependency status through its ComponentSession/ResourceClient and writes its own bounded `status`; no Provider state Volume is provisioned or mounted |
 | Data migration | v3 reset; no v2 state storage migration |
 | Validation | `state_status_test.rs` (hermetic): status projection round-trip and bound enforcement; restart re-derivation from store/ledger/external observation without a state Volume; no secret/path/argv/PID in status |
@@ -1903,7 +1903,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

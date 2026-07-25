@@ -2,22 +2,22 @@
 //!
 //! These wire the v2 provider/router/transport trait surface into
 //! `d2bd` so future gateway work can fill them in, but they are **not**
-//! called from the running daemon — the local CLI→daemon path is unchanged
+//! called from the running daemon - the local CLI→daemon path is unchanged
 //! (zero behavior change). The module exists to prove the realm contract
 //! compiles against the daemon's dependency set and to give the
 //! later gateway-mode work a concrete set of seams:
 //!
-//! - [`ApiFrontend`] — terminates a peer session and hands decoded frames in.
-//! - [`ApiService`] — the transport-neutral CLI-facing daemon API surface.
-//! - [`TargetResolver`] — resolves a realm-path target to a node/provider.
-//! - [`PeerOperationRouter`] — binds the codec-neutral
+//! - [`ApiFrontend`] - terminates a peer session and hands decoded frames in.
+//! - [`ApiService`] - the transport-neutral CLI-facing daemon API surface.
+//! - [`TargetResolver`] - resolves a realm-path target to a node/provider.
+//! - [`PeerOperationRouter`] - binds the codec-neutral
 //!   [`OperationRouter`](d2b_realm_router::OperationRouter). It
 //!   holds a **shared** node/gateway-scoped router (see [`SharedRouter`]) so
 //!   reconnecting peer sessions share one dedup owner; a fresh per-session
 //!   router would let reconnect retries bypass dedup and double-dispatch.
-//! - [`ProviderExecutor`] — dispatches an accepted operation to a provider.
-//! - [`LocalExecutor`] — the current local execution path (unchanged).
-//! - [`PeerDaemon`] — a remote-node peer session (future gateway work).
+//! - [`ProviderExecutor`] - dispatches an accepted operation to a provider.
+//! - [`LocalExecutor`] - the current local execution path (unchanged).
+//! - [`PeerDaemon`] - a remote-node peer session (future gateway work).
 //!
 //! Everything here is `dead_code`-allowed until the gateway-mode work wires
 //! it.
@@ -83,7 +83,7 @@ impl Default for ApiService {
 /// serves it, by consulting the node's [`RealmEntrypointTable`]. The table is
 /// seeded with the reserved `local` realm as
 /// host-resident; gateway-mode config wiring populates the rest. Resolution
-/// is fail-closed — an unknown realm is rejected rather than defaulted to
+/// is fail-closed - an unknown realm is rejected rather than defaulted to
 /// local dispatch.
 pub struct TargetResolver {
     table: RealmEntrypointTable,
@@ -95,7 +95,7 @@ impl TargetResolver {
         Self { table }
     }
 
-    /// A resolver that only knows the local (host-resident) realm — the
+    /// A resolver that only knows the local (host-resident) realm - the
     /// host-mode default until realm config lands.
     pub fn local_only() -> Self {
         Self::new(RealmEntrypointTable::with_local_default())
@@ -517,7 +517,7 @@ mod tests {
         // A bare host config validates as Host.
         assert_eq!(DaemonModeConfig::default().validate(), Ok(DaemonMode::Host));
         // Realm provider/relay config without an entrypoint is host-mode
-        // carrying realm config — rejected fail-closed.
+        // carrying realm config - rejected fail-closed.
         let cross_wired = DaemonModeConfig {
             has_provider_or_relay_config: true,
             ..Default::default()
@@ -537,7 +537,7 @@ mod tests {
             has_host_lifecycle: false,
         };
         assert_eq!(gateway.validate(), Ok(DaemonMode::Gateway));
-        // A gateway that also claims host lifecycle is cross-wired — rejected.
+        // A gateway that also claims host lifecycle is cross-wired - rejected.
         let cross_wired = DaemonModeConfig {
             has_realm_entrypoint: true,
             has_host_lifecycle: true,

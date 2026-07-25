@@ -8,7 +8,7 @@
 Every graphics-enabled VM (`d2b.vms.<vm>.graphics.enable = true`)
 gets an auto-generated `d2b-launch-<vm>.desktop` entry installed
 under `share/applications/`. The wrapper script the entry's `Exec`
-line points at is the **daemon path** — it drives the VM through
+line points at is the **daemon path** - it drives the VM through
 `d2bd → d2b-priv-broker → SpawnRunner`, not the legacy bash
 `d2b vm start` / `microvm@<vm>.service` chain.
 

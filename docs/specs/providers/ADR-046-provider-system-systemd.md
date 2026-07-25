@@ -110,8 +110,8 @@ exec-ordering identity cannot be weakened.
 
 The controller descriptor declares compatibility with:
 
-- `Host` targets (physical/local OS) — both `system` and `user` domains;
-- `Guest` targets (VM, sandbox, cloud, remote) — both domains, subject to the
+- `Host` targets (physical/local OS) - both `system` and `user` domains;
+- `Guest` targets (VM, sandbox, cloud, remote) - both domains, subject to the
   selected runtime Provider exposing a systemd session inside the Guest.
 
 A Guest runtime Provider that does not expose a systemd session fails
@@ -122,8 +122,8 @@ closed on missing capabilities rather than silently degrading.
 
 The controller does not open ambient system or user DBus manager connections
 and does not invoke `systemctl` or any raw DBus call. All transient unit
-operations — `StartTransientUnit`, active-state observation, stop, kill, and
-user-manager availability checks — are dispatched through an injected
+operations - `StartTransientUnit`, active-state observation, stop, kill, and
+user-manager availability checks - are dispatched through an injected
 `SystemdProcessEffectPort` trait object. The effect port implementation is
 owned by the core supervisor and process specs, not by this Provider crate.
 
@@ -246,7 +246,7 @@ no DBus connections itself.
 ### 5.2 Canonical controller Process ResourceSpec
 
 Core `ProviderDeployment` creates the following `Process` resource for each
-execution target. This is the full canonical spec — no implicit or prose-only
+execution target. This is the full canonical spec - no implicit or prose-only
 fields:
 
 ```nix
@@ -810,9 +810,9 @@ Role/RoleBinding evaluator before any bus operation.
 ### 12.2 Broker operations
 
 `Provider/system-systemd` uses no privileged broker operations and holds no
-direct DBus manager connections. All systemd manager interactions — including
+direct DBus manager connections. All systemd manager interactions - including
 system and per-user `StartTransientUnit`, active-state observation, stop, kill,
-and user-manager availability checks — are dispatched through the injected
+and user-manager availability checks - are dispatched through the injected
 `SystemdProcessEffectPort` whose implementation is owned by the core supervisor
 spec. It does not invoke `BrokerOperation::SpawnRunner`, `CgroupSubtree`, or
 any other broker op. Cgroup placement is systemd's responsibility once a
@@ -866,9 +866,9 @@ consumers are instead promoted to `status.resource`.
 empty for this Provider.
 
 `Provider/system-systemd` declares **no** Provider state Volume; its
-`ProviderStateSet` is empty. Its bounded non-secret operational state —
+`ProviderStateSet` is empty. Its bounded non-secret operational state -
 controller/effect-port readiness, per-Process launch/adoption observations,
-active-process counters, and closed-enum error detail — lives in the owning
+active-process counters, and closed-enum error detail - lives in the owning
 resource's `status` subresource and the core Operation ledger (D087). Pidfds and
 live effect-port handles remain ephemeral process-local state; persisted restart
 counts, backoff state, and checkpoints are core resource/operation state
@@ -990,16 +990,16 @@ cgroup path, user name, or unit name appears as a metric label value.
 
 | Metric | Type | Labels | Buckets (s) | Notes |
 | --- | --- | --- | --- | --- |
-| `d2b_process_launch_total` | counter | `provider=systemd`, `domain={system,user}`, `outcome={ok,error,quota}` | — | Incremented once per `StartTransientUnit` call completion |
+| `d2b_process_launch_total` | counter | `provider=systemd`, `domain={system,user}`, `outcome={ok,error,quota}` | - | Incremented once per `StartTransientUnit` call completion |
 | `d2b_process_launch_duration_seconds` | histogram | `provider=systemd`, `domain` | 0.001, 0.005, 0.010, 0.015, 0.020, 0.030, 0.050, 0.1, 0.5, 2.0 | Commit → first OS call; p95 ≤20 ms target |
-| `d2b_process_active` | gauge | `provider=systemd`, `domain` | — | Live non-terminal Process count |
-| `d2b_process_restart_total` | counter | `provider=systemd`, `class={exited,signaled,killed}` | — | Per restart event |
-| `d2b_process_adoption_total` | counter | `provider=systemd`, `outcome={ok,quarantine,error}` | — | Per adoption attempt |
+| `d2b_process_active` | gauge | `provider=systemd`, `domain` | - | Live non-terminal Process count |
+| `d2b_process_restart_total` | counter | `provider=systemd`, `class={exited,signaled,killed}` | - | Per restart event |
+| `d2b_process_adoption_total` | counter | `provider=systemd`, `outcome={ok,quarantine,error}` | - | Per adoption attempt |
 | `d2b_process_stop_duration_seconds` | histogram | `provider=systemd`, `stop_class={graceful,forced}`, `outcome` | 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 30.0 | Drain time measurement |
-| `d2b_process_pidfd_active` | gauge | (none) | — | Live entries in ephemeral pidfd table |
-| `d2b_provider_reconcile_total` | counter | `resource_type={Process,EphemeralProcess}`, `outcome={ok,requeue,conflict,error}` | — | |
+| `d2b_process_pidfd_active` | gauge | (none) | - | Live entries in ephemeral pidfd table |
+| `d2b_provider_reconcile_total` | counter | `resource_type={Process,EphemeralProcess}`, `outcome={ok,requeue,conflict,error}` | - | |
 | `d2b_provider_reconcile_duration_seconds` | histogram | `resource_type` | 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 2.0 | |
-| `d2b_provider_component_phase` | gauge | `component_type=controller`, `phase` | — | Controller process phase |
+| `d2b_provider_component_phase` | gauge | `component_type=controller`, `phase` | - | Controller process phase |
 | `d2b_controller_hint_to_handler_seconds` | histogram | `handler=systemd_process` | 0.001, 0.002, 0.005, 0.010, 0.015, 0.020, 0.030, 0.050 | p95 ≤5 ms target |
 
 ### 15.2 Spans
@@ -1253,7 +1253,7 @@ Evidence class per `ADR-046-current-code-migration-map`:
 | `packages/d2b-unsafe-local-helper/src/protocol.rs` | `production-reachable` | `HelperClient`/`HelperServer`: wire protocol between `d2bd` and helper (to be replaced by ComponentSession supervisor ticket) |
 | `packages/d2b-unsafe-local-helper/src/environment.rs` | `production-reachable` | `ManagerEnvironment`: environment setup before user scope exec |
 | `packages/d2bd/src/supervisor/` | `production-reachable` | `VmProcessDag` supervision, `ProcessRole`-based pidfd adoption, restart backoff, watchdog |
-| `packages/d2bd/src/lib.rs` — `d2b_daemon_pidfd_table_size` metric, `SO_PEERCRED` admin socket | `production-reachable` | Live pidfd table gauge; admin process model |
+| `packages/d2bd/src/lib.rs` - `d2b_daemon_pidfd_table_size` metric, `SO_PEERCRED` admin socket | `production-reachable` | Live pidfd table gauge; admin process model |
 | `packages/d2b-contracts/src/unsafe_local_wire.rs` | `production-reachable` | `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` wire types; `HelperLaunchRequest`; `HelperScopeState` |
 
 ### 17.2 Behavior retained
@@ -1283,7 +1283,7 @@ Evidence class per `ADR-046-current-code-migration-map`:
   operations; implementation owned by core supervisor spec, not this crate).
 - User-domain execution via effect port; UID verification and manager-connection
   lifecycle owned by port implementation.
-- ProviderStateSet: empty — the controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); running units re-adopted from cgroup leaves + fresh pidfds on restart.
+- ProviderStateSet: empty - the controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); running units re-adopted from cgroup leaves + fresh pidfds on restart.
 - Async reconcile loop watching `Process` / `EphemeralProcess` resources.
 - `system-systemd` conformance tests and shared conformance kit integration.
 
@@ -1321,7 +1321,7 @@ assumptions. Copied behavior is independently re-tested against v3
 | --- | --- |
 | Work item ID | `ADR046-systemd-001` |
 | Dependency/owner | `ADR046-process-002`; Process contracts/supervisor owner; effect port interface owner |
-| Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs` — `SystemdUserScopeManager`, `VerifiedScope`; `packages/d2bd/src/supervisor/` — pidfd adoption, restart backoff |
+| Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs` - `SystemdUserScopeManager`, `VerifiedScope`; `packages/d2bd/src/supervisor/` - pidfd adoption, restart backoff |
 | Reuse source | Main `a1cc0b2d`: `d2b-session/src/engine.rs`, `d2b-session-unix/src/adapter.rs` (effect port test double session/transport) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (launch algorithm via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + test double), `src/adoption.rs` (adoption algorithm), `src/sandbox.rs` (SandboxSpec → unit property compiler) |
@@ -1357,7 +1357,7 @@ assumptions. Copied behavior is independently re-tested against v3
 | Destination | `packages/d2b-provider-system-systemd/tests/conformance.rs`, `tests/fault.rs`, `tests/ephemeral.rs`, `tests/sandbox_compile.rs`; `integration/host_scenario.rs`, `integration/guest_scenario.rs` |
 | Detailed design | Full §19 test/integration requirements Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All conformance vectors pass; all fault injection scenarios reach expected phase/condition; all §19 Host and Guest test scenarios pass |
 | Removal proof | No removal; tests are permanent |
 
@@ -1439,7 +1439,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-system-systemd --lib --tests` completes in ≤2 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
-and the toolkit fakes/FakeEffectPort only — no process spawn, container,
+and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
 hardware, or live cloud, and no filesystem tree beyond tiny temp fixtures. Any
 scenario needing those lives only in `integration/`, which keeps a lane
@@ -1453,7 +1453,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1474,7 +1474,7 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | Controllers/services/workers/binaries | Binary `d2b-provider-system-systemd`; `systemd-controller` component (one instance per execution target); core ProviderDeployment creates controller Process via Provider/system-minijail; no user supervisor binary or entry point inside this crate; cgroup placement per §5.1 |
 | Placement | Valid Host and Guest execution targets; `allowedDomains: [system, user]`; required `providerRef` chain (Provider/system-systemd must be Ready before any Process uses it); system and user domain both dispatched through injected `SystemdProcessEffectPort`; effect port implementation is core-owned |
 | Dependencies and RBAC | Required RoleBinding verbs per §12.1 (no User RoleBindings; UID verification is effect port responsibility); no broker operations; ComponentSession on d2b-bus for ProviderSupervisor integration; no internal socketpair service |
-| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume — bounded non-secret operational state lives in `status`/the core Operation ledger (D087); pidfds and effect-port handles are ephemeral and not persisted; running units re-adopted from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments from caller data |
+| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume - bounded non-secret operational state lives in `status`/the core Operation ledger (D087); pidfds and effect-port handles are ephemeral and not persisted; running units re-adopted from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments from caller data |
 | Telemetry | Metric instruments per §15.1; span catalog per §15.2; audit `ProcessEffect` record per §15.3; `no_isolation=true` on user-only Host child ProcessEffect records only |
 | Build/test/integration commands | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Standalone-repo future usage | Crate depends only on published crates and the d2b provider SDK subset (`d2b-contracts`, `d2b-provider-toolkit`); may be extracted to its own repository without copying daemon internals |

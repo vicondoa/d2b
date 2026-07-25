@@ -800,8 +800,11 @@ fn expand_ranges(text: &str, known: &BTreeSet<String>, out: &mut BTreeSet<String
 
 /// Splits prose into candidate tokens, dropping surrounding punctuation.
 ///
-/// Typographic dashes separate tokens, so an `A–B` span yields its endpoints
-/// as independent tokens rather than one unparsable run.
+/// Typographic dashes separate tokens, so a span joined by one of them yields
+/// its endpoints as independent tokens rather than one unparsable run. Those
+/// characters are banned in this repository's own prose (see the Don'ts entry
+/// in AGENTS.md); the tolerance below exists for inbound Markdown only, which
+/// is why the separator set names codepoints instead of printing them.
 fn tokens(text: &str) -> Vec<String> {
     text.split(is_token_separator)
         .map(|word| word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-'))
@@ -856,7 +859,7 @@ fn render_markdown(graph: &GraphDoc) -> String {
     let mut out = String::new();
     out.push_str("# ADR 0046 implementation graph (generated)\n\n");
     out.push_str(&format!(
-        "> **Generated index — not a normative member.** This file and its companion\n\
+        "> **Generated index - not a normative member.** This file and its companion\n\
          > [`ADR-046-implementation-graph.json`](ADR-046-implementation-graph.json) are\n\
          > deterministically generated from\n\
          > [`ADR-046-spec-set.json`](ADR-046-spec-set.json),\n\
@@ -870,7 +873,7 @@ fn render_markdown(graph: &GraphDoc) -> String {
     ));
     out.push_str(
         "The graph maps every member spec and every work item exactly once to a\n\
-         dependency-ordered launch wave (`W0`–`W7`) and a file-disjoint parallel group.\n\
+         dependency-ordered launch wave (`W0`-`W7`) and a file-disjoint parallel group.\n\
          It includes every resolved security-key work-item dependency; no lexical\n\
          tie-break or omitted dependency is used.\n\
          Each JSON work-item node also embeds the manifest's exact `detailedDesign` and\n\
@@ -893,7 +896,7 @@ fn render_markdown(graph: &GraphDoc) -> String {
 
     let first_wave = graph.waves.first().map(|w| w.wave.as_str()).unwrap_or("W0");
     let last_wave = graph.waves.last().map(|w| w.wave.as_str()).unwrap_or("W7");
-    out.push_str(&format!("## Waves ({first_wave}–{last_wave})\n\n"));
+    out.push_str(&format!("## Waves ({first_wave}-{last_wave})\n\n"));
     out.push_str("| Wave | Specs | #Specs | #Work items | Parallel groups |\n| --- | --- | --- | --- | --- |\n");
     for wave in &graph.waves {
         let specs = spec_short_names(graph, &wave.wave).join(", ");
@@ -980,7 +983,7 @@ fn render_markdown(graph: &GraphDoc) -> String {
         out.push_str(&format!("{}. `{id}`\n", index + 1));
     }
 
-    out.push_str("\n## Regeneration findings (D095–D098)\n\n");
+    out.push_str("\n## Regeneration findings (D095-D098)\n\n");
     out.push_str(&format!(
         "- Regenerated from {} member specs and {} current work items; every declared heading is represented exactly once.\n",
         graph.counts.spec_nodes, graph.counts.work_item_nodes

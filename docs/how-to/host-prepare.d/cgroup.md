@@ -17,7 +17,7 @@ ownership model, and audit record shape are in
 
 ## How to verify cgroup delegation prerequisites
 
-Before running `d2b host prepare --apply` (not yet wired — it
+Before running `d2b host prepare --apply` (not yet wired - it
 returns `daemon-down` (exit 1) today; use `--dry-run` for now, and see
 the "What `host prepare --apply` will do for cgroup" section below),
 confirm the host meets the prerequisites:
@@ -48,8 +48,8 @@ first failure is what the operator sees:
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `d2bd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `d2bd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
-| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `d2b.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 - i.e., the broker failed to drop to `d2bd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `d2bd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today - use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `d2b.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard - the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root:d2bd 0640),
@@ -57,7 +57,7 @@ keyed by `operation: "DelegateCgroupV2"` or `operation: "OpenCgroupDir"`.
 
 ## What `host prepare --apply` will do for cgroup
 
-`host prepare --apply` is **not yet wired** — it returns the typed
+`host prepare --apply` is **not yet wired** - it returns the typed
 `daemon-down` envelope (exit 1) today; use `--dry-run` for now. Once
 the daemon-side dispatch ships, for a successful apply the broker will
 perform the 8-step delegation sequence documented in
@@ -87,7 +87,7 @@ delegated subtree will carry every required controller in
 
 `cgroup.kill` is permitted only via **broker-mediated** `CgroupKill`
 on per-VM role leaves or host-scoped leaves during declared
-teardown (v1.1+ — the broker is the sole writer per
+teardown (v1.1+ - the broker is the sole writer per
 [`docs/reference/cgroup-delegation.md`](../../reference/cgroup-delegation.md)
 "Broker ops on the cgroup tree"; daemon NEVER writes `cgroup.kill`
 directly). Asking the broker to kill an ancestor returns
@@ -105,7 +105,7 @@ The host is on a legacy or hybrid cgroup layout.
   and reboot. Most NixOS systems already run unified cgroup v2 by
   default; this only applies to hosts that explicitly opted out.
 - **Ubuntu 24.04**: unified cgroup v2 is the default. If the probe
-  fails, check `mount | grep cgroup` — the only mount under
+  fails, check `mount | grep cgroup` - the only mount under
   `/sys/fs/cgroup` should be `cgroup2`.
 
 ### "cgroup-controllers-missing"

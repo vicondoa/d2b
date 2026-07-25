@@ -26,8 +26,8 @@ requires the daemon to be able to:
 4. Preserve file mode/UID bits accurately so the guest sees
    files with the same exec/setuid semantics they have on the
    host (otherwise `chroot $sysroot $closure/prepare-root` in
-   the guest initrd exits with 126 — "command found but cannot
-   execute" — which is the symptom we hit pre-fu14)
+   the guest initrd exits with 126 - "command found but cannot
+   execute" - which is the symptom we hit pre-fu14)
 
 Through v1.1.1fu13, our broker spawned virtiofsd as a non-root
 ephemeral UID (`stablePrincipalId "d2b-<vm>-runner"`) with
@@ -88,7 +88,7 @@ exec'ing virtiofsd. Concretely:
    - Child unblocks; from inside the user NS its UID 0 maps
      to the host's ephemeral UID, so it can call
      `setgid(0)` / `setuid(0)` successfully (NOT
-     `setuid(host_uid_for_zero)` — host UIDs are unmapped
+     `setuid(host_uid_for_zero)` - host UIDs are unmapped
      inside the new user NS and would return `EINVAL`) and
      gets a full capability set *inside the user NS*. The
      child explicitly SKIPS `setgroups()` because the parent's
@@ -124,8 +124,8 @@ This is **acceptable for ALL current virtiofsd shares**:
   installed by `host-activation.nix` makes the file readable
   to virtiofsd inside the NS; the file appears to the guest
   with the overflow UID, but the guest's sshd doesn't care
-  about UID ownership on its host key — only its read mode.
-- `d2b-hkeys` / `d2b-meta`: same story — content semantics, not
+  about UID ownership on its host key - only its read mode.
+- `d2b-hkeys` / `d2b-meta`: same story - content semantics, not
   ownership semantics, are what matters.
 - `d2b-gctl` guest-control token share: the share runs under the
   dedicated `d2b-<vm>-gctlfs` principal, not the general runner
@@ -138,11 +138,11 @@ If a future share needs true UID-preserving semantics (e.g.,
 real UID), this single-entry mapping is insufficient. Such a
 share would need either:
 
-- A multi-entry mapping (`/etc/subuid` + `newuidmap` — rejected
+- A multi-entry mapping (`/etc/subuid` + `newuidmap` - rejected
   for the v1.1.2 closure per the "Alternatives considered"
   section), OR
 - An out-of-band ID translation policy in virtiofsd (`--uid-map`
-  + `--gid-map` arguments — also requires subuid provisioning).
+  + `--gid-map` arguments - also requires subuid provisioning).
 
 This trade-off is explicit and documented; the v1.1.2 model
 covers every virtiofsd use case d2b currently ships.
@@ -166,7 +166,7 @@ Positive:
   the guest initrd `chroot $sysroot $closure/prepare-root`
   succeeds. The pre-fu14 exit-126 symptom is fixed.
 - No `/etc/subuid` provisioning required. The single-entry
-  mapping does not need a subuid range — it maps in-NS UID 0
+  mapping does not need a subuid range - it maps in-NS UID 0
   to the principal's already-allocated ephemeral UID.
 - The sync-pipe wait is deterministic; there is no race
   between child-side `setresuid(0)` and parent-side
@@ -198,7 +198,7 @@ Negative:
    "Scenario B" from the research report). This delegates
    user-NS creation to virtiofsd itself via `newuidmap` /
    `newgidmap` setuid helpers. **Rejected** because it would
-   require `/etc/subuid` provisioning per principal — the
+   require `/etc/subuid` provisioning per principal - the
    `newuidmap` tool refuses single-entry maps that overlap
    with the operator's primary UID without a subuid
    declaration. Operator-visible state and a per-host
@@ -216,7 +216,7 @@ Negative:
 
 3. **Leave virtiofsd as v1.1.0 (root carve-out)**.
    **Rejected** because per the live-deploy debug it does not
-   work end-to-end on broker-spawned non-root runners — the
+   work end-to-end on broker-spawned non-root runners - the
    exit-126 chroot failure in guest initrd is a hard blocker.
    The "carve-out to root" path also defeats the broker's
    privilege-quarantine premise (ADR 0001).
@@ -244,7 +244,7 @@ broker:
     # happened yet, so we close the write_fd we inherited (a copy
     # of the parent's write end exists in the child until execve)
     # BEFORE blocking on read. Otherwise broker-death between
-    # clone3 and uid_map write leaves us wedged forever — our own
+    # clone3 and uid_map write leaves us wedged forever - our own
     # write_fd copy keeps the pipe open.
     close(sync_pipe.write_fd)
     read(sync_pipe.read_fd, 1 byte)   # blocks until parent maps written
@@ -256,7 +256,7 @@ broker:
     # available inside the user NS.
     setgid(0)                          # in-NS GID 0 (mapped to host_gid_for_zero)
     setuid(0)                          # in-NS UID 0 (mapped to host_uid_for_zero)
-    # setgroups() is SKIPPED entirely when in user-NS — parent
+    # setgroups() is SKIPPED entirely when in user-NS - parent
     # wrote `setgroups deny` so any setgroups call returns EPERM.
     # supplementary_groups MUST be empty (preflight enforces).
     capset(child_caps)                 # in-NS caps (full inside NS)
@@ -280,7 +280,7 @@ in subsequent v1.2 broker-pre-NS chaining), so we use the
 `setgroups=deny` path defensively.
 
 Note: `CLONE_NEWNS` is intentionally NOT in the clone3 flag
-set — the mount namespace, when needed, is created later via
+set - the mount namespace, when needed, is created later via
 `unshare(CLONE_NEWNS)` AFTER the sync-pipe read returns
 (i.e. AFTER the parent has populated the uid_map). This
 matches `man 7 user_namespaces` recommendation: a process in a
@@ -298,18 +298,18 @@ call would return `EINVAL`.
 ## Test coverage
 
 - `packages/d2b-priv-broker/src/ops/spawn_runner.rs`:
-  - `user_namespace_round_trips_none` — bundle without
+  - `user_namespace_round_trips_none` - bundle without
     user_namespace flows through preflight unchanged
-  - `user_namespace_round_trips_some` — bundle with spec
+  - `user_namespace_round_trips_some` - bundle with spec
     flows through preflight unchanged
-  - `user_namespace_with_zero_uid_is_allowed_in_plan_layer` —
+  - `user_namespace_with_zero_uid_is_allowed_in_plan_layer` -
     pins that the preflight does NOT reject UID 0 maps; the
     refusal is enforced in `runtime.rs` against
     `adr_carve_out`.
 - `packages/d2b-priv-broker/src/sys.rs`:
-  - `user_namespace_true_requires_spec` — broker rejects
+  - `user_namespace_true_requires_spec` - broker rejects
     `namespaces.user=true` without `user_namespace=Some(_)`
-  - `user_namespace_spec_requires_namespace_flag` — broker
+  - `user_namespace_spec_requires_namespace_flag` - broker
     rejects orphan `user_namespace=Some(_)` without
     `namespaces.user=true`
 - Live-deploy validation:
@@ -332,12 +332,12 @@ call would return `EINVAL`.
   for uniform least-privilege; the chief blocker today for gpu and
   audio is that those roles need access to host devices
   (`/dev/dri/renderD128`, `/dev/snd/*`) which the user NS
-  does not natively grant — would need bind-mount + setfacl
+  does not natively grant - would need bind-mount + setfacl
   coordination.
 
   **v1.2 D5/P2.3 partial closure**: swtpm is **fully closed** in
   v1.2. swtpm has zero device binds + zero host caps + Unix socket
-  only — a direct translation of the virtiofsd model. The long-lived
+  only - a direct translation of the virtiofsd model. The long-lived
   swtpm sidecar profile now declares `userNamespace = { hostUidForZero
   = stablePrincipalId "d2b-<vm>-swtpm"; hostGidForZero = ... }`
   and runs with zero host capabilities inside a single-entry user NS.
@@ -366,7 +366,7 @@ call would return `EINVAL`.
   libpipewire client opens `AF_NETLINK(NETLINK_KOBJECT_UEVENT)` during
   `pw_context_new()` (spa-alsa-monitor); in a user-NS-only spawn,
   `ns_capable(net->user_ns, CAP_NET_RAW)` checks the initial user NS
-  (owner of the pre-existing host net NS) — bind fails with `EPERM`.
+  (owner of the pre-existing host net NS) - bind fails with `EPERM`.
   Tier 1 (PipeWire config elimination via `PIPEWIRE_LATENCY` /
   `PIPEWIRE_NODE` / `PIPEWIRE_REMOTE`) was investigated and rejected:
   the AF_NETLINK open is structural in libpipewire's context-init path
@@ -374,12 +374,12 @@ call would return `EINVAL`.
   `namespaces.net = true` to the audio minijail profile. The child calls
   `unshare(CLONE_NEWNET)` inside the user NS (after uid_map is written);
   the new net NS is owned by the new user NS; `CAP_NET_RAW` is effective
-  there. No changes to `RunnerIsolationSpec` or `sys.rs` were needed —
+  there. No changes to `RunnerIsolationSpec` or `sys.rs` were needed -
   `NamespaceSet.net` + `unshare_namespace_flags` already handled
   `CLONE_NEWNET`. Audio `capabilities` reduced from `["CAP_NET_RAW"]` to
   `[]`. Bullet 3 is **fully closed** for v1.2.
 
 - Single-entry user-NS limitation for write-heavy shares (e.g.
-  `/home/<user>` mounts needing true UID-preserving semantics)
-  — remains out of v1.2 scope; tied to bullet 1's multi-principal
+  `/home/<user>` mounts needing true UID-preserving semantics) -
+  remains out of v1.2 scope; tied to bullet 1's multi-principal
   mapping work.

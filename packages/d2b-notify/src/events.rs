@@ -7,7 +7,7 @@
 //!
 //! Consumers (notification forwarder, Waybar helper, wlcontrol) receive these
 //! via the durable state file ([`crate::state`]) and must not perform any
-//! privileged host mutations in response — all callbacks route through
+//! privileged host mutations in response - all callbacks route through
 //! `d2bd`/CLI via action nonces ([`crate::nonce`]).
 
 use schemars::JsonSchema;

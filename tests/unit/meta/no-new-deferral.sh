@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/unit/meta/no-new-deferral.sh — I3 invariant enforcement gate.
+# tests/unit/meta/no-new-deferral.sh - I3 invariant enforcement gate.
 #
 # Per ADR 0022 §Decision, v1.2 is a stabilization-mode release.
 # The "no-new-deferral" invariant (I3) forbids authoring any new
@@ -16,7 +16,7 @@
 #   - CHANGELOG.md
 #   - docs/adr/*.md
 #   - nixos-modules/**.nix
-#   - plan.md (session workspace — only if present)
+#   - plan.md (session workspace - only if present)
 #
 # False-positive guard:
 #   The defining ADR 0022 itself REFERENCES these strings as the
@@ -77,7 +77,7 @@ for pat in "${PATTERNS[@]}"; do
       if [ "$file" = "$ex" ]; then skip=1; break; fi
     done
     if [ $skip -eq 0 ]; then
-      echo "no-new-deferral: I3 violation — $line" >&2
+      echo "no-new-deferral: I3 violation - $line" >&2
       violations=$((violations + 1))
     fi
   done <<< "$matches"
@@ -93,6 +93,6 @@ if [ $violations -gt 0 ]; then
   exit 1
 fi
 
-echo "PASS: tests/unit/meta/no-new-deferral.sh — no actual v1.3 deferrals authored"
+echo "PASS: tests/unit/meta/no-new-deferral.sh - no actual v1.3 deferrals authored"
 echo "      (scanned: CHANGELOG.md + docs/adr/*.md + nixos-modules/**.nix)"
 exit 0

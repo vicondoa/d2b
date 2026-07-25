@@ -12,7 +12,7 @@ Enables on-demand passthrough of a host-side YubiKey (USB vendor ID
 and some enabled VM in an env sets `usbip.yubikey = true`, the host
 materializes a broker-spawned per-env `usbipd` backend listening on TCP
 `<backendPort>` (usbipd has no `--host` flag, so it binds to
-`0.0.0.0`; firewall rules — see "Host-side resources" — restrict
+`0.0.0.0`; firewall rules - see "Host-side resources" - restrict
 backend ingress to host loopback, so it's the operational equivalent
 of a loopback bind but enforced via netfilter rather than by the
 socket). A broker-spawned per-env `socat` proxy binds exactly the env's
@@ -27,7 +27,7 @@ the guest for USBIP.
 The component itself only declares the **guest-side** wiring. All
 host-side machinery (usbipd backend + proxy broker-spawned runners,
 udev rules, firewall rules, the `usbip-host` kernel module) lives
-elsewhere — see "Host-side resources" below.
+elsewhere - see "Host-side resources" below.
 
 USB and HID capabilities remain independent from display; see
 [display and virtual I/O capabilities](./display-io-capabilities.md).
@@ -37,18 +37,18 @@ USB and HID capabilities remain independent from display; see
 USBIP state is reported as separate layers because they have different
 owners and remediation:
 
-- **Session claim** — the broker-owned per-busid lock under
+- **Session claim** - the broker-owned per-busid lock under
   `/run/d2b/locks/usbip/<busid>`. It records which VM owns the right
   to expose the physical device for the current host boot/session. The claim
   survives VM stop/restart and daemon restart, but not host reboot because the
   backing path is under `/run`. Only explicit
   `d2b usb detach <vm> <busid> --apply` releases a healthy claim during
   that host session.
-- **Active carrier** — transient host/guest state that can disappear across
+- **Active carrier** - transient host/guest state that can disappear across
   unplug, VM stop, daemon restart, or guest-control restart: the
   `usbip-host` module, host driver bind, per-env backend/export readiness,
   per-env proxy listener, and guest import.
-- **Policy/topology** — bundle-declared vendor/product and bus/port
+- **Policy/topology** - bundle-declared vendor/product and bus/port
   identity checks. Required failures fail before device exposure and require
   fixing the declaration or attaching the approved physical device, then
   rebuilding before retry.
@@ -74,7 +74,7 @@ Site-level dependency:
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `d2b.site.yubikey.enable` | bool | `true` | Host-side Yubikey support: Yubico udev rules for vendor `1050` (GROUP=kvm, MODE=0660, TAG+=uaccess). The `usbip-host` kernel module is loaded only when this option is on **and** at least one enabled VM sets `usbip.yubikey = true`. Set `false` on hosts that do not use YubiKeys — per-VM `usbip.yubikey = true` still pulls in the guest-side bits, but the host has no Yubikey-specific machinery loaded. |
+| `d2b.site.yubikey.enable` | bool | `true` | Host-side Yubikey support: Yubico udev rules for vendor `1050` (GROUP=kvm, MODE=0660, TAG+=uaccess). The `usbip-host` kernel module is loaded only when this option is on **and** at least one enabled VM sets `usbip.yubikey = true`. Set `false` on hosts that do not use YubiKeys - per-VM `usbip.yubikey = true` still pulls in the guest-side bits, but the host has no Yubikey-specific machinery loaded. |
 
 ## Options (guest-side propagation)
 
@@ -127,7 +127,7 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 > key IDs, active-key count, grace-window length, and the closed correlation
 > version.
 
-- **`d2b.slice/sys-<env>/usbipd-backend` runner** — runs
+- **`d2b.slice/sys-<env>/usbipd-backend` runner** - runs
   `usbipd -4 --tcp-port <backendPort>`. usbipd has no `--host` flag
   so it binds to `0.0.0.0`; the broker-managed `inet d2b`
   `input` chain drops non-loopback ingress to each backend port, so
@@ -137,7 +137,7 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
   mount + PID namespace with seccomp, `CAP_NET_RAW` only, masked host
   secret directories, a fresh procfs, a masked `/dev`, and only the
   locked USB device node visible.
-- **`d2b.slice/sys-<env>/usbipd-proxy` runner** —
+- **`d2b.slice/sys-<env>/usbipd-proxy` runner** -
   `socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr
   TCP:127.0.0.1:<backendPort>`. Requires + after the matching backend
   runner. `CapabilityBoundingSet = ""`. The listener is never wildcard
@@ -281,7 +281,7 @@ The entire `components/usbip.nix` is two lines of payload:
   enforcement mechanisms. The generic per-env proxy is not stopped merely to
   revoke one busid, because doing so would bounce unrelated same-env streams.
 - The host-side proxy listens only on `<env.hostUplinkIp>:3240`. A
-  workload VM in env A cannot reach env B's usbipd via routing —
+  workload VM in env A cannot reach env B's usbipd via routing -
   the nftables carve-out (per ADR 0013 + this doc's
   "Firewall carve-outs" section above) keys on the env's own
   uplink bridge, host destination IP, and net-VM uplink source IP.
@@ -324,11 +324,11 @@ for operator procedures.
 ## See also
 
 - [Design / threat model](../explanation/design.md)
-- [Manifest schema](./manifest-schema.md) — `units.usbipBackend` /
+- [Manifest schema](./manifest-schema.md) - `units.usbipBackend` /
   `units.usbipProxy` (per-env, not per-VM).
-- [CLI contract](./cli-contract.md) — `d2b usb attach|detach|probe` subcommands.
-- [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md) —
+- [CLI contract](./cli-contract.md) - `d2b usb attach|detach|probe` subcommands.
+- [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md) -
   operator recovery workflow.
-- [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
+- [`examples/graphics-workstation`](../../examples/graphics-workstation/) -
   end-to-end example with `usbip.yubikey = true`.
-- [CHANGELOG.md](../../CHANGELOG.md) — release history for USBIP gating and related fixes.
+- [CHANGELOG.md](../../CHANGELOG.md) - release history for USBIP gating and related fixes.

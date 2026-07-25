@@ -1,4 +1,4 @@
-# 0011 — W3 IPv6-off sysctl set, hash-derived IfName scheme, and bridge-port flag defaults
+# 0011 - W3 IPv6-off sysctl set, hash-derived IfName scheme, and bridge-port flag defaults
 
 - Status: Accepted
 - Date: 2026-04-29
@@ -12,12 +12,12 @@ IPv6 disablement on every d2b-owned link. Three load-bearing
 choices in this scope deserve an ADR because they freeze a contract
 the integrator and consumer ABI depend on:
 
-1. **The exact IPv6-off sysctl set per link** — what we write, in
+1. **The exact IPv6-off sysctl set per link** - what we write, in
    what order, and what we read back.
-2. **The hash-derived `IfName` scheme** — how `(env, vm, role)`
+2. **The hash-derived `IfName` scheme** - how `(env, vm, role)`
    becomes an IFNAMSIZ-compliant Linux interface name with a
    deterministic emitter-time collision detector.
-3. **Per-role bridge-port flag defaults** — every flag, every role,
+3. **Per-role bridge-port flag defaults** - every flag, every role,
    with a double opt-in for east-west bridges.
 
 ## Decision
@@ -30,7 +30,7 @@ For every d2b-created bridge or TAP, the broker performs the
 1. Pre-create: install NM unmanaged drop-in + run `nmcli general
    reload conf` (NM >= 1.20) or `systemctl reload
    NetworkManager.service` (older NM). `nmcli connection reload` is
-   **not sufficient** — it only reloads connection profiles, not
+   **not sufficient** - it only reloads connection profiles, not
    the `conf.d/*.conf` device-management rules.
 2. Create the link with `IFF_UP` cleared.
 3. While the link is down, write the per-link sysctls:
@@ -65,10 +65,10 @@ IFNAMSIZ-1 (15 bytes).
 
 Two emitter-time guards:
 
-- `IfNameError::IfNameTooLong` — refuses any candidate `>= 16`
+- `IfNameError::IfNameTooLong` - refuses any candidate `>= 16`
   bytes (defence-in-depth even though the encoding can't produce
   one with the default prefix);
-- `IfNameError::IfNameCollision(detail)` — `detect_collisions`
+- `IfNameError::IfNameCollision(detail)` - `detect_collisions`
   scans every `IfNameMapping` for duplicate bridge or TAP names
   and returns the two colliding parties, with `env`, `vm`, and
   `role` recorded for the audit record.
@@ -102,7 +102,7 @@ unconditionally accepted.
 
 After every `SetBridgePortFlags`, the broker runs
 `readback_bridge_port_flags` which calls
-`bridge_port::validate_readback` — every flag must match the
+`bridge_port::validate_readback` - every flag must match the
 per-role default. Drift is the `bridge-port-flag-drift` canary;
 fail closed.
 
@@ -173,7 +173,7 @@ L1b unit tests cover every flag/role combination in
 
 ## Consequences
 
-- Operators see deterministic, short, hash-derived names — the
+- Operators see deterministic, short, hash-derived names - the
   pretty `(env)-(vm)` form lives in `host.json` and CLI status
   only.
 - Foreign IPv6 connectivity on non-d2b links is preserved.
@@ -189,7 +189,7 @@ L1b unit tests cover every flag/role combination in
 - plan.md §"W3 bridge-port flag readback (every flag, every role)"
 - plan.md §"W3 NetworkManager reload"
 - plan.md §"W3 pre-merge canary matrix"
-- ADR 0005 (network/firewall/TAP model) — the W2 baseline this
+- ADR 0005 (network/firewall/TAP model) - the W2 baseline this
   ADR extends.
-- ADR 0010 (wire protocol + typed errors) — wire surface for
+- ADR 0010 (wire protocol + typed errors) - wire surface for
   `IfNameCollision`, `BridgePortFlagDrift`, `SysctlReadback`.

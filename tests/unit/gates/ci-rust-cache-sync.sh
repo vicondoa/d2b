@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/unit/gates/ci-rust-cache-sync.sh — fail-closed gate: the CI
+# tests/unit/gates/ci-rust-cache-sync.sh - fail-closed gate: the CI
 # rust-cache directory list must cover every CARGO_TARGET_DIR used by
 # tests/test-rust.sh. Run by `make test-drift`.
 #

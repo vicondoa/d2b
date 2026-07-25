@@ -1,4 +1,4 @@
-# `pkgs/spectrum-ch/` — update process
+# `pkgs/spectrum-ch/` - update process
 
 This module vendors a self-contained build of cloud-hypervisor with
 [spectrum-os]'s virtio-gpu patches plus four `rust-vmm/vhost`
@@ -42,7 +42,7 @@ spectrum-os patching. Two problems:
    curl -L -o pkgs/spectrum-ch/cloud-hypervisor/0001-...patch \
      'https://spectrum-os.org/git/spectrum/plain/pkgs/cloud-hypervisor/0001-...patch?id=<rev>'
    ```
-   Make sure each file is non-empty before committing — failed
+   Make sure each file is non-empty before committing - failed
    fetches return short HTML error bodies, not patches.
 3. Bump `version` to whatever CH release the new patches target;
    bump `src.hash` (use `nix-prefetch-url --unpack
@@ -58,7 +58,7 @@ spectrum-os patching. Two problems:
    - `d2b up <graphics-vm>` brings a graphics-enabled VM up cleanly.
    - `ch-remote info` against the running VM doesn't error.
    - Virtio-gpu DOES still render the VM display (this is what the
-     patches are for — without them you get a black or missing
+     patches are for - without them you get a black or missing
      window).
    - TPM still works inside the VM (`tpm2_getrandom -T device:/dev/tpmrm0 4`).
 
@@ -70,7 +70,7 @@ the message-handler traits and the patches will need rewriting.
 
 If you must:
 1. Check whether the four patches' contents are already upstream in
-   the new version. They probably are by now — try without our
+   the new version. They probably are by now - try without our
    patches first and see if the build / runtime works.
 2. If a fix landed upstream, delete the corresponding file from
    `vhostPatches`.
@@ -81,14 +81,14 @@ If you must:
   cloud-hypervisor source tree (not into it). The patch step
   `pushd ../vhost` relies on that layout.
 - **`doInstallCheck = false`** because the postFixup shim renames
-  the real binary and the version check then greps the wrapper —
+  the real binary and the version check then greps the wrapper -
   it forwards correctly at runtime but the `--version` self-check
   doesn't recognise it.
-- **The CRB sed is a log-only change** — purely cosmetic. If a
+- **The CRB sed is a log-only change** - purely cosmetic. If a
   future CH refactors `devices/src/tpm.rs` it stops applying
   silently (sed exits 0 on no-match). Add a `grep` verifier if you
   care.
-- **`--disk image_type=raw,` strip shim** — microvm.nix unconditionally
+- **`--disk image_type=raw,` strip shim** - microvm.nix unconditionally
   emits this on cloud-hypervisor since some recent rev. CH 50.0 does
   not know the option and refuses to start. The shim greps it out
   with sed at boot. Equivalent in spirit to the crosvm GPU sidecar
@@ -111,7 +111,7 @@ microvm.graphics.enable = true;
 (which you could keep as an overlay one-liner on
 `pkgs.cloud-hypervisor`).
 
-## L1.7 — cargoVendor hash verification
+## L1.7 - cargoVendor hash verification
 
 When bumping CH (`pkgs/spectrum-ch/default.nix`) or the crosvm pin used for the GPU sidecar,
 manually verify the `cargoDeps` / `cargoVendor` hash by running `nix-build` and comparing to
@@ -125,7 +125,7 @@ cd $(mktemp -d) && nix flake clone github:cloud-hypervisor/cloud-hypervisor && c
 ```
 
 Compare the printed SHA-256 against the `cargoDeps.hash` in `default.nix`. If they differ,
-the vendored tree is stale or wrong — regenerate with:
+the vendored tree is stale or wrong - regenerate with:
 
 ```bash
 nix build .#nixosConfigurations.<host>.config.microvm.vms.<graphics-vm>.config.microvm.hypervisor.package --print-out-paths

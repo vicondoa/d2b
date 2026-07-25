@@ -1,4 +1,4 @@
-# `examples/with-observability` — workload VM plus native SigNoz
+# `examples/with-observability` - workload VM plus native SigNoz
 
 This example is a complete, copy-pasteable NixOS configuration that
 turns on d2b observability end-to-end. The host enables

@@ -70,7 +70,7 @@ fn audio_grant_round_trips_json() {
     );
 }
 
-// ── parse_audio_state – v1 ────────────────────────────────────────────────────
+// ── parse_audio_state - v1 ────────────────────────────────────────────────────
 
 #[test]
 fn parse_v1_both_on() {
@@ -114,7 +114,7 @@ fn parse_v1_missing_speaker_is_error() {
     );
 }
 
-// ── parse_audio_state – v2 ────────────────────────────────────────────────────
+// ── parse_audio_state - v2 ────────────────────────────────────────────────────
 
 #[test]
 fn parse_v2_full_document() {

@@ -38,20 +38,20 @@ proposed commit is in scope and whether the tag preconditions are met.
 
 A stabilization release:
 
-1. **Is a SemVer MINOR increment** — backward-compatible at every
+1. **Is a SemVer MINOR increment** - backward-compatible at every
    public surface (wire protocol, option schema, bundle contract, CLI
    exit codes). No public API is removed or changed in a breaking way.
-2. **Carries no new public surface** — no new options, no new wire
+2. **Carries no new public surface** - no new options, no new wire
    messages, no new CLI verbs. Additive-only changes that are required
    to close a tracked deferral are allowed; unsolicited additions are
    not.
-3. **Closes every tracked deferral** — every item in the deferred list
+3. **Closes every tracked deferral** - every item in the deferred list
    (v1.2: D1..D18) either ships or receives an explicit scope-removal
    commit with documented justification. A deferral is removed from
    scope only when upstream blockers make it technically infeasible
    within the release cycle and the blocker is documented as a release
    caveat; removal is not used to lower the bar.
-4. **Introduces zero new deferrals** — no work is moved to a future
+4. **Introduces zero new deferrals** - no work is moved to a future
    release to make room for new features. The no-new-deferral invariant
    (I3) is the defining criterion: a stabilization release passes I3
    or it does not ship.
@@ -197,8 +197,8 @@ Negative:
 ## References
 
 - [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
-- v1.2 plan §P1.1, §6 (invariants I1–I7)
-- [ADR 0015](0015-daemon-only-clean-break.md) — daemon-only clean break (v1.0)
-- [ADR 0017](0017-no-bash-fallbacks-invariant.md) — no bash fallbacks (v1.1)
-- [ADR 0018](0018-microvm-nix-removal.md) — microvm.nix removal (v1.1)
-- [ADR 0021](0021-broker-user-namespace-for-virtiofsd.md) — broker user-NS for virtiofsd (v1.1.1)
+- v1.2 plan §P1.1, §6 (invariants I1-I7)
+- [ADR 0015](0015-daemon-only-clean-break.md) - daemon-only clean break (v1.0)
+- [ADR 0017](0017-no-bash-fallbacks-invariant.md) - no bash fallbacks (v1.1)
+- [ADR 0018](0018-microvm-nix-removal.md) - microvm.nix removal (v1.1)
+- [ADR 0021](0021-broker-user-namespace-for-virtiofsd.md) - broker user-NS for virtiofsd (v1.1.1)

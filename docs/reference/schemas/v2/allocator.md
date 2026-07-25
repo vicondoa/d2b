@@ -8,21 +8,21 @@ bind a socket, mutate host state, or change current `d2b.envs` behavior.
 
 ## Top-level fields
 
-- `schemaVersion` — schema version for this artifact.
-- `allocator` — future allocator root socket/state/audit paths plus explicit
+- `schemaVersion` - schema version for this artifact.
+- `allocator` - future allocator root socket/state/audit paths plus explicit
   `metadata-only` runtime state.
-- `realms` — enabled realm rows selected from `d2b._index.realms`.
-- `resourceRequests` — schema-friendly host-resource request metadata for
+- `realms` - enabled realm rows selected from `d2b._index.realms`.
+- `resourceRequests` - schema-friendly host-resource request metadata for
   path/socket partitions, network namespaces, shared env bridges, and optional
   host-mutation partitions.
-- `pathPartitions` — per-realm state/run/audit/public-socket/broker-socket
+- `pathPartitions` - per-realm state/run/audit/public-socket/broker-socket
   paths.
-- `providerPlacements` — provider placement metadata copied from enabled realm
+- `providerPlacements` - provider placement metadata copied from enabled realm
   provider rows. Optional provider `kind` values are bounded lowercase slugs.
-- `envBridge` — transitional mapping from realm paths to existing env bridges and
+- `envBridge` - transitional mapping from realm paths to existing env bridges and
   net VMs. `mode` is the closed realm network mode enum:
   `none`, `inherit-env`, `declared`, or `external`.
-- `invariants` — booleans asserting this artifact is private metadata only and
+- `invariants` - booleans asserting this artifact is private metadata only and
   preserves the existing env runtime source of truth.
 
 ## Contract notes

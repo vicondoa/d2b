@@ -9,7 +9,7 @@
 
 ## Why a state machine
 
-The host-side USBIP path is a chain of cooperating subsystems —
+The host-side USBIP path is a chain of cooperating subsystems -
 the `usbip-host` kernel module, a per-busid file lock under
 `/run/d2b/locks/usbip/<busid>`, the per-env nftables carve-out
 (`UsbipBindFirewallRule`), the per-env usbipd backend + proxy
@@ -19,7 +19,7 @@ itself. Any step out of order silently corrupts state:
 * Binding before `modprobe usbip-host` succeeds returns a
   confusing `ENODEV` deep inside the broker call site.
 * Skipping the per-busid lock lets two envs race for the same
-  physical device — both win briefly, then one loses on the first
+  physical device - both win briefly, then one loses on the first
   I/O.
 * Opening the firewall before withholding non-owner-env
   `SpawnRunner`s leaves a brief window where another env's
@@ -69,8 +69,8 @@ Single-busid teardown therefore reverses only per-busid mutable state:
 bind → firewall → withhold → lock → modprobe
 ```
 
-`modprobe` at the tail of the stop path is intentionally a no-op
-— the kernel module stays loaded. The per-env backend/proxy sidecars
+`modprobe` at the tail of the stop path is intentionally a no-op -
+the kernel module stays loaded. The per-env backend/proxy sidecars
 remain running during a single-VM restart or detach so active same-env
 streams are not bounced. Before the `bind` stop step writes the
 usbip-host driver unbind control, the broker asks the per-device
@@ -102,22 +102,22 @@ use d2bd::usbip_state_machine::{
 };
 ```
 
-* [`UsbipBusidStep`] — enum, one variant per canonical step.
-* [`UsbipBusidPlan`] — `{ busid, env, vm, steps }`. `steps` is
+* [`UsbipBusidStep`] - enum, one variant per canonical step.
+* [`UsbipBusidPlan`] - `{ busid, env, vm, steps }`. `steps` is
   pinned to `CANONICAL_STEPS` at construction.
-* [`build_usbip_plan(busid, env, vm, resolver)`] — pure
+* [`build_usbip_plan(busid, env, vm, resolver)`] - pure
   constructor. Consults the `BundleResolver` so the per-env
   firewall intent (`usbip-fw:env:<env>:bus:<busid>`) and the
   per-(env, vm, busid) bind intent
   (`usbip-bind:env:<env>:vm:<vm>:bus:<busid>`) are both proven
   to exist in the trusted bundle BEFORE the executor ever runs.
-* [`UsbipStepExecutor`] — trait, one method per step. Production
+* [`UsbipStepExecutor`] - trait, one method per step. Production
   wires this through the broker dispatch surface; tests inject a
   fixture executor that records call order and can fail a chosen
   step.
-* [`execute_usbip_plan(plan, executor)`] — drives the plan
+* [`execute_usbip_plan(plan, executor)`] - drives the plan
   top-to-bottom, fail-fast on the first error.
-* `UsbipExecutionReport::failure_rollback_order()` — returns only
+* `UsbipExecutionReport::failure_rollback_order()` - returns only
   successful per-busid steps in reverse order for failure rollback,
   filtering out shared per-env backend/proxy sidecar checks.
 
@@ -159,9 +159,9 @@ net-route-degraded paths.
 
 `execute_usbip_plan` returns either:
 
-* `Ok(UsbipExecutionReport)` — `report.completed` is the full
+* `Ok(UsbipExecutionReport)` - `report.completed` is the full
   `CANONICAL_STEPS` list; `report.failed` is `None`.
-* `Err((UsbipExecutionReport, TypedError))` — `report.completed`
+* `Err((UsbipExecutionReport, TypedError))` - `report.completed`
   holds every step that succeeded before the failure;
   `report.failed = Some((step, reason))` matches the typed
   error. The stop-path / reconciler uses
@@ -235,8 +235,8 @@ port-chain identity remain stable. ACLs granted to any previously observed
 device node are revoked before retry/failure; missing old nodes are benign
 because the kernel removes them during re-enumeration. VID/PID or topology
 changes still fail closed.
-without exposing the device. Required policy failures — missing or mismatched
-vendor/product allowlists, undeclared physical topology, or topology mismatch —
+without exposing the device. Required policy failures - missing or mismatched
+vendor/product allowlists, undeclared physical topology, or topology mismatch -
 fail before device exposure and roll back the VM start with remediation to fix
 the declaration or bind the approved physical device.
 
@@ -262,12 +262,12 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
 
 ## See also
 
-* [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care)
-  — the binding canonical-order statement.
-* [`docs/reference/privileges.md`](./privileges.md) §`Usbip` —
+* [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care) -
+  the binding canonical-order statement.
+* [`docs/reference/privileges.md`](./privileges.md) §`Usbip` -
   per-env runner / broker op surface that backs each step.
-* [`docs/reference/components-usbip.md`](./components-usbip.md)
-  — operator-facing USBIP component reference.
-* [`tests/unit/nix/cases/usbip-gating.nix`](../../tests/unit/nix/cases/usbip-gating.nix)
-  — eval-time gate that host-side USBIP artifacts require both
+* [`docs/reference/components-usbip.md`](./components-usbip.md) -
+  operator-facing USBIP component reference.
+* [`tests/unit/nix/cases/usbip-gating.nix`](../../tests/unit/nix/cases/usbip-gating.nix) -
+  eval-time gate that host-side USBIP artifacts require both
   host and per-VM opt-ins.

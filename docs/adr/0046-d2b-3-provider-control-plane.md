@@ -59,9 +59,9 @@ production Realm peer frontend. Several Provider/transport/codec/client crates
 are test-only or unwired. Realm artifacts and the allocator remain explicitly
 metadata-only.
 
-A kcp feasibility spike proved useful object semantics—typed spec/status,
+A kcp feasibility spike proved useful object semantics - typed spec/status,
 revisions, watches, optimistic conflicts, owner/finalizer behavior, hierarchy,
-and controller clients—but measured approximately 490 MiB RSS and a 176 MiB
+and controller clients - but measured approximately 490 MiB RSS and a 176 MiB
 executable. That footprint is unsuitable for recursive host/Guest/Zone use.
 
 ## Decision
@@ -135,7 +135,7 @@ Every ResourceType is **layered**: a Provider implements the ResourceType
 **base spec plus a strict provider extension** (**D089**), and status is the
 **three-layer** common/base/provider shape (**D088**). Vendor ResourceTypes and
 every Provider spec/status extension schema are qualified on the project's
-public domain **`d2bus.org`** — `<provider>.d2bus.org.<Type>` and
+public domain **`d2bus.org`** - `<provider>.d2bus.org.<Type>` and
 `<provider>.d2bus.org/<Type>/spec` (**D080**); there is no legacy
 project-domain alias (clean reset). API binding rejects ResourceType collisions.
 
@@ -189,8 +189,8 @@ worker binaries but declares one Provider identity. They are indexed in
 Component state is core-governed and **status-first** (**D086/D087**): bounded,
 non-secret Provider/controller state lives in the owning resource's `status`
 subresource by default (revisioned, size/cardinality bounded). A component
-declares a separate `Volume` — created and deleted by **core ProviderDeployment**,
-never by the semantic controller — only when its state is secret/sensitive
+declares a separate `Volume` - created and deleted by **core ProviderDeployment**,
+never by the semantic controller - only when its state is secret/sensitive
 private data, large or binary/file content, or otherwise unsuitable for
 revisioned API/status churn. Stateless and status-sufficient components declare
 no state Volume. When one is declared it is `Provider/volume-local`-backed,
@@ -427,14 +427,14 @@ Costs:
 
 ## Normative specifications
 
-The authoritative set has **55 members** — 28 foundation, resource,
-cross-cutting, and closing specs plus 27 Provider dossiers — indexed by
+The authoritative set has **55 members** - 28 foundation, resource,
+cross-cutting, and closing specs plus 27 Provider dossiers - indexed by
 [`docs/specs/README.md`](../specs/README.md) and bound by the generated
 `docs/specs/ADR-046-spec-set.json` and `docs/specs/ADR-046-work-items.json`
 manifests. The generated implementation DAG
 (`docs/specs/ADR-046-implementation-graph.json` and its human view
 `docs/specs/ADR-046-implementation-graph.md`, decision D095) maps every member
-spec and work item to a dependency-ordered `W0`–`W7` launch wave and a
+spec and work item to a dependency-ordered `W0`-`W7` launch wave and a
 file-disjoint parallel group; like the manifests it is a generated non-member
 artifact and does not change the 55-member count. This decision and every member
 are `Accepted` and were reviewed as one atomic unit; the PR delivers

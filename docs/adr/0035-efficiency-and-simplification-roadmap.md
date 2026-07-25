@@ -420,7 +420,7 @@ change does not obscure CLI docs drift.
 
 ## Multi-wave plan
 
-### Wave 0 — Baseline, budgets, and compatibility deletion
+### Wave 0 - Baseline, budgets, and compatibility deletion
 
 Goal: make efficiency measurable and begin removing obsolete compatibility
 logic immediately.
@@ -484,7 +484,7 @@ Exit criteria:
   the caller and delete the old path instead. Future breaking-change bridges
   must use the keyed `compat-ADR...` scheme above.
 
-### Wave 1 — Generated artifact family consolidation
+### Wave 1 - Generated artifact family consolidation
 
 Goal: reduce Nix and Rust drift by making bundle-artifact emission a single
 pattern.
@@ -535,7 +535,7 @@ Exit criteria:
 - adding a new bundle artifact requires one helper invocation plus Rust DTO
   and schema registration, not a copy of 40-80 lines of emitter boilerplate.
 
-### Wave 2 — Normalized Nix VM/env indexes
+### Wave 2 - Normalized Nix VM/env indexes
 
 Goal: evaluate host, network, observability, USBIP, and process modules from
 one normalized model instead of repeated full-tree scans.
@@ -594,7 +594,7 @@ Exit criteria:
 - adding a per-VM component adds one index classification, not repeated
   scans across modules.
 
-### Wave 3 — Contract crate and DTO boundary cleanup
+### Wave 3 - Contract crate and DTO boundary cleanup
 
 Goal: move shared JSON/wire/output models out of CLI and daemon hub files.
 
@@ -640,7 +640,7 @@ Exit criteria:
 - `d2bd/src/lib.rs` is orchestration and module wiring, not the canonical
   source for public output schemas.
 
-### Wave 4 — Rust hub-file decomposition
+### Wave 4 - Rust hub-file decomposition
 
 Goal: make the largest Rust crates understandable without changing behavior.
 
@@ -688,7 +688,7 @@ Exit criteria:
   default;
 - new command or daemon feature work has an obvious module home.
 
-### Wave 5 — Runner/process builder DSL
+### Wave 5 - Runner/process builder DSL
 
 Goal: encode process launch invariants once and remove repeated argv,
 profile, readiness, and audit assembly.
@@ -747,7 +747,7 @@ Exit criteria:
 - the runner role lifecycle matrix becomes executable structure rather than
   prose that must be manually mirrored in Nix and Rust.
 
-### Wave 6 — Side-effect ownership cleanup
+### Wave 6 - Side-effect ownership cleanup
 
 Goal: make host filesystem, ACL, lock, cleanup, and migration work follow a
 single ADR 0034 contract.
@@ -799,7 +799,7 @@ Exit criteria:
 - when a path is wrong, there is one generated storage row and one repair
   owner; contributors do not patch around failures with one-off ACL code.
 
-### Wave 7 — Test driver thinning and native policy migration
+### Wave 7 - Test driver thinning and native policy migration
 
 Goal: keep coverage fail-closed while reducing shell orchestration and
 duplicate work.
@@ -847,7 +847,7 @@ Exit criteria:
 - shell scripts orchestrate tools, while policy and contract logic lives in
   typed tests.
 
-### Wave 8 — Workspace, dependency graph, and naming taxonomy simplification
+### Wave 8 - Workspace, dependency graph, and naming taxonomy simplification
 
 Goal: reduce compile cost and architectural ambiguity in the Rust workspace,
 and make crate/file/type names sort by concern.
@@ -924,7 +924,7 @@ Exit criteria:
 - reviewers can identify host/guest/gateway/provider/constellation ownership
   from crate and module paths without opening the implementation first.
 
-### Wave 9 — v2 provider integration simplification
+### Wave 9 - v2 provider integration simplification
 
 Goal: make ADR 0032 extensibility reduce code, not multiply adapters.
 
@@ -988,7 +988,7 @@ Exit criteria:
 - adding a provider is mostly adapter code plus capability records, not a new
   copy of lifecycle, display, transport, audit, and storage logic.
 
-### Wave 10 — Threading, task, and non-blocking I/O model
+### Wave 10 - Threading, task, and non-blocking I/O model
 
 Goal: make d2b's concurrency model explicit and keep request/task threads
 from doing unbounded blocking I/O.
@@ -1111,7 +1111,7 @@ Exit criteria:
 - daemon/broker background tasks are owned, cancellable, and visible to
   shutdown/doctor/metrics surfaces.
 
-### Wave 11 — Runtime hot-path efficiency
+### Wave 11 - Runtime hot-path efficiency
 
 Goal: improve runtime behavior where simplicity and performance align.
 
@@ -1177,7 +1177,7 @@ Exit criteria:
 - runtime speedups come from fewer repeated reads/parses/locks, not from
   skipping validation or swallowing errors.
 
-### Wave 12 — Example, template, and documentation diet
+### Wave 12 - Example, template, and documentation diet
 
 Goal: make shipped docs/examples teach the current model without preserving
 historical scaffolding.
@@ -1222,7 +1222,7 @@ Exit criteria:
 - new users see the current architecture first; historical context remains
   available in ADRs but does not dominate day-to-day docs.
 
-### Wave 13 — Unsafe-code removal and FFI quarantine
+### Wave 13 - Unsafe-code removal and FFI quarantine
 
 Goal: remove avoidable project-local `unsafe` and make unavoidable kernel FFI
 small, audited, and replaceable by maintained safe wrappers when available.
@@ -1325,7 +1325,7 @@ Exit criteria:
 - new blocking I/O and new unsafe code are prevented by policy tests or
   review gates, not just by convention.
 
-### Wave 14 — Recurring efficiency ratchet
+### Wave 14 - Recurring efficiency ratchet
 
 Goal: prevent re-growth.
 
@@ -1383,7 +1383,7 @@ Exit criteria:
   and machine-checkable allowlisting;
 - efficiency remains part of architecture review, not a one-time cleanup.
 
-### Wave 15 — Fast async status, exec, and USB operations
+### Wave 15 - Fast async status, exec, and USB operations
 
 Goal: make the visible control-plane operations fast enough for interactive UI
 clients while preserving broker-only host mutation and daemon-only supervision.

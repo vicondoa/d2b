@@ -8,7 +8,7 @@
 # `true` (the daemon-only control plane is always enabled; see ADR 0015).
 #
 # Uses `mkEval` (== nixosSystem with the d2b module set) over a minimal
-# host config — no VMs required — and reads the rendered
+# host config - no VMs required - and reads the rendered
 # `config.d2b.defaultSwitchReadiness` attrset directly. The bash gate
 # hardcoded system = "x86_64-linux"; these cases are schema/value
 # assertions whose results are platform-independent, so they contribute to

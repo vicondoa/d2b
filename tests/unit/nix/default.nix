@@ -11,7 +11,7 @@
 # at the retired bash gate it replaced.
 #
 # Two consumers share this one corpus:
-#   * flake.checks.<sys>.nix-unit  — the hermetic CI gate (a pure-eval
+#   * flake.checks.<sys>.nix-unit  - the hermetic CI gate (a pure-eval
 #     comparison runner; NO recursive-nix / IFD), wired in flake.nix.
 #   * the upstream `nix-unit` CLI for local iteration
 #     (`nix-unit tests/unit/nix/default.nix --eval-store auto`), which reads

@@ -7,28 +7,28 @@ process role referenced from `processes.json`.
 
 ## Top-level fields
 
-- `profileId` — stable identifier referenced from process roles.
-- `role` — human-readable role name.
-- `uid` / `gid` — post-drop runtime identity.
-- `requiresStartRoot` — whether the role may begin as uid 0.
-- `capabilities` — retained Linux capability set.
-- `namespaces` — namespace isolation contract.
-- `mountPolicy` — writable-path and mount-shape policy.
-- `cgroupPlacement` — delegated cgroup target for the role.
-- `seccompPolicyRef` — seccomp policy reference.
-- `exceptionRef` / `adr_carve_out` — ADR or plan justification for any
+- `profileId` - stable identifier referenced from process roles.
+- `role` - human-readable role name.
+- `uid` / `gid` - post-drop runtime identity.
+- `requiresStartRoot` - whether the role may begin as uid 0.
+- `capabilities` - retained Linux capability set.
+- `namespaces` - namespace isolation contract.
+- `mountPolicy` - writable-path and mount-shape policy.
+- `cgroupPlacement` - delegated cgroup target for the role.
+- `seccompPolicyRef` - seccomp policy reference.
+- `exceptionRef` / `adr_carve_out` - ADR or plan justification for any
   privileged carve-out.
-- `userNamespace` — when non-null, broker pre-establishes a single-entry
+- `userNamespace` - when non-null, broker pre-establishes a single-entry
   user namespace for the role (ADR 0021). Shape: `{ hostUidForZero,
   hostGidForZero }`. virtiofsd roles use this for least-privilege FS
   serving without `CAP_DAC_*` on the host.
-- `umask` — **v1.1.2-final**: optional file-creation mask (`Option<u32>`)
+- `umask` - **v1.1.2-final**: optional file-creation mask (`Option<u32>`)
   installed in the spawned child via `umask(2)` immediately before
   `execve(2)`. `null` (the default) inherits the broker's umask
   (current behaviour). Sidecar roles that bind shared Unix sockets
   (vhost-user-sound at `snd.sock`, crosvm-gpu at `gpu.sock`, crosvm
   video at `video.sock`, swtpm at `tpm.sock`) declare `umask = 7`
-  (octal `0o007`) so the resulting sockets are mode 0660/0770 —
+  (octal `0o007`) so the resulting sockets are mode 0660/0770 -
   combined with the per-VM-runtime default ACL granting
   cloud-hypervisor's UID rwx, the named-user ACL becomes effective
   (mask:rw, not mask:---). The broker rejects values

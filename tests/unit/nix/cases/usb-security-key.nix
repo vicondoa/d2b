@@ -6,7 +6,7 @@
 #      failures; option values are set as expected.
 #   B. The eval-time assertion fires correctly for each of the three
 #      assertion categories (checked here as boolean expressions over
-#      `config.assertions`, not via mkBatch — the batch evaluator in
+#      `config.assertions`, not via mkBatch - the batch evaluator in
 #      eval-cases/assertions.nix covers the failure-message surface).
 #   C. Host-enabled with empty devices evaluates without error.
 #   D. The option defaults: host disabled, VM disabled.
@@ -114,14 +114,14 @@ let
     })
   ];
 
-  # Eval C: host enabled, empty devices list — valid.
+  # Eval C: host enabled, empty devices list - valid.
   hostEnabledEmptyDevices = evalWith [
     ({ lib, ... }: {
       d2b.host.usb.securityKey.enable = lib.mkForce true;
     })
   ];
 
-  # Eval D: default state — both options off.
+  # Eval D: default state - both options off.
   defaultState = evalWith [ ];
 
   assertionMessageContains = sys: needle:
@@ -184,13 +184,13 @@ in
     expected = true;
   };
 
-  # --- C: host enabled, empty devices — no assertion failures ---
+  # --- C: host enabled, empty devices - no assertion failures ---
   "usb-security-key/host-enabled-empty-devices-valid" = {
     expr = hasNoFailures hostEnabledEmptyDevices;
     expected = true;
   };
 
-  # --- D: default state — options off by default ---
+  # --- D: default state - options off by default ---
   "usb-security-key/host-default-disabled" = {
     expr = defaultState.config.d2b.host.usb.securityKey.enable;
     expected = false;

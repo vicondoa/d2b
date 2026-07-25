@@ -103,7 +103,7 @@ pub enum UsbipArgvError {
 ///   canonical decimal form; `01-02` would not match any real
 ///   device).
 /// - Total length is capped at `USBIP_SYSFS_BUS_ID_MAX` (31 chars).
-/// - ASCII digits only — Unicode digits like ٢ (Arabic-Indic 2)
+/// - ASCII digits only - Unicode digits like ٢ (Arabic-Indic 2)
 ///   refused.
 pub fn validate_bus_id(bus_id: &str) -> Result<(), UsbipArgvError> {
     match d2b_contracts::usbip::validate_bus_id(bus_id) {
@@ -426,7 +426,7 @@ mod tests {
 
 /// Inputs for the per-env `usbipd` backend long-lived process. The
 /// backend binds 127.0.0.1:<port> via source-based iptables defence-
-/// in-depth (usbipd has no `--host` flag — it always binds 0.0.0.0).
+/// in-depth (usbipd has no `--host` flag - it always binds 0.0.0.0).
 /// The proxy unit is the user-facing listener; see
 /// [`UsbipdProxyArgvInput`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

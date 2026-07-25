@@ -17,7 +17,7 @@
 //! 5. `cpuset.cpus.partition` STAYS `member`. A debug assertion blows up if
 //!    any caller passes the partition-root key into the writer; releases
 //!    fail closed by returning [`CgroupError::CgroupPartitionRootForbidden`].
-//! 6. Threaded cgroups are forbidden — `cgroup.type=threaded` is refused.
+//! 6. Threaded cgroups are forbidden - `cgroup.type=threaded` is refused.
 //! 7. `d2b.slice` and intermediate VM cgroup directories must be
 //!    process-free; only leaf role cgroups carry processes.
 //! 8. `cgroup.kill` is allowed only on broker/daemon-owned VM or role leaves;
@@ -137,7 +137,7 @@ impl EnabledControllers {
 /// into the broker audit record `error_kind` field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CgroupError {
-    /// Unified hierarchy probe failed — `/sys/fs/cgroup/cgroup.controllers`
+    /// Unified hierarchy probe failed - `/sys/fs/cgroup/cgroup.controllers`
     /// is missing or unreadable. CLI exit code 1; matches plan-named
     /// `cgroup-v2-unified-not-present`.
     CgroupV2UnifiedNotPresent { detail: String },
@@ -157,13 +157,13 @@ pub enum CgroupError {
     /// `d2b.slice` or an intermediate VM cgroup contained running
     /// processes when the no-internal-process invariant was checked.
     CgroupInternalProcessesPresent { path: PathBuf, pids: Vec<u32> },
-    /// Subtree-control verification failed after a write — the re-read
+    /// Subtree-control verification failed after a write - the re-read
     /// did not contain the controller we just enabled.
     SubtreeControlEnableFailed {
         path: PathBuf,
         controller: Controller,
     },
-    /// Threaded cgroup encountered — forbidden.
+    /// Threaded cgroup encountered - forbidden.
     ThreadedCgroupForbidden { path: PathBuf },
     /// Attempt to write `cpuset.cpus.partition` (partition roots are
     /// forbidden; ancestors and `d2b.slice` stay `member`).
@@ -367,7 +367,7 @@ fn read_trimmed<B: CgroupBackend>(backend: &B, path: &Path) -> Result<String, Cg
     backend.read_file(path).map(|s| s.trim().to_owned())
 }
 
-/// Step 2: cpuset inheritance — copy `.effective` into `cpuset.cpus` /
+/// Step 2: cpuset inheritance - copy `.effective` into `cpuset.cpus` /
 /// `cpuset.mems` when empty and verify `.effective` is non-empty.
 pub fn prepare_cpuset_inheritance<B: CgroupBackend>(
     backend: &B,
@@ -482,7 +482,7 @@ pub fn enable_subtree_controllers_with_child<B: CgroupBackend>(
 
 /// Step 4 enforcement helper: the algorithm NEVER writes
 /// `cpuset.cpus.partition`. Any code path that tries to is treated as a
-/// programmer bug — a `debug_assert!` blows up in development builds,
+/// programmer bug - a `debug_assert!` blows up in development builds,
 /// and release builds return [`CgroupError::CgroupPartitionRootForbidden`].
 pub fn assert_partition_member_only(path: &Path, key: &str) -> Result<(), CgroupError> {
     debug_assert!(
@@ -586,11 +586,11 @@ pub fn chown_subtree_to_d2bd<B: CgroupBackend>(
 ///    re-read);
 /// 3. enable controllers on root, verifying both the root's
 ///    `cgroup.subtree_control` re-read AND `d2b.slice/cgroup.controllers`
-///    after each `+<controller>` write — anything else is
+///    after each `+<controller>` write - anything else is
 ///    [`CgroupError::CgroupControllerNotExposedToChild`];
-/// 4. enable controllers on the slice itself (no child yet — the
+/// 4. enable controllers on the slice itself (no child yet - the
 ///    delegated subtree is empty);
-/// 5. assert `d2b.slice/cgroup.procs` is empty before chown —
+/// 5. assert `d2b.slice/cgroup.procs` is empty before chown -
 ///    delegating a slice that already holds processes is a leak.
 pub fn create_d2b_slice<B: CgroupBackend>(
     backend: &B,
@@ -681,7 +681,7 @@ pub fn create_vm_role_leaf<B: CgroupBackend>(
     }
     assert_not_threaded(backend, &leaf)?;
     // Per-role leaves DON'T enable subtree_controllers further
-    // (they're the leaf — no descendants need controllers
+    // (they're the leaf - no descendants need controllers
     // enabled at this layer); chown so d2bd can write
     // cgroup.procs / cgroup.kill.
     chown_subtree_to_d2bd(backend, &leaf, d2bd_uid, d2bd_gid)?;
@@ -768,7 +768,7 @@ impl CgroupBackend for RealCgroupBackend {
     fn fchown(&self, path: &Path, uid: u32, gid: u32) -> Result<(), CgroupError> {
         use rustix::fs::{Mode, OFlags, open};
         // v1.1.1 kernel-correctness fix: O_PATH descriptors can NOT
-        // be passed to fchown(2) — the syscall returns EBADF on
+        // be passed to fchown(2) - the syscall returns EBADF on
         // Linux per `man 2 fchown` because O_PATH fds have no
         // associated open file description. The correct primitive
         // for changing ownership via an O_PATH dirfd is
@@ -1247,7 +1247,7 @@ mod tests {
         let err =
             create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap_err();
         assert_eq!(err.code(), "cgroup-internal-processes-present");
-        // Chown must not have run — owner should be unset.
+        // Chown must not have run - owner should be unset.
         assert!(backend.owner(&slice_path).is_none());
     }
 

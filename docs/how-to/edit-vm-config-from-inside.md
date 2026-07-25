@@ -33,7 +33,7 @@ d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
 ```
 
 ```nix
-# ./vms/work.guest.nix — only guest OS options
+# ./vms/work.guest.nix - only guest OS options
 { ... }:
 {
   environment.systemPackages = [ ];   # add your packages
@@ -44,9 +44,9 @@ d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
 
 Rebuild the host once (`d2b switch work --apply`). The guest now carries:
 
-- `/etc/d2b/guest-config.nix` — a **read-only** copy of the current
+- `/etc/d2b/guest-config.nix` - a **read-only** copy of the current
   approved guest config (always reflects what's live).
-- `/var/lib/d2b-guest/guest-config.nix` — a **writable** working
+- `/var/lib/d2b-guest/guest-config.nix` - a **writable** working
   copy, seeded once from the baseline. It is owned by the VM's
   `ssh.user` when one is declared, and by `root` otherwise (the
   guest-control exec path can edit it either way).
@@ -54,8 +54,8 @@ Rebuild the host once (`d2b switch work --apply`). The guest now carries:
 ### Prerequisite: the guest-control channel
 
 `config sync` reads the edited file over the authenticated
-**guest-control** vsock — the daemon's `ReadGuestConfig` →
-guestd `ReadGuestFile` path — not over SSH. It is wired exactly when
+**guest-control** vsock - the daemon's `ReadGuestConfig` →
+guestd `ReadGuestFile` path - not over SSH. It is wired exactly when
 the VM both enables guest-control and declares a `guestConfigFile`:
 
 ```nix
@@ -66,7 +66,7 @@ d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
 With those set, guestd advertises the `ReadGuestFile` capability and
 serves a bounded read of exactly the working-copy path. Without them
 the capability stays absent and `config sync` **fails closed** with a
-typed error — it never falls back to SSH. `ssh.user` is **not**
+typed error - it never falls back to SSH. `ssh.user` is **not**
 required for sync; it only chooses a non-root owner for the writable
 working copy (and remains the in-VM account you edit as when you reach
 the VM over SSH/console):
@@ -95,7 +95,7 @@ When `ssh.user` is unset the working copy is owned by `root`.
    This pulls the edited file over the authenticated guest-control
    channel into a host-side staging copy
    (`~/.local/state/d2b/config-staging/work.guest.nix`). The host
-   treats it as untrusted data — nothing is evaluated yet.
+   treats it as untrusted data - nothing is evaluated yet.
 
 3. **Review the change.**
 
@@ -121,14 +121,14 @@ When `ssh.user` is unset the working copy is owned by `root`.
    d2b switch work --apply
    ```
 
-   The `guestConfigFile` containment assertion runs during this eval —
+   The `guestConfigFile` containment assertion runs during this eval -
    a change that reached for a host-owned option is rejected here,
    before anything is built or activated.
 
 ## You can also build on the host
 
 Nothing forces the in-VM loop. Editing `./vms/work.guest.nix` directly
-on the host and running `d2b switch work --apply` works exactly the same —
+on the host and running `d2b switch work --apply` works exactly the same -
 the same file, the same containment. The in-VM loop is just an
 ergonomic way to iterate from inside the workspace.
 

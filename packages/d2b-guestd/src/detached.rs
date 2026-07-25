@@ -42,7 +42,7 @@ pub struct ManagedUnit {
     /// `systemctl show`, or [`UnitIdentity::Unqueried`] when that query could
     /// not be performed/parsed. The distinction is load-bearing: an ACTIVE
     /// unit whose identity is `Unqueried` classifies as `Unknown` (retry),
-    /// never `Foreign` (destructive) — only a queried identity that actually
+    /// never `Foreign` (destructive) - only a queried identity that actually
     /// mismatches is `Foreign`.
     pub identity: UnitIdentity,
 }
@@ -233,7 +233,7 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
 /// backslashes. The token parser (`parse_exec_start`) is therefore the wrong
 /// tool for the workload-identity check: `validate_command` permits argv bytes
 /// the tokenizer rejects (an unmatched `"`, a trailing `\`) or mis-splits (a
-/// `;`, which `parse_exec_start` treats as a field delimiter — a fail-OPEN
+/// `;`, which `parse_exec_start` treats as a field delimiter - a fail-OPEN
 /// truncation that would compare only a shared prefix). The caller compares
 /// this raw `argv[]=` value byte-for-byte against the expected argv rendered the
 /// same lossy way, so the match is symmetric and never tokenizes user bytes.
@@ -241,7 +241,7 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
 /// The `argv[]=` value is delimited by the fixed ` ; ignore_errors=` field that
 /// systemd always emits immediately after it. We bound on the LAST occurrence
 /// (`rsplit_once`): systemd's `ignore_errors` field is the last
-/// ` ; ignore_errors=` in the line (no later field — `start_time`, `pid`, … —
+/// ` ; ignore_errors=` in the line (no later field - `start_time`, `pid`, … -
 /// contains that substring), so a user argument that itself contains the literal
 /// ` ; ignore_errors=` substring is preserved in full rather than truncating the
 /// recovered argv at the user's copy (a fail-OPEN that could match a shorter
@@ -452,7 +452,7 @@ impl TransientUnitManager for SystemdRunUnitManager {
                 let name = unit.name();
                 if let Some(block) = blocks.iter().find(|b| b.id == name) {
                     // A malformed block (a multi-line/continuation property
-                    // value — only possible for a foreign or crafted unit,
+                    // value - only possible for a foreign or crafted unit,
                     // since our own argv is newline-free) is left Unqueried
                     // so the active unit classifies Unknown (retry), never a
                     // confident identity match against a truncated value.
@@ -482,7 +482,7 @@ struct ShowEntry {
     part_of: Option<String>,
     after: Option<String>,
     /// Set when the block contained a non-empty line matching no known property
-    /// prefix — i.e. a continuation of a multi-line property value (e.g. a
+    /// prefix - i.e. a continuation of a multi-line property value (e.g. a
     /// newline inside a unit's argv split its `ExecStart` across `systemctl
     /// show` lines). The block is then untrustworthy for identity verification.
     malformed: bool,
@@ -882,7 +882,7 @@ ExecStart=
         // A foreign/crafted unit whose argv contained a newline splits its
         // ExecStart across `systemctl show` lines. The continuation line matches
         // no `Key=` prefix, so the block is flagged malformed even though its
-        // truncated first ExecStart line carries a fake closing brace — so the
+        // truncated first ExecStart line carries a fake closing brace - so the
         // unit's identity is left Unqueried (-> Unknown/retry), never a
         // confident match against the truncated value.
         let text = "\

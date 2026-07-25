@@ -11,7 +11,7 @@
 //! Detached records are visible to ANY same-VM connection (cross-connection
 //! access is allowed, unlike attached execs) bounded to the current boot id; a
 //! boot mismatch is [`ExecError::StaleSession`]. The opaque exec id never
-//! appears in a unit name, argv, or journald metadata — units are
+//! appears in a unit name, argv, or journald metadata - units are
 //! `d2b-exec-<NN>.service` keyed only by slot.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -237,7 +237,7 @@ enum CreateAdmission {
 }
 
 /// Per-slot unit liveness resolved against systemd. A query error is its
-/// own variant — it is NEVER collapsed into `Absent`, so a transient
+/// own variant - it is NEVER collapsed into `Absent`, so a transient
 /// `systemctl` failure cannot trigger destructive reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlotLiveness {
@@ -675,7 +675,7 @@ impl DetachedRegistry {
         let start = self.clock.now_ms();
         loop {
             // A read_status IO/decode error must NOT propagate while the
-            // slot is still reserved under the Creating guard — that would leak
+            // slot is still reserved under the Creating guard - that would leak
             // the active/quota reservation and the reaper would skip it forever
             // (creating). Tear the create down first, then surface the error.
             let status = match self.store.read_status(slot) {
@@ -715,7 +715,7 @@ impl DetachedRegistry {
                     // diagnostic naming the failure class and what to inspect.
                     eprintln!(
                         "d2b-guestd: detached exec create aborted (slot {slot:02}): the exec \
-                         runner reported an infrastructure failure — post-spawn verification \
+                         runner reported an infrastructure failure - post-spawn verification \
                          failed. Inspect the d2b-exec.slice placement and status of \
                          d2b-exec-{slot:02}.service and d2b-exec-{slot:02}-w.service in \
                          the guest journal."
@@ -725,8 +725,8 @@ impl DetachedRegistry {
                 }
                 None => {
                     if self.clock.now_ms().saturating_sub(start) >= CREATE_TIMEOUT_MS {
-                        // Re-query the unit. A verified-live unit — or an
-                        // UNKNOWN query result — commits Running: we must never
+                        // Re-query the unit. A verified-live unit - or an
+                        // UNKNOWN query result - commits Running: we must never
                         // kill a job whose unit might be live just because the
                         // status marker has not landed yet. Only a definitive
                         // Absent/Foreign result fails the create.
@@ -798,7 +798,7 @@ impl DetachedRegistry {
     }
 
     /// Resolve one slot's unit liveness against systemd. A query error
-    /// becomes [`SlotLiveness::Unknown`] — never `Absent` — so a transient
+    /// becomes [`SlotLiveness::Unknown`] - never `Absent` - so a transient
     /// `systemctl` failure cannot drive destructive reconciliation.
     async fn unit_liveness(&self, slot: u32) -> SlotLiveness {
         match self.units.list_managed_units().await {
@@ -938,7 +938,7 @@ impl DetachedRegistry {
         // CONSISTENCY check (does the live command match the persisted spec?)
         // recovered from systemd's lossy single-line `systemctl show` rendering;
         // it is hardened against the realistic argv bytes our own well-formed
-        // units carry, but it is not — and need not be — a defense against a
+        // units carry, but it is not - and need not be - a defense against a
         // guest-root attacker crafting a multi-line/forged ExecStart, which is a
         // total compromise the structural boundary cannot help with either.
         if identity.slice != Some("d2b-exec.slice") {
@@ -1041,7 +1041,7 @@ impl DetachedRegistry {
             let mut state = self.lock();
             let Some(entry) = state.slots.get_mut(&slot) else {
                 // The entry was GC'd between resolve and lock. Compute the kind
-                // from the already-held state — never re-lock the mutex here
+                // from the already-held state - never re-lock the mutex here
                 // (missing_kind() would deadlock on the non-reentrant std
                 // Mutex).
                 return Err(if state.is_tombstoned(exec_id) {
@@ -1139,7 +1139,7 @@ impl DetachedRegistry {
             self.sleeper.sleep_ms(STATUS_POLL_INTERVAL_MS).await;
         }
 
-        // Phase 3: last-resort backstop — only now stop the unit. Never
+        // Phase 3: last-resort backstop - only now stop the unit. Never
         // terminalize merely because the deadline elapsed: a stop failure with
         // fresh live/unknown liveness means the workload may still be running,
         // so leave it Running for a later cancel/reaper retry.
@@ -1159,8 +1159,8 @@ impl DetachedRegistry {
     // ---- live reconciliation + TTL/GC ------------------------------------
 
     /// Reconcile one live (Dispatching/Running) record against its unit/status:
-    /// adopt a terminal status, or — if the unit vanished with no terminal
-    /// status — mark the record `Cancelled`/lost (release only the active
+    /// adopt a terminal status, or - if the unit vanished with no terminal
+    /// status - mark the record `Cancelled`/lost (release only the active
     /// counter, retain slot+logs+quota until TTL/GC).
     async fn reconcile_slot(&self, slot: u32) {
         let (hidden, terminal) = {
@@ -1209,7 +1209,7 @@ impl DetachedRegistry {
         match self.unit_liveness(slot).await {
             // Live + identity-verified: healthy, leave it running.
             SlotLiveness::Live => return,
-            // Query error: liveness is UNKNOWN — never mark a maybe-live exec
+            // Query error: liveness is UNKNOWN - never mark a maybe-live exec
             // lost on a transient systemctl failure. Retry on the next pass.
             SlotLiveness::Unknown => return,
             // The root runner disappeared while the workload unit is still
@@ -1359,7 +1359,7 @@ impl DetachedRegistry {
                 }
             }
             Err(_) => {
-                // Deletion failed — retain the entry so the slot is NOT
+                // Deletion failed - retain the entry so the slot is NOT
                 // freed for reuse with stale files still on disk. A later reaper
                 // pass retries the unlink.
             }
@@ -1444,7 +1444,7 @@ impl DetachedRegistry {
     }
 
     /// A held dispatch never registered a unit within its deadline: delete the
-    /// slot dir + release the reservation — but ONLY once the on-disk dir is
+    /// slot dir + release the reservation - but ONLY once the on-disk dir is
     /// actually gone. If the unlink fails, keep the (hidden) dispatch-hold
     /// entry so the slot is never freed for reuse with stale files on disk; a
     /// later reaper pass retries the unlink (consistent with the GC
@@ -1467,7 +1467,7 @@ impl DetachedRegistry {
             Ok(slots) => slots,
             Err(_) => return,
         };
-        // A query error must NOT be treated as "no units present" — that
+        // A query error must NOT be treated as "no units present" - that
         // would make every no-status record look unit-less and trigger
         // destructive reconciliation. On error, classify every slot as Unknown
         // and adopt non-destructively; the periodic reaper resolves once
@@ -1533,7 +1533,7 @@ impl DetachedRegistry {
 
         // Resolve the action per the reconciliation matrix.
         if let Some((terminal, code, signal)) = terminal_status {
-            // Terminal status present (unit live or gone) — adopt terminal.
+            // Terminal status present (unit live or gone) - adopt terminal.
             if matches!(status, Some(StatusPhase::InfraFailed)) {
                 let _ = self.units.stop_unit(slot).await;
                 let _ = self.units.reset_failed(slot).await;
@@ -1614,7 +1614,7 @@ impl DetachedRegistry {
         } else {
             // Persisted Running (or other non-Dispatching live) with no unit
             // and no terminal status. Route through the SAME lost path as live
-            // reconciliation: adopt as Running, then mark lost — releases only
+            // reconciliation: adopt as Running, then mark lost - releases only
             // the active counter, retaining slot + logs + quota until TTL/GC.
             self.insert_adopted(slot, record, AdoptKind::Running);
             self.mark_lost(slot);
@@ -3705,7 +3705,7 @@ mod tests {
 
         // A truncated / line-split ExecStart (no closing `}`, e.g. a foreign
         // unit whose argv newline split the `systemctl show` property across
-        // lines) MUST fail closed — even though it carries a `; ignore_errors=`
+        // lines) MUST fail closed - even though it carries a `; ignore_errors=`
         // tail that would otherwise let a recovered prefix match a shorter
         // persisted argv.
         assert!(exec_start_raw_fields(
@@ -3836,7 +3836,7 @@ mod tests {
         id
     }
 
-    // A transient liveness QUERY error must be Unknown, never Absent — a
+    // A transient liveness QUERY error must be Unknown, never Absent - a
     // live exec must not be marked lost on a flaky `systemctl`.
     #[tokio::test]
     async fn f1_query_error_does_not_mark_running_lost() {
@@ -3883,7 +3883,7 @@ mod tests {
     }
 
     // An ACTIVE unit whose `systemctl show` identity enrichment FAILED
-    // is UNKNOWN, never Foreign — a transient identity-query failure must NOT
+    // is UNKNOWN, never Foreign - a transient identity-query failure must NOT
     // stop the unit or mark a possibly-live exec lost. Covers both the
     // on-access and the periodic-reaper reconciliation paths.
     #[tokio::test]
@@ -3916,14 +3916,14 @@ mod tests {
 
     // Identity verification is STRUCTURAL, not substring-based. An
     // impostor that merely embeds the runner path / `--serve-exec` / `--slot
-    // NN` as substrings of unrelated args — while running a DIFFERENT exe or a
-    // DIFFERENT slot — is rejected (Foreign), where a naive `contains` check
+    // NN` as substrings of unrelated args - while running a DIFFERENT exe or a
+    // DIFFERENT slot - is rejected (Foreign), where a naive `contains` check
     // would wrongly accept it. An authentic argv is accepted (Live).
     #[tokio::test]
     async fn g2_structural_identity_rejects_substring_impostor() {
         // Case 1: wrong executable, but the runner path is embedded as a decoy
         // argument so a substring check would falsely match. (create allocates
-        // the lowest free slot — 0 — on a fresh harness.)
+        // the lowest free slot - 0 - on a fresh harness.)
         let h = harness();
         let id = create_live_running(&h, 0).await;
         h.units.set_identity(
@@ -3986,7 +3986,7 @@ mod tests {
     }
 
     // Live reconciliation must RELEASE the active-concurrency counter (not just
-    // retain the record/logs) on access — otherwise active capacity leaks until
+    // retain the record/logs) on access - otherwise active capacity leaks until
     // a guestd restart. After the vanish, a full fresh batch of active execs
     // must fit.
     #[tokio::test]
@@ -4026,8 +4026,8 @@ mod tests {
         );
     }
 
-    // A crash-recovered Dispatching record within its deadline is held —
-    // non-listable, non-inspectable — but the slot dir is retained.
+    // A crash-recovered Dispatching record within its deadline is held -
+    // non-listable, non-inspectable - but the slot dir is retained.
     #[tokio::test]
     async fn f2_crash_dispatching_within_deadline_is_held_nonlistable() {
         let h = harness();
@@ -4304,7 +4304,7 @@ mod tests {
     }
 
     // Re-adoption matrix: a durable `record` that passes the authenticity gate
-    // but cannot be DECODED (corrupt/unreadable bytes) is quarantined — the
+    // but cannot be DECODED (corrupt/unreadable bytes) is quarantined - the
     // slot dir is deleted and nothing is adopted, never trusting corrupt bytes.
     #[tokio::test]
     async fn readoption_corrupt_record_is_quarantined() {
@@ -4459,7 +4459,7 @@ mod tests {
     }
 
     // Creating-guard: an in-flight create is invisible to a concurrent
-    // ExecList AND a concurrent reaper — neither may reveal, mark, or delete it.
+    // ExecList AND a concurrent reaper - neither may reveal, mark, or delete it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn creating_guard_hides_inflight_create_from_list_and_reaper() {
         let Harness {
@@ -4504,7 +4504,7 @@ mod tests {
         assert_eq!(registry.list("boot-A").await.unwrap().len(), 1);
     }
 
-    // GC must recheck read-guards under the mutex — a read that took a guard
+    // GC must recheck read-guards under the mutex - a read that took a guard
     // after the reaper's snapshot keeps serving stable bytes, and only once it
     // completes does a later pass GC the slot to a tombstone.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4570,7 +4570,7 @@ mod tests {
         );
     }
 
-    // ExecList exposes only the argv hash — never the raw program/args/cwd/env.
+    // ExecList exposes only the argv hash - never the raw program/args/cwd/env.
     #[tokio::test]
     async fn list_entries_redact_raw_argv() {
         let h = harness();

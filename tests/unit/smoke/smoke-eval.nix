@@ -1,4 +1,4 @@
-# tests/unit/smoke/smoke-eval.nix — Layer-1 smoke evaluation for d2b.
+# tests/unit/smoke/smoke-eval.nix - Layer-1 smoke evaluation for d2b.
 #
 # Minimal consumer-style `nixosSystem` that imports
 # `d2b.nixosModules.default` and exercises the parts of the eval
@@ -13,7 +13,7 @@
 #     so the heavyweight component imports (graphics.nix, etc.) stay
 #     out of this smoke path. The test is fast.
 #
-# Returns `system.build.toplevel` — building it would pull the whole
+# Returns `system.build.toplevel` - building it would pull the whole
 # closure, but `nix eval --raw` on this attribute only forces the
 # derivation path string (a fully evaluated nixos config). That's
 # enough to catch regressions in:
@@ -79,21 +79,21 @@ let
         d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
-          # Toggle off the host-side Yubico bits — smoke config
+          # Toggle off the host-side Yubico bits - smoke config
           # has no use for them and exercising the .enable=false
           # path is the more interesting one to keep regression-
           # free.
           yubikey.enable = false;
         };
 
-        # One env — exercises network.nix materialisation, the
+        # One env - exercises network.nix materialisation, the
         # route preflight unit, and the CIDR validation chain.
         d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        # One workload VM — exercises host.nix's microvm.vms
+        # One workload VM - exercises host.nix's microvm.vms
         # translation, the framework-managed SSH key activation,
         # and the cli.nix manifest builder.
         d2b.vms.corp-vm = {

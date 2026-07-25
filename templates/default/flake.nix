@@ -31,7 +31,7 @@
           # `/nix/store` hardlink farm, the `d2b` CLI, etc.
           d2b.nixosModules.default
 
-          # Your host config — the file you edit next.
+          # Your host config - the file you edit next.
           ./configuration.nix
         ];
       };

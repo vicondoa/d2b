@@ -1,6 +1,6 @@
 # ADR 0027: Hardlink-backed store-view live pool
 
-- Status: Draft — plan/design panel signed off
+- Status: Draft - plan/design panel signed off
 - Date: 2026-06-09
 - Related: ADR 0015 (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018 (microvm.nix removal), ADR 0021 (broker user namespace for virtiofsd)
 
@@ -337,8 +337,8 @@ Offline cleanup requires virtiofsd for that VM not serving `live/`, not merely
 cloud-hypervisor exit. Any live virtiofsd process/cgroup for the VM, open fd
 under `live/`, or uncertainty defers cleanup.
 
-Every live/metadata mutator — StoreSync, `d2b gc`, and VM-stop
-deferred cleanup — acquires `sync.lock` and revalidates that virtiofsd
+Every live/metadata mutator - StoreSync, `d2b gc`, and VM-stop
+deferred cleanup - acquires `sync.lock` and revalidates that virtiofsd
 is not serving `live/` before destructive shrinkage.
 
 ## Kernel assumptions

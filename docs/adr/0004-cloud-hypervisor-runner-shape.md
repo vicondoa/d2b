@@ -30,18 +30,18 @@ supervision.
 The considered options are:
 
 1. Reuse `declaredRunner` as a black-box shell wrapped in one union
-   minijail profile — rejected because CH, GPU, virtiofsd, audio/video,
+   minijail profile - rejected because CH, GPU, virtiofsd, audio/video,
    swtpm, TAP, and relay roles need distinct uid/gid, capability,
    cgroup, mount, and seccomp/minijail profiles.
-2. Generate d2b-owned CH argv from evaluated config — accepted. The
+2. Generate d2b-owned CH argv from evaluated config - accepted. The
    daemon consumes `microvm.interfaces`, `microvm.shares`,
    `microvm.vsock`, `microvm.cloud-hypervisor.extraArgs`,
    `d2b.vms.<vm>.*`, and the W1 manifest bundle. For headless VMs,
    generated argv must match declaredRunner's snapshotted argv except for
    documented daemon divergences such as API socket ownership and vsock
    CID allocation.
-3. Carry a small microvm.nix runner patch that skips inline GPU spawning
-   — deferred as a fallback if argv generation proves unexpectedly
+3. Carry a small microvm.nix runner patch that skips inline GPU spawning -
+   deferred as a fallback if argv generation proves unexpectedly
    complex in W4.
 4. The W0b runner-shape contract is a documentation and audit pin only:
    it does not add future Rust crate stubs. The W2 crate names reserved

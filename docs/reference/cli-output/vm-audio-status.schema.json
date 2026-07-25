@@ -184,7 +184,7 @@
           ]
         },
         "micLevel": {
-          "description": "Microphone gain (0–100), if known.",
+          "description": "Microphone gain (0-100), if known.",
           "anyOf": [
             {
               "$ref": "#/definitions/LevelPercent"
@@ -207,7 +207,7 @@
           ]
         },
         "speakerLevel": {
-          "description": "Speaker level (0–100), if known.",
+          "description": "Speaker level (0-100), if known.",
           "anyOf": [
             {
               "$ref": "#/definitions/LevelPercent"

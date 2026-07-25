@@ -64,7 +64,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
     content.lines().any(|line| re.is_match(line))
 }
 
-/// The matched line plus the following `n` lines, joined — the faithful port
+/// The matched line plus the following `n` lines, joined - the faithful port
 /// of `grep -A <n> '<start_pat>'` over the first match. Returns `None` when no
 /// line matches.
 fn lines_after(content: &str, start_pat: &str, n: usize) -> Option<String> {
@@ -145,11 +145,11 @@ fn swtpm_rendered_empty_caps_both_profiles() {
     }
     assert!(
         swtpm_seen > 0,
-        "feature-rich fixture has no swtpm sidecar node (corp-full enables tpm — regression)"
+        "feature-rich fixture has no swtpm sidecar node (corp-full enables tpm - regression)"
     );
     assert!(
         flush_seen > 0,
-        "feature-rich fixture has no swtpm-flush node (corp-full enables tpm — regression)"
+        "feature-rich fixture has no swtpm-flush node (corp-full enables tpm - regression)"
     );
 }
 
@@ -178,7 +178,7 @@ fn swtpm_rendered_user_namespace_long_lived_sidecar_only() {
                     swtpm_seen += 1;
                     let user_ns = p.user_namespace.as_ref().unwrap_or_else(|| {
                         panic!(
-                            "swtpm sidecar {} (vm {}) MISSING userNamespace block — ADR 0021 \
+                            "swtpm sidecar {} (vm {}) MISSING userNamespace block - ADR 0021 \
                              broker-pre-NS not applied",
                             p.profile_id, dag.vm
                         )
@@ -211,7 +211,7 @@ fn swtpm_rendered_user_namespace_long_lived_sidecar_only() {
                     flush_seen += 1;
                     assert!(
                         p.user_namespace.is_none(),
-                        "swtpm-flush {} (vm {}) MUST NOT carry a userNamespace block — only the \
+                        "swtpm-flush {} (vm {}) MUST NOT carry a userNamespace block - only the \
                          long-lived sidecar gets broker-pre-NS (ADR 0021 swtpm-portion scope)",
                         p.profile_id,
                         dag.vm
@@ -240,7 +240,7 @@ fn swtpm_rendered_user_namespace_long_lived_sidecar_only() {
 /// `umask = 0o007` (the fu36 socket-ACL requirement, which must survive the
 /// ADR-0021 userNamespace addition), and BOTH swtpm profiles bind the per-VM
 /// persistent state dir `/var/lib/d2b/vms/<vm>/swtpm` as a writable path
-/// (NOT tmpfs — tmpfs would silently lose the TPM NVRAM on every daemon
+/// (NOT tmpfs - tmpfs would silently lose the TPM NVRAM on every daemon
 /// restart and force Entra/Intune re-enrollment). The defence-in-depth
 /// negative (no tmpfs declaration) is a source check in
 /// `swtpm_source_principal_and_no_tmpfs`. Also pins each profile's
@@ -319,10 +319,10 @@ fn swtpm_rendered_umask_state_dir_cgroup() {
 
 /// swtpm Phase-1 S1/S4/S7 source half: the `swtpm` userNamespace must
 /// reference the swtpm principal `d2b-${name}-swtpm` (NOT the runner
-/// principal — S4 name-binding), and there must be NO tmpfs declaration for
+/// principal - S4 name-binding), and there must be NO tmpfs declaration for
 /// swtpm state anywhere in `minijail-profiles.nix` (S7 defence-in-depth;
 /// tmpfs forces Entra/Intune re-enrollment). The `read_repo_file` call also
-/// covers S1 ("minijail-profiles.nix present") — it panics with a clear
+/// covers S1 ("minijail-profiles.nix present") - it panics with a clear
 /// message if the module is missing.
 #[test]
 fn swtpm_source_principal_and_no_tmpfs() {
@@ -348,7 +348,7 @@ fn swtpm_source_principal_and_no_tmpfs() {
     let tmpfs_pat = r"^\s*[^#/\s].*(tmpfs.*swtpm|swtpm.*tmpfs)";
     assert!(
         !any_line_matches(&src, tmpfs_pat),
-        "swtpm state appears to use tmpfs in {MINIJAIL_PROFILES_NIX} — REGRESSION; tmpfs loses \
+        "swtpm state appears to use tmpfs in {MINIJAIL_PROFILES_NIX} - REGRESSION; tmpfs loses \
          the TPM NVRAM on every daemon restart and forces Entra/Intune re-enrollment"
     );
 }
@@ -369,7 +369,7 @@ fn swtpm_source_principal_and_no_tmpfs() {
 /// profile MUST exist with an EMPTY capability set, `seccompPolicyRef =
 /// "w1-video"`, masked device nodes (`hideDeviceNodesByDefault = true`)
 /// exposing ONLY the default `/dev/dri/renderD128` allowlist (NVIDIA nodes are
-/// gated behind `videoNvidiaDecode`, which the corp-full fixture leaves off —
+/// gated behind `videoNvidiaDecode`, which the corp-full fixture leaves off -
 /// so the rendered allowlist is exactly `["/dev/dri/renderD128"]`), a private
 /// PID namespace, and `umask = 0o007` for CH socket-ACL inheritance. Also pins
 /// the `d2b.slice/<vm>/video` cgroup leaf and confirms video uses a
@@ -466,7 +466,7 @@ fn video_rendered_profile_shape() {
     }
     assert!(
         video_seen > 0,
-        "feature-rich fixture has no video sidecar node (corp-full enables graphics/video — \
+        "feature-rich fixture has no video sidecar node (corp-full enables graphics/video - \
          regression)"
     );
 }

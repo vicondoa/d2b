@@ -3,9 +3,9 @@
 //! `tests/*.sh` bash gates. Each test reads the real repo files and asserts a
 //! structural/source invariant. This crate runs only from
 //! `tests/tools/rust-workspace-checks.sh` against the real checkout (it is excluded
-//! from the hermetic Nix sandbox workspace build), so repo-file access — and
+//! from the hermetic Nix sandbox workspace build), so repo-file access - and
 //! shelling out to `git` for the gitignore-respecting file enumeration that the
-//! bash gates got from `rg` — is sound here.
+//! bash gates got from `rg` - is sound here.
 //!
 //! Migrated gates:
 //!   * tests/legacy-group-name-denylist.sh    -> legacy_group_name_denylist
@@ -65,7 +65,7 @@ fn git_listed_files(roots: &[&str]) -> Vec<String> {
 // Asserts no live references to the legacy `d2b-launcher{,s}` group names
 // remain in source under `nixos-modules`, `packages`, and `tests`. The
 // allowlist is matched against full `path:lineno:content` lines (anchored
-// `^...$`), NOT as a substring — ported verbatim from the bash gate, with one
+// `^...$`), NOT as a substring - ported verbatim from the bash gate, with one
 // addition: this Rust port file is self-allowlisted, exactly as the bash gate
 // allowlisted itself (the denylist patterns it carries literally contain the
 // legacy names).
@@ -130,7 +130,7 @@ fn legacy_group_search() -> Regex {
 }
 
 /// Full-line (`^...$`-anchored, matched against `path:lineno:content`) allowlist
-/// of permitted legacy-group-name references — a verbatim port of the bash
+/// of permitted legacy-group-name references - a verbatim port of the bash
 /// gate's `allowlist=(...)` array.
 fn legacy_group_allowlist() -> Regex {
     let allowlist_patterns = [
@@ -167,7 +167,7 @@ fn legacy_group_allowlist() -> Regex {
 // Migrated from tests/vm-submodule-cutover-eval.sh.
 //
 // Asserts no production consumer in `nixos-modules/` reads
-// `config.microvm.vms.${name}.config.config.*` directly — every consumer routes
+// `config.microvm.vms.${name}.config.config.*` directly - every consumer routes
 // through the d2b-owned helpers `d2bLib.vmRunner` / `d2bLib.vmToplevel` /
 // `d2bLib.vmDeclaredRunner` in `nixos-modules/lib.nix`. `lib.nix`, `host.nix`, and
 // `vm-submodule.nix` are the substrate-side authors and are EXEMPT.
@@ -221,7 +221,7 @@ fn vm_submodule_cutover() {
 // ---------------------------------------------------------------------------
 #[test]
 fn static_rust_dependency_direction() {
-    // (crate, allowed in-workspace deps) — verbatim port of the bash WANT map.
+    // (crate, allowed in-workspace deps) - verbatim port of the bash WANT map.
     let want: &[(&str, &[&str])] = &[
         ("d2b-core", &[]),
         ("d2b-contracts", &["d2b-core"]),
@@ -266,7 +266,7 @@ fn static_rust_dependency_direction() {
         violations.join("\n")
     );
 
-    // The CLI and daemon must reach the broker only over IPC — assert each
+    // The CLI and daemon must reach the broker only over IPC - assert each
     // actually imports `d2b_contracts` from its own source tree.
     let use_contracts =
         Regex::new(r"use[[:space:]]+d2b_contracts::").expect("valid use-import regex");

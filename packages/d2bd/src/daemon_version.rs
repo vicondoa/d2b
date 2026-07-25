@@ -14,7 +14,7 @@
 //! the running daemon will be replaced by the next `systemctl
 //! restart d2bd`.
 //!
-//! Pure module — system-call surface lives in the production daemon
+//! Pure module - system-call surface lives in the production daemon
 //! callers; this module is data shuffling + filesystem helpers behind
 //! a [`FilesystemReader`] trait so tests do not need /run.
 
@@ -31,7 +31,7 @@ pub struct DaemonVersionFile {
     /// Absolute path the daemon was launched from. For Nix-built
     /// installs this is the Nix store path of `d2bd`. The CLI
     /// computes `[pending restart]` from this path's identity, so
-    /// it must NOT be a symlink to the canonical install path —
+    /// it must NOT be a symlink to the canonical install path -
     /// the daemon callers resolve via `std::fs::canonicalize` before
     /// writing.
     pub binary_path: String,
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn version_file_rejects_unknown_fields() {
         // deny_unknown_fields catches a future field added by a
-        // newer daemon and consumed by an older CLI — surfaces
+        // newer daemon and consumed by an older CLI - surfaces
         // VersionFileUnreadable so the CLI does not silently miss
         // the new field.
         let json = serde_json::json!({

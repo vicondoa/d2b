@@ -5,23 +5,23 @@
 //! through Azure is split into three planes, and only the third is a d2b
 //! credential:
 //!
-//! 1. [`CredentialPlane::AzureControlPlane`] — allocating/managing ACA, ACR,
+//! 1. [`CredentialPlane::AzureControlPlane`] - allocating/managing ACA, ACR,
 //!    and the Relay namespace uses an external Azure identity selected by the
 //!    caller. Production gateway providers use explicitly configured
 //!    managed/workload identity and do not fall back to ambient developer-tool
 //!    credentials. This module only ever holds an [`AzureControlPlaneRef`] of
 //!    **opaque, non-secret** tenant/subscription/region references.
-//! 2. [`CredentialPlane::ContainerManagedIdentity`] — the ACA sandbox's
+//! 2. [`CredentialPlane::ContainerManagedIdentity`] - the ACA sandbox's
 //!    **Managed Identity** mints its own short-lived tokens from IMDS for
 //!    Relay/ACR. d2b never mints or hands a Relay SAS token to the
 //!    container. This module holds only a [`ManagedIdentityRef`] (the MI
 //!    client id), never a token.
-//! 3. [`CredentialPlane::D2bInternal`] — the **gateway-minted
+//! 3. [`CredentialPlane::D2bInternal`] - the **gateway-minted
 //!    per-session credential** that authenticates the constellation peer /
 //!    display session. It is independent of Azure: Relay + MI grant
 //!    *reachability only* and never authenticate a constellation principal.
-//!    This module carries the [`SessionCredentialBinding`] — the claims a
-//!    minted credential is bound to — never the secret material itself.
+//!    This module carries the [`SessionCredentialBinding`] - the claims a
+//!    minted credential is bound to - never the secret material itself.
 //!
 //! A NixOS eval-time assertion (outside this crate) rejects secret-shaped
 //! host config so only the opaque references modelled here can be declared.
@@ -53,7 +53,7 @@ pub const MAX_AZURE_REF_LEN: usize = 128;
 /// subscription id, region, or Managed-Identity client id. The charset is
 /// restricted to the shape real Azure identifiers take
 /// (alphanumeric + `-` `_` `.`), which deliberately excludes the `=`, `/`,
-/// `+`, and whitespace that base64/PEM/connection-string **secrets** carry —
+/// `+`, and whitespace that base64/PEM/connection-string **secrets** carry -
 /// so a secret-shaped value fails to parse (fail-closed). It is never a SAS
 /// token, key, or connection string.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -179,7 +179,7 @@ pub struct SessionCredentialBinding {
     pub realm: RealmPath,
     /// Gateway that minted the credential.
     pub gateway: GatewayId,
-    /// Gateway generation — bumping it (rotation/revocation) invalidates
+    /// Gateway generation - bumping it (rotation/revocation) invalidates
     /// every credential minted by an older generation.
     pub gateway_generation: u64,
     /// ACA session / workload the display session drives.
@@ -206,7 +206,7 @@ impl SessionCredentialBinding {
     }
 
     /// Whether this credential authorizes `stream` under `operation` for
-    /// `workload` — the exact binding the mux MUST confirm before any
+    /// `workload` - the exact binding the mux MUST confirm before any
     /// Waypipe byte flows. Generation/expiry are checked separately by the
     /// gateway against its current generation + clock.
     pub fn authorizes(

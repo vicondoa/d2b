@@ -4,7 +4,7 @@ Reference for the daemon-side VM-start preflight that refuses to start
 a VM when its per-VM sshd host keys directory or any key leaf has
 drifted from the canonical posture.
 
-Related preflight: per-VM state-directory ownership matrix — see
+Related preflight: per-VM state-directory ownership matrix - see
 [`per-vm-state-ownership.md`](./per-vm-state-ownership.md).
 
 ## What it checks
@@ -22,7 +22,7 @@ broker op:
 2. **Key file shape.** For each `ssh_host_*_key` private-key file
    directly under the directory (excluding `.pub` siblings and any
    unrelated files):
-   - the file is a regular file (no symlinks — equivalent to opening
+   - the file is a regular file (no symlinks - equivalent to opening
      with `O_NOFOLLOW`);
    - owner uid is `0` (root);
    - group gid is `0` (root);
@@ -99,11 +99,11 @@ an existing path → fail-closed.
 ## Implementation
 
 - Pure check:
-  [`d2bd::ssh_host_key_preflight::check_sshd_host_keys`](../../packages/d2bd/src/ssh_host_key_preflight.rs)
-  — takes `(vm, keys_dir)`, returns `Result<(), SshdHostKeyDrift>`.
+  [`d2bd::ssh_host_key_preflight::check_sshd_host_keys`](../../packages/d2bd/src/ssh_host_key_preflight.rs) -
+  takes `(vm, keys_dir)`, returns `Result<(), SshdHostKeyDrift>`.
 - Typed error:
-  [`TypedError::SshdHostKeyDrift`](../../packages/d2bd/src/typed_error.rs)
-  — exit code `62`, kind `sshd-host-key-drift`.
+  [`TypedError::SshdHostKeyDrift`](../../packages/d2bd/src/typed_error.rs) -
+  exit code `62`, kind `sshd-host-key-drift`.
 - Call sites:
   1. `dispatch_broker_vm_start` runs the preflight inline after
      `ownership_preflight::preflight`. Refusal short-circuits all

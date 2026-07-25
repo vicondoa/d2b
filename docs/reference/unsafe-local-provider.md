@@ -188,7 +188,7 @@ Persistent shells use a separate hidden `shell-supervisor` process in a
 name, reads the complete user-manager environment and passwd identity, starts
 the supervisor blocked, verifies the scope identity, releases it, waits for
 socket, PTY, and login-shell readiness, and only then atomically extends the
-existing scope ledger. The supervisor—not the reconnectable helper—owns the PTY
+existing scope ledger. The supervisor - not the reconnectable helper - owns the PTY
 master, login-shell child, output ring, attachment state, and private listener.
 The child executes the authenticated user's absolute passwd login shell in the
 passwd home with the complete manager environment; no shell string, PATH

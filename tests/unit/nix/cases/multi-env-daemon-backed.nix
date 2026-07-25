@@ -20,7 +20,7 @@
 #     systemd-unit reference.
 #   * processes.json node-level systemd `unit` fields.
 #
-# Spec corrections ("existing code is canon" — ADR 0015 daemon-only):
+# Spec corrections ("existing code is canon" - ADR 0015 daemon-only):
 #   1. The bash gate (steps 5-6) asserted a supervisor split: the daemon
 #      variant's `work-app` drops node `unit` fields while the
 #      systemd-supervised `personal-app` and the legacy `demo` variant
@@ -28,8 +28,8 @@
 #      `d2b.vms.<vm>.supervisor` option is removed and every enabled VM
 #      is daemon-supervised, so the framework emits NO per-VM systemd unit
 #      for ANY node of ANY VM in EITHER variant (verified by probe: every
-#      node's `unit` is null). The cases below assert the real invariant —
-#      zero node-level unit fields across both variants — superseding the
+#      node's `unit` is null). The cases below assert the real invariant -
+#      zero node-level unit fields across both variants - superseding the
 #      obsolete supervisor-split expectation.
 #   2. The bash gate (step 5) also asserted processes.json contains no
 #      `microvm@work-app` substring. The current code uses `microvm@<vm>`

@@ -2,7 +2,7 @@
 //!
 //! Resolution is **policy, not address decoding**: the
 //! [`d2b_realm_core::RealmTarget`] grammar never encodes whether a realm is
-//! host-resident or gateway-backed — the entrypoint table does. Given a
+//! host-resident or gateway-backed - the entrypoint table does. Given a
 //! parsed target, [`RealmEntrypointTable::resolve`] selects the realm
 //! entrypoint by **longest-suffix match** over the target's realm path
 //! (most-specific realm first) and returns a [`DispatchTarget`].
@@ -111,7 +111,7 @@ impl RealmEntrypointTable {
     }
 
     /// An empty table seeded with the reserved `local` realm as
-    /// host-resident — the common case for host-local substrates.
+    /// host-resident - the common case for host-local substrates.
     pub fn with_local_default() -> Self {
         let mut t = Self::new();
         t.insert(RealmPath::local(), RealmEntrypoint::host_resident());

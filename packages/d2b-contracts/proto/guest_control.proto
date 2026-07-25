@@ -367,7 +367,7 @@ message ControlAck {
 // closed enum (NOT a free-form path); guestd maps the key to the host-declared
 // target path. The response is a single bounded payload; oversize files fail
 // with FileTooLarge BEFORE any read/allocation. The guest-reported size/sha256
-// are diagnostics only — the host recomputes both from the received bytes.
+// are diagnostics only - the host recomputes both from the received bytes.
 message ReadGuestFileRequest {
   RequestMetadata metadata = 1;
   GuestFileId file_id = 2;
@@ -826,7 +826,7 @@ enum AudioChannel {
 message GuestAudioChannelState {
   // True when the channel is muted (grant = off).
   bool muted = 1;
-  // Current level 0–100; 0 when not configured or unavailable.
+  // Current level 0-100; 0 when not configured or unavailable.
   uint32 level = 2;
   // True when the level value is meaningful (false → level is not available).
   bool level_known = 3;
@@ -860,7 +860,7 @@ message AudioSetRequest {
   AudioSetKind kind = 3;
   // For GRANT: true = on, false = off.
   bool grant_on = 4;
-  // For LEVEL: 0–100; ignored for GRANT.
+  // For LEVEL: 0-100; ignored for GRANT.
   uint32 level = 5;
 }
 

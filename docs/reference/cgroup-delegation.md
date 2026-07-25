@@ -23,7 +23,7 @@ split into two categories:
   registration): the daemon's `d2bd` uid owns the subtree via
   Phase A `fchown` and READS delegated files using cgroup-directory
   fds obtained via the **broker's `OpenCgroupDir` op** (per the
-  broker-ops table below — pidfds in the daemon's `PidfdTable` are
+  broker-ops table below - pidfds in the daemon's `PidfdTable` are
   for `pidfd_send_signal` + poll observability on processes ONLY;
   pidfds cannot read cgroup files like `cgroup.events`). The
   read-only cgroup files the daemon may need (e.g., `cgroup.events`
@@ -31,7 +31,7 @@ split into two categories:
   `d2b status` verb) are accessed via dedicated cgroup-dir
   fds returned by `OpenCgroupDir`. The daemon does NOT perform
   process placement, leaf mkdir, leaf
-  rmdir, kill, or any other mutation — all mutations are
+  rmdir, kill, or any other mutation - all mutations are
   broker-mediated per the table below. **The daemon NEVER writes
   to `cgroup.procs`** (the broker uses `clone3(CLONE_INTO_CGROUP)`
   for process placement at spawn time when the kernel supports it,
@@ -63,7 +63,7 @@ pidfd/`CgroupKill` path instead of a service-wide systemd kill.
 | --- | --- | --- | --- |
 | `DelegateCgroupV2` | live | yes | Broker (one-shot Phase A: `+controllers` cascade, slice/leaf `mkdir`, `fchown` to `d2bd` uid/gid; re-runnable on host re-prepare). |
 | `OpenCgroupDir` | live | yes | Broker (fd-passing for delegated leaves; the daemon acquires fresh fds when needed). |
-| `CgroupKill` | live | yes | Broker, broker-only. The broker holds the leaf write-fd via the Phase A `fchown` and is the **sole writer** of `cgroup.kill` files. The daemon NEVER writes `cgroup.kill` directly — daemon teardown of a runner uses `pidfd_send_signal(SIGTERM)` first; if SIGTERM does not drain the leaf within the role's documented grace period, the daemon escalates by issuing a `CgroupKill` broker request as a last resort. |
+| `CgroupKill` | live | yes | Broker, broker-only. The broker holds the leaf write-fd via the Phase A `fchown` and is the **sole writer** of `cgroup.kill` files. The daemon NEVER writes `cgroup.kill` directly - daemon teardown of a runner uses `pidfd_send_signal(SIGTERM)` first; if SIGTERM does not drain the leaf within the role's documented grace period, the daemon escalates by issuing a `CgroupKill` broker request as a last resort. |
 
 The **broker-only `cgroup.kill` writer invariant** is the canonical
 rule for the leaf-kill code path (per ADR 0011 Decision item 6
@@ -84,7 +84,7 @@ Hard invariants:
    controllers (`rdma`, `hugetlb`, `misc`, ...) are accepted but
    never required.
 3. **Single slice name; per-VM-interior + per-role-leaf
-   hierarchy.** The slice is `d2b.slice` literally — not
+   hierarchy.** The slice is `d2b.slice` literally - not
    configurable. Per-VM **intermediate** directories live at
    `d2b.slice/<vm-id>/` (process-free) with **per-role leaves**
    at `d2b.slice/<vm-id>/<role>/`. Host-scoped roles split
@@ -106,7 +106,7 @@ Hard invariants:
    d2b-owned cgroup. The R10 kernel reviewer correctly noted
    that the cgroup v2 root is normally a partition root; the
    invariant therefore explicitly does NOT apply to the cgroup v2
-   root or to any cgroup outside `d2b.slice` — d2b never
+   root or to any cgroup outside `d2b.slice` - d2b never
    reads or writes ancestor `cpuset.cpus.partition` values
    (partition-root state on the kernel root or distro-owned
    ancestors is a host concern, not a delegated-subtree concern).
@@ -122,12 +122,12 @@ Hard invariants:
 7. **Kill scope.** `cgroup.kill` is allowed only on **broker-mediated**
    per-VM role leaves or host-scoped leaves during declared
    teardown/cleanup (the broker is the sole writer per cgroup-
-   delegation.md "Broker ops on the cgroup tree" — daemon NEVER
+   delegation.md "Broker ops on the cgroup tree" - daemon NEVER
    writes `cgroup.kill` directly; daemon requests broker escalation
    only after `pidfd_send_signal(SIGTERM)` grace expiry). Ancestor
    `cgroup.kill` is refused with `cgroup-kill-on-ancestor-refused`.
 8. **Non-root delegation.** Refuse delegation **runtime mutation**
-   while running as uid 0 — i.e., the `require_non_root_delegation`
+   while running as uid 0 - i.e., the `require_non_root_delegation`
    guard at step 8 is enforced on subsequent calls into the cgroup
    module **AFTER** the initial Phase A delegation completes
    (steps 1-6 are Phase A; they require root for `+controllers`,
@@ -163,9 +163,9 @@ The daemon owns one `Arc<OwnedFd>` per registered pidfd in
 
 | Layer | What it holds | Lifetime |
 | --- | --- | --- |
-| Broker | The pidfd produced by `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` (or, in the documented historical fallback, `fork`+`pidfd_open` per ADR 0011 Decision item 8). **The broker RETAINS this pidfd as the parent** of the SpawnRunner child for the lifetime of the child — per [ADR 0018](../adr/0018-microvm-nix-removal.md) § "broker-as-parent reaping model", only the broker (as parent) can `waitid(P_PIDFD)` to reap the child, so it MUST hold the pidfd until final reap. The R23 kernel reviewer flagged the prior "broker drops its copy" wording as incompatible with the broker-reaper invariant. | Broker holds until child exit + `waitid(P_PIDFD)` reap completes; only then drops. |
-| Kernel buffer | A duplicate fd inside the seqpacket message (SCM_RIGHTS-sent DUP — broker's original pidfd is NOT transferred, only duplicated) | Lives until the daemon `recvmsg(2)` consumes it. |
-| Daemon table | `Arc<OwnedFd>` of the DUP'd pidfd, keyed by `(vm_id, role_id)`. The daemon uses this pidfd ONLY for `pidfd_send_signal(2)` and pidfd-poll readiness observation (via tokio epoll); the daemon does NOT call `waitid(P_PIDFD)` on SpawnRunner children (the broker reaps, per ADR 0018) and does NOT use this pidfd to read cgroup files (the broker exposes `OpenCgroupDir` for cgroup-dir fd handoff — see the daemon-direct enumeration note above). | Lives until `PidfdTable::deregister` is called (teardown or failed start). |
+| Broker | The pidfd produced by `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` (or, in the documented historical fallback, `fork`+`pidfd_open` per ADR 0011 Decision item 8). **The broker RETAINS this pidfd as the parent** of the SpawnRunner child for the lifetime of the child - per [ADR 0018](../adr/0018-microvm-nix-removal.md) § "broker-as-parent reaping model", only the broker (as parent) can `waitid(P_PIDFD)` to reap the child, so it MUST hold the pidfd until final reap. The R23 kernel reviewer flagged the prior "broker drops its copy" wording as incompatible with the broker-reaper invariant. | Broker holds until child exit + `waitid(P_PIDFD)` reap completes; only then drops. |
+| Kernel buffer | A duplicate fd inside the seqpacket message (SCM_RIGHTS-sent DUP - broker's original pidfd is NOT transferred, only duplicated) | Lives until the daemon `recvmsg(2)` consumes it. |
+| Daemon table | `Arc<OwnedFd>` of the DUP'd pidfd, keyed by `(vm_id, role_id)`. The daemon uses this pidfd ONLY for `pidfd_send_signal(2)` and pidfd-poll readiness observation (via tokio epoll); the daemon does NOT call `waitid(P_PIDFD)` on SpawnRunner children (the broker reaps, per ADR 0018) and does NOT use this pidfd to read cgroup files (the broker exposes `OpenCgroupDir` for cgroup-dir fd handoff - see the daemon-direct enumeration note above). | Lives until `PidfdTable::deregister` is called (teardown or failed start). |
 | Daemon poll loop | `tokio::io::unix::AsyncFd<RawFdView>` borrowing the table's `Arc<OwnedFd>` (poll readiness only; on poll-readable the daemon emits an observability event but the broker is the one that reaps via OneShotComplete RPC per ADR 0018) | Lives as long as the table entry. |
 
 The daemon never holds a raw `pid_t` for control. Raw-pid kill/wait is
@@ -180,7 +180,7 @@ path-safety contract:
 
 - fd-relative `openat`/`openat2` with `O_NOFOLLOW` on every open;
 - For the chown step on `O_PATH` descriptors: use
-  `fchownat(fd, "", uid, gid, AT_EMPTY_PATH)` — NOT `fchown(fd, ...)`,
+  `fchownat(fd, "", uid, gid, AT_EMPTY_PATH)` - NOT `fchown(fd, ...)`,
   which is not the correct primitive for `O_PATH` descriptors
   (Linux `fchown` does not portably operate on `O_PATH` fds). The
   `AT_EMPTY_PATH` flag (Linux ≥ 2.6.39) directs the kernel to
@@ -271,14 +271,14 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `cgroup_id` | string | The canonical path the broker resolved from the subject. Omitted on subject-resolution failure. |
-| `path_class` | string | One of `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` (the current four-value taxonomy per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) Decision item 1). Legacy `d2b-slice` / `vm-leaf` / `foreign` / `unknown-subject` values are retired. **Bundle-miss / unresolved-subject cases**: same convention as `CgroupKill` below — the `path_class` field is OMITTED from `operation_fields` on subject-resolution failure; the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level. |
+| `path_class` | string | One of `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` (the current four-value taxonomy per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) Decision item 1). Legacy `d2b-slice` / `vm-leaf` / `foreign` / `unknown-subject` values are retired. **Bundle-miss / unresolved-subject cases**: same convention as `CgroupKill` below - the `path_class` field is OMITTED from `operation_fields` on subject-resolution failure; the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level. |
 
 ### `CgroupKill` (internal teardown path)
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `cgroup_id` | string | The canonical leaf path. |
-| `path_class` | string | Always `vm-role-leaf` (or `host-scoped-leaf` for host-scope roles) on success. **Bundle-miss / unresolved-subject cases**: the `path_class` field is **only populated after successful subject resolution**; on bundle miss the field is OMITTED from the audit record's `operation_fields` block and the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level (the four-value enum `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` stays closed — no `unknown-subject` discriminant). |
+| `path_class` | string | Always `vm-role-leaf` (or `host-scoped-leaf` for host-scope roles) on success. **Bundle-miss / unresolved-subject cases**: the `path_class` field is **only populated after successful subject resolution**; on bundle miss the field is OMITTED from the audit record's `operation_fields` block and the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level (the four-value enum `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` stays closed - no `unknown-subject` discriminant). |
 
 ## Forbidden surfaces
 
@@ -287,7 +287,7 @@ D2b explicitly forbids the following:
 - writing `cpuset.cpus.partition` on d2b-owned cgroups
   (`d2b.slice` and every d2b-created descendant stays
   `member` per invariant 4 above; the cgroup v2 root and other
-  ancestor `cpuset.cpus.partition` values are out of scope —
+  ancestor `cpuset.cpus.partition` values are out of scope -
   d2b never reads or writes them);
 - creating threaded cgroups;
 - holding non-leaf processes inside `d2b.slice` or an intermediate
@@ -296,13 +296,13 @@ D2b explicitly forbids the following:
 - `cgroup.kill` on `d2b.slice` or any ancestor (including
   per-VM `<vm-id>/` and host-scope `sys-<env>/` interiors);
 - **Phase B (post-delegation) runtime mutation while running as
-  uid 0** — i.e., once Phase A (privileged setup: `+controllers`
+  uid 0** - i.e., once Phase A (privileged setup: `+controllers`
   cascade, slice/leaf `mkdir`, `fchown` to `d2bd`'s uid/gid;
   legitimately runs as root per
   [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
   Decision item 2) has completed and the broker has dropped
   privileges, all subsequent calls into the cgroup module
-  (any potential daemon-side cgroup interaction — though the daemon
+  (any potential daemon-side cgroup interaction - though the daemon
   performs read-only enumeration only per the
   scope-and-invariants section above) MUST run as `d2bd`'s uid
   (`getuid() != 0`). Mutating operations (process placement via
@@ -311,10 +311,10 @@ D2b explicitly forbids the following:
   audited; there is no daemon-direct mutating codepath. Direct
   privilege escalation in the steady-state cgroup code path is what
   is forbidden, NOT the one-shot Phase A setup;
-- libcgroup (rejected in the ADR — it cannot enforce the
+- libcgroup (rejected in the ADR - it cannot enforce the
   scoped non-root Phase B invariant);
 - systemd `Slice=` direct delegation without the broker (rejected in
-  the ADR — it cannot enforce bundle-derived paths or audit the
+  the ADR - it cannot enforce bundle-derived paths or audit the
   decision).
 
 Removing any of these requires a panel-approved ADR override.

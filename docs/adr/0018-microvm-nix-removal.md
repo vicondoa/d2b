@@ -3,7 +3,7 @@
 - Status: Implemented in v1.1
 - Date: 2026-05-31
 - Wave: v1.1-P8 → v1.1-P11 (landed)
-- Plan slice: v1.1 §§"v1.1-P8 — Re-home processes-json.nix reads", "v1.1-P9 — Replace microvm.vms with d2b-owned submodule evaluator", "v1.1-P10 — Retire microvm@/microvm-virtiofsd@/store-sync templates", "v1.1-P11 — Drop microvm.nix flake input"
+- Plan slice: v1.1 §§"v1.1-P8 - Re-home processes-json.nix reads", "v1.1-P9 - Replace microvm.vms with d2b-owned submodule evaluator", "v1.1-P10 - Retire microvm@/microvm-virtiofsd@/store-sync templates", "v1.1-P11 - Drop microvm.nix flake input"
 - Companion ADRs: [ADR 0001](0001-systemd-free-vm-orchestration.md), [ADR 0004](0004-cloud-hypervisor-runner-shape.md), [ADR 0015](0015-daemon-only-clean-break.md)
 - Verification: `tests/microvm-nix-absent-eval.sh` + 4 sibling substrate gates; commit `edde456`.
 
@@ -73,7 +73,7 @@ Pressure for removal came from three directions:
 Every microvm.* field consumed by d2b production paths gets a
 d2b-owned counterpart in `nixos-modules/options-vms.nix`. The
 mapping is established in v1.1-P8 (processes-json re-home) and
-extended through P9–P11.
+extended through P9-P11.
 
 | Upstream `microvm.*` field (per-VM)              | d2b-owned counterpart                              | Consumer                              |
 |--------------------------------------------------|--------------------------------------------------------|---------------------------------------|
@@ -90,7 +90,7 @@ extended through P9–P11.
 | `microvm.kernel.{dev,out}` / `initrdPath` / `kernelParams` | `d2b.vms.<vm>.runner.kernel.*`           | processes-json                        |
 | `microvm.storeOnDisk` / `storeDisk` / `writableStoreOverlay` | `d2b.vms.<vm>.runner.store.*`          | processes-json, store.nix             |
 | `microvm.virtiofsd.*` (package, group, inodeFileHandles, extraArgs, threadPoolSize) | `d2b.vms.<vm>.runner.virtiofsd.*` | processes-json, store.nix |
-| `microvm.hypervisor`                             | (constant `"cloud-hypervisor"` in d2b — drop option) | processes-json                       |
+| `microvm.hypervisor`                             | (constant `"cloud-hypervisor"` in d2b - drop option) | processes-json                       |
 | `microvm.cloud-hypervisor.package`               | `d2b.vms.<vm>.runner.hypervisor.package`           | processes-json                        |
 | `microvm.cloud-hypervisor.extraArgs`             | `d2b.vms.<vm>.runner.hypervisor.extraArgs`         | processes-json                        |
 | `microvm.cloud-hypervisor.platformOEMStrings`    | `d2b.vms.<vm>.runner.hypervisor.platformOEMStrings`| processes-json                        |
@@ -153,7 +153,7 @@ shape via `nixos-modules/vm-submodule.nix`:
   `swtpm-argv-minimal.txt`, `usbip-argv-minimal.txt`,
   `video-argv-minimal.txt`, `virtgpu-ioctl-values.txt`,
   `virtiofsd-argv-minimal.txt`, `vsock-relay-argv-minimal.txt`,
-  `parity-drift.json` — 12 fixtures total) become the parity
+  `parity-drift.json` - 12 fixtures total) become the parity
   oracle. **Important scope note.** At HEAD `00b24c5` the
   [`tests/runner-shape-snapshot.sh`](../../tests/runner-shape-snapshot.sh)
   driver script only exercises 2 of those fixtures
@@ -165,7 +165,7 @@ shape via `nixos-modules/vm-submodule.nix`:
   covers every supported runner shape. The frozen fixtures are
   refreshed only by panel-approved CH-version bumps.
 
-### Sidecar/template retirement — full role matrix
+### Sidecar/template retirement - full role matrix
 
 v1.1 retires every per-VM systemd-template surface AND every
 retired-host-singleton surface listed in
@@ -177,7 +177,7 @@ matrix below; some matrix rows reference patterns that are
 **scheduled to be added to the denylist gate in their owning
 v1.1-P<N> phase** (per the TDD-table P10 rows in the v1.1 plan)
 rather than being protected at v1.1-P0 landing. The matrix's
-status column does NOT change based on gate-coverage timing —
+status column does NOT change based on gate-coverage timing -
 each row's disposition (SpawnRunner / Host-prep DAG / Retired
 in P6) is canonical for the v1.1 design regardless of when the
 denylist gate row lands. The matrix below covers ALL 14
@@ -185,7 +185,7 @@ denylist patterns from the gate plus the v1.1-P10-expanded
 patterns scheduled for that phase, each with one of three
 dispositions:
 
-- **SpawnRunner** — replaced by a broker `SpawnRunner{role: ...}`
+- **SpawnRunner** - replaced by a broker `SpawnRunner{role: ...}`
   variant. **The role disposition matrix in this ADR (section
   "Disposition matrix" below) is the canonical, normative source
   of truth for the v1.1 SpawnRunner role inventory.** Earlier
@@ -201,14 +201,14 @@ dispositions:
   `tests/broker-spawn-audit-parity-eval.sh` gate enforces parity
   between the Rust enum and the matrix rows (resolves R10
   virt-r10-2 + R11 docs-r11-1).
-- **Host-prep DAG** — replaced by a daemon-owned host-preparation
+- **Host-prep DAG** - replaced by a daemon-owned host-preparation
   op (no per-runner spawn; ordering is enforced inside `d2bd`).
-- **Retired in P6** — the unit is already gone in v1.0 source as
+- **Retired in P6** - the unit is already gone in v1.0 source as
   part of the daemon-only clean break (per ADR 0015); the v1.1
   matrix records the disposition for completeness so future
   reviewers do not need to chase the history.
 
-#### ADR 0011 invariant — applies to every SpawnRunner row
+#### ADR 0011 invariant - applies to every SpawnRunner row
 
 Every SpawnRunner role MUST preserve the
 [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
@@ -218,7 +218,7 @@ interior cgroup nodes process-free, hand a pidfd to d2bd over
 leaf-only **broker-mediated `CgroupKill`** (v1.1-P10 op per
 [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
 Decision item 6 + [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
-"Broker ops on the cgroup tree" — broker is the sole writer of
+"Broker ops on the cgroup tree" - broker is the sole writer of
 `cgroup.kill`; daemon uses `pidfd_send_signal(SIGTERM)` first
 and only requests broker-mediated `CgroupKill` escalation as
 last resort) for teardown. The invariant applies
@@ -238,10 +238,10 @@ Some SpawnRunner roles execute their payload through a
 seccomp/namespace/capability confinement (the role catalog at
 ADR 0004 leaves wrapper choice per role; v1.1-P10 will document
 per-role wrapper settings). When a role uses such a wrapper, the
-broker's lifecycle invariants — `waitid(P_PIDFD)`-based reap,
+broker's lifecycle invariants - `waitid(P_PIDFD)`-based reap,
 `OneShotComplete` semantics, leaf-only broker-mediated `CgroupKill`,
 and the
-cgroup-empty check after final reap — depend on the broker
+cgroup-empty check after final reap - depend on the broker
 remaining the parent of the **same kernel process object** the
 pidfd refers to. The following wrapper-launch invariants are
 therefore **normative** for every SpawnRunner role that wraps in
@@ -259,7 +259,7 @@ minijail/nsjail/bwrap:
    re-parent the payload to PID 1 (or the nearest subreaper),
    detaching it from the broker; the broker's pidfd would then
    refer to the wrapper's exited zombie, and
-   `waitid(P_PIDFD)` would reap the wrapper — NOT the payload.
+   `waitid(P_PIDFD)` would reap the wrapper - NOT the payload.
    The cgroup leaf would remain populated by an
    un-reaped-by-broker payload, breaking the cgroup-empty
    check after final reap.
@@ -292,7 +292,7 @@ RPC channel along with the prctl readbacks. The broker then:
     payload AND `fstat`s the SCM_RIGHTS-received payload-self
     pidfd; on pidfs-backed kernels (Linux ≥ 6.9, the v1.1
     kernel floor per ADR 0008's v1.1 uplift) BOTH fstats MUST
-    return identical `(st_dev, st_ino)` pairs — this is the
+    return identical `(st_dev, st_ino)` pairs - this is the
     **process-identity check (NOT PID-namespace identity)** and
     proves the pidfd-table entry tracks the supervised payload
     (NOT a pre-exec wrapper helper that exited before the
@@ -310,7 +310,7 @@ RPC channel along with the prctl readbacks. The broker then:
     (no re-parenting per invariants #1-#3); asserts `getsid()`
     is the broker's session (no setsid/daemonize); asserts
     `prctl(PR_GET_CHILD_SUBREAPER, ...)` from inside the
-    wrapper returns 0 (invariant #4 — wrapper MUST NOT claim
+    wrapper returns 0 (invariant #4 - wrapper MUST NOT claim
     subreaper); asserts `pidfd_send_signal(0, broker_pidfd)`
     succeeds (process still tracked).
 
@@ -323,7 +323,7 @@ RPC channel along with the prctl readbacks. The broker then:
     a pidfd to the payload's `struct pid`; fstat of that pidfd
     differs from fstat of the broker's wrapper-helper pidfd
     (different pidfs inodes). The negative-fixture test asserts
-    this case CAUSES the gate to FAIL — proving the
+    this case CAUSES the gate to FAIL - proving the
     process-identity comparison detects helper-vs-payload drift
     that PID-namespace identity would miss.
 
@@ -333,7 +333,7 @@ configuration in v1.1-P10 is panel-reviewed against this
 contract.
 
 Roles that run **without** a wrapper (the v1.0 default for most
-SpawnRunner rows above) are unaffected — they are direct
+SpawnRunner rows above) are unaffected - they are direct
 `execve` of the payload by the broker-forked child and the
 pidfd-table entry trivially refers to the payload's kernel
 process.
@@ -344,19 +344,19 @@ The `OpAuditRecord` kinds enumerated in the matrix below are the
 **minimum** every row MUST emit. The role-independent baseline
 applies to every SpawnRunner role:
 
-- `SpawnRequested` — broker received the spawn request.
-- `SpawnSucceeded` — child process started, pidfd opened.
-- `SpawnFailed` — exec failed (ENOENT, EACCES, cgroup error).
-- `ChildSignalled` — broker delivered a signal (SIGTERM/SIGKILL)
+- `SpawnRequested` - broker received the spawn request.
+- `SpawnSucceeded` - child process started, pidfd opened.
+- `SpawnFailed` - exec failed (ENOENT, EACCES, cgroup error).
+- `ChildSignalled` - broker delivered a signal (SIGTERM/SIGKILL)
   to the child.
-- `ChildExited` — child exited (pidfd became readable); record
+- `ChildExited` - child exited (pidfd became readable); record
   includes exit status + signal + WIFEXITED/WIFSIGNALED disposition.
-- `Restarted` — if the role's restart policy applies, after a
+- `Restarted` - if the role's restart policy applies, after a
   ChildExited the broker emits this when respawning.
 - `PreLaunchHookStarted` / `PreLaunchHookSucceeded` /
-  `PreLaunchHookFailed` — if the role has any pre-launch hook.
+  `PreLaunchHookFailed` - if the role has any pre-launch hook.
 - `LivenessProbeStarted` / `LivenessProbeOk` /
-  `LivenessProbeWedged` / `WedgeRestarted` — if the role uses
+  `LivenessProbeWedged` / `WedgeRestarted` - if the role uses
   active liveness probing (Virtiofsd does; others may opt in).
 
 The `OpAuditRecord` parity gate
@@ -371,17 +371,17 @@ panel-approved rationale.
 
 | Retired systemd surface (denylist pattern)             | Disposition       | Replacement detail                                                                                            | Role-baseline `OpAuditRecord` kinds applicable |
 |--------------------------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|------------------------------------------------|
-| `microvm@<vm>.service`                                 | SpawnRunner       | `Hypervisor` — cloud-hypervisor argv, signal/restart/audit, pidfd handoff                                     | full baseline (Spawn + Child + Restarted + PreLaunchHook for store-sync) |
-| `microvm-virtiofsd@<vm>.service` (per-share drop-in)  | SpawnRunner       | `Virtiofsd` (one per share) — virtiofsd argv per share, FD plumbing, ACL setup                               | full baseline + LivenessProbe (active wedge detection per below) |
-| `d2b-<vm>-store-sync.service`                      | Pre-launch hook   | `Hypervisor` pre-launch hook — rsync + hardlink-farm population; subprocess MUST run as its own SpawnRunner leaf per ADR 0011 binding above | PreLaunchHookStarted/Succeeded/Failed + (if forks child) full Spawn/Child baseline |
-| `d2b-<vm>-swtpm.service`                           | SpawnRunner       | `SwtpmFlush` (one-shot) + `Swtpm` (long-lived) — swtpm-flush state migration; swtpm pidfd                    | full baseline (Restarted N/A for SwtpmFlush) |
-| `d2b-<vm>-gpu.service`                             | SpawnRunner       | `Gpu` — crosvm gpu sidecar argv, GPU device ACL, socket FD via SCM_RIGHTS                                    | full baseline + Restarted + signal-on-VM-shutdown |
-| `d2b-<vm>-video.service`                           | SpawnRunner       | `Video` — vhost-user-video argv, video device ACL                                                            | full baseline + Restarted |
-| `d2b-<vm>-snd.service`                             | SpawnRunner       | `Audio` — vhost-user-sound argv, audio ACL, pipewire socket FD via SCM_RIGHTS                                | full baseline + Restarted |
-| `d2b-otel-relay@<vm>.service`                      | SpawnRunner       | `OtelGuestRelay` — per-VM OTLP relay, vsock FD plumbing                                                      | full baseline + Restarted |
-| `d2b-otel-host-bridge.service`                     | SpawnRunner       | `OtelHostBridge` — host-side OTLP bridge, ACL refresh (replaces `host-otel-relay-acl.nix`), unix-socket plumbing | full baseline + Restarted (v1.1-P6 lands this) |
+| `microvm@<vm>.service`                                 | SpawnRunner       | `Hypervisor` - cloud-hypervisor argv, signal/restart/audit, pidfd handoff                                     | full baseline (Spawn + Child + Restarted + PreLaunchHook for store-sync) |
+| `microvm-virtiofsd@<vm>.service` (per-share drop-in)  | SpawnRunner       | `Virtiofsd` (one per share) - virtiofsd argv per share, FD plumbing, ACL setup                               | full baseline + LivenessProbe (active wedge detection per below) |
+| `d2b-<vm>-store-sync.service`                      | Pre-launch hook   | `Hypervisor` pre-launch hook - rsync + hardlink-farm population; subprocess MUST run as its own SpawnRunner leaf per ADR 0011 binding above | PreLaunchHookStarted/Succeeded/Failed + (if forks child) full Spawn/Child baseline |
+| `d2b-<vm>-swtpm.service`                           | SpawnRunner       | `SwtpmFlush` (one-shot) + `Swtpm` (long-lived) - swtpm-flush state migration; swtpm pidfd                    | full baseline (Restarted N/A for SwtpmFlush) |
+| `d2b-<vm>-gpu.service`                             | SpawnRunner       | `Gpu` - crosvm gpu sidecar argv, GPU device ACL, socket FD via SCM_RIGHTS                                    | full baseline + Restarted + signal-on-VM-shutdown |
+| `d2b-<vm>-video.service`                           | SpawnRunner       | `Video` - vhost-user-video argv, video device ACL                                                            | full baseline + Restarted |
+| `d2b-<vm>-snd.service`                             | SpawnRunner       | `Audio` - vhost-user-sound argv, audio ACL, pipewire socket FD via SCM_RIGHTS                                | full baseline + Restarted |
+| `d2b-otel-relay@<vm>.service`                      | SpawnRunner       | `OtelGuestRelay` - per-VM OTLP relay, vsock FD plumbing                                                      | full baseline + Restarted |
+| `d2b-otel-host-bridge.service`                     | SpawnRunner       | `OtelHostBridge` - host-side OTLP bridge, ACL refresh (replaces `host-otel-relay-acl.nix`), unix-socket plumbing | full baseline + Restarted (v1.1-P6 lands this) |
 | `d2b-vfsd-watchdog@.{service,timer}`               | Embedded in role  | Active liveness probe inside `Virtiofsd` SpawnRunner role (see "Virtiofsd wedge detection" below)             | LivenessProbe set (Started/Ok/Wedged/WedgeRestarted) |
-| `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}` | SpawnRunner   | `UsbipBackend` (per-env, long-lived `usbipd -4 --tcp-port <backendPort>`) + `UsbipProxy` (per-env, `systemd-socket-proxyd` front binding `<env.hostUplinkIp>:3240`). At v1.0 HEAD these are ALREADY broker-spawned under `d2b.slice/sys-<env>/usbipd-*` per [`docs/reference/components-usbip.md`](../reference/components-usbip.md); v1.1 only consolidates the role-matrix entry and registers the denylist pattern. **v1.1 RunnerRole catalog reconciliation note** (resolves R10 virt-r10-2 + R11 docs-r11-2 + networking-r11-2): the v1.0 [`privileges.md`](../reference/privileges.md) catalog lists a SINGULAR `Usbip` SpawnRunner role and the broker ops `UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`. The v1.1 design SUPERSEDES the singular role into the multi-variant inventory below (per ADR 0018 § "Disposition matrix" — this matrix is the canonical RunnerRole source per the section preamble above); the v1.0 broker ops (`UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`) remain unchanged and are what the v1.1 SpawnRunner leaves dispatch through. v1.1-P10 lands the corresponding privileges.md update (singular `Usbip` row → 6-variant rows) alongside the runner_role.rs enum. **Per-attach lifecycle reconciled with [`docs/reference/components-usbip.md`](../reference/components-usbip.md).** The hot-plug ceremony has **two distinct execution contexts**: (a) host-side `usbip bind`/`unbind` against the local usbipd (dispatched via the existing `UsbipBind`/`UsbipUnbind` broker ops); AND (b) guest-side `usbip attach`/`detach` which MUST run INSIDE the workload VM (per components-usbip.md "Guest-side resources created" and `vhci_hcd` requirement). Both contexts dispatch through the broker `SpawnRunner` DAG as **ephemeral one-shot SpawnRunner leaves** — but the leaf's exec payload differs: **host-side** leaves exec the host `/run/current-system/sw/bin/usbip` binary directly; **guest-side** leaves exec an `ssh` client invocation whose **remote-command** argv is the `usbip attach`/`detach` against the in-guest vhci_hcd (the same model components-usbip.md describes as "Rust CLI SSHs in and issues `usbip attach`"). The v1.1 SpawnRunner role naming reflects this split: **host-side** roles `UsbipBindOneShot{busid}` (dispatches the existing `UsbipBind` broker op via a one-shot SpawnRunner leaf — these are NOT new broker ops, they are SpawnRunner variants that exec the host `usbip bind` payload) and `UsbipUnbindOneShot{busid}` (dispatches existing `UsbipUnbind` broker op); **guest-side** roles `GuestUsbipAttachOneShot{vm, busid}` (no corresponding host-side broker op; exec: `ssh -i <vm.ssh.keyPath> <vm.ssh.user>@<vm.staticIp> -- usbip attach -r <env.usbipdHostIp> -b <busid>`) and `GuestUsbipDetachOneShot{vm, busid}` (exec: `ssh ... -- usbip detach -p <port>`). Both contexts spawn under `d2b.slice/sys-<env>/usbip-<verb>-<id>/` cgroup leaf with pidfd handoff per the ADR 0011 invariant binding above. **The `UsbipBindFirewallRule` broker op stays a broker op (NOT a SpawnRunner role).** Earlier drafts of this row described it as a SpawnRunner; per privileges.md § "Broker dispatcher fields" it is the existing v1.0 broker op that emits nftables carve-outs. It is invoked from the host-prep DAG ordering (before `UsbipBackend` SpawnRunner starts) and from the per-attach state machine (before `UsbipBindOneShot` SpawnRunner runs); there is NO `UsbipUnbindFirewallRule` op — carve-out removal is performed by re-invoking `UsbipBindFirewallRule` with a `destroy: true` payload field (the standard W3 broker-op destroy convention per [`ApplyNftables`](../adr/0013-w3-firewall-coexistence-policy.md) precedent). The guest-side `ssh` client invocation, like every host-launched SpawnRunner payload, is constrained by the minijail parentage invariants (exec-in-place, no double-fork) per the "Minijail / sandbox-wrapper parentage preservation" subsection below. **ssh(1) hardening for `Guest*OneShot` payloads** (resolves R11 kernel ssh-parentage finding): the broker's `ssh` argv MUST NOT pass `-f` (would daemonize and re-parent), MUST NOT pass `-N`/`-M` (background master-mode would do the same), MUST set `-o ControlMaster=no` and `-o ControlPath=none` (disables multiplexing master sockets which can outlive the pidfd-tracked client), MUST set `-o ControlPersist=no`, MUST set `-o BatchMode=yes` (no interactive prompts; deterministic exit on auth fail), MUST NOT read user-level `~/.ssh/config` (use `-F /dev/null`), and MUST exec the configured key + user + host explicitly. The broker enforces this via a static argv builder; the `tests/broker-spawn-minijail-parentage-eval.sh` gate (future, v1.1-P10) exercises the ssh-OneShot leaves with a synthetic guest that asserts `getppid()` and pidfd identity match expectations — proving the ssh client is exec-in-place and not double-forked. Cross-env busid exclusivity is enforced by `host.json.environments[].usbipBusidLocks[].busIds` (the per-env flock contract); the broker MUST hold the lock for the duration of the bind→attach→detach→unbind sequence and audit `UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended` events around it (these are daemon-side audit-event kinds, NOT broker ops or SpawnRunner roles — they land in v1.1-P10 daemon-side audit catalog). **Pre-spawn `modprobe usbip-host`** is NOT in-process — it execs the host's `/run/current-system/sw/bin/modprobe` binary. Per the R4 virt finding, this requires its own disposition: register as a daemon **host-prep DAG op** `ModprobeIfAllowed{module: "usbip-host", matrix_entry_id}` per [`docs/reference/privileges.md`](../reference/privileges.md) row `ModprobeIfAllowed` (already catalogued, scope `kernel module`, gated by `d2b.site.yubikey.enable` + at least one VM with `usbip.yubikey = true`). The host-prep DAG runs the modprobe op BEFORE the first `UsbipBackend` SpawnRunner starts for each env. **ModprobeIfAllowed failure propagation** (resolves R6 virt + R7 virt findings): if the modprobe op fails the host-prep DAG aborts the per-env USBIP bring-up sequence and returns a typed `#broker-validation-failed` envelope (exit 31 per [`error-codes.md`](../reference/error-codes.md)). The envelope `kind` is always `broker-validation-failed`; the **fine-grained denial reason** is carried in the **audit `error_kind` field** (NOT the envelope kind) using existing catalog codes from `error-codes.md`: `#modules-disabled-sysctl-locked` (kernel.modules_disabled=1 prevented load), `#host-modules-locked` (host blocks all loads), or `#modprobe-denied-not-in-matrix` (module not in the trusted-matrix allowlist). The dependent `UsbipBackend` SpawnRunner is NOT started; the daemon emits `HostPrepAborted{env, op: "ModprobeIfAllowed", error_kind, broker_op_id}` and the operator sees the typed envelope on `d2b vm start --apply` (or whichever verb triggered the per-env bring-up). The modprobe op itself is short-lived but runs under broker oversight in its own ephemeral cgroup leaf | full baseline + Restarted on the two long-lived runners (`UsbipBackend`/`UsbipProxy`); ephemeral one-shot SpawnRunner leaves (`UsbipBindOneShot`/`UsbipUnbindOneShot` host-side; `GuestUsbipAttachOneShot`/`GuestUsbipDetachOneShot` guest-via-SSH) emit the **full SpawnRunner baseline** (SpawnRequested/Succeeded/Failed + ChildExited; Restarted N/A on one-shots — listed in `tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml` (future, v1.1-P10 — fixture file does NOT exist at HEAD; it will be created in v1.1-P10 alongside the role implementations) via the `applies_to: {lifecycle: one_shot}` predicate with `owner_discipline: virt`); the per-attach lock kinds (`UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended`) are emitted at the daemon→broker dispatch boundary, NOT at the SpawnRunner level, and are tracked under a separate daemon-side audit catalog (NOT the SpawnRunner role-baseline parity gate) |
+| `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}` | SpawnRunner   | `UsbipBackend` (per-env, long-lived `usbipd -4 --tcp-port <backendPort>`) + `UsbipProxy` (per-env, `systemd-socket-proxyd` front binding `<env.hostUplinkIp>:3240`). At v1.0 HEAD these are ALREADY broker-spawned under `d2b.slice/sys-<env>/usbipd-*` per [`docs/reference/components-usbip.md`](../reference/components-usbip.md); v1.1 only consolidates the role-matrix entry and registers the denylist pattern. **v1.1 RunnerRole catalog reconciliation note** (resolves R10 virt-r10-2 + R11 docs-r11-2 + networking-r11-2): the v1.0 [`privileges.md`](../reference/privileges.md) catalog lists a SINGULAR `Usbip` SpawnRunner role and the broker ops `UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`. The v1.1 design SUPERSEDES the singular role into the multi-variant inventory below (per ADR 0018 § "Disposition matrix" - this matrix is the canonical RunnerRole source per the section preamble above); the v1.0 broker ops (`UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`) remain unchanged and are what the v1.1 SpawnRunner leaves dispatch through. v1.1-P10 lands the corresponding privileges.md update (singular `Usbip` row → 6-variant rows) alongside the runner_role.rs enum. **Per-attach lifecycle reconciled with [`docs/reference/components-usbip.md`](../reference/components-usbip.md).** The hot-plug ceremony has **two distinct execution contexts**: (a) host-side `usbip bind`/`unbind` against the local usbipd (dispatched via the existing `UsbipBind`/`UsbipUnbind` broker ops); AND (b) guest-side `usbip attach`/`detach` which MUST run INSIDE the workload VM (per components-usbip.md "Guest-side resources created" and `vhci_hcd` requirement). Both contexts dispatch through the broker `SpawnRunner` DAG as **ephemeral one-shot SpawnRunner leaves** - but the leaf's exec payload differs: **host-side** leaves exec the host `/run/current-system/sw/bin/usbip` binary directly; **guest-side** leaves exec an `ssh` client invocation whose **remote-command** argv is the `usbip attach`/`detach` against the in-guest vhci_hcd (the same model components-usbip.md describes as "Rust CLI SSHs in and issues `usbip attach`"). The v1.1 SpawnRunner role naming reflects this split: **host-side** roles `UsbipBindOneShot{busid}` (dispatches the existing `UsbipBind` broker op via a one-shot SpawnRunner leaf - these are NOT new broker ops, they are SpawnRunner variants that exec the host `usbip bind` payload) and `UsbipUnbindOneShot{busid}` (dispatches existing `UsbipUnbind` broker op); **guest-side** roles `GuestUsbipAttachOneShot{vm, busid}` (no corresponding host-side broker op; exec: `ssh -i <vm.ssh.keyPath> <vm.ssh.user>@<vm.staticIp> -- usbip attach -r <env.usbipdHostIp> -b <busid>`) and `GuestUsbipDetachOneShot{vm, busid}` (exec: `ssh ... -- usbip detach -p <port>`). Both contexts spawn under `d2b.slice/sys-<env>/usbip-<verb>-<id>/` cgroup leaf with pidfd handoff per the ADR 0011 invariant binding above. **The `UsbipBindFirewallRule` broker op stays a broker op (NOT a SpawnRunner role).** Earlier drafts of this row described it as a SpawnRunner; per privileges.md § "Broker dispatcher fields" it is the existing v1.0 broker op that emits nftables carve-outs. It is invoked from the host-prep DAG ordering (before `UsbipBackend` SpawnRunner starts) and from the per-attach state machine (before `UsbipBindOneShot` SpawnRunner runs); there is NO `UsbipUnbindFirewallRule` op - carve-out removal is performed by re-invoking `UsbipBindFirewallRule` with a `destroy: true` payload field (the standard W3 broker-op destroy convention per [`ApplyNftables`](../adr/0013-w3-firewall-coexistence-policy.md) precedent). The guest-side `ssh` client invocation, like every host-launched SpawnRunner payload, is constrained by the minijail parentage invariants (exec-in-place, no double-fork) per the "Minijail / sandbox-wrapper parentage preservation" subsection below. **ssh(1) hardening for `Guest*OneShot` payloads** (resolves R11 kernel ssh-parentage finding): the broker's `ssh` argv MUST NOT pass `-f` (would daemonize and re-parent), MUST NOT pass `-N`/`-M` (background master-mode would do the same), MUST set `-o ControlMaster=no` and `-o ControlPath=none` (disables multiplexing master sockets which can outlive the pidfd-tracked client), MUST set `-o ControlPersist=no`, MUST set `-o BatchMode=yes` (no interactive prompts; deterministic exit on auth fail), MUST NOT read user-level `~/.ssh/config` (use `-F /dev/null`), and MUST exec the configured key + user + host explicitly. The broker enforces this via a static argv builder; the `tests/broker-spawn-minijail-parentage-eval.sh` gate (future, v1.1-P10) exercises the ssh-OneShot leaves with a synthetic guest that asserts `getppid()` and pidfd identity match expectations - proving the ssh client is exec-in-place and not double-forked. Cross-env busid exclusivity is enforced by `host.json.environments[].usbipBusidLocks[].busIds` (the per-env flock contract); the broker MUST hold the lock for the duration of the bind→attach→detach→unbind sequence and audit `UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended` events around it (these are daemon-side audit-event kinds, NOT broker ops or SpawnRunner roles - they land in v1.1-P10 daemon-side audit catalog). **Pre-spawn `modprobe usbip-host`** is NOT in-process - it execs the host's `/run/current-system/sw/bin/modprobe` binary. Per the R4 virt finding, this requires its own disposition: register as a daemon **host-prep DAG op** `ModprobeIfAllowed{module: "usbip-host", matrix_entry_id}` per [`docs/reference/privileges.md`](../reference/privileges.md) row `ModprobeIfAllowed` (already catalogued, scope `kernel module`, gated by `d2b.site.yubikey.enable` + at least one VM with `usbip.yubikey = true`). The host-prep DAG runs the modprobe op BEFORE the first `UsbipBackend` SpawnRunner starts for each env. **ModprobeIfAllowed failure propagation** (resolves R6 virt + R7 virt findings): if the modprobe op fails the host-prep DAG aborts the per-env USBIP bring-up sequence and returns a typed `#broker-validation-failed` envelope (exit 31 per [`error-codes.md`](../reference/error-codes.md)). The envelope `kind` is always `broker-validation-failed`; the **fine-grained denial reason** is carried in the **audit `error_kind` field** (NOT the envelope kind) using existing catalog codes from `error-codes.md`: `#modules-disabled-sysctl-locked` (kernel.modules_disabled=1 prevented load), `#host-modules-locked` (host blocks all loads), or `#modprobe-denied-not-in-matrix` (module not in the trusted-matrix allowlist). The dependent `UsbipBackend` SpawnRunner is NOT started; the daemon emits `HostPrepAborted{env, op: "ModprobeIfAllowed", error_kind, broker_op_id}` and the operator sees the typed envelope on `d2b vm start --apply` (or whichever verb triggered the per-env bring-up). The modprobe op itself is short-lived but runs under broker oversight in its own ephemeral cgroup leaf | full baseline + Restarted on the two long-lived runners (`UsbipBackend`/`UsbipProxy`); ephemeral one-shot SpawnRunner leaves (`UsbipBindOneShot`/`UsbipUnbindOneShot` host-side; `GuestUsbipAttachOneShot`/`GuestUsbipDetachOneShot` guest-via-SSH) emit the **full SpawnRunner baseline** (SpawnRequested/Succeeded/Failed + ChildExited; Restarted N/A on one-shots - listed in `tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml` (future, v1.1-P10 - fixture file does NOT exist at HEAD; it will be created in v1.1-P10 alongside the role implementations) via the `applies_to: {lifecycle: one_shot}` predicate with `owner_discipline: virt`); the per-attach lock kinds (`UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended`) are emitted at the daemon→broker dispatch boundary, NOT at the SpawnRunner level, and are tracked under a separate daemon-side audit catalog (NOT the SpawnRunner role-baseline parity gate) |
 | `microvm-tap-interfaces@.service` (and per-VM TAP)     | Host-prep DAG     | `ApplyW3TapInterfaces` (already W3-owned in v1.0 per ADRs 0012/0014)                                          | (covered by existing W3 audit kinds, not SpawnRunner) |
 | `microvm-setup@.service`                               | Retired in P6     | Subsumed into daemon host-prep DAG (per ADR 0015 § Decision); no replacement needed                          | n/a |
 | `microvm-pci-devices@.service`                         | Host-prep DAG     | `ApplyDeviceCgroup` (per-VM PCI passthrough device ACL via daemon-owned cgroup device controller)            | (covered by existing host-prep audit kinds) |
@@ -406,7 +406,7 @@ v1.1 cleanup sequence therefore puts the **broker** in charge of
 reaping, with the daemon as an observer:
 
 1. After `SpawnSucceeded` the broker holds (a) the pidfd to its
-   own child — preferentially obtained from `clone3(CLONE_PIDFD)`
+   own child - preferentially obtained from `clone3(CLONE_PIDFD)`
    which atomically returns a pidfd to the new child in the parent
    (see [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
    § Decision step 8); the fallback path is parent-side
@@ -414,7 +414,7 @@ reaping, with the daemon as an observer:
    the child's PID to the parent (NOT `pidfd_open(getpid())`,
    which would return a pidfd to the broker itself, not its
    child; the R9 kernel reviewer flagged the earlier wording as
-   structurally impossible — a parent cannot inherit a pidfd
+   structurally impossible - a parent cannot inherit a pidfd
    opened by the child after fork, and `getpid()` evaluated in
    the parent targets the broker). (b) the cgroup leaf path, and
    (c) registers a
@@ -426,18 +426,18 @@ reaping, with the daemon as an observer:
    the daemon does NOT register the pidfd for reaping.
 2. The **broker** polls the pidfd for readability via `epoll(7)`
    on the pidfd's `EPOLLIN` set. When readable (or already-exited
-   at registration time — both paths are handled identically by
+   at registration time - both paths are handled identically by
    the polling loop), the broker enters the cleanup sequence:
-   - **First `waitid` (WNOWAIT — peek the exit status without
+   - **First `waitid` (WNOWAIT - peek the exit status without
      reaping):** `waitid(P_PIDFD, pidfd, &si, WEXITED | WNOWAIT)`.
      The broker is the parent so this returns the exit status
-     successfully. WNOWAIT explicitly does NOT reap the zombie —
+     successfully. WNOWAIT explicitly does NOT reap the zombie -
      it returns the exit status while keeping the child in
      zombie state so subsequent inspection can use the pidfd
      unambiguously.
    - Emit `ChildExited` `OpAuditRecord` (broker-side audit log)
      with the exit status read above.
-   - **Final `waitid` (NO WNOWAIT — reap the zombie):**
+   - **Final `waitid` (NO WNOWAIT - reap the zombie):**
      `waitid(P_PIDFD, pidfd, &si, WEXITED)`. This call REAPS
      the zombie. The zombie was holding a cgroup reference; the
      reap releases it so the cgroup leaf becomes truly empty.
@@ -455,8 +455,8 @@ reaping, with the daemon as an observer:
      against the leaf (broker is sole writer of `cgroup.kill`
      per cgroup-delegation.md "Broker ops on the cgroup tree";
      daemon does NOT write `cgroup.kill` directly) AND emit
-     `OrphanGrandchildKilled` audit event (security-load-bearing
-     — escape is a bug).
+     `OrphanGrandchildKilled` audit event (security-load-bearing -
+     escape is a bug).
    - Close the pidfd via `close(2)`. (Safe to do AFTER the
      reaping `waitid`; the pidfd's only remaining purpose was
      to pin the kernel process object during the audit emit.)
@@ -548,7 +548,7 @@ ADR 0018 in v1.1 for SpawnRunner children" note to ADR 0011 §
 that paragraph.)
 
 The broker's SIGCHLD disposition is `SIG_DFL` for SpawnRunner
-children — the default disposition preserves zombies pending
+children - the default disposition preserves zombies pending
 the explicit `waitid(P_PIDFD)` polling-loop reap (per signal(7)
 `SIG_DFL` for SIGCHLD is "ignore" semantics that DOES NOT
 auto-reap, exactly what the WNOWAIT-then-reap pattern requires).
@@ -638,16 +638,16 @@ full ADR 0014 contract, not just the module-name list:
   example VM:
   - **Set-equality** on `requiredKernelModules` AND
     `optionalKernelModules` (ordering ignored because nothing in
-    d2b source consumes list order for module loading — verified
+    d2b source consumes list order for module loading - verified
     by `rg -nE 'kernel_modules|kernelModules' packages/d2b-core/src/`
-    showing only iteration patterns at HEAD `4b5274b` — in particular
+    showing only iteration patterns at HEAD `4b5274b` - in particular
     `for module in &host.kernel_modules` at
     `packages/d2b-core/src/host_check.rs:541`, indexed iteration
     at `host_check.rs:659,662,993,994`, struct definition at
     `packages/d2b-core/src/host.rs:115` (no order-sensitive
     consumers found).
   - **Per-module attribute equality** on requirement class,
-    load-fail-if-locked policy, and sysctl-association — these
+    load-fail-if-locked policy, and sysctl-association - these
     fail the gate if any drift, regardless of ordering.
   - **modules_disabled fail-closed behaviour assertion**: synthesize
     a fixture host with `kernel.modules_disabled = 1` and a VM
@@ -691,7 +691,7 @@ sides interlock as follows:
      **Kernel-floor uplift (v1.1 ONLY).** Linux pidfs (the proper
      filesystem backing pidfds with per-process inodes) landed in
      Linux 6.9. On pre-6.9 kernels, pidfds are anon_inode-backed
-     and ALL pidfds share the same `(st_dev, st_ino)` — the
+     and ALL pidfds share the same `(st_dev, st_ino)` - the
      fstat identity check is structurally impossible to satisfy
      correctly. v1.1 therefore **uplifts the v1.0
      [ADR 0008](0008-supported-platforms-and-rejected-targets.md)
@@ -717,7 +717,7 @@ sides interlock as follows:
         `pause()`); the child is reaped by the daemon as part of
         the probe's cleanup. The helper child's PID is
         DIFFERENT from `getpid()` by construction (a fresh PID
-        from the kernel) — this avoids the failure mode where
+        from the kernel) - this avoids the failure mode where
         `d2bd` is itself PID 1 in its visible namespace
         (e.g., when running inside an init-less container)
         and "PID 1" would be `getpid()` rather than an
@@ -733,7 +733,7 @@ sides interlock as follows:
         - The helper-child pidfd has a DIFFERENT
           `(st_dev, st_ino)` from the `getpid()` pair (proves
           pidfs returns DISTINCT inodes for distinct kernel
-          process objects — the security-load-bearing claim).
+          process objects - the security-load-bearing claim).
      5. Sends `SIGKILL` to the helper child, waitids it (full
         reap), closes all three pidfds.
 
@@ -773,7 +773,7 @@ sides interlock as follows:
      need. "Exact-fd" stronger claims (e.g., the broker must send
      the literal kernel fd it received from `pidfd_open`) are NOT
      achievable via fstat alone but are also unnecessary for this
-     threat model — the broker is trusted to be the Hypervisor's
+     threat model - the broker is trusted to be the Hypervisor's
      spawning process and the daemon already vetted the SCM_RIGHTS
      channel.
 
@@ -781,7 +781,7 @@ sides interlock as follows:
      flagged that an earlier draft mis-specified `pidfd_getfd` as
      a comparison primitive. `pidfd_getfd(pidfd, targetfd, 0)`
      actually duplicates fd `targetfd` from the process referenced
-     by `pidfd` into the caller's fd table — it is a
+     by `pidfd` into the caller's fd table - it is a
      fd-extraction primitive, not a fd-comparison primitive.
      It is also `PTRACE_MODE_ATTACH_REALCREDS`-gated against the
      target's credentials, and the daemon (non-root per ADR 0002)
@@ -807,7 +807,7 @@ sides interlock as follows:
      also reads `/proc/self/fdinfo/<daemon_pidfd>` and
      `/proc/self/fdinfo/<broker_pidfd>` and compares the `Pid:`
      and `NSpid:` lines. This cross-check serves **diagnostic
-     purposes only** — pidfd already pins the kernel process
+     purposes only** - pidfd already pins the kernel process
      object across PID reuse (a pidfd to an exited process stays
      valid and returns `Pid: -1` per the kernel pidfd contract),
      so PID reuse is structurally impossible to fool the fstat
@@ -843,7 +843,7 @@ sides interlock as follows:
   **Classification precedence (deterministic; the daemon walks
   the checks in this order and the FIRST failure determines the
   `cas_failure_class`):**
-  1. `stale-generation` — `requested_generation <
+  1. `stale-generation` - `requested_generation <
      current_hypervisor_generation` is checked FIRST; if the
      generation is strictly older than the daemon's current
      hypervisor generation, the daemon rejects WITHOUT
@@ -851,7 +851,7 @@ sides interlock as follows:
      over `forged-pidfd` because a stale generation is
      unambiguous from BootedNotify metadata alone. **Equality
      (`requested_generation == current_hypervisor_generation`)
-     proceeds to the fstat check** — this is the acceptance
+     proceeds to the fstat check** - this is the acceptance
      path's first stage and matches the "generation matches the
      daemon's currently-owned Hypervisor pidfd for that VM"
      condition above. The R9 kernel reviewer flagged the earlier
@@ -860,7 +860,7 @@ sides interlock as follows:
      **Future generations**
      (`requested_generation > current_hypervisor_generation`) are
      ALSO rejected at this stage with a distinct
-     `future-generation` class — the daemon cannot have a
+     `future-generation` class - the daemon cannot have a
      pidfd-table entry for a not-yet-owned generation, so the
      fstat check would have no comparand. The
      `future-generation` rejection is rare in normal operation
@@ -868,11 +868,11 @@ sides interlock as follows:
      handoff acknowledgement) and is treated as a hard error
      (vs `stale-generation` which can occur during VM restart
      races and is treated as a soft observability event).
-  2. `forged-pidfd` — `fstat_identity_result == "fstat-mismatch"`
+  2. `forged-pidfd` - `fstat_identity_result == "fstat-mismatch"`
      OR `"fstat-failed"`. Checked SECOND because the
      pidfd-identity proof depends on a valid pidfd having been
      passed.
-  3. `concurrent-broker` — `state.json.booted_generation >=
+  3. `concurrent-broker` - `state.json.booted_generation >=
      requested_generation` (CAS failure on the on-disk write,
      after both above checks pass). Checked LAST because it
      requires acquiring the on-disk lock.
@@ -916,7 +916,7 @@ v1.1-P10) which exercises:
 - Stale generation (broker delivers `BootedNotify` from
   generation N after daemon already owns generation N+1) →
   rejected with `cas_failure_class: stale-generation` and
-  `pidfd_identity_result: "absent"` (the precedence rule above —
+  `pidfd_identity_result: "absent"` (the precedence rule above -
   the fstat AND procfs checks are skipped because the generation
   check runs FIRST).
 - Forged-pidfd (broker forges a pidfd to an unrelated live
@@ -926,8 +926,8 @@ v1.1-P10) which exercises:
 - Concurrent `BootedNotify` for the same `(vm, generation)`
   from two broker instances → exactly one accepted, exactly
   one CAS failure with `cas_failure_class: concurrent-broker`.
-- **Procfs-diagnostic-mismatch** (the fstat check succeeds — same
-  process object — AND the procfs `NSpid:` cross-check
+- **Procfs-diagnostic-mismatch** (the fstat check succeeds - same
+  process object - AND the procfs `NSpid:` cross-check
   disagrees, e.g., the broker passes a pidfd via SCM_RIGHTS to a
   process visible to the daemon under a different namespace
   view). The daemon ACCEPTS the BootedNotify (fstat is
@@ -987,25 +987,25 @@ state dirs are `/var/lib/d2b/vms/<vm>/` at mode `0750`
 d2b:d2b (set by the v1.1-P5 perms tightening that reverts
 the 0755 workaround). Each sidecar group ACL grant requires
 `--x` traversal on this parent dir for the group to reach the
-nested target — these traversal grants are also listed below.
+nested target - these traversal grants are also listed below.
 
 | Source ref                                                  | Path / socket pattern                                                  | Grantee group(s)                       | Mode  | v1.1 replacement                                                                                                            |
 |-------------------------------------------------------------|------------------------------------------------------------------------|----------------------------------------|-------|-----------------------------------------------------------------------------------------------------------------------------|
 | `:251` `refresh_acl_set "g:d2b-otel-relay" relay_listener_keep_dirs ... rwx` | Per-VM workload listener dir `/var/lib/d2b/vms/<workload-vm>/`     | `g:d2b-otel-relay`                 | `rwx` + default ACL | `OtelGuestRelay` SpawnRunner broker pre-spawn ops: `MkdirSetown{path: state_dir, owner: d2b-otel-relay, mode: 0700}` + create listener socket directly under daemon-owned cgroup |
 | `:251` `refresh_acl_set ... "vsock.sock_${obsOtlpPort}"`    | Per-VM listener socket `/var/lib/d2b/vms/<workload-vm>/vsock.sock_<port>` | `g:d2b-otel-relay`                 | `rw`  | `OtelGuestRelay` SpawnRunner mints socket FD via `socketpair()` / vsock bind + hands to relay child via `SCM_RIGHTS`; no on-disk ACL needed |
-| `:252` `refresh_acl_set "g:d2b-otel-relay" relay_stack_keep_dirs ... --x` | Obs-stack VM state dir `/var/lib/d2b/vms/<obs-vm>/`                | `g:d2b-otel-relay`                 | `--x` (traverse only) | `OtelGuestRelay` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: d2b-otel-relay}` op (no default ACL — explicit single-grant) |
+| `:252` `refresh_acl_set "g:d2b-otel-relay" relay_stack_keep_dirs ... --x` | Obs-stack VM state dir `/var/lib/d2b/vms/<obs-vm>/`                | `g:d2b-otel-relay`                 | `--x` (traverse only) | `OtelGuestRelay` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: d2b-otel-relay}` op (no default ACL - explicit single-grant) |
 | `:252` `refresh_acl_set ... "vsock.sock"` (stack base, rw)  | Obs-stack base socket `/var/lib/d2b/vms/<obs-vm>/vsock.sock`        | `g:d2b-otel-relay`                 | `rw`  | `OtelGuestRelay` SpawnRunner mints connector FD (CH textual protocol) + hands to relay child via `SCM_RIGHTS`; OR (alternative) broker pre-spawn `SetfaclSocket{path, group, mode: rw}` op |
 | `:253` `refresh_acl_set "g:kvm" relay_listener_keep_dirs ... --x` | Per-VM workload listener dir `/var/lib/d2b/vms/<workload-vm>/`     | `g:kvm`                                | `--x` (traverse only) | `Hypervisor` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: kvm}` op (kvm group is the CH proxy user, needs `--x` to reach the listener socket the relay binds) |
 | `:253` `refresh_acl_set ... "vsock.sock_${obsOtlpPort}"`    | Per-VM listener socket `/var/lib/d2b/vms/<workload-vm>/vsock.sock_<port>` | `g:kvm`                                | `--x` (connect-only) | `Hypervisor` SpawnRunner accepts the FD from `OtelGuestRelay` over `SCM_RIGHTS`; no on-disk ACL needed |
 | `:254` `refresh_acl_set "g:d2b-otel-bridge" bridge_keep_dirs ... rwx` | Bridge state dir `/var/lib/d2b/vms/<obs-vm>/` (bridge mode)        | `g:d2b-otel-bridge`                | `rwx` + default ACL | `OtelHostBridge` SpawnRunner broker pre-spawn `MkdirSetown{path: bridge_state_dir, owner: d2b-otel-bridge, mode: 0700}` op |
 | `:254` `refresh_acl_set ... "vsock.sock"`                   | Bridge base socket `/var/lib/d2b/vms/<obs-vm>/vsock.sock`           | `g:d2b-otel-bridge`                | `rw`  | `OtelHostBridge` SpawnRunner mints connector FD + hands to bridge child via `SCM_RIGHTS` |
-| **Parent-dir traversal — new in v1.1**                      | `/var/lib/d2b/vms/<vm>/` parent (0750 after v1.1-P5)               | `g:d2b-otel-relay`, `g:d2b-otel-bridge`, `g:kvm` | `--x` (traverse only) | Daemon-owned activation script (v1.1-P5) grants `--x` ACL to each enumerated sidecar group on every per-VM parent dir; v1.1-P5 owns the activation-script change, v1.1-P6 wires the ACL grants for the OTel groups specifically |
+| **Parent-dir traversal - new in v1.1**                      | `/var/lib/d2b/vms/<vm>/` parent (0750 after v1.1-P5)               | `g:d2b-otel-relay`, `g:d2b-otel-bridge`, `g:kvm` | `--x` (traverse only) | Daemon-owned activation script (v1.1-P5) grants `--x` ACL to each enumerated sidecar group on every per-VM parent dir; v1.1-P5 owns the activation-script change, v1.1-P6 wires the ACL grants for the OTel groups specifically |
 | `:256` `refresh_acl_set "g:d2b-ch-exporter" ch_keep_dirs ... "%VM%.sock"` (RETIRED) | `d2b-ch-exporter` group ACL refresh (transitional remnant of P6-deleted `d2b-ch-exporter.service`) | `g:d2b-ch-exporter`                | (variable) | Retired entirely by v1.1-P6 (no replacement; the underlying `d2b-ch-exporter` service was already retired in P6 per ADR 0015; this ACL refresh is dead code waiting for the script's retirement) |
-| (defensive) `:138-148` pre-pass revoke of `g:d2b-otel-relay` / `g:d2b-otel-bridge` on per-VM `vsock.sock` (non-obs-stack) | Per-VM workload `vsock.sock` (NOT obs-stack) | (revoke `g:d2b-otel-relay`, `g:d2b-otel-bridge`) | (n/a — revoke) | `OtelHostBridge` / `OtelGuestRelay` SpawnRunner broker startup invokes the `RevokeSocketAclIfPresent{path, groups: [d2b-otel-relay, d2b-otel-bridge]}` broker op (catalogued as a **distinct broker op** in [`docs/reference/privileges.md`](../reference/privileges.md), NOT a state-mode of `SetSocketAcl`; the earlier "extending SetSocketAcl with state: \"absent\"" framing has been retired per the R5 networking review). Audit fields include the `socket_path_hash`, `groups_revoked`, and `acl_diff` shape per the privileges.md row |
+| (defensive) `:138-148` pre-pass revoke of `g:d2b-otel-relay` / `g:d2b-otel-bridge` on per-VM `vsock.sock` (non-obs-stack) | Per-VM workload `vsock.sock` (NOT obs-stack) | (revoke `g:d2b-otel-relay`, `g:d2b-otel-bridge`) | (n/a - revoke) | `OtelHostBridge` / `OtelGuestRelay` SpawnRunner broker startup invokes the `RevokeSocketAclIfPresent{path, groups: [d2b-otel-relay, d2b-otel-bridge]}` broker op (catalogued as a **distinct broker op** in [`docs/reference/privileges.md`](../reference/privileges.md), NOT a state-mode of `SetSocketAcl`; the earlier "extending SetSocketAcl with state: \"absent\"" framing has been retired per the R5 networking review). Audit fields include the `socket_path_hash`, `groups_revoked`, and `acl_diff` shape per the privileges.md row |
 
 **On `/run/alloy` path.** An earlier draft of this table referenced
 `/run/alloy/<vm>/` as the Alloy collector socket path. That was
-incorrect — at HEAD `74c36dc` the Alloy host RuntimeDirectory is
+incorrect - at HEAD `74c36dc` the Alloy host RuntimeDirectory is
 `/run/d2b/alloy/` (per
 `nixos-modules/components/observability/host.nix:15`
 `alloyRuntimeDir = "/run/d2b/alloy"`; the `RuntimeDirectory =
@@ -1049,7 +1049,7 @@ on-`nixos-rebuild switch` ACL refresh cadence (the script was
 invoked from `system.activationScripts.d2bOtelAcls`) is
 replaced by two coordinated trigger points:
 
-1. **NixOS activation-script (every `nixos-rebuild switch`)** —
+1. **NixOS activation-script (every `nixos-rebuild switch`)** -
    v1.1-P6 lands a new `system.activationScripts.d2bReconcileOtelAcls`
    step that runs on every switch (the same trigger cadence the
    retired script used; this preserves operator expectations).
@@ -1061,12 +1061,12 @@ replaced by two coordinated trigger points:
    below). This trigger is REQUIRED (not `ExecStartPost` on
    `d2bd.service`) because **`d2bd.service` is
    `restartIfChanged = false`** at `nixos-modules/host-daemon.nix:154`
-   per the v1.0 daemon-lifecycle invariant — restarting the
+   per the v1.0 daemon-lifecycle invariant - restarting the
    daemon on every switch would interrupt every running VM. An
    `ExecStartPost` on a service that does not restart would not
    reliably fire on `nixos-rebuild switch`, defeating the trigger.
 
-2. **Daemon-startup reconcile** —  `d2bd.service`
+2. **Daemon-startup reconcile** -  `d2bd.service`
    `ExecStartPost=` invokes a daemon RPC
    `daemon-api/host-prep ReconcileOtelAcls` on the daemon's OWN
    startup (which happens on system boot, NOT on every switch
@@ -1074,7 +1074,7 @@ replaced by two coordinated trigger points:
    post-reboot case where the daemon comes up before any
    `nixos-rebuild switch` has run since the reboot.
 
-3. **Per-spawn pre-launch** — every `OtelGuestRelay` /
+3. **Per-spawn pre-launch** - every `OtelGuestRelay` /
    `OtelHostBridge` SpawnRunner emits the ACL grants as
    pre-launch broker ops (the table-row replacements above). This
    handles the case where an operator runs
@@ -1086,7 +1086,7 @@ replaced by two coordinated trigger points:
 review's underspecification finding): the activation-time and
 daemon-startup reconciles (triggers 1 + 2) establish the
 **baseline** ACL set covering ALL declared **AND enabled** VMs
-in the bundle — i.e., every VM where
+in the bundle - i.e., every VM where
 `d2b.vms.<vm>.enable = true`, **whether currently running
 or not**. For an enabled-but-stopped VM the state-dir
 `/var/lib/d2b/vms/<vm>/` still exists (created by the
@@ -1148,7 +1148,7 @@ current v1.0 source still wires
 following concrete behaviour. The probe path uses a **minimal
 daemon-socket connect check** (NOT the full `host doctor`,
 which has many sub-checks for broker / metrics / runner /
-module / autostart — a metrics-endpoint failure should NOT
+module / autostart - a metrics-endpoint failure should NOT
 soft-defer the ACL reconcile per the R7 networking review).
 The probe invokes `d2b host reconcile-otel-acls --apply
 --json` directly and inspects the typed envelope. **Envelope
@@ -1157,7 +1157,7 @@ shape** (per the v1.0 source-of-truth at
 and [`docs/reference/daemon-api.md`](../reference/daemon-api.md)):
 the typed envelope is a **top-level JSON object** with
 `{code, docs_anchor, exit_code, kind, observed_state,
-remediation, what_was_checked}` fields — `code` carries the
+remediation, what_was_checked}` fields - `code` carries the
 machine-readable error kind (e.g., `"daemon-down"`), `kind` is
 the broader envelope class (e.g., `"host-check-error"`,
 `"host-prep-error"`). The activation script parses `.code`
@@ -1187,13 +1187,13 @@ system.activationScripts.d2bReconcileOtelAcls = {
         # Success
         ;;
       1:daemon-down)
-        # SOFT defer — daemon-startup ExecStartPost will pick it up
+        # SOFT defer - daemon-startup ExecStartPost will pick it up
         printf 'd2b: daemon not reachable during activation; ' >&2
         printf 'OTel ACL reconcile deferred to d2bd startup\n' >&2
         exit 0
         ;;
       *)
-        # HARD failure — any other non-zero exit OR unrecognized
+        # HARD failure - any other non-zero exit OR unrecognized
         # envelope code. Operator sees the typed envelope in stderr
         # and can re-run after fixing the underlying issue.
         printf 'd2b: OTel ACL reconcile FAILED at activation: ' >&2
@@ -1259,7 +1259,7 @@ trap-on-EXIT cleanup so no stale state remains in `/run/d2b`.
 
 **The `deps = [ "users" "specialfs" "etc" ]` ordering** uses
 canonical NixOS activation-script names (NOT systemd unit
-names — the R6 networking reviewer correctly flagged the prior
+names - the R6 networking reviewer correctly flagged the prior
 `"d2b-priv-broker-socket"` value as the wrong shape).
 `users` + `specialfs` + `etc` are the standard pre-requisites
 that ensure user/group creation, `/proc`/`/sys` mounting, and
@@ -1276,7 +1276,7 @@ New test gate `tests/host-otel-acl-activation-eval.sh` (future,
 v1.1-P6) asserts the activation script's NixOS eval produces
 the exact shape above (deps ordering uses activation-script
 names not systemd unit names, soft-defer triggered by
-**exit 1 + top-level `.code == "daemon-down"`** — NEVER on
+**exit 1 + top-level `.code == "daemon-down"`** - NEVER on
 `.kind`, since `.kind` carries the broader envelope class
 `host-check-error` here, hard-failure on other errors,
 scratch-file cleanup via trap),
@@ -1308,19 +1308,19 @@ ReconcileOtelAcls{Started|Succeeded|Failed} {
 **not** a free-form string; it MUST be one of the following
 enumerated values, mirroring the `error-codes.md` catalog:
 
-- `daemon-down` — daemon RPC layer unreachable (typically only
+- `daemon-down` - daemon RPC layer unreachable (typically only
   emitted by the per-spawn-prelaunch trigger; the
   activation-script trigger never reaches this code path
   because it soft-defers on `daemon-down` per the contract
   above)
-- `broker-validation-failed` — one or more `SetSocketAcl` /
+- `broker-validation-failed` - one or more `SetSocketAcl` /
   `RevokeSocketAclIfPresent` broker ops were denied by the
   broker's validation layer. The `broker_op_ids` array carries
   the per-row broker audit IDs; each broker-side audit record
   has its own `error_kind` from the broker decision catalog
   (e.g., `socket-acl-target-not-owned`, etc.) for fine-grained
   forensic walk.
-- `internal-io` — daemon-side I/O failure during the reconcile
+- `internal-io` - daemon-side I/O failure during the reconcile
   (e.g., reading the bundle file failed, or the daemon→broker
   IPC channel errored). Indicates a daemon-internal bug or a
   filesystem fault.
@@ -1385,7 +1385,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
   above. Concrete rename map AND explicit Rust DTO type/cardinality
   spec (resolves the R4 rust review's "ambiguous field cardinality"
   finding):
-  - `d2b` → (DELETE — the per-VM `d2b@<vm>.service`
+  - `d2b` → (DELETE - the per-VM `d2b@<vm>.service`
     template was retired in P6 per ADR 0015; v1.0 source still
     probes it as a vestigial check, which v1.1-P10 removes).
   - `microvm` → `hypervisor: HypervisorState` (single per-VM
@@ -1429,10 +1429,10 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     one-shot lifecycle appears as `SwtpmState::flush_history:
     Vec<FlushAttempt>` sub-field, NOT a separate top-level
     field).
-  - **New** `otel_relay: Option<OtelGuestRelayState>` — per-VM,
+  - **New** `otel_relay: Option<OtelGuestRelayState>` - per-VM,
     present iff observability is enabled for the VM (per
     `d2b.vms.<vm>.observability.enable` at HEAD).
-  - **New** `otel_host_bridge: Option<OtelHostBridgeState>` —
+  - **New** `otel_host_bridge: Option<OtelHostBridgeState>` -
     **host singleton** (NOT per-VM). The `StatusServicesOutputV2`
     type is currently per-VM-rendered; v1.1-P10 splits the
     output into a per-VM section AND a host section. The
@@ -1466,7 +1466,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
 
     The angle-bracketed placeholders (`<HypervisorState>`,
     `<GpuState | null>`, etc.) are **custom schematic notation**
-    used in this ADR to describe the shape — they are NOT
+    used in this ADR to describe the shape - they are NOT
     JSON-Schema `$ref` / `anyOf` syntax. The canonical
     JSON-Schema artifact at
     `docs/reference/cli-output/status.schema.json` uses standard
@@ -1485,13 +1485,13 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     schema version by URI. The **schema drift gate** is the
     existing `cargo xtask gen-schemas` no-diff CI check (a
     dedicated `tests/schema-drift-eval.sh` does NOT exist at
-    v1.0 HEAD — the R7 rust reviewer correctly flagged the
+    v1.0 HEAD - the R7 rust reviewer correctly flagged the
     prior draft's reference to a non-existent file); the drift
     check is invoked as part of the standard `cargo xtask test`
     flow. The full `StatusOutputV3` Rust source path:
     `packages/d2b/src/status_v3.rs` (new file in v1.1-P10,
-    following the `packages/d2b/src/` flat module convention
-    — see `ls packages/d2b/src/`). At v1.0 HEAD the
+    following the `packages/d2b/src/` flat module convention -
+    see `ls packages/d2b/src/`). At v1.0 HEAD the
     `StatusServicesOutputV2` struct lives inline in `lib.rs`
     around lines 99-114; v1.1-P10 extracts it to a new
     `packages/d2b/src/status_v2_compat.rs` file. To
@@ -1561,7 +1561,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     that omits the field) deserialize successfully and the
     server-side handler sees `schema_version == 3`. The R10
     rust reviewer flagged the prior draft (no default) as
-    breaking existing request compatibility — without the
+    breaking existing request compatibility - without the
     serde default, deserialization of a v1.0-shaped
     `StatusRequest` (with no `schema_version` field) would
     fail with a `missing field` error.
@@ -1642,7 +1642,7 @@ in a structured allowlist file rather than relying on prose
 rationale alone. The allowlist contract supports BOTH per-role
 exceptions AND **predicate-based** exceptions (for categories of
 roles that share a structural omission, e.g., all one-shot
-roles never emit `Restarted` — a predicate avoids a per-role
+roles never emit `Restarted` - a predicate avoids a per-role
 entry explosion):
 
 - Location: `tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml`
@@ -1664,7 +1664,7 @@ entry explosion):
   audit-event assertion.
 - **Schema** (YAML; v1.1-P10 implementation MUST validate against
   this JSON-Schema-equivalent contract before the gate runs). The
-  validator is strict — `additionalProperties: false` on every
+  validator is strict - `additionalProperties: false` on every
   object (enforced via `#[serde(deny_unknown_fields)]`), anchored
   regexes (enforced via the custom Deserializer helper above),
   no string-with-trailing-junk acceptance:
@@ -1716,7 +1716,7 @@ entry explosion):
   #              `UsbipBindOneShot` + `UsbipUnbindOneShot` +
   #              `GuestUsbipAttachOneShot` + `GuestUsbipDetachOneShot`
   #              in one entry), use multiple per-role
-  #              entries — predicates with `lifecycle: one_shot`
+  #              entries - predicates with `lifecycle: one_shot`
   #              also work for the broader category.)
   #
   #   **Predicate-omitted-kinds restriction (resolves R6 virt finding):**
@@ -1852,7 +1852,7 @@ Keep the `microvm.*` namespace as a deprecated alias that maps to
 the new `d2b.vms.<vm>.runner.*` tree.
 
 **Rejected** because:
-- No consumer flake under d2b's control reads `microvm.*` —
+- No consumer flake under d2b's control reads `microvm.*` -
   the option tree is internal to d2b-the-framework.
 - Aliasing adds duplicate-option-source confusion and complicates
   the eval gate that asserts no `microvm.*` remains.
@@ -1942,8 +1942,8 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   - Load both outputs; sort object keys recursively.
   - Apply path-level normalization to every value matching a Nix
     store path. The **normative regex** is
-    `^/nix/store/(?P<hash>[0-9a-df-np-sv-z]{32})-(?P<name>[^/]+)(?P<rest>/.*)?$`
-    — `<hash>` is exactly 32 characters from the Nix base32
+    `^/nix/store/(?P<hash>[0-9a-df-np-sv-z]{32})-(?P<name>[^/]+)(?P<rest>/.*)?$` -
+    `<hash>` is exactly 32 characters from the Nix base32
     alphabet (the v1.1 test reviewer noted that Nix base32
     EXCLUDES `e`, `o`, `t`, `u` to avoid case-confusion glyphs,
     so the alphabet is `0-9a-df-np-sv-z`; the over-permissive
@@ -1961,7 +1961,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
     (hash-only drift → pass; name drift → fail) AND a third
     fixture for a string that contains `[0-9a-z]{32}` but with
     `e`/`o`/`t`/`u` in the 32-char window (should NOT match the
-    regex; should pass through unchanged — guards against
+    regex; should pass through unchanged - guards against
     over-normalization of non-Nix-store paths that happen to
     look hash-like).
   - Apply field-level redaction for fully-volatile fields
@@ -1976,8 +1976,8 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
     pointers regardless of value shape. Runtime paths with
     volatile suffixes that are NOT Nix store paths (e.g.,
     `/var/lib/d2b/runtime/<vm>/socket-12345.sock`) MUST be
-    listed in `bundle-json-volatile-fields.json` by JSON pointer
-    — the store-path regex MUST NOT be relaxed to match them.
+    listed in `bundle-json-volatile-fields.json` by JSON pointer -
+    the store-path regex MUST NOT be relaxed to match them.
     The fixture set includes a negative test (a non-store path
     with a volatile suffix) that the store-path regex correctly
     leaves unchanged.
@@ -2000,7 +2000,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   the v1.0 → v1.1 substrate replacement is allowed to drift on
   IFF the drift is semantically neutral):
   - `config.system.build.toplevel.outPath` (basename component
-    only — derivation hash drift is the expected source of
+    only - derivation hash drift is the expected source of
     needing the fallback in the first place).
   - `config.system.build.extraDependencies`.
   - `config.systemd.services.<name>.serviceConfig` for every
@@ -2029,7 +2029,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   panel-justified.
 
 - `tests/kernel-modules-parity-eval.sh` (future, v1.1-P9a, per
-  [ADR 0014](0014-w3-modules-devices-runner-shape.md)) — see the
+  [ADR 0014](0014-w3-modules-devices-runner-shape.md)) - see the
   full contract in the "Kernel modules + `modules_disabled`
   parity" subsection above. Compares set-equality on module
   lists AND per-module attribute equality on requirement class,
@@ -2055,7 +2055,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   dropped.
 
 - `tests/runner-shape-snapshot.sh` (existing; **extended** in
-  v1.1-P9a) — at HEAD `00b24c5` the script diffs only 2 of the
+  v1.1-P9a) - at HEAD `00b24c5` the script diffs only 2 of the
   12 fixtures under `tests/golden/runner-shape/`. v1.1-P9a
   extends the script to diff every fixture (`audio`, `gpu`,
   `otel-host-bridge`, `swtpm`, `usbip`, `video`,

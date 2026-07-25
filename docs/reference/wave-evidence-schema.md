@@ -64,12 +64,12 @@ fields "wave" = "<wave>", "timestamp", and "operatorSignature".
 
 ### Field semantics
 
-- **`wave`** — wave identifier. Must equal the file basename so a
+- **`wave`** - wave identifier. Must equal the file basename so a
   copied-by-mistake `p0.json` cannot satisfy `p1`.
-- **`timestamp`** — when the validating smoke run completed.
+- **`timestamp`** - when the validating smoke run completed.
   RFC 3339 / ISO-8601 UTC is the recommended shape; the
   validator enforces only non-empty `string`.
-- **`operatorSignature`** — who attests to the run. Free-form
+- **`operatorSignature`** - who attests to the run. Free-form
   string; typical shapes are `alice@example`,
   `ci-bot@build-host-3`, or a host fingerprint. The validator
   enforces only non-empty `string`.
@@ -85,7 +85,7 @@ evidence file under `/var/lib/d2b/validated/<wave>.json` before
 `d2b.defaultSwitchReadiness.<wave>.validated = true` will pass
 eval.
 
-| Wave key | Implemented (shipped code)                                                                                                                                            | Validated (what the evidence file attests) — i.e. what the operator must have exercised before writing the file |
+| Wave key | Implemented (shipped code)                                                                                                                                            | Validated (what the evidence file attests) - i.e. what the operator must have exercised before writing the file |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `w4Fu`   | W12/W14 headless daemon + supervisor path.                                                                                                                            | Ubuntu Tier-1 smoke + matching `broker-<utc-date>.jsonl` audit log entries.                                    |
 | `w5Fu`   | W17 minijail profiles + GPU/audio/video argv generators.                                                                                                              | W20 hardware smoke (NVIDIA Quadro T1000 / virtio-snd / virtio-media) + audit log evidence. Depends on `w4Fu` validated. |
@@ -144,7 +144,7 @@ The intended path from a fresh host to a wave's
    wave inventory and writes one
    `/var/lib/d2b/validated/<wave>.json` file per wave with
    the canonical `{wave, timestamp, operatorSignature}` payload.
-   It does NOT itself run the validators — operators are expected
+   It does NOT itself run the validators - operators are expected
    to have run each wave's validator (`tests/minijail-validator-*.sh`,
    etc.) by hand or in a CI job, OR to rely on the daemon's
    opportunistic evidence-write path described below. `--dry-run`
@@ -202,17 +202,17 @@ that the three fields are present and well-typed.
 
 ## See also
 
-- [`host-validate.md`](./host-validate.md) — the
+- [`host-validate.md`](./host-validate.md) - the
   `d2b host validate` verb (P5 sibling deliverable) that
   writes these files.
-- [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)
-  — the per-wave evidence gate this evidence feeds.
-- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md)
-  — the per-wave readiness matrix and the design rationale.
-- [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md)
-  — the W20 hardware smoke that writes `w5Fu.json` / `w6Fu.json`.
-- [`wave-evidence-schema.json`](./wave-evidence-schema.json) —
+- [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) -
+  the per-wave evidence gate this evidence feeds.
+- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md) -
+  the per-wave readiness matrix and the design rationale.
+- [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md) -
+  the W20 hardware smoke that writes `w5Fu.json` / `w6Fu.json`.
+- [`wave-evidence-schema.json`](./wave-evidence-schema.json) -
   machine-readable JSON Schema companion to this document.
-- [`../../nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix)
-  — `validationEvidencePresent`, the cargo-checked predicate this
+- [`../../nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix) -
+  `validationEvidencePresent`, the cargo-checked predicate this
   doc mirrors.

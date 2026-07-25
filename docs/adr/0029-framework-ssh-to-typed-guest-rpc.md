@@ -6,13 +6,13 @@
   config editing, sync, and containment), ADR 0028 (guest-control plane
   over vsock)
 
-> **Update (W16) — current shipped reality.** This migration landed.
+> **Update (W16) - current shipped reality.** This migration landed.
 > Framework readiness gates on the fail-closed `guest-control-health`
 > DAG node (authenticated guest-control `Health`), not the raw TCP-22
 > `guest-ssh-readiness` node. `config sync` reads the guest config
 > working copy over the typed bounded `ReadGuestFile` RPC; on a VM whose
 > running generation does not declare the guest-control transport it
-> **fails closed** — the operator SSH compatibility transport described
+> **fails closed** - the operator SSH compatibility transport described
 > below is **not yet wired** into the command. `d2b vm konsole` now
 > runs over guest-control (no SSH) via the shipped admin-only `d2b
 > vm exec`. Per-VM SSH keys remain only for the surviving compatibility
@@ -88,7 +88,7 @@ during a compatibility window.
    guest's self-reported metadata is untrusted) and keeps the existing
    diff / approve / atomic-publish staging model. On a non-guest-control
    (old-generation) VM, `config sync` **fails closed** with a typed
-   `guest-control-unavailable-old-generation` error — there is no SSH
+   `guest-control-unavailable-old-generation` error - there is no SSH
    fallback. SSH argv builders are retained only behind a clearly
    delimited compatibility module.
 

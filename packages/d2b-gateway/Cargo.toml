@@ -15,7 +15,7 @@ workspace = true
 # proven providers (d2b-provider-aca WorkloadProvider + d2b-provider-
 # relay TransportProvider + an operator-session Waypipe display runner) into a
 # session-credential-bound display session. The session credential (a
-# gateway-minted one-shot HMAC binding) is what admits display bytes — Azure
+# gateway-minted one-shot HMAC binding) is what admits display bytes - Azure
 # Relay / the sandbox managed identity stay reachability-only. Pure-logic cores
 # (handshake, ledger, state machine) are injected-deps testable with mocks; no
 # live Azure in unit tests. Host-side leaf crate: nothing in the constellation

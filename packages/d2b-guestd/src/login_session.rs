@@ -117,7 +117,7 @@ const GUEST_PASSWD_PATH: &str = "/etc/passwd";
 /// UID 0 must be refused exactly like `root`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkloadUserUid {
-    /// Resolves to a non-zero UID — safe to run guest exec as this user.
+    /// Resolves to a non-zero UID - safe to run guest exec as this user.
     NonRoot(u32),
     /// Resolves to UID 0 under some name (e.g. a `root` alias). Refused.
     Root,
@@ -177,8 +177,8 @@ pub fn classify_workload_user_in(content: &str, user: &str) -> WorkloadUserUid {
 /// Resolve `user`'s effective UID from the guest passwd database and classify
 /// it. This is the runtime half of the never-root contract: the host-side name
 /// check rejects only the literal `root`, but the contract is about the
-/// effective UID, so UID 0 under any alias — and any user we cannot prove is
-/// non-root (absent/unreadable passwd) — fails closed.
+/// effective UID, so UID 0 under any alias - and any user we cannot prove is
+/// non-root (absent/unreadable passwd) - fails closed.
 pub fn classify_workload_user(user: &str) -> WorkloadUserUid {
     match std::fs::read_to_string(GUEST_PASSWD_PATH) {
         Ok(content) => classify_workload_user_in(&content, user),
@@ -232,12 +232,12 @@ const SYSTEMCTL_KILL_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// The workload runs in a PID 1-owned transient unit, NOT in the `systemd-run`
 /// wrapper's process group, so a wrapper/session SIGKILL alone leaves a quiet
 /// non-TTY command running indefinitely. Callers MUST issue their local
-/// (wrapper-PGID / `/proc`-session) kill FIRST — both so teardown can never be
+/// (wrapper-PGID / `/proc`-session) kill FIRST - both so teardown can never be
 /// stranded by a wedged PID 1 (the local path always fires) and so the wrapper
 /// cannot send a further `StartTransientUnit` after teardown begins. This then
 /// SIGKILLs the named unit's entire cgroup (`--kill-whom=all`).
 ///
-/// Bounded: a wedged PID 1 / D-Bus cannot hang teardown — the `systemctl` child
+/// Bounded: a wedged PID 1 / D-Bus cannot hang teardown - the `systemctl` child
 /// is force-killed past [`SYSTEMCTL_KILL_TIMEOUT`]. Idempotent: a missing unit
 /// is a no-op. Retries once after a non-success result to catch the startup
 /// race where the unit is not yet registered.

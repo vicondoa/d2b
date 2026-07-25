@@ -716,7 +716,7 @@ mod tests {
         let ctx = context(&["alpha"]);
         let audit = RecordingAuditSink::default();
         handle_delegate_cgroup_v2(&b, &ctx, &audit).unwrap();
-        // Asking the slice itself isn't a known vm — refused with
+        // Asking the slice itself isn't a known vm - refused with
         // `unknown-subject` per the bundle gate.
         let err = handle_cgroup_kill(&b, &ctx, "d2b.slice", &audit).unwrap_err();
         match err {

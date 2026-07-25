@@ -3,8 +3,8 @@
 //! the `d2b_contract_tests` repo-file helpers) and asserts a structural /
 //! documentation invariant. This crate runs only from
 //! `tests/tools/rust-workspace-checks.sh` against the real checkout (it is excluded
-//! from the hermetic Nix sandbox workspace build), so repo-file access — and
-//! the filesystem walk over `packages/**/*.rs` the tracing gate relies on — is
+//! from the hermetic Nix sandbox workspace build), so repo-file access - and
+//! the filesystem walk over `packages/**/*.rs` the tracing gate relies on - is
 //! sound here.
 //!
 //! Migrated gates:
@@ -19,7 +19,7 @@ use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 use regex::Regex;
 
 /// Whether any single line of `content` matches `pattern`. This mirrors `grep`'s
-/// (and ripgrep's) per-line evaluation faithfully — a `\s*` / `[[:space:]]*` in
+/// (and ripgrep's) per-line evaluation faithfully - a `\s*` / `[[:space:]]*` in
 /// the pattern can never span a newline boundary, as it could with a whole-file
 /// `Regex::is_match`.
 fn any_line_matches(content: &str, pattern: &str) -> bool {
@@ -27,7 +27,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
     content.lines().any(|line| re.is_match(line))
 }
 
-/// `grep -q PATTERN FILE` — assert at least one line of the repo-relative file
+/// `grep -q PATTERN FILE` - assert at least one line of the repo-relative file
 /// matches `pattern`.
 fn assert_file_has_line(rel: &str, pattern: &str, ctx: &str) {
     assert!(
@@ -36,7 +36,7 @@ fn assert_file_has_line(rel: &str, pattern: &str, ctx: &str) {
     );
 }
 
-/// `rg PATTERN FILES...` (fail-on-match) — assert NO line of any of the
+/// `rg PATTERN FILES...` (fail-on-match) - assert NO line of any of the
 /// repo-relative `files` matches `pattern`.
 fn assert_files_have_no_line(files: &[&str], pattern: &str, ctx: &str) {
     let re = Regex::new(pattern).expect("valid regex");
@@ -91,7 +91,7 @@ fn tap_dag_contract_doc_matches_implementation() {
     // Every relative `../../<path>` the doc points at must resolve. Spec
     // correction: this commit retires the bash gate scripts, so the doc's
     // own self-reference to `../../tests/tap-dag-contract-doc-eval.sh` (and
-    // the sibling H-group scripts) is excluded here — the integrator sweeps
+    // the sibling H-group scripts) is excluded here - the integrator sweeps
     // the doc cross-reference to the Rust successor. Keeping every other
     // referenced path's existence check intact preserves coverage.
     let retired_scripts: BTreeSet<&str> = [
@@ -288,16 +288,16 @@ fn tap_dag_contract_doc_matches_implementation() {
 // Migrated from tests/guest-exec-runtime-static.sh.
 //
 // Guest exec runtime static guard. Asserts:
-//   * the ATTACHED non-interactive exec runtime stays inside its scope —
+//   * the ATTACHED non-interactive exec runtime stays inside its scope -
 //     guestd-local process execution only, no userd call path, no low-level
 //     TTY/PTY syscalls, no detached retained-log writes in the attached path,
 //     stdin closed (never piped), no extra vsock listeners, no CH
 //     CONNECT/relay/host-network/observability surface;
-//   * the DETACHED path is present-and-bounded — slot-keyed transient units
+//   * the DETACHED path is present-and-bounded - slot-keyed transient units
 //     (no opaque exec id in unit name/argv), scoped to d2b-exec.slice,
 //     truncation-bounded retained logs, conditionally-advertised capabilities,
 //     and the guest-module-declared parent dir + slice;
-//   * the INTERACTIVE TTY path is present-and-confined — PTY master allocation
+//   * the INTERACTIVE TTY path is present-and-confined - PTY master allocation
 //     lives only in exec_pty.rs, the setsid + TIOCSCTTY controlling-terminal
 //     handshake lives ONLY in the exec-runner --tty-exec helper (guestd never
 //     acquires a controlling tty), and the typed stderr-unavailable wire
@@ -529,13 +529,13 @@ fn tracing_contract_lint() {
     let rust_files = collect_workspace_rust_files();
     assert!(
         !rust_files.is_empty(),
-        "tracing-contract-lint: no Rust source files found under packages/ — wrong CWD?"
+        "tracing-contract-lint: no Rust source files found under packages/ - wrong CWD?"
     );
 
     let mut violations: Vec<String> = Vec::new();
 
     // -- Single-line forbidden attribute classes ----------------------------
-    // (description, ERE pattern) — verbatim ports of the bash gate's `scan`
+    // (description, ERE pattern) - verbatim ports of the bash gate's `scan`
     // calls. Descriptions are phrased to avoid the `<name> = %/?` shapes that
     // would make this very file a self-violation when the gate scans it.
     let scans: &[(&str, &str)] = &[
@@ -552,111 +552,111 @@ fn tracing_contract_lint() {
             r"keys_dir[[:space:]]*=[[:space:]]*[%?][^,]*\.display\(\)",
         ),
         (
-            "argv attr in tracing (forbidden — operator-supplied content; route via typed envelope)",
+            "argv attr in tracing (forbidden - operator-supplied content; route via typed envelope)",
             r"(^|[^_a-zA-Z0-9])argv[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "cmdline attr in tracing (forbidden — see argv rule)",
+            "cmdline attr in tracing (forbidden - see argv rule)",
             r"(^|[^_a-zA-Z0-9])cmdline[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "command_line attr in tracing (forbidden — see argv rule)",
+            "command_line attr in tracing (forbidden - see argv rule)",
             r"(^|[^_a-zA-Z0-9])command_line[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "process_env attr in tracing (forbidden — environment leak)",
+            "process_env attr in tracing (forbidden - environment leak)",
             r"(^|[^_a-zA-Z0-9])process_env[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "environment attr in tracing (forbidden — environment leak)",
+            "environment attr in tracing (forbidden - environment leak)",
             r"(^|[^_a-zA-Z0-9])environment[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "cwd attr in tracing (forbidden — working-directory leak)",
+            "cwd attr in tracing (forbidden - working-directory leak)",
             r"(^|[^_a-zA-Z0-9])cwd[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "current_working_directory attr in tracing (forbidden — working-directory leak)",
+            "current_working_directory attr in tracing (forbidden - working-directory leak)",
             r"(^|[^_a-zA-Z0-9])current_working_directory[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "secret attr in tracing (forbidden — credential leak)",
+            "secret attr in tracing (forbidden - credential leak)",
             r"(^|[^_a-zA-Z0-9])secret[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "password attr in tracing (forbidden — credential leak)",
+            "password attr in tracing (forbidden - credential leak)",
             r"(^|[^_a-zA-Z0-9])password[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "token attr in tracing (forbidden — credential leak)",
+            "token attr in tracing (forbidden - credential leak)",
             r"(^|[^_a-zA-Z0-9])token[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "private_key attr in tracing (forbidden — credential leak)",
+            "private_key attr in tracing (forbidden - credential leak)",
             r"(^|[^_a-zA-Z0-9])private_key[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "provider attr in tracing (forbidden — provider context leak)",
+            "provider attr in tracing (forbidden - provider context leak)",
             r"(^|[^_a-zA-Z0-9])provider[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "provider_endpoint attr in tracing (forbidden — provider endpoint leak)",
+            "provider_endpoint attr in tracing (forbidden - provider endpoint leak)",
             r"(^|[^_a-zA-Z0-9])provider_endpoint[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "provider_resource_id attr in tracing (forbidden — provider resource leak)",
+            "provider_resource_id attr in tracing (forbidden - provider resource leak)",
             r"(^|[^_a-zA-Z0-9])provider_resource_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "provider_credential attr in tracing (forbidden — provider credential leak)",
+            "provider_credential attr in tracing (forbidden - provider credential leak)",
             r"(^|[^_a-zA-Z0-9])provider_credential[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "credential attr in tracing (forbidden — credential leak)",
+            "credential attr in tracing (forbidden - credential leak)",
             r"(^|[^_a-zA-Z0-9])credential[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "stream attr in tracing (forbidden — terminal stream context leak)",
+            "stream attr in tracing (forbidden - terminal stream context leak)",
             r"(^|[^_a-zA-Z0-9])stream[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "stream_id attr in tracing (forbidden — terminal stream id leak)",
+            "stream_id attr in tracing (forbidden - terminal stream id leak)",
             r"(^|[^_a-zA-Z0-9])stream_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "terminal_stream_id attr in tracing (forbidden — terminal stream id leak)",
+            "terminal_stream_id attr in tracing (forbidden - terminal stream id leak)",
             r"(^|[^_a-zA-Z0-9])terminal_stream_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "attach_id attr in tracing (forbidden — terminal attach id leak)",
+            "attach_id attr in tracing (forbidden - terminal attach id leak)",
             r"(^|[^_a-zA-Z0-9])attach_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "session attr in tracing (forbidden — terminal session context leak)",
+            "session attr in tracing (forbidden - terminal session context leak)",
             r"(^|[^_a-zA-Z0-9])session[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "session_id attr in tracing (forbidden — terminal session id leak)",
+            "session_id attr in tracing (forbidden - terminal session id leak)",
             r"(^|[^_a-zA-Z0-9])session_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "session-id attr in tracing (forbidden — terminal session id leak)",
+            "session-id attr in tracing (forbidden - terminal session id leak)",
             r"(^|[^_a-zA-Z0-9])session-id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "resource attr in tracing (forbidden — provider resource leak)",
+            "resource attr in tracing (forbidden - provider resource leak)",
             r"(^|[^_a-zA-Z0-9])resource[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "resource_id attr in tracing (forbidden — provider resource leak)",
+            "resource_id attr in tracing (forbidden - provider resource leak)",
             r"(^|[^_a-zA-Z0-9])resource_id[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "stdout attr in tracing (forbidden — child output; route via typed envelope)",
+            "stdout attr in tracing (forbidden - child output; route via typed envelope)",
             r"(^|[^_a-zA-Z0-9])stdout[[:space:]]*=[[:space:]]*[%?]",
         ),
         (
-            "stderr attr in tracing (forbidden — child output; route via typed envelope)",
+            "stderr attr in tracing (forbidden - child output; route via typed envelope)",
             r"(^|[^_a-zA-Z0-9])stderr[[:space:]]*=[[:space:]]*[%?]",
         ),
     ];
@@ -686,7 +686,7 @@ fn tracing_contract_lint() {
     let comment_line_re = Regex::new(r"^[[:space:]]*//").expect("valid comment-line regex");
 
     // First: are there ANY non-comment store-path literals at all? (Mirrors the
-    // bash gate's `nix_store_hits` gate — the awk state machine only runs when
+    // bash gate's `nix_store_hits` gate - the awk state machine only runs when
     // at least one non-comment literal exists.)
     let mut store_literals_present = false;
     'outer: for rel in &rust_files {
@@ -747,7 +747,7 @@ fn tracing_contract_lint() {
     assert!(
         violations.is_empty(),
         "tracing-contract-lint: {} forbidden high-cardinality / leakable tracing attr class(es) \
-         detected — see docs/reference/tracing-contract.md\n\n{}",
+         detected - see docs/reference/tracing-contract.md\n\n{}",
         violations.len(),
         violations.join("\n\n")
     );

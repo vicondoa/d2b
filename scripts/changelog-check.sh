@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/changelog-check.sh — fail-closed changelog policy gate for PR CI.
+# scripts/changelog-check.sh - fail-closed changelog policy gate for PR CI.
 #
 # A code change ships release notes either as a CHANGELOG.md entry or as a
 # changelog.d/ fragment (see changelog.d/README.md). Neither is a failure.

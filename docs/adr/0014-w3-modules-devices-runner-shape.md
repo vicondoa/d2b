@@ -32,7 +32,7 @@ When `/proc/sys/kernel/modules_disabled` reads `1`, W3 refuses to
 start any VM that declares a `required` kernel module not detected as
 built-in or already loaded. The host check surfaces
 `host-modules-locked` with the per-tier remediation hint. The broker
-**never** attempts `modprobe(8)` in this state — the read happens
+**never** attempts `modprobe(8)` in this state - the read happens
 before any backend call. There is no override knob: the only
 remediations are (a) reboot without `modules_disabled=1`, or (b) ship
 the module as built-in.
@@ -62,10 +62,10 @@ W3 records the selected mode in `host.json` under
 `host.ch.netHandoffMode`. Detection runs against the packaged
 `ch --help` output:
 
-- `tap-fd` (preferred) — broker opens TAP + `/dev/vhost-net` and
+- `tap-fd` (preferred) - broker opens TAP + `/dev/vhost-net` and
   passes file descriptors via `SCM_RIGHTS`; runner has no
   `CAP_NET_ADMIN`.
-- `persistent-tap` (fallback) — broker creates a persistent TAP with
+- `persistent-tap` (fallback) - broker creates a persistent TAP with
   `TUNSETOWNER` / `TUNSETGROUP` to the runner uid/gid; runner mounts
   the device node read-only.
 

@@ -8,7 +8,7 @@
 //!
 //! Invariants:
 //! - A bare workload name with no configured default realm or alias table routes
-//!   **local** — the existing host-daemon fast path is never disturbed.
+//!   **local** - the existing host-daemon fast path is never disturbed.
 //! - An unknown realm fails **closed** (`NoRealmEntrypoint`); resolution never
 //!   silently defaults an unconfigured realm to local dispatch.
 //! - Old node-qualified targets are surfaced as typed migration diagnostics when
@@ -212,7 +212,7 @@ impl core::fmt::Display for RealmArgError {
 pub enum TargetMigrationHint {
     /// The operator used a bare VM name (e.g. `corp-vm`) and the daemon has
     /// advertised a canonical workload target for it (e.g. `corp-vm.work.d2b`).
-    /// The local fast path still works — this is a non-fatal compatibility
+    /// The local fast path still works - this is a non-fatal compatibility
     /// warning suggesting the canonical form.
     BareVmHasCanonicalTarget {
         /// The bare VM name as supplied by the operator.
