@@ -86,7 +86,8 @@ you to run one directly.
 make check-tier0
 
 # Layer-1 local development umbrella: lint, Rust, proofs, flake,
-# drift, and policy gates. CI runs these sub-targets in parallel.
+# drift, policy, and the hermetic runtime-ledger gate. CI runs these
+# sub-targets in parallel.
 make test-unit
 
 # Focused Layer-1 shards when iterating on one surface.
@@ -96,6 +97,7 @@ make test-proofs
 make test-flake
 make test-drift
 make test-policy
+make test-runtime-ledger
 
 # PR-equivalent Layer-1 gate. Uses tests/layer1-jobs.json to run
 # independent make test-* shards locally with bounded parallelism.
@@ -122,6 +124,19 @@ make test-host-integration  # runNixOSTest VM checks; NixOS + KVM host
 slow TCG if `/dev/kvm` is absent. Hardware and live-host tests remain
 explicit manual tiers and require a host with the matching devices or
 deployed d2b state.
+
+`make test-runtime-ledger` is the hermetic execution-budget Layer-1 job
+(also run by `make test-unit` / `make check` through
+`tests/layer1-jobs.json`). It times a pinned closed census of crates and
+shards (`tests/runtime-ledger-census.json`) against a pinned baseline
+(`tests/runtime-ledger-baseline.json`) after a warm build so compilation
+is excluded from the timings. When you intentionally add, remove, or
+rename a census test you MUST regenerate the baseline in the same change
+with `make runtime-ledger-regen` and commit the updated census/baseline
+pins. The ledger's exact enforcement scope is still being finalized and
+may be rescoped; if its shape here diverges from the current `Makefile`
+targets or `tests/layer1-jobs.json`, treat those as authoritative and
+flag the drift for the integrator rather than hand-editing the pins.
 
 ### Heavy lanes
 
@@ -161,21 +176,23 @@ one re-executes itself through the semaphore exactly once when
 self-guard block**, or the fail-closed inventory guard
 (`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.
 
-### Spec-literal lint allowlist marker
+### Spec-literal lint allowlist
 
 The ADR 0046 spec-literal lints (`policy_adr046_spec_literals.rs`) enforce
 three frozen decisions across `docs/specs/**`: D103 (the single 24-byte
 `YYYY-MM-DDTHH:MM:SS.sssZ` datetime spelling), D104 (the single
 `.d2bus.org.` ResourceType qualifier infix), and D108 (the integer
 `retryAfterMs` retry-delay scalar superseding the old `retryAfter`
-duration string). A line that must legitimately quote a rejected form -
-for example a rejection illustration - is exempted only by the explicit
-end-of-line marker `d2b-lint-allow: D103` (or `D104` / `D108`), usually
-written as an HTML comment. The scope is deliberately narrow: the marker
-exempts exactly the one line it sits on for exactly the one named code,
-and the decision-register row that defines a rule is the only other
-exemption. Do not use it to silence genuine drift; correct the example
-instead.
+duration string). The allowlist is a pinned exact exemption, not an
+author-suppressible marker: an inline `d2b-lint-allow` comment is
+explicitly **not** honored and will not exempt a line - the lint rejects
+that escape hatch by design, because a per-line marker would let any
+future author silently suppress a real violation. The **only** exemption
+is the decision-register table row that *defines* the rule (the `| <code> |`
+row in `docs/specs/ADR-046-decision-register.md`), and that exemption is
+pinned to that one file. Everywhere else, including a rejection
+illustration, must be phrased so it does not embed the exact rejected
+literal; correct the example rather than trying to silence the lint.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](./tests/AGENTS.md).

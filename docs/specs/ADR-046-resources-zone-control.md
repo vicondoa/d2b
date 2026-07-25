@@ -131,6 +131,17 @@ status:
   startedAt: 2026-07-22T00:00:00.000Z
   completedAt: null
   outcome: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### 2.4 Status
@@ -1042,6 +1053,17 @@ status:
   startedAt: null
   completedAt: null
   outcome: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 #### 5.3.1 Rule schema
@@ -1295,6 +1317,17 @@ status:
   startedAt: null
   completedAt: null
   outcome: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 #### 6.3.1 roleRef

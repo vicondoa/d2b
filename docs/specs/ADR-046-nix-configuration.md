@@ -328,6 +328,17 @@ metadata:
 spec: {}
 status:
   phase: Ready
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `uid` is never specified in Nix. It is assigned by the Zone runtime at first
@@ -1483,6 +1494,17 @@ status:
   observedGid:              null
   observedHome:             null
   sessionManagerAvailable:  false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `observedUid` and `observedGid` are status observations, never spec fields.

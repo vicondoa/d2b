@@ -108,6 +108,17 @@ spec:
     runtimeTmpfsQuotaInodes: 1024
 status:
   phase: Pending
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `config` is validated against the Provider's signed JSON Schema before the
@@ -201,6 +212,17 @@ status:
     observedProviderGeneration: 1
     details:
       providerPhase: ""
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `spec.systemArtifactId` is `null` for media-boot Guests; no NixOS guest system

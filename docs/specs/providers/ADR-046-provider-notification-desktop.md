@@ -199,6 +199,17 @@ spec:
           - device.removed
 status:
   phase: Pending
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ---
@@ -504,6 +515,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -533,6 +555,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -562,6 +595,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Retained opaque handles

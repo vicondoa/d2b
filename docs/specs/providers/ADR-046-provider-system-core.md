@@ -145,6 +145,17 @@ status:
         phase: Ready
   dependencyHealth: []
   disabledCondition: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 > **Provider status ownership**: `Provider/system-core` is the fixed core
@@ -202,7 +213,7 @@ spec:
   providerRef: Provider/system-core   # fixed; any other value rejected at admission
   defaultDomain: system               # system|user; default system
   allowedDomains: [system, user]      # [system|user]; 1..2 unique items
-  defaultUserRef: null                # User/<name>; required when user ∈ allowedDomains
+  defaultUserRef: User/alice          # User/<name>; required when user ∈ allowedDomains
   budget: {}                          # BudgetSpec aggregate across all Processes
   networkAttachments: []              # 0..64 NetworkAttachmentList entries
   deviceAttachments:  []              # 0..64 DeviceAttachmentList entries
@@ -611,6 +622,17 @@ status:
   endpointGeneration: 1
   connectionAvailability: available
   leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## 5.5 Retained opaque handles (D092 promotion test)

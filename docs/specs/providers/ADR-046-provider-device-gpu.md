@@ -218,6 +218,17 @@ status:
     provisionedAt: null
     lastProbedAt: 2026-07-22T00:00:00.000Z
     providerDiagnostic: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Root config schema

@@ -780,6 +780,17 @@ status:
   connectionAvailability: Available
   leaseAvailability: Available
   conditions: []
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 Consumers refer to `Endpoint/<name>` and resolve it only through the authorized
@@ -897,7 +908,10 @@ them, and the parent has no ZoneLink handler:
 
 | Concern | Core responsibility |
 | --- | --- |
-| Noise KK handshake and key derivation | Core initiates and verifies; relay sees opaque bytes only |
+| Enrollment-and-session state machine | Core owns `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; only `Unenrolled -> IKpsk2` consumes the allocator-issued single-use PSK, and resource traffic is prohibited before `Ready` |
+| One-time IKpsk2 bootstrap and PSK consumption | Core consumes the single-use PSK exactly once during bootstrap; relay sees opaque bytes only and never the PSK |
+| Sealed enrollment record (child static key-pin) | Core seals it in one durable transaction, reuses it on reconnect, and invalidates it on revocation; relay has no view |
+| Noise KK handshake and key derivation | Core initiates and verifies against the sealed enrollment record; relay sees opaque bytes only |
 | Session generation counter | Core increments on each reconnect |
 | Reconnect policy and backoff | Core's reconnect policy drives reconnect; core calls `CloseTransport` then `OpenTransport` after applying its own backoff |
 | Idempotency key tracking | Core assigns and deduplicates `ZoneLinkIdempotencyKey` |
@@ -948,7 +962,9 @@ Noise record bytes over that stream. Key properties:
   is transferred to d2b-bus or core.
 - **Opaque Noise records only.** The named stream carries only the
   2-byte length-prefixed Noise record bytes produced and consumed by core's
-  KK machinery. The relay service cannot decrypt or interpret them.
+  handshake machinery - the one-time IKpsk2 bootstrap records during
+  enrollment and the enrolled KK records for every established and
+  reconnected session. The relay service cannot decrypt or interpret them.
 - **Attachment support: false.** FD transfer via `SCM_RIGHTS` is a local-Unix
   operation; it is rejected at the source d2b-bus before any relay frame is
   sent (`attachment-not-permitted-over-zone-link`).
@@ -1149,7 +1165,7 @@ Rules:
 | Phase | Meaning |
 | --- | --- |
 | `Pending` | Listener service process started inside gateway Guest; relay control channel not yet open |
-| `Connected` | Relay channel open; `OpenTransport` returned a handle; awaiting core Noise KK |
+| `Connected` | Relay channel open; `OpenTransport` returned a handle; awaiting the core handshake (one-time IKpsk2 bootstrap when the link is `Unenrolled`, otherwise the enrolled KK handshake) |
 | `Reconnecting` | Core called `CloseTransport` after disconnect; re-issuing `OpenTransport` |
 | `Failed` | Core reconnect policy exhausted or credential unrecoverable |
 | `Unknown` | Core cannot determine carriage state from `ObserveTransport` stream |
@@ -1214,8 +1230,10 @@ Rules:
 - `reason` fields use stable bounded codes, not provider-internal diagnostics.
 - `relayNamespaceId` and `relayEntityId` are non-secret identifiers.
 - `correlationId` links audit records to OTEL spans without carrying span payload.
-- Noise KK outcomes, session generation, and resource state transitions are
-  recorded in the core resource audit trail, not here.
+- Noise IKpsk2 bootstrap and enrolled KK outcomes, enrollment commit and
+  invalidation, session generation, and resource state transitions
+  (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`) are recorded
+  in the core resource audit trail, not here.
 
 ---
 
@@ -1254,8 +1272,10 @@ OTEL spans are emitted for:
 
 - Relay WebSocket connect and accept operations (span: `relay.connect`,
   `relay.accept`).
-- Noise KK handshake initiation and completion (span: `kk.handshake`; no
-  key material in attributes).
+- Noise handshake initiation and completion (span: `kk.handshake` for the
+  enrolled KK handshake and `ikpsk2.bootstrap` for the one-time IKpsk2
+  bootstrap enrollment; no key material, PSK, or enrollment secret in
+  attributes).
 - Credential acquisition requests (span: `credential.acquire`; carries only
   `credentialRef` as an opaque ResourceRef string, never token bytes).
 - Reconnect cycles (span: `relay.reconnect`).

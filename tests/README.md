@@ -48,7 +48,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
+| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + drift + policy + runtime-ledger | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
@@ -58,6 +58,8 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
+| `make test-runtime-ledger` | hermetic execution-budget gate: times the pinned closed census (`tests/runtime-ledger-census.json`) against the pinned baseline (`tests/runtime-ledger-baseline.json`) after a warm build | local + CI |
+| `make runtime-ledger-regen` | regenerate `tests/runtime-ledger-baseline.json` after intentionally adding/removing/renaming a census test; commit the updated census/baseline pins | local |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
@@ -83,8 +85,12 @@ aliases run a Layer-1 gate, the Rust suite, the building flake check, or a
 public lane under the same semaphore. Live-host and hardware scripts obey the
 same rule: use the gated `make pre-tag` / `make smoke-lite` live-VM smoke
 entrypoints, or wrap a raw live script as `cargo xtask heavy-gate -- env
-D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Do not invoke `D2B_LIVE=1
-bash tests/integration/live/<x>.sh` directly; that bypasses the semaphore.
+D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
+tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
+each live/hardware/perf entrypoint re-executes itself through the gate
+exactly once when `D2B_HEAVY_GATE` is unset, so the shared Nix store,
+cargo target directory, and KVM device cannot be oversubscribed. The
+gated targets remain the documented path.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
@@ -98,6 +104,12 @@ is generated from it by `make layer1-workflow` and checked by
 `make layer1-workflow-check` during `make test-drift`. CI runs the individual
 Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel and exposes a
 stable final `check` rollup job intended for branch protection.
+
+The `test-runtime-ledger` job is part of that graph. Its enforcement scope is
+still being finalized and may be rescoped; if the description above diverges
+from the current `Makefile` targets or `tests/layer1-jobs.json`, treat those
+as authoritative and flag the drift for the integrator rather than
+hand-editing the census/baseline pins.
 
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
