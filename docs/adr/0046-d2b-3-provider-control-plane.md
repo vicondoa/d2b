@@ -434,7 +434,7 @@ cross-cutting, and closing specs plus 27 Provider dossiers - indexed by
 manifests. The generated implementation DAG
 (`docs/specs/ADR-046-implementation-graph.json` and its human view
 `docs/specs/ADR-046-implementation-graph.md`, decision D095) maps every member
-spec and work item to a dependency-ordered `W0`-`W7` launch wave and a
+spec and work item to a dependency-ordered `W0`-`W8` launch wave and a
 file-disjoint parallel group; like the manifests it is a generated non-member
 artifact and does not change the 55-member count. This decision and every member
 are `Accepted` and were reviewed as one atomic unit; the PR delivers
