@@ -17,6 +17,61 @@ use super::{
     storage::CandidateDir,
 };
 
+/// The complete `merge-target` document schema and an offline recipe to build
+/// it. Published through `wave help` (see [`WaveCommand::schema`]) so a
+/// contributor authors the one hand-written stage input without reading
+/// source.
+///
+/// The document's `material` is not authored field by field: it is copied
+/// verbatim from the candidate's own `seal.json` (equivalently `snapshot.json`)
+/// `material` object, which `merge-target` re-canonicalizes and re-derives, so
+/// a stale or edited material is caught by the same digest check every stage
+/// uses.
+const MERGE_TARGET_SCHEMA: &str = "\
+A merge-target document (the --target input) is:
+
+{
+  \"artifact_kind\": \"d2b-delivery/merge-target\",
+  \"schema_version\": <integer, equal to the candidate's seal.json schema_version>,
+  \"material\": <the candidate's integrated material, copied verbatim from seal.json's \"material\" object>,
+  \"pull_requests\": [
+    {
+      \"repository\": \"<logical repository id, exactly as passed to --repo>\",
+      \"number\": <pull request number>,
+      \"base_ref\": \"<base branch name>\",
+      \"base_oid\": \"<base commit object id, 40 or 64 hex characters>\",
+      \"head_ref\": \"<head branch name>\",
+      \"head_oid\": \"<head commit object id, 40 or 64 hex characters>\",
+      \"required_checks\": [ { \"name\": \"<check name>\", \"conclusion\": \"success\" } ]
+    }
+  ]
+}
+
+Every required check must read \"success\"; pending, failure, neutral, skipped, \
+cancelled, stale, timed_out, action_required, and startup_failure all fail \
+closed, as does a pull request with no required checks or a sealed repository \
+with no pull request.
+
+Offline recipe (no network I/O happens inside this stage):
+
+  SEAL=<state-root>/<wave>/<candidate>/seal.json
+  # Gather the live stack out of band, e.g. with:
+  #   gh pr view <number> --repo <owner/name> \
+  #     --json number,baseRefName,baseRefOid,headRefName,headRefOid,statusCheckRollup
+  # Then assemble the document, taking material straight from the seal:
+  jq -n --slurpfile s \"$SEAL\" '{
+      artifact_kind: \"d2b-delivery/merge-target\",
+      schema_version: $s[0].schema_version,
+      material: $s[0].material,
+      pull_requests: [ /* one object per repository, shaped as above */ ]
+    }' > merge-target.json
+  cargo xtask delivery wave merge-target \
+      --seal \"$SEAL\" --target merge-target.json --repo <logical-id>=<checkout-root>
+
+merge-target validates the shape, canonicalizes the material, and installs \
+merge-target.json under the candidate; merge-eligibility then reads that \
+captured target when no --target is given.";
+
 /// One stage of the wave delivery workflow.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum WaveCommand {
@@ -183,6 +238,19 @@ impl WaveCommand {
         }
     }
 
+    /// The complete JSON schema and executable recipe for a stage whose input
+    /// a contributor must author by hand.
+    ///
+    /// Only `merge-target` needs one: its `--target` document is not produced
+    /// by an earlier stage, so its full shape and a precise, offline recipe are
+    /// published here rather than living in source comments.
+    pub fn schema(self) -> Option<&'static str> {
+        match self {
+            Self::MergeTarget => Some(MERGE_TARGET_SCHEMA),
+            _ => None,
+        }
+    }
+
     /// Whether this stage's implementation has landed.
     pub fn implemented(self) -> bool {
         matches!(
@@ -213,8 +281,46 @@ pub struct WorkflowOutput {
     pub snapshot_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateHelp>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<WorkflowCommandHelp>,
+}
+
+/// Where delivery state lives and how one stage's output chains into the next.
+///
+/// Emitted by the `help` stage so a contributor can chain the workflow without
+/// reading source or searching the filesystem. Every field is a grammar or a
+/// template, never an expanded path, so it carries no `HOME`, username, or
+/// checkout path.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StateHelp {
+    pub default_root: String,
+    pub override_flag: String,
+    pub layout: String,
+    pub chaining: String,
+}
+
+impl StateHelp {
+    fn describe() -> Self {
+        Self {
+            default_root: "$XDG_STATE_HOME/d2b/delivery when XDG_STATE_HOME is set, else \
+                 $HOME/.local/state/d2b/delivery"
+                .to_owned(),
+            override_flag: "--state-dir DIR overrides the default state root on every stage"
+                .to_owned(),
+            layout:
+                "delivery state is laid out as <state-root>/<wave>/<candidate>/<artifact>, for \
+                 example <state-root>/w0/<candidate-id>/snapshot.json"
+                    .to_owned(),
+            chaining:
+                "each stage reports its output in the artifact field as a state-root-relative \
+                 reference (<wave>/<candidate>/<artifact>); pass that value as the next stage's \
+                 --snapshot or --seal and it resolves under the same state root, so chaining \
+                 needs no absolute path"
+                    .to_owned(),
+        }
+    }
 }
 
 impl WorkflowOutput {
@@ -227,6 +333,7 @@ impl WorkflowOutput {
             content_id: None,
             snapshot_sha256: None,
             artifact: None,
+            state: None,
             commands: Vec::new(),
         }
     }
@@ -240,16 +347,18 @@ impl WorkflowOutput {
     }
 
     /// Records the artifact this invocation produced, as a bounded
-    /// candidate-relative key.
+    /// state-root-relative reference.
     ///
-    /// Only the logical key (for example `evidence/local-host/layer1.json`) is
-    /// reported, never the absolute state path: structured stdout must never
-    /// carry `HOME`, the local username, or a checkout or store path into a CI
-    /// or operator log. The absolute path stays internal to storage. The
-    /// `candidate_id` field already addresses which candidate the key belongs
-    /// to, so the pair stays machine-readable.
+    /// The reference is `<wave>/<candidate>/<artifact>` (for example
+    /// `w0/<candidate-id>/snapshot.json`), never the absolute state path:
+    /// structured stdout must never carry `HOME`, the local username, or a
+    /// checkout or store path into a CI or operator log. Because the reference
+    /// also names the wave and candidate, a later stage resolves it under the
+    /// same state root, so this field is exactly the value to pass as the next
+    /// stage's `--snapshot` or `--seal`. The absolute path stays internal to
+    /// storage.
     pub fn with_artifact(mut self, candidate: &CandidateDir, path: &Path) -> Result<Self> {
-        self.artifact = Some(candidate.artifact_key(path)?);
+        self.artifact = Some(candidate.state_relative_key(path)?);
         Ok(self)
     }
 }
@@ -261,6 +370,8 @@ pub struct WorkflowCommandHelp {
     pub synopsis: String,
     pub required_options: Vec<String>,
     pub optional_options: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     pub implemented: bool,
     pub work_item: String,
 }
@@ -289,6 +400,7 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
             let options = CliOptions::parse(rest)?;
             options.finish()?;
             let mut output = WorkflowOutput::ok(WaveCommand::Help);
+            output.state = Some(StateHelp::describe());
             output.commands = WAVE_COMMANDS
                 .into_iter()
                 .map(|command| WorkflowCommandHelp {
@@ -305,6 +417,7 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
                         .iter()
                         .map(|option| (*option).to_owned())
                         .collect(),
+                    schema: command.schema().map(str::to_owned),
                     implemented: command.implemented(),
                     work_item: command.work_item().to_owned(),
                 })
@@ -504,6 +617,105 @@ mod tests {
                 .contains("--generated NAME=LOGICAL_ID:PATH"),
             "the synopsis must spell the compound fingerprint grammar: {}",
             snapshot.synopsis
+        );
+    }
+
+    #[test]
+    fn help_documents_the_state_root_default_layout_and_chaining() {
+        let output = dispatch(&args(&["wave", "help"])).expect("help succeeds");
+        let state = output.state.expect("help documents the state root");
+        assert!(
+            state.default_root.contains("$XDG_STATE_HOME/d2b/delivery")
+                && state
+                    .default_root
+                    .contains("$HOME/.local/state/d2b/delivery"),
+            "the default state root grammar must be published: {}",
+            state.default_root
+        );
+        assert!(
+            state.override_flag.contains("--state-dir"),
+            "the override flag must be published: {}",
+            state.override_flag
+        );
+        assert!(
+            state
+                .layout
+                .contains("<state-root>/<wave>/<candidate>/<artifact>"),
+            "the on-disk layout must be published: {}",
+            state.layout
+        );
+        assert!(
+            state.chaining.contains("--snapshot") && state.chaining.contains("--seal"),
+            "chaining guidance must name the options a later stage consumes: {}",
+            state.chaining
+        );
+        // The documentation is grammar and templates only: never an expanded
+        // path that would leak HOME, the username, or a checkout.
+        let home = std::env::var("HOME").unwrap_or_default();
+        for field in [
+            &state.default_root,
+            &state.override_flag,
+            &state.layout,
+            &state.chaining,
+        ] {
+            assert!(
+                !home.is_empty() && !field.contains(&home),
+                "state help must not leak the expanded HOME path"
+            );
+        }
+    }
+
+    #[test]
+    fn help_publishes_the_complete_merge_target_schema() {
+        let output = dispatch(&args(&["wave", "help"])).expect("help succeeds");
+        let merge_target = output
+            .commands
+            .iter()
+            .find(|command| command.name == "merge-target")
+            .expect("merge-target is listed");
+        let schema = merge_target
+            .schema
+            .as_deref()
+            .expect("merge-target publishes its schema");
+        for token in [
+            "\"artifact_kind\": \"d2b-delivery/merge-target\"",
+            "\"schema_version\"",
+            "\"material\"",
+            "\"pull_requests\"",
+            "\"base_oid\"",
+            "\"head_oid\"",
+            "\"required_checks\"",
+            "\"conclusion\": \"success\"",
+            "seal.json",
+            "cargo xtask delivery wave merge-target",
+        ] {
+            assert!(
+                schema.contains(token),
+                "the published schema must spell {token:?}: {schema}"
+            );
+        }
+        assert!(
+            !schema.contains("..."),
+            "the published schema must not use an ellipsis for the material shape"
+        );
+        // No other stage carries a hand-authored-input schema.
+        for command in &output.commands {
+            if command.name != "merge-target" {
+                assert!(
+                    command.schema.is_none(),
+                    "{} must not carry a schema",
+                    command.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_module_usage_string_lists_merge_target() {
+        assert!(
+            usage().contains("merge-target"),
+            "the wave usage string must list merge-target: {}",
+            usage()
         );
     }
 
