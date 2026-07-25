@@ -1,6 +1,6 @@
 # ADR 0046: d2b 3.0 Provider control plane
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-22
 - Baseline: protected `v3` commit
   `b5ddbed67867d9244bf33390868101bd9b053e49`

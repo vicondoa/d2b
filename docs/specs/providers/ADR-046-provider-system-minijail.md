@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-system-minijail` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` |

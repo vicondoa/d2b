@@ -28,11 +28,16 @@ deprecations ship one minor release before removal.
   tests with integration-only slow coverage, and Noise-protected
   ComponentSession/d2b-bus channels on the `d2bus.org` public namespace,
   together with the security/threat-model, reset/cutover, feasibility,
-  validation and delivery, and streamline contracts. Everything remains
-  Proposed; no crates, services, controllers, or Providers are created.
+  validation and delivery, and streamline contracts. No crates, services,
+  controllers, or Providers are created.
 
 ### Changed
 
+- Accepted ADR 0046 and all 55 members of its specification set (28 top-level
+  specs plus 27 Provider dossiers), flipping each metadata `Status` from
+  `Proposed` to `Accepted`. This satisfies the manifest-acceptance portion of
+  the ADR 0046 delivery contract's Gate 0 precondition for implementation
+  work. No crates, services, controllers, or Providers are created.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
 

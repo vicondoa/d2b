@@ -6,7 +6,7 @@
 | Crate | `packages/d2b-provider-display-wayland/` |
 | Provider ResourceRef | `Provider/display-wayland` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
