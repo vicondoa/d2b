@@ -280,13 +280,11 @@ fn tamper_owner_wrong_uid() {
     let bundle_path = dir.path().join("bundle.json");
     write_private(&bundle_path, &minimal_bundle_json_no_hash());
 
-    // Change owner to uid=65534 (nobody) using the system chown binary.
-    let status = std::process::Command::new("chown")
-        .arg("65534")
-        .arg(bundle_path.as_os_str())
-        .status()
-        .expect("chown command ran");
-    assert!(status.success(), "chown 65534 failed: {status}");
+    // Change owner to uid=65534 (nobody) with a direct syscall. Spawning the
+    // system `chown` binary would make this hermetic-tier test depend on an
+    // external process and on PATH.
+    nix::unistd::chown(&bundle_path, Some(nix::unistd::Uid::from_raw(65534)), None)
+        .expect("chown to uid 65534");
 
     // Use a policy that expects uid=0 so the file fails.
     let policy = BundleVerifyPolicy {

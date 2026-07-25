@@ -642,7 +642,7 @@ three-stage lifecycle:
 No spike in this catalog is retired by this spec; retirement is always
 performed by the owning production work item, per anti-claim rule 5.
 
-## Hermetic test-runtime budget baseline (D094)
+## Hermetic test-runtime budget reference (D094)
 
 The D094 execution budgets in `ADR-046-validation-and-delivery` §10.16 are
 measurable and are recorded, not asserted by feel:
@@ -651,7 +651,7 @@ measurable and are recorded, not asserted by feel:
   shape) is recorded with the ledger so a recorded figure reflects test cost,
   not hardware drift; a genuine cross-machine reference baseline is the
   deferred follow-up `runtime-ledger-full-census-and-real-shards`.
-- **Repetitions and statistic.** Each measured test/crate/shard is executed a
+- **Repetitions and statistic.** Each measured test/crate is executed a
   fixed, recorded repetition count with a warm cache; the reported figure is
   the p95 of execution-only time (build excluded).
 - **Fail policy.** A run fails when a budget in §10.16 is exceeded on the
@@ -666,7 +666,7 @@ measurable and are recorded, not asserted by feel:
   it is never mixed into the execution budgets, and correctness never depends
   on any cache.
 
-This baseline is established by `ADR046-feasibility-011` and consumed by the
+This budget reference is established by `ADR046-feasibility-011` and consumed by the
 test-runtime ledger/timing gate (`ADR046-delivery-007`/`ADR046-streamline-022`).
 
 ## Current-code fit
@@ -860,9 +860,9 @@ decisions/work items" row.
 | Current source | this codebase's ad hoc `tests/tools/` timing logs (`d2b-static-timing.$$/`), which are not a candidate-bound, reference-runner-recorded ledger |
 | Reuse source | existing `libtest --format=json` timing output and `xtask` (no new test framework) |
 | Reuse action | adapt |
-| Destination | `proofs/test-runtime-budget-spike/`; the committed baseline ledger consumed by `ADR046-delivery-007` |
-| Detailed design | Establishes the D094 measurement reference: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a budget violation |
-| Integration | Output ledger shape is consumed by the runtime ledger/timing gate as absolute per-test/crate/shard budgets; a historical-regression baseline built on top of them is the deferred follow-up `runtime-ledger-full-census-and-real-shards` |
+| Destination | `proofs/test-runtime-budget-spike/`; a one-off measurement-reference proof for the §10.16 budgets consumed by `ADR046-delivery-007` (no committed baseline ledger ships) |
+| Detailed design | Establishes the D094 measurement reference: records the reference runner class, repetition count, and per-test/crate p95 for a representative hermetic crate; proves the §10.16 per-test and per-crate budgets (individual normal test p95 <=50 ms, per-crate `--lib --tests` <=2 s) are met on the reference runner and that an injected slow/sleeping test is detected as a budget violation (a real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`) |
+| Integration | Output ledger shape is consumed by the runtime ledger/timing gate as absolute per-test/crate budgets; a real multi-crate shard inventory and a historical-regression baseline built on top of them are the deferred follow-up `runtime-ledger-full-census-and-real-shards` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets |
-| Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces the baseline against the real crate set |
+| Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces these budget checks against the real crate set |

@@ -1,19 +1,20 @@
 //! Hermetic test-runtime ledger and timing gate.
 //!
-//! Records execution-only timings for individual tests, Provider crates, and
-//! Layer-1 shards into a deterministic machine-readable ledger, then enforces
-//! the absolute hermetic execution budgets against it.
+//! Records execution-only timings for individual tests and Provider crates
+//! into a deterministic machine-readable ledger, then enforces the absolute
+//! hermetic execution budgets against it.
 //!
-//! The gate is an absolute per-test / per-crate / per-shard budget check on a
-//! freshly recorded ledger: it makes no historical-regression claim and holds
-//! no baseline. Every run is judged only against the frozen budgets and the
-//! pinned closed census, so there is nothing synthetic to keep in step. The
-//! broader goal of a genuine cross-machine reference baseline and a real
-//! multi-crate shard inventory is deferred; see the `test-runtime-ledger`
-//! Makefile target for the named follow-up.
+//! The gate is an absolute per-test / per-crate budget check on a freshly
+//! recorded ledger: it makes no historical-regression claim and holds no
+//! baseline. Every run is judged only against the frozen budgets and the
+//! pinned closed census, so there is nothing synthetic to keep in step. A
+//! genuine cross-machine reference baseline and a real multi-crate shard
+//! inventory (with a per-shard budget over that inventory) are deferred; see
+//! the `test-runtime-ledger` Makefile target for the named follow-up
+//! `runtime-ledger-full-census-and-real-shards`.
 //!
 //! Measurement is delegated to the existing `make` targets: this task ingests
-//! the timings they produce (either as explicit shard/crate samples or as a
+//! the timings they produce (either as explicit crate samples or as a
 //! `libtest --format=json` stream) and never spawns a test runner itself, so
 //! the ledger stays reproducible and free of host paths.
 
@@ -30,15 +31,13 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const TEST_BUDGET_MS: u64 = 50;
 /// Per Provider crate `--lib --tests` hermetic suite.
 pub const CRATE_BUDGET_MS: u64 = 2_000;
-/// Each Layer-1 hermetic shard.
-pub const SHARD_BUDGET_MS: u64 = 60_000;
 /// Minimum execution-only repetitions the ledger must carry before its p95 or
 /// per-crate budgets mean anything. A single wall-clock sample flaps on noise
 /// and can silently fold build work into the timing, so the gate refuses to
 /// draw a conclusion from fewer than this many execution-only repetitions.
 pub const MIN_REPETITIONS: usize = 3;
 
-/// Upper bound on a printable identifier (test id, crate id, or shard id).
+/// Upper bound on a printable identifier (test id or crate id).
 /// Long enough for any crate-qualified `crate::module::submodule::test` path
 /// and short enough that a host path, a multi-line log fragment, or an
 /// unbounded blob cannot masquerade as an id.
@@ -98,7 +97,7 @@ pub fn validate_runner_label(label: &str) -> Result<(), String> {
 
 /// Validate a printable, bounded, control-free identifier.
 ///
-/// Every id (test, crate, or shard) must be non-empty, at most [`MAX_ID_LEN`]
+/// Every id (test or crate) must be non-empty, at most [`MAX_ID_LEN`]
 /// bytes, and composed only of printable ASCII (`0x20..=0x7e`). Rejecting
 /// control characters and non-ASCII bytes stops a newline or terminal escape
 /// from being serialized into the ledger and then echoed verbatim into a
@@ -132,11 +131,7 @@ pub fn validate_id(scope: &str, id: &str) -> Result<(), String> {
 /// or unbounded row past the gate.
 pub fn validate_ledger(ledger: &Ledger) -> Result<(), String> {
     validate_runner_label(&ledger.runner)?;
-    let scopes: [(&str, &Vec<Sample>); 3] = [
-        ("test", &ledger.tests),
-        ("crate", &ledger.crates),
-        ("shard", &ledger.shards),
-    ];
+    let scopes: [(&str, &Vec<Sample>); 2] = [("test", &ledger.tests), ("crate", &ledger.crates)];
     for (scope, samples) in scopes {
         for sample in samples {
             validate_id(scope, &sample.id)?;
@@ -169,7 +164,6 @@ pub struct Ledger {
     pub repetitions: usize,
     pub runner: String,
     pub schema_version: u32,
-    pub shards: Vec<Sample>,
     pub tests: Vec<Sample>,
 }
 
@@ -187,7 +181,6 @@ pub fn p95(samples: &[u64]) -> u64 {
 #[derive(Debug, Default)]
 struct Collector {
     crates: BTreeMap<String, Vec<u64>>,
-    shards: BTreeMap<String, Vec<u64>>,
     tests: BTreeMap<String, Vec<u64>>,
     exceptions: BTreeMap<String, u64>,
 }
@@ -221,7 +214,6 @@ impl Collector {
             repetitions,
             runner,
             schema_version: SCHEMA_VERSION,
-            shards: build(self.shards, SHARD_BUDGET_MS),
             tests,
         }
     }
@@ -283,18 +275,14 @@ pub struct Violation {
     pub detail: String,
 }
 
-/// Enforces the absolute hermetic per-test, per-crate, and per-shard budgets.
+/// Enforces the absolute hermetic per-test and per-crate budgets.
 ///
 /// This is a budget gate, not a regression gate: each recorded p95 is judged
 /// only against its own frozen budget, with no historical anchor. A slower run
 /// that still fits the budget passes.
 pub fn check(ledger: &Ledger) -> Vec<Violation> {
     let mut violations = Vec::new();
-    let scopes: [(&str, &Vec<Sample>); 3] = [
-        ("test", &ledger.tests),
-        ("crate", &ledger.crates),
-        ("shard", &ledger.shards),
-    ];
+    let scopes: [(&str, &Vec<Sample>); 2] = [("test", &ledger.tests), ("crate", &ledger.crates)];
     for (scope, samples) in scopes {
         for sample in samples {
             if sample.p95_ms > sample.budget_ms {
@@ -323,7 +311,7 @@ pub fn check(ledger: &Ledger) -> Vec<Violation> {
 /// A run fails the audit when any of the following holds:
 ///
 /// * it records fewer than [`MIN_REPETITIONS`] execution-only repetitions;
-/// * any of the test, crate, or shard censuses is empty; or
+/// * either the test or crate census is empty; or
 /// * any sample carries a number of samples other than the declared
 ///   repetition count, so every id is measured every repetition.
 pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
@@ -341,11 +329,7 @@ pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
         });
     }
 
-    let scopes: [(&str, &Vec<Sample>); 3] = [
-        ("test", &ledger.tests),
-        ("crate", &ledger.crates),
-        ("shard", &ledger.shards),
-    ];
+    let scopes: [(&str, &Vec<Sample>); 2] = [("test", &ledger.tests), ("crate", &ledger.crates)];
     for (scope, samples) in scopes {
         if samples.is_empty() {
             violations.push(Violation {
@@ -377,9 +361,9 @@ pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
     violations
 }
 
-/// The pinned, closed crate and shard census the ledger must reproduce exactly.
+/// The pinned, closed crate census the ledger must reproduce exactly.
 ///
-/// Loaded from a committed JSON pin so the set of measured crates and shards is
+/// Loaded from a committed JSON pin so the set of measured crates is
 /// fixed in the repository, not chosen per run. `audit_closed_census` enforces
 /// exact-set equality against it, which is what stops the gate from passing on
 /// "one arbitrary repeated id per scope": a census that drops a pinned crate,
@@ -388,7 +372,6 @@ pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedCensus {
     pub crates: Vec<String>,
-    pub shards: Vec<String>,
 }
 
 impl ExpectedCensus {
@@ -402,25 +385,15 @@ impl ExpectedCensus {
                     .to_string(),
             );
         }
-        if self.shards.is_empty() {
-            return Err(
-                "the expected census pins no shards; it must pin the closed \
-                        hermetic shard set"
-                    .to_string(),
-            );
-        }
         for id in &self.crates {
             validate_id("crate", id)?;
-        }
-        for id in &self.shards {
-            validate_id("shard", id)?;
         }
         Ok(())
     }
 }
 
-/// Enforce that the ledger's crate and shard censuses reproduce the pinned
-/// closed sets *exactly* - no missing pinned id, and no unpinned extra.
+/// Enforce that the ledger's crate census reproduces the pinned closed set
+/// *exactly* - no missing pinned id, and no unpinned extra.
 ///
 /// `audit_census` proves the run is complete and repeated; this proves it is
 /// measuring the pinned set and only the pinned set. Together they close the
@@ -429,10 +402,8 @@ impl ExpectedCensus {
 /// the committed census.
 pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Violation> {
     let mut violations = Vec::new();
-    let compared: [(&str, &Vec<String>, &Vec<Sample>); 2] = [
-        ("crate", &expected.crates, &ledger.crates),
-        ("shard", &expected.shards, &ledger.shards),
-    ];
+    let compared: [(&str, &Vec<String>, &Vec<Sample>); 1] =
+        [("crate", &expected.crates, &ledger.crates)];
     for (scope, expected_ids, samples) in compared {
         let want: BTreeSet<&str> = expected_ids.iter().map(String::as_str).collect();
         let have: BTreeSet<&str> = samples.iter().map(|s| s.id.as_str()).collect();
@@ -548,11 +519,11 @@ pub fn lint_source(path: &str, text: &str) -> Vec<Finding> {
 const USAGE: &str = "usage: cargo xtask test-runtime-ledger <command>\n\
      \n\
        record --runner <label> --output <path> [--repetitions <n>]\n\
-              [--shard <id>=<ms>]... [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
+              [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
               [--libtest-json <path>]... [--crate-libtest-json <crate>=<path>]...\n\
               [--exception <test-id>=<ms>]...\n\
        check  --ledger <path> --expected-census <path> [--top <n>]\n\
-       census --expected-census <path> --field <crates|shards>\n\
+       census --expected-census <path> --field crates\n\
        lint   <path>...\n\
        help";
 
@@ -620,11 +591,8 @@ fn run_census(args: &[String]) -> Result<(), String> {
     let census = load_expected_census(&census_path)?;
     let ids = match field.as_str() {
         "crates" => &census.crates,
-        "shards" => &census.shards,
         other => {
-            return Err(format!(
-                "--field expects `crates` or `shards`, got `{other}`"
-            ));
+            return Err(format!("--field expects `crates`, got `{other}`"));
         }
     };
     for id in ids {
@@ -651,11 +619,6 @@ fn run_record(args: &[String]) -> Result<(), String> {
                 repetitions = value
                     .parse()
                     .map_err(|_| format!("--repetitions expects an integer, got `{value}`"))?
-            }
-            "--shard" => {
-                let (id, millis) = pair(value, flag)?;
-                validate_id("shard", &id)?;
-                collector.shards.entry(id).or_default().push(millis);
             }
             "--crate" => {
                 let (id, millis) = pair(value, flag)?;
@@ -719,10 +682,9 @@ fn run_record(args: &[String]) -> Result<(), String> {
     }
     fs::write(&output, rendered).map_err(|error| format!("cannot write `{output}`: {error}"))?;
     println!(
-        "recorded {} test, {} crate, and {} shard measurements",
+        "recorded {} test and {} crate measurements",
         ledger.tests.len(),
-        ledger.crates.len(),
-        ledger.shards.len()
+        ledger.crates.len()
     );
     Ok(())
 }
@@ -771,7 +733,7 @@ fn run_check(args: &[String]) -> Result<(), String> {
     // A pinned closed census is mandatory: without it the gate could pass on a
     // scope shrunk to one convenient id.
     let census_path = census_path.ok_or_else(|| {
-        "--expected-census is required so the crate and shard censuses are enforced against a \
+        "--expected-census is required so the crate census is enforced against a \
          pinned closed set"
             .to_string()
     })?;
@@ -790,10 +752,9 @@ fn run_check(args: &[String]) -> Result<(), String> {
     violations.dedup();
     if violations.is_empty() {
         println!(
-            "runtime budgets hold for {} test, {} crate, and {} shard measurements on `{}`",
+            "runtime budgets hold for {} test and {} crate measurements on `{}`",
             ledger.tests.len(),
             ledger.crates.len(),
-            ledger.shards.len(),
             ledger.runner
         );
         return Ok(());
@@ -856,7 +817,6 @@ mod tests {
             repetitions: 3,
             runner: "reference".to_string(),
             schema_version: SCHEMA_VERSION,
-            shards: Vec::new(),
             tests,
         }
     }
@@ -978,7 +938,6 @@ mod tests {
             repetitions,
             runner: "reference".to_string(),
             schema_version: SCHEMA_VERSION,
-            shards: vec![three("unit", SHARD_BUDGET_MS)],
             tests: vec![three("a::b", TEST_BUDGET_MS)],
         }
     }
@@ -1033,7 +992,6 @@ mod tests {
     fn expected_census() -> ExpectedCensus {
         ExpectedCensus {
             crates: vec!["d2b-core".to_string()],
-            shards: vec!["unit".to_string()],
         }
     }
 
@@ -1099,21 +1057,10 @@ mod tests {
 
     #[test]
     fn an_empty_census_pin_is_rejected() {
-        let empty = ExpectedCensus {
-            crates: Vec::new(),
-            shards: vec!["unit".to_string()],
-        };
+        let empty = ExpectedCensus { crates: Vec::new() };
         assert!(
             empty.validate().is_err(),
             "a census with no crates is refused"
-        );
-        let empty_shards = ExpectedCensus {
-            crates: vec!["d2b-core".to_string()],
-            shards: Vec::new(),
-        };
-        assert!(
-            empty_shards.validate().is_err(),
-            "a census with no shards is refused"
         );
     }
 

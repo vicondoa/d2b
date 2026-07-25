@@ -16,11 +16,13 @@
 
 ### Changed
 
-- Aligned the D094 test-runtime ledger prose across the decision register,
-  validation/delivery §10.16, feasibility/spikes, streamline, and the
-  generated implementation graph to the ledger's actual scope: an honest
-  absolute per-test/crate/shard execution-budget gate that holds no baseline
+- Aligned much of the D094 test-runtime ledger prose across the decision
+  register, validation/delivery §10.16, feasibility/spikes, streamline, and the
+  generated implementation graph toward the ledger's actual scope: an honest
+  absolute per-test/crate execution-budget gate that holds no baseline
   and makes no historical-regression claim. Growing the census to a real
   multi-crate shard inventory and adding a cross-machine reference baseline are
   recorded as the deferred follow-up `runtime-ledger-full-census-and-real-shards`.
-  Removed stale references to the deleted synthetic `runtime-ledger-baseline.json`.
+  Deleted the synthetic `runtime-ledger-baseline.json`. Retired
+  baseline/regression/shard references that survived in the code, the
+  `Makefile`, and several docs are reconciled in a later follow-up.
