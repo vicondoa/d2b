@@ -870,15 +870,18 @@ When the Zone daemon reads a bundle whose `contentHash` (`generationId`) differs
 
 1. **Integrity check**: recompute SHA-256 of the `resources` array; abort with `bundle-integrity-failure` on mismatch - prior generation is unchanged.
 2. **Diff**: compute `(type, name)` diff between the persisted resource store entries where `managedBy: configuration` and the new canonical configured set.
-3. **Added or changed resources**: create new resources; update spec of existing `managedBy: configuration` resources and set their `configurationGeneration`. If a resource with the same `(type, name)` already exists with `managedBy: controller` or `managedBy: api`, the configuration service records a `configuration-name-conflict` error for that resource, marks that generation activation item `Degraded/name-conflict`, and leaves the existing resource untouched. It never seizes ownership by changing `managedBy`.
-4. **Absent resources**: set `deletionRequestedAt` on every persisted `managedBy: configuration` resource absent from the new configured set. Deletion proceeds through owner-child/finalizer-safe ordering; the Zone runtime does not force-delete or skip finalizers.
-5. **Unchanged resources**: resources whose spec is byte-identical to the persisted spec have their `configurationGeneration` updated to the current generation; no controller reconcile is triggered.
+3. **Atomic durable commit (the sole activation point)**: before any intent is queued, the sole durable writer ADR046-routing-013 atomically commits `/var/lib/d2b/zones/<zone>/configuration/generation.json` (new active `contentHash`, prior `contentHash`, `retainedGenerations`, retention-ring metadata) and stages the outgoing bundle into the retention ring, under the bundle-file OFD lock. The new generation is active only when this commit returns; provider-state does not write `generation.json` itself and defers the durable commit to ADR046-routing-013.
+4. **Added or changed resources**: create new resources; update spec of existing `managedBy: configuration` resources and set their `configurationGeneration`. If a resource with the same `(type, name)` already exists with `managedBy: controller` or `managedBy: api`, the configuration service records a `configuration-name-conflict` error for that resource, marks that generation activation item `Degraded/name-conflict`, and leaves the existing resource untouched. It never seizes ownership by changing `managedBy`.
+5. **Absent resources**: set `deletionRequestedAt` on every persisted `managedBy: configuration` resource absent from the new configured set. Deletion proceeds through owner-child/finalizer-safe ordering; the Zone runtime does not force-delete or skip finalizers.
+6. **Unchanged resources**: resources whose spec is byte-identical to the persisted spec have their `configurationGeneration` updated to the current generation; no controller reconcile is triggered.
 
-### Activation does not block
+Steps 4-6 (intent application) run only after the step-3 commit returns.
 
-New generation activation does **not** wait for cleanup completion:
+### Activation does not block on cleanup
 
-- `Zone.status.observedGeneration` advances to the new bundle generation immediately after the diff is applied.
+New generation activation is complete once the step-3 durable commit returns; it does **not** wait for cleanup completion:
+
+- `Zone.status.observedGeneration` advances to the new bundle generation once the atomic `generation.json` commit returns, not after intent application completes.
 - `Zone.status.phase` transitions to `Degraded` with a `pending-cleanup` condition while any prior-generation `managedBy: configuration` resources are still completing deletion.
 - `Zone.status.phase` returns to its normal steady state once all pending cleanup completes.
 - Providers registered in the new generation start immediately; their controllers may begin creating controller-created children against the new spec without waiting.

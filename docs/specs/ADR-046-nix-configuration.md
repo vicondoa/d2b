@@ -2074,21 +2074,28 @@ Nix eval
          artifact-catalog document digest, resolved artifact digests);
       2. validate resource refs, owners, RBAC cross-checks, and the
          cross-Zone index cross-check;
-      3. stage the new generation into the Zone runtime (not yet active);
+      3. install the verified bundle at
+         /etc/d2b/zones/<zone>/resource-bundle.json (immutable input, not
+         yet active) and notify the daemon (SIGHUP).
+  -> daemon config controller (ADR046-routing-013, the sole durable writer)
       4. atomically persist generation.json = { activeContentHash,
          activeArtifactCatalogDigest, priorContentHash, retainedGenerations,
          retention-ring metadata } in one durable write (temp file in the same
          directory, write, fsync the file, rename over the target, fsync the
-         parent directory), per the ADR 0034 storage contract; the new
+         parent directory), per the ADR 0034 storage contract, and stage the
+         outgoing bundle into the retention ring in that same commit; the new
          generation counts as active only when this write returns success;
-      5. notify the configuration-publication controller.
+      5. queue the diff intents and notify reconcile loops only after step 4
+         returns.
 ```
 
-Steps 1-3 are fail-closed. Step 4 is the single atomic commit point: the prior
-pointer is recorded in the same durable write that installs the new active
-pointer, never in a later step. The controller is notified only after step 4
-succeeds (step 5). There is no window in which the active pointer has advanced
-but the prior pointer has not been recorded.
+Steps 1-3 are the helper's fail-closed verify/validate/install. Step 4 is the
+single atomic commit point, performed by the daemon config controller (the sole
+durable writer, ADR046-routing-013): the prior pointer is recorded in the same
+durable write that installs the new active pointer, never in a later step.
+Intents are queued and reconcile loops notified only after step 4 succeeds
+(step 5). There is no window in which the active pointer has advanced but the
+prior pointer has not been recorded.
 
 #### Restart recovery for an interrupted activation
 
@@ -2614,7 +2621,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, `installFileName`, `mode 0640` ownership); `nixos-modules/bundle.nix` (bundle derivation, SHA256SUMS, `d2b._bundle` integrity chain) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/bundle-zones.nix` (per-Zone bundle derivation); common helpers retained in `bundle-artifacts.nix` |
-| Detailed design | Per-Zone monolithic `resource-bundle.json` (store-derivation filename `bundle.json`) whose `contentHash` is the generation identity, verified via the four-member digest chain (see Bundle contract (canonical)); `generationIndex` monotonic ordinal; atomic `generation.json` activation commit; `manifestVersion` -> `schemaVersion` rename Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and rewrite. |
+| Detailed design | Per-Zone monolithic `resource-bundle.json` (store-derivation filename `bundle.json`) whose `contentHash` is the generation identity, verified via the four-member digest chain (see Bundle contract (canonical)); `manifestVersion` -> `schemaVersion` rename. The runtime `configurationGeneration` ordinal and the atomic `generation.json` activation commit are runtime concerns owned by the sole durable writer ADR046-routing-013; this work item emits only the immutable bundle and neither assigns a generation ordinal nor writes `generation.json`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and rewrite. |
 | Integration | `d2b-activation-helper` reads `resource-bundle.json` per Zone; validates the digest chain before staging |
 | Data migration | Per-Zone bundles are generated from v3 resource declarations; full d2b 3.0 reset; no v2 monolithic bundle state import. |
 | Validation | Artifact-shape contract tests in `packages/d2b-contract-tests/tests/`; determinism test (build twice, diff outputs) |

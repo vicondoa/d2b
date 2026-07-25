@@ -1175,26 +1175,40 @@ When a new bundle is installed (e.g. after `nixos-rebuild switch`):
 2. Computes diff against the active generation by generationId.
    If generationId is unchanged, no action required.
 
-3. For each resource in the new bundle:
+3. Atomic durable commit - the sole activation point, owned by the sole
+   durable writer ADR046-routing-013. The daemon config controller writes
+   `/var/lib/d2b/zones/<zone>/configuration/generation.json` (active
+   contentHash, prior contentHash, retainedGenerations, retention-ring
+   metadata) and stages the outgoing bundle into the retention ring in one
+   durable operation - temp file in the same directory, write, fsync, rename
+   over the target, fsync the parent directory - under the bundle-file OFD
+   lock. The new generation is active only when this commit returns success.
+   The commit precedes all intent queuing (steps 4-5) and reconcile
+   notification (step 6), so a crash can never leave a new generation active
+   without a durably recorded rollback target.
+
+4. For each resource in the new bundle (queued only after step 3 returns):
    a. Absent from store → queue Create intent (sets configurationGeneration).
    b. Present, spec changed → queue UpdateSpec intent (updates configurationGeneration).
    c. Present, spec unchanged → no-op (configurationGeneration refreshed in place).
 
-4. For each resource in the prior bundle whose configurationGeneration matches
+5. For each resource in the prior bundle whose configurationGeneration matches
    the prior generationId and that is absent from the new bundle:
    → queue Delete intent (asynchronous, non-blocking).
    Core sets `deletionRequestedAt` on the resource immediately and adds
    a Pending condition to signal cleanup is in progress.
 
-5. Activation completes synchronously once all intents are queued.
-   The Zone runtime begins applying intents asynchronously.
+6. Reconcile loops are notified only after step 3 and begin applying the
+   queued intents asynchronously. Activation is already complete at step 3;
+   intent application and cleanup are post-activation reconciliation, never
+   part of the activation point.
 
-6. Zone Resource phase after diff:
+7. Zone Resource phase after diff:
    - Pending  → while any Create or UpdateSpec intent is in-flight.
    - Degraded → all Creates/Updates done; one or more Delete intents pending.
    - Ready    → all intents complete; no pending cleanup.
 
-7. Prior generation bundles are retained in a capped ring
+8. Prior generation bundles are retained in a capped ring
    (default 3, range 1..16, no TTL) until explicitly pruned or rolled back.
    See "Prior generation retention and rollback" below.
 ```
@@ -1301,12 +1315,19 @@ under `/var/lib/d2b/zones/<zone>/configuration/prior/`:
 Retention is count-only: the oldest bundle is pruned when a new generation
 is added and the count would exceed `retainedGenerations`. No time-based expiry.
 
-- **Rollback**: writing a retained bundle back to
-  `/etc/d2b/zones/<zone>/resource-bundle.json` (e.g. via `nixos-rebuild switch`
-  to a previous NixOS generation) triggers a reverse diff. Resources with
-  `deletionRequestedAt` set have the field cleared and their Pending
-  condition removed (Delete intent cancelled if not yet executed);
-  resources added in the now-superseded generation receive Delete intents.
+- **Rollback**: rolling back does **not** rewrite `/etc` in place. The runtime
+  restages a retained prior bundle as a **new** generation: it re-runs the
+  atomic `generation.json` commit (activation step 3) with the retained
+  bundle's `contentHash` as the new active pointer and the current generation
+  recorded as the new prior pointer, then applies the reverse diff once that
+  commit returns. Resources with `deletionRequestedAt` set have the field
+  cleared and their Pending condition removed (Delete intent cancelled if not
+  yet executed); resources added in the now-superseded generation receive
+  Delete intents. A `nixos-rebuild switch` to a previous NixOS generation
+  reinstalls the earlier bundle at
+  `/etc/d2b/zones/<zone>/resource-bundle.json`, which the runtime activates
+  through the same restage-as-new-generation commit rather than by trusting the
+  rewritten `/etc` file as already-active.
 - **Pruning on cleanup failure**: prior bundles are never forcibly pruned
   while a Delete intent originating from their configurationGeneration is
   still in flight.
@@ -2697,8 +2718,8 @@ The following transitions are NOT simple textual renames:
 | Main reuse source | `packages/d2b-state/src/` (main `a1cc0b2d`): atomic state, audit segment primitives adapted for generation tracking |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/configuration.rs` (defined by ADR-046-core-controllers); shared bundle DTOs may live in `packages/d2b-core/` |
-| Detailed design | Implement the configuration ownership and cleanup contract from the "Configuration ownership and cleanup contract" section. `configuration.rs` owns: (1) reading and integrity-verifying `/etc/d2b/zones/<zone>/resource-bundle.json` on startup and SIGHUP; (2) diffing against active generation by `generationId` (no-op if unchanged); (3) queuing Create/UpdateSpec/Delete intents - core sets `configurationGeneration` and `managedBy` when applying Create/UpdateSpec; Delete targets only resources where BOTH `managedBy` equals the configuration service's value AND `configurationGeneration` matches the prior bundle - resources with `managedBy=controller` or `managedBy=api` are never seized; (4) setting `deletionRequestedAt` on pending-delete resources immediately and adding a Pending condition; (5) writing the prior bundle into the capped ring at `/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id>.json` (default retainedGenerations=3, range 1..16, no TTL; prune oldest when count would exceed limit); (6) enforcing boundary invariants (no diff-delete for absent `configurationGeneration`, `managedBy` collision guard, live controller-child teardown guard); (7) driving finalizer drain + controller-child cascade before completing a Delete; (8) on successful deletion: one store transaction writes the `Deleted` revision/change event and removes the resource row and all index entries; the authoritative audit record (`zone-resource-cleanup`) is appended from the committed revision with dedup/exactly-once recovery and is NOT part of the store transaction; (9) tracking `deletionRequestedAt`/`cleanupConfigGeneration`/`cleanupError`/`cleanupAttempt` per resource; (10) on rollback: clearing `deletionRequestedAt` and Pending condition for revived resources; (11) never pruning a prior bundle while a Delete intent from its `configurationGeneration` is in flight. OFD lock on the bundle file prevents concurrent activation races. Generation state persisted atomically at `/var/lib/d2b/zones/<zone>/configuration/generation.json` (root:d2bd 0640). The `spec` object comparison for UpdateSpec detection uses the canonical JSON form so two identical specs always compare equal regardless of Nix rendering order. Resource phase transitions: Pending while Create/UpdateSpec in-flight; Degraded while cleanup pending; Ready when clean; Failed on permanent error. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Implement the configuration ownership and cleanup contract from the "Configuration ownership and cleanup contract" section. `configuration.rs` owns: (1) reading and integrity-verifying `/etc/d2b/zones/<zone>/resource-bundle.json` on startup and SIGHUP; (2) diffing against active generation by `generationId` (no-op if unchanged); (3) queuing Create/UpdateSpec/Delete intents - core sets `configurationGeneration` and `managedBy` when applying Create/UpdateSpec; Delete targets only resources where BOTH `managedBy` equals the configuration service's value AND `configurationGeneration` matches the prior bundle - resources with `managedBy=controller` or `managedBy=api` are never seized; (4) setting `deletionRequestedAt` on pending-delete resources immediately and adding a Pending condition; (5) writing the prior bundle into the capped ring at `/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id>.json` (default retainedGenerations=3, range 1..16, no TTL; prune oldest when count would exceed limit); (6) enforcing boundary invariants (no diff-delete for absent `configurationGeneration`, `managedBy` collision guard, live controller-child teardown guard); (7) driving finalizer drain + controller-child cascade before completing a Delete; (8) on successful deletion: one store transaction writes the `Deleted` revision/change event and removes the resource row and all index entries; the authoritative audit record (`zone-resource-cleanup`) is appended from the committed revision with dedup/exactly-once recovery and is NOT part of the store transaction; (9) tracking `deletionRequestedAt`/`cleanupConfigGeneration`/`cleanupError`/`cleanupAttempt` per resource; (10) on rollback: clearing `deletionRequestedAt` and Pending condition for revived resources; (11) never pruning a prior bundle while a Delete intent from its `configurationGeneration` is in flight. OFD lock on the bundle file prevents concurrent activation races. ADR046-routing-013 is the **sole durable writer** of the per-Zone generation record: no other work item writes `generation.json`. Activation ordering is fixed - after integrity-verify (1) and diff (2), the controller performs a single atomic durable commit of `/var/lib/d2b/zones/<zone>/configuration/generation.json` (root:d2bd 0640): the active `contentHash`, the prior `contentHash`, `retainedGenerations`, and the retention-ring metadata are written together via temp-file + fsync + rename-over-target + parent-directory fsync under the bundle-file OFD lock, and the outgoing bundle is staged into the retention ring in that same commit. This commit is the sole activation point: the new generation is active only when it returns success, and it precedes all intent queuing (3) and reconcile notification. A normal daemon restart is a continuation event (ADR 0034): on startup the controller reads `generation.json`, adopts the recorded active generation when its staged bundle is present and integrity-verifies, and otherwise quarantines the ambiguous generation and continues serving from the recorded prior pointer. Recovery adopts or quarantines before any cleanup; no prior bundle is pruned while it is a rollback target or an in-flight Delete from its generation could still be needed. The `spec` object comparison for UpdateSpec detection uses the canonical JSON form so two identical specs always compare equal regardless of Nix rendering order. Resource phase transitions: Pending while Create/UpdateSpec in-flight; Degraded while cleanup pending; Ready when clean; Failed on permanent error. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b-core-controller` configuration service activates on bundle install and SIGHUP; zone-controller reconcile loops in `d2b-core-controller` consume the queued intents; d2b-bus resource API exposes `status.phase` and `pendingCleanup` via Get/Watch on the active generation resource |
 | Data migration | None; new runtime component |
-| Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup |
+| Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup; activation-ordering tests: the atomic `generation.json` commit is performed before any intent is queued (before-rename ordering) and reconcile is notified only after the commit returns (before-notify ordering); restart-adoption of a committed active generation whose staged bundle integrity-verifies; quarantine of an ambiguous or interrupted generation with continued service from the recorded prior pointer; cleanup-order (adopt or quarantine before any prune, and no prune of a bundle that is still a rollback target or an in-flight Delete source) |
 | Removal proof | `realm_access_resolver.rs` (B) retires after `d2b-core-controller` configuration tracking is live; `RealmControllersJson` (C) retires after all hosts migrated to Zone bundles |
