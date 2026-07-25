@@ -514,11 +514,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 }
 
 #[cfg(test)]
-pub(crate) use test_support::{Scratch, repo_root};
-
-/// Hermetic scratch state for every delivery test module.
-#[cfg(test)]
-mod test_support {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -535,7 +531,7 @@ mod test_support {
     /// Scratch directory inside the ignored build tree, so tests never touch
     /// a tracked path and never write outside the project.
     pub(crate) struct Scratch {
-        path: PathBuf,
+        pub(crate) path: PathBuf,
     }
 
     impl Scratch {
@@ -548,10 +544,6 @@ mod test_support {
             fs::create_dir_all(&path).expect("create scratch directory");
             Self { path }
         }
-
-        pub(crate) fn path(&self) -> &Path {
-            &self.path
-        }
     }
 
     impl Drop for Scratch {
@@ -559,11 +551,6 @@ mod test_support {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{test_support::repo_root, *};
 
     fn candidate_id() -> CandidateId {
         CandidateId::parse("a".repeat(64)).expect("hex digest")
@@ -643,7 +630,7 @@ mod tests {
     #[test]
     fn candidate_directories_are_addressed_by_candidate_id() {
         let scratch = Scratch::new("addressing");
-        let root = StateRoot::for_tests(&scratch.path().join("state")).expect("anchor root");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
         let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
         assert_eq!(
             candidate.path(),
@@ -663,7 +650,7 @@ mod tests {
     #[test]
     fn artifacts_round_trip_through_the_candidate_directory() {
         let scratch = Scratch::new("round-trip");
-        let root = StateRoot::for_tests(&scratch.path().join("state")).expect("anchor root");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
         let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
 
         let digest = candidate
@@ -693,7 +680,7 @@ mod tests {
     #[test]
     fn a_traversing_artifact_path_is_refused() {
         let scratch = Scratch::new("traversal");
-        let root = StateRoot::for_tests(&scratch.path().join("state")).expect("anchor root");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
         let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
         for relative in ["../escape.json", "/etc/escape.json", ".git/config", ""] {
             assert!(
@@ -706,7 +693,7 @@ mod tests {
     #[test]
     fn an_absent_candidate_directory_is_not_created_by_existing_candidate() {
         let scratch = Scratch::new("absent");
-        let root = StateRoot::for_tests(&scratch.path().join("state")).expect("anchor root");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
         assert!(root.existing_candidate("w0", &candidate_id()).is_err());
         assert!(!root.path().join("w0").exists());
     }

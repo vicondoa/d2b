@@ -279,7 +279,7 @@ pub(crate) mod tests {
     use crate::delivery::{
         model::PANEL_ROLES,
         panel::tests::{candidate_with_snapshot, record_files, write_record_dir},
-        storage::Scratch,
+        storage::tests::Scratch,
     };
     use std::path::Path;
 

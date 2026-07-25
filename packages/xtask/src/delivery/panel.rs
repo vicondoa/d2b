@@ -705,7 +705,10 @@ pub(crate) mod tests {
     use crate::delivery::{
         DeliveryErrorKind,
         model::fixtures,
-        storage::{SNAPSHOT_FILE, Scratch, repo_root},
+        storage::{
+            SNAPSHOT_FILE,
+            tests::{Scratch, repo_root},
+        },
     };
 
     pub(crate) fn snapshot() -> SnapshotView {
@@ -726,7 +729,7 @@ pub(crate) mod tests {
     pub(crate) fn candidate_with_snapshot(
         scratch: &Scratch,
     ) -> (StateRoot, CandidateDir, SnapshotView) {
-        let state = StateRoot::for_tests(&scratch.path().join("state")).expect("state root");
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
         let snapshot = snapshot();
         let candidate = state
             .candidate(snapshot.wave(), &snapshot.candidate_id)
@@ -774,7 +777,7 @@ pub(crate) mod tests {
 
     /// Writes a record set into an operator-style directory.
     pub(crate) fn write_record_dir(scratch: &Scratch, files: &[RecordFile]) -> PathBuf {
-        let dir = scratch.path().join("records");
+        let dir = scratch.path.join("records");
         fs::create_dir_all(&dir).expect("records directory");
         for (name, bytes) in files {
             fs::write(dir.join(name), bytes).expect("write record");
@@ -816,7 +819,7 @@ pub(crate) mod tests {
         let scratch = Scratch::new("panel-request-location");
         let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         request(&candidate, &snapshot).expect("panel request");
-        assert!(candidate.panel_request_path().starts_with(scratch.path()));
+        assert!(candidate.panel_request_path().starts_with(&scratch.path));
 
         let inside_repository = StateRoot::prepare(&[], Some(&repo_root().join("delivery-state")));
         assert!(
@@ -1124,7 +1127,7 @@ pub(crate) mod tests {
     fn a_snapshot_outside_candidate_state_is_rejected() {
         let scratch = Scratch::new("panel-foreign-snapshot");
         let (state, _candidate, snapshot) = candidate_with_snapshot(&scratch);
-        let foreign = scratch.path().join("foreign-snapshot.json");
+        let foreign = scratch.path.join("foreign-snapshot.json");
         fs::write(&foreign, serde_json::to_vec(&snapshot).expect("snapshot")).expect("write");
         let error = open_candidate(&state, &foreign).expect_err("foreign path");
         assert!(

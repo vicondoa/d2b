@@ -399,7 +399,7 @@ mod tests {
         model::fixtures,
         panel::SnapshotView,
         seal::{seal, tests::sealable},
-        storage::{SEAL_FILE, Scratch},
+        storage::{SEAL_FILE, tests::Scratch},
     };
 
     fn sealed(scratch: &Scratch) -> (CandidateDir, SealRecord, SnapshotView) {
