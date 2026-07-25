@@ -9,12 +9,12 @@
 //! Contract, as specified by `docs/specs/ADR-046-validation-and-delivery.md`
 //! section 11:
 //!
-//! * Exactly [`SLOT_COUNT`] slots, scoped to the invoking uid, living under
-//!   the canonical per-uid namespace `/run/user/<uid>/d2b-heavy-gates/uid-<uid>/`
-//!   (falling back to `/tmp` only when the per-user runtime directory is
-//!   genuinely absent). The root is a fixed function of the uid, never a
-//!   caller-selectable environment variable, so two lanes for the same uid
-//!   always contend for the same two slots.
+//! * Exactly [`SLOT_COUNT`] slots, scoped to the invoking uid, living under a
+//!   single fixed per-host root, `/tmp/d2b-heavy-gates/uid-<uid>/`. The root is
+//!   a constant - never a function of runtime-directory existence and never a
+//!   caller-selectable environment variable - so two lanes for the same uid
+//!   always contend for the same two slots even if a login or logout races
+//!   their startup.
 //! * Acquisition is nonblocking (`F_OFD_SETLK`), retried every
 //!   [`RETRY_INTERVAL`] for at most [`ACQUIRE_TIMEOUT`].
 //! * Fail-closed: if the platform or filesystem does not support open file
@@ -104,34 +104,44 @@ const WAIT_NOTICE_INTERVAL: Duration = Duration::from_secs(60);
 /// Directory name holding every uid's slot directory.
 const GATE_DIR_NAME: &str = "d2b-heavy-gates";
 
-/// The canonical per-user runtime root. The per-uid namespace lives at
-/// `{CANONICAL_RUNTIME_ROOT}/<uid>/d2b-heavy-gates/uid-<uid>`. This is the
-/// systemd-managed per-user runtime directory (`/run/user/<uid>`, mode 0700,
-/// owned by the uid); it is a fixed function of the uid, so it cannot be
-/// pointed at a second, independent slot pool the way an environment variable
-/// could.
-const CANONICAL_RUNTIME_ROOT: &str = "/run/user";
-
-/// The fallback root when the per-user runtime directory is genuinely absent
-/// (for example a minimal container with no logind session). It is a fixed,
-/// root-owned, sticky, world-writable location, so - like the runtime root -
-/// every lane for the same uid resolves to the same `d2b-heavy-gates/uid-<uid>`
-/// directory. It is *not* selectable by the caller: the choice between it and
-/// [`CANONICAL_RUNTIME_ROOT`] is made purely on whether the runtime directory
-/// exists.
-const CANONICAL_FALLBACK_ROOT: &str = "/tmp";
+/// The single, fixed per-host root the heavy-gate namespace lives under:
+/// `{CANONICAL_GATE_ROOT}/d2b-heavy-gates/uid-<uid>`.
+///
+/// `/tmp` is chosen because it is the one location that is *always present*
+/// (unlike `/run/user/<uid>`, which pam_systemd creates on login and removes on
+/// last logout) and is root-owned and sticky on every supported host. Both
+/// properties matter:
+///
+/// * *always present* - the root is never selected by whether some other
+///   directory happens to exist, so two lanes for the same uid can never land
+///   in two independent slot pools because one started before and one after the
+///   per-user runtime directory appeared. An earlier form chose
+///   `/run/user/<uid>` when it existed and `/tmp` otherwise; a login (or logout)
+///   between two concurrent lane starts split the pool and defeated the global
+///   two-slot limit without forging anything. Anchoring to a single fixed root
+///   removes that race in both directions.
+/// * *root-owned and sticky* - the root itself cannot be renamed or replaced by
+///   a non-root peer, so a hostile peer cannot swap the whole verified
+///   `d2b-heavy-gates` directory out from under a future invocation. The shared
+///   parent's safe shapes are enumerated in [`shared_parent_is_trusted`]; the
+///   root is held to the same bar.
+///
+/// The root is *not* a function of the caller's uid and *not* selectable by any
+/// environment variable in a released binary: per-uid isolation comes entirely
+/// from the `uid-<uid>` slot directory beneath the shared parent.
+const CANONICAL_GATE_ROOT: &str = "/tmp";
 
 /// Semantic labels for the fixed heavy-gate namespace components.
 ///
 /// Every operator- and CI-facing diagnostic names the directory or file by its
 /// ROLE, never by its absolute path or the caller's uid. The gate paths embed
-/// both the runtime root and the uid (`/run/user/<uid>/d2b-heavy-gates/uid-<uid>`),
-/// and these diagnostics reach stderr and CI logs verbatim, so interpolating
-/// the resolved path or the raw uid would leak them. Naming the role instead
-/// keeps the message actionable without disclosing either. The remediation
-/// text uses the shell-style `$UID` placeholder rather than the literal number.
+/// both the root and the uid (`/tmp/d2b-heavy-gates/uid-<uid>`), and these
+/// diagnostics reach stderr and CI logs verbatim, so interpolating the resolved
+/// path or the raw uid would leak them. Naming the role instead keeps the
+/// message actionable without disclosing either. The remediation text uses the
+/// shell-style `$UID` placeholder rather than the literal number.
 mod gate_label {
-    /// The canonical per-uid runtime root (`/run/user/$UID`, else `/tmp`).
+    /// The single fixed per-host root (`/tmp`).
     pub const ROOT: &str = "the heavy-gate root directory";
     /// The shared `d2b-heavy-gates` parent beneath the root.
     pub const SHARED: &str = "the shared heavy-gate directory";
@@ -339,27 +349,31 @@ fn unlock(file: &File) -> std::result::Result<(), Errno> {
     fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map(drop)
 }
 
-/// The single canonical per-uid namespace root.
+/// The single canonical namespace root.
 ///
-/// Non-overridable: the root is derived only from `uid`, never from `TMPDIR`,
-/// `XDG_RUNTIME_DIR`, or any other environment variable an attacker - or a
-/// well-meaning operator wiring up two lanes - could set differently for two
-/// concurrent invocations. That is the whole point of the semaphore: two
-/// lanes for the same uid on the same host MUST resolve to the same
-/// `d2b-heavy-gates/uid-<uid>` directory so they contend for the same two
-/// slots. An earlier form honoured `XDG_RUNTIME_DIR` then `TMPDIR`, which let
-/// two lanes each pick an independent root and each acquire two slots,
-/// defeating the global limit without forging anything.
+/// Non-overridable and not a function of runtime-directory existence: in a
+/// released binary the root is the constant [`CANONICAL_GATE_ROOT`], never
+/// `TMPDIR`, `XDG_RUNTIME_DIR`, `/run/user/<uid>`, or any other value that an
+/// attacker - or a well-meaning operator wiring up two lanes - could set or
+/// cause to differ between two concurrent invocations. That is the whole point
+/// of the semaphore: two lanes for the same uid on the same host MUST resolve
+/// to the same `d2b-heavy-gates/uid-<uid>` directory so they contend for the
+/// same two slots. An earlier form honoured `XDG_RUNTIME_DIR` then `TMPDIR`,
+/// which let two lanes each pick an independent root; a later form chose
+/// `/run/user/<uid>` when it existed and `/tmp` otherwise, which split the pool
+/// whenever a login or logout raced two lane starts. A single fixed root closes
+/// both, without forging anything. Per-uid isolation comes from the
+/// `uid-<uid>` slot directory, not from the root.
 ///
 /// `test_root` is an injectable seam used *exclusively* by this crate's own
 /// tests, which is why the function stays pure (no environment or filesystem
 /// access) and its precedence is directly unit-testable. The production caller
 /// always passes `None` (see [`GateDir::resolve`]), so a released binary has
 /// no code path that consults a caller-selected root.
-pub fn gate_root_from(uid: u32, test_root: Option<&Path>) -> PathBuf {
+pub fn gate_root_from(_uid: u32, test_root: Option<&Path>) -> PathBuf {
     match test_root {
         Some(root) => root.to_path_buf(),
-        None => PathBuf::from(format!("{CANONICAL_RUNTIME_ROOT}/{uid}")),
+        None => PathBuf::from(CANONICAL_GATE_ROOT),
     }
 }
 
@@ -420,14 +434,17 @@ impl GateDir {
         &self.path
     }
 
-    /// Resolve and prepare the gate directory from the canonical per-uid
-    /// namespace.
+    /// Resolve and prepare the gate directory from the single canonical
+    /// namespace root.
     ///
-    /// The root is a fixed function of the uid, never a caller-selected
-    /// environment variable: `/run/user/<uid>` when that per-user runtime
-    /// directory exists, otherwise the shared root-owned sticky `/tmp`. Both
-    /// are non-overridable, so two lanes for the same uid on the same host
-    /// always contend for the same two slots.
+    /// The root is the constant [`CANONICAL_GATE_ROOT`] (`/tmp`), never a
+    /// caller-selected environment variable and never a function of whether
+    /// `/run/user/<uid>` happens to exist. `/tmp` is always present and is
+    /// root-owned and sticky on every supported host, so two lanes for the same
+    /// uid always contend for the same two slots and the verified shared parent
+    /// cannot be renamed out from under a future invocation by a non-root peer.
+    /// [`GateDir::prepare`] fails closed if the root or the shared parent is not
+    /// in a [`shared_parent_is_trusted`] shape.
     pub fn resolve() -> Result<Self> {
         let uid = getuid().as_raw();
         // Injectable seam: honoured only in this crate's own test build, so a
@@ -435,14 +452,6 @@ impl GateDir {
         // root. See `gate_root_from`.
         let test_root = Self::test_root_override();
         let root = gate_root_from(uid, test_root.as_deref());
-        // `/run/user/<uid>` is the canonical per-user runtime directory; fall
-        // back to the shared, root-owned, sticky `/tmp` only when it is
-        // genuinely absent (a minimal container without logind). The choice is
-        // made solely on existence - never on a caller-supplied value - so it
-        // cannot be steered to mint a second slot pool.
-        if test_root.is_none() && !root.is_dir() {
-            return Self::prepare(Path::new(CANONICAL_FALLBACK_ROOT), uid);
-        }
         Self::prepare(&root, uid)
     }
 
@@ -450,9 +459,9 @@ impl GateDir {
     ///
     /// In the crate's test build the child-mode helpers re-exec this same
     /// binary with `XDG_RUNTIME_DIR` pointed at a per-test scratch directory,
-    /// so tests never touch the real per-user runtime namespace. In a released
-    /// binary this always returns `None`: the production namespace is fixed by
-    /// the uid alone and no environment variable can redirect it.
+    /// so tests never touch the real namespace. In a released binary this
+    /// always returns `None`: the production root is the fixed constant
+    /// [`CANONICAL_GATE_ROOT`] and no environment variable can redirect it.
     #[cfg(test)]
     fn test_root_override() -> Option<PathBuf> {
         std::env::var_os("XDG_RUNTIME_DIR")
@@ -467,18 +476,17 @@ impl GateDir {
 
     /// Create (if needed) and validate `<root>/d2b-heavy-gates/uid-<uid>`.
     ///
-    /// The canonical root (`/run/user/<uid>`, else `/tmp`; see
-    /// [`GateDir::resolve`]) is opened and `fstat`ed *first*. A root a non-root
-    /// peer owns, or an owned-but-loosely-permissioned root, is refused:
-    /// otherwise that peer could rename the whole verified `d2b-heavy-gates`
-    /// directory between invocations, so a later invocation would create a
-    /// *second* semaphore namespace and both would run two lanes each.
-    /// Anchoring within a single invocation (via `/proc/self/fd`) protects
-    /// that invocation's inodes but cannot preserve one namespace across
-    /// invocations; only trusting the root can. A root is trusted when it is
-    /// ours and not group- or world-writable (a per-user runtime directory),
-    /// or root-owned and either locked down or sticky (like `/tmp`) - exactly
-    /// [`shared_parent_is_trusted`].
+    /// The canonical root ([`CANONICAL_GATE_ROOT`]; see [`GateDir::resolve`]) is
+    /// opened and `fstat`ed *first*. A root a non-root peer owns, or an
+    /// owned-but-loosely-permissioned root, is refused: otherwise that peer
+    /// could rename the whole verified `d2b-heavy-gates` directory between
+    /// invocations, so a later invocation would create a *second* semaphore
+    /// namespace and both would run two lanes each. Anchoring within a single
+    /// invocation (via `/proc/self/fd`) protects that invocation's inodes but
+    /// cannot preserve one namespace across invocations; only trusting the root
+    /// can. `/tmp` is root-owned and sticky, so it satisfies
+    /// [`shared_parent_is_trusted`]; the same predicate also accepts an
+    /// owned-and-private root should the injectable test seam point at one.
     ///
     /// The shared `d2b-heavy-gates` parent is then created *relative to that
     /// anchored root descriptor* and private to us (mode `0700`) rather than
@@ -506,10 +514,9 @@ impl GateDir {
         if !shared_parent_is_trusted(root_stat.st_uid, root_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
                 "{} is owned by another user or is group- or world-writable; refusing to create \
-                 a semaphore namespace under a directory a peer could rename. Ensure the \
-                 per-user runtime directory /run/user/$UID exists and is owned by you \
-                 (mode 0700), or - where it is genuinely absent - that /tmp is the usual \
-                 root-owned sticky directory.",
+                 a semaphore namespace under a directory a peer could rename. The heavy-gate \
+                 root must be a root-owned sticky directory (the usual shape of /tmp) so no \
+                 non-root peer can rename the shared namespace out from under a later run.",
                 gate_label::ROOT,
             )));
         }
@@ -546,9 +553,9 @@ impl GateDir {
         if !shared_parent_is_trusted(shared_stat.st_uid, shared_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
                 "{} is owned by another user or is group- or world-writable; refusing to \
-                 share a semaphore namespace a peer could rename. Ensure the per-user runtime \
-                 directory /run/user/$UID is owned by you (mode 0700), or have an administrator \
-                 provision a root-owned (optionally sticky) {GATE_DIR_NAME} directory.",
+                 share a semaphore namespace a peer could rename. Ensure it is owned by you \
+                 (mode 0700), or have an administrator provision a root-owned (optionally \
+                 sticky) {GATE_DIR_NAME} directory.",
                 gate_label::SHARED,
             )));
         }
@@ -646,8 +653,8 @@ impl GateDir {
         GateError::unsupported(format!(
             "open file description locks (F_OFD_SETLK) are unavailable on the filesystem backing \
              {} ({errno}). The heavy gate fails closed rather than falling back to flock or \
-             running unsynchronized; the per-user runtime directory (/run/user/$UID, else /tmp) \
-             must live on a filesystem that supports them.",
+             running unsynchronized; the heavy-gate root (/tmp) must live on a filesystem that \
+             supports them.",
             gate_label::SLOT_DIR
         ))
     }
@@ -1715,12 +1722,16 @@ mod tests {
     // ---- pure contract -------------------------------------------------
 
     #[test]
-    fn gate_root_is_a_fixed_function_of_the_uid() {
-        // Production (no injected override) is always the canonical per-user
-        // runtime directory - a fixed function of the uid, never a
-        // caller-selected environment variable.
-        assert_eq!(gate_root_from(1000, None), PathBuf::from("/run/user/1000"));
-        assert_eq!(gate_root_from(1001, None), PathBuf::from("/run/user/1001"));
+    fn gate_root_is_a_fixed_constant_independent_of_the_uid_and_runtime_dir() {
+        // Production (no injected override) is always the single fixed root,
+        // never a function of the uid and never a function of whether
+        // /run/user/<uid> happens to exist. Two different uids resolve to the
+        // same root; per-uid isolation comes from the uid-<uid> slot directory
+        // beneath it, not from the root. This is what makes two lanes for the
+        // same uid contend for one slot pool even if a login or logout races
+        // their startup.
+        assert_eq!(gate_root_from(1000, None), PathBuf::from("/tmp"));
+        assert_eq!(gate_root_from(1001, None), PathBuf::from("/tmp"));
         // The injectable seam (tests only) wins when present, so the crate's
         // own tests can redirect the namespace to a scratch directory.
         assert_eq!(
@@ -1731,8 +1742,8 @@ mod tests {
 
     #[test]
     fn gate_directory_is_scoped_per_uid() {
-        let first = gate_dir_path(Path::new("/run/user/1000"), 1000);
-        let second = gate_dir_path(Path::new("/run/user/1000"), 1001);
+        let first = gate_dir_path(Path::new("/tmp"), 1000);
+        let second = gate_dir_path(Path::new("/tmp"), 1001);
         assert!(first.ends_with("d2b-heavy-gates/uid-1000"));
         assert!(second.ends_with("d2b-heavy-gates/uid-1001"));
         assert_ne!(first, second);
