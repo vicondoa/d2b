@@ -9,7 +9,19 @@
 //! * `candidate_id` — digest of `content_id` plus the wave's dependency graph
 //!   and repository set.
 //! * `snapshot_sha256` — digest covering the same inputs byte-for-byte,
-//!   including the exact base and head commits the snapshot binds.
+//!   including the exact base and head commits the snapshot binds. It is the
+//!   only one of the three that changes under a history-only rebase, which is
+//!   what makes it useful for detecting one.
+//!
+//! A consequence worth stating outright, because it is deliberate and easy to
+//! mistake for a bug: a history-only rebase that preserves every byte of
+//! integrated content reproduces both `content_id` and `candidate_id`. The
+//! wave therefore keeps the same candidate address, and re-snapshotting
+//! rewrites `snapshot.json` in place rather than creating a second candidate
+//! directory. Spec section 12.6 only permits reusing panel evidence across
+//! such a rebase, so excluding commit history from `candidate_id` is the
+//! behaviour that makes that clause coherent. Do not "fix" it by folding
+//! base or head object IDs into either identifier.
 //!
 //! Every digest is produced by [`canonical_digest`], which prefixes a
 //! per-purpose domain tag and a big-endian length so material from one
@@ -33,11 +45,15 @@ pub const PANEL_REQUEST_ARTIFACT_KIND: &str = "d2b-delivery/panel-request";
 pub const PANEL_ATTESTATION_ARTIFACT_KIND: &str = "d2b-delivery/panel-receipt";
 pub const EVIDENCE_ARTIFACT_KIND: &str = "d2b-delivery/validation-evidence";
 
-/// Provider and model every panel role is bound to by spec section 12.3.
-/// These live only inside the external delivery-state directory; section 12.5
-/// forbids them from reaching Git, a PR body, or a release archive.
+/// Provider, model, and reasoning effort every panel role is bound to by spec
+/// section 12.3. These live only inside the external delivery-state directory;
+/// section 12.5 forbids them from reaching Git, a PR body, or a release
+/// archive. The constants below are validator policy, not authorship
+/// attribution, so they are committed here for the attestation check to
+/// compare against.
 pub const PANEL_PROVIDER_POLICY: &str = "github-copilot";
-pub const PANEL_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
+pub const PANEL_MODEL_POLICY: &str = "gpt-5.6-sol";
+pub const PANEL_REASONING_EFFORT_POLICY: &str = "xhigh";
 
 pub const MAX_REPOSITORIES: usize = 16;
 pub const MAX_DEPENDENCY_EDGES: usize = 512;
@@ -838,5 +854,12 @@ mod tests {
                 "kernel",
             ]
         );
+    }
+
+    #[test]
+    fn the_panel_binding_pins_provider_model_and_reasoning_effort() {
+        assert_eq!(PANEL_PROVIDER_POLICY, "github-copilot");
+        assert_eq!(PANEL_MODEL_POLICY, "gpt-5.6-sol");
+        assert_eq!(PANEL_REASONING_EFFORT_POLICY, "xhigh");
     }
 }

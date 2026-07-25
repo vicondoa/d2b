@@ -13,5 +13,10 @@
 //! * The proof preserves the panel record only. Required CI still reruns on
 //!   the new history.
 //!
-//! There is no `wave history-proof` subcommand of its own; the proof is an
-//! input to `merge-eligibility`.
+//! There is no `wave history-proof` subcommand in the current dispatch table;
+//! the proof is an input to `merge-eligibility`. Whether the integrator also
+//! needs to invoke it standalone during a retarget is an open decision,
+//! deliberately deferred to the `ADR046-delivery-006` slice that owns seal,
+//! eligibility, and this module. Adding it later is a one-line addition to
+//! [`WAVE_COMMANDS`](super::command::WAVE_COMMANDS); this note exists so the
+//! question is not silently dropped.

@@ -24,6 +24,37 @@
 //! <state root>/<wave>/<candidate_id>/seal.json
 //! <state root>/<wave>/<candidate_id>/history-proof.json
 //! ```
+//!
+//! # Implementation note: deliberate de-escalation from the reuse source
+//!
+//! The implementation this module was adapted from anchored every operation on
+//! directory file descriptors, using `openat`, `mkdirat`, `renameat_with`, and
+//! `fchmodat` through `rustix` and `nix`. This one uses plain `std` instead.
+//! That is a deliberate tradeoff, recorded here so it is visible in review
+//! rather than having to be reconstructed.
+//!
+//! Security properties preserved:
+//!
+//! * external-path refusal — the state root is rejected inside any declared
+//!   repository checkout and inside any enclosing Git working tree;
+//! * symlink-component rejection over the whole existing path prefix;
+//! * `0700` directories and `0600` files, verified after creation;
+//! * bounded reads, so a hostile artifact cannot exhaust memory;
+//! * traversal-proof relative paths, so no caller can address a file outside
+//!   the candidate directory.
+//!
+//! Properties **not** carried over:
+//!
+//! * TOCTOU-hardened file-descriptor anchoring. Path checks here are performed
+//!   against names, so an attacker with write access to an ancestor directory
+//!   could in principle swap a component between the check and the use.
+//! * `geteuid` file-ownership verification. An existing state directory owned
+//!   by another user is accepted as long as its mode is `0700`.
+//!
+//! Both would be additive changes and neither is load-bearing for the
+//! not-in-Git guarantee this module exists to enforce. Delivery state lives
+//! under a per-user state directory, and the threat model for it is operator
+//! error, not a local attacker racing the integrator.
 
 use std::{
     ffi::{OsStr, OsString},

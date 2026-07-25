@@ -35,8 +35,9 @@ pub mod storage;
 pub use command::{WaveCommand, WorkflowOutput, dispatch};
 pub use model::{
     CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge, EvidenceResult,
-    Fingerprint, GitObjectFormat, PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY, PANEL_ROLES,
-    PanelRole, RepositoryRecord, SnapshotSha256, canonical_digest,
+    Fingerprint, GitObjectFormat, PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY,
+    PANEL_REASONING_EFFORT_POLICY, PANEL_ROLES, PanelRole, RepositoryRecord, SnapshotSha256,
+    canonical_digest,
 };
 pub use storage::{CandidateDir, StateRoot};
 
