@@ -2511,23 +2511,29 @@ Remove }`. The per-Network firewall model does NOT map onto the shipped
 The request carries only an opaque `bundle_nft_projection_ref` (resolved by the
 broker to the validated projection - ownership marker plus rule set - from the
 integrity-pinned private bundle), a closed `action` enum (`Apply|Remove`), an
-`expected_projection_generation` fence, and an optional `tracing_span_id`. It
-carries no inline rule text, no IfName, and no caller-supplied ownership marker.
-The broker validates the fence against the live projection generation, then for
+`expected_generation_id` fence (the immutable installed configuration generation,
+i.e. the bundle `generationId`/`contentHash`), and an optional `tracing_span_id`.
+It carries no inline rule text, no IfName, and no caller-supplied ownership
+marker. The broker compares `expected_generation_id` against the
+currently-installed configuration generation (reloaded per request), then for
 `Apply` atomically replaces only the rules bearing that projection's ownership
 marker (`comment "d2b managed: <ownership-id>"`) inside `inet d2b`, and for
 `Remove` deletes only that marker's rules. It never deletes and recreates the
 whole `inet d2b` table. A validated already-absent projection is idempotent
 success; a foreign marker where the resolved projection's marker is expected
-fails closed with `foreign-nft-rule-preserved`; a stale generation mutates
-nothing and requeues after a fresh read. The op returns a projection-scoped
-`FirewallDigest` (SHA-256 over only that marker's rules) and appends a
-post-effect, path-free audit record (`op: ApplyNftablesProjection`, opaque
-projection digest, expected generation, `action`, `outcome`, `error_class`,
-`correlation_id`; never rule text, IfName, marker body, or projection bytes).
-Concurrent applies to different projections commute; concurrent mutation of the
-same projection is serialized by the generation fence, eliminating the
-whole-table last-writer-wins behavior.
+fails closed with `foreign-nft-rule-preserved`; a request whose
+`expected_generation_id` differs from the currently-installed generation mutates
+nothing and requeues as `stale-projection-generation` after a fresh read. The op
+returns a projection-scoped `FirewallDigest` (SHA-256 over only that marker's
+rules) and appends a post-effect, path-free audit record (`op:
+ApplyNftablesProjection`, opaque projection digest, expected generationId,
+`action`, `outcome`, `error_class`, `correlation_id`; never rule text, IfName,
+marker body, or projection bytes). The fence is not a live projection-generation
+counter and there is no compare-and-advance (see D125): serialization is provided
+by the ordered OFD lock on the `inet d2b` table (total acquisition order per ADR
+0034), so concurrent applies to different projections commute and two concurrent
+same-generation applies to the same projection converge on identical desired
+state, eliminating the whole-table last-writer-wins behavior.
 
 **Rationale**: the shipped `ApplyNftables` op (`packages/d2b-priv-broker/src/ops/nft.rs`)
 explicitly discards `ownership_id` and renders a whole-table

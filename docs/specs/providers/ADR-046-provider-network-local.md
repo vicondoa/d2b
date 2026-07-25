@@ -408,7 +408,7 @@ serialized to JSON or transmitted over the resource API wire.
 | `AttachmentGenerationFence` | `expected_network_generation`, `expected_attachment_generation` | Both are non-zero resource generations captured from the current realization; stale values fail closed |
 | `FabricHandle` | opaque seal over internal `network_uid` | Redacted Debug; not Clone/Copy/Serialize |
 | `FirewallIntent` | `rules: Vec<FirewallRule>` (rules reference attachment handles, not IfNames) | No raw IfNames and no USBIP/TCP-3240 rule |
-| `FirewallGenerationFence` | `expected_projection_generation` | Non-zero generation captured from the current firewall projection realization; a stale value fails closed and mutates nothing |
+| `FirewallGenerationFence` | `expected_generation_id` | The immutable installed configuration generation (bundle generationId/contentHash) the controller reconciled against; a value that differs from the currently-installed generation fails closed (`stale-projection-generation`) and mutates nothing |
 | `FirewallDigest` | opaque `[u8; 32]` SHA-256 of the Network-UID ownership projection | Stored in status for Network-owned drift comparison only; excludes device-usbip |
 | `RouteIntent` | `destinations: Vec<IpNet>`, `via: Option<RouteViaHint>` | CIDRs from declared spec |
 | `SysctlIntent` | `ipv6_suppress: bool` | - |
@@ -494,14 +494,16 @@ pub enum NftProjectionAction {
 pub struct ApplyNftablesProjectionRequest {
     pub bundle_nft_projection_ref: BundleOpId,
     pub action: NftProjectionAction,
-    pub expected_projection_generation: u64,
+    pub expected_generation_id: GenerationId,
     pub tracing_span_id: Option<TracingSpanId>,
 }
 ```
 
 The broker resolves `bundle_nft_projection_ref` to the validated projection
-(ownership marker + rule set) from the private bundle, validates
-`expected_projection_generation` against the live projection generation, then:
+(ownership marker + rule set) from the private bundle, compares
+`expected_generation_id` against the currently-installed configuration
+generation (the bundle `generationId`/`contentHash`, which the broker reloads
+per request from the installed bundle and `generation.json`), then:
 
 - for `Apply`, atomically replaces only the rules bearing that projection's
   ownership marker (`comment "d2b managed: <ownership-id>"`) within `inet d2b`,
@@ -512,15 +514,19 @@ The broker resolves `bundle_nft_projection_ref` to the validated projection
 
 It never deletes the whole `inet d2b` table. Discovering a foreign marker where
 the resolved projection's marker is expected fails closed with
-`foreign-nft-rule-preserved`; a stale generation mutates nothing and requeues
-after a fresh read. The op returns the projection-scoped `FirewallDigest`
-(SHA-256 over only that marker's rules). Concurrent applies to *different*
-projections are independent and commute; concurrent mutation of the *same*
-projection is serialized by the generation fence, so the second writer observes a
-mismatch and requeues (last-writer-wins across the whole table is eliminated).
-The broker appends a post-effect, path-free audit record with
+`foreign-nft-rule-preserved`; a request whose `expected_generation_id` differs
+from the currently-installed configuration generation mutates nothing and
+requeues as `stale-projection-generation` after a fresh read. The op returns the
+projection-scoped `FirewallDigest` (SHA-256 over only that marker's rules).
+`expected_generation_id` is the immutable installed configuration generation, not
+a live projection-generation counter, and there is no compare-and-advance:
+serialization is provided by the ordered OFD lock on the `inet d2b` table (total
+acquisition order per ADR 0034), so concurrent applies to *different* projections
+commute and two concurrent same-generation applies to the *same* projection
+converge because they carry identical desired state (see D125). The broker
+appends a post-effect, path-free audit record with
 `op: ApplyNftablesProjection`, an opaque projection digest, the expected
-generation, `action`, `outcome`, `error_class`, and `correlation_id`; it never
+generationId, `action`, `outcome`, `error_class`, and `correlation_id`; it never
 records rule text, an IfName, a marker body, or the projection bytes.
 
 The same closed op serves every ownership projection in `inet d2b`: the
@@ -2473,7 +2479,7 @@ On controller binary upgrade:
 | Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, SeedDnsmasqLease, and `CreatePersistentTap` operations, but no paired `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, or `ApplyNftablesProjection` v3 ops. The shipped `ApplyNftables` op discards `ownership_id` and does a whole-table `delete table ...; table ...` replace (`packages/d2b-priv-broker/src/ops/nft.rs`), so it cannot express per-Network projection mutation; `ApplyNftablesProjection` is authored to replace that mapping for `apply_host_firewall`/`remove_host_firewall` (D-NETWORK-004 in `ADR-046-resources-network.md`). |
 | Reuse action | adapt |
 | Destination | Broker wire contract and broker/core adapter operation table for `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. |
-| Detailed design | Add canonical closed `DeletePersistentTap` paired with `CreatePersistentTap`, plus `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. `DeletePersistentTapRequest` contains only an opaque attachment ID and expected Network/attachment generations. `ApplyNftablesProjectionRequest` contains only an opaque `bundle_nft_projection_ref`, a closed `NftProjectionAction { Apply, Remove }`, an `expected_projection_generation` fence, and an optional `tracing_span_id`; the broker resolves the projection (ownership marker + rule set) from the private bundle, mutates only that marker's rules inside `inet d2b`, byte-preserves every other Network and device-usbip marker, never whole-table replaces, treats validated absence as success, rejects foreign markers without deletion, and emits a path-free post-effect audit with a projection-scoped digest. The broker resolves trusted realization state, validates generations and ownership marker, treats validated absence as success, rejects foreign markers without deletion, and emits path-free post-effect audit. No request accepts an IfName, path, inline rule text, or caller-authored marker. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape. |
+| Detailed design | Add canonical closed `DeletePersistentTap` paired with `CreatePersistentTap`, plus `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. `DeletePersistentTapRequest` contains only an opaque attachment ID and expected Network/attachment generations. `ApplyNftablesProjectionRequest` contains only an opaque `bundle_nft_projection_ref`, a closed `NftProjectionAction { Apply, Remove }`, an `expected_generation_id` fence, and an optional `tracing_span_id`; the broker resolves the projection (ownership marker + rule set) from the private bundle, mutates only that marker's rules inside `inet d2b`, byte-preserves every other Network and device-usbip marker, never whole-table replaces, treats validated absence as success, rejects foreign markers without deletion, and emits a path-free post-effect audit with a projection-scoped digest. The broker resolves trusted realization state, validates generations and ownership marker, treats validated absence as success, rejects foreign markers without deletion, and emits path-free post-effect audit. No request accepts an IfName, path, inline rule text, or caller-authored marker. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape. |
 | Integration | `NetworkEffectPort` core adapter invokes these broker ops for attachment/fabric/firewall lifecycle and observe/drift checks; `Provider/network-local` receives only typed results and opaque digests/handles. Attachment removal and Network finalization retain the handle until `DeletePersistentTap` confirms deletion or validated absence; firewall apply/remove retains the projection reference until `ApplyNftablesProjection` confirms the effect or validated absence. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Broker tests cover `DeletePersistentTap` success, validated already-absent idempotency, stale Network/attachment generations, foreign-marker fail-closed behavior, path-free audit, and rejection of any IfName/path field; `ApplyNftablesProjection` tests cover apply/remove of exactly one ownership marker, sibling-Network and device-usbip marker preservation, never-whole-table-replace, generation-fence rejection of stale same-projection mutation, validated-absence idempotency, foreign-marker fail-closed, projection-scoped digest, and path-free audit with no rule text/IfName/path; `integration/host_fabric.rs` covers persistent-tap deletion, bridge create/delete, nftables projection apply/remove/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation. |
