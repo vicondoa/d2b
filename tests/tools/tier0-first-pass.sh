@@ -40,7 +40,7 @@ DASHES=(
 # w4Fu. The last is part of the functional defaultSwitchReadiness contract.
 # Lowercase wave tags are recognized only in path-shaped filenames, such as
 # w3-ubuntu.txt; this avoids treating ordinary prose tokens as process tags.
-PROCESS_MARKER_RE='(^|[^[:alnum:]_])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
+PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
 PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
 
 log() {
@@ -131,11 +131,10 @@ scan_dashes() {
 #
 # Path classification is the allow-list. Historical/process-bearing paths
 # (AGENTS.md, docs/adr/**, docs/specs/**, changelog.d/**) never enter the
-# governed set. Shipped prose and CLI goldens are scanned in full; source trees
-# are scanned in full so comments and user-facing strings cannot hide among
-# implementation text. Workflow and CHANGELOG files use structural contexts:
-# only workflow/job/step names and released changelog sections are governed.
-# A new path exemption therefore requires changing this code, not adding magic
+# governed set. Shipped prose and CLI goldens are scanned in full. Source trees
+# use comment context plus the CLI crate's string context; workflow and
+# CHANGELOG files use workflow/job/step-name and released-section contexts. A
+# new path exemption therefore requires changing this code, not adding magic
 # prose that the scanner silently accepts.
 #
 # Enumeration is intentionally identical to scan_dashes: git supplies every
@@ -145,7 +144,8 @@ scan_dashes() {
 # governed files fail instead of being skipped.
 scan_process_markers() {
   local root="$1"
-  local -a files=() full_files=() workflow_files=() changelog_files=()
+  local -a files=() full_files=() source_files=() filename_files=()
+  local -a workflow_files=() changelog_files=()
   local f hits context_hits toplevel enum_status grep_status awk_status
   local is_repo_root=0 filename_hits=
 
@@ -182,12 +182,21 @@ scan_process_markers() {
         ;;
       README.md|SECURITY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
         full_files+=("$f")
+        filename_files+=("$f")
         ;;
-      tests/golden/*|nixos-modules/*|pkgs/*|packages/*)
+      tests/golden/cli-output/*)
         full_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      tests/golden/l3-matrix/*)
+        filename_files+=("$f")
+        ;;
+      nixos-modules/*|pkgs/*|packages/*)
+        source_files+=("$f")
         ;;
       .github/workflows/*)
         workflow_files+=("$f")
+        filename_files+=("$f")
         ;;
       CHANGELOG.md)
         changelog_files+=("$f")
@@ -198,9 +207,11 @@ scan_process_markers() {
   [ "$is_repo_root" -eq 0 ] || [ "${#full_files[@]}" -gt 0 ] \
     || fail "process-marker scan could not classify any governed files under $root"
 
-  for f in "${full_files[@]}" "${workflow_files[@]}"; do
+  for f in "${full_files[@]}" "${source_files[@]}" "${workflow_files[@]}" "${filename_files[@]}"; do
     [ -r "$root/$f" ] \
       || fail "process-marker scan cannot read governed file $f"
+  done
+  for f in "${filename_files[@]}"; do
     if [[ "$(basename "$f")" =~ $PROCESS_MARKER_FILENAME_RE ]]; then
       filename_hits+="${filename_hits:+$'\n'}$f: filename contains a process marker"
     fi
@@ -219,6 +230,35 @@ scan_process_markers() {
   else
     hits=
     grep_status=1
+  fi
+
+  if [ "${#source_files[@]}" -gt 0 ]; then
+    set +e
+    context_hits=$(
+      cd "$root" && awk -v marker="$PROCESS_MARKER_RE" '
+        {
+          marker_at = match($0, marker)
+          if (!marker_at) {
+            next
+          }
+          prefix = substr($0, 1, marker_at)
+          comment_at = match(prefix, /(^|[[:space:]])(\/\/[/!]?|#|\/\*|\*)/)
+          cli_string = FILENAME ~ /^packages\/d2b\/src\// &&
+            prefix ~ /["]/
+          nix_string = (FILENAME ~ /^nixos-modules\// ||
+                        FILENAME ~ /^pkgs\//) &&
+            prefix ~ /["]/
+          if (comment_at || cli_string || nix_string) {
+            printf "%s:%d:%s\n", FILENAME, FNR, $0
+          }
+        }
+      ' "${source_files[@]}"
+    )
+    awk_status=$?
+    set -e
+    [ "$awk_status" -eq 0 ] \
+      || fail "process-marker source-context scan aborted (awk exited $awk_status)"
+    [ -z "$context_hits" ] || hits+="${hits:+$'\n'}$context_hits"
   fi
 
   for f in "${workflow_files[@]}"; do
