@@ -164,7 +164,10 @@ Endpoint, or status handler.
 **Not in scope for this Provider** - owned by other components:
 - ZoneLink reconcile loop, status condition writes, finalizers, and local
   route/session state → child Zone's core ZoneLink/delegation controller.
-- Noise handshake (KK, IKpsk2), ComponentSession lifecycle, credit/flow
+- Noise handshake profile selection and sequencing (the core-owned
+  enrollment-and-session state machine `Unenrolled -> IKpsk2 ->
+  EnrollmentCommitted -> KK -> Ready`: one-time IKpsk2 bootstrap when
+  `Unenrolled`, then enrolled KK), ComponentSession lifecycle, credit/flow
   control, stream multiplexing, session-generation management → d2b-bus /
   ComponentSession.
 - Port allocation and the port registry → selected parent allocator's sealed
@@ -744,7 +747,14 @@ core writes all present layers atomically in the child store and never copies sh
 6. Provider returns `transport_handle` + `stream_id` to child core.
 7. Child core hands `stream_id` to d2b-bus as the `OwnedTransport` for its local
    ZoneLink.
-8. d2b-bus runs Noise KK or IKpsk2 handshake on top of the raw bytes.
+8. d2b-bus runs the ZoneLink handshake selected by core from the core-owned
+   enrollment-and-session state machine
+   `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` (canonical in
+   ADR-046-zone-routing) on top of the raw bytes: the one-time IKpsk2 bootstrap
+   consuming the allocator-issued single-use PSK only when the link is
+   `Unenrolled` (and after revocation), otherwise the enrolled KK handshake.
+   This Provider carries opaque bytes only and never selects, negotiates, or
+   reorders the handshake profile.
 
 ### Transport close
 
