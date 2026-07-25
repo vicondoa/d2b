@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# tests/test-policy.sh — `make test-policy`: repository policy / meta gates that
+# tests/test-policy.sh - `make test-policy`: repository policy / meta gates that
 # guard the test architecture itself and other cross-cutting invariants.
 #
-#   * adr-index-coverage      — every docs/adr/*.md is indexed
-#   * ci-coverage             — every tests/*.sh is wired into CI / an aggregator
-#   * deliverable-gate-inventory — required gate scripts exist
-#   * layer1-self-inventory   — Layer-1 driver scripts are accounted for
-#   * no-new-deferral         — ADR 0022 I3 invariant (no new v1.3 deferrals)
-#   * pr-checklist-gate       — PR template checklist is well-formed
+#   * adr-index-coverage      - every docs/adr/*.md is indexed
+#   * ci-coverage             - every tests/*.sh is wired into CI / an aggregator
+#   * deliverable-gate-inventory - required gate scripts exist
+#   * layer1-self-inventory   - Layer-1 driver scripts are accounted for
+#   * no-new-deferral         - ADR 0022 I3 invariant (no new v1.3 deferrals)
+#   * pr-checklist-gate       - PR template checklist is well-formed
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 

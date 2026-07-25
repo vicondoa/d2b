@@ -12,9 +12,9 @@
 #   - jq, ip, ssh are installed (nixpkgs default).
 #
 # Configurable via env:
-#   FLAKE — consumer flake root (default: derived from this lib's
+#   FLAKE - consumer flake root (default: derived from this lib's
 #           location, i.e. the repo containing tests/).
-#   D2B_OPERATOR_SSH_KEY — host operator's SSH private key for the
+#   D2B_OPERATOR_SSH_KEY - host operator's SSH private key for the
 #           net-VM root login (default: $HOME/.ssh/id_ed25519).
 #
 # All output goes to stderr so test functions can `echo` their actual
@@ -51,7 +51,7 @@ d2b_repo_root() {
 
 # Resolve the flake source as a `git+file://` reference instead of a bare
 # path. ALWAYS use this (or the equivalent `git+file://` form) in test eval
-# expressions — never `builtins.getFlake (toString $root)`.
+# expressions - never `builtins.getFlake (toString $root)`.
 #
 # Why: a bare path makes Nix use the `path:` fetcher, which copies the
 # ENTIRE working tree into the store, including the multi-GiB
@@ -61,7 +61,7 @@ d2b_repo_root() {
 # 5-minute eval into <1 s.
 #
 # Semantics: uncommitted edits to TRACKED files are still evaluated
-# (dirty-tree). UNTRACKED (never `git add`ed) files are invisible — the
+# (dirty-tree). UNTRACKED (never `git add`ed) files are invisible - the
 # same contract `nix flake check` already enforces, so "commit before
 # building" remains the rule (AGENTS.md "Edit -> commit -> validate").
 #
@@ -309,7 +309,7 @@ ssh_vm() {
   # nixos-rebuilds (the SSH host-key on disk is regenerated in the
   # microvm root). When that happens, ssh fails with 255 + "HOST
   # IDENTIFICATION HAS CHANGED". The L1 known_hosts-refresh service
-  # refuses to overwrite a pinned key (security-r7) — operators are
+  # refuses to overwrite a pinned key (security-r7) - operators are
   # expected to rotate manually. For the AUTOMATED TEST suite, we
   # accept that rotation is the norm: remove the stale pin and
   # re-pin via the refresh service, then retry once. This keeps the
@@ -346,11 +346,11 @@ ssh_vm() {
 #
 # Return codes (callers use these to distinguish "infra missing" from
 # "SSH failed" so they can SKIP cleanly rather than mis-FAIL):
-#   2 — net VM not in manifest / no staticIp
-#   3 — operator host key not on disk (net VM build evaluated
+#   2 - net VM not in manifest / no staticIp
+#   3 - operator host key not on disk (net VM build evaluated
 #       `lib.optionals (builtins.pathExists ...)` to []; nothing to
 #       authenticate with)
-#   * — whatever ssh itself returned (255 transport, command exit)
+#   * - whatever ssh itself returned (255 transport, command exit)
 ssh_net_vm() {
   local vm="$1"; shift
   local ip key=${D2B_OPERATOR_SSH_KEY:-$HOME/.ssh/id_ed25519}
@@ -585,7 +585,7 @@ d2b_check_disk_budget() {
 # artifacts. Each gate calls `d2b_smoke_vms_json` / `d2b_smoke_bundle_*`
 # which lazily render on first request (cached for subsequent
 # callers in the same run) and otherwise reuse the cache. When a
-# gate runs standalone, the helper still works — it just renders
+# gate runs standalone, the helper still works - it just renders
 # into a per-shell fallback scratch dir created here at lib.sh source
 # time so that command-substitution callers (e.g. `path=$(d2b_smoke_*)`)
 # read from a stable directory whose cleanup is tied to the outer

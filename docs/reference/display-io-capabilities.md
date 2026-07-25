@@ -72,8 +72,8 @@ sessions on close, failed open, and daemon-side stale-session collection.
 
 Console streaming and audio enforcement are separately tracked from the
 display capability set documented above. The provider capability matrix
-for console and audio — covering Cloud Hypervisor NixOS VMs, qemu-media
-targets, and ACA sandboxes — is documented in
+for console and audio - covering Cloud Hypervisor NixOS VMs, qemu-media
+targets, and ACA sandboxes - is documented in
 [provider capability matrix](./provider-capability-matrix.md).
 
 ## Related references

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-rust.sh — `make test-rust`: the comprehensive Rust gate.
+# tests/test-rust.sh - `make test-rust`: the comprehensive Rust gate.
 #   fmt + clippy + `cargo test --workspace` (excluding the fixture-dependent
 #   d2b-contract-tests), the contract crate against D2B_FIXTURES, the
 #   CLI-contract layer, no-bash-ast-walker, the privileged broker workspace
@@ -183,12 +183,12 @@ cleanup_package_test_scratch() {
 }
 
 # sccache: a per-crate compilation cache (keyed on source + flags), shared
-# across the main + broker workspaces and all feature passes — so the broker's
+# across the main + broker workspaces and all feature passes - so the broker's
 # rebuilds of crates the main workspace already compiled (d2b-core/host/ipc)
 # and its three separate-target-dir feature passes become cache hits. Used
 # locally by default. In CI it is OFF unless D2B_CI_SCCACHE=1 is set, because it
 # only helps when a persistent backend survives across runs. CI opts in by
-# pointing SCCACHE_DIR at a directory it restores/saves via actions/cache — we
+# pointing SCCACHE_DIR at a directory it restores/saves via actions/cache - we
 # deliberately use sccache's LOCAL-DISK backend (NOT SCCACHE_GHA_ENABLED): the
 # native GHA backend needs ACTIONS_RUNTIME_TOKEN exported into this process's
 # environment, where the untrusted crate code this gate compiles and runs
@@ -222,7 +222,7 @@ assert_pinned_rust_toolchain
 # The privileged broker is a SEPARATE workspace with three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
 # They share nothing with the main workspace and nothing with each other, so the
-# three are run CONCURRENTLY among themselves in the broker section below — but
+# three are run CONCURRENTLY among themselves in the broker section below - but
 # AFTER the main-workspace section, not overlapping it, so they don't contend
 # with the main workspace's timing-sensitive tests. With sccache the shared
 # crates are cache hits across all streams. Set D2B_NO_PARALLEL_BROKER=1 to force
@@ -267,7 +267,7 @@ ok "cargo test"
 # W3 fixture-contract layer: the d2b-contract-tests crate is EXCLUDED
 # from the workspace test above because it reads the Nix-rendered bundle via
 # $D2B_FIXTURES. Build the fixture-smoke artifact and run the contract crate
-# against it — this is what gates the fixture -> d2b-core DTO contract
+# against it - this is what gates the fixture -> d2b-core DTO contract
 # layer (e.g. the privileges Rust-vs-Nix matrix parity). Without this step
 # the contract crate never runs in the gate.
 if [ "${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then
@@ -279,7 +279,7 @@ elif command -v nix >/dev/null 2>&1; then
   contract_fixtures=$(nix build --extra-experimental-features 'nix-command flakes' \
     --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke")
   # Feature-rich fixture (graphics+video+audio+tpm+usbip+observability) for the
-  # per-role minijail-validator contract tests — x86_64-linux only (graphics
+  # per-role minijail-validator contract tests - x86_64-linux only (graphics
   # platform gate). On other systems D2B_FIXTURES_FULL stays unset and those
   # tests skip.
   contract_fixtures_full=""
@@ -333,14 +333,14 @@ CARGO_TARGET_DIR="$workspace_target_dir" \
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 
 # Broker workspace: run the three feature passes (default, layer1-bootstrap,
-# fake-backends) — each on its own target dir — serially by default because
+# fake-backends) - each on its own target dir - serially by default because
 # the broker's SIGCHLD reaper tests manipulate process-global signal/reap state.
 # Set D2B_PARALLEL_BROKER=1 only for local timing experiments. The fail-closed
 # `fake-backends` stream runs the broker's hermetic
 # integration tests (e.g. tests/pidfd_handoff_scm_rights.rs,
 # #![cfg(feature = "fake-backends")], pinned in
 # tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the
-# layer1-bootstrap pass enables — without it those fd-passing tests would not
+# layer1-bootstrap pass enables - without it those fd-passing tests would not
 # run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
 if [ "$broker_parallel" = 1 ]; then
   log "--> broker workspace: running default|layer1|fake-backends concurrently (separate target dirs)"
@@ -355,7 +355,7 @@ if [ "$broker_parallel" = 1 ]; then
     if wait "${broker_pid[$_stream]}"; then
       ok "broker cargo ($_stream feature pass)"
     else
-      log "broker stream '$_stream' FAILED — captured output follows:"
+      log "broker stream '$_stream' FAILED - captured output follows:"
       cat "${broker_log[$_stream]}" >&2 || true
       broker_failed=1
     fi

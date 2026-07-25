@@ -76,7 +76,7 @@ collect_present < <(
 # Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
 # cargo workspace, excluded from the main one. Retired canaries pinned
 # ops::device / ops::modprobe #[test]s that live there, so the fail-closed
-# pinned gate must enumerate it too — otherwise those retirements would be
+# pinned gate must enumerate it too - otherwise those retirements would be
 # silently unguarded against deletion.
 #
 # `cargo metadata --all-features` (run by `nextest list`) can add a

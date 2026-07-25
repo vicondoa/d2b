@@ -6,13 +6,13 @@
   (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018
   (microvm.nix removal), ADR 0024 (in-VM guest config sync)
 
-> **Update (W16) — current shipped reality.** The guest-control plane
+> **Update (W16) - current shipped reality.** The guest-control plane
 > described here has landed: `d2b-guestd` serves `Hello`/`Health`/
 > `Capabilities`, the bounded `ReadGuestFile` read, and the exec
 > lifecycle RPCs over the authenticated vsock channel. `d2b config
 > sync` reads the guest config working copy over `ReadGuestFile` (no
 > `ssh cat`) and **fails closed** on a VM whose running generation does
-> not declare the guest-control transport — the SSH compatibility path
+> not declare the guest-control transport - the SSH compatibility path
 > sketched below is **not yet wired** into the command. `d2b vm
 > konsole` runs `d2b vm exec -it` over guest-control (no SSH), and
 > the admin-only `d2b vm exec` verb shipped alongside it. The DAG
@@ -182,8 +182,8 @@ directory.
 slots. guestd launches the per-exec worker through `systemd-run` as a
 transient unit named `d2b-exec-<NN>.service` (zero-padded slot index),
 scoped to the guest-internal `d2b-exec.slice`. The unit name and its
-`ExecStart` argv carry **only** the slot index — never the opaque exec id,
-argv, environment, or cwd — so journald/systemd metadata cardinality is
+`ExecStart` argv carry **only** the slot index - never the opaque exec id,
+argv, environment, or cwd - so journald/systemd metadata cardinality is
 bounded to ≤32 stable values and leaks no command detail. The worker is the
 dependency-pure `d2b-exec-runner` binary invoked as
 `d2b-exec-runner --serve-exec --slot <NN>`.
@@ -222,7 +222,7 @@ its `dispatch_deadline` (slot reserved, non-listable) and adopts a
 late-registering unit, but is deleted and released past the deadline on a
 negative re-query; `infra-failed` rows are cleaned up and released. A vanished
 unit with no terminal status is marked lost exactly like a natural
-termination — slot, logs, and quota are retained as a terminal record until
+termination - slot, logs, and quota are retained as a terminal record until
 TTL/GC. Re-adoption is bounded to a single boot: a boot-id mismatch is a
 `StaleSession`.
 
@@ -313,8 +313,8 @@ disconnect.
 when the interactive path is usable (the PTY spawner is wired, which requires
 the exec-runner helper to be present).
 
-The full interactive contract — mode matrix, helper-exec handshake, merged
-output, VEOF close, resize/signal ordering, and teardown — is specified in the
+The full interactive contract - mode matrix, helper-exec handshake, merged
+output, VEOF close, resize/signal ordering, and teardown - is specified in the
 [interactive TTY exec reference](../reference/guest-control-exec-interactive-tty.md).
 
 ## Feasibility gate
@@ -755,10 +755,10 @@ Negative:
 
 ## References
 
-- [ADR 0010 — Wire protocol and typed errors](0010-wire-protocol-and-typed-errors.md)
-- [ADR 0015 — Daemon-only clean break](0015-daemon-only-clean-break.md)
-- [ADR 0017 — No bash fallbacks invariant](0017-no-bash-fallbacks-invariant.md)
-- [ADR 0024 — In-VM guest config editing, sync, and containment](0024-in-vm-guest-config-sync.md)
+- [ADR 0010 - Wire protocol and typed errors](0010-wire-protocol-and-typed-errors.md)
+- [ADR 0015 - Daemon-only clean break](0015-daemon-only-clean-break.md)
+- [ADR 0017 - No bash fallbacks invariant](0017-no-bash-fallbacks-invariant.md)
+- [ADR 0024 - In-VM guest config editing, sync, and containment](0024-in-vm-guest-config-sync.md)
 - [Kata agent README: ttRPC/protobuf API](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/agent/README.md#L61-L64)
 - [Kata agent README: vsock server address](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/agent/README.md#L142)
 - [Kata agent protocol: stdio RPCs](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L33-L49)

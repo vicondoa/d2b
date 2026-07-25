@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 // `pkgs/spectrum-ch/cloud-hypervisor/0003-vhost-user-media-device.patch`
 // hard-codes the virtio-media wire shape that this sidecar speaks to the
 // guest through cloud-hypervisor. These constants are NOT user-tunable
-// argv flags — they live in the CH patch and the crosvm vhost-user-media
+// argv flags - they live in the CH patch and the crosvm vhost-user-media
 // backend. We mirror them here so the byte-parity golden
 // (`tests/golden/runner-shape/video-argv-minimal.txt`) captures the full
 // effective wire shape, and any future drift in the CH patch surfaces as

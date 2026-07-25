@@ -2293,7 +2293,7 @@ software, test, nixos, networking, security, rust, product, docs,
 observability, kernel, d2b architect, service architect,
 authentication, and compliance.
 
-### Pre-wave gate — ADR, threat model, and review freeze
+### Pre-wave gate - ADR, threat model, and review freeze
 
 | Field | Detail |
 | --- | --- |
@@ -2305,7 +2305,7 @@ authentication, and compliance.
 | Exit criteria | ADR is `Accepted`; all panel reviewers sign off; no open design ambiguity about the entrypoint, auth flow, or trust boundary. |
 | Non-goals | No code, no transport, no schema change, no gateway packaging. |
 
-### Wave 0 — Provider abstraction and code organization
+### Wave 0 - Provider abstraction and code organization
 
 | Field | Detail |
 | --- | --- |
@@ -2318,7 +2318,7 @@ authentication, and compliance.
 | Exit criteria | Current local CLI-to-daemon Unix behavior is represented as one daemon-access transport with no behavior change; current local Cloud Hypervisor+crosvm behavior and wl-cross-domain Wayland behavior are represented as provider adapters with no behavior change; Azure Relay, Azure Container Apps session, and Waypipe-style display providers have concrete trait slots and capability descriptors; protobuf codec is behind a codec interface; later waves can implement providers/transports without changing CLI command semantics. |
 | Non-goals | No real Azure Relay connection, no Azure Container Apps API integration, no alternate hypervisor implementation beyond current behavior wrapped as adapters, no user-facing CLI changes. |
 
-### Wave P0 — Azure Container Apps sandbox with Wayland app forwarding
+### Wave P0 - Azure Container Apps sandbox with Wayland app forwarding
 
 | Field | Detail |
 | --- | --- |
@@ -2423,7 +2423,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
   daemon cannot assume it can connect to `/run/user/<uid>/...`; Wave 17 must
   replace manual ACL setup with a first-class receiver owner/lease/ACL model.
 
-### Wave 1 — Realm entrypoint and gateway workload profile
+### Wave 1 - Realm entrypoint and gateway workload profile
 
 | Field | Detail |
 | --- | --- |
@@ -2435,7 +2435,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Host can dispatch host-resident realm workloads locally, and create/start/stop/inspect/enter gateway-backed realm VMs; gateway state is per realm; host stores no relay credentials. |
 | Non-goals | No relay, no remote node discovery, no provider adapters, no shared multi-realm gateway. |
 
-### Wave 2 — Core model, IDs, schemas, and audit envelope
+### Wave 2 - Core model, IDs, schemas, and audit envelope
 
 | Field | Detail |
 | --- | --- |
@@ -2447,7 +2447,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Core model compiles, schemas are generated, and every mutating/stream operation has a required audit context shape. |
 | Non-goals | No live transport, no node registration, no policy engine beyond basic allow/deny model. |
 
-### Wave 3 — Auth, audit foundations, and local fast-path preservation
+### Wave 3 - Auth, audit foundations, and local fast-path preservation
 
 | Field | Detail |
 | --- | --- |
@@ -2459,7 +2459,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Local path remains independent; audit has realm context where applicable; no host relay credential path exists. |
 | Non-goals | No remote transport, no provider enrollment, no cross-realm policy engine. |
 
-### Wave 4 — constellation peer protocol skeleton
+### Wave 4 - constellation peer protocol skeleton
 
 | Field | Detail |
 | --- | --- |
@@ -2471,7 +2471,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Two d2bd peer endpoints can deterministically accept/reject a session without real transport. |
 | Non-goals | No relay integration, no streams, no execution lifecycle. |
 
-### Wave 5 — Named stream mux
+### Wave 5 - Named stream mux
 
 | Field | Detail |
 | --- | --- |
@@ -2483,7 +2483,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Named streams open/drain/cancel/reattach with bounded memory and deterministic offsets. |
 | Non-goals | No raw ttRPC stream, no relay credential handling, no display implementation beyond stream shape. |
 
-### Wave 6 — Durable execution model
+### Wave 6 - Durable execution model
 
 | Field | Detail |
 | --- | --- |
@@ -2495,7 +2495,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Durable exec survives disconnect/reconnect with typed outcomes and bounded retained state. |
 | Non-goals | No SSH fallback, no shell-string API, no remote host credentials in protocol. |
 
-### Wave 7 — Capability negotiation and typed denial behavior
+### Wave 7 - Capability negotiation and typed denial behavior
 
 | Field | Detail |
 | --- | --- |
@@ -2507,7 +2507,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Capability negotiation is the only way to enable a v2 operation/stream. |
 | Non-goals | No silent downgrade, no generic fallback stream, no transport credential work. |
 
-### Wave 8 — Gateway enrollment and credential sealing
+### Wave 8 - Gateway enrollment and credential sealing
 
 | Field | Detail |
 | --- | --- |
@@ -2519,7 +2519,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Gateway has a realm identity and credential store usable by transports, with host unable to use the credentials. |
 | Non-goals | No Azure Relay connection yet, no provider provisioning, no shared realm credential store. |
 
-### Wave 9 — Mock/loopback transport conformance
+### Wave 9 - Mock/loopback transport conformance
 
 | Field | Detail |
 | --- | --- |
@@ -2531,7 +2531,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Exit criteria | Mock adapter passes the full transport conformance matrix; every future transport must reuse it. |
 | Non-goals | No Azure Relay, no host egress rules, no external service dependency. |
 
-### Wave 10 — Azure Relay inside the gateway guest
+### Wave 10 - Azure Relay inside the gateway guest
 
 | Field | Detail |
 | --- | --- |
@@ -2544,7 +2544,7 @@ credential relocation (Waves 8/10/12), provider REST/identity hardening (Wave
 | Non-goals | No Azure-specific orchestration model, no provider provisioning, no display forwarding, no host-side realm relay client. |
 
 **Home for the gateway-guest `guestd` + relay services.** This wave is where the
-realm gateway **guest VM** — a real d2b microVM with full systemd — runs
+realm gateway **guest VM** - a real d2b microVM with full systemd - runs
 `d2b-guestd` and the Azure Relay `TransportProvider` as gateway services.
 It does **not** host a static compositor-facing Waypipe service. The operator
 host reaches the gateway guest's `d2bd`/`guestd` over **local**
@@ -2554,10 +2554,10 @@ exposed raw over the relay (it stays local-to-host/guest per the Context
 section); the relay carries constellation peer/provider operations and
 named `control`/`stdio`/`logs`/`display` streams above the E2E session
 security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
-**not** given a guestd by this wave — they remain provider-adapter targets
+**not** given a guestd by this wave - they remain provider-adapter targets
 (Wave 15).
 
-### Wave 11 — Self-hosted relay, QUIC, and explicit SSH transport adapters
+### Wave 11 - Self-hosted relay, QUIC, and explicit SSH transport adapters
 
 | Field | Detail |
 | --- | --- |
@@ -2569,7 +2569,7 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 | Exit criteria | At least one non-Azure adapter passes conformance, proving Relay is not hardcoded. |
 | Non-goals | No flat VPN overlay, no transport-specific authz bypass, no generic port tunnel as default API. |
 
-### Wave 12 — Host no-realm-relay and egress enforcement
+### Wave 12 - Host no-realm-relay and egress enforcement
 
 | Field | Detail |
 | --- | --- |
@@ -2581,7 +2581,7 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 | Exit criteria | CI/focused gates fail if host artifacts contain realm relay creds or host daemon code opens realm relay sessions. Daemon-access relay sessions require a separate opt-in configuration and separate audit. |
 | Non-goals | No generic host firewall manager, no provider egress policy beyond gateway relay destinations. |
 
-### Wave 13 — Host substrate adapters for NixOS and generic Linux
+### Wave 13 - Host substrate adapters for NixOS and generic Linux
 
 | Field | Detail |
 | --- | --- |
@@ -2593,7 +2593,7 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 | Exit criteria | A remote Ubuntu full host can install d2b components, advertise substrate capabilities, and be eligible for node registration without using the NixOS module. |
 | Non-goals | No support for unsupported distros beyond Tier policy, no containers-as-full-hosts, no rootless host mode. |
 
-### Wave 14 — Remote full-host node adapter
+### Wave 14 - Remote full-host node adapter
 
 | Field | Detail |
 | --- | --- |
@@ -2605,7 +2605,7 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 | Exit criteria | Gateway can operate a remote full-host node for lifecycle and exec/logs through local re-origination. |
 | Non-goals | No provider provisioning, no remote display by default, no gateway-to-this-host control unless separately opted in. |
 
-### Wave 15 — Provider-managed sandbox/session adapters
+### Wave 15 - Provider-managed sandbox/session adapters
 
 | Field | Detail |
 | --- | --- |
@@ -2622,7 +2622,7 @@ security, not a guestd RPC socket. Provider-managed sandboxes (e.g. ACA) are
 vsock, the broker, and systemd-as-init as **absences**, not parity gaps to be
 shimmed. `d2b vm exec`/log/file against such a node map to the provider's
 own exec/log/file API surface, surfaced as constellation `stdio`/`logs`
-streams — there is no guestd in the sandbox and no guest-control RPC over the
+streams - there is no guestd in the sandbox and no guest-control RPC over the
 relay. This is also a hard platform fact for ACA: the sandbox runs a container
 init (PID 1 is the entrypoint, `/sys/fs/cgroup` is read-only), so systemd
 cannot run as PID 1 and in-sandbox helpers (the Waypipe server, the relay
@@ -2631,7 +2631,7 @@ full host with guestd/systemd belong behind a realm **gateway guest VM**
 (Waves 1/10) or a remote full-host node (Wave 14), not inside a
 provider-managed sandbox.
 
-### Wave 16 — Runtime/hypervisor provider abstraction
+### Wave 16 - Runtime/hypervisor provider abstraction
 
 | Field | Detail |
 | --- | --- |
@@ -2643,7 +2643,7 @@ provider-managed sandbox.
 | Exit criteria | Runtime provider choice is data-driven and explicit in capabilities. |
 | Non-goals | No parity mandate across VMMs, no replacement of local fast path. |
 
-### Wave 17 — Display and virtual I/O capabilities
+### Wave 17 - Display and virtual I/O capabilities
 
 | Field | Detail |
 | --- | --- |
@@ -2668,8 +2668,8 @@ brought up at workload start so that `vm exec` only launches applications into
 an already-running Wayland setup.
 
 **Display-bridge desired-state owner + reconciliation.** Wave 17 names a
-**single desired-state owner** — the workload's lifecycle controller in
-`d2bd` — for the whole display bridge across its segments (the operator
+**single desired-state owner** - the workload's lifecycle controller in
+`d2bd` - for the whole display bridge across its segments (the operator
 dynamic host/operator Waypipe client and the in-sandbox agent-supervised
 helpers). That owner runs one reconcile loop that
 converges actual to desired across daemon restart, operator user-manager /
@@ -2680,7 +2680,7 @@ gateway session-credential generation check). Each segment exposes a
 queryable health/state so the owner can mark the bridge degraded and drive
 re-establishment rather than leaving orphaned services or half-open streams.
 
-### Wave 18 — Realm rollout and work gateway policy
+### Wave 18 - Realm rollout and work gateway policy
 
 | Field | Detail |
 | --- | --- |
@@ -2692,7 +2692,7 @@ re-establishment rather than leaving orphaned services or half-open streams.
 | Exit criteria | Work/provider realms are isolated by topology and policy with per-realm gateway guests; host-resident realms remain local-only and cannot silently gain relay/provider credentials. |
 | Non-goals | No shared trust-boundary gateway, no default routed overlay, no host-side relay identity management. |
 
-### Wave 19 — Constellation observability aggregation
+### Wave 19 - Constellation observability aggregation
 
 | Field | Detail |
 | --- | --- |

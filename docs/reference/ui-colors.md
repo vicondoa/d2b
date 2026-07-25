@@ -42,7 +42,7 @@ Resolved artifacts normalize colors to lowercase.
 Each enabled realm gets an accent color entry in the resolved artifacts.
 The accent color is the primary visual identity for realm-first desktop
 surfaces such as realm status indicators, launcher badges, and desktop
-control tools. Realm colors are **presentation metadata only** — they
+control tools. Realm colors are **presentation metadata only** - they
 carry no authorization semantics.
 
 Set a realm accent color explicitly:
@@ -150,11 +150,11 @@ Shape:
 
 The `realms` object is keyed by realm id. Each entry includes:
 
-- `path` — the canonical realm path (`d2b.realms.<realm>.path`), written
+- `path` - the canonical realm path (`d2b.realms.<realm>.path`), written
   most-specific-first (e.g. `payments.work` for a realm whose `parent` is
   `work`). Desktop consumers use this to route the accent to
   realm-path–qualified display targets.
-- `accent` — the resolved accent color. Set via
+- `accent` - the resolved accent color. Set via
   `d2b.realms.<realm>.network.ui.accentColor`; falls back to a
   deterministic palette color derived from the realm name.
 

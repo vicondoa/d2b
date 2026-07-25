@@ -5,7 +5,7 @@
 //! must run after a fresh `nixos-rebuild switch` to record the
 //! per-wave validation evidence the readiness assertions consume.
 //! (`d2b.daemonExperimental.enable` defaults `true` and is no
-//! longer evidence-auto-flipped — there is no default to flip — but it
+//! longer evidence-auto-flipped - there is no default to flip - but it
 //! still functionally gates the daemon control plane; setting it
 //! `false` reverts the host to the unsupported pre-daemon legacy
 //! state.) It iterates the known
@@ -30,7 +30,7 @@
 //!
 //! The per-wave `validated = true` readiness assertions consume these
 //! evidence files (the historical daemonExperimental auto-flip gate is
-//! retired) — see the Critical-subsystems "Control plane" row in
+//! retired) - see the Critical-subsystems "Control plane" row in
 //! AGENTS.md and `docs/reference/default-switch-and-deprecation.md`.
 //!
 //! This verb is intentionally a thin orchestrator: it does NOT
@@ -59,7 +59,7 @@ pub const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/d2b/validated";
 /// attesting via `host validate --apply`.
 ///
 /// The wave-name vocabulary MUST stay byte-identical with
-/// `readinessWaveSpecs` in `nixos-modules/options-daemon.nix` —
+/// `readinessWaveSpecs` in `nixos-modules/options-daemon.nix` -
 /// `tests/host-validate-verb-eval.sh` enforces parity.
 #[derive(Debug, Clone, Copy)]
 pub struct WaveSpec {
@@ -187,7 +187,7 @@ pub enum WaveStatus {
     Ready,
     /// At least one declared validator script is missing.
     Missing,
-    /// No validators are declared for this wave (informational —
+    /// No validators are declared for this wave (informational -
     /// e.g. `p6`/`p7` whose readiness signal is gate-output, not a
     /// per-host script).
     NoValidators,
@@ -436,14 +436,14 @@ fn maybe_write_evidence(
                 "evidence NOT written: {} (run the listed validators before re-attesting)",
                 report.detail
             );
-            // Status stays `Missing` — operator must fix.
+            // Status stays `Missing` - operator must fix.
         }
         WaveStatus::NoValidators => {
             // No host-local validator → no operator-attested evidence is
             // meaningful for this wave. Leave the record absent so the
             // default-switch gate falls back to gate-output-only logic.
             report.detail = format!(
-                "{} — operator attestation not applicable; rely on Layer-1 gate output",
+                "{} - operator attestation not applicable; rely on Layer-1 gate output",
                 report.detail
             );
         }
@@ -520,7 +520,7 @@ fn compute_operator_signature(wave: &str, req: &ValidateRequest, timestamp: &str
 }
 
 fn read_hostname() -> String {
-    // Avoid an extra crate dep — read /etc/hostname or fall back to
+    // Avoid an extra crate dep - read /etc/hostname or fall back to
     // the HOSTNAME env var.
     if let Ok(text) = std::fs::read_to_string("/etc/hostname") {
         let trimmed = text.trim();
@@ -533,7 +533,7 @@ fn read_hostname() -> String {
 
 // ---------------------------------------------------------------
 // Minimal in-tree SHA-256 (no extra crate dep).
-// FIPS-180-4 reference. Used ONLY for the operator-signature label —
+// FIPS-180-4 reference. Used ONLY for the operator-signature label -
 // not a cryptographic boundary; the load-bearing default-switch trust
 // signal is "evidence file exists with the canonical schema" (see
 // options-daemon.nix:validationEvidencePresent).
@@ -691,7 +691,7 @@ pub fn render_human(report: &ValidateReport) -> String {
         counts["writeFailed"],
     );
     for w in &report.waves {
-        let _ = writeln!(out, "  [{}] {} — {}", w.status.as_str(), w.wave, w.detail);
+        let _ = writeln!(out, "  [{}] {} - {}", w.status.as_str(), w.wave, w.detail);
     }
     out
 }
@@ -727,7 +727,7 @@ pub fn exit_code(report: &ValidateReport) -> i32 {
     // Apply mode: any write-failure is exit 1.
     // Any wave still `Missing` after apply is exit 78 (operator must
     // re-run after running the per-wave validator).
-    // Dry-run mode: `Missing` is not an error — it's diagnostic.
+    // Dry-run mode: `Missing` is not an error - it's diagnostic.
     let mut has_write_failed = false;
     let mut has_missing = false;
     for w in &report.waves {

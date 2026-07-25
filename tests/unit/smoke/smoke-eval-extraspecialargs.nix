@@ -1,4 +1,4 @@
-# tests/unit/smoke/smoke-eval-extraspecialargs.nix — regression test for Spec
+# tests/unit/smoke/smoke-eval-extraspecialargs.nix - regression test for Spec
 # correction #30 (v0.1.1: `d2b.site.extraSpecialArgs` is merged
 # into the per-VM `specialArgs` in the d2b-owned VM evaluator).
 #

@@ -22,9 +22,9 @@ schema, operation kinds, idempotency, stream authz) see
 substrate capabilities see [host substrate providers](./host-substrate-providers.md).
 The architectural rationale is in
 [ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md).
-For provider-managed sandboxes — nodes whose lifecycle is owned by a
-cloud provider API rather than by a locally managed `d2b-priv-broker`
-— see [provider-managed sandboxes](./provider-managed-sandboxes.md).
+For provider-managed sandboxes - nodes whose lifecycle is owned by a
+cloud provider API rather than by a locally managed `d2b-priv-broker` -
+see [provider-managed sandboxes](./provider-managed-sandboxes.md).
 
 ---
 
@@ -178,7 +178,7 @@ intermediary, not an execution proxy.
 ## Remote-side deduplication and idempotency
 
 Mutating operation kinds carry a required `IdempotencyKey` (see
-[realm core — operation authorization and idempotency](./realm-core.md#operation-authorization-and-idempotency)).
+[realm core - operation authorization and idempotency](./realm-core.md#operation-authorization-and-idempotency)).
 The gateway deduplicates at-least-once delivery before forwarding. The
 remote node performs a second deduplication layer against its own
 in-memory idempotency store:
@@ -226,7 +226,7 @@ before they can reach the new generation.
 
 The gateway authenticates the transport peer session using the
 peer-session handshake mechanism described in
-[realm core — peer protocol handshake](./realm-core.md#peer-protocol-handshake).
+[realm core - peer protocol handshake](./realm-core.md#peer-protocol-handshake).
 For the preview adapter, the authenticated principal is obtained from the
 `PeerContext` established during handshake, or from an injected test
 equivalent in hermetic test environments.
@@ -298,7 +298,7 @@ Audit records never include:
 
 The `AuditChainRecord` / `AuditChainLink` tamper-evident chain covers
 both the gateway and remote-node audit streams (see
-[realm core — audit and error redaction](./realm-core.md#audit-and-error-redaction)).
+[realm core - audit and error redaction](./realm-core.md#audit-and-error-redaction)).
 
 ---
 

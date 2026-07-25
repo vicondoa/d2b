@@ -23,7 +23,7 @@ order:
    for the rationale.
 
 2. **Remove `d2b.daemonExperimental.enable`** from the
-   consumer flake — or leave it at its `default = true`. Do **not**
+   consumer flake - or leave it at its `default = true`. Do **not**
    set it `false`: the option still functionally gates the daemon
    control plane, and setting it `false` reverts the host to the
    unsupported pre-daemon legacy state. The broker socket/service are
@@ -150,7 +150,7 @@ migrated into the broker pre-spawn pipeline
 `packages/d2b-priv-broker/src/runtime.rs`).
 
 No operator-visible change if your v1.0 deployment used the
-`d2b-otel-host-bridge.service` host singleton — the broker
+`d2b-otel-host-bridge.service` host singleton - the broker
 SpawnRunner is the v1.1 replacement and is wired identically.
 
 ### `d2b-vfsd-watchdog@.{service,timer}` retired
@@ -181,7 +181,7 @@ removed from `flake.nix`** entirely. The v1.1 invariant gates
 (including `packages/d2b-contract-tests/tests/policy_release.rs`'s
 `microvm_nix_input_absent_from_flake`) PASS.
 
-**Action — consumer flake update**: if your consumer flake's
+**Action - consumer flake update**: if your consumer flake's
 `flake.nix` declares its own `inputs.microvm`, drop it. D2b
 no longer depends on the upstream microvm.nix flake, so your
 consumer's lock file should not pin a `microvm` entry on
@@ -191,7 +191,7 @@ your lock.
 
 If you previously used microvm.nix directly in your own VM
 declarations (outside the d2b framework), you can keep your
-own `inputs.microvm` for those use cases — d2b no longer
+own `inputs.microvm` for those use cases - d2b no longer
 imports the host module, but nothing prevents you from importing
 it yourself for non-d2b VMs.
 
@@ -235,12 +235,12 @@ output; JSON uses `{"virtiofsd_per_share": {"store": {...}},
 | `gpu`                            | `gpu`                         | Unchanged name; broker-spawned in v1.1.                            |
 | `snd`                            | `audio`                       | Renamed to match the role-catalog naming convention.               |
 | `swtpm`                          | `swtpm`                       | Unchanged name; broker-spawned in v1.1.                            |
-| (no V2 field)                    | `otel_relay`                  | New per-VM field — broker-spawned OtelGuestRelay per ADR 0018.     |
-| (no V2 field)                    | `otel_host_bridge`            | New host-scoped field — broker-spawned OtelHostBridge.             |
-| (no V2 field)                    | `usbip_backend_per_env[<env>]`| New host-scoped field — broker-spawned USBIP backend per env.      |
-| (no V2 field)                    | `usbip_proxy_per_env[<env>]`  | New host-scoped field — broker-spawned USBIP proxy per env.        |
+| (no V2 field)                    | `otel_relay`                  | New per-VM field - broker-spawned OtelGuestRelay per ADR 0018.     |
+| (no V2 field)                    | `otel_host_bridge`            | New host-scoped field - broker-spawned OtelHostBridge.             |
+| (no V2 field)                    | `usbip_backend_per_env[<env>]`| New host-scoped field - broker-spawned USBIP backend per env.      |
+| (no V2 field)                    | `usbip_proxy_per_env[<env>]`  | New host-scoped field - broker-spawned USBIP proxy per env.        |
 
-## Recovery — broker bring-up troubleshooting
+## Recovery - broker bring-up troubleshooting
 
 If `d2b vm start --apply <vm>` returns a `daemon-down` envelope
 after upgrading:
@@ -271,12 +271,12 @@ ls -lZ /run/d2b/priv.sock
 
 ## See also
 
-- [ADR 0015 — Daemon-only clean break](../adr/0015-daemon-only-clean-break.md) — overall v1.0 → v1.1 narrative.
-- [ADR 0017 — No bash fallbacks invariant](../adr/0017-no-bash-fallbacks-invariant.md) — v1.1 rationale.
-- [ADR 0018 — Removal of the microvm.nix flake dependency](../adr/0018-microvm-nix-removal.md) — v1.1 rationale and roadmap.
-- [`docs/reference/cli-contract.md`](../reference/cli-contract.md) — per-verb invariants in v1.1+.
-- [`docs/reference/error-codes.md`](../reference/error-codes.md) "Remediation rendering conventions" — typed-envelope format.
-- [`docs/reference/privileges.md`](../reference/privileges.md) — broker capability matrix + per-role ACL contract.
+- [ADR 0015 - Daemon-only clean break](../adr/0015-daemon-only-clean-break.md) - overall v1.0 → v1.1 narrative.
+- [ADR 0017 - No bash fallbacks invariant](../adr/0017-no-bash-fallbacks-invariant.md) - v1.1 rationale.
+- [ADR 0018 - Removal of the microvm.nix flake dependency](../adr/0018-microvm-nix-removal.md) - v1.1 rationale and roadmap.
+- [`docs/reference/cli-contract.md`](../reference/cli-contract.md) - per-verb invariants in v1.1+.
+- [`docs/reference/error-codes.md`](../reference/error-codes.md) "Remediation rendering conventions" - typed-envelope format.
+- [`docs/reference/privileges.md`](../reference/privileges.md) - broker capability matrix + per-role ACL contract.
 
 ## v1.1.1 → v1.1.2 operational notes
 
@@ -309,7 +309,7 @@ manifest edits, no `/etc/subuid` / `/etc/subgid` provisioning.
    - Altname add no longer silently swallows ALL errors;
      foreign-device altname collisions now fail loud.
 4. Updates the daemon (`d2bd`) with `PidfdTable::prune_dead_entries`
-   called from the vm-start handler — stale pidfd-table entries
+   called from the vm-start handler - stale pidfd-table entries
    from prior runs are dropped automatically. The daemon's
    `extraGroups += "d2b"` membership is now
    declarative (previously a manual `gpasswd -a` operator step).
@@ -321,13 +321,13 @@ Any running virtiofsd processes will be restarted on the next
 profile shape differs from v1.1.1's. Running VMs that have
 NOT been restarted continue to run with their v1.1.1 profile
 (host caps + `requiresStartRoot=true`); the bump is therefore
-forward-only — there is no security regression for in-flight
+forward-only - there is no security regression for in-flight
 processes, but the security improvement only takes effect on
 the next VM restart.
 
 The manual reset sequence operators previously used between
 `d2b vm start --apply` attempts (per the live-deploy session
-notes — `chown`/`chmod`/`setfacl` on
+notes - `chown`/`chmod`/`setfacl` on
 `/run/d2b/locks` + per-VM store dirs) is **no longer
 needed**: the new activation script + daemon prune logic
 codify those workarounds.

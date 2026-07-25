@@ -1162,7 +1162,7 @@ mod module_sysctl_tests {
     fn br_netfilter_sysctl_missing_fails_closed() {
         // br_netfilter loaded but /proc/sys returned None (missing
         // sysctl). The previous behavior silently skipped enforcement;
-        // this makes it fail closed — operators must explicitly set the
+        // this makes it fail closed - operators must explicitly set the
         // documented value.
         let fixture = baseline_fixture(true);
         let host = br_netfilter_host(true);

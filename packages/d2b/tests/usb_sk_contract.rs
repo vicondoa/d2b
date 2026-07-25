@@ -10,8 +10,8 @@
 //! * `usb security-key test corp-vm --dry-run` →
 //!   `usb-security-key-test-dry-run.txt`
 //!
-//! The live (non-dry-run) paths — `status`, `sessions`, `cancel --apply`,
-//! `test <vm>` without `--dry-run` — require a daemon handler that has not
+//! The live (non-dry-run) paths - `status`, `sessions`, `cancel --apply`,
+//! `test <vm>` without `--dry-run` - require a daemon handler that has not
 //! landed yet. Those paths are tested for exit code 78 + structured
 //! `not-yet-implemented` envelope (JSON mode) without a golden file comparison,
 //! so they remain stable once the handler ships and the envelope is replaced by

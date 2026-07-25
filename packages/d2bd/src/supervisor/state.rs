@@ -14,17 +14,17 @@
 //!    [`ReconciliationOutcome::Quarantine`], or
 //!    [`ReconciliationOutcome::Missing`].
 //!
-//! Adopt — record can be re-opened with `pidfd_open(pid)` and the
+//! Adopt - record can be re-opened with `pidfd_open(pid)` and the
 //! supervisor resumes ownership. The classifier returns the `Adopt`
 //! outcome; the actual `pidfd_open` call is wired together with the
 //! broker-side `SpawnRunner` execution.
 //!
-//! Quarantine — `(pid, start_time)` drifted; the slot is parked and the
+//! Quarantine - `(pid, start_time)` drifted; the slot is parked and the
 //! typed-error envelope surfaces `quarantine-pid-drift` so the operator
 //! can decide whether to kill (`pidfd_send_signal` after a
 //! one-shot ADR carve-out) or wait out the stale process.
 //!
-//! Missing — `/proc/<pid>/` is gone; the snapshot is removed.
+//! Missing - `/proc/<pid>/` is gone; the snapshot is removed.
 //!
 //! This module is the **pure parser + classification surface**; the
 //! filesystem snapshot store is behind a trait so tests can drive the
@@ -224,7 +224,7 @@ pub fn reconcile(
 /// Wraps the pure [`reconcile`] classifier with the actual
 /// `pidfd_open(2)` adoption call. For each snapshot the classifier
 /// returns `Adopt` for, this function opens a fresh pidfd (which
-/// the kernel guarantees refers to that exact process — pidfds do
+/// the kernel guarantees refers to that exact process - pidfds do
 /// not survive pid reuse, even though the (pid, start_time_ticks)
 /// tuple we cross-checked against `/proc/<pid>/stat` would not have
 /// allowed re-adoption past the start-time-drift guard either).
@@ -249,7 +249,7 @@ pub fn reconcile(
 ///   `expected_start_time_ticks` argument. If the start-time
 ///   drifted between the original `/proc` read in [`reconcile`]
 ///   and the post-open re-check, the pid was reused in that
-///   window and the opened pidfd refers to an unrelated process —
+///   window and the opened pidfd refers to an unrelated process -
 ///   the implementation closes it and surfaces
 ///   `AdoptOutcome::AdoptRaced`.
 ///
@@ -259,7 +259,7 @@ pub fn reconcile(
 ///   The W*-fu wiring sends a `BrokerRequest::OpenPidfd { pid,
 ///   expected_start_time }` shim over the broker socket, and the
 ///   broker returns the verified-fd over SCM_RIGHTS. That shim is
-///   tracked as a follow-up commit — the trait + verification
+///   tracked as a follow-up commit - the trait + verification
 ///   contract land here so the daemon-side caller is correct
 ///   the moment the shim ships.
 ///
@@ -294,7 +294,7 @@ pub enum AdoptOutcome {
     /// `PidfdTable`).
     Adopted(std::os::fd::OwnedFd),
     /// Snapshot classified as `Adopt` but `pidfd_open` failed
-    /// (race between the /proc check and pidfd_open — the process
+    /// (race between the /proc check and pidfd_open - the process
     /// exited in that window). Treated as `Missing` for the
     /// purposes of removing the stale snapshot.
     AdoptRaced { detail: String },
@@ -430,7 +430,7 @@ impl SnapshotStore for FilesystemSnapshotStore {
             path: path.display().to_string(),
             detail: e.to_string(),
         })?;
-        // Full crash-durable write — write_all + sync_all on the tmp file
+        // Full crash-durable write - write_all + sync_all on the tmp file
         // BEFORE rename, then fsync the parent dir AFTER rename so the
         // directory entry itself reaches disk. This protects against host
         // power loss in addition to process crash (the docs claimed
@@ -686,7 +686,7 @@ mod tests {
     fn quarantines_drifted_pid() {
         let snaps = vec![sample("corp-vm", "ch", 4242, 987_654_321)];
         let mut reader = FakeProcReader::default();
-        // PID still exists, but start_time is different — the pid
+        // PID still exists, but start_time is different - the pid
         // got reused by a brand-new unrelated process.
         reader.add_alive(4242, 111);
         let report = reconcile(&snaps, &reader);

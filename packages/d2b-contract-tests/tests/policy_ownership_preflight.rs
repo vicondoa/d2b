@@ -3,7 +3,7 @@
 //!
 //! The eval-time assertions over `d2b.daemon.perVmStateOwnershipMatrix`
 //! live in the nix-unit corpus (`tests/unit/nix/cases/per-vm-state-ownership.nix`).
-//! The bash gate ALSO carried source-level regression guards — that
+//! The bash gate ALSO carried source-level regression guards - that
 //! `nixos-modules/store.nix` and the daemon's
 //! `packages/d2bd/src/ownership_preflight.rs` never re-introduce the legacy
 //! `root:kvm` ownership / `2775` group-writable store mode. Those are

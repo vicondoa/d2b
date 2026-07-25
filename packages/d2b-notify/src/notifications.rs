@@ -141,7 +141,7 @@ pub fn busy(vm_name: &str, detail: &BusyDetail, actions: Vec<NotificationAction>
     let holder = sanitize(&detail.holder_vm, 64);
     Notification {
         summary: "Security key busy".to_owned(),
-        body: format!("{vm} is waiting — {holder} is currently using the security key."),
+        body: format!("{vm} is waiting - {holder} is currently using the security key."),
         actions,
     }
 }

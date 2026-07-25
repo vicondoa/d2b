@@ -6,7 +6,7 @@
 //! reduction, the same approach the nix-unit migrations took):
 //!
 //!   * the root object schema of every sensitive schema closes unknown fields
-//!     (`additionalProperties: false`) — so an unknown top-level field is
+//!     (`additionalProperties: false`) - so an unknown top-level field is
 //!     rejected, exactly what the bash gate's synthesize-instance +
 //!     `__d2b_unknown_field__` + validate check proved;
 //!   * the committed valid/invalid fixture pairs (bundle/host/closures) isolate
@@ -183,7 +183,7 @@ fn deny_unknown_fixtures_isolate_an_unknown_field() {
              not declared in {stem}.json properties"
         );
 
-        // The invalid fixture carries at least one unknown top-level field — the
+        // The invalid fixture carries at least one unknown top-level field - the
         // field the root's additionalProperties:false rejects.
         let invalid_unknown: Vec<&String> = invalid_obj
             .keys()

@@ -101,7 +101,7 @@ fn tampered_mode_maps_to_bundle_tampered_envelope() {
     let dir = TempDir::new().expect("tempdir");
     let bundle_path = dir.path().join("bundle.json");
 
-    // Write with 0o644 (world-readable — policy expects 0o640).
+    // Write with 0o644 (world-readable - policy expects 0o640).
     write_with_mode(&bundle_path, &minimal_bundle_json(), 0o644);
 
     let policy = current_user_policy(); // requires 0o640
@@ -176,7 +176,7 @@ fn non_bundle_error_maps_to_internal_io() {
 
     let typed = map_core_error(err);
 
-    // Should NOT be BundleTampered — missing file is an I/O error.
+    // Should NOT be BundleTampered - missing file is an I/O error.
     assert_ne!(
         typed.kind(),
         "bundle-tampered",
@@ -217,7 +217,7 @@ fn bundle_tampered_to_envelope_round_trip() {
     };
     // `to_envelope` calls `log_raw_detail` (which emits a tracing event) and
     // builds the public envelope.  The tracing subscriber isn't initialised
-    // here so the event is silently discarded — that's fine for a unit test.
+    // here so the event is silently discarded - that's fine for a unit test.
     let envelope = typed.to_envelope();
     assert_eq!(envelope.kind, "bundle-tampered");
     assert_eq!(envelope.exit_code, 60);

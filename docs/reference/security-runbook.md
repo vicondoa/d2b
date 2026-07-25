@@ -26,7 +26,7 @@ Operational rules:
 
 - keep real secrets out of `vms.json`, examples, README snippets, and public
   issue reports;
-- keep `launcherUsers` small — that boundary is broad enough to matter;
+- keep `launcherUsers` small - that boundary is broad enough to matter;
 - prefer framework-managed keys unless you have a documented reason to own an
   external `ssh.keyPath` yourself.
 
@@ -110,7 +110,7 @@ side and `sudo usbip unbind -b 1-3` on the host.
 In v1.0 (per ADR 0015) the per-env usbipd backend + proxy run as
 broker-spawned runners on the per-env DAG under
 `d2b.slice/sys-<env>/usbipd-*`. Stop them via the broker
-`SignalRunner` op dispatched through the daemon — e.g. detach
+`SignalRunner` op dispatched through the daemon - e.g. detach
 the device through `d2b usb detach <vm> --apply` which the
 broker translates into a SIGTERM on the per-env usbipd runner.
 (The legacy `d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}`

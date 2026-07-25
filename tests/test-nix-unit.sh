@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tests/test-nix-unit.sh — `make test-nix-unit`: build the nix-unit corpus checks
+# tests/test-nix-unit.sh - `make test-nix-unit`: build the nix-unit corpus checks
 # (`flake.checks.<system>.nix-unit*`) for the native system.
 #
 # This is a FOCUSED convenience target for iterating on the declarative
 # value/throw corpus under tests/unit/nix/. It is NOT part of `make test-unit`,
 # because the root `nix flake check` run by `make test-flake` already evaluates
-# the nix-unit check — running both would double the work.
+# the nix-unit check - running both would double the work.
 
 set -euo pipefail
 

@@ -9,8 +9,8 @@
 //!
 //! The panel lane's success is the ten unanimous records themselves, which
 //! this stage verifies directly, so a lane record for the panel is accepted
-//! but never a substitute for the records. The two validator lanes — required
-//! GitHub CI and the heavy-gated local/host validators — must each carry at
+//! but never a substitute for the records. The two validator lanes - required
+//! GitHub CI and the heavy-gated local/host validators - must each carry at
 //! least one imported result, and every imported result must be a pass.
 //! [`EvidenceResult`] has no pending state by construction: a pending lane is
 //! an absent record, and an absent lane fails the seal.

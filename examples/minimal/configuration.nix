@@ -2,7 +2,7 @@
 
 {
   # --------------------------------------------------------------
-  # Host NixOS baseline — PLACEHOLDER
+  # Host NixOS baseline - PLACEHOLDER
   # --------------------------------------------------------------
   # The values below are stubs that let `nix flake check`
   # evaluate without touching real hardware. When you copy this
@@ -30,7 +30,7 @@
   };
 
   # --------------------------------------------------------------
-  # d2b.site — host-wide knobs
+  # d2b.site - host-wide knobs
   # --------------------------------------------------------------
   d2b.site = {
     # Headless host: no Wayland session, no graphics or audio
@@ -50,10 +50,10 @@
   };
 
   # --------------------------------------------------------------
-  # d2b.envs.personal — one isolated environment
+  # d2b.envs.personal - one isolated environment
   # --------------------------------------------------------------
   # Declaring this attribute set is enough for d2b to render
-  # the full per-env plumbing — see this example's README for the
+  # the full per-env plumbing - see this example's README for the
   # itemised list of bridges, VMs, and services that materialise.
   d2b.envs.personal = {
     lanSubnet    = "10.99.0.0/24";
@@ -61,7 +61,7 @@
   };
 
   # --------------------------------------------------------------
-  # d2b.vms.personal-dev — one headless workload VM
+  # d2b.vms.personal-dev - one headless workload VM
   # --------------------------------------------------------------
   # No `graphics.enable`, `audio.enable`, `tpm.enable`, or
   # `usbip.yubikey`. This is the bare-minimum d2b consumer:
@@ -73,7 +73,7 @@
 
     # Bind to the env declared above. Together with `index`, this
     # derives the VM's MAC, IP (10.99.0.10), dnsmasq reservation,
-    # and tap name — no imperative wiring required.
+    # and tap name - no imperative wiring required.
     env   = "personal";
     index = 10;
 
@@ -83,7 +83,7 @@
     ssh.user = "alice";
 
     # NixOS module merged INTO THE GUEST (not the host). Keep
-    # this minimal — the framework already handles networking,
+    # this minimal - the framework already handles networking,
     # SSH keys, and the per-VM /nix/store.
     config = {
       networking.hostName = lib.mkDefault "personal-dev";

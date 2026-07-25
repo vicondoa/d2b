@@ -1,4 +1,4 @@
-# d2b.envs.<env>.* — isolated per-env networks. Each env is
+# d2b.envs.<env>.* - isolated per-env networks. Each env is
 # materialised by network.nix into two host bridges (`br-<env>-up`
 # point-to-point host↔net-VM, `br-<env>-lan` net-VM↔workload-VMs),
 # an auto-generated headless net VM (`sys-<env>-net`), NAT/firewall,

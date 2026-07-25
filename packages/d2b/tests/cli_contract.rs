@@ -23,7 +23,7 @@ use d2b_contracts::cli_output::ListOutputV2;
 
 // Mirrors tests/cli-rust-native-common.sh d2b_write_system_state_fixture, but
 // also pins d2bd.service (the bash helper omitted it, so the CLI fell back
-// to the real host's `systemctl is-active d2bd.service` — non-hermetic; see
+// to the real host's `systemctl is-active d2bd.service` - non-hermetic; see
 // tests/README.md). corp-vm: all units inactive + an empty daemon-state dir
 // (pidfd-table.json absent -> ch-runner "stopped") -> status "stopped".
 // sys-work-net: net VM -> always "running".
@@ -59,13 +59,13 @@ fn list_json_matches_smoke_inventory_and_schema() {
     std::fs::write(&sys, SYSTEM_STATE_JSON).expect("write system-state fixture");
     // Sandbox the daemon-state dir to an empty dir so pidfd-table.json is absent
     // (-> per-role "stopped") instead of reading the real host's
-    // /var/lib/d2b/daemon-state — the hermeticity fix over the bash gate.
+    // /var/lib/d2b/daemon-state - the hermeticity fix over the bash gate.
     let daemon_state = tmp.path().join("daemon-state");
     std::fs::create_dir_all(&daemon_state).expect("mk daemon-state dir");
     // d2bd's public socket is preferred for live VM status (d098dfca: "report
     // live public VM status from pidfd table"). Point it (and the broker socket)
     // at non-existent paths so `list` cannot reach the real host daemon and falls
-    // back to the static fixture inventory — the hermeticity fix for that change.
+    // back to the static fixture inventory - the hermeticity fix for that change.
     let missing_public = tmp.path().join("public.sock");
     let missing_broker = tmp.path().join("priv.sock");
 

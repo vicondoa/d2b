@@ -14,10 +14,10 @@
 //!
 //! Sibling gate: `tests/static-invariant-deny-unknown-fields.sh` (the schema
 //! Draft 2020-12 validation gate) is migrated to
-//! `policy_deny_unknown_schemas.rs` as a faithful structural reduction —
+//! `policy_deny_unknown_schemas.rs` as a faithful structural reduction -
 //! asserting the root + (for guest-control) every object schema closes unknown
 //! fields, the fixture pairs isolate an unknown field, and the guest-control
-//! string/chunk/terminal bounds — without shelling out to nix + python +
+//! string/chunk/terminal bounds - without shelling out to nix + python +
 //! jsonschema.
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
@@ -27,7 +27,7 @@ use regex::Regex;
 /// `#[serde(deny_unknown_fields)]`. Membership and order mirror the bash gate's
 /// `W3_DTOS` array exactly.
 const W3_DTOS: &[&str] = &[
-    // host_w3.rs — security-sensitive broker and schema drift types:
+    // host_w3.rs - security-sensitive broker and schema drift types:
     "IfNameMapping",
     "BridgePortFlagsW3",
     "KernelModuleEntry",
@@ -36,7 +36,7 @@ const W3_DTOS: &[&str] = &[
     "HostsEntry",
     "NmUnmanagedEntry",
     "FirewallCoexistencePolicy",
-    // host.rs — additions to HostJson:
+    // host.rs - additions to HostJson:
     "HostChConfig",
 ];
 

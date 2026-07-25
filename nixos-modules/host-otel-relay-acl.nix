@@ -253,7 +253,7 @@ let
       refresh_acl_set "g:d2b-otel-relay" relay_stack_keep_dirs relay_stack_keep_sockets "vsock.sock" --x
       refresh_acl_set "g:kvm" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" --x
       refresh_acl_set "g:d2b-otel-bridge" bridge_keep_dirs bridge_keep_sockets "vsock.sock"
-      # retired: ch-exporter group ACL refresh — transitional remnant of the deleted d2b-ch-exporter.service
+      # retired: ch-exporter group ACL refresh - transitional remnant of the deleted d2b-ch-exporter.service
       refresh_acl_set "g:d2b-ch-exporter" ch_keep_dirs ch_keep_sockets "%VM%.sock"
     '';
   };

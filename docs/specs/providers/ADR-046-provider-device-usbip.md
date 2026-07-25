@@ -107,7 +107,7 @@ spec:
 
 | Field | Type | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- |
-| `controllerExecutionRef` | ResourceRef | — | required; `Host/<name>` only | Host on which the framework creates the controller Process. |
+| `controllerExecutionRef` | ResourceRef | - | required; `Host/<name>` only | Host on which the framework creates the controller Process. |
 
 `controllerExecutionRef` is the only operator-configurable field.
 `usbipHostKernelModule`, `vhciHcdKernelModule`, the private backend transport,
@@ -625,22 +625,22 @@ The guest-side `vhci_hcd` kernel module is wired at Guest build time via
 The following operations are **not** EphemeralProcesses and not long-lived
 Process resources. They are semantic steps executed through injected EffectPorts:
 
-- `modprobe usbip-host` — `EnsureKernelModule` host EffectPort step
-- Device withhold (sysfs `authorized = 0`) — `WithholdDevice` host EffectPort step
-- `usbip bind --busid <id>` — `BindBusid` host EffectPort step
-- `usbip unbind --busid <id>` — `UnbindBusid` host EffectPort step
-- Per-busid OFD lock acquisition / release — `AcquireLease` / `ReleaseLease` host EffectPort steps
-- nftables firewall carve-out — `apply_firewall` /
+- `modprobe usbip-host` - `EnsureKernelModule` host EffectPort step
+- Device withhold (sysfs `authorized = 0`) - `WithholdDevice` host EffectPort step
+- `usbip bind --busid <id>` - `BindBusid` host EffectPort step
+- `usbip unbind --busid <id>` - `UnbindBusid` host EffectPort step
+- Per-busid OFD lock acquisition / release - `AcquireLease` / `ReleaseLease` host EffectPort steps
+- nftables firewall carve-out - `apply_firewall` /
   `UsbipBindFirewallRule { action: Ensure, ... }` and `release_firewall` /
   `UsbipBindFirewallRule { action: Remove, ... }`
-- Guest-side `usbip attach` / `usbip detach` — `UsbipGuestEffectPort` steps
+- Guest-side `usbip attach` / `usbip detach` - `UsbipGuestEffectPort` steps
 
 The host adapter and guest supervisor adapter execute these internally.
 No EphemeralProcess resource is created for any of these operations.
 
 ---
 
-## UsbipEffectPort — injected semantic port
+## UsbipEffectPort - injected semantic port
 
 The `UsbipEffectPort` trait is defined in `d2b-contracts` (or
 `d2b-provider-toolkit`). The Provider controller receives an
@@ -879,7 +879,7 @@ The core adapter that implements `UsbipEffectPort` is owned by the framework
    (`device_uid.zone() == network_uid.zone()`); returns `WrongZone` immediately
    if they differ.
 3. Acquires / releases the per-busid OFD lock at
-   `/run/d2b/locks/usbip/<busid>` — adapter-internal; no controller visibility.
+   `/run/d2b/locks/usbip/<busid>` - adapter-internal; no controller visibility.
 4. Dispatches the existing closed `UsbipBindFirewallRule` request through the
    privileged broker (the sole privileged executor), using action `Ensure` for
    apply and `Remove` for release, for the complete per-Network/per-busid
@@ -1071,7 +1071,7 @@ Binding-owned Guest proxy/private Endpoint, and invokes
 `UsbipGuestEffectPort::attach` when `attachmentPolicy.desired: attached` and the
 Service, Guest, and local Network are Ready.
 
-Claim source: `UsbipClaimSource::Declared { device_uid, network_uid }` —
+Claim source: `UsbipClaimSource::Declared { device_uid, network_uid }` -
 tracked in the Binding's bounded status; never exposed to the Guest.
 
 ### `attachmentPolicy.activation: explicit`
@@ -1082,7 +1082,7 @@ slot acquisition until an operator invokes `d2b device usb attach
 Endpoint and calls `guest_effect.attach(binding_uid)`. The attach command is an
 internal EffectPort operation; the proxy is the Binding-owned long-lived Process.
 
-Claim source: `UsbipClaimSource::Explicit` — tracked in
+Claim source: `UsbipClaimSource::Explicit` - tracked in
 the Binding's bounded status.
 
 ---
@@ -1178,7 +1178,7 @@ information. No broker connection for Network data; no route table access;
 no direct NetworkManager/nftables query.
 
 Fields read from Network status by the controller (read-only, via ResourceClient watch):
-- `status.phase` — gates Network relay and Binding proxy creation until Ready
+- `status.phase` - gates Network relay and Binding proxy creation until Ready
 
 The adapter supplies the Network UID to Core's private fabric resolver when
 constructing the shared relay or executing firewall effects. Core derives the
@@ -1708,16 +1708,16 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 
 | v3 baseline source | Reuse disposition | Notes |
 | --- | --- | --- |
-| `packages/d2b-contracts/src/usbip.rs` — `validate_bus_id`, `SYSFS_BUS_ID_MAX`, `UsbipClaimSource`, `sanitize_usb_hex_id` | Copy unchanged into `d2b-contracts`; reference from Provider crate | These are contracts, not broker internals; safe to reference |
-| `packages/d2bd/src/usbip_state_machine.rs` — `CANONICAL_STEPS`, `UsbipBusidStep`, step ordering | Adapt step ordering into `src/reconcile.rs` EffectPort model; remove all broker-call sites | Step semantics and idempotency invariants preserved |
-| `packages/d2bd/src/usbip_reconcile_state.rs` — desired/carrier/bind/proxy state enums | Split into typed Service authority and per-Guest Binding status | Restart-safe reconcile model preserved without putting attachment state on Device |
-| `packages/d2b-host/src/usbip_argv.rs` — argv generators | Remain in `d2b-host`; called by the core adapter only | Provider crate has no compile dependency on `d2b-host` |
-| `packages/d2b-priv-broker/src/ops/usbip_firewall.rs` — `bind_firewall_rule`, audit structs | Adapter-internal only; Provider crate never imports this | Preserve the one closed `UsbipBindFirewallRule` request and extend it with exact action enum `Ensure|Remove` plus generation fencing; no separate release op; audit structs remain broker-internal and `UsbipBindFirewallRuleAudit` never becomes visible to Provider |
-| `packages/d2b-priv-broker/src/ops/usbip_host.rs` — `withhold_device` impl | Adapter-internal | Same as above |
-| `packages/d2b-priv-broker/src/ops/usbip_lock.rs` — OFD lock | Adapter-internal | Lock fd never leaves adapter |
+| `packages/d2b-contracts/src/usbip.rs` - `validate_bus_id`, `SYSFS_BUS_ID_MAX`, `UsbipClaimSource`, `sanitize_usb_hex_id` | Copy unchanged into `d2b-contracts`; reference from Provider crate | These are contracts, not broker internals; safe to reference |
+| `packages/d2bd/src/usbip_state_machine.rs` - `CANONICAL_STEPS`, `UsbipBusidStep`, step ordering | Adapt step ordering into `src/reconcile.rs` EffectPort model; remove all broker-call sites | Step semantics and idempotency invariants preserved |
+| `packages/d2bd/src/usbip_reconcile_state.rs` - desired/carrier/bind/proxy state enums | Split into typed Service authority and per-Guest Binding status | Restart-safe reconcile model preserved without putting attachment state on Device |
+| `packages/d2b-host/src/usbip_argv.rs` - argv generators | Remain in `d2b-host`; called by the core adapter only | Provider crate has no compile dependency on `d2b-host` |
+| `packages/d2b-priv-broker/src/ops/usbip_firewall.rs` - `bind_firewall_rule`, audit structs | Adapter-internal only; Provider crate never imports this | Preserve the one closed `UsbipBindFirewallRule` request and extend it with exact action enum `Ensure|Remove` plus generation fencing; no separate release op; audit structs remain broker-internal and `UsbipBindFirewallRuleAudit` never becomes visible to Provider |
+| `packages/d2b-priv-broker/src/ops/usbip_host.rs` - `withhold_device` impl | Adapter-internal | Same as above |
+| `packages/d2b-priv-broker/src/ops/usbip_lock.rs` - OFD lock | Adapter-internal | Lock fd never leaves adapter |
 | `packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs` | Split into fast Provider `tests/wrong_zone.rs` admission coverage and real `tests/host-integration/usbip-service.nix` firewall coverage | Old duplicate retires only after both successors pass |
-| `nixos-modules/components/usbip.nix` — guest vhci_hcd + tools | Unchanged; guest runtime module stays; host-side bits removed at v3 reset | Remains under runtime-cloud-hypervisor Guest module |
-| `packages/d2bd/src/usbipd_perenv_autostart.rs` — per-env autostart | Delete; replace with one Host backend and one typed TCP 3240 relay Endpoint per Network | No per-env systemd unit and no per-Device port collision |
+| `nixos-modules/components/usbip.nix` - guest vhci_hcd + tools | Unchanged; guest runtime module stays; host-side bits removed at v3 reset | Remains under runtime-cloud-hypervisor Guest module |
+| `packages/d2bd/src/usbipd_perenv_autostart.rs` - per-env autostart | Delete; replace with one Host backend and one typed TCP 3240 relay Endpoint per Network | No per-env systemd unit and no per-Device port collision |
 
 ---
 
@@ -1728,14 +1728,14 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | Field | Value |
 | --- | --- |
 | Dependency/owner | d2b-contracts crate shape stabilised by shared root contract; d2b-contracts owner |
-| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-contracts/src/usbip_effect_port.rs |
 | Detailed design | Define UsbipEffectPort and UsbipGuestEffectPort in d2b-contracts with DeviceUid, NetworkUid, UsbBindingUid, LeaseToken, FirewallToken, FirewallGenerationFence, FirewallObservation, KernelModuleClass, DeviceProbeResult, and UsbipEffectError; export traits/types only with no implementation. `apply_firewall` and `release_firewall` both accept expected Network/Service generations; release also accepts NetworkUid and borrows the token so the controller can retain it until confirmed effect. Keep firewall apply/observe/release Network/busid-scoped, attach/detach Binding-addressed, and all fd/path/busid values private. `TransientDetail` derives `Clone, PartialEq, Eq` while retaining manual redacted Debug/Display so `UsbipEffectError`'s derives compile without disclosure. Primary reuse disposition: `create`. Preserved source-plan detail: net-new trait definition. |
 | Integration | Provider/device-usbip controller depends on this trait for injected semantic effects; the framework core adapter implements it in ADR046-usbip-002. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | d2b-contracts tests for trait object safety, generation-fenced firewall apply/observe/release signatures (release requires NetworkUid and token), `FirewallGenerationMismatch`, `UsbipEffectError: Clone + PartialEq + Eq`, `TransientDetail` clone/equality, redacted Debug/Display behavior, and no implementation leakage. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
 Define the `UsbipEffectPort` async trait with the method set in § UsbipEffectPort.
 Define `DeviceUid`, `NetworkUid`, `UsbBindingUid`, `LeaseToken`,
@@ -1774,14 +1774,14 @@ type to the trait caller. Add unit tests for same-Zone gate and anti-spoof logic
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-usbip-001, ADR046-provider-004; Provider model crate structure; device-usbip provider owner |
-| Current source | None — net-new Provider crate; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new Provider crate; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-provider-device-usbip/ |
 | Detailed design | Create the required crate layout; bind the shared D098 `UsbService`/`UsbBinding` base versions/fingerprints from ADR046-provider-004 and implement only strict USBIP Provider extensions; sign/register extension schemas and advertise explicit export only for authority `UsbService` resources implemented by this Provider; implement validation.rs and compile-checked EffectPort injection. Declare the controller user/User resource in Nix activation. Primary reuse disposition: `create`. Preserved source-plan detail: net-new crate skeleton with contract reuse. |
 | Integration | Workspace manifests, Provider artifact catalog, Nix module, and ProviderDeployment consume the crate and component descriptor. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | make test-policy passes; Cargo.toml has no d2b-priv-broker dependency; fast schema/manifest tests consume the common fixtures, accept canonical minimal base without `spec.provider`, prove a fake direct-local Provider can implement the same base, and cover Service-only exportability, Binding non-exportability, Core projection ownerRef/base fields with explicit `spec.provider` rejection, D088 status layering, semantic factory-fingerprint stability across Provider/adapter identity changes, strict refs, and trait injection. |
-| Removal proof | None — net-new; no prior owner to remove |
+| Removal proof | None - net-new; no prior owner to remove |
 
 Create the crate with the layout in § Crate layout. Implement `lib.rs`, `validation.rs`
 (bus-id corpus from `d2b-contracts::usbip`), and stub controller with compile-checked
@@ -1791,7 +1791,7 @@ Create the crate with the layout in § Crate layout. Implement `lib.rs`, `valida
 The Nix module declares the `d2b-device-usbip-ctrl` system user and its
 `User/d2b-device-usbip-ctrl` resource at NixOS activation time. The
 controller component state Volume (`device-usbip--controller--state--host-system`)
-is created by core ProviderDeployment — not by the device-usbip controller —
+is created by core ProviderDeployment - not by the device-usbip controller -
 before the controller Process is started. Volume is not an exported ResourceType
 of this Provider.
 
@@ -1833,7 +1833,7 @@ Tests required:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-usbip-003; Process ResourceType schema; device-usbip process lifecycle owner |
-| Current source | None — net-new Process resources; templates derive from the Provider package descriptor |
+| Current source | None - net-new Process resources; templates derive from the Provider package descriptor |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-device-usbip/src/reconcile.rs |
 | Detailed design | Create/adopt exactly one Host backend Process authority, exactly one D097 Network relay Process/Endpoint/firewall authority bound to TCP 3240 with a Core-derived Network/policy key, and one Binding-owned Guest proxy/private Endpoint per attached Binding. Restrict relay resolution to the Core adapter and exact active-lease Binding proxies; deliver their connected streams by LaunchTicket. Use canonical system-minijail specs, signed templates, bounded budgets/readiness/restart, no argv/path/address/fd fields; attach/detach remains a one-shot EffectPort operation, not a second Process. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into singleton Host backend, per-Network relay, and per-Binding Guest proxy management. |
@@ -1881,7 +1881,7 @@ not ResourceTypes or compatibility aliases.
 | Destination | packages/d2b-provider-device-usbip/{src,tests,integration/README.md}; tests/host-integration/usbip-service.nix; tests/host-integration/hardware/usbip-service.sh |
 | Detailed design | Put provider-neutral Service/Binding base-schema separation, strict USBIP extensions, projection `spec.provider` rejection, D088 layered status, semantic factory-fingerprint independence from Provider/adapter identity, exact shared physical backing tuple/conflict, one Core-derived per-Network relay Endpoint/firewall authority, exact per-busid firewall ownership/drift/release through one `UsbipBindFirewallRule` request with closed `Ensure|Remove`, generation fencing, idempotent validated-absence `Remove`, foreign-marker fail-closed behavior, and status/token/authority retention until confirmation, arbitration, same-type export/import, encrypted fake-stream, and least-privilege process/Endpoint shape coverage in fast Layer-1 Rust tests. Include a fake direct-local Provider proving the same base contract has no USBIP dependency. Reserve runNixOSTest for real Linux usbip_host/vhci_hcd, usbipd, namespaces/nftables, TCP 3240, zero network-local carve-out, and Guest checks; reserve the hardware script for an approved physical device. Use existing Make gates only. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing network-scoping assertion and add new scenarios. |
 | Integration | Layer-2 lanes exercise actual kernel/backend/relay/Guest/device paths and do not duplicate pure controller/schema cases. Cross-Zone protocol logic remains hermetic with fake peers; the runNixOSTest only proves its real-system integration. |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | `make test-host-integration` runs the non-hardware real-kernel case on a capable host; `make test-hardware` runs the explicit manual device case. No Layer-1 test opens a device, loads a module, creates a namespace, or listens on a socket. |
 | Removal proof | Old usbip_policy_network_scoping coverage is retired only after the fast wrong-Zone admission test and `tests/host-integration/usbip-service.nix` successor both pass and the migration ledger is updated. |
 
@@ -1963,7 +1963,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-device-usbip --lib --tests` completes in
 ≤2 s warm-cache execution time (compilation excluded). They use a deterministic
-fake clock/RNG and the toolkit fakes/FakeEffectPort only — no process spawn,
+fake clock/RNG and the toolkit fakes/FakeEffectPort only - no process spawn,
 container, network, DBus, systemd, broker daemon, Nix eval/build, KVM,
 USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny temp
 fixtures. Any scenario genuinely needing a booted kernel/Guest lives only in
@@ -2033,7 +2033,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

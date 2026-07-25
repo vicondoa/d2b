@@ -1,4 +1,4 @@
-# cli-json — CLI-contract integration tests for the unique behaviours of the
+# cli-json - CLI-contract integration tests for the unique behaviours of the
 # retired tests/cli-json.sh bash gate (packages/d2b/tests/cli_json_contract.rs).
 # Spawns the real `d2b` binary against the D2B_FIXTURES rendered bundle
 # (copied into a hermetic temp bundle so the host's deployed /etc/d2b

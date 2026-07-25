@@ -24,7 +24,7 @@ pub fn owned_fd_from_raw(fd: RawFd) -> OwnedFd {
 /// 2. Verifies `SO_DOMAIN == AF_UNIX` via `getsockopt(2)`.
 /// 3. Verifies `SO_TYPE == SOCK_SEQPACKET` via `getsockopt(2)`.
 /// 4. Sets `FD_CLOEXEC` (defensive; systemd normally sets it already).
-/// 5. Returns `OwnedFd::from_raw_fd(3)` — transfers ownership.
+/// 5. Returns `OwnedFd::from_raw_fd(3)` - transfers ownership.
 ///
 /// Routing this through `sys.rs` keeps the one `unsafe` block on the
 /// quarantined FFI surface (the broker crate carries `unsafe_code = "deny"`).
@@ -205,19 +205,19 @@ pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
 /// `RESOLVE_NO_XDEV` is additionally enforced at every component as
 /// defense-in-depth and is relaxed *only* exactly where a real,
 /// pre-existing kernel/framework mount sits (e.g. `/run` tmpfs, `/dev`
-/// devtmpfs), since broker paths legitimately span those mounts — see
+/// devtmpfs), since broker paths legitimately span those mounts - see
 /// [`open_dir_path_safe`] for the per-component mount-tolerant walk:
 ///
-/// - [`refuse_symlink`] — rejects symlinks at `path` via `lstat`;
-/// - [`refuse_world_writable_parent`] — rejects world-writable parent
+/// - [`refuse_symlink`] - rejects symlinks at `path` via `lstat`;
+/// - [`refuse_world_writable_parent`] - rejects world-writable parent
 ///   directories (the most common path-safety regression);
-/// - [`refuse_non_root_parent`] — used in production paths under `/etc`
+/// - [`refuse_non_root_parent`] - used in production paths under `/etc`
 ///   and `/run` to refuse non-root-owned parents (separate helper so
 ///   test scratch dirs can opt out);
-/// - [`atomic_replace`] — `O_TMPFILE`-style temp-file + `rename(2)`
+/// - [`atomic_replace`] - `O_TMPFILE`-style temp-file + `rename(2)`
 ///   atomic replace, preserving parent-dir mode;
-/// - [`read_to_string_nofollow`] — symlink-refusing read;
-/// - [`ensure_dir_path_safe`] / [`remove_path_safe`] — fd-relative mkdir / unlink.
+/// - [`read_to_string_nofollow`] - symlink-refusing read;
+/// - [`ensure_dir_path_safe`] / [`remove_path_safe`] - fd-relative mkdir / unlink.
 pub mod path_safe {
     use std::ffi::OsStr;
     use std::fs::{self, File, OpenOptions};
@@ -390,7 +390,7 @@ pub mod path_safe {
     /// root as `d2bd:users 2770` plus per-runner POSIX ACLs (see
     /// `nixos-modules/host-activation.nix`); re-`fchmod`/`fchown`-ing it
     /// to a single runner principal on every reconcile clobbered that
-    /// posture — clipping the ACL mask to `r-x` (so virtiofsd/gpu/video
+    /// posture - clipping the ACL mask to `r-x` (so virtiofsd/gpu/video
     /// lost write access to their per-VM runtime dir) and flipping the
     /// owner to an unresolvable runner uid (tripping the daemon's
     /// ownership-matrix preflight on the next start). The matrix
@@ -1097,8 +1097,8 @@ pub mod path_safe {
     /// We resolve **component by component**. Each component is opened
     /// with the full hardened mask; if a component is a genuine mount
     /// crossing (`openat2` returns `EXDEV` under `NO_XDEV`), it is
-    /// re-opened **without** `NO_XDEV` — but still with `NO_SYMLINKS`,
-    /// `NO_MAGICLINKS`, and `BENEATH` — and the walk continues with the
+    /// re-opened **without** `NO_XDEV` - but still with `NO_SYMLINKS`,
+    /// `NO_MAGICLINKS`, and `BENEATH` - and the walk continues with the
     /// full mask beneath. Net effect:
     ///
     /// - symlink / magic-link components are **always** refused (this is
@@ -1257,7 +1257,7 @@ pub mod path_safe {
         // (e.g. host activation) created the per-VM root between our
         // initial open (which returned NotFound) and this `mkdirat`.
         // Re-stamping it then would defeat `ensure_dir_preserve_existing`
-        // exactly as the always-fchmod path did — clipping the ACL mask
+        // exactly as the always-fchmod path did - clipping the ACL mask
         // / chowning to a runner principal. Treat that raced dir like
         // any other pre-existing dir and leave its metadata intact.
         if created || reassert_metadata {
@@ -1325,7 +1325,7 @@ pub mod path_safe {
     /// Like [`mkdir_at`] but FAILS CLOSED on `EEXIST` (surfaced as
     /// [`io::ErrorKind::AlreadyExists`]) instead of treating a pre-existing
     /// entry as success. Used where adopting a directory this call did NOT
-    /// create would be a security bug — e.g. the swtpm NVRAM dir
+    /// create would be a security bug - e.g. the swtpm NVRAM dir
     /// fresh-create path (issue #64): a role UID with `rwx` on the sticky
     /// per-VM root can race-create `swtpm/` between the absence pre-check
     /// and this `mkdirat`, and the broker must refuse rather than
@@ -1475,7 +1475,7 @@ pub mod path_safe {
 
 /// Quarantined syscall surface for the pidfd handoff contract.
 ///
-/// We use `clone3(CLONE_PIDFD)` as the preferred entry — `rustix
+/// We use `clone3(CLONE_PIDFD)` as the preferred entry - `rustix
 /// 0.38` does NOT expose `clone3`, so the call goes via
 /// `libc::syscall(SYS_clone3, ...)` with a manually-constructed
 /// `clone_args` struct per the kernel `clone3(2)` man page. Every
@@ -1544,7 +1544,7 @@ pub mod pidfd_sys {
     /// `CLONE_INTO_CGROUP` and `args.cgroup = dirfd as u64`. The
     /// kernel atomically places the new child into the cgroup
     /// pointed at by `dirfd` (typically the per-role leaf
-    /// `d2b.slice/<vm>/<role>/`) — eliminating the
+    /// `d2b.slice/<vm>/<role>/`) - eliminating the
     /// classical race window where the parent writes the child's
     /// PID to `cgroup.procs` AFTER fork (during which the child
     /// is unaccounted in the per-role cgroup).
@@ -1910,7 +1910,7 @@ pub mod pidfd_sys {
         Ok(())
     }
 
-    /// Pure I/O — no syscalls beyond `open`/`read`. Returns `None` if
+    /// Pure I/O - no syscalls beyond `open`/`read`. Returns `None` if
     /// the file is missing or field 22 isn't parseable.
     pub fn read_proc_stat_start_time(pid: i32) -> io::Result<u64> {
         let path = format!("/proc/{pid}/stat");
@@ -2012,7 +2012,7 @@ pub mod pidfd_sys {
         /// When `Some`, the child calls `umask(2)` with the given mask
         /// immediately before execve. Profiles that bind shared Unix
         /// sockets (vhost-user-sound, crosvm-gpu, swtpm) declare `0o007`
-        /// so created sockets have mode 0660 — combined with the
+        /// so created sockets have mode 0660 - combined with the
         /// per-VM-runtime default ACL, this lets cloud-hypervisor's
         /// named-user ACL entry become effective (mask:rw instead of
         /// mask:---).
@@ -2797,7 +2797,7 @@ pub mod pidfd_sys {
     const CHILD_EXIT_SETGID: libc::c_int = 71;
     const CHILD_EXIT_SETUID: libc::c_int = 72;
     const CHILD_EXIT_EXECVE: libc::c_int = 73;
-    /// Child failed to read 1 byte from the user-NS sync pipe —
+    /// Child failed to read 1 byte from the user-NS sync pipe -
     /// typically EINTR or the parent died before writing the maps.
     /// Distinct exit code so audit/triage can distinguish from generic
     /// execve / capset failures.
@@ -2836,7 +2836,7 @@ pub mod pidfd_sys {
         // values. Caller must set both for the child to be fake-root
         // inside the new user NS. Setting namespaces.user without
         // user_namespace is rejected because the child would land in the
-        // namespace with overflowuid (65534) and no caps — never useful.
+        // namespace with overflowuid (65534) and no caps - never useful.
         let user_ns_spec = isolation.user_namespace;
         if isolation.namespaces.user && user_ns_spec.is_none() {
             return Err(io::Error::new(
@@ -2939,7 +2939,7 @@ pub mod pidfd_sys {
         // Capture BOTH pipe fds in the child closure. Without this, the
         // child inherits both ends of the pipe (CLOEXEC only fires on
         // execve, not at clone), so the parent's death never delivers EOF
-        // to the child's read() — it can wedge forever. The child
+        // to the child's read() - it can wedge forever. The child
         // explicitly closes its inherited write_fd before blocking, so
         // EOF is observable.
         let user_ns_sync_read_fd: libc::c_int = user_ns_sync
@@ -2955,7 +2955,7 @@ pub mod pidfd_sys {
         // to in-NS UID 0 (the mapped root), NOT to the host stable
         // principal UID. Calling setuid(<host_uid>) inside the new user
         // NS fails with EINVAL because that UID is NOT mapped as an
-        // in-namespace ID — only NS-UID 0 is mapped.
+        // in-namespace ID - only NS-UID 0 is mapped.
         //
         // The role profile's host UID/GID is still the EXEMPLAR
         // identity (used by ACLs and audit), but the in-NS
@@ -2966,7 +2966,7 @@ pub mod pidfd_sys {
         let target_gid: libc::gid_t = if in_ns_credentials { 0 } else { gid };
 
         // With setgroups=deny written by the parent's user-NS setup, the
-        // child CANNOT call setgroups(2) — even setgroups(0, ...) returns
+        // child CANNOT call setgroups(2) - even setgroups(0, ...) returns
         // EPERM. Skip the call entirely when in a broker-pre-NS spawn.
         // Caller MUST ensure supplementary_groups is empty for
         // user_namespace spawns; we enforce this here defensively.
@@ -3038,7 +3038,7 @@ pub mod pidfd_sys {
                     // The user-NS already provides isolation (each NS has its
                     // own mount tree clone from clone3). Bind-mounting paths
                     // onto themselves WOULD FAIL with EPERM for any path that
-                    // belongs to a mount inherited from the parent NS — Linux
+                    // belongs to a mount inherited from the parent NS - Linux
                     // locks inherited mounts inside user-NS so they can't be
                     // mutated. virtiofsd's --sandbox=chroot does its own
                     // pivot_root inside the user-NS post-exec, which works
@@ -3141,7 +3141,7 @@ pub mod pidfd_sys {
                 // a signal. In this `clone3`/`fork` child of the MULTITHREADED
                 // broker (and, under test, the multithreaded `cargo test` runner)
                 // the inherited glibc thread list still names the parent's other
-                // threads — none of which exist in the single-threaded child — so
+                // threads - none of which exist in the single-threaded child - so
                 // the wrapper waits forever on a futex no one will ever post. That
                 // is a classic fork-in-a-multithreaded-program deadlock and it
                 // wedges the child before `execve`, leaking every inherited fd
@@ -3181,7 +3181,7 @@ pub mod pidfd_sys {
                 //   capset → umask → seccomp → execve
                 // Install umask from the role profile before execve. Sidecars
                 // that bind shared Unix sockets (vhost-user-sound, crosvm-gpu,
-                // swtpm) use 0o007 so the bind() returns a 0660-mode socket —
+                // swtpm) use 0o007 so the bind() returns a 0660-mode socket -
                 // the existing /run/d2b/vms/<vm>/ default ACL
                 // (user:<ch-uid>:rwx) then becomes effective for
                 // cloud-hypervisor because mode-group-bits derive ACL mask=rw,
@@ -3281,7 +3281,7 @@ pub mod pidfd_sys {
                 return Err(err);
             }
             // Drop the parent's inherited read end before signaling
-            // — it's never read on the parent side. Explicit drop
+            // - it's never read on the parent side. Explicit drop
             // for the reader half makes the intent obvious.
             drop(sync.read_fd);
             match rustix::io::write(&sync.write_fd, &[0u8; 1]) {
@@ -3560,7 +3560,7 @@ mod tests {
     #[test]
     fn user_namespace_true_requires_spec() {
         // namespaces.user=true but user_namespace=None is
-        // rejected before clone3 — the child would land in the
+        // rejected before clone3 - the child would land in the
         // NS with overflowuid and never be able to setuid(0).
         let mut iso = isolation_with_user_namespace(None);
         iso.namespaces.user = true;
@@ -3573,7 +3573,7 @@ mod tests {
     #[test]
     fn user_namespace_spec_requires_namespace_flag() {
         // user_namespace=Some but namespaces.user=false is
-        // also rejected — the spec would be silently ignored.
+        // also rejected - the spec would be silently ignored.
         let mut iso = isolation_with_user_namespace(Some(UserNamespaceSpec {
             host_uid_for_zero: 1000,
             host_gid_for_zero: 1000,
@@ -3813,7 +3813,7 @@ mod tests {
     /// called when `in_ns_credentials = true` (broker-pre-NS spawn per
     /// ADR 0021).
     ///
-    /// Strategy — exit-code oracle: spawn a no-op binary (`true`) with
+    /// Strategy - exit-code oracle: spawn a no-op binary (`true`) with
     /// `user_namespace = Some(...)` (which sets `in_ns_credentials =
     /// true`) and a mount policy that produces a non-empty
     /// `mount_actions` list (`nix_store_read_only = true` →
@@ -3902,7 +3902,7 @@ mod tests {
             Ok(o) => o,
             Err(e) if e.raw_os_error() == Some(nix::libc::EPERM) => {
                 // kernel.unprivileged_userns_clone=0: user namespaces
-                // not available on this host — skip rather than fail.
+                // not available on this host - skip rather than fail.
                 println!(
                     "SKIP: unprivileged user NS not available \
                      (kernel.unprivileged_userns_clone=0)"
@@ -3924,7 +3924,7 @@ mod tests {
         }
 
         // CHILD_EXIT_MOUNT = 64 would mean apply_mount_actions ran and
-        // got EPERM on the locked /nix/store bind-mount — i.e., the
+        // got EPERM on the locked /nix/store bind-mount - i.e., the
         // `if !in_ns_credentials` guard is absent.
         assert_eq!(
             wait_status,

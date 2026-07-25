@@ -2,7 +2,7 @@
 #
 # Asserts the shared `nixos-modules/lib.nix` volume helpers
 # (volumeSerial / volumeHostPath / volumeFileSystem / volumeSizeBytes /
-# volumeDiskInitEligible / volumeSerialIssues) — Cloud Hypervisor disk
+# volumeDiskInitEligible / volumeSerialIssues) - Cloud Hypervisor disk
 # serials, guest fileSystems mounts, MiB->bytes, DiskInit eligibility, and
 # the duplicate/reserved/overlong/unsafe serial issue sets.
 #

@@ -45,7 +45,7 @@
 //!    the socket path (or deletes and re-creates the socket) will leave the
 //!    running VM's GPU sidecar with a dead Wayland path. The plan's requirement
 //!    to treat proxy death as a fatal VM error (triggering d2bd's pidfd
-//!    watchdog) is correct — silent restart without socket-path continuity is
+//!    watchdog) is correct - silent restart without socket-path continuity is
 //!    not viable.
 //!
 //! 6. **minijail/seccomp/RLIMIT_NOFILE**: The filter binary uses a standard
@@ -63,13 +63,13 @@
 //!    security-sensitive globals by default (e.g., `wlr_screencopy`, `wlr_export_dmabuf`,
 //!    `ext_data_control`, `zwp_linux_dmabuf_feedback_v1` if not needed for graphics,
 //!    `security_context_v1`). Warnings for operator overrides are trivially
-//!    implemented by printing to stderr before starting the listen loop — visible
+//!    implemented by printing to stderr before starting the listen loop - visible
 //!    in journald output from the broker-spawned process.
 //!
 //! 8. **multi-output behavior**: `wl-proxy` passes through all compositor globals
 //!    including `wl_output` and `xdg_output`; the guest sees a single (virtual)
 //!    output via the cross-domain transport. Multi-output host compositor behavior
-//!    is not visible to the guest through this stack — the cross-domain transport
+//!    is not visible to the guest through this stack - the cross-domain transport
 //!    presents a single virtual output regardless of host monitor count. This is
 //!    a property of the cross-domain virtio-gpu layer, not of the host filter.
 
@@ -100,7 +100,7 @@ use wl_proxy::{
 /// real host compositor socket inside the minijail, e.g. `/run/wl/wayland-0`.
 /// The listen socket is `/run/d2b-wlproxy/<vm>/wayland.sock`.
 ///
-/// Returns Err if the upstream is unreachable — the caller exits non-zero
+/// Returns Err if the upstream is unreachable - the caller exits non-zero
 /// and the broker never reports the process as ready.
 pub fn build_proxy_state(
     upstream_socket_path: &str,
@@ -161,11 +161,11 @@ impl FilterPolicy {
 }
 
 // ---------------------------------------------------------------------------
-// Handler types — these implement wl-proxy traits in safe Rust only.
+// Handler types - these implement wl-proxy traits in safe Rust only.
 // No unsafe{} block appears anywhere in this file.
 // ---------------------------------------------------------------------------
 
-/// Top-level display handler — the entry point for each proxied client.
+/// Top-level display handler - the entry point for each proxied client.
 pub struct FilterDisplay {
     policy: Rc<FilterPolicy>,
 }
@@ -187,7 +187,7 @@ impl WlDisplayHandler for FilterDisplay {
     }
 }
 
-/// Registry handler — enforces the deny list and name remapping.
+/// Registry handler - enforces the deny list and name remapping.
 struct FilterRegistry {
     filter: GlobalMapper,
     policy: Rc<FilterPolicy>,
@@ -224,12 +224,12 @@ impl WlRegistryHandler for FilterRegistry {
         // forward_bind maps the client-side name back to the server-side name
         // using GlobalMapper's internal table. If the client tries to bind a
         // name that was never advertised (or was ignored), GlobalMapper logs
-        // a warning and drops the bind — the compositor never sees it.
+        // a warning and drops the bind - the compositor never sees it.
         self.filter.forward_bind(slf, name, &id);
     }
 }
 
-/// xdg_toplevel handler — enforces app-id prefix for niri window-rule matching.
+/// xdg_toplevel handler - enforces app-id prefix for niri window-rule matching.
 ///
 /// This demonstrates that app-id rewriting is purely safe Rust: intercept
 /// `handle_set_app_id`, prepend the VM prefix if not already present, and

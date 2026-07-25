@@ -8,7 +8,7 @@ The legacy `d2b-otel-host-bridge.service` host singleton has
 been replaced by a broker-`SpawnRunner` lifecycle under
 `RunnerRole::OtelHostBridge`. The broker can spawn the forwarder
 per the trusted bundle's intent, and `pidfd_table` tracks its
-liveness — but without this gate there would be no *formal
+liveness - but without this gate there would be no *formal
 readiness* signal the daemon could block on before declaring an
 observability VM "ready".
 
@@ -27,9 +27,9 @@ The gate is evaluated by `dispatch_broker_vm_start` *after* the
 per-VM process DAG returns `overall_ok=true`, but only when both
 of the following are true for the VM being started:
 
-1. `manifest._observability.enabled == true` — the operator has
+1. `manifest._observability.enabled == true` - the operator has
    opted into observability for this site.
-2. `request.vm == manifest._observability.vmName` — the VM being
+2. `request.vm == manifest._observability.vmName` - the VM being
    started IS the observability VM that the OtelHostBridge relays
    into.
 
@@ -107,7 +107,7 @@ start.
 - Inspect `d2b host doctor` for the OtelHostBridge runner's
   pidfd liveness + last-relay-flush timestamp.
 - If the runner is missing entirely, the broker `SpawnRunner` for
-  `RunnerRole::OtelHostBridge` failed — inspect the broker audit
+  `RunnerRole::OtelHostBridge` failed - inspect the broker audit
   log.
 - If the vsock host socket does not exist, the obs VM is not
   accepting OTLP from workload VMs; restarting the obs VM
@@ -121,22 +121,22 @@ start.
 
 The gate ships in `packages/d2bd/src/otel_host_bridge_readiness.rs`:
 
-- `enum OtelHostBridgeReadiness` — pure verdict
+- `enum OtelHostBridgeReadiness` - pure verdict
   (`Ready` / `Pending { elapsed_ms }` / `Failed { reason }`).
-- `struct ReadinessProbe` — pure inputs (booleans + elapsed +
+- `struct ReadinessProbe` - pure inputs (booleans + elapsed +
   deadline).
-- `fn evaluate_readiness(&ReadinessProbe) -> OtelHostBridgeReadiness`
-  — pure evaluator; no I/O.
-- `trait OtelHostBridgeProbeSource` — read-only injection point
+- `fn evaluate_readiness(&ReadinessProbe) -> OtelHostBridgeReadiness` -
+  pure evaluator; no I/O.
+- `trait OtelHostBridgeProbeSource` - read-only injection point
   for the side-effecting wrapper.
-- `struct PidfdAndSocketProbeSource` — production implementation
+- `struct PidfdAndSocketProbeSource` - production implementation
   backed by `PidfdTable` + filesystem `stat(2)`.
-- `fn await_otel_host_bridge_readiness(...) -> ReadinessWaitOutcome`
-  — side-effecting wrapper. Loops `evaluate_readiness` until
+- `fn await_otel_host_bridge_readiness(...) -> ReadinessWaitOutcome` -
+  side-effecting wrapper. Loops `evaluate_readiness` until
   `Ready` or `Failed`; takes an injected `sleep` callback for
   deterministic testing.
-- `struct ReadinessWaitConfig { timeout, poll_interval, strict }`
-  — populated by `ReadinessWaitConfig::from_env()`.
+- `struct ReadinessWaitConfig { timeout, poll_interval, strict }` -
+  populated by `ReadinessWaitConfig::from_env()`.
 
 Twelve unit tests cover the pure evaluator (truth-table over all
 four inputs), the env-var parser (default fallback on garbage

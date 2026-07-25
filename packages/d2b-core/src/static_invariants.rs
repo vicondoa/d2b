@@ -13,7 +13,7 @@
 
 use serde_json::Value;
 
-/// Linux capabilities considered "broad" — granting one to a long-lived
+/// Linux capabilities considered "broad" - granting one to a long-lived
 /// profile requires an explicit ADR/plan carve-out reference.
 pub const BROAD_CAPABILITIES: &[&str] = &["CAP_SYS_ADMIN", "CAP_NET_ADMIN"];
 

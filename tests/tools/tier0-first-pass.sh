@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/tools/tier0-first-pass.sh — sub-60s first-pass PR gate.
+# tests/tools/tier0-first-pass.sh - sub-60s first-pass PR gate.
 #
 # Pure host-local checks only:
 #   * bash -n on tracked shell scripts under tests/, scripts/, harness/ubuntu/

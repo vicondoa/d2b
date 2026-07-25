@@ -3,7 +3,7 @@
 # The canonical eval-time assertion corpus: every consumer misconfig must be
 # REJECTED with the expected reason. Reuses the EXACT case table
 # (tests/unit/nix/eval-cases/assertions.nix) and the minimal `lib.evalModules`
-# evaluator (tests/unit/nix/eval-cases/shared.nix, ~0.6 s/case — NOT a full
+# evaluator (tests/unit/nix/eval-cases/shared.nix, ~0.6 s/case - NOT a full
 # nixosSystem), so this migration is on the fast path and does not add the
 # heavy per-case nixosSystem eval cost.
 #
@@ -13,7 +13,7 @@
 #     `expectedSubstring` appears in the failing-assertion message list.
 #     This PRESERVES the message-substring check (unlike a throw-only
 #     `expectedError` migration).
-#   * Bucket B (eval THROWS before config.assertions is computable — e.g.
+#   * Bucket B (eval THROWS before config.assertions is computable - e.g.
 #     the platform gate, or graphics with waylandUser = null): `tryEval`
 #     cannot capture the throw message, so assert only THAT eval is rejected
 #     (`evalSucceeded == false`). The expected message is retained in
@@ -40,13 +40,13 @@ let
 
   mkCase = name: result:
     if builtins.elem name bucketB then
-      # Bucket B — must be rejected via a throw.
+      # Bucket B - must be rejected via a throw.
       {
         expr = result.evalSucceeded;
         expected = false;
       }
     else
-      # Bucket A — eval succeeds, but a failing assertion message carries
+      # Bucket A - eval succeeds, but a failing assertion message carries
       # the expected substring.
       {
         expr =

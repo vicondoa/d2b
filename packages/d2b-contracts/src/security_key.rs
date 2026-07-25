@@ -62,7 +62,7 @@ impl SecurityKeySessionId {
 
 /// Stable label identifying a configured FIDO device selector.
 ///
-/// Must match `^[a-z][a-z0-9-]{0,62}$` — same constraint as the NixOS
+/// Must match `^[a-z][a-z0-9-]{0,62}$` - same constraint as the NixOS
 /// option `d2b.host.usb.securityKey.devices[].label`.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,

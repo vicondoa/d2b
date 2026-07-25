@@ -26,7 +26,7 @@
 //!
 //! The per-VM `vm-corp-full-usbip` profile (rendered into the
 //! `minijail-profiles.nix` profile TABLE when `usbip.yubikey` is set) does NOT
-//! emit its own DAG node in `processes.json` — the per-busid attach runs on the
+//! emit its own DAG node in `processes.json` - the per-busid attach runs on the
 //! env's auto-declared `sys-work-usbipd` net side. The bash gate's `role =
 //! "usbip"` / `capabilities = [ "CAP_NET_RAW" ]` greps cover BOTH the per-VM
 //! `vm-<name>-usbip` block (the corp-full side) AND the usbipd backend/proxy
@@ -60,7 +60,7 @@
 //!   * The bash gates' "skip when the binary is absent" preflights
 //!     (`vhost-device-sound`/`minijail0`/`python3` for audio; `usbip`/`cc` for
 //!     usbip) are build-host gates that set `positive_ok=1` and SKIP when the
-//!     tool is missing — they are not contract assertions and do not port.
+//!     tool is missing - they are not contract assertions and do not port.
 
 use d2b_contract_tests::{load_full_bundle_resolver_from_env, read_repo_file, repo_path_exists};
 use d2b_core::processes::ProcessRole;
@@ -80,7 +80,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 /// through the first subsequent line matching `end_pat`. Mirrors the audio bash
 /// gate's `awk '/profileIdFor name "audio"/{inblock=1} inblock{print} inblock &&
 /// /^[[:space:]]*};[[:space:]]*$/{exit}'` block extraction (the first `};` line
-/// terminates the block — for the audio profile that is the `userNamespace`
+/// terminates the block - for the audio profile that is the `userNamespace`
 /// closer, which still encloses every checked token). Copied from
 /// `tests/minijail_roles.rs::extract_block`.
 fn extract_block(content: &str, start_pat: &str, end_pat: &str) -> Option<String> {
@@ -111,7 +111,7 @@ fn extract_block(content: &str, start_pat: &str, end_pat: &str) -> Option<String
 ///   * `minijail-profiles.nix` exists (else "not found" die);
 ///   * the file has an `profileIdFor name "audio"` block (else "no audio
 ///     profile block" die);
-///   * the extracted audio block keeps host capabilities EMPTY — it must NOT
+///   * the extracted audio block keeps host capabilities EMPTY - it must NOT
 ///     declare `capabilities =` (mkProfile defaults to `[]`);
 ///   * `seccompPolicyRef = "w1-audio"`;
 ///   * `namespaces = defaultNamespaces // { net = true; }` (private net NS);
@@ -167,7 +167,7 @@ fn audio_profile_source_layer1_shape() {
 
 /// Layer-1 applied to the REAL rendered fixture RoleProfile (stronger than the
 /// bash gate, which only `grep`ed the `.nix` source): the rendered
-/// `vm-corp-full-audio` profile MUST carry the broker-pre-NS audio shape —
+/// `vm-corp-full-audio` profile MUST carry the broker-pre-NS audio shape -
 /// EMPTY host caps, `seccompPolicyRef = "w1-audio"`, a private net namespace
 /// combined with a user namespace, a single-entry `userNamespace` mapping in-NS
 /// 0 to the `d2b-<vm>-snd` principal's stable ephemeral uid/gid (never the
@@ -290,7 +290,7 @@ fn audio_rendered_profile_broker_pre_ns_shape() {
     }
     assert!(
         seen > 0,
-        "fixture-smoke-full has no audio node — corp-full enables audio (regression)"
+        "fixture-smoke-full has no audio node - corp-full enables audio (regression)"
     );
 }
 
@@ -306,7 +306,7 @@ fn audio_rendered_profile_broker_pre_ns_shape() {
 ///   * the usbip profile declares `capabilities = [ "CAP_NET_RAW" ]`
 ///     (kernel-r2-4 cap matrix); else fail;
 ///   * `seccompPolicyRef = "w1-usbip"` (the closed allowlist the broker loads;
-///     ptrace is NOT in it — the negative-path Layer-1 equivalent); else fail.
+///     ptrace is NOT in it - the negative-path Layer-1 equivalent); else fail.
 ///
 /// These greps are file-scoped (the bash gate's `grep -q` over the whole file),
 /// so they are satisfied by the per-VM `vm-<name>-usbip` block (the corp-full
@@ -389,7 +389,7 @@ fn usbip_proxy_source_has_no_host_privilege_surface() {
 
 /// Layer-1 applied to the REAL rendered fixture RoleProfiles (stronger than the
 /// bash gate's source greps): the env's auto-declared `sys-work-usbipd` net VM
-/// emits the two usbip DAG nodes the per-busid attach runs under —
+/// emits the two usbip DAG nodes the per-busid attach runs under -
 /// `vm-sys-work-usbipd-backend` and `vm-sys-work-usbipd-proxy`. The backend
 /// (host-root usbipd write side) MUST carry exactly `["CAP_NET_RAW"]`,
 /// `seccompPolicyRef = "w1-usbip"`, uid/gid 0 with the documented root

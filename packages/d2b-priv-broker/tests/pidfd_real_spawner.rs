@@ -28,7 +28,7 @@ fn cloexec_set(fd: i32) -> bool {
 fn real_spawner_pidfd_is_cloexec_and_start_time_round_trips() {
     let spawner = RealPidfdSpawner::new();
     // We use a small but real argv. The child will exec /bin/true (or
-    // just exit cleanly) — what we care about is the pidfd contract,
+    // just exit cleanly) - what we care about is the pidfd contract,
     // not the child program's behavior.
     let payload = PidfdPayload {
         argv: vec!["/bin/true".into()],

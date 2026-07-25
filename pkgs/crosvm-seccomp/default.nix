@@ -17,7 +17,7 @@ let
   # at a known-good newer crosvm rev (the commit that added
   # MADV_GUARD_*) and use those policies. Policy files are pure
   # text and forward-compatible with the slightly older crosvm
-  # binary — newer versions only add allowed syscalls/args.
+  # binary - newer versions only add allowed syscalls/args.
   #
   # Pinned rev: google/crosvm@299c1e7 ("seccomp: Add
   # MADV_GUARD_{INSTALL,REMOVE}", 2026-03-27).
@@ -59,7 +59,7 @@ let
     # init and SIGSYS out, because their policies (net.policy /
     # rng_device.policy) include common_device.policy but neither
     # they nor common allow statx. statx is a metadata-read
-    # syscall, no capability grant — safe to allow for any device
+    # syscall, no capability grant - safe to allow for any device
     # proxy that includes common_device.policy.
     #
     # Several other policies (9p_device, block, fs_device, etc.)
@@ -73,7 +73,7 @@ let
       -exec sed -i '/^statx:/d' {} +
     cat >> $out/share/policy/crosvm/common_device.policy <<'EOF'
 
-# nixpkgs glibc 2.41+ compat — see modules/d2b/graphics.nix
+# nixpkgs glibc 2.41+ compat - see modules/d2b/graphics.nix
 statx: 1
 EOF
 

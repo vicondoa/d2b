@@ -19,7 +19,7 @@
 #   - `config.microvm.*` (the runner options from vm-options.nix
 #     above; consumer-set or default)
 #   - everything else a NixOS module evaluation produces (boot,
-#     networking, services, etc. — driven by the consumer's
+#     networking, services, etc. - driven by the consumer's
 #     `vm.config` module list).
 { inputs }:
 { config, lib, pkgs, ... }:
@@ -28,7 +28,7 @@ let
   cfg = config.d2b;
 
   # Build a per-VM NixOS evaluation using the host's nixpkgs path.
-  # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint —
+  # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint -
   # it sets up `pkgs`, the module system, and the standard NixOS
   # module set. We layer our d2b-owned vm-options.nix on top so
   # the per-VM config can set `microvm.mem`, etc.
@@ -37,7 +37,7 @@ let
   # `./base.nix`, `./guest-sshd-host-keys.nix`, the per-component
   # guest modules, and `vm.config` (the consumer's module list)
   # into the `composedConfig` it passes here, so we do NOT layer
-  # those again — double-imports of `./base.nix` would multiply
+  # those again - double-imports of `./base.nix` would multiply
   # evaluate the framework baseline.
   # Build a per-VM NixOS evaluation using the host's nixpkgs path.
   # The caller passes a LIST of modules (`composedModules`) that

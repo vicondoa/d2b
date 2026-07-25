@@ -20,7 +20,7 @@
 #      bounded.
 #
 # The bash gate's `grep -qF` source/doc checks migrate to pure
-# `builtins.readFile` substring cases (no IFD, no cargo — the flake source
+# `builtins.readFile` substring cases (no IFD, no cargo - the flake source
 # is already in scope as `flakeRoot`). The matching is line-oriented to
 # mirror `grep -F` exactly and to avoid `lib.hasInfix`'s whole-file
 # `builtins.match ".*needle.*"` blowing the evaluator stack on large

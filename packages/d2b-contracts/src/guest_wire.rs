@@ -37,8 +37,8 @@ pub const fn base64_encoded_len(raw_len: usize) -> usize {
 /// Maximum base64-encoded length of a single-shot guest-config read payload,
 /// DERIVED from [`READ_GUEST_FILE_MAX_BYTES`]. Used by the daemon's
 /// `ReadGuestConfig` verb to fail closed (`FileTooLarge`) before it serializes
-/// an oversize response. The const assertion below proves the encoded payload
-/// — plus a JSON-envelope margin — fits under BOTH the public.sock frame
+/// an oversize response. The const assertion below proves the encoded payload,
+/// plus a JSON-envelope margin, fits under BOTH the public.sock frame
 /// (`crate::MAX_FRAME_SIZE`) and the ttRPC frame ([`TTRPC_FRAME_CAP_BYTES`]).
 pub const READ_GUEST_CONFIG_ENCODED_MAX_BYTES: usize =
     base64_encoded_len(READ_GUEST_FILE_MAX_BYTES as usize);
@@ -1262,7 +1262,7 @@ pub struct ReadGuestFileRequest {
 /// Single-shot bounded response. `content` is capped at
 /// `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE
 /// any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics
-/// only — the host recomputes both from the received bytes.
+/// only - the host recomputes both from the received bytes.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadGuestFileResponse {
@@ -1609,7 +1609,7 @@ mod tests {
     #[allow(clippy::assertions_on_constants)]
     fn guest_config_encoded_cap_fits_public_sock_and_ttrpc_frames() {
         // The derived encoded cap (plus envelope margin) must sit under the
-        // public.sock frame and the ttRPC frame — the binding cap is the
+        // public.sock frame and the ttRPC frame - the binding cap is the
         // smaller public.sock frame.
         assert!(
             READ_GUEST_CONFIG_ENCODED_MAX_BYTES + READ_GUEST_CONFIG_ENVELOPE_MARGIN

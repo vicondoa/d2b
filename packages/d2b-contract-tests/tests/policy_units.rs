@@ -4,14 +4,14 @@
 //! unit name retired by the pre-daemon supervisor may reappear as live wiring.
 //! This crate runs only from `tests/tools/rust-workspace-checks.sh` against the real
 //! checkout (it is excluded from the hermetic Nix sandbox workspace build), so
-//! repo-file access — and shelling out to `git` for the file enumeration the
-//! bash gate got from `find` — is sound here.
+//! repo-file access - and shelling out to `git` for the file enumeration the
+//! bash gate got from `find` - is sound here.
 //!
 //! Migrated gate:
 //!   * tests/legacy-unit-denylist-eval.sh -> legacy_unit_denylist
 //!
 //! Self-flag note: the denylist needles this file carries (e.g.
-//! `d2b-${name}-gpu`) could match this very file — but the gate's file
+//! `d2b-${name}-gpu`) could match this very file - but the gate's file
 //! enumeration is scoped to `nixos-modules/` only (never `packages/` or
 //! `tests/`), so this port under `packages/` is never scanned by its own
 //! denylist and needs no self-allowlist. None of the needles contain the
@@ -32,8 +32,8 @@ fn read_repo_file_opt(rel: &str) -> Option<String> {
 
 /// Enumerate repo-relative tracked + untracked-non-ignored files under the given
 /// pathspecs via `git ls-files`. The bash gate used `find "$MODULES_DIR" -type f`
-/// (which ignores `.gitignore`); for the `nixos-modules/` source tree — which
-/// carries no build artifacts — `git ls-files --cached --others
+/// (which ignores `.gitignore`); for the `nixos-modules/` source tree - which
+/// carries no build artifacts - `git ls-files --cached --others
 /// --exclude-standard` enumerates the identical set, and is the convention every
 /// sibling `policy_*.rs` port already uses.
 fn git_listed_files(roots: &[&str]) -> Vec<String> {
@@ -179,7 +179,7 @@ fn classify(rel: &str, idx: usize, lines: &[String]) -> Verdict {
         return Verdict::Skip;
     }
     if rel.ends_with("/host-users.nix") {
-        // Declares user/group names — NOT systemd units.
+        // Declares user/group names - NOT systemd units.
         return Verdict::Skip;
     }
     if rel.ends_with("/minijail-profiles.nix") {
@@ -187,15 +187,15 @@ fn classify(rel: &str, idx: usize, lines: &[String]) -> Verdict {
         return Verdict::Skip;
     }
     if rel.ends_with("/manifest.nix") {
-        // Bundle metadata strings the broker consumes — NOT unit declarations.
+        // Bundle metadata strings the broker consumes - NOT unit declarations.
         return Verdict::Skip;
     }
     if rel.ends_with("/processes-json.nix") {
-        // Bundle processes taxonomy identifier strings — NOT unit declarations.
+        // Bundle processes taxonomy identifier strings - NOT unit declarations.
         return Verdict::Skip;
     }
     if rel.ends_with("/storage-json.nix") {
-        // Storage principal names and ACL subjects — NOT systemd unit declarations.
+        // Storage principal names and ACL subjects - NOT systemd unit declarations.
         return Verdict::Skip;
     }
     if rel.ends_with("/components/observability/host.nix") {
@@ -210,7 +210,7 @@ fn classify(rel: &str, idx: usize, lines: &[String]) -> Verdict {
         return Verdict::Skip;
     }
     if rel.ends_with("/components/observability/stack.nix") {
-        // Prometheus alert-rule regex pinning the legacy name — historical.
+        // Prometheus alert-rule regex pinning the legacy name - historical.
         return Verdict::Skip;
     }
     if rel.ends_with("/host-activation.nix") {
@@ -218,7 +218,7 @@ fn classify(rel: &str, idx: usize, lines: &[String]) -> Verdict {
         return Verdict::Skip;
     }
     if rel.ends_with("/assertions.nix") {
-        // Operator-facing remediation prose — NOT declarations.
+        // Operator-facing remediation prose - NOT declarations.
         return Verdict::Skip;
     }
     if rel.ends_with("/components/audio/host.nix") {
@@ -263,7 +263,7 @@ fn legacy_unit_denylist() {
         })
         .collect();
 
-    // Iterate per pattern, then per file, then per line — mirroring the bash
+    // Iterate per pattern, then per file, then per line - mirroring the bash
     // `for pattern; do grep -HnE ...; done` so each pattern is evaluated
     // independently against every line.
     let mut violations: Vec<String> = Vec::new();
@@ -283,7 +283,7 @@ fn legacy_unit_denylist() {
     assert!(
         violations.is_empty(),
         "legacy-unit-denylist: {} live legacy-unit reference(s) in nixos-modules/ \
-         (ADR 0015 — retired per-VM systemd templates and host-singleton \
+         (ADR 0015 - retired per-VM systemd templates and host-singleton \
          framework services must not reappear as live wiring):\n{}",
         violations.len(),
         violations.join("\n")
@@ -323,7 +323,7 @@ fn legacy_unit_denylist_classify_semantics() {
             "nixos-modules/host-otel-relay-acl.nix",
             1,
             &[
-                "      # retired: ch-exporter ACL — remnant of the deleted d2b-ch-exporter.service"
+                "      # retired: ch-exporter ACL - remnant of the deleted d2b-ch-exporter.service"
                     .to_string(),
                 r#"      refresh_acl_set "g:d2b-ch-exporter" dirs socks"#.to_string(),
             ]
@@ -484,7 +484,7 @@ fn legacy_unit_denylist_swtpm_forms() {
     );
 
     // processes-json.nix carries the swtpm unit string as a bundle-metadata
-    // `unit = "d2b-${name}-swtpm.service"` field — NOT a systemd unit
+    // `unit = "d2b-${name}-swtpm.service"` field - NOT a systemd unit
     // declaration. The file-level allowlist must keep it SKIP.
     assert_eq!(
         classify(

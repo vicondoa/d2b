@@ -87,11 +87,11 @@ daemon DTOs do not expose the argv hash.
 A detached exec lookup distinguishes three not-available conditions with
 distinct typed error kinds:
 
-- `stale-session` — the request's `guest_boot_id` does not match the current
+- `stale-session` - the request's `guest_boot_id` does not match the current
   boot (re-adoption is bounded to a single boot);
-- `exec-expired` — the record existed for this caller but was evicted by the
+- `exec-expired` - the record existed for this caller but was evicted by the
   retention TTL / GC (tombstoned);
-- `exec-not-found` — no such exec id exists for this caller.
+- `exec-not-found` - no such exec id exists for this caller.
 
 ## Exec lifecycle messages
 
@@ -116,7 +116,7 @@ Request fields:
   present each dimension must be in the Linux `winsize` range `1..=65535`. A
   present `0` or out-of-range value is rejected with `protocol-error` (it is
   never silently defaulted). Presence on a non-`tty` exec is **rejected** with
-  `protocol-error` (unsupported mode) — it is never silently ignored.
+  `protocol-error` (unsupported mode) - it is never silently ignored.
 - `output_policy`: `{max_chunk_bytes, max_stdout_log_bytes,
   max_stderr_log_bytes, slow_consumer_timeout_ms, wait_timeout_ms}`. The
   server clamps each value to the VM capability maximum.
@@ -280,7 +280,7 @@ all-or-nothing + `request_id`-replay model of rules 2–4. Instead:
   `offset` equals the next expected offset. There is **no** `request_id` dedupe
   entry on the TTY path, so a duplicate or out-of-order offset (including a
   replay of an already-accepted chunk) is rejected with `stdin-offset-mismatch`
-  and the expected offset — it is never silently absorbed as a duplicate.
+  and the expected offset - it is never silently absorbed as a duplicate.
 - **VEOF is not counted.** `close_after=true` (and `CloseStdin`) inject `VEOF`
   only once the full payload has landed; the injected `VEOF` control byte does
   not advance `next_offset`.
@@ -557,7 +557,7 @@ If retained logs are file-backed, they live below guestd-owned guest
 paths, never below `/nix/store`, a host-shared mount, or a virtiofs export:
 
 - live attached state: `/run/d2b/guest-control/exec/<uid>/<exec-id>/`;
-- detached retained state: `/run/d2b-exec/slot-<NN>/` — a root-owned,
+- detached retained state: `/run/d2b-exec/slot-<NN>/` - a root-owned,
   `0700`, boot-scoped slot-keyed directory. Detached state is **not**
   per-user and **not** keyed by the opaque exec id: it is keyed by the
   fixed slot index, and is owned by the root guestd service, not a target
@@ -599,7 +599,7 @@ different leaves only if they preserve the same security properties:
    period if the client disappears. A detached **terminal** record expires
    at the earlier of explicit operator removal, VM reboot, or the retention
    TTL; the default TTL is **30 minutes** and applies to terminal records
-   only — a detached `Running` job runs **indefinitely** and is never
+   only - a detached `Running` job runs **indefinitely** and is never
    reaped by TTL/GC. Startup reconciliation removes expired, orphaned,
    partially-created, and path-unsafe records before serving `ExecLogs`.
 
@@ -884,9 +884,9 @@ payload bytes, or guest free-form error text.
 > **Scope note.** The guest-control exec *RPC/service* surface
 > (`ExecCreate`/`WriteStdin`/`CloseStdin`/`ReadOutput`/`TtyWinResize`/
 > `ExecSignal`/`ExecInspect`/`ExecWait`/`ExecCancel`) is the shipped
-> contract. The `d2b vm exec` **CLI** described below — including the
+> contract. The `d2b vm exec` **CLI** described below - including the
 > `--interactive` / `-i`, `--tty` / `-t`, and the interactive `exec -it`
-> flow — is shipped and drives that RPC surface (admin-only). Detached
+> flow - is shipped and drives that RPC surface (admin-only). Detached
 > non-interactive exec is also shipped: `d2b vm exec -d <vm> --
 > <cmd>` creates a workload-user detached exec, and `d2b vm exec <vm>
 > list|logs|status|kill <id>` manages retained records. Detached exec uses

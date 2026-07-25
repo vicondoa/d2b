@@ -19,7 +19,7 @@
     "00000000000000000000000000000000";
 
   # Host-side primary user. This is the human at the Plasma /
-  # Wayland session — `alice` here matches the documentation
+  # Wayland session - `alice` here matches the documentation
   # placeholder used throughout the d2b README. Replace with
   # your actual login name in real deployments.
   users.users.alice = {
@@ -31,7 +31,7 @@
   d2b.site = {
     # Required when any VM enables `graphics.enable` or
     # `audio.enable`. The work-entra in this example is headless
-    # (TPM only, no Wayland forward), so this is informational —
+    # (TPM only, no Wayland forward), so this is informational -
     # but a realistic Entra workspace will probably want graphics
     # too, in which case waylandUser is mandatory.
     waylandUser = "alice";

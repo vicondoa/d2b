@@ -11,7 +11,7 @@
 W3 introduces the privileged `ApplyNftables` broker op and a USBIP
 firewall-rule skeleton (`UsbipBindFirewallRule`). The named table
 `inet d2b` must coexist with whatever firewall manager is already
-present on the host — firewalld on Fedora, ufw on Ubuntu, Docker on
+present on the host - firewalld on Fedora, ufw on Ubuntu, Docker on
 mixed CI / dev hosts, libvirt on virtualization hosts, the
 `iptables-nft` compat shim, and "nothing" on a clean NixOS host.
 
@@ -19,7 +19,7 @@ Two failure modes are unacceptable:
 
 1. **Flushing foreign rules.** Some nft tooling defaults to
    `nft flush ruleset`, which silently clears the host's firewall.
-   D2b MUST never do this — operators have written rules they
+   D2b MUST never do this - operators have written rules they
    expect to keep.
 2. **Silent shadowing.** Even without a flush, `inet d2b` rules can
    be ineffective if a foreign hook at a more negative priority
@@ -150,10 +150,10 @@ non-admin readers.
 
 - plan.md §"W3 `inet d2b` chain layout" (§2492-2513)
 - plan.md §"W3 firewall coexistence policy" (§2515-2530)
-- plan.md §"W3 pre-merge canary matrix" — rows
+- plan.md §"W3 pre-merge canary matrix" - rows
   `foreign-nft-rule-preserved`, `nft-coexistence-*`,
   `usbip-firewall-skeleton`
 - [docs/reference/inet-d2b-chains.md](../reference/inet-d2b-chains.md)
 - [docs/how-to/host-prepare.d/firewall.md](../how-to/host-prepare.d/firewall.md)
-- ADR 0005 (network, firewall, TAP model) — original `inet d2b`
+- ADR 0005 (network, firewall, TAP model) - original `inet d2b`
   decision, extended here.

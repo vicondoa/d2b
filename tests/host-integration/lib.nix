@@ -98,13 +98,13 @@ in
         }
         # Opt-in writable same-fs store. ONLY needed by tests that drive the
         # per-VM /nix/store hardlink farm (which requires /var/lib/d2b and
-        # /nix/store on the SAME filesystem — hardlinks can't cross FS — and the
+        # /nix/store on the SAME filesystem - hardlinks can't cross FS - and the
         # default runNixOSTest read-only store image splits them). It is OFF by
         # default: `virtualisation.writableStore = true` copies the entire guest
         # closure into a writable overlay at boot, which adds many minutes to
         # (and can hang) VM startup. The daemon/broker activation + host-posture
         # tests (daemon-smoke, bridge-isolation, state-dir-acl, privilege-oracle)
-        # never boot a microVM, so they never touch the farm — keep this off for
+        # never boot a microVM, so they never touch the farm - keep this off for
         # a fast, reliable boot.
         (lib.mkIf writableStore {
           virtualisation.writableStore = true;

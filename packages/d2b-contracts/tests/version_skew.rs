@@ -9,18 +9,18 @@
 //! Four explicit scenarios per plan.md §"W3 wire-compat / version-skew
 //! gate (pre-merge)":
 //!
-//!   1. **Old daemon / new broker** — daemon advertises a W2-only
+//!   1. **Old daemon / new broker** - daemon advertises a W2-only
 //!      capability set; broker accepts the handshake but refuses
 //!      every W3-only operation with `wire-version-mismatch` +
 //!      `unknown-operation`, and audits each refusal.
-//!   2. **New daemon / old broker** — daemon requests every W3 op
+//!   2. **New daemon / old broker** - daemon requests every W3 op
 //!      advertised in `BrokerCapabilities::w3`; the old broker
 //!      returns `wire-version-mismatch` for each unknown variant;
 //!      the daemon surfaces `broker-too-old` (exit 78).
-//!   3. **Old client / new daemon** — client uses W2-only commands;
+//!   3. **Old client / new daemon** - client uses W2-only commands;
 //!      daemon honours them; daemon does NOT silently upgrade to a
 //!      W3 op the client did not request.
-//!   4. **New client / old daemon** — client requests `host prepare`;
+//!   4. **New client / old daemon** - client requests `host prepare`;
 //!      daemon returns `wire-version-mismatch`; client surfaces
 //!      `daemon-too-old` (exit 78).
 //!
@@ -33,7 +33,7 @@
 
 use d2b_contracts::{BrokerCapabilities, PROTOCOL_VERSION, W3BrokerOperation};
 
-/// W2 broker operation tags — the closed pre-W3 set the version-skew
+/// W2 broker operation tags - the closed pre-W3 set the version-skew
 /// scenarios pretend an "old daemon" or "old broker" advertised. We
 /// keep this list lexically sorted to match `BrokerCapabilities::w3`
 /// sort/dedup semantics.
@@ -70,7 +70,7 @@ fn w2_capabilities() -> BrokerCapabilities {
     }
 }
 
-/// W3-only ops — every variant in [`W3BrokerOperation::all`].
+/// W3-only ops - every variant in [`W3BrokerOperation::all`].
 fn w3_only_operations() -> Vec<String> {
     W3BrokerOperation::all()
         .iter()
@@ -163,14 +163,14 @@ fn scenario_1_old_daemon_new_broker_refuses_every_w3_op() {
     let broker = BrokerCapabilities::w3();
     let negotiated = negotiated_ops(&daemon, &broker);
 
-    // Handshake itself MUST succeed — the broker is forward-compatible
+    // Handshake itself MUST succeed - the broker is forward-compatible
     // and accepts a strictly-narrower daemon set.
     assert!(
         !negotiated.is_empty(),
         "handshake must succeed when old daemon negotiates with new broker (got empty intersection)",
     );
     // Pre-W3 Hello/ValidateBundle/ExportBrokerAudit always survive
-    // negotiation — sanity-check the intersection.
+    // negotiation - sanity-check the intersection.
     for survivor in ["Hello", "ValidateBundle", "ExportBrokerAudit"] {
         assert!(
             negotiated.iter().any(|op| op == survivor),
@@ -264,7 +264,7 @@ fn scenario_4_new_client_old_daemon_surfaces_daemon_too_old() {
     assert_eq!(refusal.exit_code, EXIT_CONFIG_MISMATCH);
 
     // Same surface for every other W3-only op the new client might
-    // request — coverage assertion ensures we did not encode a
+    // request - coverage assertion ensures we did not encode a
     // single-op happy path.
     for op in w3_only_operations() {
         let refusal = client_surfaces_daemon_refusal(&daemon, &op)
@@ -327,7 +327,7 @@ fn w3_capabilities_match_w3_broker_operation_enum() {
     for tag in &caps.broker_operations {
         assert!(
             w2_set.contains(tag.as_str()) || w3_set.contains(tag.as_str()),
-            "advertised tag {tag} is neither a W2 survivor nor a W3 enum variant — \
+            "advertised tag {tag} is neither a W2 survivor nor a W3 enum variant - \
              update W3BrokerOperation or document the W2 survivor in the test fixture",
         );
     }

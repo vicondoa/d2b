@@ -27,11 +27,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[probe] connecting role={:?} cred={:?}", role, credential);
     match connect(&endpoint, role, &credential, 600).await {
         Ok(_ws) => {
-            println!("[probe] HANDSHAKE OK — relay accepted the credential");
+            println!("[probe] HANDSHAKE OK - relay accepted the credential");
             Ok(())
         }
         Err(e) => {
-            println!("[probe] HANDSHAKE FAILED — {e}");
+            println!("[probe] HANDSHAKE FAILED - {e}");
             std::process::exit(1);
         }
     }

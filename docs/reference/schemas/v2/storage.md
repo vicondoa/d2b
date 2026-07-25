@@ -15,15 +15,15 @@ authority.
 
 ## Top-level fields
 
-- `schemaVersion` — schema version for this artifact.
-- `roots` — declared root directories such as `/etc/d2b`,
+- `schemaVersion` - schema version for this artifact.
+- `roots` - declared root directories such as `/etc/d2b`,
   `/var/lib/d2b`, and `/run/d2b`.
-- `paths` — storage path specs with kind, lifecycle, owner/group/mode,
+- `paths` - storage path specs with kind, lifecycle, owner/group/mode,
   access/default ACLs, cleanup/repair/restart/adoption policy, sensitivity,
   and invariants.
-- `restartPolicies` — per-VM/per-role restart classes and adoption inputs.
-- `degradedStates` — closed degraded-state reason slugs and storage class.
-- `remediations` — static remediation IDs and human-facing commands.
+- `restartPolicies` - per-VM/per-role restart classes and adoption inputs.
+- `degradedStates` - closed degraded-state reason slugs and storage class.
+- `remediations` - static remediation IDs and human-facing commands.
 
 ## Contract notes
 

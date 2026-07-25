@@ -41,27 +41,27 @@ virtiofsd \
 
 Flag semantics:
 
-- `--socket-path` — UDS the CH runner connects to. Daemon-owned;
+- `--socket-path` - UDS the CH runner connects to. Daemon-owned;
   the broker places normal share sockets under
   `/run/d2b/vms/<vm>/<tag>.sock`; `d2b-gctl` uses the isolated
   `/run/d2b/vms/<vm>/guest-control/d2b-gctl.sock` path.
-- `--socket-group=<group>` — optional UDS group ownership. It is emitted
+- `--socket-group=<group>` - optional UDS group ownership. It is emitted
   only when `microvm.virtiofsd.group` is non-null.
-- `--shared-dir` — host path the guest sees through the tag.
-- `--thread-pool-size` — integer resolved from
+- `--shared-dir` - host path the guest sees through the tag.
+- `--thread-pool-size` - integer resolved from
   `microvm.virtiofsd.threadPoolSize`, falling back to the VM vCPU count
   (or `1` when vCPU is unset/zero).
-- `--sandbox=chroot`, `--inode-file-handles=never` — ADR 0021
+- `--sandbox=chroot`, `--inode-file-handles=never` - ADR 0021
   broker-pre-established user namespace shape. Reintroducing
   `--sandbox=namespace` or file handles requires a new ADR/update.
-- `--cache=auto` — auto-cache (kernel decides per inode). `always`
+- `--cache=auto` - auto-cache (kernel decides per inode). `always`
   is unsafe for the `ro-store` share because hardlink farm churn
   could expose stale store-paths; `never` makes virtiofs latency
   visible. `auto` matches the audit.
-- `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
+- `--inode-file-handles=prefer` - virtiofsd uses `name_to_handle_at`
   when the underlying filesystem supports it. Reduces the per-share
   fd budget; matches the audit shape.
-- `--readonly` — `ro-store`, `d2b-meta`, and the guest-control token
+- `--readonly` - `ro-store`, `d2b-meta`, and the guest-control token
   share (`d2b-gctl`) are read-only. `d2b-meta` is rooted at
   `store-view/meta` and carries only guest-safe generation metadata
   (`current`, `store-paths`, `db.dump`, allow-listed `meta.json`); it
@@ -87,15 +87,15 @@ the per-role uid from the trusted bundle when it serves the
 
 ## Cross-references
 
-- `nixos-modules/processes-json.nix` — current daemon-owned virtiofsd argv
+- `nixos-modules/processes-json.nix` - current daemon-owned virtiofsd argv
   emitter.
-- [Runner-shape audit](runner-shape-audit.md) — historical microvm.nix
+- [Runner-shape audit](runner-shape-audit.md) - historical microvm.nix
   runner evidence, not the current daemon parity oracle.
-- [ADR 0003](../adr/0003-minijail-provisioning-and-sandbox-interface.md)
-  — per-role minijail uid/cap split.
-- [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md)
-  — broker-pre-established user namespace model for virtiofsd.
-- [ADR 0004](../adr/0004-cloud-hypervisor-runner-shape.md) — CH
+- [ADR 0003](../adr/0003-minijail-provisioning-and-sandbox-interface.md) -
+  per-role minijail uid/cap split.
+- [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md) -
+  broker-pre-established user namespace model for virtiofsd.
+- [ADR 0004](../adr/0004-cloud-hypervisor-runner-shape.md) - CH
   runner-shape decision including the virtiofs share contract.
-- [Daemon lifecycle](../explanation/daemon-lifecycle.md) — where
+- [Daemon lifecycle](../explanation/daemon-lifecycle.md) - where
   virtiofsd sits in the per-VM DAG.

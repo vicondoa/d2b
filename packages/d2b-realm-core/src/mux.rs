@@ -7,7 +7,7 @@
 //!
 //! - a stream must be **opened** (authz-consistent, operation-bound) before
 //!   any data flows on it;
-//! - inbound chunks are **strictly sequential** — a gap or a replay is
+//! - inbound chunks are **strictly sequential** - a gap or a replay is
 //!   rejected, never silently reordered;
 //! - a sender may only spend **credit the receiver granted** (credit-based
 //!   backpressure), counted in frames;

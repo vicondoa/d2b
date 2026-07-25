@@ -651,7 +651,7 @@ pub enum TypedError {
     /// complete before the caller's single absolute deadline. Distinct
     /// from [`Self::InternalBrokerUnavailable`] (a fast connect/transport
     /// failure) so a genuine deadline exhaustion can be surfaced as a
-    /// timeout end to end — the guest-control signer maps this to
+    /// timeout end to end - the guest-control signer maps this to
     /// [`crate::guest_control_health::GuestControlHealthError::Timeout`]
     /// (slug `guest-control-timeout`) instead of collapsing it into a
     /// generic signer/transport failure.
@@ -730,7 +730,7 @@ pub enum TypedError {
     /// `env` is the env scope (e.g. `corp`, `personal`, `obs`);
     /// `expected` and `actual` are 64-char lowercase SHA-256 hex
     /// digests. The mismatch indicates the bundle was updated but
-    /// the dnsmasq render step did not rerun — rebuild the bundle
+    /// the dnsmasq render step did not rerun - rebuild the bundle
     /// (or re-run the host singleton that renders dnsmasq.conf)
     /// and retry.
     BundleDnsmasqDrift {
@@ -826,14 +826,14 @@ pub enum TypedError {
         verb: String,
     },
     /// Authenticated guest-control config read failed. The closed-enum `kind`
-    /// is the ONLY payload — never a path, byte, or guest-supplied string — so
+    /// is the ONLY payload - never a path, byte, or guest-supplied string - so
     /// the public envelope cannot leak guest content.
     GuestControlReadFailed {
         kind: GuestControlReadErrorKind,
     },
     /// Authenticated guest-control **exec** failed (establishment, per-op proxy,
     /// or session-table reservation). The closed-enum `kind` is the ONLY
-    /// payload — never argv, env, output, a session handle, or a guest string.
+    /// payload - never argv, env, output, a session handle, or a guest string.
     GuestControlExecFailed {
         kind: GuestControlExecErrorKind,
     },
@@ -1291,7 +1291,7 @@ impl TypedError {
                 "rebuild the bundle from a trusted source (nixos-rebuild switch) and verify ownership root:d2bd 0640; refuse to run mutating verbs until the bundle is restored".to_owned()
             }
             Self::OwnershipMatrixDrift { .. } => {
-                "reconcile per-VM state ownership against d2b.daemon.perVmStateOwnershipMatrix; see docs/reference/per-vm-state-ownership.md. Recovery: nixos-rebuild switch (re-runs the host-activation chown), or manually chown/chmod the listed entries. NEVER run a recursive ownership/ACL op across /var/lib/d2b/vms/<vm>/store/ — its inodes are shared with /nix/store via the hardlink farm.".to_owned()
+                "reconcile per-VM state ownership against d2b.daemon.perVmStateOwnershipMatrix; see docs/reference/per-vm-state-ownership.md. Recovery: nixos-rebuild switch (re-runs the host-activation chown), or manually chown/chmod the listed entries. NEVER run a recursive ownership/ACL op across /var/lib/d2b/vms/<vm>/store/ - its inodes are shared with /nix/store via the hardlink farm.".to_owned()
             }
             Self::SshdHostKeyDrift { .. } => {
                 "regenerate or chown/chmod the per-VM sshd host keys so each ssh_host_*_key under /var/lib/d2b/vms/<vm>/sshd-host-keys is a regular file owned root:root with mode 0400 (no symlinks); see docs/reference/ssh-host-key-preflight.md. Recovery: nixos-rebuild switch (re-runs the host-activation key sync), or remove the offending key and let d2b keys rotate <vm> reprovision it.".to_owned()
@@ -1300,10 +1300,10 @@ impl TypedError {
                 "re-render the per-env dnsmasq.conf so it matches the trusted bundle's hosts_intent + route_intent + nft_intent, then retry the net VM start. Recovery: nixos-rebuild switch (re-runs the dnsmasq render host singleton) and verify the file at /var/lib/d2b/dnsmasq/<env>.conf is owned by the daemon and matches the bundle. See docs/reference/net-vm-bundle-gate.md.".to_owned()
             }
             Self::HostKernelModulesMissing { .. } => {
-                "load the listed kernel modules with `modprobe <name>` (or via `boot.kernelModules` in the NixOS host config) and restart d2bd. KVM alternatives display as `kvm_intel|kvm_amd` — load whichever matches the host CPU. See docs/reference/kernel-module-check.md for the full required-vs-optional matrix and per-feature remediation.".to_owned()
+                "load the listed kernel modules with `modprobe <name>` (or via `boot.kernelModules` in the NixOS host config) and restart d2bd. KVM alternatives display as `kvm_intel|kvm_amd` - load whichever matches the host CPU. See docs/reference/kernel-module-check.md for the full required-vs-optional matrix and per-feature remediation.".to_owned()
             }
             Self::OtelHostBridgeReadinessTimeout { .. } => {
-                "check that the OtelHostBridge runner is healthy: `d2b host doctor` reports its pidfd liveness and last-relay-flush timestamp. If the runner is missing, the broker SpawnRunner for `RunnerRole::OtelHostBridge` failed — inspect the broker audit log. If the vsock host socket does not exist, the obs VM cannot accept OTLP from workload VMs; restart the obs VM. To raise the deadline set `D2B_OTEL_BRIDGE_READINESS_TIMEOUT_MS=<ms>`; to fail-closed instead of degrading set `D2B_OTEL_BRIDGE_READINESS_STRICT=1`. See docs/reference/otel-host-bridge-readiness.md.".to_owned()
+                "check that the OtelHostBridge runner is healthy: `d2b host doctor` reports its pidfd liveness and last-relay-flush timestamp. If the runner is missing, the broker SpawnRunner for `RunnerRole::OtelHostBridge` failed - inspect the broker audit log. If the vsock host socket does not exist, the obs VM cannot accept OTLP from workload VMs; restart the obs VM. To raise the deadline set `D2B_OTEL_BRIDGE_READINESS_TIMEOUT_MS=<ms>`; to fail-closed instead of degrading set `D2B_OTEL_BRIDGE_READINESS_STRICT=1`. See docs/reference/otel-host-bridge-readiness.md.".to_owned()
             }
             Self::NetRoutePreflightDegraded { .. } => {
                 "`d2b host reconcile --network --apply` re-runs the per-env nftables / route / sysctl reconcile through the broker without starting any VM and clears the net-route preflight history on success. Read-only verbs (`status`, `host doctor --read-only`, `audit`) remain available. See docs/explanation/host-prepare.md § \"Net-route preflight & network reconcile\".".to_owned()
@@ -1530,7 +1530,7 @@ impl TypedError {
             }
             // Remaining variants already carry only safe values in
             // their public messages (UIDs, version ranges, frame
-            // sizes, field names) — no extra logging needed.
+            // sizes, field names) - no extra logging needed.
             _ => {}
         }
     }
@@ -1845,7 +1845,7 @@ mod tests {
     fn guest_control_exec_failed_kinds_are_leak_free() {
         // Every exec failure kind (including the serde/protocol and
         // transport classes) must surface a non-empty, leak-free public
-        // message + remediation — no host path, argv, env, output bytes, or
+        // message + remediation - no host path, argv, env, output bytes, or
         // session handle. The daemon never attaches guest-supplied content to
         // a `GuestControlExecFailed` envelope, so iterating the closed enum is
         // sufficient sentinel coverage for the failure path.

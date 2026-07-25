@@ -102,7 +102,7 @@ normal WebAuthn use).
 
 ### `ceremony_failed`
 
-Emitted when a CTAP ceremony fails — timeout, broker error, guest disconnect,
+Emitted when a CTAP ceremony fails - timeout, broker error, guest disconnect,
 or `CTAPHID_ERROR` from the device.
 
 ```json
@@ -168,7 +168,7 @@ Desktop notification summary: `Security key request timed out (work-aad)`.
 
 ### `lease_revoked`
 
-Emitted when the broker forcibly revokes a lease — for example, when a VM
+Emitted when the broker forcibly revokes a lease - for example, when a VM
 stops or the guest frontend disconnects mid-ceremony.
 
 ```json

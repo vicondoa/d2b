@@ -202,7 +202,7 @@ pub struct NftChain {
     pub policy: ChainPolicy,
     /// Rules in order. The reconcile contract requires specific
     /// carve-outs (e.g. USBIP per-busid) to be inserted BEFORE the
-    /// generic allow/drop rules — [`NftBatch::add_usbip_carveout`]
+    /// generic allow/drop rules - [`NftBatch::add_usbip_carveout`]
     /// enforces this invariant.
     pub rules: Vec<NftRule>,
 }
@@ -629,7 +629,7 @@ impl fmt::Display for BusId {
 ///
 /// The chains emitted are EXACTLY: `prerouting`, `forward`, `output`,
 /// `input`. NO `raw`/`mangle`/`nat` hooks are allocated under
-/// `inet d2b`. This is the contract — adding hooks here requires
+/// `inet d2b`. This is the contract - adding hooks here requires
 /// an ADR.
 pub fn build_inet_d2b_chains() -> NftBatch {
     NftBatch {
@@ -859,7 +859,7 @@ pub fn assert_no_forbidden_hooks(batch: &NftBatch) -> Result<(), NftError> {
             ChainHook::Prerouting | ChainHook::Forward | ChainHook::Output | ChainHook::Input => {}
         }
         // The enum has no raw/mangle/nat variant, so a hook that
-        // round-trips through it can never be one of those — but we
+        // round-trips through it can never be one of those - but we
         // also defend against a buggy chain.name suggesting otherwise.
         let lname = chain.name.to_ascii_lowercase();
         if lname == "raw" || lname == "mangle" || lname == "nat" {
@@ -978,7 +978,7 @@ mod tests {
         assert!(assert_no_forbidden_hooks(&batch).is_ok());
     }
 
-    /// 7-row coexistence matrix — these are the L1c canaries
+    /// 7-row coexistence matrix - these are the L1c canaries
     /// `nft-coexistence-{firewalld,ufw,docker,libvirt,iptables-nft,
     /// unknown-manager,no-manager}`.
     #[test]
@@ -1153,7 +1153,7 @@ mod tests {
     /// Idempotency oracle for the production [`hash_inet_d2b_table`]
     /// drift digest. Hashing
     /// the same canonical `nft list table inet d2b -j` output
-    /// twice MUST produce the same digest — this is the
+    /// twice MUST produce the same digest - this is the
     /// apply→dry-run-empty invariant the broker relies on for
     /// drift detection.
     #[test]

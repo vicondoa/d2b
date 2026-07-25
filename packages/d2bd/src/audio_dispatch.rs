@@ -309,7 +309,7 @@ pub enum HostEnforcementResult {
 ///   the audio ProcessNode from `processes.json` to extract `WPCTL_PATH` and
 ///   `PIPEWIRE_RUNTIME_DIR` and returns a [`PipeWireHostController`]. Falls
 ///   back to returning `Unsupported` if the node or required env vars are
-///   absent — this is a configuration error, not a runtime failure.
+///   absent - this is a configuration error, not a runtime failure.
 ///
 /// * For `QemuAudioBackend` providers, returns a [`QemuAudioController`]
 ///   which commits offline policy and returns `Applied` immediately.
@@ -1177,7 +1177,7 @@ mod tests {
         assert_eq!(
             applied,
             AudioSetApplied::Unsupported,
-            "failed enforcement on Off must be Unsupported — host boundary NOT sealed"
+            "failed enforcement on Off must be Unsupported - host boundary NOT sealed"
         );
         assert_ne!(applied, AudioSetApplied::HostOnly);
     }

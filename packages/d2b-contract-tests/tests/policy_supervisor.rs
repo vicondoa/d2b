@@ -147,7 +147,7 @@ fn usbip_state_machine_surface() {
     // (4) Doc cross-check: must name the canonical order verbatim so prose can't
     // drift from the code. The marker is the canonical-order string itself, NOT
     // this gate's retired `.sh` filename (which the doc also references at a
-    // separate line) — see the self-referential-doc note in the migration record.
+    // separate line) - see the self-referential-doc note in the migration record.
     assert!(
         doc.contains("modprobe → lock → withhold → firewall → backend → bind → proxy"),
         "usbip-state-machine-eval: doc does not name the canonical order verbatim"

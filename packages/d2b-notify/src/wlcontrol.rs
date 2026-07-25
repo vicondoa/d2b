@@ -3,7 +3,7 @@
 //!
 //! `d2b-wlcontrol` reads the durable security-key state and renders it as a
 //! status row or panel.  This module defines the typed DTO that wlcontrol
-//! reads — it is produced by the host runtime and consumed by wlcontrol.
+//! reads - it is produced by the host runtime and consumed by wlcontrol.
 //!
 //! ## Rendering contract
 //!

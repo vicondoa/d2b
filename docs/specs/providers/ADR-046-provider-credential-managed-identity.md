@@ -24,7 +24,7 @@ operate the Provider from a fresh baseline:
   binding, co-located at the declared `executionRef`;
 - SDK-consumer co-location contract for Azure VM and ACA Guest contexts;
 - the injected `ManagedIdentityCredentialClient` held exclusively by the agent
-  process — no ambient IMDS chain, no environment-variable fallback, no
+  process - no ambient IMDS chain, no environment-variable fallback, no
   developer-credential path;
 - all `d2b.credential.v3` service methods with exact controller/agent
   dispatch split, their lease types, and the state machine;
@@ -66,9 +66,9 @@ bytes or credential material are allowed in any spec layer, including
 sessions.
 
 Every surface that may be observed by more than the authorized consumer
-Provider process — resource spec, resource status, the redb store, revision
+Provider process - resource spec, resource status, the redb store, revision
 log, d2b-bus routing DTOs, audit records, OTEL spans, metrics, and all log
-lines — **never contains secret material** in any field or byte.
+lines - **never contains secret material** in any field or byte.
 
 Specifically:
 
@@ -171,7 +171,7 @@ is controller-managed and is not present in the Nix-rendered bundle output.
 `clientId` is validated using `OpaqueAzureRef::parse` from
 `d2b-realm-provider/src/credential.rs` (evidence class:
 `implemented-and-reachable`). The charset `^[A-Za-z0-9._-]+$` structurally
-rejects secret-shaped values at parse time — the characters `=`, `/`, `+`, and
+rejects secret-shaped values at parse time - the characters `=`, `/`, `+`, and
 whitespace that bearer tokens and connection strings carry are all outside the
 safe identifier set (fail-closed). A GUID-shaped value
 (`aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`) passes. A SAS token, connection
@@ -271,9 +271,9 @@ Core aggregates the `Provider/credential-managed-identity` status from the
 controller Process health, agent Process health, and Zone-level resource
 conditions. The credential controller writes status only to:
 
-- `Credential/<name>.status` — lease state, rotation generation, placement
+- `Credential/<name>.status` - lease state, rotation generation, placement
   binding, and condition flags received from the agent via status-update RPC;
-- `Process/mi-agent-<name>.status` — managed by the Process Provider
+- `Process/mi-agent-<name>.status` - managed by the Process Provider
   (`Provider/system-minijail`); the credential controller reads but does not
   write this status.
 
@@ -454,7 +454,7 @@ Every method:
 
 - rejects an unauthenticated caller or a caller whose **authenticated bus
   subject** (established by the ComponentSession from SO_PEERCRED or the
-  enrolled Noise_KK static key — see §ExactSdkConsumer authentication below)
+  enrolled Noise_KK static key - see §ExactSdkConsumer authentication below)
   does not match `spec.consumerRef` when set, with `credential-consumer-mismatch`;
 - rejects before Provider dispatch unless the method's one exact operation is
   present in both `spec.allowedOperations` and the Role `subresources` under
@@ -522,7 +522,7 @@ resemble, contain, or be derivable from a token, bearer string, IMDS response
 fragment, GUID, or connection string. It is safe to include in audit records
 and metric labels as an opaque handle. Maximum length: 256 chars.
 `ManagedIdentityLeaseHandle` implements a hand-written `Debug` that emits only
-`ManagedIdentityLeaseHandle(REDACTED)` — no auto-derived `Debug`.
+`ManagedIdentityLeaseHandle(REDACTED)` - no auto-derived `Debug`.
 
 ### ExactSdkConsumer authentication
 
@@ -545,7 +545,7 @@ follows:
    when `spec.consumerRef` is set. If the authenticated subject does not match,
    the method returns `credential-consumer-mismatch`. If `spec.consumerRef` is
    null (any authorized Provider), authentication still proceeds through the
-   enrolled key — there is no unauthenticated path.
+   enrolled key - there is no unauthenticated path.
 5. Additionally, the consumer's signed component descriptor (available through
    the enrolled key) must declare `credentialProviderRef: Provider/credential-managed-identity`
    for the RBAC `use-credential` check to pass.
@@ -590,7 +590,7 @@ Each delivery session binds (in the Noise prologue verified by both parties):
 | `credentialGeneration` | Credential resource generation at delivery time |
 | `consumerProviderRef` | `Provider/<name>` matching `spec.consumerRef` |
 | `consumerComponentGeneration` | Consumer Provider component generation from signed descriptor |
-| `audience_digest` | SHA-256 of `spec.audience` — the raw audience string never enters the prologue or any log/audit surface |
+| `audience_digest` | SHA-256 of `spec.audience` - the raw audience string never enters the prologue or any log/audit surface |
 | `operationClass` | Closed enum: `acquire-token` or `refresh-token` |
 | `expiryUnixMs` | Absolute delivery-session expiry; clipped to `spec.rotation.maxLeaseLifetimeMs` |
 | `deadlineUnixMs` | Hard session close deadline; must be ≤ `expiryUnixMs` |
@@ -763,11 +763,11 @@ roles. All fields shown are required unless marked optional; fields excluded
 by the instruction set (principalRef, profileRef, endpoint `kind`, Process
 `config`, `telemetry.componentRef`, `readiness.probe`/`timeoutMs`,
 `network.allowedEffects`) are absent. `budget` uses canonical nested
-cpu/memory/pids/fds fields — there is no top-level `class` key on
+cpu/memory/pids/fds fields - there is no top-level `class` key on
 BudgetSpec. `telemetry` uses canonical metricsEnabled/tracingEnabled/logLevel/
-sensitiveLabels fields — there is no `class` key on TelemetrySpec.
+sensitiveLabels fields - there is no `class` key on TelemetrySpec.
 Controller-created agent resources must not appear in Zone bundle Nix
-configuration — they are managed exclusively by the controller.
+configuration - they are managed exclusively by the controller.
 
 ### Controller Process template
 
@@ -945,8 +945,8 @@ the injected `ManagedIdentityCredentialClient` implementation, supplied via an
 **effect port** by the co-located runtime Provider at agent start-up.
 
 The `imdsEndpointAlias` (closed enum `azure-imds | azure-imds-aca`) from
-`Provider.spec.config` is projected into a **LaunchTicket** — a signed,
-bounded, non-stored launch-time configuration blob — that the controller attaches
+`Provider.spec.config` is projected into a **LaunchTicket** - a signed,
+bounded, non-stored launch-time configuration blob - that the controller attaches
 to the agent Process resource at spawn time. The runtime Provider reads the
 LaunchTicket, resolves the alias to the correct IMDS client configuration, and
 constructs the `ManagedIdentityCredentialClient` implementation bound to that
@@ -995,7 +995,7 @@ Applied to every `d2b.zones.<zone>.resources.<name>` entry whose
 - Spawns an agent Process when the Credential spec is **admitted** (domain and
   allowedOperations checks pass) and all dependencies are **ready** (executionRef
   live, Provider Ready). The controller does not wait for the Credential to reach
-  `phase=Ready` before spawning — doing so would be circular, because the
+  `phase=Ready` before spawning - doing so would be circular, because the
   Credential only reaches `phase=Ready` after the agent is ready.
 
 **Agent** (per-method dispatch):
@@ -1007,7 +1007,7 @@ Applied to every `d2b.zones.<zone>.resources.<name>` entry whose
   any caller-supplied field) against `spec.consumerRef`. If the authenticated
   subject does not match, the method returns `credential-consumer-mismatch`
   before any IMDS interaction. If `spec.consumerRef` is null, authentication
-  still proceeds through the enrolled channel — there is no unauthenticated
+  still proceeds through the enrolled channel - there is no unauthenticated
   path.
 - `sign-challenge` operation class returns `credential-schema-invalid`
   immediately before any IMDS interaction.
@@ -1082,8 +1082,8 @@ The Provider process never starts with an invalid `clientId`.
 
 ### No ambient credential discovery
 
-The `ManagedIdentityCredentialProvider::new` constructor signature — used by
-the **`managed-identity-agent` process** at start-up — accepts only:
+The `ManagedIdentityCredentialProvider::new` constructor signature - used by
+the **`managed-identity-agent` process** at start-up - accepts only:
 
 - a validated `ManagedIdentityClientConfig` (containing the resolved alias binding);
 - an injected `impl ManagedIdentityCredentialClient + Send + Sync + 'static`.
@@ -1529,7 +1529,7 @@ spec, status, audit record, or log line.
 Applied to every entry with `type = "Credential"` and
 `spec.providerRef = "Provider/credential-managed-identity"`:
 
-1. `spec.scope.domainFilter` must not be `"user"` — assertion failure with
+1. `spec.scope.domainFilter` must not be `"user"` - assertion failure with
    descriptive message.
 2. `spec.scope.executionRef` resolves a declared `Host/<name>` or `Guest/<name>`
    in the same Zone.
@@ -1751,7 +1751,7 @@ observeInterval: 30s
 
 ### Concurrency and ordering
 
-- `reconcileConcurrency: 8` — up to 8 Credential resources reconciled in
+- `reconcileConcurrency: 8` - up to 8 Credential resources reconciled in
   parallel.
 - Independent resources (distinct executionRefs) proceed concurrently.
 - Per-resource reconcile tasks serialize: at most one in-flight reconcile per
@@ -1837,7 +1837,7 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Destination | packages/d2b-provider-credential-managed-identity/src/controller.rs; packages/d2b-contracts/src/v3/credential_controller.rs |
 | Detailed design | Managed-identity-specific controller design: implement async reconcile and agent spawn/teardown from §Async reconcile; enforce system-only domain; spawn agent on Credential admission plus dependency-ready, not on `phase=Ready`; implement `observeInterval=30s` health-check RPC to the agent, which calls `InspectMetadata` on the injected client; controller never calls IMDS; derive idempotency key as `SHA-256(UID \|\| ":" \|\| rotationGeneration.to_le_bytes() \|\| ":" \|\| operation_class_byte)`; enforce `MAX_LOCAL_LEASES=256` in the resource store; implement Deleted-phase closure by clearing `provider-revoke` only after agent Process deletion and revocation confirmation while core/audit own Deleted revision and deletion record. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt shared Credential controller lifecycle to managed-identity controller/agent spawn and teardown. |
 | Integration | Shared Credential controller contract produces reconcile events; managed-identity controller consumes them, manages agent Process resources, and writes Credential/agent status; generated controller contracts are consumed by all Credential Providers. |
-| Data migration | None — controller lifecycle code only; no runtime state import |
+| Data migration | None - controller lifecycle code only; no runtime state import |
 | Validation | Managed-identity reconcile/controller tests; shared Credential reconciliation tests; topology tests validating agent spawn/teardown and Deleted-phase cleanup |
 | Removal proof | V2 `CredentialProvider` status/enrollment trait lifecycle is superseded after shared controller reconcile and managed-identity agent lifecycle pass parity |
 
@@ -1869,9 +1869,9 @@ item.
 | Destination | packages/d2b-provider-credential-managed-identity/src/{audit.rs,telemetry.rs}; packages/d2b-contract-tests/tests/credential_audit.rs |
 | Detailed design | Shared audit/OTEL: emit audit records for all methods and controller events per §Audit, with Credential identity represented only by the authorized bounded `resource_name_digest`; emit OTEL spans and metrics per §OTEL and metrics with no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/Credential/resource-name-derived label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); report expiry as the minimum for each provider/placement aggregate; add `d2b_credential_imds_calls_total` counter with bounded `alias` label; enforce `contains_sensitive_shape` on all string fields in audit records and metric labels; add canary tests for `managed-identity-canary`, `credential_canary`, `imds-endpoint-canary`, Credential name/ref/UID/digest, and Zone name in `canary.rs`. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing sensitive-shape guard and canary pattern to v3 audit, OTEL, and metric surfaces. |
 | Integration | Controller and agent service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded redacted records; contract tests validate credential audit shape across providers. |
-| Data migration | None — audit/telemetry only; no runtime state import |
+| Data migration | None - audit/telemetry only; no runtime state import |
 | Validation | `packages/d2b-contract-tests/tests/credential_audit.rs` requires `resource_name_digest` in authorized audit records and rejects raw Credential name/ResourceRef/UID; managed-identity `canary.rs` and audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived label key; reject Credential name/ref/UID/digest canaries from all OTEL Resource attributes, span attributes, and metric labels; preserve generic collector-allowlisted Resource attributes including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; reject Zone-name span/label canaries and sensitive shapes; pass complete managed-identity metric/span frames through the shared collector ingress validator and prove that adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
-| Removal proof | None — audit/telemetry helpers are additive; no prior owner to remove |
+| Removal proof | None - audit/telemetry helpers are additive; no prior owner to remove |
 
 ---
 
@@ -2007,7 +2007,7 @@ audit record field set conformance, delivery session binding contract, RBAC
 | Agent Process `phase=Failed`: controller sets `ProviderUnavailable=True` on Credential; schedules respawn after backoff | Agent failure → controller response |
 | Agent respawn: controller creates new `mi-agent-<name>` Process resource; new agent transitions `Ready`; controller clears `ProviderUnavailable` | Agent restart recovery |
 | Three consecutive agent spawn failures: controller sets Credential `phase=Failed`, `outcome=agent-process-failed` | Respawn exhaustion |
-| Credential `Delete`: controller sends graceful-stop to agent; agent drains in-flight requests and revokes leases; controller issues delete on agent Process resource; controller observes agent Process deletion watch event (no persisted `phase=Deleted` row for agent Process); controller clears `provider-revoke` finalizer; Core atomically writes event-only Deleted revision and removes Credential row/index; audit subsystem appends closure record with exactly-once dedup — finalizer cleared before Core deletion, Core deletion before audit, all verified in order | Graceful teardown; finalizer-then-Core-deletion-then-audit ordering |
+| Credential `Delete`: controller sends graceful-stop to agent; agent drains in-flight requests and revokes leases; controller issues delete on agent Process resource; controller observes agent Process deletion watch event (no persisted `phase=Deleted` row for agent Process); controller clears `provider-revoke` finalizer; Core atomically writes event-only Deleted revision and removes Credential row/index; audit subsystem appends closure record with exactly-once dedup - finalizer cleared before Core deletion, Core deletion before audit, all verified in order | Graceful teardown; finalizer-then-Core-deletion-then-audit ordering |
 | Audit exactly-once: simulate Core Deleted revision committed with no corresponding audit record; audit subsystem on recovery appends exactly once using dedup key bound to committed revision; controller does not re-emit; no duplicate in audit log | Audit subsystem exactly-once / no controller re-emit |
 | Agent Process `ownerRef` matches Credential UID: controller watch filter correctly associates agent Process events with the owning Credential | ownerRef watch correctness |
 | Controller `InspectMetadata` path: returns stored `leaseState` without calling `FakeClient`; agent `FakeClient` call count unchanged | Controller-side metadata inspection |
@@ -2068,7 +2068,7 @@ Nix-generation lifecycle:
   `reason=nix-generation-removed` during cleanup.
 - Confirms that after the `provider-revoke` finalizer completes, a watch event
   carrying the event-only Deleted revision is observed for `aca-relay-mi`, and
-  that a subsequent resource lookup returns not-found — no persisted Deleted row
+  that a subsequent resource lookup returns not-found - no persisted Deleted row
   remains in the store.
 - Rollback from generation N+1 to N: `aca-relay-mi` re-created from retained
   bundle; fresh lease acquired; prior IMDS token not restored.
@@ -2080,7 +2080,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-credential-managed-identity --lib --tests`
 completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -2110,7 +2110,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -2135,39 +2135,39 @@ Old and new suites never run in parallel indefinitely.
 The `packages/d2b-provider-credential-managed-identity/README.md` MUST contain
 these sections in order:
 
-1. **Provider identity** — `Provider/credential-managed-identity`, managed
+1. **Provider identity** - `Provider/credential-managed-identity`, managed
    ResourceType (`Credential`), provider generation/versioning policy,
    Zone placement constraints (`host-system` and `guest-agent` only).
-2. **Config schema** — `spec.config` fields (`clientId`, `imdsEndpointAlias`,
+2. **Config schema** - `spec.config` fields (`clientId`, `imdsEndpointAlias`,
    `maxLeases`), types, bounds, constraints, and worked examples for both
    Azure VM and ACA placement using the `d2b.zones.<zone>.resources` Nix
    authoring shape.
-3. **ResourceTypes managed** — `Credential` only: lifecycle phases, status
+3. **ResourceTypes managed** - `Credential` only: lifecycle phases, status
    conditions owned (`CredentialReady`, `RotationDue`, `ProviderUnavailable`,
    `LeaseRevoked`), finalizers owned (`credential.d2bus.org/provider-revoke`).
    `Volume` is **not** listed here; this Provider declares no Provider state
    Volume under D087 because no managed-identity payload passes the
    storage-need test.
-4. **Controllers, services, workers, and binaries** — two binaries:
+4. **Controllers, services, workers, and binaries** - two binaries:
    `d2b-managed-identity-controller` (controller; one per Zone; system domain;
    no IMDS access; spawns/supervises agent Processes) and
    `d2b-managed-identity-agent` (service; one per Credential binding;
    co-located at `executionRef`; holds IMDS client; terminates KK delivery;
    owned by Credential resource; controller-managed, not Nix-configured).
-5. **Placement** — `host-system` and `guest-agent` supported;
+5. **Placement** - `host-system` and `guest-agent` supported;
    `user-agent` rejected with `credential-placement-mismatch`; `sign-challenge`
    rejected with `credential-schema-invalid`; agent Process resource
    co-located at `scope.executionRef`.
-6. **Dependencies and RBAC** — required Zone resources (`executionRef Host|Guest`,
+6. **Dependencies and RBAC** - required Zone resources (`executionRef Host|Guest`,
    `consumerRef Provider`), `use-credential` verb, `ExactSdkConsumer` enforcement
    via `AuthenticatedSubjectContext`, `Noise_KK` enrolled key requirement.
-7. **Security, state, and telemetry** — no ambient IMDS chain in agent; no env
+7. **Security, state, and telemetry** - no ambient IMDS chain in agent; no env
    fallback; controller holds no IMDS client; zero-secret-bytes invariant;
    opaque lease handles only; `credential_canary` and `imds-endpoint-canary`
    enforcement; Deleted-phase closure audit record; OTEL spans/metrics.
-8. **Build, test, and integration commands** — exact `cargo`/`make` invocations:
+8. **Build, test, and integration commands** - exact `cargo`/`make` invocations:
    `cargo test -p d2b-provider-credential-managed-identity`,
    `make test-integration`, `make test-host-integration`.
-9. **Standalone-repo usage** *(mandatory before first release to a sibling flake)* —
+9. **Standalone-repo usage** *(mandatory before first release to a sibling flake)* -
    flake input pattern; `nixpkgs`/toolkit input-follows boilerplate; compatibility
    constraints; `d2b.artifacts` catalog entry pattern.

@@ -3,17 +3,17 @@
 //! Defines [`HostAudioController`], a typed trait for host-side audio
 //! enforcement, plus concrete implementations:
 //!
-//! * [`PipeWireHostController`] — argv-only `wpctl` subprocess targeting
+//! * [`PipeWireHostController`] - argv-only `wpctl` subprocess targeting
 //!   the per-VM vhost-user-sound PipeWire stream for the requested direction.
 //!   Credential-aware: the
 //!   PipeWire socket access is probed with `access(2)` before any
 //!   subprocess is spawned. Returns [`HostEnforcementResult::Failed`] (not
 //!   `Unsupported`) when the credential check fails so callers know `off`
 //!   did **not** seal the host boundary.
-//! * [`QemuAudioController`] — offline-only enforcement for qemu-media VMs.
+//! * [`QemuAudioController`] - offline-only enforcement for qemu-media VMs.
 //!   Writing the state file IS the policy for qemu-media; no live runtime
 //!   enforcement exists and no guestd call is made.
-//! * [`FakeHostController`] — test-only injectable with configurable results.
+//! * [`FakeHostController`] - test-only injectable with configurable results.
 //!   Gated behind `#[cfg(test)]` so it never compiles into production builds.
 //!
 //! ## PipeWire node targeting
@@ -97,7 +97,7 @@ impl PipeWireHostController {
     /// Construct from the audio runner [`ProcessNode`] env.
     ///
     /// Returns `None` when `WPCTL_PATH`, `PW_DUMP_PATH`, or
-    /// `PIPEWIRE_RUNTIME_DIR` is absent from the node env — caller should fall back to returning
+    /// `PIPEWIRE_RUNTIME_DIR` is absent from the node env - caller should fall back to returning
     /// `Unsupported`.
     pub fn from_audio_node(node: &ProcessNode) -> Option<Self> {
         let wpctl_path = extract_env_value(&node.env, "WPCTL_PATH")?;
@@ -129,7 +129,7 @@ impl PipeWireHostController {
     ///
     /// Uses `rustix::fs::access` with `WRITE_OK` on
     /// `<pipewire_runtime_dir>/pipewire-0`.  This is an explicit credential
-    /// posture check per ADR 0041 — d2bd MUST NOT traverse `/run/user/<uid>`
+    /// posture check per ADR 0041 - d2bd MUST NOT traverse `/run/user/<uid>`
     /// without first confirming access.
     fn has_pipewire_access(&self) -> bool {
         let socket = self.pipewire_runtime_dir.join("pipewire-0");
@@ -212,7 +212,7 @@ impl HostAudioController for PipeWireHostController {
 /// qemu-media VMs have no vhost-user-sound sidecar; the qemu audio backend
 /// is configured at VM start time. The state-file write that the dispatch
 /// layer performs BEFORE calling the controller is the authoritative policy
-/// change — the next VM restart picks up the new policy.
+/// change - the next VM restart picks up the new policy.
 ///
 /// This controller returns [`HostEnforcementResult::Applied`] to signal that
 /// the offline policy has been committed, not that live runtime enforcement
@@ -220,7 +220,7 @@ impl HostAudioController for PipeWireHostController {
 /// accurate: the host state file is updated; there is no guest enforcement
 /// path for qemu-media VMs.
 ///
-/// The controller never calls guestd — the qemu-media capability row has
+/// The controller never calls guestd - the qemu-media capability row has
 /// `guest_enforcement = Unsupported`, and that invariant is enforced at the
 /// dispatch layer, not here.
 #[derive(Debug, Clone, Copy, Default)]
@@ -255,7 +255,7 @@ impl HostAudioController for QemuAudioController {
 /// Gated behind `#[cfg(test)]` so it never compiles into production builds.
 ///
 /// **Tests must set results explicitly.** There is intentionally NO default
-/// that returns `Applied` — callers that forget to configure the fake will
+/// that returns `Applied` - callers that forget to configure the fake will
 /// get `Failed`, surfacing the omission.
 #[cfg(test)]
 #[derive(Debug, Clone)]

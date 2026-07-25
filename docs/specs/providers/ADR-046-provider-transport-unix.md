@@ -27,7 +27,7 @@ The primary **reuse source** is main commit
 records exact file, symbol, and test selections, the v3 destination, and the
 ADR 0045 assumptions excluded.
 
-### d2b-session-unix — Unix transport and FD credit (primary reuse)
+### d2b-session-unix - Unix transport and FD credit (primary reuse)
 
 **Crate**: `packages/d2b-session-unix/` at main `a1cc0b2d`
 
@@ -35,7 +35,7 @@ ADR 0045 assumptions excluded.
 
 | Symbol | Selected behavior |
 | --- | --- |
-| `UnixSeqpacketTransport` | Atomic packet + ancillary FDs via `sendmsg`/`recvmsg` with `SCM_RIGHTS`; each `send` is one `sendmsg` call — packet and FD ancillary data are delivered atomically or not at all; receive reads the full packet and collects all attached FDs before returning |
+| `UnixSeqpacketTransport` | Atomic packet + ancillary FDs via `sendmsg`/`recvmsg` with `SCM_RIGHTS`; each `send` is one `sendmsg` call - packet and FD ancillary data are delivered atomically or not at all; receive reads the full packet and collects all attached FDs before returning |
 | `UnixStreamTransport` | Frame-based: 2-byte big-endian record-length prefix on every write; reader reads the prefix, allocates a buf, reads the body; no FD ancillary support |
 | `PeerIdentityPolicy` | Three variants: `Accepted` (no further check), `Pathname { uid, gid }` (SO_PEERCRED verified against expected uid/gid from the endpoint config), `InheritedSocketpair` (credentials extracted from kernel SO_PEERCRED without connecting; verified not overwritten by peer) |
 | `UnixAttachmentPayload` | Attachment payload for seqpacket-received FDs; holds an `OwnedFd` with CLOEXEC enforced; `validate_descriptor` called after the protected record is decrypted and before the FD is delivered to any service handler |
@@ -58,7 +58,7 @@ ADR 0045 assumptions excluded.
 | `PeerCredentials` | Wraps kernel-supplied `ucred` (`uid`, `gid`, `pid`); never derived from payload or peer assertion |
 | `PidfdIdentityPolicy` | Verifies live process identity: opens pidfd via `pidfd_open(pid, 0)`, reads `/proc/<pid>/fdinfo/<fd>`, checks `pos` and `flags`; rejects on any I/O error or kernel-object mismatch |
 | `DescriptorPolicy` | Combines `PeerCredentials`, `PidfdIdentityPolicy`, and object identity into one admission decision; all three must pass |
-| `VerifiedPacket` | Output of `DescriptorPolicy::verify`; carries verified `PeerCredentials`, verified object identities, and scavenged `OwnedFd` set — guaranteed close on drop |
+| `VerifiedPacket` | Output of `DescriptorPolicy::verify`; carries verified `PeerCredentials`, verified object identities, and scavenged `OwnedFd` set - guaranteed close on drop |
 | `ObjectIdentity` | `st_dev`, `st_ino`, `file_type`; kernel-supplied; same-kernel-object check rejects duplicate FDs |
 | `AcceptedAttachment` | Binding of `VerifiedPacket` and `UnixAttachmentPayload` after decrypted descriptor matches verified object |
 
@@ -108,7 +108,7 @@ and `packages/d2b-provider-transport-unix/tests/{portal,identity,credit,admissio
 
 ---
 
-### d2b-session — ComponentSession transport abstraction (ancillary reuse)
+### d2b-session - ComponentSession transport abstraction (ancillary reuse)
 
 From main `a1cc0b2d`, `packages/d2b-session/src/transport.rs`:
 `OwnedTransport`, `TransportDescriptor`, `TransportError` are the trait/error
@@ -237,9 +237,9 @@ grouping of the *declared* Volume resources in a Zone whose
 that declares no state Volume.
 
 `Provider/transport-unix` declares **no** Provider state Volume; its
-`ProviderStateSet` is empty. Its bounded non-secret operational state — service
+`ProviderStateSet` is empty. Its bounded non-secret operational state - service
 readiness, transport-open/close reconcile stage, bounded connection counters,
-and closed-enum error detail — lives in the owning resource's `status`
+and closed-enum error detail - lives in the owning resource's `status`
 subresource and the core Operation ledger (D087). All ZoneLink session state
 (generation, reconnect count, queued intents, route revision) is owned by the
 child Zone's core ZoneLink controller in that child's redb store under its local
@@ -298,7 +298,7 @@ docs/reference/schemas/v3/providers/transport-unix.transport-binding.json
 
 The `not/anyOf` block is structurally redundant under `additionalProperties: false`
 (those keys are all rejected as unknown fields) but is kept as explicit documentation
-signal — `attachmentsEnabled` is listed first to make the prohibition visible at a
+signal - `attachmentsEnabled` is listed first to make the prohibition visible at a
 glance. Runtime validation also enforces the schema independently of the build step.
 
 ### Rules
@@ -306,7 +306,7 @@ glance. Runtime validation also enforces the schema independently of the build s
 - `spec.transportSettings: {}` is the normal and recommended value. `socketKind`
   is optional and defaults to `"seqpacket"`.
 - **`attachmentsEnabled` is not a ZoneLink `spec.transportSettings` field.** The
-  ZoneLink contract prohibits FD and resource grants across Zone boundaries —
+  ZoneLink contract prohibits FD and resource grants across Zone boundaries -
   even for same-kernel parent/child links. Child core always opens ZoneLink
   transports with `attachments_enabled=false`; a cross-Zone SCM_RIGHTS attempt
   fails structurally at the child-core boundary before `OpenTransport` is
@@ -336,13 +336,13 @@ glance. Runtime validation also enforces the schema independently of the build s
 the payload and all ancillary data atomically or not at all. `recvmsg` with
 `MSG_WAITALL` receives the full datagram or returns an error.
 
-**ZoneLink paths — no SCM_RIGHTS**: when `route_class=zone-link`, the socket
+**ZoneLink paths - no SCM_RIGHTS**: when `route_class=zone-link`, the socket
 carries only Noise-protected record payloads. No `SCM_RIGHTS` ancillary data
 is sent or received; any ancillary data arriving on a zone-link transport is
 a protocol error and the session is terminated. `TransportPacket.attachments`
 is always empty for ZoneLink transports.
 
-**Local-portal paths — SCM_RIGHTS enabled**: when `route_class=local-portal`
+**Local-portal paths - SCM_RIGHTS enabled**: when `route_class=local-portal`
 (within-Zone ComponentSessions and portals), SCM_RIGHTS FD attachment is active.
 `TransportPacket.attachments` holds exactly the FDs received in that one
 `recvmsg` call. Maximum FD count per packet is bounded by
@@ -570,7 +570,7 @@ component:
       limit: "50m"
 ```
 
-The child Zone's core ProviderDeployment (not a Provider controller — no such
+The child Zone's core ProviderDeployment (not a Provider controller - no such
 controller exists for this Provider) creates the following `Process` resource when
 `Provider/transport-unix` is installed (not authored by Nix; emitted by the
 ProviderDeployment reconciler):
@@ -862,7 +862,7 @@ profiles. It provides the transport FD; the session engine selects and executes
 the handshake. This section notes the profile characteristics that make
 certain profiles possible or impossible over Unix transports.
 
-### NN — local identity over Unix transport
+### NN - local identity over Unix transport
 
 `Noise_NN_25519_ChaChaPoly_SHA256` is viable over Unix seqpacket or stream when:
 
@@ -873,14 +873,14 @@ certain profiles possible or impossible over Unix transports.
 NN supplies forward-secret ephemeral record protection; peer authentication comes
 from OS-enforced SO_PEERCRED, not a peer-supplied long-term key.
 
-### KK — enrolled peers over Unix transport
+### KK - enrolled peers over Unix transport
 
 `Noise_KK_25519_ChaChaPoly_SHA256` is used for all ZoneLink ComponentSessions:
 
 - Both static public keys are known before handshake.
 - The child Zone's enrolled static identity is pinned in sealed
   enrollment/bootstrap state and verified by the child Zone's core ZoneLink
-  controller after the handshake — not by this Provider.
+  controller after the handshake - not by this Provider.
 - Unix seqpacket or stream carries the handshake bytes; the transport is
   unaware of the Noise content.
 - SO_PEERCRED is still verified by `PeerIdentityPolicy`; for KK sessions its
@@ -890,7 +890,7 @@ The child Zone's core ZoneLink controller enforces KK on its ZoneLink session;
 this Provider accepts whichever Noise profile the session engine negotiates on
 its FD.
 
-### IKpsk2 — one-time bootstrap
+### IKpsk2 - one-time bootstrap
 
 `Noise_IKpsk2_25519_ChaChaPoly_SHA256` for Zone enrollment. The Provider
 passes through IKpsk2 sessions transparently; it does not generate, consume,
@@ -1160,7 +1160,7 @@ core decides whether to retry based on its ZoneLink reconnect policy.
 
 The transport-unix service emits bounded transport-observation records only.
 It does not audit ZoneLink resource transitions, session establishment/teardown,
-child Zone identity verification, route changes, or intent queue operations —
+child Zone identity verification, route changes, or intent queue operations -
 those are core/session/broker audit responsibilities.
 
 All records are emitted under category `transport-unix` to the Zone runtime's
@@ -1406,7 +1406,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-transport-unix --lib --tests` completes in ≤2 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
-and the toolkit fakes/FakeEffectPort only — no process spawn, container,
+and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
 hardware, or live cloud, and no filesystem tree beyond tiny temp fixtures. Any
 scenario needing those lives only in `integration/`, which keeps a lane
@@ -1420,7 +1420,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1439,7 +1439,7 @@ Old and new suites never run in parallel indefinitely.
 | Unix session tests (12) | `d2b-session-unix/tests/unix_session.rs` (main `a1cc0b2d`) | `test-only-or-preview` | copy and adapt for v3 portal model |
 | OpenTransport/CloseTransport/ObserveTransport service API | none | `ADR-only` | new |
 | Service Process resource with full sandbox/budget/endpoints spec | none in v3 baseline | `ADR-only` | new |
-| ProviderStateSet | ownerRef=Provider/transport-unix Volume query | `ADR-only` | Empty — `Provider/transport-unix` declares no Provider state Volume; its bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
+| ProviderStateSet | ownerRef=Provider/transport-unix Volume query | `ADR-only` | Empty - `Provider/transport-unix` declares no Provider state Volume; its bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
 | ZoneLink `spec.transportSettings` schema | none | `ADR-only` | new in this spec |
 | FD pre-bind pattern (broker FD pre-binding) | `d2b-priv-broker/src/ops/{swtpm_dir,spawn_runner}.rs` (v3 baseline) | `implemented-and-reachable` | selected parent allocator adapts the pattern, retains its peer endpoint as sealed route state, and injects only the child endpoint through sealed bootstrap; the child-local Provider is a passive recipient and no FD crosses the ZoneLink |
 | Route advertisement / RouteTreeEngine | `d2b-realm-core/src/route_engine.rs` (v3 baseline) | `implemented-but-unwired` | child core owns local ZoneLink session/cursor state; selected parent allocator owns only sealed route state; not in this Provider |
@@ -1478,9 +1478,9 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | Same; `UnixSeqpacketTransport`, `PeerIdentityPolicy`, `UnixAttachmentPayload`, `OwnedUnixAttachment`, `SeqpacketSocket`, `PeerCredentials`, `ObjectIdentity`, `AcceptedAttachment`, `VerifiedPacket` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/src/{seqpacket,identity,socket}.rs` |
-| Detailed design | Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup — that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
+| Detailed design | Copy transport structs verbatim; adapt `PeerIdentityPolicy` to report `PeerCredentials` upward to ComponentSession for subject mapping (not for direct resource lookup - that is core's responsibility); maintain `SO_PASSCRED` setup and first-packet credential extraction as documented; CLOEXEC enforcement uses `rustix` syscall wrappers over `libc` where available Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | `portal.rs::open_transport` calls `SeqpacketSocket::getsockopt(SO_TYPE)` and `setsockopt(SO_PASSCRED)`, constructs `UnixSeqpacketTransport`, hands OwnedTransport FD back to caller |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here` |
 | Removal proof | `d2b-realm-transport` seqpacket path retired after ZoneLink sessions migrate to child-local Providers and tests prove no reciprocal parent-store resource or cross-Zone FD transfer remains |
 
@@ -1498,7 +1498,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/{stream,socket}.rs` |
 | Detailed design | Copy verbatim; add `attachment_support: false` in `TransportDescriptor` (stream never carries SCM_RIGHTS regardless of route class); `admission.rs::validate_route_class` rejects `attachments_enabled=true` for stream Primary reuse disposition: `adapt`. Preserved source-plan detail: copy unchanged. |
 | Integration | Same path as seqpacket but without SCM_RIGHTS paths |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::stream_open_transport_forces_no_attachments`; `tests/identity.rs::stream_transport_reassembles_partial_and_coalesced_records` |
 | Removal proof | No current stream ZoneLink path exists; stream is net-new |
 
@@ -1516,7 +1516,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/credit.rs` |
 | Detailed design | Copy all five types verbatim; import scope-capacity constants from v3 contract; add `#[derive(Debug)]` with redacted Display (no raw counts in Debug output) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy unchanged. |
 | Integration | `CreditScopeSet` created per active ComponentSession; `CreditBundle` per packet receive; credits released in `UnixAttachmentPayload::close()` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 4 credit test functions; add `credit_released_on_attachment_close` and `emergency_headroom_constant_across_fd_counts` |
 | Removal proof | No current code path uses this crate directly; new |
 
@@ -1534,7 +1534,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/descriptor.rs` |
 | Detailed design | Copy verbatim; adapt `DescriptorPolicy::verify` to produce `AcceptedAttachment` carrying `ObjectIdentity` binding for v3 ComponentSession attachment descriptor model; `pid` not stored beyond liveness check Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Called by seqpacket transport after decrypting attachment descriptor |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` and `duplicate_kernel_objects_are_rejected_and_cleaned_up` |
 | Removal proof | Broker pidfd-open path in `d2b-priv-broker/src/sys.rs` serves different purpose (process supervision); no removal dependency |
 
@@ -1552,7 +1552,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/admission.rs` |
 | Detailed design | `validate_route_class(route_class, socket_kind, attachments_enabled, received_fd)` calls `getsockopt(SO_TYPE)` (blocking adapter) on `received_fd`: `SOCK_SEQPACKET` must match `"seqpacket"`, `SOCK_STREAM` must match `"stream"`, any other type fails `invalid-socket-fd`; if `route_class == RouteClass::ZoneLink && attachments_enabled == true` fail `attachment-policy-conflict` with detail `cross-zone-attachments-forbidden`; if `socket_kind == "stream" && attachments_enabled == true` fail `attachment-policy-conflict`; no Noise profile enforcement (that is ComponentSession's responsibility); returns `Ok(RouteAdmission { route_class, socket_kind, attachments_enabled })` |
 | Integration | Called by `portal.rs::open_transport` before the monitoring dup and handle allocation |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`; `stream_fd_passes_stream_kind`; `seqpacket_fd_rejects_stream_kind_declaration`; `zone_link_with_attachments_enabled_fails`; `local_portal_seqpacket_with_attachments_accepted`; `stream_with_attachments_enabled_rejected` |
 | Removal proof | No current code has this gate; new path |
 
@@ -1570,7 +1570,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/src/{portal,service}.rs` |
 | Detailed design | `portal.rs`: `PortalHandler` struct owns a bounded `HashMap<TransportHandle, MonitorState>` (capacity `MAX_OPEN_TRANSPORTS=256`); `open_transport(req, attachment_fd)` validates via `admission.rs`, dups FD, allocates handle, stores `MonitorState { dup_fd, observation_senders: Vec<NamedStreamSender> }`; `close_transport(handle)` closes dup FD, half-closes all observation senders, removes entry; `observe_transport(handle)` registers a new `NamedStreamSender` and spawns an async epoll-watcher task on the dup FD; `TransportHandle` is a `[u8; 16]` random token; redacted in all Debug impls; `service.rs` is the binary entry: accepts the allocator-issued portal endpoint FD at launch, runs `GeneratedTransportServiceServer` over it, dispatches to `PortalHandler` Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt dispatch pattern; implement portal methods as new. |
 | Integration | The child Zone's core ZoneLink controller calls the three methods via same-Zone d2b-bus; the selected parent allocator retains its peer endpoint as sealed route state and injects the child endpoint through sealed bootstrap; the child runtime supplies that FD locally at Process spawn, not through a parent Provider, a cross-Zone attachment, or `SD_LISTEN_FDS` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::open_transport_zone_link_validates_and_returns_ownedtransport`; `open_transport_uses_child_bootstrap_endpoint_only`; `parent_endpoint_never_enters_provider_portal`; `open_transport_local_portal_seqpacket_with_attachments_accepted`; `open_transport_zone_link_attachments_enabled_rejected`; `close_transport_is_idempotent_after_handle_removed`; `observe_transport_delivers_pollhup_as_peer_disconnected`; `handle_table_rejects_at_max_capacity`; `restart_clears_all_handles` |
 | Removal proof | Ad-hoc IPC stubs in `d2bd/src/` retired after portal migration |
 
@@ -1642,6 +1642,6 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-transport-unix/integration/` and `integration/README.md` |
 | Detailed design | Four scenarios: `transport_open.rs` (fixture models compiler-only `k1.parentZone = "local-root"`; fake selected allocator retains one socketpair endpoint as sealed route state and injects the other into K1 bootstrap; K1 core passes only that child endpoint to its same-Zone Provider → OwnedTransport out; verify socket kind, CLOEXEC, SO_PASSCRED, K1-local Provider/ZoneLink, and absent local-root reciprocal row; p95 latency assertion ≤2 ms); `fd_transfer.rs` (within-Zone local-portal seqpacket `SCM_RIGHTS` transfer, credit accounting, scavenge on error injection; ZoneLink route rejects the same packet); `reconnect.rs` (CloseTransport + re-OpenTransport with a fresh sealed child endpoint, verify previous handle is unknown and monitoring dup closed); `observation_stream.rs` (ObserveTransport stream receives `PEER_DISCONNECTED` when peer closes within 5 ms p95). `integration/README.md` documents prerequisites (no KVM required; all scenarios use in-process socketpairs and fake Zone API endpoint stub), invocation (`cargo test -p d2b-provider-transport-unix --test integration`), environment variables, and expected output |
 | Integration | Invoked by `make test-integration`; no host mutation; each scenario creates its own socketpair, keeps parent endpoint state outside the resource stores, and exposes only the child endpoint to the child-local Provider |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All four scenarios pass in CI; latency assertions enforced using monotonic timestamps; scavenge correctness verified by open-FD count before/after error injection |
 | Removal proof | Ad-hoc IPC test stubs retired after scenario parity |

@@ -30,7 +30,7 @@ mod broker_tampered {
         }
     }
 
-    /// Minimal bundle JSON bytes (no bundleHash — mode check fires first).
+    /// Minimal bundle JSON bytes (no bundleHash - mode check fires first).
     fn minimal_bundle_json() -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "bundleVersion": 4,
@@ -57,7 +57,7 @@ mod broker_tampered {
 
     // ---------------------------------------------------------------
     // Helper: create a bundle dir with bundle.json at mode 0o644 (too
-    // permissive — requires 0o640).
+    // permissive - requires 0o640).
     // ---------------------------------------------------------------
 
     fn make_tampered_bundle_dir() -> TempDir {

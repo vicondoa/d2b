@@ -115,7 +115,7 @@ pub fn spawn_d2bd_once(peer: &TestPeer) -> Option<DaemonOnce> {
 ///
 /// `artifacts_dir` must contain a `bundle.json` whose `hostPath` /
 /// `processesPath` resolve (relative to the dir) to fixture artifacts that
-/// live there too, plus a `closures/` subdir — see
+/// live there too, plus a `closures/` subdir - see
 /// `host_check_contract::build_hermetic_bundle_tree`, which rewrites the
 /// committed fixture-smoke bundle so the absolute `/etc/d2b/*` paths can
 /// never leak the real host's artifacts into the test.
@@ -236,7 +236,7 @@ fn spawn_d2bd_inner(
 /// The client opens a single `AF_UNIX`/`SOCK_SEQPACKET` connection, sends a
 /// `hello` frame followed by `{"type":"hostCheck","strict":<strict>}`, and
 /// prints one JSON line per response frame. The LAST line is the
-/// `hostCheckResponse`. Panics if the harness binary is unavailable — callers
+/// `hostCheckResponse`. Panics if the harness binary is unavailable - callers
 /// that obtained a [`DaemonOnce`] from [`spawn_d2bd_host_check`] already
 /// know `d2bd_bin()` is `Some`.
 pub fn daemon_host_check_response(socket_path: &Path, strict: bool) -> serde_json::Value {

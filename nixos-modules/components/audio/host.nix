@@ -20,7 +20,7 @@
 #     preserved (the tmpfiles 'f' type does NOT overwrite existing
 #     files).
 #
-# Split mic/speaker enforcement is NOT done in this module in v1 —
+# Split mic/speaker enforcement is NOT done in this module in v1 -
 # the design originally called for a WirePlumber stream-rule, but a
 # misplaced rule in `monitor.rules` broke the host's audio output
 # during implementation. The rule was removed; v1 ships with binary
@@ -37,7 +37,7 @@ let
 
   anyAudio = enabledVms != { };
 
-  # Wayland user's UID — used to find the host compositor's
+  # Wayland user's UID - used to find the host compositor's
   # pipewire-0 socket and ACL-grant the per-VM audio sidecar
   # user to read/write it. Assertions guarantee waylandUser is
   # non-null whenever audio.enable is set on any VM, so the `or 0`
@@ -61,7 +61,7 @@ let
   # /etc/wireplumber/wireplumber.conf.d/90-d2b.conf that used
   # `monitor.rules` to match `application.name = "~d2b-*"` and
   # apply per-stream restrictions. `monitor.rules` is the WRONG
-  # section — it filters discovered ALSA HARDWARE monitors, not
+  # section - it filters discovered ALSA HARDWARE monitors, not
   # client streams. The rule put WirePlumber into a state where the
   # host's audio output devices disappeared from plasma-pa
   # entirely. It has been REMOVED.
@@ -100,7 +100,7 @@ in
               is started on demand by `d2b up ${name}` before the
               hypervisor runner. With autostart = true the legacy
               microvm@ system service would boot the VM without a
-              daemon-supervised audio runner — the
+              daemon-supervised audio runner - the
               vhost-device-sound socket wouldn't be ready and CH would
               fail to attach a virtio-snd device. Set autostart = false
               and launch interactively, or set audio.enable = false.
@@ -141,7 +141,7 @@ in
       # activated on a USB device WirePlumber switches it into
       # duplex mode. USB headsets have notoriously poor clock
       # recovery in duplex; the result is audible static on the
-      # user's playback when the sidecar is alive — even when
+      # user's playback when the sidecar is alive - even when
       # nothing in the VM uses the microphone, and even when the
       # state file says `mic = "off"`.
       #
@@ -171,7 +171,7 @@ in
       #
       # 2. Match keys must be `node.name = "vhost-device-sound"` or
       #    `application.name = "~d2b-.*"`. Do NOT use
-      #    `application.process.binary = "vhost-device-sound"` —
+      #    `application.process.binary = "vhost-device-sound"` -
       #    that key is absent on the sidecar's streams (process
       #    metadata isn't propagated through libpipewire's client
       #    socket). The actual properties on the live node are
@@ -182,7 +182,7 @@ in
       # 3. Only the INPUT direction is null-targeted. The output
       #    direction MUST remain auto-linked so guest audio reaches
       #    the host sink. Two earlier iterations tried to put
-      #    matches under `monitor.rules` / `monitor.alsa.rules` —
+      #    matches under `monitor.rules` / `monitor.alsa.rules` -
       #    both broke host audio because those sections match
       #    HARDWARE devices, not client STREAMS. Pick the right
       #    section.
@@ -247,7 +247,7 @@ in
       # in the unlinked state instead of destroying it (otherwise the
       # guest's audio device disappears mid-flight). When the
       # direction is ON we WANT the auto-route, so we MUST NOT set
-      # any of these props — leave WirePlumber's normal default-
+      # any of these props - leave WirePlumber's normal default-
       # target hook do its job.
       services.pipewire.extraConfig.client."90-d2b" = {
         "stream.rules" = (lib.optional (cfg.site.audio.inputTargetNode != null) {
@@ -336,7 +336,7 @@ in
             # 'f'  = create regular file only if absent; never overwrites.
             # 'a+' = append ACL entries (idempotent; runs even on existing paths).
             #
-            # state/: d2bd:d2b 0750 — daemon owns it, launcher-group traverses.
+            # state/: d2bd:d2b 0750 - daemon owns it, launcher-group traverses.
             [''d /var/lib/d2b/vms/${name}/state 0750 d2bd d2b -''
              ''f /var/lib/d2b/vms/${name}/state/audio-state.json 0640 d2bd d2b - ${initial}''
              # d2b group traversal on the VM state root so CLI users can

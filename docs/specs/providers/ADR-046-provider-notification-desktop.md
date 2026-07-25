@@ -51,8 +51,8 @@ backing for any notification delivery event.  Only the bounded in-memory
 action nonce store persists entries within a single host-sink session
 lifetime.
 
-Notification contents — summary, body, icon, action labels, correlation
-bytes, VM names in notification bodies, and every byte of presented text —
+Notification contents - summary, body, icon, action labels, correlation
+bytes, VM names in notification bodies, and every byte of presented text -
 are **never** written to logs, metrics, audit records, traces, OTEL spans, or
 any persistent state.
 
@@ -66,15 +66,15 @@ packages/d2b-provider-notification-desktop/
     lib.rs                    # crate root; forbid(unsafe_code)
     types.rs                  # NotificationRequest/NotificationResult DTOs,
                               #   stream record types, category/urgency enums
-    controller.rs             # Process placement controller — watches guestSources
+    controller.rs             # Process placement controller - watches guestSources
                               #   Guest refs; creates/manages guest-source Processes
-    guest_source.rs           # guest-side source process — validates requests,
+    guest_source.rs           # guest-side source process - validates requests,
                               #   emits NotificationRequest records over stream
-    host_sink.rs              # host-side sink process — consumes stream, calls D-Bus,
+    host_sink.rs              # host-side sink process - consumes stream, calls D-Bus,
                               #   manages observer projection
     action_nonce.rs           # bounded single-use action capability store
     stream_admission.rs       # ComponentSession admission checks
-    redact.rs                 # sanitize() — strip/cap notification text before use
+    redact.rs                 # sanitize() - strip/cap notification text before use
     error.rs                  # typed stable error enum; no content in messages
   tests/
     stream_record.rs          # NotificationRequest/NotificationResult DTO schema,
@@ -141,24 +141,24 @@ All operator-facing configuration is nested under `spec.config`.
 
 | Field | Type | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `spec.artifactId` | bounded ID | yes | — | Nix artifact catalog entry |
-| `spec.config.hostExecutionRef` | ResourceRef | yes | — | `Host/<name>` in same Zone; controller and host-sink are placed on this Host |
-| `spec.config.hostUserRef` | ResourceRef | yes* | — | `User/<name>` in same Zone; user domain for host-sink; required when `dbusSinkEnabled = true`; must match the `display-wayland` session user |
+| `spec.artifactId` | bounded ID | yes | - | Nix artifact catalog entry |
+| `spec.config.hostExecutionRef` | ResourceRef | yes | - | `Host/<name>` in same Zone; controller and host-sink are placed on this Host |
+| `spec.config.hostUserRef` | ResourceRef | yes* | - | `User/<name>` in same Zone; user domain for host-sink; required when `dbusSinkEnabled = true`; must match the `display-wayland` session user |
 | `spec.config.maxPendingNotifications` | u32 | no | 64 | Oldest unanswered entry dropped when exceeded; range `[8, 1024]` |
 | `spec.config.actionNonceTtlSecs` | u32 | no | 120 | Single-use capability TTL; range `[30, 600]` |
 | `spec.config.actionNonceStoreSize` | u32 | no | 256 | Maximum live capabilities per sink process; range `[64, 4096]` |
 | `spec.config.acknowledgeTimeoutSecs` | u32 | no | 3600 | Auto-drop projection entry if no observer ack within this window |
 | `spec.config.dbusSinkEnabled` | bool | no | true | Enable `host-sink` D-Bus process |
 | `spec.config.observerEnabled` | bool | no | true | Enable authenticated observer named stream |
-| `spec.config.displayWaylandRef` | ResourceRef | yes* | — | `Provider/display-wayland` in same Zone; required when `dbusSinkEnabled = true`; its session identity must match `hostUserRef` |
+| `spec.config.displayWaylandRef` | ResourceRef | yes* | - | `Provider/display-wayland` in same Zone; required when `dbusSinkEnabled = true`; its session identity must match `hostUserRef` |
 | `spec.config.guestSources` | `[GuestSourceSpec]` | no | `[]` | Guests for which a `guest-source` Process is created |
 
 `GuestSourceSpec` fields:
 
 | Field | Type | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `guestRef` | ResourceRef | yes | — | `Guest/<name>` in same Zone; controller watches this ref |
-| `categories` | `[string]` | yes | — | Non-empty subset of the closed category set (§4.3); guest-source rejects out-of-list categories |
+| `guestRef` | ResourceRef | yes | - | `Guest/<name>` in same Zone; controller watches this ref |
+| `categories` | `[string]` | yes | - | Non-empty subset of the closed category set (§4.3); guest-source rejects out-of-list categories |
 
 The controller creates one `guest-source` Process per entry in
 `spec.config.guestSources` and watches the referenced Guest resource.
@@ -635,7 +635,7 @@ NN is allowed for the observer because:
 KK is required for the Guest→Host sink because the guest-source crosses a Zone
 boundary (Host Zone ← Guest Zone vsock transport).
 
-### 6.5 Admission checks — stream_admission.rs
+### 6.5 Admission checks - stream_admission.rs
 
 `stream_admission.rs` checks on every session establishment:
 
@@ -881,12 +881,12 @@ It is not a ResourceType or stored artifact and is empty for a Provider that
 declares no state Volume.
 
 `Provider/notification-desktop` declares **no** Provider state Volume; its
-`ProviderStateSet` is empty. Notification delivery state — the in-memory
-projection and the action nonce store — remains exclusively in the host-sink
+`ProviderStateSet` is empty. Notification delivery state - the in-memory
+projection and the action nonce store - remains exclusively in the host-sink
 process heap and is never persisted. No notification summary, body, action
 label, icon identifier, nonce, or content byte is ever written to durable
-storage. Its bounded non-secret operational state — component readiness,
-reconcile stage, and closed-enum error/health detail — lives in core-owned
+storage. Its bounded non-secret operational state - component readiness,
+reconcile stage, and closed-enum error/health detail - lives in core-owned
 Provider status and the core Operation ledger (D087).
 
 Per D088, notification-desktop exports no semantic ResourceType and writes no
@@ -1072,8 +1072,8 @@ source identity; bounded OTEL resource attributes retain `d2b.zone`.
 | `d2b_notification_action_invoked_total` | counter | `category` | Action invoked; no action ID label |
 | `d2b_notification_drop_total` | counter | `reason` | `reason`: `capacity` \| `observer-backpressure` \| `sink-unavailable` |
 | `d2b_notification_dbus_duration_seconds` | histogram | `outcome` | D-Bus call latency |
-| `d2b_notification_action_nonce_issued_total` | counter | (none) | — |
-| `d2b_notification_action_nonce_expired_total` | counter | (none) | — |
+| `d2b_notification_action_nonce_issued_total` | counter | (none) | - |
+| `d2b_notification_action_nonce_expired_total` | counter | (none) | - |
 | `d2b_notification_stream_sessions_active` | gauge | `stream_kind` | Active named stream sessions |
 
 **Labels that are explicitly excluded:** Zone name/UID, summary, body, action
@@ -1104,12 +1104,12 @@ values.  The `correlationId` from the request is carried as the W3C TraceContext
 
 Audit records are emitted for:
 
-- `DesktopNotificationSessionEstablished` — on every admitted ComponentSession
+- `DesktopNotificationSessionEstablished` - on every admitted ComponentSession
   (source or observer).  Fields: zone, subject digest, stream kind, session
   generation digest, outcome.  No content.
-- `DesktopNotificationActionInvoked` — on every consumed nonce.  Fields: zone,
+- `DesktopNotificationActionInvoked` - on every consumed nonce.  Fields: zone,
   subject digest, request handle digest, outcome.  No content, no action ID.
-- `DesktopNotificationDeliveryFailed` — when `dbus-error` or `dbus-unavailable`
+- `DesktopNotificationDeliveryFailed` - when `dbus-error` or `dbus-unavailable`
   outcome is returned to a guest-source.  Fields: zone, outcome code only.
   No content.
 
@@ -1255,8 +1255,8 @@ dependency is unavailable; it does not transition to `Failed`.
 **D-Bus connection acquisition.**  The host-sink process does **not** read a
 D-Bus session socket path from the `Provider/display-wayland` status field or
 from any environment variable.  Instead, at host-sink startup the controller
-opens a ComponentSession to `Provider/display-wayland` under same-UID policy —
-using the UID of `spec.config.hostUserRef` — and receives an authenticated
+opens a ComponentSession to `Provider/display-wayland` under same-UID policy -
+using the UID of `spec.config.hostUserRef` - and receives an authenticated
 pre-opened D-Bus connection FD.  This FD is passed to the host-sink process as
 a sealed startup credential through the Process bootstrap protocol.  The FD is
 valid for the lifetime of the compositor session; the host-sink does not
@@ -1313,16 +1313,16 @@ are candidates for copy/adapt:
 
 | Main source | Reuse action | v3 destination |
 | --- | --- | --- |
-| `packages/d2b-notify/src/notifications.rs` — `sanitize()`, `Notification`, `Notifier`, `RecordingNotifier` | copy/adapt | `packages/d2b-provider-notification-desktop/src/redact.rs` |
-| `packages/d2b-notify/src/nonce.rs` — `ActionNonce`, `ActionNonceStore`, `NONCE_BYTES`, `NONCE_TTL_SECS`, `MAX_STORE_SIZE`, `notification_action_key`, `parse_notification_action_key` | copy/adapt | `packages/d2b-provider-notification-desktop/src/action_nonce.rs` |
-| `packages/d2b-notify/src/events.rs` — event enum, field bounds, `SecurityKeyEvent` | extract/adapt; generalize from security-key to generic category | `packages/d2b-provider-notification-desktop/src/types.rs` |
-| `packages/d2b-notify/src/state.rs` — `CeremonySummary`, `SkNotifyState`, bound constants | adapt; generalize | `packages/d2b-provider-notification-desktop/src/types.rs` |
-| `packages/d2b-notify/src/services/mod.rs` — `EstablishedDesktopSession`, `DesktopServices`, session evidence mapping, `DesktopStartupError` | copy/adapt | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
-| `packages/d2b-notify/src/services/actions.rs` — `ActionService`, `ActionSession`, `ActionOffer`, `InvokeActionRequest` | copy/adapt | `packages/d2b-provider-notification-desktop/src/action_nonce.rs` (client side) |
-| `packages/d2b-notify/src/services/observer.rs` — `ObserverService`, `ObserverSession`, projection logic | adapt | `packages/d2b-provider-notification-desktop/src/host_sink.rs` (observer projection) |
-| `packages/d2b-contracts/src/generated_v2_services/notify_ttrpc.rs` — `NotifyServiceClient`, `NotifyService` ttrpc shape | replace with v3 protobuf/ttrpc regenerated under `d2b.notification.v3` | `packages/d2b-provider-notification-desktop/src/` (generated) |
-| v3 baseline `packages/d2b-clipd/src/notifications.rs` — `sanitize_notification_text` | absorb into `redact::sanitize()`; retire clipd copy | `packages/d2b-provider-notification-desktop/src/redact.rs` |
-| v3 baseline `nixos-modules/notifications.nix` — `d2b.notifications.*` option set, `stateDir`, `statusHelper`, `securityKey` | superseded by v3 Zone resource authoring; Nix module retired after migration | see §17.3 |
+| `packages/d2b-notify/src/notifications.rs` - `sanitize()`, `Notification`, `Notifier`, `RecordingNotifier` | copy/adapt | `packages/d2b-provider-notification-desktop/src/redact.rs` |
+| `packages/d2b-notify/src/nonce.rs` - `ActionNonce`, `ActionNonceStore`, `NONCE_BYTES`, `NONCE_TTL_SECS`, `MAX_STORE_SIZE`, `notification_action_key`, `parse_notification_action_key` | copy/adapt | `packages/d2b-provider-notification-desktop/src/action_nonce.rs` |
+| `packages/d2b-notify/src/events.rs` - event enum, field bounds, `SecurityKeyEvent` | extract/adapt; generalize from security-key to generic category | `packages/d2b-provider-notification-desktop/src/types.rs` |
+| `packages/d2b-notify/src/state.rs` - `CeremonySummary`, `SkNotifyState`, bound constants | adapt; generalize | `packages/d2b-provider-notification-desktop/src/types.rs` |
+| `packages/d2b-notify/src/services/mod.rs` - `EstablishedDesktopSession`, `DesktopServices`, session evidence mapping, `DesktopStartupError` | copy/adapt | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
+| `packages/d2b-notify/src/services/actions.rs` - `ActionService`, `ActionSession`, `ActionOffer`, `InvokeActionRequest` | copy/adapt | `packages/d2b-provider-notification-desktop/src/action_nonce.rs` (client side) |
+| `packages/d2b-notify/src/services/observer.rs` - `ObserverService`, `ObserverSession`, projection logic | adapt | `packages/d2b-provider-notification-desktop/src/host_sink.rs` (observer projection) |
+| `packages/d2b-contracts/src/generated_v2_services/notify_ttrpc.rs` - `NotifyServiceClient`, `NotifyService` ttrpc shape | replace with v3 protobuf/ttrpc regenerated under `d2b.notification.v3` | `packages/d2b-provider-notification-desktop/src/` (generated) |
+| v3 baseline `packages/d2b-clipd/src/notifications.rs` - `sanitize_notification_text` | absorb into `redact::sanitize()`; retire clipd copy | `packages/d2b-provider-notification-desktop/src/redact.rs` |
+| v3 baseline `nixos-modules/notifications.nix` - `d2b.notifications.*` option set, `stateDir`, `statusHelper`, `securityKey` | superseded by v3 Zone resource authoring; Nix module retired after migration | see §17.3 |
 
 The v3 baseline `d2b-notify` crate (`packages/d2b-notify/`) is the primary
 existing source.  It is not yet wired to the ADR 0046 resource/session model.
@@ -1342,7 +1342,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Detailed design | `NotificationRequest`/`NotificationResult` DTOs and stream record types; bounded fields; closed category set; icon catalog contract; `ActionNonce`/`ActionNonceStore` adapted from main; no ResourceType DTO Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | Zone bus service; host-sink stream consumer; guest-source stream producer |
 | Data migration | No v2 compatibility; reset |
-| Validation | `tests/stream_record.rs` — DTO schema vectors; `tests/action_nonce.rs` — single-use/TTL/capacity/replay |
+| Validation | `tests/stream_record.rs` - DTO schema vectors; `tests/action_nonce.rs` - single-use/TTL/capacity/replay |
 | Removal proof | v2 `d2b.notify.v2` generated stubs removed after v3 service established |
 
 ### ADR046-notify-002
@@ -1355,8 +1355,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
 | Detailed design | Session admission checks, Noise profile enforcement, transport class validation Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | ComponentSession/d2b-bus |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | `tests/stream_admission.rs` — all rejection vectors |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
+| Validation | `tests/stream_admission.rs` - all rejection vectors |
 | Removal proof | Old `DesktopServices` session admitted under v2 contract removed when v3 session established |
 
 ### ADR046-notify-003
@@ -1369,7 +1369,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/controller.rs` |
 | Detailed design | Async Process placement controller; watches `guestSources` Guest refs; creates/drains/deletes guest-source Processes; creates/stops host-sink Process on display-wayland readiness change; declares no Provider state Volume and does not own/add/create/delete Volumes; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); notification delivery state (in-memory projection, action nonce store) is host-sink process memory only; no ResourceType reconcile loop |
 | Integration | Zone resource store (Process API); d2b-bus; display-wayland dependency watch |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for placement FSM in `tests/stream_record.rs`; Volume creation/deletion lifecycle in `tests/volume_lifecycle.rs`; see also `integration/cross_zone_source.rs` end-to-end |
 | Removal proof | Not applicable (new controller) |
 
@@ -1383,7 +1383,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/host_sink.rs` |
 | Detailed design | D-Bus client; `DesktopNotificationSink` stream consumer; action nonce issuance; `DesktopNotificationObserver` projection (in-memory, not persisted); display-wayland ComponentSession bootstrap for pre-opened D-Bus FD |
 | Integration | D-Bus session (pre-opened FD via ComponentSession bootstrap); ComponentSession named streams |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `integration/dbus_sink.rs`, `integration/observer_client.rs`, `integration/action_invoke.rs` |
 | Removal proof | `nixos-modules/notifications.nix` state-dir tmpfiles rule retired; all notification state is in-memory per-session with no Volume replacement |
 
@@ -1397,7 +1397,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Destination | `packages/d2b-provider-notification-desktop/src/guest_source.rs` |
 | Detailed design | Guest-side vsock ComponentSession; `NotificationRequest` record validation and field bounding; category filter; `DesktopNotificationSink` stream forwarding; `NotificationResult` handling; no host-side resource creation |
 | Integration | Guest process vsock → host ComponentSession |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `integration/cross_zone_source.rs` |
 | Removal proof | v3 baseline security-key notification path in `d2b-notify` is superseded; clipd direct `notify_rust` call superseded |
 
@@ -1429,7 +1429,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1448,7 +1448,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-notification-desktop --lib --tests`
 completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which

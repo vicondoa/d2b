@@ -45,7 +45,7 @@ let
   # network `10-eth-dhcp` (matchConfig.Type = "ether") is materialized
   # in the net VM too, where it would sort lex-first against the
   # per-MAC `10-uplink`/`10-lan` definitions below and DHCP both NICs
-  # — breaking the static addressing. The `lib.mkForce` override at
+  # - breaking the static addressing. The `lib.mkForce` override at
   # the bottom of this file neutralizes it by replacing its match
   # with a MAC that can never match.
 in
@@ -72,7 +72,7 @@ in
     # so workload VMs get DHCP on their single NIC. Net VMs have TWO
     # NICs explicitly bound by MAC below, and `10-eth-dhcp` would sort
     # lex-first (10-eth-dhcp < 10-lan < 10-uplink) and DHCP both NICs
-    # — preempting the static config. `mkForce` replaces the whole
+    # - preempting the static config. `mkForce` replaces the whole
     # attrset; the bogus MAC ensures no interface ever matches, so
     # systemd-networkd writes a harmless file and skips it.
     "10-eth-dhcp" = lib.mkForce {
@@ -146,7 +146,7 @@ in
   };
 
   # The MACs that the host-side bridges expect on each NIC. The
-  # nftables ruleset below also references "eth0"/"eth1" by name —
+  # nftables ruleset below also references "eth0"/"eth1" by name -
   # since we can't rely on the kernel naming, use systemd.link
   # files to rename them deterministically.
   systemd.network.links = {
@@ -210,7 +210,7 @@ in
           iifname "eth1" udp dport 5353 accept
           ''}
 
-          # ICMP echo — rate-limited (was unconditional, now 10/s burst).
+          # ICMP echo - rate-limited (was unconditional, now 10/s burst).
           ip protocol icmp icmp type echo-request limit rate 10/second burst 20 packets accept
         }
 
@@ -306,7 +306,7 @@ in
       # bind-interfaces: dnsmasq binds the listening socket directly to
       # eth1 instead of accepting on the wildcard (0.0.0.0) socket. The
       # trade-off: bind-interfaces requires eth1 to exist when dnsmasq
-      # starts (race vs networkd) — we close that race with an explicit
+      # starts (race vs networkd) - we close that race with an explicit
       # systemd-networkd-wait-online@eth1 ordering below. Security-wise
       # bind-interfaces is the safer choice: with bind-dynamic the
       # wildcard socket can leak DHCP/DNS to other interfaces (eth0)
@@ -321,7 +321,7 @@ in
       server = [ "1.1.1.1" "8.8.8.8" ];
       cache-size = 1000;
 
-      # DHCP — pool covers the "unreserved" tail end of the subnet.
+      # DHCP - pool covers the "unreserved" tail end of the subnet.
       dhcp-authoritative = true;
       dhcp-range = "${m.dhcpRangeStart},${m.dhcpRangeEnd},12h";
       dhcp-option = [
@@ -351,13 +351,13 @@ in
   #      redundant and the internal setuid would need SETUID/SETGID ambient
   #      caps to succeed from a non-root starting point, which we avoid).
   #   3. Replacing the module's preStart (which ran chown/touch as the service
-  #      user — broken with User=dnsmasq) with a single root-privileged (+)
+  #      user - broken with User=dnsmasq) with a single root-privileged (+)
   #      ExecStartPre that owns all the privileged setup.
   #   4. Adding comprehensive systemd sandboxing.
   #
   # Make sure dnsmasq starts after networkd has eth1 up. bind-interfaces
   # (above) requires the kernel interface to exist at bind time, so we
-  # additionally wait for systemd-networkd-wait-online@eth1 — that unit
+  # additionally wait for systemd-networkd-wait-online@eth1 - that unit
   # blocks until eth1 reaches at least "degraded" (link up, address
   # assigned), which is exactly what bind-interfaces needs.
   systemd.services.dnsmasq = {
@@ -404,9 +404,9 @@ in
 
       # --- capabilities ---
       # Ambient: the non-root process needs these effective after exec.
-      #   CAP_NET_BIND_SERVICE — bind ports 53 (DNS) and 67 (DHCP, <1024)
-      #   CAP_NET_RAW          — raw sockets for ICMP duplicate-IP detection
-      #   CAP_NET_ADMIN        — DHCP route management (required by dnsmasq)
+      #   CAP_NET_BIND_SERVICE - bind ports 53 (DNS) and 67 (DHCP, <1024)
+      #   CAP_NET_RAW          - raw sockets for ICMP duplicate-IP detection
+      #   CAP_NET_ADMIN        - DHCP route management (required by dnsmasq)
       AmbientCapabilities   = "CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN";
       # Bounding set caps what can ever be raised. SETUID/SETGID included per
       # spec; with NoNewPrivileges they cannot be leveraged via execve.
@@ -477,7 +477,7 @@ in
   # cannot persist across rebuilds.
   users.mutableUsers = false;
 
-  # Small VM. No graphics, no TPM, no usbip — just routing.
+  # Small VM. No graphics, no TPM, no usbip - just routing.
   # The `microvm.shares` block (read-only /nix/store via virtiofs) is
   # injected by modules/d2b/store.nix as a per-VM hardlink farm so
   # this net VM only sees its own closure.
@@ -531,7 +531,7 @@ in
   # guest's `d2b-load-host-keys.service` (see base.nix), which
   # reads them from the virtiofs share at `/run/d2b-host-keys/`.
   # At NixOS module-eval time, root has neither password nor
-  # authorized_keys — that would normally trip the
+  # authorized_keys - that would normally trip the
   # `users.allowNoPasswordLogin` assertion. Set the flag here with
   # an explicit comment: this is the framework's design, not an
   # oversight. The runtime guarantee that root *does* get a key

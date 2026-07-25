@@ -412,7 +412,7 @@ transcript/session generation digest, route, and fixed outcome.
 | Destination | `packages/d2b-session-unix/`, future enrolled transport adapter crates |
 | Detailed design | Unix/socketpair/vsock owned transports, peer evidence, fd/pidfd/object validation, credits Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | ProviderSupervisor/Host/Guest/Zone listeners hand owned transports to session |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copied fd/peer/credit tests plus Host/Guest subject mapping |
 | Removal proof | Ad hoc guest/public/helper transport removed only per service cutover |
 
@@ -427,6 +427,6 @@ transcript/session generation digest, route, and fixed outcome.
 | Destination | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` |
 | Detailed design | Exact service/resource routes, RBAC, pinned reverse route, cancellation, named stream bridge, no wildcard pub/sub Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Every ResourceClient/controller/Provider/CLI service |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Message isolation; closed session-verb enum including `relay`, `audit-export`, and `support-bundle`; exact diagnostic service/method binding with no implied resource grant; relay missing/target verb missing/provider self-assertion fail-closed vectors; named-target and nameless List/Watch selector/filter preservation at every hop; route/auth revocation; fairness; reconnect; no direct-store path |
 | Removal proof | Old direct dispatch branches removed only after route parity |

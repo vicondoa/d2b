@@ -46,7 +46,7 @@ pub struct SwtpmArgvInput {
     /// `tpm2-00.permall` plus its log/pid in here.
     pub state_dir: String,
     /// Absolute path to the swtpm control socket (`--ctrl`). CH never
-    /// connects to this one — the daemon uses it for shutdown/flush.
+    /// connects to this one - the daemon uses it for shutdown/flush.
     pub ctrl_socket_path: String,
     /// Absolute path to the swtpm server socket (`--server`). CH
     /// connects to this one through `--tpm`.
@@ -289,7 +289,7 @@ mod tests {
 
         assert_eq!(
             observed, expected,
-            "swtpm argv golden drift — regenerate tests/golden/runner-shape/swtpm-argv-minimal.txt\n--- expected ---\n{expected}\n--- observed ---\n{observed}\n"
+            "swtpm argv golden drift - regenerate tests/golden/runner-shape/swtpm-argv-minimal.txt\n--- expected ---\n{expected}\n--- observed ---\n{observed}\n"
         );
     }
 

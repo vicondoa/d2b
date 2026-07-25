@@ -1,6 +1,6 @@
 # Migrate d2b v1.1 to v1.2
 
-## TL;DR — required steps for operators
+## TL;DR - required steps for operators
 
 For most v1.1 hosts the upgrade is two commands:
 
@@ -13,7 +13,7 @@ After these two steps, all VMs continue working with no further
 operator action. If you have users with
 `extraGroups = [ "d2b-launcher" ]` in your `/etc/nixos` config,
 you must additionally update that to `[ "d2b" ]` before
-`nixos-rebuild` — see "What consumers must change" below.
+`nixos-rebuild` - see "What consumers must change" below.
 
 v1.2 unifies the host-side lifecycle Unix groups
 `d2b-launcher` and `d2b-launchers` into one canonical

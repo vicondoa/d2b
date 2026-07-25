@@ -34,7 +34,7 @@ eval anyway.
 
 Examples that pull in an external sibling flake (`with-entra-id/`
 consumes `github:vicondoa/entrablau.nix`) **do** commit their
-`flake.lock` for reproducibility — the lock is the only way to ensure
+`flake.lock` for reproducibility - the lock is the only way to ensure
 the example builds bit-identically across machines.
 
 ## In-tree vs published consumption
@@ -42,14 +42,14 @@ the example builds bit-identically across machines.
 Every checked example's `flake.nix` uses `d2b.url = "path:../.."`
 so it can be evaluated against the in-tree framework without a
 network round-trip. When you copy any of these layouts into your own
-repo, swap that for a real flake ref — `github:vicondoa/d2b`
+repo, swap that for a real flake ref - `github:vicondoa/d2b`
 (track `main`) or a tagged release.
 
 ## See also
 
-- [`../templates/default/`](../templates/default/) — `nix flake init`
+- [`../templates/default/`](../templates/default/) - `nix flake init`
   scaffold with sentinel TODOs + assertion gates.
-- [`../README.md`](../README.md) — framework-level Rust-first quick
+- [`../README.md`](../README.md) - framework-level Rust-first quick
   start, threat model, and option index.
-- [`../docs/`](../docs/) — reference docs (manifest schema, CLI
+- [`../docs/`](../docs/) - reference docs (manifest schema, CLI
   contract, security runbook).

@@ -137,7 +137,7 @@ conformance suite. Binding:
 2. records the Provider's signed `spec.provider` extension schema
    (`schemaId`/`schemaVersion`/`settings` JSON Schema) and the aligned
    `status.provider` extension schema, both deny-unknown, bounded, and digested;
-3. records the Provider's signed **standard capability matrix** — the exact set
+3. records the Provider's signed **standard capability matrix** - the exact set
    of optional base capabilities it does and does not support.
 
 A bound Provider MUST accept the canonical minimal valid base Spec for the
@@ -241,7 +241,7 @@ opaqueKeyDigest)` derived from each authority Resource/Process's signed
 `AuthorityDescriptor`. On `Create`/`UpdateSpec` of an authority-bearing Resource
 (or launch of an authority owner Process), admission consults the index **before
 any external effect** and rejects a second claimant for an `exactly-one`/
-`zero-or-one` authority — or one exceeding a `bounded-many` bound — with the
+`zero-or-one` authority - or one exceeding a `bounded-many` bound - with the
 typed `duplicateConflict` error naming the exact incumbent owner digest. The
 `authorityKey` is internal and non-authorizing: it is never an authorization
 principal and never appears as a locator in spec/status/audit. Authorization for

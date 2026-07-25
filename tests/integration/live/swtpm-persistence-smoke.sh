@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329
-# tests/integration/live/swtpm-persistence-smoke.sh— critical-subsystem regression.
+# tests/integration/live/swtpm-persistence-smoke.sh - critical-subsystem regression.
 #
 # Plan:.
 #
@@ -21,7 +21,7 @@
 # failure on a production host forces Entra/Intune re-enrollment for
 # work-aad and similar TPM-bound IdP joins because the IdP will see a
 # fresh EK seed and a wiped NVRAM and refuse the device. Do NOT mark
-# this test "expected to fail" — fix the bind contract instead.
+# this test "expected to fail" - fix the bind contract instead.
 #
 # Layer 2; opt-in via D2B_LIVE=1. Cleanup trap restores all changes
 # (best-effort, since the destructive step is the daemon restart).
@@ -93,7 +93,7 @@ export TPM2TOOLS_TCTI="swtpm:path=$SRV_SOCK"
 
 # Write the NVRAM marker (guest-side path requires SSH into VM; we
 # write host-side via the server socket since the swtpm server speaks
-# to whoever can reach the socket — the daemon and root).
+# to whoever can reach the socket - the daemon and root).
 log "==> Step 2: write NVRAM index $NV_INDEX = '$NV_PAYLOAD'"
 tpm2_startup -c >/dev/null 2>&1 || true
 if sudo -E tpm2_nvdefine "$NV_INDEX" -C o -s "${#NV_PAYLOAD}" \
@@ -117,7 +117,7 @@ log "==> Step 3: stop VM $VM"
 sudo d2b vm stop "$VM" >/dev/null 2>&1 || true
 pass_check "d2b vm stop $VM returned"
 
-# Restart the daemon — the load-bearing step. swtpm state must survive
+# Restart the daemon - the load-bearing step. swtpm state must survive
 # a daemon restart, not merely a sidecar restart.
 log "==> Step 4: restart d2bd.service (daemon-level restart)"
 sudo systemctl restart d2bd.service
@@ -150,10 +150,10 @@ log "==> Step 6: read NVRAM index $NV_INDEX back"
 tpm2_startup -c >/dev/null 2>&1 || true
 READBACK=$(sudo -E tpm2_nvread "$NV_INDEX" -C o 2>/dev/null || true)
 if [ "$READBACK" = "$NV_PAYLOAD" ]; then
-  pass_check "NVRAM survived daemon restart — critical-subsystem invariant honoured"
+  pass_check "NVRAM survived daemon restart - critical-subsystem invariant honoured"
 else
   log "  observed = '$READBACK' expected = '$NV_PAYLOAD'"
-  fail_check "WARNING: this failure forces Entra/Intune re-enrollment for work-aad and similar TPM-bound IdP joins. NVRAM did NOT survive the daemon restart — the /var/lib/d2b/vms/${VM}/swtpm bind is not preserving state across daemon restarts."
+  fail_check "WARNING: this failure forces Entra/Intune re-enrollment for work-aad and similar TPM-bound IdP joins. NVRAM did NOT survive the daemon restart - the /var/lib/d2b/vms/${VM}/swtpm bind is not preserving state across daemon restarts."
 fi
 
 if [ "$FAIL" -gt 0 ]; then

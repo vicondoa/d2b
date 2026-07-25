@@ -293,7 +293,7 @@ finalizers/incident hold, and writes cleanupEligibleAt.
 - clone3(CLONE_PIDFD);
 - d2b owns wait/reap;
 - pidfd/cgroup/process start identity;
-- no direct Provider broker access — the Provider process never imports or
+- no direct Provider broker access - the Provider process never imports or
   calls the broker itself.
 
 Both implement identical ResourceTypes and status/error conformance.
@@ -357,7 +357,7 @@ controller see the ID and semantic settings only. Raw path resolution is
 private Nix/bundle/effect authority (see `ADR-046-resources-volume`). The
 `transport: virtiofs` attachment is served by the separate `volume-virtiofs`
 Provider, which owns only the attachment lifecycle/status and its owned
-virtiofsd Process — never the Volume's own `providerRef`/layout/ownership
+virtiofsd Process - never the Volume's own `providerRef`/layout/ownership
 fields.
 
 All layout paths are relative to the anchored Volume root. A raw host path is

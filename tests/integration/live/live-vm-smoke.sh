@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2126,SC2329
-# tests/integration/live/live-vm-smoke.sh— v1.2 live-VM smoke gate.
+# tests/integration/live/live-vm-smoke.sh - v1.2 live-VM smoke gate.
 #
 # Pre-tag maintainer-side gate per ADR 0022 + v1.2 plan §.
 # SKIP-ON-CI (requires KVM / systemd / privileged broker).
@@ -119,7 +119,7 @@ wait_for_guest_exec() {
   return 1
 }
 
-# vm_ip <vm> — resolve the VM's static IP from the d2b manifest.
+# vm_ip <vm> - resolve the VM's static IP from the d2b manifest.
 vm_ip() {
   local vm="$1" ip
   ip=$(d2b vm status "$vm" --json 2>/dev/null \
@@ -143,13 +143,13 @@ vm_ip() {
     '
 }
 
-# api_socket <vm> — path to CH HTTP API socket.
+# api_socket <vm> - path to CH HTTP API socket.
 # Convention from manifest.nix: /var/lib/d2b/vms/<vm>/<vm>.sock
 api_socket() {
   printf '%s/%s/%s.sock\n' "$VM_STATE_BASE" "$1" "$1"
 }
 
-# ch_pid <vm> — PID of the cloud-hypervisor process for the given VM.
+# ch_pid <vm> - PID of the cloud-hypervisor process for the given VM.
 ch_pid() {
   local vm="$1"
   if [ -f "$PIDFD_TABLE" ]; then
@@ -161,7 +161,7 @@ ch_pid() {
   fi
 }
 
-# wait_for_api_ready <vm> <budget_secs> — wait until d2b vm status reports api_ready yes.
+# wait_for_api_ready <vm> <budget_secs> - wait until d2b vm status reports api_ready yes.
 wait_for_api_ready() {
   local vm="$1" budget="$2" elapsed=0 interval=5
   while [ "$elapsed" -lt "$budget" ]; do
@@ -272,7 +272,7 @@ probe_common() {
       fail_check "$vm: pidfd-table has ${snap_fail} stale PID(s) (fu32 class)"
     fi
   else
-    log "  WARN: pidfd-table not found at $PIDFD_TABLE — skipping snapshot check"
+    log "  WARN: pidfd-table not found at $PIDFD_TABLE - skipping snapshot check"
   fi
 
   # 7. CH HTTP API liveness.

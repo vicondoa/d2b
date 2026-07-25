@@ -15,7 +15,7 @@
 //!   --params '{"context-types":"virgl:virgl2:cross-domain","displays":[{"hidden":true}],"egl":true,"vulkan":true}'
 //! ```
 //!
-//! CH then connects via `--gpu socket=corp-desktop-gpu.sock` — that
+//! CH then connects via `--gpu socket=corp-desktop-gpu.sock` - that
 //! flag is appended by the daemon caller into
 //! [`crate::ch_argv::ChArgvInput::extra_args`] when assembling the
 //! graphics VM's CH argv.
@@ -117,7 +117,7 @@ pub enum GpuArgvError {
 /// - the byte-stable parity diff vs the W0b audit fixture pins
 ///   the exact field order; serde_json::to_string does not
 ///   guarantee object-field ordering;
-/// - the injection surface is bounded — `GpuContextType` is a
+/// - the injection surface is bounded - `GpuContextType` is a
 ///   closed enum with safe `as_str()` outputs verified at test
 ///   time by `context_type_string_is_json_safe`; `bool` fields
 ///   render as lowercase `true`/`false` via Rust `Display`.
@@ -420,7 +420,7 @@ mod tests {
     }
 
     /// Enforce at test time that every `GpuContextType::as_str()` output
-    /// is JSON-safe — only ASCII
+    /// is JSON-safe - only ASCII
     /// letters / digits / dash / underscore allowed. If a future
     /// variant ships with a quote, backslash, comma, or control
     /// character, this test fails closed rather than silently
@@ -436,7 +436,7 @@ mod tests {
             for c in s.chars() {
                 assert!(
                     c.is_ascii_alphanumeric() || c == '-' || c == '_',
-                    "GpuContextType::as_str() output {s:?} contains JSON-unsafe character {c:?} — \
+                    "GpuContextType::as_str() output {s:?} contains JSON-unsafe character {c:?} - \
                      `render_params` uses manual format! interpolation that would corrupt the JSON \
                      payload; switch to serde_json::to_string for the offending variant or pin a \
                      stricter charset here."

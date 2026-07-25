@@ -9,7 +9,7 @@
 //! across PID reuse). Static eval gates
 //! (`tests/v1.1-kernel-floor-eval.sh`) catch the easy case (operator
 //! flake declares an older kernel via `boot.kernelPackages`); this
-//! runtime probe catches the hard case — a custom-built kernel at
+//! runtime probe catches the hard case - a custom-built kernel at
 //! >= 6.9 that strips pidfs support.
 //!
 //! The probe: open a pidfd to the current process via
@@ -19,7 +19,7 @@
 //! a pseudofs device id; on 6.9+ it returns the pidfs anon device.
 //!
 //! If the probe fails, `d2bd` startup refuses to proceed with a
-//! `pidfs-unavailable` typed error — operators must upgrade the
+//! `pidfs-unavailable` typed error - operators must upgrade the
 //! kernel before the v1.1.1 broker SpawnRunner pipeline can rely on
 //! pidfs identity semantics.
 
@@ -49,7 +49,7 @@ pub enum PidfsProbeOutcome {
     PidfsNotPresent { st_dev: u64 },
     /// Probe encountered an unexpected error (not the supported
     /// "ENOSYS" / "fstat-wrong-dev" cases). Logged at warn level
-    /// and treated as soft-defer — operators may have a permissions
+    /// and treated as soft-defer - operators may have a permissions
     /// edge case where pidfd_open succeeds outside of d2bd's
     /// runtime. Hard refusal at startup if the operator hasn't set
     /// the `D2B_ALLOW_PIDFS_PROBE_SOFT_FAIL` env var to opt in
@@ -66,7 +66,7 @@ pub const PID_FS_MAGIC: u64 = 0x50494446;
 /// Run the pidfs runtime self-probe.
 ///
 /// Returns the probe outcome (caller decides whether to refuse
-/// startup or soft-defer). The probe is pure I/O — opens a pidfd
+/// startup or soft-defer). The probe is pure I/O - opens a pidfd
 /// on the current process, fstats it, closes the fd. No state
 /// mutation, no global side effects.
 pub fn probe_pidfs() -> PidfsProbeOutcome {
@@ -124,7 +124,7 @@ pub(crate) fn enforce_probe_outcome_with(
             Ok(())
         }
         PidfsProbeOutcome::PidfdOpenUnsupported => {
-            let msg = "pidfs probe: pidfd_open(2) returned ENOSYS — kernel does not support pidfds. v1.1+ requires Linux ≥ 6.9 (per ADR 0008 + ADR 0018). Upgrade your kernel before running d2bd.";
+            let msg = "pidfs probe: pidfd_open(2) returned ENOSYS - kernel does not support pidfds. v1.1+ requires Linux ≥ 6.9 (per ADR 0008 + ADR 0018). Upgrade your kernel before running d2bd.";
             if allow_soft_fail {
                 tracing::warn!("{msg} (soft-fail enabled via D2B_ALLOW_PIDFS_PROBE_SOFT_FAIL)");
                 Ok(())
@@ -156,7 +156,7 @@ pub(crate) fn enforce_probe_outcome_with(
                 "pidfs probe: unexpected error: {detail}. Treating as soft-defer for diagnostic purposes; investigate before relying on BootedNotify identity in production."
             );
             tracing::warn!("{msg}");
-            // Always soft-defer on unexpected errors — they indicate
+            // Always soft-defer on unexpected errors - they indicate
             // a permissions / namespace edge case, not a missing
             // pidfs.
             Ok(())

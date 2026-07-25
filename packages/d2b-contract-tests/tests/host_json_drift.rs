@@ -196,7 +196,7 @@ fn live_shape_fixture_uses_broker_canonical_ownership() {
 fn rendered_smoke_host_json_emits_firewall_policy_when_fixture_available() {
     let Some(fixtures_dir) = env::var_os("D2B_FIXTURES") else {
         eprintln!(
-            "  (skipping smoke host.json top-level field check — D2B_FIXTURES unavailable in this gate context)"
+            "  (skipping smoke host.json top-level field check - D2B_FIXTURES unavailable in this gate context)"
         );
         return;
     };

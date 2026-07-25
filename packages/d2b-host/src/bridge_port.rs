@@ -107,7 +107,7 @@ impl BridgePortFlagSet {
 }
 
 /// Result of comparing a readback flag set against the expected
-/// defaults — used by the post-`SetBridgePortFlags` netlink readback.
+/// defaults - used by the post-`SetBridgePortFlags` netlink readback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgePortFlagDrift {
     pub role: TapRoleW3,

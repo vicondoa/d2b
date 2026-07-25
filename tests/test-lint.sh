@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-lint.sh — `make test-lint`: fast static lint, no Nix eval, no cargo.
+# tests/test-lint.sh - `make test-lint`: fast static lint, no Nix eval, no cargo.
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
 #   * nix-instantiate --parse on every .nix file

@@ -1,4 +1,4 @@
-# d2b.realms.<realm>.network — realm-native network declaration as the
+# d2b.realms.<realm>.network - realm-native network declaration as the
 # replacement public surface for d2b.envs.<env>.
 #
 # This file is imported as a fragment inside the d2b.realms.<realm>
@@ -8,18 +8,18 @@
 # shape that mirrors the runtime contract carried by d2b.envs.<env>.
 #
 # Runtime materialisation behaviour follows network.mode:
-#   "none"        — no bridges, no net VM, no host network resources
+#   "none"        - no bridges, no net VM, no host network resources
 #                   are claimed.  Safe default for metadata-only realm
 #                   declarations.
-#   "inherit-env" — the realm delegates network to an existing
+#   "inherit-env" - the realm delegates network to an existing
 #                   d2b.envs.<env> entry named by network.envs[0].
 #                   Bridge lifecycle remains controlled by the env.
-#   "declared"    — the realm OWNS the network declaration.  This is
+#   "declared"    - the realm OWNS the network declaration.  This is
 #                   the v2-native path: the realm's network.* options
 #                   supply the subnet / bridge / externalNetwork
 #                   parameters and d2b materialises the bridges + net
 #                   VM under a realm-derived name.
-#   "external"    — the realm uses an externally-managed network.
+#   "external"    - the realm uses an externally-managed network.
 #                   No d2b-managed bridges are created; only
 #                   policy-metadata fields are meaningful.
 #

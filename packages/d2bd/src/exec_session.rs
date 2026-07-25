@@ -251,7 +251,7 @@ pub struct NegotiatedCaps {
 }
 
 impl NegotiatedCaps {
-    /// All capabilities present — used by tests that exercise the happy path.
+    /// All capabilities present - used by tests that exercise the happy path.
     #[cfg(test)]
     pub fn all() -> Self {
         Self {
@@ -314,11 +314,11 @@ impl OwnerReaper for NoopReaper {
 /// terminal, a stalled owner that never closes its connection is reaped after
 /// this long so it cannot pin a session slot indefinitely. Generous enough for
 /// a well-behaved CLI to read the terminal status and close first. The reaper
-/// never kills a LIVE command — cleanup only arms once `Wait` returns terminal.
+/// never kills a LIVE command - cleanup only arms once `Wait` returns terminal.
 pub const EXEC_TERMINAL_CLEANUP_TTL: Duration = Duration::from_secs(10);
 
-/// Records when the guest command first went terminal and decides — against an
-/// injected [`Clock`] — whether the terminal-cleanup TTL has since elapsed.
+/// Records when the guest command first went terminal and decides - against an
+/// injected [`Clock`] - whether the terminal-cleanup TTL has since elapsed.
 /// Pure and fake-clock testable; the worker arms a real timer that consults
 /// [`TerminalReaper::due`].
 pub struct TerminalReaper {
@@ -389,7 +389,7 @@ pub struct WorkerSpawn {
 /// tokio runtime. The worker establishes the session, reports the result over
 /// `establish_tx`, then services `WorkerCommand`s until the channel closes.
 /// Dropping the sender (owner disconnect) returns the worker, drops the
-/// runtime, and drops every client clone — prompting the guest teardown.
+/// runtime, and drops every client clone - prompting the guest teardown.
 pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
     let WorkerSpawn {
         connector,
@@ -1856,7 +1856,7 @@ mod tests {
         );
 
         // The long-poll Wait draws its own fresh poll-based deadline, computed
-        // from THIS op's timeout_ms — not from session start, and not shrunk by
+        // from THIS op's timeout_ms - not from session start, and not shrunk by
         // the accumulated session age.
         let wait = recorded
             .iter()

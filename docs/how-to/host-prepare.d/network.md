@@ -46,7 +46,7 @@ sudo d2b host prepare --apply
 sudo d2b host destroy --apply
 ```
 
-`host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
+`host prepare --apply` is refused on a Tier 0 NixOS-legacy host -
 one where d2b resolves no daemon-owned bundle to reconcile. The
 per-VM `d2b.vms.<vm>.supervisor` option was removed in v1.1 (per
 ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
@@ -77,7 +77,7 @@ between the step-3 write and the step-5 readback is the
 
 1. **Pre-create**: install the NetworkManager `unmanaged` drop-in (or
    refuse on systemd-networkd hosts without a configured-unmanaged
-   file). Trigger `nmcli general reload conf` (NM >= 1.20) — fall back
+   file). Trigger `nmcli general reload conf` (NM >= 1.20) - fall back
    to `systemctl reload NetworkManager.service` on older NM. **Do not
    use `nmcli connection reload`**: it only reloads connection
    profiles, not the `conf.d/*.conf` device-management snippets.
@@ -107,7 +107,7 @@ between the step-3 write and the step-5 readback is the
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
   ID; remove or rename it and, once `host prepare --apply` is wired,
-  re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  re-run it (it returns `daemon-down` (exit 1) today - use `--dry-run`
   to re-check).
 
 ### Fedora 40+ (Tier 1-later)
@@ -162,7 +162,7 @@ derivation rule:
 - skip Docker/libvirt-known prefixes (`docker*`, `virbr*`, `lxcbr*`);
 - skip DOWN-state links;
 - collect remaining IPv4 `RT_TABLE_MAIN scope LINK` destinations;
-- flag VPN-like routes (point-to-point, no broadcast) as ambiguous —
+- flag VPN-like routes (point-to-point, no broadcast) as ambiguous -
   do not include automatically. Operator overrides via
   `d2b.site.hostLanCidrs`.
 

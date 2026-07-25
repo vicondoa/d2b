@@ -196,7 +196,7 @@ recorded.
 | <a id="cgroup-controllers-missing"></a>`cgroup-controllers-missing` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-v2-unified-not-present"></a>`cgroup-v2-unified-not-present` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-delegation-refused"></a>`cgroup-delegation-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
-| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (broker-mediated only — no daemon-direct `cgroup.kill` writes; see [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
+| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (broker-mediated only - no daemon-direct `cgroup.kill` writes; see [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
 | <a id="ifname-too-long"></a>`ifname-too-long` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `CreateTapFd`, `CreatePersistentTap` | `wire-ifname-invalid` |
 | <a id="ifname-collision"></a>`ifname-collision` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | bundle render + `CreateTapFd` | `broker-validation-failed` |
 | <a id="bridge-port-flag-drift"></a>`bridge-port-flag-drift` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `SetBridgePortFlags` | `broker-validation-failed` |
@@ -255,7 +255,7 @@ migration guide:
 The multi-line block format renders differently for the two verb
 categories described above:
 
-**Category 1 — Truly deferred verbs** (`audit --strict`) emit
+**Category 1 - Truly deferred verbs** (`audit --strict`) emit
 `#not-yet-implemented` (exit 78) unconditionally. The remediation
 block renders as:
 
@@ -267,7 +267,7 @@ Remediation:
   Specifically the "<verb-specific anchor>" section.
 ```
 
-**Category 2 — Daemon-down rendering pointers** (`audit` without
+**Category 2 - Daemon-down rendering pointers** (`audit` without
 `--strict`, `keys list`, `keys show`) emit `#daemon-down` (exit 1)
 only when the broker is stopped; otherwise the successful
 invocation path runs normally. When `#daemon-down` does fire, the
@@ -296,8 +296,8 @@ unchanged because their inline rendering is preserved.
 
 The two affected verbs and their migration-guide anchors are:
 
-- `d2b audit`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit) (**mixed disposition** — non-`--strict` is Category 2 daemon-down only; `--strict` is Category 1 truly deferred)
-- `d2b keys list` / `d2b keys show`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 — daemon-down only)
+- `d2b audit`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit) (**mixed disposition** - non-`--strict` is Category 2 daemon-down only; `--strict` is Category 1 truly deferred)
+- `d2b keys list` / `d2b keys show`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 - daemon-down only)
 
 `d2b console` and `d2b audio` (subcommands `status|mic|speaker|off`)
 are implemented and no longer emit `#not-yet-implemented` envelopes.

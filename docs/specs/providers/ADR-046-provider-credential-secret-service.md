@@ -51,24 +51,24 @@ failure.
 ```text
 packages/d2b-provider-credential-secret-service/
   src/
-    lib.rs         — port trait, lease DTOs, owner placement guard, and unit tests
-    controller.rs  — Credential controller: reconcile/observe/finalize/drain/health handlers
-    service.rs     — d2b.credential.v3 service handler bound to controller state
-    main.rs        — binary entry point; constructs process context and drives controller
+    lib.rs         - port trait, lease DTOs, owner placement guard, and unit tests
+    controller.rs  - Credential controller: reconcile/observe/finalize/drain/health handlers
+    service.rs     - d2b.credential.v3 service handler bound to controller state
+    main.rs        - binary entry point; constructs process context and drives controller
   tests/
-    lifecycle.rs   — acquire/refresh/revoke/inspect end-to-end with FakeOo7Port
-    conformance.rs — all check_provider_conformance arms pass
-    faults.rs      — locked state → credential-provider-unavailable; unavailable; cardinality limit
-    canary.rs      — credential_canary and object_path_canary absent from every response, status field, and delivery record
-    delivery.rs    — delivery-session binding contract; zeroizing buffer; replay-safe sequence
-    placement.rs   — user-agent on Host and Guest accepted; system-domain and guest-agent (system-domain on Guest) rejected
+    lifecycle.rs   - acquire/refresh/revoke/inspect end-to-end with FakeOo7Port
+    conformance.rs - all check_provider_conformance arms pass
+    faults.rs      - locked state → credential-provider-unavailable; unavailable; cardinality limit
+    canary.rs      - credential_canary and object_path_canary absent from every response, status field, and delivery record
+    delivery.rs    - delivery-session binding contract; zeroizing buffer; replay-safe sequence
+    placement.rs   - user-agent on Host and Guest accepted; system-domain and guest-agent (system-domain on Guest) rejected
   integration/
-    container-service.sh    — container-backed Provider service start/stop/drain
-    host-placement.nix      — user-domain Host/Process placement (executionRef=Host) in runNixOSTest
-    guest-placement.nix     — user-domain Guest/Process placement (executionRef=Guest) in runNixOSTest
-    cleanup-rollback.sh     — Nix-generation removal triggers async Delete and provider-revoke finalizer
-    README.md               — integration fixture descriptions and invocation instructions (optional; root README.md is the mandated policy gate)
-  README.md                 — all §Provider README required sections (see §17)
+    container-service.sh    - container-backed Provider service start/stop/drain
+    host-placement.nix      - user-domain Host/Process placement (executionRef=Host) in runNixOSTest
+    guest-placement.nix     - user-domain Guest/Process placement (executionRef=Guest) in runNixOSTest
+    cleanup-rollback.sh     - Nix-generation removal triggers async Delete and provider-revoke finalizer
+    README.md               - integration fixture descriptions and invocation instructions (optional; root README.md is the mandated policy gate)
+  README.md                 - all §Provider README required sections (see §17)
   Cargo.toml
 ```
 
@@ -1273,7 +1273,7 @@ directly from v3 `d2b-realm-provider/src/credential.rs`. Full detail in
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Dependency for ADR046-cred-ss-003; owner: credential service contract/codegen |
-| Current source | None — net-new v3 `d2b.credential.v3` service; no pre-ADR45 baseline service proto equivalent |
+| Current source | None - net-new v3 `d2b.credential.v3` service; no pre-ADR45 baseline service proto equivalent |
 | Reuse action | create |
 | Destination | packages/d2b-contracts/proto/v3/credential.proto; packages/d2b-credential-service/ |
 | Detailed design | Service proto: define the `d2b.credential.v3` protobuf/ttrpc service and generate typed client/server code. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `create`. Preserved source-plan detail: net-new service contract replacing the v2 in-process `CredentialProvider` trait. |
@@ -1297,9 +1297,9 @@ client/server in `packages/d2b-credential-service/`. Full detail in
 | Destination | packages/d2b-provider-credential-<impl>/src/controller.rs |
 | Detailed design | Controller toolkit: implement the common Credential controller handler conforming to the `ADR-046-resource-reconciliation` async loop. Secret-service-specific controller code plugs into this handler while keeping provider bytes out of status/store/audit. Primary reuse disposition: `create`. Preserved source-plan detail: net-new shared controller handler pattern specialized by each Credential Provider. |
 | Integration | Resource watches and Operation ledger drive the controller loop; credential-secret-service handler uses the toolkit to reconcile Credential status, finalizers, Process health, and service lifecycle. |
-| Data migration | None — controller toolkit code only; no runtime state migration |
+| Data migration | None - controller toolkit code only; no runtime state migration |
 | Validation | Shared reconciliation tests from `ADR-046-resources-credential`; credential-secret-service lifecycle/fault tests verify the handler integration |
-| Removal proof | None — shared toolkit is additive; v2 trait removal is tracked by ADR046-cred-ss-003/001 parity |
+| Removal proof | None - shared toolkit is additive; v2 trait removal is tracked by ADR046-cred-ss-003/001 parity |
 
 Implements the common Credential controller handler conforming to the
 `ADR-046-resource-reconciliation` async loop in
@@ -1311,14 +1311,14 @@ Implements the common Credential controller handler conforming to the
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Dependency for ADR046-cred-ss-003; owner: Nix resource compiler and activation cleanup |
-| Current source | None — net-new v3 `d2b.zones.<zone>.resources.<name>` Credential/Provider authoring surface; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 `d2b.zones.<zone>.resources.<name>` Credential/Provider authoring surface; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | nixos-modules/options-resources.nix; nixos-modules/activation-nixos-cleanup.nix |
 | Detailed design | Nix compiler: implement `d2b.zones.<zone>.resources.<name>` authoring, eval-time assertions, canonical JSON emission, artifact catalog, bundle digest, and generation cleanup contract. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `create`. Preserved source-plan detail: net-new Nix resource emission and cleanup contract. |
 | Integration | Nix emits Provider/Credential resource JSON and artifact catalog entries; ResourceAPI admission and credential-secret-service controller consume the rendered resources; activation cleanup issues async Delete/finalizer flow on generation removal. |
 | Data migration | Full d2b 3.0 reset; no old credential config is imported into v3 resources |
 | Validation | Nix eval/assertion/golden tests from `ADR-046-resources-credential`; credential-secret-service cleanup rollback integration fixture |
-| Removal proof | None — new v3 Nix resource surface; old trait removal waits for controller parity |
+| Removal proof | None - new v3 Nix resource surface; old trait removal waits for controller parity |
 
 Implements `d2b.zones.<zone>.resources.<name>` Nix authoring, eval-time
 assertions, canonical JSON emission, artifact catalog, bundle digest, and
@@ -1336,9 +1336,9 @@ generation cleanup contract in `nixos-modules/options-resources.nix` and
 | Destination | packages/d2b-provider-credential-secret-service/src/{audit.rs,telemetry.rs} |
 | Detailed design | Audit/OTEL: emit authorized bounded audit records with Credential identity represented only by `resource_name_digest`, and emit OTEL spans/metrics for all credential service methods and controller events with canary enforcement, expiry aggregated across user-agent leases, no Credential resource name, ResourceRef, UID, digest, derived identity token, Zone/Credential/resource-name-derived metric label, or non-allowlisted OTEL Resource attribute; retain applicable generic collector-allowlisted Resource attributes (`d2b.zone`, `d2b.provider`, `d2b.component`, and service fields); no token/object-path/lease bytes in status, delivery outer headers, audit, metrics, spans, or logs. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt zero-secret invariant and canary test pattern to credential-secret-service audit/OTEL surfaces. |
 | Integration | Controller and service methods call audit/telemetry helpers; audit subsystem and OTEL exporters consume bounded event/span/metric records; canary tests verify every public observable surface stays secret-free. |
-| Data migration | None — audit/telemetry only; no runtime state migration |
+| Data migration | None - audit/telemetry only; no runtime state migration |
 | Validation | Credential audit/OTEL tests from `ADR-046-resources-credential` require `resource_name_digest` in authorized audit records and reject raw Credential name/ResourceRef/UID; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived metric key; Credential name/ref/UID/digest canaries are absent from all OTEL Resource attributes, span attributes, and metric labels; Zone-name canaries are absent from spans and labels while generic collector-allowlisted Resource attributes remain; complete secret-service metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame; `tests/delivery.rs` covers credential-secret-service delivery |
-| Removal proof | None — audit/telemetry helpers are new; no prior owner to remove |
+| Removal proof | None - audit/telemetry helpers are new; no prior owner to remove |
 
 Implements audit record and OTEL span/metric emission for all credential
 service methods and controller events in
@@ -1499,7 +1499,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-credential-secret-service --lib --tests`
 completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1602,7 +1602,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

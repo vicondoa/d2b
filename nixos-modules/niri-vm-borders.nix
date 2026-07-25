@@ -1,4 +1,4 @@
-# nixos-modules/niri-vm-borders.nix — opt-in niri window-rule include
+# nixos-modules/niri-vm-borders.nix - opt-in niri window-rule include
 # generation for d2b graphics and qemu-media VMs.
 #
 # When `d2b.site.ui.compositors.niri.enable = true` or the legacy
@@ -149,7 +149,7 @@ in
       Requires niri ≥ 0.1.9 for include-directive support.
 
       This option does not mutate the user's niri config
-      automatically — the `include` line must be added manually.
+      automatically - the `include` line must be added manually.
     '';
 
     outputPath = lib.mkOption {

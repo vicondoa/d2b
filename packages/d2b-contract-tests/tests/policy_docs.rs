@@ -34,10 +34,10 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // is explicitly marked as such.
 //
 // Two halves, ported verbatim from the bash gate:
-//   * Positive invariants — the rewrite must surface the daemon-only end-state
+//   * Positive invariants - the rewrite must surface the daemon-only end-state
 //     section explicitly, cross-reference ADR 0015, and mention d2bd /
 //     d2b-priv-broker.socket / SpawnRunner.
-//   * Negative invariants — a per-line scan: any line matching a forbidden
+//   * Negative invariants - a per-line scan: any line matching a forbidden
 //     legacy-as-live pattern is a violation UNLESS the same line also carries an
 //     explicit historical / retired marker (matched case-insensitively).
 // ---------------------------------------------------------------------------
@@ -447,7 +447,7 @@ fn kernel_module_matrix_source_doc_parity() {
 // USB security-key docs scaffolding existence gate.
 //
 // Asserts that the docs scaffolding files for the USB security-key proxy
-// feature are present in the repo. This is a policy gate — it ensures the
+// feature are present in the repo. This is a policy gate - it ensures the
 // docs/test surface does not silently disappear in a partial revert and that
 // the implementation workstream has a concrete target to make green.
 //

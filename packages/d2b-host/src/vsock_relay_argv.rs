@@ -6,13 +6,13 @@
 //! `nixos-modules/components/observability/{host,guest,stack}.nix`:
 //!
 //! - **stack-vm vsock-in**: `socat VSOCK-LISTEN:14317,fork,...
-//!   UNIX-CONNECT:/run/d2b/obs-ingress.sock` — the obs stack VM
+//!   UNIX-CONNECT:/run/d2b/obs-ingress.sock` - the obs stack VM
 //!   listens on a vsock port and forwards to an in-guest Alloy.
 //! - **guest egress**: `socat UNIX-LISTEN:<sock>,fork,...
-//!   VSOCK-CONNECT:2:14317` — the guest Alloy egresses to host
+//!   VSOCK-CONNECT:2:14317` - the guest Alloy egresses to host
 //!   CID 2 (the daemon-host) on port 14317.
 //! - **host bridge** (EXEC form): `socat UNIX-LISTEN:<sock>,fork,...
-//!   EXEC:"<chVsockConnect> <base> 14317"` — used when CH only
+//!   EXEC:"<chVsockConnect> <base> 14317"` - used when CH only
 //!   exposes the GUEST→HOST direction on demand.
 //!
 //! This generator covers the LISTEN+CONNECT shapes (the EXEC form
@@ -126,14 +126,14 @@ pub enum VsockRelayArgvError {
     },
     /// The source MUST be a LISTEN side (one of UnixListen / VsockListen).
     /// Two CONNECTs back-to-back would require socat to run both as clients
-    /// — that's a different shape (proxy chain) the harness does not support.
+    /// - that's a different shape (proxy chain) the harness does not support.
     SourceMustBeListen,
     /// socat's address syntax is `<type>:<address-data>[,option[,option...]]`.
     /// A UNIX path
     /// containing a comma (or any other socat option-syntax
     /// character) injects arbitrary socat options when interpolated
     /// into `UNIX-LISTEN:<path>,fork,...`. The fix refuses any path
-    /// containing `,`, `!`, `"`, `'`, `;`, or whitespace — those
+    /// containing `,`, `!`, `"`, `'`, `;`, or whitespace - those
     /// have no legitimate use in a UDS path under
     /// `/run/d2b/...` or `/var/lib/d2b/...` and a bundle row
     /// supplying one is unambiguously hostile.

@@ -68,15 +68,15 @@ The v3 target name appears in parentheses or an explicit mapping.
 | ResourceType | `Provider` |
 | Name | `volume-local` (artifact ID `volume-local-provider`) |
 | Crate | `packages/d2b-provider-volume-local/` |
-| Reconciled ResourceType | `Volume` — exported as volume-local's primary ResourceType; reconciles physical state (layout, ACL, quota, identity marker) for all assigned Volumes; operators create/delete ordinary Volumes via Resource API; **core ProviderDeployment** creates/deletes component state Volumes before/after component Processes; volume-local never issues Volume create/delete API calls; component Processes consume their required view only |
+| Reconciled ResourceType | `Volume` - exported as volume-local's primary ResourceType; reconciles physical state (layout, ACL, quota, identity marker) for all assigned Volumes; operators create/delete ordinary Volumes via Resource API; **core ProviderDeployment** creates/deletes component state Volumes before/after component Processes; volume-local never issues Volume create/delete API calls; component Processes consume their required view only |
 | Source kinds | `local-path`, `block-image`, `tmpfs` |
 | Controller component | `volume-local-controller`; `Process` under `Host/host-system`, `domain: system`; `controllerExecutionRef: Host/host-system` |
 | Effect operations | `ProvisionLayoutEntry`, `RepairLayoutEntry`, `CleanupLayoutEntry`, `PrepareSwtpmDir`, `StoreSyncComplete`, `MountTmpfs`, `ProvisionBlockImage`, `RotateSealingKey` (all via injected `VolumeEffectPort`; no direct broker connection) |
 | Permissions | No special host-path permission; all host path resolution in core/broker adapter; broker ops not called directly from Provider process |
-| ProviderStateSet | Optional query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; **empty** — volume-local declares no state Volume of its own (its bounded non-secret operational state lives in `status`/the core Operation ledger, D087). Volume-local is the **sole reconciler** for all assigned Volumes carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' *declared* state Volumes; Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes other Providers' declared state Volume instances before/after their component Processes; a declared component state Volume is created only when its payload passes the storage-need test; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing; no empty identity-only Volume |
+| ProviderStateSet | Optional query-time logical grouping (not a ResourceType): `{ v : Volume \| ownerRef == "Provider/volume-local" }`; **empty** - volume-local declares no state Volume of its own (its bounded non-secret operational state lives in `status`/the core Operation ledger, D087). Volume-local is the **sole reconciler** for all assigned Volumes carrying `providerRef: Provider/volume-local` (operator-created Volumes and other Providers' *declared* state Volumes; Volume is its exported type) and never issues Volume create/delete API calls; **core ProviderDeployment** creates/deletes other Providers' declared state Volume instances before/after their component Processes; a declared component state Volume is created only when its payload passes the storage-need test; Nix-preprovisioned `User/<name>` layout principals; no cross-component sharing; no empty identity-only Volume |
 | Finalizers | `volume-local/layout` |
 | Supported Host variants | Local NixOS Host; bare-metal Host; ACA if backing filesystem is accessible |
-| Guest capability | Not applicable — volume-local does not attach to Guests |
+| Guest capability | Not applicable - volume-local does not attach to Guests |
 | Main reuse | `d2b-state` at commit `6faa5256` (copy/adapt); `d2b-priv-broker/src/ops/swtpm_dir.rs` (adapt marker algorithm) |
 
 **D089 desired-spec shape.** `Provider/volume-local` owns the `Volume`
@@ -216,7 +216,7 @@ host path prefixes live only in the Nix-emitted private bundle and are never
 projected into the Provider config or any public DTO.
 
 ```yaml
-# Provider root config — validated against volume-local root-config.schema.json
+# Provider root config - validated against volume-local root-config.schema.json
 sourcePolicies:
   - id: default-state
     class: local-path          # local-path | block-image | tmpfs
@@ -261,12 +261,12 @@ is a prefix of another entry's path unless they differ only by the trailing
 
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `path` | string | Yes | — | Anchored relative path; `""` = Volume root |
-| `type` | EntryType | Yes | — | `directory`, `file`, `symlink`, `unix-socket` |
-| `ownerRef` | `User/<name>` ResourceRef | Yes | — | Same Zone; no numeric UID accepted |
-| `groupRef` | `User/<name>` ResourceRef | Yes | — | Same Zone; no numeric GID accepted |
-| `mode` | four-octet string | Yes | — | e.g. `"0700"`, `"0640"`, `"0660"` |
-| `target` | string | Conditional | — | Required for `symlink` only; relative to Volume root; no `..`; no leading `/`; no null bytes; must resolve within Volume root |
+| `path` | string | Yes | - | Anchored relative path; `""` = Volume root |
+| `type` | EntryType | Yes | - | `directory`, `file`, `symlink`, `unix-socket` |
+| `ownerRef` | `User/<name>` ResourceRef | Yes | - | Same Zone; no numeric UID accepted |
+| `groupRef` | `User/<name>` ResourceRef | Yes | - | Same Zone; no numeric GID accepted |
+| `mode` | four-octet string | Yes | - | e.g. `"0700"`, `"0640"`, `"0660"` |
+| `target` | string | Conditional | - | Required for `symlink` only; relative to Volume root; no `..`; no leading `/`; no null bytes; must resolve within Volume root |
 | `accessAcl` | `AclGrant[]` | No | `[]` | Named access ACL; continuously reconciled |
 | `defaultAcl` | `AclGrant[]` | No | `[]` | Default ACL for new children; continuously reconciled |
 | `foreignChildPolicy` | `preserve` \| `fail` | No | `preserve` | Governs children not covered by `defaultAcl` |
@@ -386,8 +386,8 @@ that affects the UID binding.
 | `same-filesystem` | Entry must share `st_dev` with the Volume root (hardlink farm) | `StorageInvariant::SameFilesystem` |
 | `hardlink-farm-no-recursion` | Entry is a hardlink farm node; broker does not recurse | `StorageInvariant::HardlinkFarmNoRecursion` |
 | `broker-opaque-id-only` | Only broker-assigned identities may create children | `StorageInvariant::BrokerOpaqueIdOnly` |
-| `scope-authorization-required` | Effect op on this entry requires confirmed `SourcePolicyId` authorization from the adapter; scope must be explicitly permitted for the requesting operation | — |
-| `root-owned-parent` | Parent directory must be root-owned (TPM marker root) | — |
+| `scope-authorization-required` | Effect op on this entry requires confirmed `SourcePolicyId` authorization from the adapter; scope must be explicitly permitted for the requesting operation | - |
+| `root-owned-parent` | Parent directory must be root-owned (TPM marker root) | - |
 
 ---
 
@@ -410,7 +410,7 @@ only for `ephemeral`/`tmp`) the controller:
    declared `defaultAcl`. If `foreignChildPolicy == "preserve"`, surplus ACL
    entries are left unchanged.
 5. The controller writes a `RepairLayoutEntry` audit record with the Volume UID,
-   entry type, and repair action class — never with entry paths or ACL values.
+   entry type, and repair action class - never with entry paths or ACL values.
 
 ### View rights enforcement
 
@@ -665,7 +665,7 @@ resources replace the path rows.
 3. **Private mount namespace**: the broker performs hardlink operations inside a
    private mount namespace where `/nix/store` is lazily detached from its
    bind-mount shadow (NixOS bind-mounts `/nix/store` on itself; a same-`st_dev`
-   cross-vfsmount `link(2)` returns `EXDEV` — recoverable, distinct from a
+   cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct from a
    fatal different-filesystem `EXDEV`). An `EMLINK` fallback (saturated empty-file
    inode) copies the byte content.
 
@@ -794,9 +794,9 @@ mounts:
 
 | Field | Type | Required | Default | Constraints |
 | --- | --- | --- | --- | --- |
-| `volumeRef` | ResourceRef | Yes | — | Must resolve to a Ready Volume in the same Zone |
-| `view` | ViewId | Yes | — | Must exist in the Volume spec; bounded `^[a-z][a-z0-9-]*$`; max 63 chars |
-| `mountPath` | absolute path string | Yes | — | Inside the Process sandbox; no overlap |
+| `volumeRef` | ResourceRef | Yes | - | Must resolve to a Ready Volume in the same Zone |
+| `view` | ViewId | Yes | - | Must exist in the Volume spec; bounded `^[a-z][a-z0-9-]*$`; max 63 chars |
+| `mountPath` | absolute path string | Yes | - | Inside the Process sandbox; no overlap |
 | `access` | `read-only` \| `read-write` | No | `read-only` | Must be compatible with View rights |
 | `required` | bool | No | `true` | If `false`, absent/Degraded Volume does not prevent Process start |
 
@@ -813,7 +813,7 @@ The controller's attach-time flow:
    The adapter opens the Volume root via `openat2` anchored at the policy prefix
    FD, verifies `st_dev`/`st_ino` match the marker record, and routes the
    anchored FD **directly** to the target ProviderSupervisor out-of-band.
-3. The adapter returns a `VolumeMountToken` — an opaque authorization/correlation
+3. The adapter returns a `VolumeMountToken` - an opaque authorization/correlation
    handle with a fully redacted `Debug` impl. The token contains no `OwnedFd`
    visible to the Provider process.
 4. The controller embeds the token in the LaunchTicket sent to the Process
@@ -851,13 +851,13 @@ and must not contain host paths, secret content, process data, or terminal bytes
 
 ---
 
-## VolumeEffectPort — injected effect boundary
+## VolumeEffectPort - injected effect boundary
 
 The `Provider/volume-local` controller process never opens host paths, calls
 `openat2` or any syscall that takes a raw host path, issues `setfacl`,
 `mount`/`umount`, or `fallocate`, receives numeric UIDs, or holds a direct
 connection to the Zone broker. All filesystem mutation, path resolution, and
-audit emission are performed by the injected `VolumeEffectPort` implementation —
+audit emission are performed by the injected `VolumeEffectPort` implementation -
 a core/broker adapter that runs outside the Provider process boundary.
 
 ### VolumeEffectPort trait
@@ -1196,8 +1196,8 @@ This is a query-time logical grouping, not a ResourceType or stored artifact,
 and it is **empty** for `Provider/volume-local`.
 
 `Provider/volume-local` declares **no** Provider state Volume of its own. Its
-bounded non-secret operational state — reconcile stage, per-Volume layout/marker
-observations, quota usage, adoption observations, and closed-enum error detail —
+bounded non-secret operational state - reconcile stage, per-Volume layout/marker
+observations, quota usage, adoption observations, and closed-enum error detail -
 lives in the owning resource's `status` subresource and the core Operation
 ledger (D087). Because that state is fully derivable from the Volume resources
 it reconciles, their `status`, the core Operation ledger, and independent
@@ -1246,7 +1246,7 @@ resource status; no custom provider-level status extension is defined.
 
 Volume-local is itself the storage Provider, but because its controller declares
 **no** state Volume, there is nothing to provision before the controller is
-active — so there is no bootstrap state-Volume cycle, no closed bootstrap
+active - so there is no bootstrap state-Volume cycle, no closed bootstrap
 storage sequence, no broker layout pre-provision, and no bootstrap-storage
 exception (D086, superseded by D087; see "No bootstrap state Volume" in
 `ADR-046-components-processes-and-sandbox`).
@@ -1257,7 +1257,7 @@ ledger, and a resource-store relist; there is no hidden bootstrap store and no
 pre-provisioned controller Volume. Once Ready, it reconciles every Volume
 carrying `providerRef: Provider/volume-local` (operator-created Volumes and
 other Providers' declared state Volumes) as they appear in its `providerRef`
-watch — re-verifying identity markers against external reality — never creating
+watch - re-verifying identity markers against external reality - never creating
 them itself. A Guest bootstraps its own Guest-local volume-local instance from
 Guest-local primitives only, never a leaked parent-Host dirfd or resource
 handle.
@@ -1871,17 +1871,17 @@ that controller shutdown propagates atomically.
 The controller uses the Zone d2b-bus `ResourceClient` provided via its
 ComponentSession for:
 
-- `watch(Volume, providerRef: Provider/volume-local)` — observe all served
+- `watch(Volume, providerRef: Provider/volume-local)` - observe all served
   Volumes (spec/status changes trigger layout/ACL/quota/marker reconciliation);
   ProviderDeployment creates and deletes Volume instances; volume-local
   reconciles physical state only and does not issue create/delete API calls
   for these Volumes;
-- `update-status(Volume, with-expected-revision)` — write layout conditions;
-- `create(EphemeralProcess)` — dispatch migration/snapshot/relocation workers;
-- `watch(EphemeralProcess)` — observe worker completion;
-- `watch(User)` — observe UID binding changes for ACL re-resolve;
-- `watch(Credential)` — observe sealing key rotation;
-- `update-finalizers(Volume)` — manage `volume-local/layout` finalizer.
+- `update-status(Volume, with-expected-revision)` - write layout conditions;
+- `create(EphemeralProcess)` - dispatch migration/snapshot/relocation workers;
+- `watch(EphemeralProcess)` - observe worker completion;
+- `watch(User)` - observe UID binding changes for ACL re-resolve;
+- `watch(Credential)` - observe sealing key rotation;
+- `update-finalizers(Volume)` - manage `volume-local/layout` finalizer.
 
 No direct d2b-bus protocol details are specified here; they are governed by
 `ADR-046-componentsession-and-bus`. The controller's session purpose is
@@ -1908,7 +1908,7 @@ Cross-references to main `a1cc0b2d` symbols used by volume-local (per
 ## RBAC
 
 ```yaml
-# Controller role — creates and manages Volumes
+# Controller role - creates and manages Volumes
 rules:
   - resourceTypes: [Volume, EphemeralProcess]
     verbs: [create, update-spec, update-status, update-finalizers, get, list, watch, delete]
@@ -2216,7 +2216,7 @@ d2b.zones."dev".resources."volume-local" = {
 };
 ```
 
-### Volume resource — minimal state Volume
+### Volume resource - minimal state Volume
 
 ```nix
 d2b.zones."dev".resources."work-state" = {
@@ -2252,7 +2252,7 @@ d2b.zones."dev".resources."work-state" = {
 };
 ```
 
-### Volume resource — block-image
+### Volume resource - block-image
 
 ```nix
 d2b.zones."dev".resources."work-disk" = {
@@ -2278,7 +2278,7 @@ d2b.zones."dev".resources."work-disk" = {
 };
 ```
 
-### Volume resource — tmpfs
+### Volume resource - tmpfs
 
 ```nix
 d2b.zones."dev".resources."work-tmp" = {
@@ -2442,7 +2442,7 @@ Required test files and minimum coverage:
 | `tests/layout_repair.rs` | Drift detected on owner/mode/ACL; `repairPolicy: exact-owner` corrects; `repairPolicy: fail-closed` sets Failed; `repairPolicy: none` sets condition; ACL re-reconcile after User revision |
 | `tests/layout_adopt.rs` | `adopt-with-live-owner-proof` with live pidfd; `quarantine-on-ambiguity` with no proof; `not-adoptable` always recreated |
 | `tests/acl.rs` | `accessAcl` applied and reconciled; `defaultAcl` applied to new children; `foreignChildPolicy: preserve` retains surplus; `foreignChildPolicy: fail` sets `ForeignAclViolation` |
-| `tests/quota.rs` | `enforcement: hard` — FS supports quota: admitted; FS does not support quota: `Failed`; write above quota: rejected; `quotaUsage` reported; descriptor-Volume mismatch: `quota-mismatch` |
+| `tests/quota.rs` | `enforcement: hard` - FS supports quota: admitted; FS does not support quota: `Failed`; write above quota: rejected; `quotaUsage` reported; descriptor-Volume mismatch: `quota-mismatch` |
 | `tests/marker.rs` | First-provision write; restart verify: `verified`; marker missing: `missing` → Failed; `st_ino` mismatch: `replaced` → Failed; HMAC tampered: `tampered` → Failed; `installedSchemaVersion` > spec: migration-failed |
 | `tests/store_view.rs` | Hardlink farm LayoutEntry matrix validated; `gcroots/` at root (not under `meta/`); `state/` at root; `sync.lock` never unlinked; `live/.d2b-marker-<vm>` zero-length; same-filesystem invariant: `st_dev` mismatch → Failed |
 | `tests/swtpm_volume.rs` | TPM `create-if-never-provisioned`: existing → preserve; marker absent after provision → Failed; owner mismatch → Failed; quarantine on ambiguity; ancestor traverse ACL applied |
@@ -2495,7 +2495,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-volume-local --lib --tests` completes in ≤2 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
-and the toolkit fakes/FakeEffectPort only — no process spawn, container,
+and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
 hardware, or live cloud, and no filesystem tree beyond tiny temp fixtures. Any
 scenario needing those lives only in `integration/`, which keeps a lane
@@ -2550,7 +2550,7 @@ Documents:
 
 ## Implementation work items
 
-### ADR046-vl-001 — Volume contracts and state schema
+### ADR046-vl-001 - Volume contracts and state schema
 
 | Field | Value |
 | --- | --- |
@@ -2566,7 +2566,7 @@ Documents:
 | Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract; compile-time assertions for the exact `Clone + Serialize + DeserializeOwned` ID bounds and `Serialize + DeserializeOwned` request bounds; sealing-rotation request canonical-string/round-trip and deny-unknown tests; exact redacted-Debug assertions; deserialization rejects empty, over-128-byte, non-ASCII, whitespace, and control-byte IDs without echoing input; compile-time trait conformance includes `rotate_sealing_key` |
 | Removal proof | `d2b-core/src/storage.rs` StoragePathSpec/policy enums removed only after all Provider descriptor consumers are on v3 Volume spec |
 
-### ADR046-vl-002 — Crate scaffold and filesystem primitives
+### ADR046-vl-002 - Crate scaffold and filesystem primitives
 
 | Field | Value |
 | --- | --- |
@@ -2582,7 +2582,7 @@ Documents:
 | Validation | All `tests/marker.rs`, `tests/state.rs` scenarios; all `integration/provision.rs` scenarios; `cargo deny check` verifies no `d2b-priv-broker`/`d2bd` dependency |
 | Removal proof | `swtpm_dir.rs` marker implementation retired only after device-tpm Provider Volume is live and marker-check parity is confirmed |
 
-### ADR046-vl-003 — Controller reconcile loop and layout engine
+### ADR046-vl-003 - Controller reconcile loop and layout engine
 
 | Field | Value |
 | --- | --- |
@@ -2591,13 +2591,13 @@ Documents:
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract}.rs` (broker layout ops); `d2b-core/src/storage_lifecycle.rs` (lifecycle report) |
 | Reuse action | adapt |
 | Destination | `src/controller.rs`, `src/layout.rs`, `src/acl.rs`, `src/source.rs` |
-| Detailed design | Async reconcile loop; topological LayoutEntry evaluation; `VolumeEffectPort` semantic op dispatch (no direct broker connection; no `openat2`/`setfacl` call sites); ACL reconciliation cycle via effect port; drift detection; status write with expected revision; `sourcePolicyId` validation against declared `sourcePolicies`; controller watch remains responsive while per-resource effect calls run concurrently; **single watch scope** `providerRef: Provider/volume-local` — physical state reconciliation for all served Volumes (layout/ACL/quota/marker); ProviderDeployment creates/deletes Volume instances; volume-local does not issue create/delete API calls; Nix-preprovisioned `User/<name>` layout principals; no cross-component Volume sharing; each component consumes only its declared view; empty-payload stateNamespace Volumes use `migrationPolicy: none` — no migration EphemeralProcess dispatched |
+| Detailed design | Async reconcile loop; topological LayoutEntry evaluation; `VolumeEffectPort` semantic op dispatch (no direct broker connection; no `openat2`/`setfacl` call sites); ACL reconciliation cycle via effect port; drift detection; status write with expected revision; `sourcePolicyId` validation against declared `sourcePolicies`; controller watch remains responsive while per-resource effect calls run concurrently; **single watch scope** `providerRef: Provider/volume-local` - physical state reconciliation for all served Volumes (layout/ACL/quota/marker); ProviderDeployment creates/deletes Volume instances; volume-local does not issue create/delete API calls; Nix-preprovisioned `User/<name>` layout principals; no cross-component Volume sharing; each component consumes only its declared view; empty-payload stateNamespace Volumes use `migrationPolicy: none` - no migration EphemeralProcess dispatched |
 | Integration | Controller binary instantiated by Zone runtime after Provider Ready; receives `VolumeEffectPort` implementation and d2b-bus `ResourceClient` via ComponentSession |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/layout_provision.rs`, `tests/layout_repair.rs`, `tests/layout_adopt.rs`, `tests/acl.rs`, `tests/view_rights.rs`, `tests/source.rs`, `integration/provision.rs` |
 | Removal proof | `d2b-priv-broker/src/ops/storage_contract.rs` `reconcile_storage_scope` retired only after Volume controller parity confirmed |
 
-### ADR046-vl-004 — Store-view Volume
+### ADR046-vl-004 - Store-view Volume
 
 | Field | Value |
 | --- | --- |
@@ -2612,7 +2612,7 @@ Documents:
 | Validation | `tests/store_view.rs` all invariants; `integration/store_view.rs` same-filesystem boundary; private-NS sync with concurrent reader |
 | Removal proof | `nixos-modules/store.nix` activation and `d2b-priv-broker/src/ops/store_sync.rs` retired only after store-view Volume controller is live and passes all parity tests |
 
-### ADR046-vl-005 — TPM Volume
+### ADR046-vl-005 - TPM Volume
 
 | Field | Value |
 | --- | --- |
@@ -2627,7 +2627,7 @@ Documents:
 | Validation | `tests/swtpm_volume.rs` all scenarios; `integration/swtpm_marker.rs` real broker-maintained marker |
 | Removal proof | `d2b-priv-broker/src/ops/swtpm_dir.rs` retired only after device-tpm Provider TPM Volume is live and fail-closed tests pass |
 
-### ADR046-vl-006 — Block-image and tmpfs source kinds
+### ADR046-vl-006 - Block-image and tmpfs source kinds
 
 | Field | Value |
 | --- | --- |
@@ -2638,11 +2638,11 @@ Documents:
 | Destination | `src/source.rs` (block-image and tmpfs branches); `tests/source.rs`; `integration/block_image.rs` |
 | Detailed design | `block-image`: image file create/verify via `provision_block_image` effect op; `fallocate` performed by adapter when `preallocate: true`; FD transfer to Guest runtime via LaunchTicket via `open_volume_mount_token` effect op; `tmpfs`: `mount_tmpfs`/`umount_tmpfs` effect ops; `size=` and `nr_inodes=` derived from quota fields; cleanup via `umount_tmpfs` op |
 | Integration | Guest runtime Provider (cloud-hypervisor) receives block-image FD from volume-local via LaunchTicket; no path crosses the boundary |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/source.rs` allowlist pass/fail; block-image/tmpfs eval constraints; `integration/block_image.rs` real image lifecycle |
 | Removal proof | Not applicable (new) |
 
-### ADR046-vl-007 — Migration and snapshots
+### ADR046-vl-007 - Migration and snapshots
 
 | Field | Value |
 | --- | --- |
@@ -2657,7 +2657,7 @@ Documents:
 | Validation | All `tests/migration_unit.rs`, `tests/snapshot_unit.rs`, `tests/sealing_unit.rs`, `integration/migration.rs`, `integration/snapshot.rs`, and `integration/sealing.rs` scenarios, including restart/idempotency and status-before-effect assertions |
 | Removal proof | Not applicable (new) |
 
-### ADR046-vl-008 — Relocation, retention, incident hold, unclaimed GC, destruction
+### ADR046-vl-008 - Relocation, retention, incident hold, unclaimed GC, destruction
 
 | Field | Value |
 | --- | --- |
@@ -2672,7 +2672,7 @@ Documents:
 | Validation | All `tests/relocation_unit.rs`, `integration/relocation.rs` scenarios; destruction ordering under fault injection |
 | Removal proof | Not applicable (new) |
 
-### ADR046-vl-009 — Audit, OTEL, and error catalog
+### ADR046-vl-009 - Audit, OTEL, and error catalog
 
 | Field | Value |
 | --- | --- |
@@ -2683,11 +2683,11 @@ Documents:
 | Destination | `src/audit.rs`; `src/otel.rs`; `src/error.rs`; `tests/audit_unit.rs`; `integration/audit.rs` |
 | Detailed design | Event types and Zone audit emission per §Audit events, including controller rotation start/failure/commit and exactly-once broker `RotateSealingKey` success; OTEL metric definitions per §OTEL metrics with closed semantic labels and no Zone/resource-name-derived dimensions; Zone identity remains in `d2b.zone` resource attributes; error catalog per §Error catalog; no-path/no-key invariant enforced in all outputs |
 | Integration | Every lifecycle transition calls `audit::emit_volume_event`; OTEL metrics exported via `observability-otel` Provider |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/audit_unit.rs` golden records and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus resource-name canary absence; rotation audit exact-once/digest-only vectors; `tests/error_messages.rs` bounded messages; `integration/audit.rs` live stream |
 | Removal proof | Not applicable |
 
-### ADR046-vl-010 — Nix configuration and resource compiler integration
+### ADR046-vl-010 - Nix configuration and resource compiler integration
 
 | Field | Value |
 | --- | --- |
@@ -2702,7 +2702,7 @@ Documents:
 | Validation | All Nix eval-time validation rules; `contentId` determinism; credential-ref guard; unknown Provider config key → build fail |
 | Removal proof | `nixos-modules/storage-json.nix` and `nixos-modules/store.nix` per-VM rows retired only after Volume resources replace every path row and all consumers complete bundle-format migration |
 
-### ADR046-vl-011 — Workspace policy gate
+### ADR046-vl-011 - Workspace policy gate
 
 | Field | Value |
 | --- | --- |
@@ -2717,7 +2717,7 @@ Documents:
 | Validation | Gate detects each missing path; idempotent across re-runs; existing non-provider `d2b-*` crates not flagged |
 | Removal proof | Not applicable (permanent gate) |
 
-### ADR046-vl-012 — Core/broker adapter implementing VolumeEffectPort
+### ADR046-vl-012 - Core/broker adapter implementing VolumeEffectPort
 
 | Field | Value |
 | --- | --- |
@@ -2733,7 +2733,7 @@ Documents:
 | Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; rotation authorization, policy binding, all generation/revision preconditions, canonical idempotency vectors, byte-identical duplicate/retry, different-payload conflict, typed retry classification, and no key/path/handle in wire/Debug/error/audit; broker crash injection at every journal boundary with old-or-target visibility, roll-forward, and exactly-once success audit; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter exposes neither raw paths nor broker implementation to Provider crate; `integration/{provision,sealing}.rs` exercise full adapter paths |
 | Removal proof | Baseline broker op handlers (`state_dir.rs`, `storage_contract.rs`, `swtpm_dir.rs`, `store_sync.rs`, `store_view_posture.rs`) retired only after Volume controller parity is confirmed and all callers are on the adapter |
 
-### ADR046-vl-013 — No bootstrap-state exception (status-first controller start)
+### ADR046-vl-013 - No bootstrap-state exception (status-first controller start)
 
 | Field | Value |
 | --- | --- |
@@ -2855,7 +2855,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

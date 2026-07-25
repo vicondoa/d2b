@@ -11,7 +11,7 @@
 # inherited 0o022. A silent pipeline drop in any layer would surface here.
 #
 # Evaluated against a synthesized nixosSystem with tpm.enable,
-# graphics.enable, graphics.videoSidecar, and audio.enable all true — the
+# graphics.enable, graphics.videoSidecar, and audio.enable all true - the
 # minimal config that instantiates all four roles at once. Like the niri
 # graphics case, this is x86_64-only by nature (the framework's
 # checkVmPlatform gate refuses graphics/audio on non-x86_64 hosts).

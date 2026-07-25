@@ -506,8 +506,8 @@ in
       # /etc/d2b/ config + bundle/host/processes are root:d2bd
       # 0640 so the daemon reads without write.
       #
-      # /run/d2b is group-owned by `d2b` so launcher users —
-      # members of `d2b` via daemon-config.json's `publicSocketGroup` —
+      # /run/d2b is group-owned by `d2b` so launcher users -
+      # members of `d2b` via daemon-config.json's `publicSocketGroup` -
       # can traverse the directory to reach `public.sock`. The owning group
       # entry below narrows launcher access to r-x; the 1770 base mode keeps
       # the ACL mask at rwx so the named d2bd ACL can bind/remove the

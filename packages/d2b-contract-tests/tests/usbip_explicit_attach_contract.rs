@@ -1,7 +1,7 @@
 /// Explicit USB attach contract tests.
 ///
 /// These tests verify the shape, policy, and reject behavior for the
-/// `d2b usb attach <vm> <present-busid> --apply` explicit path — the
+/// `d2b usb attach <vm> <present-busid> --apply` explicit path - the
 /// path that does NOT require static busid/vendor allowlists in the bundle.
 use d2b_contract_tests::read_repo_file;
 use d2b_contracts::{
@@ -10,7 +10,7 @@ use d2b_contracts::{
 };
 
 // ---------------------------------------------------------------------------
-// Explicit plan — present-busid busid shape contract
+// Explicit plan - present-busid busid shape contract
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -96,7 +96,7 @@ fn explicit_firewall_rule_request_denies_unknown_fields() {
 }
 
 // ---------------------------------------------------------------------------
-// Busid validation — explicit path uses same sysfs shape as declared path
+// Busid validation - explicit path uses same sysfs shape as declared path
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -121,7 +121,7 @@ fn explicit_attach_uses_same_busid_validation_as_declared_path() {
 }
 
 // ---------------------------------------------------------------------------
-// UsbipClaimSource — claim source enum shape
+// UsbipClaimSource - claim source enum shape
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -162,7 +162,7 @@ fn claim_source_round_trips_via_serde() {
 }
 
 // ---------------------------------------------------------------------------
-// UsbipDaemonClaimRecord — lock path derivation
+// UsbipDaemonClaimRecord - lock path derivation
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -170,11 +170,11 @@ fn lock_path_for_busid_is_scoped_to_run_d2b_locks_usbip() {
     let path = UsbipDaemonClaimRecord::lock_path_for_busid("1-2");
     assert!(
         path.starts_with("/run/d2b/locks/usbip/"),
-        "OFD lock path must be under /run/d2b/locks/usbip/ — got {path:?}"
+        "OFD lock path must be under /run/d2b/locks/usbip/ - got {path:?}"
     );
     assert!(
         path.ends_with("1-2"),
-        "OFD lock path must end with busid — got {path:?}"
+        "OFD lock path must end with busid - got {path:?}"
     );
 }
 
@@ -185,17 +185,17 @@ fn lock_path_for_busid_does_not_traverse() {
         let path = UsbipDaemonClaimRecord::lock_path_for_busid(busid);
         assert!(
             path.starts_with("/run/d2b/locks/usbip/"),
-            "lock path must stay under /run/d2b/locks/usbip/ for busid {busid:?} — got {path:?}"
+            "lock path must stay under /run/d2b/locks/usbip/ for busid {busid:?} - got {path:?}"
         );
         assert!(
             !path.contains(".."),
-            "lock path must not contain '..' for busid {busid:?} — got {path:?}"
+            "lock path must not contain '..' for busid {busid:?} - got {path:?}"
         );
     }
 }
 
 // ---------------------------------------------------------------------------
-// Per-device backend model — no shared backend for explicit busids
+// Per-device backend model - no shared backend for explicit busids
 // ---------------------------------------------------------------------------
 
 #[test]

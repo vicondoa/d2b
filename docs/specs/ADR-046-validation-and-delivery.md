@@ -34,14 +34,14 @@ request must follow; it does not itself begin that work, and no cleanup,
 branch deletion, or worktree removal described in §14 is performed by this
 change.
 
-## 2. Manifest closure gate (Gate 0 — precondition for any implementation wave)
+## 2. Manifest closure gate (Gate 0 - precondition for any implementation wave)
 
 No `ADR046-W*` implementation wave in §3 may open until **all** of the
 following are true, per the parent ADR's "Review and acceptance" contract and
 `docs/specs/README.md`:
 
-1. Every file in the `docs/specs/ADR-046-*` manifest — the exact 28 top-level
-   specs and 27 `docs/specs/providers/ADR-046-provider-*` dossiers — is
+1. Every file in the `docs/specs/ADR-046-*` manifest - the exact 28 top-level
+   specs and 27 `docs/specs/providers/ADR-046-provider-*` dossiers - is
    `Status: Accepted`. The five closing specs are
    `ADR-046-feasibility-and-spikes`, `ADR-046-reset-and-cutover`,
    `ADR-046-security-and-threat-model`, `ADR-046-streamline`, and this spec.
@@ -81,14 +81,14 @@ every spec's metadata table (verified directly against each file at baseline
 before two specs may run in literally concurrent worktrees. Where a spec's
 own `Depends on` list is a strict subset of another same-wave spec's
 prerequisites, its implementation branch MAY open earlier than its assigned
-wave boundary under the speculative-readiness rule in §6 — the wave number
+wave boundary under the speculative-readiness rule in §6 - the wave number
 below is the latest-safe placement, not the earliest-possible one.
 
 This rule derives a wave only for a spec. `ADR046-W8` (§3.2) has no spec
 members and is therefore **not** produced by the layering above: it is a
-terminal delivery-process wave whose contents — the tooling and process
+terminal delivery-process wave whose contents - the tooling and process
 friction accumulated while delivering `ADR046-W0`–`ADR046-W7`, in the
-categories signoff, build, test, merge, codegen, and disk — are triaged and
+categories signoff, build, test, merge, codegen, and disk - are triaged and
 fixed at `ADR046-W7` close rather than read off a `Depends on` edge. Its
 only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 §4 template unchanged, including exactly one binding ten-role panel (§12.3).
@@ -100,14 +100,14 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 | `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR-046-resource-store-redb` → `ADR-046-resource-api-and-authorization` (serial sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema}.rs`; `packages/d2b-resource-store/`, `packages/d2b-resource-store-redb/`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
 | `ADR046-W1` | `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus` | `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
-| `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial — every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
+| `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
 | `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
 | `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
-| `ADR046-W8` | None — no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`–`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
+| `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`–`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
-Waves are numbered `ADR046-W0`…`ADR046-W8` — an ADR-046-scoped namespace,
+Waves are numbered `ADR046-W0`…`ADR046-W8` - an ADR-046-scoped namespace,
 distinct from this repository's general per-plan `Wn` commit-tag convention
 in `AGENTS.md`. Commit subjects for ADR 0046 implementation work use
 `( ADR046-W<n> )`, `( ADR046-W<n>fu<m> )`, and
@@ -143,7 +143,7 @@ never writes Volume layout/spec/ownership fields, but its controller
 by volume-local in integration tests) and `network-local` before
 `device-usbip` (device-usbip's dossier lists `ADR-046-resources-network` as a
 dependency for its firewall/export attachment). Both are soft integration-test
-orderings, not authoring blockers — the crates themselves may be authored
+orderings, not authoring blockers - the crates themselves may be authored
 concurrently; only their `integration/` scenario tests need the peer Provider
 present.
 
@@ -234,7 +234,7 @@ re-derives launch order or parallelism from this prose. Per D095:
 - **Anti-serialization.** The graph embodies §6: all ready, file-disjoint
   parallel groups launch concurrently. A same-wave dependency is a
   `shared-contract`/`file-overlap-order` prep barrier before its specific
-  consumers — never a reason to serialize a whole wave.
+  consumers - never a reason to serialize a whole wave.
 
 #### 3.5.1 Ready-wave query
 
@@ -270,13 +270,13 @@ an anti-serialization violation (see §6 and `ADR046-streamline-013`).
 Every wave (`ADR046-W0`…`ADR046-W8`) uses this template. A wave's exit
 criteria are its successor's entry criteria; there is no partial-wave
 advance. `ADR046-W8` is no exception: having no spec members satisfies its
-spec-scoped entry and exit clauses vacuously, but every remaining clause —
+spec-scoped entry and exit clauses vacuously, but every remaining clause -
 snapshot immutability, validator lanes, exactly one binding ten-role panel,
-seal, and merge eligibility — applies to it unchanged.
+seal, and merge eligibility - applies to it unchanged.
 
 **Entry criteria (all required):**
 
-1. Gate 0 (§2) has passed, or — for `ADR046-W1` onward — every spec assigned
+1. Gate 0 (§2) has passed, or - for `ADR046-W1` onward - every spec assigned
    to this wave and every wave before it has a `Merged` implementation state
    recorded in `docs/specs/ADR-046-work-items.json` (§8).
 2. Every destination path this wave's work items name (§3.2, §7) is free of
@@ -306,7 +306,7 @@ seal, and merge eligibility — applies to it unchanged.
    PR in the wave's stack, and each has merged root-to-leaf through GitHub
    (§13).
 6. Post-wave cleanup (§14) is recorded as pending for the integrator (not
-   necessarily executed before advancing — advancing needs the merge, not the
+   necessarily executed before advancing - advancing needs the merge, not the
    worktree teardown).
 
 No wave may begin implementation subagent dispatch before its entry criteria
@@ -347,7 +347,7 @@ codebase's sibling ADR-0045 lineage):
 3. **`ADR046-W1`/`ADR046-W2`/`ADR046-W4`/`ADR046-W5`/`ADR046-W6` parallel
    slices** each branch from the exact merged (or, speculatively, exact
    open) tip of their prerequisite branch and target `v3` once that
-   prerequisite merges — never targeting an unrelated parallel sibling slice.
+   prerequisite merges - never targeting an unrelated parallel sibling slice.
 4. **The integrator owns**: shared-prep commits (§7), Cargo.toml workspace
    member list and `flake.nix` output additions, `docs/specs/ADR-046-spec-set.json`
    / `ADR-046-work-items.json` regeneration, cross-slice conflict resolution,
@@ -356,7 +356,7 @@ codebase's sibling ADR-0045 lineage):
    implementation sink for any slice that can be assigned independently
    (mirrors the sibling repository's anti-serialization invariant, item 4).
 5. **PR bodies** contain only dependency, base/head/tree, `candidate_id`/
-   `content_id`, and check-status summaries, per §12.5 — never raw
+   `content_id`, and check-status summaries, per §12.5 - never raw
    validation output, panel transcripts, or AI/tool/model attribution.
 6. **Reviewers and panel roles** inspect the plan/diff and supplied evidence;
    they do not re-run tests/builds/evals unless the integrator explicitly
@@ -372,14 +372,14 @@ A slice's implementation branch **may** open before its assigned wave number
 in §3.2 closes, provided:
 
 1. every spec it `Depends on` (§3.4) already has `Merged` work-item state
-   (not merely "wave complete" — the precise edge, not the coarse wave), and
+   (not merely "wave complete" - the precise edge, not the coarse wave), and
 2. no destination path it will write (per its work items' `Destination`
    field) is currently claimed by another **still-open** branch, per the
    contention index in §6.2/§7.
 
 For example, `resources-network` (computed wave W4) and `resources-credential`
-(also W4) may each open as soon as `provider-model-and-packaging` (W3) merges
-— they need nothing from `components-processes-and-sandbox` or
+(also W4) may each open as soon as `provider-model-and-packaging` (W3) merges -
+they need nothing from `components-processes-and-sandbox` or
 `core-controllers`, which are their W4 siblings, not their prerequisites. This
 is a positive launch requirement, not merely permission: when a slice's exact
 dependency edges are satisfied and its destination paths are uncontended, the
@@ -402,7 +402,7 @@ Before opening any wave's slices, the integrator builds a file-overlap graph:
    regions of the (now-existing) file.
 3. Distinct connected components run concurrently in separate worktrees.
    Partition by actual file paths, never by a desire to avoid all future
-   conflict — avoiding possible conflicts is not, by itself, grounds to
+   conflict - avoiding possible conflicts is not, by itself, grounds to
    serialize two components that do not share a file.
 4. Record the connected-component count, the launched-slice count, and any
    blocked slice with its exact blocker (contended path, missing shared-prep
@@ -435,7 +435,7 @@ the other claimant's worktree opens:
 | `nixos-modules/index.nix`, `nixos-modules/default.nix` | `ADR046-identities-002` (zones/resources), every `ADR-046-provider-*` Nix authoring section (`ADR046-W5`/`ADR046-W6`) | `ADR046-W0` lands the base zones/resources wiring; each `ADR046-W6` Provider slice appends its own resource-type Nix module import as a single line, rebased by the integrator at merge time, never touching another Provider's import line |
 | `packages/d2b-contract-tests/tests/workspace_policy.rs` | every Provider crate-layout assertion (D059/`ADR046-pstate-011`-equivalent gates), one row per Provider | integrator batches one appended assertion per merged `ADR046-W6` slice; a slice's own PR adds only its own assertion function, appended after the current last function, never reordering existing ones |
 | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` | regenerated after every spec status/work-item-state change (§8) | integrator-only; regenerated and committed as the last commit of each wave, never inside a slice's own PR |
-| `packages/d2b-core-controller/src/rbac.rs`, `authz_audit.rs` | `resource-api-and-authorization` (W0-adjacent api-002 work item), `resources-zone-control` (Role/RoleBinding schema), `telemetry-audit-and-support` (audit hooks) | `resources-zone-control` (W5) lands the concrete Role/RoleBinding schema atop the W0 `authz.rs` skeleton; `telemetry-audit-and-support` (W5, parallel) adds only its own `authz_audit.rs` audit-emission hooks, a distinct file, so this is a false-positive overlap once split at the file (not module) level — recorded here so the integrator does not accidentally serialize two already-disjoint files under one shared symbol name |
+| `packages/d2b-core-controller/src/rbac.rs`, `authz_audit.rs` | `resource-api-and-authorization` (W0-adjacent api-002 work item), `resources-zone-control` (Role/RoleBinding schema), `telemetry-audit-and-support` (audit hooks) | `resources-zone-control` (W5) lands the concrete Role/RoleBinding schema atop the W0 `authz.rs` skeleton; `telemetry-audit-and-support` (W5, parallel) adds only its own `authz_audit.rs` audit-emission hooks, a distinct file, so this is a false-positive overlap once split at the file (not module) level - recorded here so the integrator does not accidentally serialize two already-disjoint files under one shared symbol name |
 | `CHANGELOG.md` `## [Unreleased]` block | every slice in every wave (`ADR046-W0`–`ADR046-W8`), because the changelog gate requires release notes for any code change | no slice edits `CHANGELOG.md`; each slice writes one `changelog.d/<branch>.md` fragment carrying standard Keep a Changelog `### <Section>` headings (see `changelog.d/README.md`), which no other slice touches, and the integrator runs `cargo xtask changelog-fold` at wave close to collate every fragment into `## [Unreleased]` by section and delete the consumed fragments. The `test-changelog` gate accepts either a `CHANGELOG.md` entry or a fragment, so slices never need the shared file |
 
 Any newly discovered contention during wave execution is added to this table
@@ -450,7 +450,7 @@ parallelism (it does, until resolved).
    are generated indexes (per `docs/specs/README.md`) binding exact member
    files, versions, statuses, dependency edges, content digests, and
    implementation work items. They are generated once the initial member set
-   exists (already true — all 28 top-level specs and 27 dossiers exist at
+   exists (already true - all 28 top-level specs and 27 dossiers exist at
    this baseline) and regenerated as the last commit of every wave in §3.2.
    A wave's exit criteria (§4) include this regeneration; `make test-drift`
    (extended per work item `ADR046-delivery-004`, §17) fails if the committed
@@ -498,7 +498,7 @@ are Accepted; per the parent ADR's "Current-code fit" table and
    successor (so a revert of one does not silently also revert the other).
 4. `DELETE`-disposition rows (per the migration map's disposition-code
    table, §0/§1–§9) are deleted only in the wave whose successor spec closes
-   them — for example, the per-realm PID1 broker/controller systemd units
+   them - for example, the per-realm PID1 broker/controller systemd units
    (§5.2 of the migration map) are deleted only after `ADR046-W5`'s
    `resources-zone-control`/`core-controllers` successors are integrated and
    the removal-proof test passes; `d2b-realm-router` session types are
@@ -507,7 +507,7 @@ are Accepted; per the parent ADR's "Current-code fit" table and
 5. A `REPLACE`-disposition row (e.g. `d2b-realm-router/src/router.rs` →
    Zone-local resource routing) follows the same rule but may retain its old
    file as a dead, test-gated stub for one wave beyond its successor's
-   landing if — and only if — a still-open sibling slice's integration test
+   landing if - and only if - a still-open sibling slice's integration test
    fixture references it; the stub's removal is then a follow-up commit in
    the same wave, not deferred indefinitely.
 6. This spec's own `ADR046-W7` ("streamline & cutover") is the wave that
@@ -534,7 +534,7 @@ manifest/fixture, per that file's closed-set rule.
 | --- | --- | --- | --- |
 | Tier0 | Syntax + shellcheck for every new/changed shell/doc surface introduced by ADR 0046 tooling (§17) | `make check-tier0` | existing target, no change |
 | Layer-1 lint | `cargo fmt`/`clippy` for every new `d2b-*` crate in §3.2/§3.3 | `make test-lint` | existing target, extended by new crate membership |
-| Layer-1 rust | `cargo test --workspace` across every new crate, including the three broker feature passes where a new crate touches `d2b-priv-broker` (none does, per D077 — no Provider process imports the broker) | `make test-rust` | existing target |
+| Layer-1 rust | `cargo test --workspace` across every new crate, including the three broker feature passes where a new crate touches `d2b-priv-broker` (none does, per D077 - no Provider process imports the broker) | `make test-rust` | existing target |
 | Layer-1 proofs | Any new `proofs/` crate for redb/session invariants (only if a wave's feasibility spike needs a separate proof crate; see `ADR-046-feasibility-and-spikes`) | `make test-proofs` | existing target |
 | Layer-1 flake | `eval-*` checks extended with Zone/resource examples once `ADR046-W5`'s `nix-configuration` lands; `examples/minimal` gains a `d2b.zones.dev.resources.*` block | `make test-flake` | existing target, new fixture |
 | Layer-1 drift | Schema/Nix-option/spec-set drift gates from §8 | `make test-drift` | existing target, extended rows |
@@ -544,7 +544,7 @@ manifest/fixture, per that file's closed-set rule.
 
 | Row | Coverage | Location |
 | --- | --- | --- |
-| Unit | Every DTO/schema/validator introduced by `ADR046-object-001/002`, `ADR046-store-001..003`, `ADR046-api-001/002` — canonical JSON, bounds, redaction, unknown-field rejection | `packages/d2b-contracts/src/v3/**` `#[cfg(test)]`, `packages/d2b-resource-store-redb/src/**` |
+| Unit | Every DTO/schema/validator introduced by `ADR046-object-001/002`, `ADR046-store-001..003`, `ADR046-api-001/002` - canonical JSON, bounds, redaction, unknown-field rejection | `packages/d2b-contracts/src/v3/**` `#[cfg(test)]`, `packages/d2b-resource-store-redb/src/**` |
 | Property | Owner cycle/depth/reparent property tests (`ADR046-object-002`); expected-revision conflict storms; watch replay/no-gap; ResourceRef parse/collision vectors (`ADR046-identities-001`) | `packages/d2b-contracts/src/v3/resource_ref.rs`, `packages/d2b-resource-store-redb/tests/` |
 | Fuzz | Canonical offer/record fuzzing carried over from main's `d2b-session` Noise vectors (`ADR046-session-001`); redb key/encoding fuzz for `type_index`/`owner_index`/`revision_log` | `packages/d2b-session/tests/noise_vectors.rs` (ported), `packages/d2b-resource-store-redb/fuzz/` |
 | Fault injection | Forced crash at every commit boundary (resource-store-redb performance contract fixture list); controller-spawned Process exits unexpectedly → `phase: Degraded`/`Failed` (D059 `tests/` requirement); disconnect/relist/lease-withdrawal | `packages/d2b-resource-store-redb/tests/fault.rs`; every Provider crate's `tests/*.rs` |
@@ -572,7 +572,7 @@ contract, run in `packages/d2b-resource-store-redb/benches/`:
 | p95 crash-safe single-resource mutation | <=10 ms |
 | p95 durable commit → matching controller handler start | <=5 ms |
 | p95 ready Process commit → launch-attempt start | <=20 ms |
-| 10,000 resources | list/get/watch fixture — must meet the above p95s under load |
+| 10,000 resources | list/get/watch fixture - must meet the above p95s under load |
 | 100 live watches | fan-out fixture |
 | 1/10/100 concurrently ready Process resources | fast-launch concurrency fixture (`ADR046-reconcile-003`) |
 | Expected-revision conflict storm | no silent merge; every stale write returns `resource-conflict` with current revision |
@@ -613,7 +613,7 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   package/template/resource-output resolution, and identity/pidfd-evidence
   observation tests (`ADR046-process-001`).
 - `VolumeLayoutEffectPort`/`VolumeSourceEffectPort`,
-  `NetworkEffectPort`/`DeviceEffectPort` — every call carries only opaque
+  `NetworkEffectPort`/`DeviceEffectPort` - every call carries only opaque
   resource/intent/template/policy IDs; a policy test
   (`packages/d2b-contract-tests/tests/policy_no_raw_host_path_to_provider.rs`)
   asserts no Provider crate source references a raw host path, broker DTO
@@ -645,7 +645,7 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   forward from current storage-lifecycle coverage (`ADR046-primitives-003`),
   plus new: 1,024 layout-entry / 64-view / 64-attachment bound tests (D062);
   `sourcePolicyId` opacity test (raw host path never in spec/status/audit,
-  never reaches the Provider process as a literal path — D082).
+  never reaches the Provider process as a literal path - D082).
 - Provider state Volume tests: a component receives a state Volume **only**
   when it declares one under the storage-need test (D087); a stateless
   component declares none and receives none, and no empty identity-only Volume
@@ -658,7 +658,7 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   (controller re-derives observed state from status/core ledger/external
   observation and never treats status as authority); optional-state admission
   tests asserting an unjustified namespace is rejected `component-state-not-
-  justified`; no bootstrap state Volume or bootstrap-storage mechanism exists —
+  justified`; no bootstrap state Volume or bootstrap-storage mechanism exists -
   fixed bootstrap components reach Ready from status/the core Operation ledger
   (D086, superseded by D087), and a Guest still bootstraps its own Guest-local
   `volume-local` without a parent-Host dirfd leak.
@@ -871,7 +871,7 @@ with the production encrypted named-stream implementation.
 | --- | --- | --- |
 | Container | Provider controller against a real Zone runtime in a container; resource lifecycle under real broker calls; cleanup-contract scenarios (§0.2 of the migration map) | `make test-integration` (podman; local host/manual pre-PR, per this repo's existing tier) |
 | Host runNixOSTest, KVM | Live daemon/broker/socket-activation/host-posture/kernel behavior for every new Zone runtime, Provider process, and cleanup/rollback scenario | `make test-host-integration` (x86_64-linux, KVM) |
-| Host runNixOSTest, TCG fallback | Same suite when `/dev/kvm` is absent — slower, still required before Wave exit for waves touching kernel-adjacent behavior (process/adoption, cgroup, virtiofs) | `make test-host-integration` (TCG fallback path, already documented in this repo's `AGENTS.md`) |
+| Host runNixOSTest, TCG fallback | Same suite when `/dev/kvm` is absent - slower, still required before Wave exit for waves touching kernel-adjacent behavior (process/adoption, cgroup, virtiofs) | `make test-host-integration` (TCG fallback path, already documented in this repo's `AGENTS.md`) |
 
 ### 10.11 Hardware/live/cloud manual
 
@@ -879,7 +879,7 @@ with the production encrypted named-stream implementation.
 | --- | --- | --- |
 | Hardware | Real GPU/YubiKey/hardware-TPM passthrough for `device-gpu`, `device-security-key`, `device-tpm` | `make test-hardware`, manual, on a host with the devices |
 | Live-host | Destructive/stateful checks against a real deployed Zone (store adoption, restart/power-loss, USBIP guestd lifecycle equivalents) | `D2B_LIVE=1 bash tests/integration/live/<name>.sh`, manual, never CI |
-| Cloud | `runtime-azure-container-apps`, `runtime-azure-virtual-machine`, `transport-azure-relay`, `credential-managed-identity`, `credential-entra` against real Azure resources | manual tier, gated by `ADR-046-feasibility-and-spikes`; never run in CI or as a required wave-exit lane — recorded as external evidence only |
+| Cloud | `runtime-azure-container-apps`, `runtime-azure-virtual-machine`, `transport-azure-relay`, `credential-managed-identity`, `credential-entra` against real Azure resources | manual tier, gated by `ADR-046-feasibility-and-spikes`; never run in CI or as a required wave-exit lane - recorded as external evidence only |
 
 ### 10.12 Restart/power-loss
 
@@ -893,7 +893,7 @@ with the production encrypted named-stream implementation.
   commit with no torn write observable.
 - Store identity fail-closed: a previously provisioned database that is
   missing, replaced, bound to another Zone/UID, newer than the binary
-  schema, or internally inconsistent fails closed — never silently
+  schema, or internally inconsistent fails closed - never silently
   recreated (`ADR-046-resource-store-redb` "Store identity").
 
 ### 10.13 Reset/cutover
@@ -920,7 +920,7 @@ before it opens.
   contract test in `packages/d2b-contract-tests/tests/` renders the snippet
   and diffs it against the dossier's committed JSON block.
 - `docs/reference/*` pages affected by ADR 0046 land in the same wave as
-  their implementation, not deferred — per this repository's existing
+  their implementation, not deferred - per this repository's existing
   `AGENTS.md` docs-review-role expectation ("Diataxis adherence... AGENTS.md
   updates landing with load-bearing changes").
 
@@ -954,7 +954,7 @@ The fast hermetic suite (`src/` `#[cfg(test)]` units and crate `tests/*.rs`)
 is the default inner loop, required on every change; all slower coverage
 lives only in `integration/`. Budgets below are **execution-only**, measured
 after build with a warm cache (compilation excluded) against the recorded
-reference runner, and enforced by the runtime ledger + timing gate — not by a
+reference runner, and enforced by the runtime ledger + timing gate - not by a
 new test framework.
 
 | Budget | Threshold (warm cache, execution only) |
@@ -968,7 +968,7 @@ new test framework.
 
 **Placement rules (a violation must move, never gain a sleep/timeout/`#[ignore]`):**
 
-- `src/` units and `tests/` are in-process only — deterministic fake
+- `src/` units and `tests/` are in-process only - deterministic fake
   clock/RNG; fake `ResourceClient`/EffectPort/broker/transport/credential/
   systemd; in-memory or tiny-temp bounded redb fixtures; parallel-safe with
   no global mutable or shared ports/paths; exact bounded property case counts.
@@ -995,7 +995,7 @@ tracked and optimized separately via shared cache and dependency discipline.
 reusable semantic assertions migrate into the new hermetic suite and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and
 manifest entries are deleted once successor coverage and the §9 removal proof
-pass — old and new suites never run indefinitely. Every current-code
+pass - old and new suites never run indefinitely. Every current-code
 migration/replacement work item names the exact old test selectors/files with
 a keep/adapt/move/delete disposition and a removal gate, and updates
 `tests/layer1-jobs.json`, closed gate manifests, flake/matrix/Nix-unit pins,
@@ -1007,9 +1007,9 @@ legacy selector is absent.
 ## 11. Heavy-gate: sole use
 
 Every Layer-2/hardware/live/perf-heavy command anywhere in ADR 0046
-delivery — `make test-integration`, `make test-host-integration`,
+delivery - `make test-integration`, `make test-host-integration`,
 `make test-hardware`, `D2B_LIVE=1 bash tests/integration/live/*.sh`, the
-redb benchmark suite (§10.4), and any cloud-tier manual run (§10.11) — MUST
+redb benchmark suite (§10.4), and any cloud-tier manual run (§10.11) - MUST
 run only through one shared semaphore:
 
 ```bash
@@ -1030,7 +1030,7 @@ not already present at ADR 0046 implementation time) is work item
 `make heavy-test-hardware` targets route through it. "Sole use" means: no
 wave, no Provider crate, and no panel/validator role may create a second
 ad hoc lock file, a bespoke sleep-and-retry loop, or a per-crate heavy-lane
-guard — every heavy lane in every wave shares the exact same two slots, so
+guard - every heavy lane in every wave shares the exact same two slots, so
 concurrent waves' heavy validation cannot silently oversubscribe the shared
 Nix store, cargo target, or KVM device.
 
@@ -1052,8 +1052,8 @@ snapshot binding:
 This mirrors `cargo xtask delivery wave help`'s `snapshot` subcommand as
 already specified for this codebase's sibling ADR-0045 lineage (built here as
 work item `ADR046-delivery-002`, §17, by copy/adapt per D001/D041). Any
-content change after the snapshot — including generated output, dependency
-metadata, contract fingerprints, or repository-set membership — invalidates
+content change after the snapshot - including generated output, dependency
+metadata, contract fingerprints, or repository-set membership - invalidates
 both validator and panel evidence; the wave re-snapshots and both lanes
 rerun. A history-only rebase or retarget may reuse panel evidence only when
 the canonical proof tool (§12.6) verifies byte-identical integrated content.
@@ -1076,13 +1076,13 @@ gating each other:
 
 A pending lane is valid only while the wave's PR stack is open (§13.1); it
 never permits merge (§13.3). Command/result evidence is imported into an
-external, candidate-ID-addressed state directory — never committed to Git,
+external, candidate-ID-addressed state directory - never committed to Git,
 copied into generated artifacts, or pasted into a PR body (§12.5).
 
 ### 12.3 Ten-role final panel, bound to GPT-5.6 Sol
 
-Every ADR 0046 wave's binding panel — run exactly once, at wave close,
-against the wave's one immutable snapshot, never per implementation round —
+Every ADR 0046 wave's binding panel - run exactly once, at wave close,
+against the wave's one immutable snapshot, never per implementation round -
 uses this repository's existing ten-role default roster (`AGENTS.md` →
 "Panel review" → "Default panel"), with every role's provider/model bound by
 the wave's `panel-request` record to:
@@ -1134,7 +1134,7 @@ ADR-0045-lineage panel-receipt artifact:
 
 `signoff` is `true` iff `recommendations` is `[]`; any finding requires a
 content change, which creates a new snapshot and invalidates every prior
-validation/panel record for that wave. Green tests never waive this gate —
+validation/panel record for that wave. Green tests never waive this gate -
 every wave, including a documentation-only or single-crate wave, requires
 unanimous 10/10 signoff before its exit criteria (§4) are met. Building this
 tooling (if not already present) is work item `ADR046-delivery-004`/`-005`
@@ -1160,15 +1160,15 @@ bodies carry only: dependency list, base/head/tree OIDs, `candidate_id`/
 evidence. No PR description, commit message, CHANGELOG entry, or shipped doc
 names or lists the AI agent, assistant, tool, or model used to author or
 review the change (per this repository's existing `AGENTS.md` "AI/tool
-attribution" rule, extended here to also cover panel attestation records —
+attribution" rule, extended here to also cover panel attestation records -
 the panel's own `model_version`/`provider` fields exist only inside the
 external, non-Git delivery-state directory, never inside a committed file).
 
 ### 12.6 Content invalidation and byte-identical history proof
 
-Any content change to the wave's integrated tree — including generated
+Any content change to the wave's integrated tree - including generated
 output, dependency metadata, contract/index content, or repository-set
-membership — invalidates both the validator and panel lanes for that wave.
+membership - invalidates both the validator and panel lanes for that wave.
 The wave re-snapshots (§12.1) and reruns both lanes. A history-only rebase or
 retarget (no tree content change, only a new base commit) may reuse prior
 panel records only when a canonical proof tool verifies:
@@ -1190,7 +1190,7 @@ sibling-lineage history-proof tool per D001/D041.
 After a slice's candidate passes the smallest focused local preflight
 (`make check-tier0` + its directly affected `make test-*` shard), the
 integrator immediately opens or updates its PR and creates the wave's
-immutable snapshot (§12.1) from that exact open-PR/stack state — it does not
+immutable snapshot (§12.1) from that exact open-PR/stack state - it does not
 wait for `make test-integration`, `make test-host-integration`, or the panel
 to finish first. This is the same ordering this repository's existing
 `AGENTS.md` "Landing changes (PR workflow)" section already requires; ADR
@@ -1218,12 +1218,12 @@ merge (§13.3).
    validation for that retarget (full re-panel only if content changed, per
    §12.6).
 4. A wave does not advance to the next wave's entry criteria (§4) until
-   every PR in its own stack has merged through GitHub — never through a
+   every PR in its own stack has merged through GitHub - never through a
    local octopus merge or a direct push to `v3` for ADR-scale work
    (per this repository's existing `AGENTS.md` "Finish-of-work invariant"
    and "Stacked PR workflow" sections, which remain binding for ADR 0046).
 
-## 14. Post-wave cleanup (policy only — no deletion performed by this change)
+## 14. Post-wave cleanup (policy only - no deletion performed by this change)
 
 After each wave's every PR merges (§13.3), the integrator:
 
@@ -1234,7 +1234,7 @@ After each wave's every PR merges (§13.3), the integrator:
 3. Removes the finished local worktrees and deletes their local branches.
 4. Runs `nix-collect-garbage` and verifies `git worktree list` contains only
    active work for the next wave.
-5. Confirms no abandoned/superseded branch is silently dropped — any
+5. Confirms no abandoned/superseded branch is silently dropped - any
    worktree branch whose tip is unmerged but represents abandoned work is
    flagged for the operator, per this repository's existing `AGENTS.md`
    worktree-audit rule.
@@ -1258,7 +1258,7 @@ close, and d2b 3.0 does not release, until all of:
    evidence is imported per §12.2.
 2. Every `DELETE`/`REPLACE` row in `ADR-046-current-code-migration-map` has
    satisfied its removal-proof test (§9) on the `ADR046-W8` candidate
-   snapshot — the removal proofs `ADR046-W7` established must still hold on
+   snapshot - the removal proofs `ADR046-W7` established must still hold on
    the shipping tree. This is the destructive-cutover gate; d2b 3.0 does not
    ship with both the v3-pre-ADR-0046 code path and its successor coexisting
    indefinitely.
@@ -1274,7 +1274,7 @@ close, and d2b 3.0 does not release, until all of:
    Keep-a-Changelog convention (`AGENTS.md` → "Changelog & Releases"),
    summarized by version with every internal wave/finding process marker
    stripped, per that same file's "Process markers stay out of shipped
-   artifacts" rule — ADR 0046's `ADR046-W<n>` tags are exactly such a
+   artifacts" rule - ADR 0046's `ADR046-W<n>` tags are exactly such a
    process marker and never appear in the released CHANGELOG section.
 6. Every prior wave's post-wave cleanup (§14) has been performed, so the
    release cuts from a tree with no dangling ADR 0046 implementation
@@ -1290,7 +1290,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Item | Treatment |
 | --- | --- |
 | Current anchor | This repository's `AGENTS.md` "Panel review" (8/N-role phase gate, no candidate snapshot/seal), "Stacked PR workflow for large waves," "Worktrees for parallel agents," `tests/AGENTS.md`/`tests/README.md` Layer-1/Layer-2 taxonomy, and `Makefile` targets (`make check-tier0`, `test-unit`, `test-lint`, `test-rust`, `test-proofs`, `test-flake`, `test-drift`, `test-policy`, `check`, `check-static`, `test`, `test-integration`, `test-host-integration`) |
-| Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool are `ADR-only` in this repository today — they exist as a proven, documented process on this codebase's sibling ADR-0045 lineage and are adopted here by explicit copy/adapt under D001/D041, not invented fresh |
+| Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool are `ADR-only` in this repository today - they exist as a proven, documented process on this codebase's sibling ADR-0045 lineage and are adopted here by explicit copy/adapt under D001/D041, not invented fresh |
 | Behavior retained | Layer-1-first bias, closed drift/meta-gate set, hermetic mocking discipline, commit-before-build convention, no-AI-metadata-in-Git convention, worktree/branch hygiene, `KillMode=process` restart-continuation semantics |
 | Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`–`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
 | Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; extend the existing ten-role panel table unchanged |
@@ -1312,7 +1312,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check` |
 | Detailed design | Two-slot per-UID OFD-locked semaphore, 250 ms nonblocking retry up to 30 minutes, fail-closed on unsupported locking, duplicated locked-FD handoff to child, wrapper-owned group-signal/reap, as specified in §11 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout. |
 | Integration | Every heavy lane in §10.4/§10.10/§10.11 routes through this one binary; no wave adds a second lock mechanism |
-| Data migration | None — net-new tooling |
+| Data migration | None - net-new tooling |
 | Validation | Unit tests for slot acquisition/timeout/fail-closed paths; integration test spawning two concurrent heavy-gate invocations and asserting the second blocks until the first releases |
 | Removal proof | Not applicable (net-new; nothing to remove) |
 
@@ -1328,7 +1328,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/delivery/snapshot.rs` |
 | Detailed design | Binds base/head OIDs, dependency graph, repository set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | Called by the integrator immediately after PR opening (§13.1), before any validator/panel lane starts |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests asserting identical inputs produce identical digests and any single-byte content change produces a different `content_id` |
 | Removal proof | Not applicable |
 
@@ -1344,7 +1344,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/delivery/validate_import.rs`; external candidate-ID-addressed evidence directory (never under Git) |
 | Detailed design | Imports CI/local/host validator command/result evidence, keyed by `candidate_id`, per §12.2 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | Consumed by `wave seal` (§ADR046-delivery-005) as one of the seal's required inputs |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Test asserting evidence for a stale `candidate_id` is rejected; test asserting raw command output never lands in a tracked file |
 | Removal proof | Not applicable |
 
@@ -1355,12 +1355,12 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Work item ID | `ADR046-delivery-004` |
 | Dependency/owner | `ADR046-delivery-002`; spec-set integrator |
 | Current source | `docs/specs/README.md`'s described-but-not-yet-generated `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract |
-| Reuse source | none required — this generator is specific to the `docs/specs/ADR-046-*` manifest shape |
+| Reuse source | none required - this generator is specific to the `docs/specs/ADR-046-*` manifest shape |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` |
 | Detailed design | Enumerates every `docs/specs/ADR-046-*.md` and `docs/specs/providers/ADR-046-provider-*.md` file, its metadata table, bytewise-sorted `workItemPrefixes` registry, content digest, and every `### ADR046-<registered-prefix>-<ordinal>` work item, per §8. Each prefix belongs globally to exactly one member, and generation resolves ownership only through the registry rather than by splitting IDs or filenames. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (new generator, following the existing `xtask gen-schemas`/`gen-nix-options` pattern already used for other generated artifacts). |
 | Integration | `make test-drift` gains a row running this generator and `git diff --exit-code`; every wave's exit criteria (§4) require it committed as the wave's last commit |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden-fixture test against a small synthetic spec directory; drift test against the real `docs/specs/` tree |
 | Removal proof | Not applicable |
 
@@ -1376,7 +1376,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/delivery/panel.rs` |
 | Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3). |
 | Integration | Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |
 | Removal proof | Not applicable |
 
@@ -1392,7 +1392,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` |
 | Detailed design | `seal` requires all ten panel records unanimous and bound to the same candidate/content/snapshot digests plus every validator lane passing; `merge-eligibility` checks each stacked PR's current base/head against the sealed OIDs or a passing history-proof; `history_proof` verifies byte-identical integrated content/generated artifacts/dependency diff/repository set across a rebase, per §12.4/§12.6 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | `make check` gains no new required step for ordinary contributors; this tooling is invoked only by the wave integrator per §4/§13 |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |
 | Removal proof | Not applicable |
 
@@ -1408,7 +1408,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 shard targets |
 | Detailed design | Measures execution-only time (after build, warm cache) per test/crate/shard against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, applies a historical regression threshold, and emits a machine-readable CI artifact; the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
 | Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; a synthetic timing regression fails the gate; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |
 
@@ -1424,7 +1424,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `docs/specs/ADR-046-implementation-graph.json`, `docs/specs/ADR-046-implementation-graph.md` (generated by `ADR046-streamline-001`'s `xtask implementation-graph`); the artifact contract, generation, validation, and ready-wave query are owned by §3.5 of this spec |
 | Detailed design | Owns the D095 implementation-graph contract: `artifactKind`/`schemaVersion`/`adr`/`status`; one node per member spec and per work item mapped exactly once to a `W0`–`W7` wave and a file-disjoint `parallelGroup`, with `owner`/`destinations`/`entryContracts`/`prerequisites`/`blockers`/`exitGate`/`topologicalRank`; work-item nodes additionally embed the manifest's exact `detailedDesign` and `validation` text byte-for-byte; typed `spec-depends-on`/`shared-contract`/`work-item-depends-on`/`implements-spec`/`file-overlap-order` edges; the §3.5.1 ready-wave query; and the anti-serialization invariant that every ready file-disjoint group launches concurrently while a same-wave dependency is a prep barrier, not whole-wave serialization. The graph is a generated non-member artifact and does not change the 55-member `ADR-046-spec-set.json` count. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (D095 artifact contract). |
 | Integration | Consumed by §4 wave entry/exit and §6 anti-serialization checks and by `ADR046-streamline-013`; a `tests/unit/gates/` drift gate regenerates and `git diff --exit-code`s the graph after any spec/work-item edit |
-| Data migration | None — docs/tooling only; no runtime state |
+| Data migration | None - docs/tooling only; no runtime state |
 | Validation | Every 55 spec node and every work item present exactly once; all edge endpoints resolve; graph acyclic; waves monotonic (dependencies earlier or explicit same-wave prep barrier); parallel groups claim no ordering absent a dependency/file-overlap edge; deterministic JSON with no timestamps/host paths; every Mermaid node ID valid; the ready-wave query returns the expected concurrently-launchable groups on a seeded fixture |
 | Removal proof | Not applicable |
 
@@ -1440,6 +1440,6 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs`; generated spec-set, work-item, and implementation-graph drift checks |
 | Detailed design | Parse every normative member's exact level-three `### ADR046-<registered-prefix>-<ordinal>` headings and tables; `##` or `####` item declarations are invalid. Require an exact Markdown/manifest bijection; exact `specId` and `specPath`; a bytewise-sorted, nonempty `workItemPrefixes` list for each item-owning member; global one-member ownership for every registered prefix; registry-based ID ownership; three-digit nonzero ordinals; every mandatory field exactly once and nonempty; one closed scalar `reuseAction`; and `reuseSource: null` for `create`. Reject dropped, extra, malformed, wrong-level, duplicate, ambiguous, heuristic-split, unregistered-prefix, or unconsumed items before writing any artifact. Validate all dependency endpoints, DAG acyclicity, wave monotonicity, and single-wave parallel groups before atomically publishing all generated files. |
 | Integration | `make test-policy` runs negative fixtures; `make test-drift` regenerates all ADR 0046 artifacts and requires a clean diff; `ADR046-delivery-008` consumes only a manifest that passed this policy |
-| Data migration | None — documentation/build-policy contract only |
+| Data migration | None - documentation/build-policy contract only |
 | Validation | Fixtures fail for a dropped heading, `##`/`####` item heading, extra manifest row, duplicate ID, duplicate cross-member prefix, unsorted/empty required prefix registry, wrong owner/path/prefix, heuristic-only prefix match, two-digit/zero ordinal, missing/duplicate mandatory field, free-form/compound action, `create` with a reuse source, dangling dependency, cyclic DAG, backward-wave dependency, and cross-wave parallel group; the exact 55-spec real tree passes with every item once |
 | Removal proof | Not applicable; the policy remains the permanent generated-artifact closure gate |

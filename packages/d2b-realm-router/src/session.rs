@@ -1,6 +1,6 @@
 //! The authenticated peer-session boundary (ADR 0032).
 //!
-//! A raw [`TransportSession`] carries only **reachability** — a duplex byte
+//! A raw [`TransportSession`] carries only **reachability** - a duplex byte
 //! stream over a loopback duplex, an AF_VSOCK pair, or an Azure Relay
 //! connection. It is never, on its own, a constellation principal. This
 //! module wraps that raw stream and refuses to expose any operation/stream
@@ -12,7 +12,7 @@
 //!
 //! Framing is a little-endian `u32` length prefix followed by the codec
 //! bytes, bounded by [`MAX_FRAME_BYTES`]. Reads use `read_exact` so a
-//! fragmenting stream transport (Relay, vsock) is reassembled correctly —
+//! fragmenting stream transport (Relay, vsock) is reassembled correctly -
 //! unlike a seqpacket one-read-per-frame socket.
 
 use d2b_realm_core::{

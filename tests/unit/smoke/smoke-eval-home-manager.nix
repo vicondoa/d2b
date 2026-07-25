@@ -1,4 +1,4 @@
-# tests/unit/smoke/smoke-eval-home-manager.nix — v0.1.0 H4 regression test.
+# tests/unit/smoke/smoke-eval-home-manager.nix - v0.1.0 H4 regression test.
 #
 # Mirrors tests/unit/smoke/smoke-eval.nix but enables Home Manager on the
 # workload VM. Exercises the codepath that imports

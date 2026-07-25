@@ -856,7 +856,7 @@ fn render_markdown(graph: &GraphDoc) -> String {
     let mut out = String::new();
     out.push_str("# ADR 0046 implementation graph (generated)\n\n");
     out.push_str(&format!(
-        "> **Generated index — not a normative member.** This file and its companion\n\
+        "> **Generated index - not a normative member.** This file and its companion\n\
          > [`ADR-046-implementation-graph.json`](ADR-046-implementation-graph.json) are\n\
          > deterministically generated from\n\
          > [`ADR-046-spec-set.json`](ADR-046-spec-set.json),\n\

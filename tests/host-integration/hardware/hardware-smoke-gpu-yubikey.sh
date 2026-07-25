@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh— (rollup):
+# tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh - (rollup):
 # hardware validation smoke on this NixOS dev host.
 #
 # Validates the GPU sidecar + USBIP YubiKey live paths
@@ -26,7 +26,7 @@
 #      driving the broker live SpawnRunner against
 #      /dev/dri/renderD128 + the USBIP live_bind against the
 #      plugged-in YubiKey. This phase is intentionally NOT
-#      automated — running it spawns real VMs that disrupt the
+#      automated - running it spawns real VMs that disrupt the
 #      operator's active Wayland session.
 #
 # Set D2B_HARDWARE_SMOKE_STRICT=1 to fail closed on the cargo

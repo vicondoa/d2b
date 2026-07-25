@@ -56,18 +56,18 @@ For the audited headless `examples/minimal` VM (`corp-vm`) with Cloud
 Hypervisor forced, `config.microvm.vms.corp-vm.config.config.microvm.declaredRunner`
 resolves to the runner above. Its layout is:
 
-- `bin/microvm-run` — shell wrapper that removes stale CH/notify
+- `bin/microvm-run` - shell wrapper that removes stale CH/notify
   sockets, optionally starts a `socat` systemd-notify relay, sets
   `runtime_args=`, and `exec`s Cloud Hypervisor.
-- `bin/virtiofsd-run` — shell wrapper that execs supervisord:
+- `bin/virtiofsd-run` - shell wrapper that execs supervisord:
   `/nix/store/qal8sp237c6rdxljvm9k1i2xsnl1wz3n-python3.13-supervisor-4.3.0/bin/supervisord --configuration /nix/store/7mfww0f3h8z4m83dvgqyqwbgydr69bf6-corp-vm-virtiofsd-supervisord.conf "$@"`.
-- `bin/tap-up` — deletes any stale `work-l10`, creates a TAP as user
+- `bin/tap-up` - deletes any stale `work-l10`, creates a TAP as user
   `microvm` with `vnet_hdr`, then brings it up.
-- `bin/tap-down` — deletes `work-l10`.
-- `share/microvm/hypervisor` — `cloud-hypervisor`.
-- `share/microvm/tap-interfaces` — `work-l10`.
-- `share/microvm/tap-flags` — `vnet_hdr`.
-- `share/microvm/vsock-cid` — `10914385`.
+- `bin/tap-down` - deletes `work-l10`.
+- `share/microvm/hypervisor` - `cloud-hypervisor`.
+- `share/microvm/tap-interfaces` - `work-l10`.
+- `share/microvm/tap-flags` - `vnet_hdr`.
+- `share/microvm/vsock-cid` - `10914385`.
 
 The virtiofsd supervisord config at
 `/nix/store/7mfww0f3h8z4m83dvgqyqwbgydr69bf6-corp-vm-virtiofsd-supervisord.conf`

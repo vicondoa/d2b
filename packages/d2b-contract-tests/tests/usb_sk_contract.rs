@@ -321,7 +321,7 @@ fn w3_operation_security_key_apply_udev_rules_is_destructive() {
 }
 
 // ---------------------------------------------------------------------------
-// Type 5: policy lints — new operations appear in docs and privileges matrix
+// Type 5: policy lints - new operations appear in docs and privileges matrix
 // ---------------------------------------------------------------------------
 
 const DISPOSITIONS_DOC: &str = "docs/reference/broker-w2-dispositions.md";

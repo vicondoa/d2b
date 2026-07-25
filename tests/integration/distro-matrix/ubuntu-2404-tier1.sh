@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/integration/distro-matrix/ubuntu-2404-tier1.sh— (rollup):
+# tests/integration/distro-matrix/ubuntu-2404-tier1.sh - (rollup):
 # Ubuntu 24.04 LTS x86_64 Tier-1 smoke harness scaffold.
 #
 # This is the **scaffold** half of the deliverable. The Tier-1
@@ -81,13 +81,13 @@ preflight_or_skip() {
         skip "Tier-1 smoke needs root for KVM + nft + ip route"
     fi
     if ! [ -e /dev/kvm ]; then
-        skip "no /dev/kvm — Tier-1 smoke requires KVM"
+        skip "no /dev/kvm - Tier-1 smoke requires KVM"
     fi
     if ! command -v nix >/dev/null 2>&1; then
-        skip "nix not on PATH — install nix or run from a NixOS host"
+        skip "nix not on PATH - install nix or run from a NixOS host"
     fi
     if ! [ -f /etc/os-release ]; then
-        skip "no /etc/os-release — cannot identify host distro"
+        skip "no /etc/os-release - cannot identify host distro"
     fi
     if ! grep -q '^ID=ubuntu' /etc/os-release; then
         log "host is not Ubuntu; running scaffold validation only"

@@ -12,7 +12,7 @@
 > (`host prepare --apply`, `host destroy --apply`) are **not yet
 > wired**: the daemon-side typed-intent dispatch and bundle resolver
 > that back them are still pending, so both return the typed
-> `daemon-down` envelope (exit 1) today — use `--dry-run` for now.
+> `daemon-down` envelope (exit 1) today - use `--dry-run` for now.
 > When the daemon-side dispatch ships, the `--apply` verbs will
 > dispatch through the broker reconcile ops (`ApplyNftables`,
 > `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`)
@@ -34,11 +34,11 @@ The host CLI is split across seven verbs; the canonical contract is:
 
 | Verb | Mutates host | Required flag |
 | --- | --- | --- |
-| `d2b host check` | no | n/a — read-only inventory + diff |
+| `d2b host check` | no | n/a - read-only inventory + diff |
 | `d2b host prepare --dry-run` | no | `--dry-run` mandatory; reports only |
-| `d2b host prepare --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
+| `d2b host prepare --apply` | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
 | `d2b host destroy --dry-run` | no | `--dry-run` mandatory; reports only |
-| `d2b host destroy --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
+| `d2b host destroy --apply` | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
 | `d2b host doctor --read-only` | no | `--read-only` mandatory |
 | `d2b host install --dry-run` | no | `--dry-run` mandatory; reports the synthesized 5-step install plan |
 | `d2b host install --apply` | yes (daemon → broker) | `--apply` mandatory; optional `--enable` + `--start`/`--no-start`; broker failures exit 78 |
@@ -51,9 +51,9 @@ want the apply-plan-without-mutation run `d2b host prepare
 `daemon-down` (exit 1) today; once wired it withdraws only
 d2b-owned state and refuses foreign ownership markers.
 
-The four reconcile domains — cgroup delegation, network (bridge /
+The four reconcile domains - cgroup delegation, network (bridge /
 TAP / NM / IPv6 / hosts), firewall (`inet d2b` nftables
-coexistence + USBIP rule skeleton), and modules + device nodes —
+coexistence + USBIP rule skeleton), and modules + device nodes -
 are each documented in the sections below, which are assembled from
 smaller fragment files.
 
@@ -74,7 +74,7 @@ catalogued in
 
 ---
 
-## Section 1 — cgroup v2 delegation
+## Section 1 - cgroup v2 delegation
 
 # Host prepare: cgroup v2 delegation
 
@@ -95,7 +95,7 @@ ownership model, and audit record shape are in
 
 ## How to verify cgroup delegation prerequisites
 
-Before running `d2b host prepare --apply` (not yet wired — it
+Before running `d2b host prepare --apply` (not yet wired - it
 returns `daemon-down` (exit 1) today; use `--dry-run` for now, and see
 the "What `host prepare --apply` will do for cgroup" section below),
 confirm the host meets
@@ -127,8 +127,8 @@ first failure is what the operator sees:
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `d2bd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `d2bd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
-| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `d2b.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 - i.e., the broker failed to drop to `d2bd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `d2bd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today - use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `d2b.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard - the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root:d2bd 0640),
@@ -136,7 +136,7 @@ keyed by `operation: "DelegateCgroupV2"` or `operation: "OpenCgroupDir"`.
 
 ## What `host prepare --apply` will do for cgroup
 
-`host prepare --apply` is **not yet wired** — it returns the typed
+`host prepare --apply` is **not yet wired** - it returns the typed
 `daemon-down` envelope (exit 1) today; use `--dry-run` for now. Once
 the daemon-side dispatch ships, for a successful apply the broker will
 perform the 8-step delegation sequence documented in
@@ -166,7 +166,7 @@ delegated subtree will carry every required controller in
 
 `cgroup.kill` is permitted only via **broker-mediated** `CgroupKill`
 on per-VM role leaves or host-scoped leaves during declared
-teardown (v1.1+ — the broker is the sole writer per
+teardown (v1.1+ - the broker is the sole writer per
 [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
 "Broker ops on the cgroup tree"; daemon NEVER writes `cgroup.kill`
 directly). Asking the broker to kill an ancestor returns
@@ -184,7 +184,7 @@ The host is on a legacy or hybrid cgroup layout.
   and reboot. Most NixOS systems already run unified cgroup v2 by
   default; this only applies to hosts that explicitly opted out.
 - **Ubuntu 24.04**: unified cgroup v2 is the default. If the probe
-  fails, check `mount | grep cgroup` — the only mount under
+  fails, check `mount | grep cgroup` - the only mount under
   `/sys/fs/cgroup` should be `cgroup2`.
 
 ### "cgroup-controllers-missing"
@@ -209,7 +209,7 @@ not cgroup-related.
 
 ---
 
-## Section 2 — network reconcile
+## Section 2 - network reconcile
 
 # How to: prepare the host network
 
@@ -267,7 +267,7 @@ sudo d2b host destroy --apply
 The mutating `--apply` invocations are not yet wired: the daemon-side
 typed-intent dispatch and bundle resolver that back them are pending,
 so both `host prepare --apply` and `host destroy --apply` return the
-typed `daemon-down` envelope (exit 1) today — re-run with `--dry-run`
+typed `daemon-down` envelope (exit 1) today - re-run with `--dry-run`
 for now. When the daemon-side dispatch ships, the `--apply` invocations
 will dispatch through the broker reconcile ops (`ApplyNftables`,
 `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`) on
@@ -275,7 +275,7 @@ every non-Tier-0 host, with broker failures surfacing as the typed
 `broker-error` envelope (exit 78). The `host check` and `--dry-run`
 reads already exercise the broker's read-only audit path.
 
-`host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
+`host prepare --apply` is refused on a Tier 0 NixOS-legacy host -
 one where d2b resolves no daemon-owned bundle to reconcile and
 the upstream NixOS module already owns host-shared reconciliation. The
 per-VM `d2b.vms.<vm>.supervisor` option was removed in v1.1 (per
@@ -308,7 +308,7 @@ between the step-3 write and the step-5 readback is the
 
 1. **Pre-create**: install the NetworkManager `unmanaged` drop-in (or
    refuse on systemd-networkd hosts without a configured-unmanaged
-   file). Trigger `nmcli general reload conf` (NM >= 1.20) — fall back
+   file). Trigger `nmcli general reload conf` (NM >= 1.20) - fall back
    to `systemctl reload NetworkManager.service` on older NM. **Do not
    use `nmcli connection reload`**: it only reloads connection
    profiles, not the `conf.d/*.conf` device-management snippets.
@@ -338,7 +338,7 @@ between the step-3 write and the step-5 readback is the
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
   ID; remove or rename it and, once `host prepare --apply` is wired,
-  re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  re-run it (it returns `daemon-down` (exit 1) today - use `--dry-run`
   to re-check).
 
 ### Fedora 40+ (Tier 1-later)
@@ -393,7 +393,7 @@ derivation rule:
 - skip Docker/libvirt-known prefixes (`docker*`, `virbr*`, `lxcbr*`);
 - skip DOWN-state links;
 - collect remaining IPv4 `RT_TABLE_MAIN scope LINK` destinations;
-- flag VPN-like routes (point-to-point, no broadcast) as ambiguous —
+- flag VPN-like routes (point-to-point, no broadcast) as ambiguous -
   do not include automatically. Operator overrides via
   `d2b.site.hostLanCidrs`.
 
@@ -419,7 +419,7 @@ for the rationale + rejected alternatives.
 
 ---
 
-## Section 3 — firewall coexistence
+## Section 3 - firewall coexistence
 
 # Host firewall coexistence
 
@@ -428,7 +428,7 @@ This fragment is included in `docs/how-to/host-prepare.md`.
 This document is the operator how-to for the `inet d2b` named
 table that the privileged broker's host-prepare path reconciles (and
 re-checks before every VM start). The mutating `d2b host prepare
---apply` is **not yet wired** — it returns the typed `daemon-down`
+--apply` is **not yet wired** - it returns the typed `daemon-down`
 envelope (exit 1) today; `host check` and `host prepare --dry-run`
 exercise the read-only path. The authoritative chain layout reference
 lives at
@@ -472,7 +472,7 @@ To use d2b on a firewalld host, either:
 
 1. Stop firewalld (`systemctl disable --now firewalld`) and, once
    `d2b host prepare --apply` is wired, re-run it to reconcile (it
-   returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); or
+   returns `daemon-down` (exit 1) today - use `--dry-run` to re-check); or
 2. Replace firewalld with a firewall setup where d2b owns
    `inet d2b`; otherwise d2b fails closed.
 
@@ -485,7 +485,7 @@ shadows `inet d2b`'s `forward` chain.
 To use d2b on a ufw host:
 
 1. `ufw disable` and, once `d2b host prepare --apply` is wired,
-   re-run it to reconcile (it returns `daemon-down` (exit 1) today —
+   re-run it to reconcile (it returns `daemon-down` (exit 1) today -
    use `--dry-run` to re-check); or
 2. Replace ufw with a firewall setup where d2b owns `inet
    d2b`; otherwise the host check refuses.
@@ -523,7 +523,7 @@ volatile `handle`/`index` fields stripped) and compares against the
 digest stored in the bundle's `host.json`. Mismatches fail closed with
 `inet-d2b-drift`; remediation is to re-run
 `d2b host prepare --apply` once it is wired (it returns
-`daemon-down` (exit 1) today — use `--dry-run` to re-check the diff).
+`daemon-down` (exit 1) today - use `--dry-run` to re-check the diff).
 
 ## USBIP firewall carve-out
 
@@ -539,20 +539,20 @@ separately from this firewall carve-out.
   match the bundle's declared policy. Either change the bundle (allowed
   override per the matrix above) or stop/disable the offending manager
   and, once `d2b host prepare --apply` is wired, re-run it (it
-  returns `daemon-down` (exit 1) today — use `--dry-run` to re-check).
+  returns `daemon-down` (exit 1) today - use `--dry-run` to re-check).
 - **`nft-foreign-rule-shadows-d2b`**: a foreign hook at a priority
   ≤ `-5` is active. Inspect with `nft list ruleset` and identify the
   source.
 - **`inet-d2b-drift`**: the live table no longer matches the
   bundle digest. Re-apply with `d2b host prepare --apply` once it
-  is wired (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  is wired (it returns `daemon-down` (exit 1) today - use `--dry-run`
   to re-check); if it
   recurs immediately, a periodic process is rewriting the ruleset
   (`firewalld --reload`, `ufw reload`, custom cron, …).
 
 ---
 
-## Section 4 — kernel modules + device nodes
+## Section 4 - kernel modules + device nodes
 
 # Modules and devices
 
@@ -564,17 +564,17 @@ into [`docs/how-to/host-prepare.md`](./host-prepare.md).
 
 Host prepare runs a four-step probe before any `ModprobeIfAllowed` broker call:
 
-1. `/proc/sys/kernel/modules_disabled` — if the file reads `1`, every
+1. `/proc/sys/kernel/modules_disabled` - if the file reads `1`, every
    `required` module that is neither built-in nor loaded surfaces as
    `host-modules-locked`. There is no remediation other than rebooting
    with `modules_disabled=0` or shipping the module built-in.
-2. `/proc/modules` plus `/sys/module/<name>/` — loaded-module
+2. `/proc/modules` plus `/sys/module/<name>/` - loaded-module
    detection. Modules listed here are accepted without any further
    action.
 3. `/lib/modules/$(uname -r)/modules.builtin` (preferred) or
-   `modules.builtin.bin` — built-in detection. Built-in modules
+   `modules.builtin.bin` - built-in detection. Built-in modules
    satisfy the requirement without needing `modprobe`.
-4. `/boot/config-$(uname -r)` or `/proc/config.gz` — `CONFIG_*` checks
+4. `/boot/config-$(uname -r)` or `/proc/config.gz` - `CONFIG_*` checks
    used only as **secondary evidence**. The probe never refuses solely
    on the basis of a missing `CONFIG_*` line.
 
@@ -671,10 +671,10 @@ backends.
 
 ## Cross-references
 
-- ADR 0011 — [cgroup v2 delegation and pidfd handoff](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-- ADR 0012 — [IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
-- ADR 0013 — [firewall coexistence policy matrix + `inet d2b` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
-- ADR 0014 — [`kernel.modules_disabled=1` behavior, module probe order, CH net handoff selection, and runner-shape preflight](../adr/0014-w3-modules-devices-runner-shape.md)
+- ADR 0011 - [cgroup v2 delegation and pidfd handoff](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
+- ADR 0012 - [IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
+- ADR 0013 - [firewall coexistence policy matrix + `inet d2b` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
+- ADR 0014 - [`kernel.modules_disabled=1` behavior, module probe order, CH net handoff selection, and runner-shape preflight](../adr/0014-w3-modules-devices-runner-shape.md)
 - Reference: [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
 - Reference: [`docs/reference/inet-d2b-chains.md`](../reference/inet-d2b-chains.md)
 - Reference: [`docs/reference/support-matrix.md`](../reference/support-matrix.md)

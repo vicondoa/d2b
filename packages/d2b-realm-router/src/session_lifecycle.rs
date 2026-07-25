@@ -5,7 +5,7 @@
 //!
 //! The P0 design panel (software, service-architect) required a concrete
 //! lifecycle with explicit states, rollback on partial failure, and an
-//! idempotent stop — so a half-allocated ACA session can never be leaked or
+//! idempotent stop - so a half-allocated ACA session can never be leaked or
 //! double-stopped. The phases are strictly ordered:
 //!
 //! ```text
@@ -16,8 +16,8 @@
 //! ```
 //!
 //! A failure in any *active* phase routes through `Stopping` (so whatever was
-//! already allocated — the ACA session, a minted token lease, a relay
-//! connection, an open display — is cleaned up) and then `Stopped`. `stop()`
+//! already allocated - the ACA session, a minted token lease, a relay
+//! connection, an open display - is cleaned up) and then `Stopped`. `stop()`
 //! is idempotent: calling it on a session that is already `Stopping`/`Stopped`
 //! is a no-op success, so a retry or a reconcile pass cannot wedge or
 //! double-free.

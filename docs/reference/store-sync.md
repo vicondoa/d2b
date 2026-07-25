@@ -8,7 +8,7 @@ generation.
 It is the **sole canonical writer** for `store-view`; host activation may
 publish next-generation pointers and enforce directory posture, but it
 must not build/sweep/activate store-view closures. There is no bash
-store-view writer and no backend toggle — the Rust broker owns the layout.
+store-view writer and no backend toggle - the Rust broker owns the layout.
 
 ## On-disk layout (ADR 0027 split)
 
@@ -59,8 +59,8 @@ The per-VM hardlink farm shares **inodes** with `/nix/store`. The
    reconciled on the next run.
 
 The daemon does not have the privileges to satisfy any of these
-guarantees — the farm root lives under `/var/lib/d2b/vms/<vm>/`
-which is broker-owned and chmod'd `0o700` to root — so the work
+guarantees - the farm root lives under `/var/lib/d2b/vms/<vm>/`
+which is broker-owned and chmod'd `0o700` to root - so the work
 must happen in the broker.
 
 ## CRITICAL invariant (must read)
@@ -84,7 +84,7 @@ The `StoreSync` handler holds the line by only ever calling:
   crashed prior run
 
 It does **not** call `chown(2)`, `chmod(2)`, `fsetxattr(2)`, or
-`setfacl(8)` anywhere — and the inline unit test
+`setfacl(8)` anywhere - and the inline unit test
 `farm_shares_inodes_with_source_no_recursive_chown` asserts the
 source `/nix/store` file's mode/uid/gid is byte-identical before
 and after the op.
@@ -101,7 +101,7 @@ Request (`BrokerRequest::StoreSync(StoreSyncRequest)`):
 | `tracing_span_id`      | `Option<TracingSpanId>` | Audit correlation only.                        |
 
 The daemon never names raw closure paths or generation
-directories on the wire — the broker re-derives them from the
+directories on the wire - the broker re-derives them from the
 trusted bundle via
 `BundleResolver::find_store_view_intent(vm_name)`.
 
@@ -110,8 +110,8 @@ Response (`BrokerResponse::StoreSync(StoreSyncResponse)`):
 | Field                  | Type     | Notes                                                |
 | ---------------------- | -------- | ---------------------------------------------------- |
 | `vm`                   | `String` | Echoed VM name from the resolved intent.             |
-| `generation_id`        | `String` | Activated generation **id** — the collision-free on-disk layout key (SHA-256 over the full ordered closure identity, [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)). |
-| `generation_token`     | `u32`    | Activated generation **token** — truncated u32 display/wire value carried for backcompat; never the on-disk key. |
+| `generation_id`        | `String` | Activated generation **id** - the collision-free on-disk layout key (SHA-256 over the full ordered closure identity, [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)). |
+| `generation_token`     | `u32`    | Activated generation **token** - truncated u32 display/wire value carried for backcompat; never the on-disk key. |
 | `hardlink_farm_path`   | `String` | Per-VM store-view root (`/var/lib/d2b/vms/<vm>/store-view`). |
 | `closure_count`        | `u32`    | Number of top-level closure paths linked in.         |
 | `retained_generations` | `Vec<u32>` | Generations retained for cleanup safety.           |
@@ -141,12 +141,12 @@ Fields:
 | `error_stage`          | enum            | `none` \| `authz` \| `lock` \| `probe` \| `verify` \| `stage` \| `rename` \| `metadata` \| `integrity` \| `current_swap` \| `marker`. |
 | `cleanup_status`       | enum            | `not_attempted` \| `completed` \| `deferred_online` \| `deferred_ambiguous` \| `deferred_metadata` \| `skipped_fast_path` \| `failed`. |
 | `cleanup_reason`       | enum            | `none` \| `vm_running` \| `running_generation_ambiguous` \| `missing_retained_metadata` \| `io_error` \| `fast_path`. |
-| `caller_principal`     | `Option<String>`| Audit only — **never** a metric label and never in guest metadata.  |
+| `caller_principal`     | `Option<String>`| Audit only - **never** a metric label and never in guest metadata.  |
 | `authz_outcome`        | enum            | `allow` \| `deny`.                                                   |
 | `closure_count`        | `u32`           | Enumerated top-level closure size.                                   |
 | `linked_count`         | `u32`           | Top-level paths newly hardlinked this attempt.                       |
 | `skipped_count`        | `u32`           | Top-level paths already present (fast-path / reuse).                 |
-| `retained_generations` | `Vec<u32>`      | Audit only — never a metric label and never in guest metadata.      |
+| `retained_generations` | `Vec<u32>`      | Audit only - never a metric label and never in guest metadata.      |
 | `swept_count`          | `u32`           | Top-level live entries removed by cleanup.                           |
 | `fast_path`            | `bool`          | Whether the closure was already fully materialised.                  |
 | `timings`              | object          | `total_ms`, `lock_wait_ms`, `lock_hold_ms`, `probe_ms`, `verify_ms`, `stage_ms`, `metadata_ms`, `sweep_ms`, `cleanup_ms`. |
@@ -187,9 +187,9 @@ The `decision` field follows the broker default
 > **Current wiring:** the success path (`ok_fast_path` /
 > `ok_non_fast_path`) and the failure path (`failed`) both emit the signed
 > terminal record. Every `run_store_sync` attempt that reaches the handler
-> emits exactly one terminal `OperationFields::StoreSync` record — success
+> emits exactly one terminal `OperationFields::StoreSync` record - success
 > with `decision = allowed`, failure with `decision = errored` and a
-> classified `error_stage` — and the failure no longer falls back to the
+> classified `error_stage` - and the failure no longer falls back to the
 > generic `BrokerError` audit record (`BrokerError::StoreSyncFailed`'s own
 > `audit()` is a no-op so the record is never duplicated). The `denied`
 > constructor is implemented and unit-tested but **not yet reachable from
@@ -222,7 +222,7 @@ written `0640`, `O_APPEND`, one JSON object per line, daily-rotated by
 UTC date. The projection is a dedicated
 `StoreSyncObservabilityRecord` struct
 (`packages/d2b-priv-broker/src/ops/store_sync_export.rs`) built by
-`from_audit_fields()`, which reads **only** the allow-listed fields — so
+`from_audit_fields()`, which reads **only** the allow-listed fields - so
 no serializer ever receives the full audit struct and host-only fields
 cannot leak by construction (`#[serde(deny_unknown_fields)]` + an
 `EXPORTED_KEYS` key-set test pin the contract).
@@ -251,14 +251,14 @@ Notes:
   nested `timings` object, the raw `vm`/`env` keys, host/store paths and
   basenames, `db.dump` contents, and marker payloads.
 - The export is **best-effort**: a failed export write logs a
-  `tracing::warn!` but never fails the StoreSync attempt — the
+  `tracing::warn!` but never fails the StoreSync attempt - the
   host-confidential audit record remains the source of truth.
 
 The host Nix/Alloy wiring
 (`nixos-modules/components/observability/host.nix`) follows only the
 `store-sync-*.jsonl` glob (via `local.file_match` + `loki.source.file`,
 following rotation and new files) and grants the `alloy` identity
-focused read/traverse ACLs to the export directory **only** — never to
+focused read/traverse ACLs to the export directory **only** - never to
 the broker audit log, the privileged daemon socket, or d2bd state.
 The Loki stream labels stay host singletons (`vm="host"`, `env="host"`,
 `role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
@@ -270,7 +270,7 @@ remain in JSON content. See
 > current obs stack has no `loki.process`/`stage.metrics` log→metric
 > path, and the signed scope forbids adding a Loki ruler, Alertmanager,
 > host Alloy self-scrape, a broker `/metrics` endpoint, or a new exposed
-> port — so the existing systemd-unit-failed `D2bStoreSyncFailure`
+> port - so the existing systemd-unit-failed `D2bStoreSyncFailure`
 > alert (Prometheus, `stack.nix`) is left unchanged.
 
 ## Explicit verify surface
@@ -316,18 +316,18 @@ result.
 The handler is fail-closed and maps each refusal to a typed
 `StoreSyncError`:
 
-- `BundleIntentMissing { kind: "store-sync-closure" }` — the wire
+- `BundleIntentMissing { kind: "store-sync-closure" }` - the wire
   `bundle_closure_ref` does not match the bundle-resolved intent
   (or no store-view intent exists for the VM).
-- `GenerationMismatch` — the wire `generation_token` does not match the
+- `GenerationMismatch` - the wire `generation_token` does not match the
   bundle-resolved generation. Generations are monotonic; a stale
   daemon must not race the activator.
-- `GenerationOverflow` — bundle resolver carries `u64` generations;
+- `GenerationOverflow` - bundle resolver carries `u64` generations;
   refuse if the wire's `u32` token cannot represent the resolved value
   (would otherwise silently truncate).
-- `VmMismatch` — bundle resolver returned an intent keyed at a
+- `VmMismatch` - bundle resolver returned an intent keyed at a
   different VM than the wire `vm_id`.
-- `HardlinkFarm { stage, source }` — the underlying primitive returned a
+- `HardlinkFarm { stage, source }` - the underlying primitive returned a
   `HardlinkFarmError` (cross-filesystem, marker missing/unparseable,
   I/O failure). `stage` carries the classified `error_stage` of the
   failing publish step (`probe` for topology/cross-filesystem,
@@ -357,7 +357,7 @@ guest. Its key set is exactly:
 - `schema_version`
 - `generation_id` (collision-free closure identity; the canonical key)
 - `generation_token` (u32 display/wire token; never the on-disk key)
-- `sync_status` (only `ok` reaches the guest — `meta.json` is written
+- `sync_status` (only `ok` reaches the guest - `meta.json` is written
   after the generation materialised)
 - `closure_count`
 
@@ -380,38 +380,38 @@ asserts `len() == 0`.
 
 ## Implementation file map
 
-- `packages/d2b-priv-broker/src/ops/store_sync.rs` — pure
+- `packages/d2b-priv-broker/src/ops/store_sync.rs` - pure
   handler (`run_store_sync`) + typed `StoreSyncError`. Derives the
   `generation_id`, materialises via `build_store_view_cross_mount_safe`,
   and publishes (`state/current`, `meta/current`, live marker).
-- `packages/d2b-priv-broker/src/ops/store_view_farm.rs` —
+- `packages/d2b-priv-broker/src/ops/store_view_farm.rs` -
   cross-mount-safe wrappers (`build_store_view_cross_mount_safe`) that
   retry the build/replace in a private mount namespace when `/nix/store` is a
   separate vfsmount. The broker execs the activation helper directly; no shell
   wrapper is used.
-- `packages/d2b-host/src/hardlink_farm.rs` — underlying
+- `packages/d2b-host/src/hardlink_farm.rs` - underlying
   same-filesystem-checked split-layout primitive (`build_store_view`,
   the `generation_id` derivation, the publish/read helpers); authors the
   zero-length live marker and the guest-safe + host-only `meta.json`.
-- `packages/d2b-host/src/bin/d2b-activation-helper.rs` —
+- `packages/d2b-host/src/bin/d2b-activation-helper.rs` -
   the `private-store <verb>` entrypoint that unshares the mount namespace,
   makes propagation private, lazily detaches `/nix/store`, and runs
   `build-store-view` / `replace-store-view-live` from stdin JSON.
-- `packages/d2b-priv-broker/src/runtime.rs` — wire dispatch
+- `packages/d2b-priv-broker/src/runtime.rs` - wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
-- `packages/d2b-contracts/src/broker_wire.rs` — typed request/
+- `packages/d2b-contracts/src/broker_wire.rs` - typed request/
   response structs + enum variants. The wire carries both the
   collision-free `generation_id` (response) and the u32
   `generation_token` (request + response); the token is display/wire
   only and is never the on-disk key.
-- `packages/d2b-contracts/src/types.rs` — `BundleClosureRef`
+- `packages/d2b-contracts/src/types.rs` - `BundleClosureRef`
   opaque newtype.
-- `packages/d2b-priv-broker/src/ops/audit_op.rs` —
+- `packages/d2b-priv-broker/src/ops/audit_op.rs` -
   `OperationFields::StoreSync` newtype over `StoreSyncAuditFields`.
-- `packages/d2b-priv-broker/src/ops/store_sync_audit.rs` —
+- `packages/d2b-priv-broker/src/ops/store_sync_audit.rs` -
   the signed `StoreSyncAuditFields` terminal audit schema, its enums,
   invariant-enforcing constructors, and `validate()`.
-- `packages/d2b-priv-broker/src/ops/store_verify.rs` — explicit
+- `packages/d2b-priv-broker/src/ops/store_verify.rs` - explicit
   StoreVerify broker op, top-level live-pool verifier, and host-only
   integrity record writer.
 
@@ -419,5 +419,5 @@ asserts `len() == 0`.
 
 The generated `d2b-<vm>-store-sync.service` unit is the
 caller of the bash hardlink-farm script today. Deletion of the
-generator is owned by the daemon-only cleanup — `StoreSync` is the
+generator is owned by the daemon-only cleanup - `StoreSync` is the
 typed replacement op that the per-VM start path will call instead.

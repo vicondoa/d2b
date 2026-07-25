@@ -19,7 +19,7 @@ pub mod dag;
 pub mod state;
 // Typed stop-DAG planner that reconciles nftables fragments and USBIP
 // carriers on daemon restart / vm_stop
-// against the bundle's declared intent. Pure planner — dispatch
+// against the bundle's declared intent. Pure planner - dispatch
 // happens via the existing ApplyNftables / UsbipBind / UsbipUnbind
 // broker ops.
 pub mod stop_dag;

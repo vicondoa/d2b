@@ -19,7 +19,7 @@ than literal byte-for-byte goldens unless the corresponding
 > the no-bash invariant is enforced by
 > `tests/no-bash-exec-eval.sh`. Verbs that used to degrade to bash on
 > `not-yet-implemented` or `daemon-down` now surface typed
-> envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) —
+> envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) -
 > see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
 > for the multi-line block format used on those envelopes. `d2b
 > up/down/restart/list` are first-class top-level aliases for `vm
@@ -120,7 +120,7 @@ and never fall back.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Launch committed or was already committed. | — |
+| `0` | Launch committed or was already committed. | - |
 | `2` | Target/item not found, or omitted item is ambiguous. | [`usage`](./error-codes.md#usage) |
 | `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. | workload launch error |
 | `69` | Provider prerequisite or transport unavailable. | workload launch error |
@@ -134,7 +134,7 @@ $ d2b launch tools.host.d2b --item browser
 launched tools.host.d2b item browser (committed)
 ```
 
-**`--json` example** — schema: [`launch.schema.json`](./cli-output/launch.schema.json).
+**`--json` example** - schema: [`launch.schema.json`](./cli-output/launch.schema.json).
 
 ```json
 {
@@ -167,7 +167,7 @@ launched tools.host.d2b item browser (committed)
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | Unexpected daemon reply, local probe, or manifest-read failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
@@ -180,7 +180,7 @@ corp-vm            work      false     false false   10.20.0.10      running
 sys-work-net       work      false     false false   192.0.2.1       running (net-vm)
 ```
 
-**`--json` example** — schema: [`list.schema.json`](./cli-output/list.schema.json); prose companion: [`list.md`](./cli-output/list.md).
+**`--json` example** - schema: [`list.schema.json`](./cli-output/list.schema.json); prose companion: [`list.md`](./cli-output/list.md).
 
 ```json
 [
@@ -254,7 +254,7 @@ typed failure instead of silently writing clipboard data.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | — |
+| `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | - |
 | `2` | The control socket was unavailable, malformed, timed out, or returned a daemon error. | [`usage`](./error-codes.md#usage) |
 
 The CLI connects to `$XDG_RUNTIME_DIR/d2b-clipd/clipd.sock`, sends one bounded
@@ -419,7 +419,7 @@ through the daemon.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -479,7 +479,7 @@ through the daemon.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -501,8 +501,8 @@ that graceful timeout plus the standard forced-cleanup signal windows.
 Pidfd `EPERM` while stopping a per-VM-UID runner used to surface as
 typed `broker-error` exit 78. Current `--apply` recovers that specific
 case by asking the broker to run `SignalRunner`; if the broker reports
-`signaled=true`, `vm stop` exits 0. True broker failures — unreachable
-broker, dispatch errors, unexpected responses, or `signaled=false` —
+`signaled=true`, `vm stop` exits 0. True broker failures - unreachable
+broker, dispatch errors, unexpected responses, or `signaled=false` -
 still surface as `broker-error` / exit 78.
 
 **Human example**
@@ -562,7 +562,7 @@ through the daemon.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -622,7 +622,7 @@ a note explaining that d2bd must be started or restarted.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | Unexpected local JSON serialization failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
@@ -681,7 +681,7 @@ When d2bd's public socket is unavailable, `--json` returns:
 }
 ```
 
-**Current disposition:** `rust-native` — the Rust CLI owns the stable
+**Current disposition:** `rust-native` - the Rust CLI owns the stable
 daemon-side runtime-view contract and reads it from d2bd's public socket.
 
 ### `status`
@@ -706,7 +706,7 @@ daemon-side runtime-view contract and reads it from d2bd's public socket.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | Unexpected probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag, unsupported `--json` shape, or unknown VM. | [`usage`](./error-codes.md#usage) |
 
@@ -728,7 +728,7 @@ br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up
 br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 ```
 
-**`--json` example** — schema: [`status.schema.json`](./cli-output/status.schema.json); prose companion: [`status.md`](./cli-output/status.md).
+**`--json` example** - schema: [`status.schema.json`](./cli-output/status.schema.json); prose companion: [`status.md`](./cli-output/status.md).
 
 ```json
 {
@@ -790,7 +790,7 @@ appear as an ad hoc unversioned key.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Every declared bridge is in the expected healthy state for the current VM topology. | — |
+| `0` | Every declared bridge is in the expected healthy state for the current VM topology. | - |
 | `2` | Unsupported combination such as `--json`, extra arguments, or an unknown flag. | [`usage`](./error-codes.md#usage) |
 | `4` | A bridge is missing, administratively down, or lacks carrier when carrier is required. | [`bridge-unhealthy`](./error-codes.md#bridge-unhealthy) |
 
@@ -825,7 +825,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated guestd import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Ask `d2bd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid — `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists — `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask guestd over authenticated guest-control to import the selected busid. |
+| `--apply` | boolean | `false` | Ask `d2bd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid - `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists - `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask guestd over authenticated guest-control to import the selected busid. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -840,7 +840,7 @@ The bridge-health probe is part of the read-only status surface, even though rec
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
 | `67` | The USB device busid is not present in sysfs (`usbip-busid-not-present`), or another VM already holds an active claim on this busid (`usbip-explicit-claim-conflict`). | [`usbip-busid-not-present`](./error-codes.md#usbip-busid-not-present), [`usbip-explicit-claim-conflict`](./error-codes.md#usbip-explicit-claim-conflict) |
@@ -860,13 +860,13 @@ without requiring a static busid or vendor allowlist in the NixOS configuration.
 The daemon selects the **explicit path** when no declared bundle intent exists for
 the requested busid. Three fail-closed checks run before any broker call:
 
-1. **Sysfs presence** — the daemon checks `/sys/bus/usb/devices/<busid>/idVendor`.
+1. **Sysfs presence** - the daemon checks `/sys/bus/usb/devices/<busid>/idVendor`.
    If absent, the attach fails with `UsbipBusidNotPresent` (exit 67) and guides
    the operator to plug in the device before retrying.
-2. **USB-capable gate** — the VM must have `RuntimeCapabilityGate::UsbHotplug`
+2. **USB-capable gate** - the VM must have `RuntimeCapabilityGate::UsbHotplug`
    declared in its manifest. Non-USB-capable VMs fail with a typed
    `RuntimeCapabilityUnsupported` error.
-3. **Active claim exclusivity** — the daemon reads the OFD lock under
+3. **Active claim exclusivity** - the daemon reads the OFD lock under
    `/run/d2b/locks/usbip/<busid>`. If another VM already holds the claim, the
    attach fails with `UsbipExplicitClaimConflict` (exit 67) naming the owner VM
    and guiding the operator to detach from the owner first.
@@ -931,7 +931,7 @@ commands.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
 | `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
@@ -987,7 +987,7 @@ rerun `d2b usb detach <vm> <busid> --apply`.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | `d2bd` is unreachable or does not expose the native USBIP probe request. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | The daemon reached the broker but the `UsbipProxyReconcile` pass failed. | [`broker-error`](./error-codes.md#broker-error) |
@@ -1003,7 +1003,7 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
   command: d2b usb attach corp-vm 1-2 --apply
 ```
 
-**`--json` example** — schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
+**`--json` example** - schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
 
 ```json
 {
@@ -1108,14 +1108,14 @@ command.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `78` | The daemon handler for this command has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 **Human example**
 
 ```text
 $ d2b usb security-key status
-# not yet available — exits 78 with not-yet-implemented envelope
+# not yet available - exits 78 with not-yet-implemented envelope
 ```
 
 **Status**
@@ -1149,14 +1149,14 @@ terminology is reserved for diagnostics and technical documentation.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `78` | The daemon handler for this command has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 **Human example**
 
 ```text
 $ d2b usb security-key sessions
-# not yet available — exits 78 with not-yet-implemented envelope
+# not yet available - exits 78 with not-yet-implemented envelope
 ```
 
 **Status**
@@ -1188,7 +1188,7 @@ security-key proxy daemon handler ships.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success (`--dry-run` or successful cancel). | — |
+| `0` | Success (`--dry-run` or successful cancel). | - |
 | `2` | Neither `<session-id>` nor `--current` was provided; or neither `--dry-run` nor `--apply` was provided. | [`usage`](./error-codes.md#usage) |
 | `78` | `--apply`: the daemon handler has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
@@ -1240,7 +1240,7 @@ the daemon handler ships.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success (`--dry-run` or all checks passed). | — |
+| `0` | Success (`--dry-run` or all checks passed). | - |
 | `78` | Live path: the daemon handler has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 **Human example**
@@ -1278,7 +1278,7 @@ until the daemon handler ships.
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | Serial console access has no command-line flags. |
+| _(none)_ | - | - | Serial console access has no command-line flags. |
 
 **Arguments**
 
@@ -1290,10 +1290,10 @@ until the daemon handler ships.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | Console launch or output read failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
-| `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console — provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console - provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1326,7 +1326,7 @@ The Rust CLI dispatches `ConsoleOp` to `d2bd` over the public socket. The daemon
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | Audio status has no flags in the compatibility contract. |
+| _(none)_ | - | - | Audio status has no flags in the compatibility contract. |
 
 **Arguments**
 
@@ -1338,7 +1338,7 @@ The Rust CLI dispatches `ConsoleOp` to `d2bd` over the public socket. The daemon
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. Per-target `enforcement: unsupported` (e.g. qemu-media guest-side) is reported in the output body, not as an error exit. | — |
+| `0` | Success. Per-target `enforcement: unsupported` (e.g. qemu-media guest-side) is reported in the output body, not as an error exit. | - |
 | `1` | Unexpected filesystem or state probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport; see [provider capability matrix](./provider-capability-matrix.md#aca-audio). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
@@ -1374,7 +1374,7 @@ The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Pr
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | The direction and state are positional arguments, not flags. |
+| _(none)_ | - | - | The direction and state are positional arguments, not flags. |
 
 **Arguments**
 
@@ -1387,7 +1387,7 @@ The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Pr
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | — |
+| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | - |
 | `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
@@ -1425,7 +1425,7 @@ The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The 
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | The direction and state are positional arguments, not flags. |
+| _(none)_ | - | - | The direction and state are positional arguments, not flags. |
 
 **Arguments**
 
@@ -1438,7 +1438,7 @@ The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The 
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | — |
+| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | - |
 | `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
@@ -1476,7 +1476,7 @@ The Rust CLI dispatches `AudioOp::SetSpeaker` to `d2bd` over the public socket. 
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | The command revokes both directions; there are no flags. |
+| _(none)_ | - | - | The command revokes both directions; there are no flags. |
 
 **Arguments**
 
@@ -1488,7 +1488,7 @@ The Rust CLI dispatches `AudioOp::SetSpeaker` to `d2bd` over the public socket. 
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | — |
+| `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | - |
 | `1` | Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
@@ -1526,7 +1526,7 @@ The Rust CLI dispatches `AudioOp::Mute` to `d2bd` over the public socket. The da
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | Build does not take command-line flags in v0.4.0 or v1.0. |
+| _(none)_ | - | - | Build does not take command-line flags in v0.4.0 or v1.0. |
 
 **Arguments**
 
@@ -1538,7 +1538,7 @@ The Rust CLI dispatches `AudioOp::Mute` to `d2bd` over the public socket. The da
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | Nix evaluation/build failure or missing flake context. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
 
@@ -1592,7 +1592,7 @@ guest-control.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
@@ -1665,7 +1665,7 @@ mutation flag is set, the CLI prints the parity notice and defaults to
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `1` | `d2bd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
@@ -1724,7 +1724,7 @@ to be running and reachable over guest-control.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
@@ -1782,7 +1782,7 @@ over guest-control.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
@@ -1821,7 +1821,7 @@ d2b rollback --apply activated previous toplevel in guest via guest-control (vm=
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | Generation listing has no flags. |
+| _(none)_ | - | - | Generation listing has no flags. |
 
 **Arguments**
 
@@ -1833,7 +1833,7 @@ d2b rollback --apply activated previous toplevel in guest via guest-control (vm=
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1841,10 +1841,10 @@ d2b rollback --apply activated previous toplevel in guest via guest-control (vm=
 ```text
 $ d2b generations corp-vm
 === Host-side per-VM store generations (/var/lib/d2b/vms/corp-vm/store-meta/generations) ===
-  (none yet — run 'd2b build corp-vm')
+  (none yet - run 'd2b build corp-vm')
 
 === In-VM nix-profile generations ===
-  (corp-vm is not running — start it and try again)
+  (corp-vm is not running - start it and try again)
 ```
 
 **Status**
@@ -1885,7 +1885,7 @@ Generations is a native introspection surface that reports current/booted symlin
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
@@ -1935,14 +1935,14 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Live pool is clean, or repair completed successfully. | — |
+| `0` | Live pool is clean, or repair completed successfully. | - |
 | `1` | Daemon is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `4` | Drift found or integrity remains unknown. | [`drift`](./error-codes.md#drift) |
 | `70` | The named VM is not declared or not visible to the caller. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Broker/system failure while verifying. | [`broker-error`](./error-codes.md#broker-error) |
 
-**`--json` example** — schema: [`store-verify.schema.json`](./cli-output/store-verify.schema.json); prose companion: [`store-verify.md`](./cli-output/store-verify.md).
+**`--json` example** - schema: [`store-verify.schema.json`](./cli-output/store-verify.schema.json); prose companion: [`store-verify.md`](./cli-output/store-verify.md).
 
 ```json
 {
@@ -2003,7 +2003,7 @@ store verify corp-vm: status=ok checked=42 drifted=0 repaired=0
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -2053,7 +2053,7 @@ d2b trust --apply executed via the native daemon → broker path (vm=corp-vm, st
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -2099,8 +2099,8 @@ d2b rotate-known-host --apply executed via the native daemon → broker path (vm
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | `d2bd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract — there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in v1.0). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 — daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `0` | Success. | - |
+| `1` | `d2bd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract - there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in v1.0). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 - daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape inherited from the `keys` subcommand dispatcher. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -2161,8 +2161,8 @@ Keys list is a native inventory preview that reports the managed-key resolution 
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | `d2bd` is unreachable (typed `#daemon-down` envelope; multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook) — OR the daemon returned the request but the key material was unreadable (typed `#generic` envelope; rare). | [`daemon-down`](./error-codes.md#daemon-down) / [`generic`](./error-codes.md#generic) |
+| `0` | Success. | - |
+| `1` | `d2bd` is unreachable (typed `#daemon-down` envelope; multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook) - OR the daemon returned the request but the key material was unreadable (typed `#generic` envelope; rare). | [`daemon-down`](./error-codes.md#daemon-down) / [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing VM argument, or unreadable key material reported by daemon as an unknown subject. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -2210,7 +2210,7 @@ Keys show is a native preview that reports daemon-resolved key metadata placehol
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -2257,8 +2257,8 @@ d2b keys rotate --apply executed via the native daemon → broker path (vm=corp-
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **`--strict` flag arm only** — `d2b audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md) § "Migration target table" line 91 (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | Success (non-`--strict` arm only — `--strict` returns exit 78 unconditionally per above). | — |
+| `78` | **`--strict` flag arm only** - `d2b audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md) § "Migration target table" line 91 (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | Success (non-`--strict` arm only - `--strict` returns exit 78 unconditionally per above). | - |
 | `1` | (Non-`--strict` arm only) `d2bd` is unreachable; typed `#daemon-down` envelope emitted. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unexpected positional argument. | [`usage`](./error-codes.md#usage) |
 
@@ -2277,7 +2277,7 @@ $ d2b audit --human
     sys-work-net: erofs
 ```
 
-**`--json` example** — schema: [`audit.schema.json`](./cli-output/audit.schema.json); prose companion: [`audit.md`](./cli-output/audit.md).
+**`--json` example** - schema: [`audit.schema.json`](./cli-output/audit.schema.json); prose companion: [`audit.md`](./cli-output/audit.md).
 
 ```json
 {
@@ -2343,7 +2343,7 @@ Audit is part of the read-only daemon surface and keeps both human and JSON outp
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | All required checks passed. | — |
+| `0` | All required checks passed. | - |
 | `1` | At least one advisory warning was reported. | [`host-check-warning`](./error-codes.md#host-check-warning) |
 | `2` | At least one required check failed. | [`host-check-failure`](./error-codes.md#host-check-failure) |
 | `3` | Unknown flag or other usage error. | [`usage`](./error-codes.md#usage) |
@@ -2360,7 +2360,7 @@ WARN
 - firewalld-coexistence: firewalld is active; coexistence is reported but host rules are not mutated
 ```
 
-**`--json` example** — schema: [`host-check.schema.json`](./cli-output/host-check.schema.json); prose companion: [`host-check.md`](./cli-output/host-check.md).
+**`--json` example** - schema: [`host-check.schema.json`](./cli-output/host-check.schema.json); prose companion: [`host-check.md`](./cli-output/host-check.md).
 
 ```json
 {
@@ -2415,14 +2415,14 @@ The command never mutates nftables, cgroups, users, or runtime directories. `--r
 
 **Status**
 
-`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "d2b: NOTICE: defaulting to --dry-run; d2b 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy/mixed host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` / `single-writer-conflict` (exit 78).
+`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "d2b: NOTICE: defaulting to --dry-run; d2b 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** - the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy/mixed host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` / `single-writer-conflict` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the host reconcile without mutating host state. |
-| `--apply` | boolean | `false` | Perform the host-reconcile mutation. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
+| `--apply` | boolean | `false` | Perform the host-reconcile mutation. **Not yet wired** - returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -2436,7 +2436,7 @@ The command never mutates nftables, cgroups, users, or runtime directories. `--r
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | — |
+| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal, Tier-0 mixed single-writer conflict, or typed `broker-error` / `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`single-writer-conflict`](./error-codes.md#single-writer-conflict), [`broker-error`](./error-codes.md#broker-error) |
 
@@ -2451,7 +2451,7 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Native**
 
-- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `d2bd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy/mixed host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
+- `--apply`: **not yet wired** - returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `d2bd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy/mixed host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
 - The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires `d2bd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (broker ops staged in commit `ee6ed0b`; public-socket dispatch pending).
 
@@ -2464,14 +2464,14 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Status**
 
-`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "d2b: NOTICE: defaulting to --dry-run; d2b 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` (exit 78).
+`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "d2b: NOTICE: defaulting to --dry-run; d2b 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** - the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan removal of d2b-owned host reconcile state without mutating host state. |
-| `--apply` | boolean | `false` | Perform the host-reconcile teardown. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
+| `--apply` | boolean | `false` | Perform the host-reconcile teardown. **Not yet wired** - returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -2485,7 +2485,7 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | — |
+| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal or typed `broker-error` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`broker-error`](./error-codes.md#broker-error) |
 
@@ -2500,7 +2500,7 @@ host destroy --dry-run: no d2b-owned resources to remove
 
 **Native**
 
-- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `d2bd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
+- `--apply`: **not yet wired** - returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `d2bd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
 - The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires the same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (broker ops staged in commit `ee6ed0b`; reverse-order hardening in `b73e28f`; public-socket dispatch pending).
 
@@ -2574,7 +2574,7 @@ cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered. | — |
+| `0` | Dry-run plan rendered. | - |
 | `2` | Unknown flag or invalid flag combination. | [`usage`](./error-codes.md#usage) |
 | `78` | `--apply` or `--rollback` requested before the broker-backed mover is available. | `storage-migration-apply-not-implemented`, `storage-migration-rollback-not-implemented` |
 
@@ -2684,22 +2684,22 @@ socket, and audit-log checks are extended with structured liveness for
 the broker-spawned singletons and the recovery report files the daemon
 persists during startup. Probed surfaces:
 
-- **broker-ready** — `SOCK_SEQPACKET` connect to the broker socket.
-- **daemon-ready** — connect to the public daemon socket.
-- **metrics-endpoint** — loopback HTTP GET against the Prometheus scrape
+- **broker-ready** - `SOCK_SEQPACKET` connect to the broker socket.
+- **daemon-ready** - connect to the public daemon socket.
+- **metrics-endpoint** - loopback HTTP GET against the Prometheus scrape
   URL (default `http://127.0.0.1:9101/metrics`; see
   [`daemon-metrics`](./daemon-metrics.md)).
-- **otel-host-bridge-runner** — counts `role: "otel-host-bridge"`
+- **otel-host-bridge-runner** - counts `role: "otel-host-bridge"`
   entries in `<daemon-state>/pidfd-table.json`.
-- **usbipd-runners** — counts `role: "usbip"` entries (one per env that
+- **usbipd-runners** - counts `role: "usbip"` entries (one per env that
   owns USB).
-- **kernel-module-matrix** — reads
+- **kernel-module-matrix** - reads
   `<daemon-state>/kernel-module-report.json` (written by the daemon's
   startup self-check, see [`kernel-module-check`](./kernel-module-check.md)).
-- **autostart-status** — reads `<daemon-state>/autostart-report.json`
+- **autostart-status** - reads `<daemon-state>/autostart-report.json`
   (written after the daemon's autostart pass, see
   [`daemon-autostart`](./daemon-autostart.md)).
-- **storage-lifecycle-report** — reads
+- **storage-lifecycle-report** - reads
   `<daemon-state>/storage-lifecycle-report.json` (written by the daemon's
   startup storage/restart/sync contract check, see
   [`storage-lifecycle-report`](./storage-lifecycle-report.md)).
@@ -2733,7 +2733,7 @@ Legacy top-level fields (`broker_ready`, `findings[]`, `summary`,
 
 | Exit | Meaning | Catalog anchor |
 | --- | --- | --- |
-| `0` | Every check passed. | — |
+| `0` | Every check passed. | - |
 | `1` | At least one check is `warn`, none are `fail`. | [`host-check-warning`](./error-codes.md#host-check-warning) |
 | `2` | At least one check is `fail` (e.g. required kernel module missing, autostart VM failed, broker socket unreachable). | [`host-check-warning`](./error-codes.md#host-check-warning) |
 | `78` | Missing required `--read-only` flag (doctor is read-only; mutation forms are later deliverables). | [`--read-only-required`](./error-codes.md#--read-only-required) |
@@ -2768,7 +2768,7 @@ fallback was retired in v1.0).
 
 | Exit | Meaning | Catalog anchor |
 | --- | --- | --- |
-| `0` | Dry-run plan rendered or daemon → broker apply succeeded. | — |
+| `0` | Dry-run plan rendered or daemon → broker apply succeeded. | - |
 | `78` | Missing `--dry-run` / `--apply`, or the daemon → broker apply path returned `broker-error`. | [`--apply-or-dry-run-required`](./error-codes.md#--apply-or-dry-run-required), [`broker-error`](./error-codes.md#broker-error) |
 
 **Disposition:** `rust-native` (`--apply` dispatches through daemon → broker `RunHostInstall`).
@@ -2803,7 +2803,7 @@ bridge and broker `RunMigrate` path.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Missing explicit `--dry-run`/`--apply` or typed `broker-error` / `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`--apply-or-dry-run-required`](./error-codes.md#--apply-or-dry-run-required), [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
@@ -2835,7 +2835,7 @@ is the live mutation path when you are ready.
   `d2b migrate` path directly.
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
-**Disposition:** `rust-native` — dry-run analysis is native, and
+**Disposition:** `rust-native` - dry-run analysis is native, and
 `--apply` uses daemon → broker `RunMigrate` when available.
 
 ### `auth status`
@@ -2859,7 +2859,7 @@ is the live mutation path when you are ready.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
+| `0` | Success. | - |
 | `1` | Socket reachability or capability probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
@@ -2874,7 +2874,7 @@ denied commands:
 - audit: requires admin role in d2b.site.adminUsers
 ```
 
-**`--json` example** — schema: [`auth-status.schema.json`](./cli-output/auth-status.schema.json); prose companion: [`auth-status.md`](./cli-output/auth-status.md).
+**`--json` example** - schema: [`auth-status.schema.json`](./cli-output/auth-status.schema.json); prose companion: [`auth-status.md`](./cli-output/auth-status.md).
 
 ```json
 {
@@ -2919,7 +2919,7 @@ Auth status is a read-only daemon query that reports caller mapping, socket reac
 <a id="config-sync-guest-control-transport"></a>
 On a guest-control-capable VM, `config sync` reads the VM's canonical
 guest config working copy (default `/var/lib/d2b-guest/guest-config.nix`)
-over the authenticated **guest-control transport** — a typed
+over the authenticated **guest-control transport** - a typed
 `readGuestConfig` request to `d2bd` over the daemon public socket.
 There is no SSH: no ssh/scp process is spawned, and the SSH-shaped flags
 (`--host`/`--user`/`--key`/`--known-hosts`) and a non-default
@@ -2937,7 +2937,7 @@ The staging copy is never evaluated until approved.
 
 `--dry-run` selects and reports the transport WITHOUT contacting the
 daemon or reading any guest bytes: it emits `transport: "guest-control"`
-plus the planned staging target only — never an SSH argv and never guest
+plus the planned staging target only - never an SSH argv and never guest
 content.
 
 Fail-closed behaviour:
@@ -2970,7 +2970,7 @@ narrow `HostShutdown` role. This role can dispatch only `vmStop`; it cannot run
 admin-only operator verbs such as exec, USB attach/detach, host prepare/destroy,
 audit export, key rotation, or config sync.
 
-**Disposition:** `rust-native` — host-initiated typed `readGuestConfig`
+**Disposition:** `rust-native` - host-initiated typed `readGuestConfig`
 over the daemon public socket; no SSH, no virtiofs, no new privileged
 surface.
 
@@ -2983,7 +2983,7 @@ host-side file the operator names with `--against` (typically their
 `guestConfigFile`). Exits 0 whether or not they differ; `--json`
 reports `differs` + the diff text.
 
-**Disposition:** `rust-native` — read-only `diff -u`.
+**Disposition:** `rust-native` - read-only `diff -u`.
 
 ### `config approve`
 
@@ -2992,12 +2992,12 @@ reports `differs` + the diff text.
 Validates the staged guest config (non-empty, valid UTF-8) and
 atomically writes it onto the operator-chosen `--to` target (unique
 `O_EXCL` temp + fsync + rename + parent-dir fsync), then clears the
-staging file. The CLI never auto-locates the operator's config tree —
+staging file. The CLI never auto-locates the operator's config tree -
 the operator names the target explicitly. The authoritative containment
 + eval gate is the per-VM `guestConfigFile` assertion that runs on the
 subsequent `d2b switch`.
 
-**Disposition:** `rust-native` — host-operator-only; atomic publish.
+**Disposition:** `rust-native` - host-operator-only; atomic publish.
 
 ### `config reject`
 
@@ -3014,7 +3014,7 @@ Discards the staged guest config for a VM.
 Reports whether a VM (or, with `--all`, every VM) has a pending
 (un-approved) staged guest config.
 
-**Disposition:** `rust-native` — read-only.
+**Disposition:** `rust-native` - read-only.
 
 ### `config` exit codes + JSON envelopes
 
@@ -3026,12 +3026,12 @@ All `config` verbs share these exit codes:
 | `1` | Runtime error: nothing staged, a low-level public-socket I/O failure on `config sync` (send/receive frame), size-cap/timeout on the staging verbs, missing `--to`/`--against` target dir, I/O error. |
 | `2` | Usage error (bad/missing arguments; surfaced by `clap`), or `config sync` SSH-shaped flags rejected on a guest-control VM (`guest-control-ssh-flag-rejected`). |
 | `70` | `config sync` only. The VM is not declared in the active manifest (`require_known_vm`); the VM's generation does not declare the guest-control transport (`guest-control-unavailable-old-generation`); the daemon socket is unreachable (`guest-control-transport-unavailable`); or a per-kind guest-control read error (`guest-control-file-not-found`, `guest-control-file-too-large`, `guest-control-path-unsafe`, `guest-control-read-denied`, `guest-control-timeout`, `guest-control-protocol-error`, `guest-control-auth-failed`, `guest-control-capability-unavailable`). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest or transport and so never return `70`. |
-| `75` | `config sync` only. The caller is not in `d2b.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error — exit `75`, the daemon's reserved authz code — before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
+| `75` | `config sync` only. The caller is not in `d2b.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error - exit `75`, the daemon's reserved authz code - before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
 
 With `--json` each verb emits a single stdout object:
 
 - `config sync` → `{ "command": "config sync", "vm", "transport": "guest-control", "staging", "bytes", "sha256" }`
-  (or `{ "command": "config sync", "mode": "dry-run", "vm", "transport": "guest-control", "staging", "guestFile" }` under `--dry-run` — no SSH argv, no guest bytes).
+  (or `{ "command": "config sync", "mode": "dry-run", "vm", "transport": "guest-control", "staging", "guestFile" }` under `--dry-run` - no SSH argv, no guest bytes).
 - `config diff` → `{ "command": "config diff", "vm", "against", "staging", "differs": <bool>, "diff": <string> }`.
 - `config approve` → `{ "command": "config approve", "vm", "target", "bytes" }`.
 - `config reject` → `{ "command": "config reject", "vm", "removed": <bool> }`.
@@ -3048,11 +3048,11 @@ verbs) are emitted on **stderr** for human output only, so they never perturb a
 
 `ACTION` is one of:
 
-- omitted or `attach` — attach to the target's configured default shell session,
+- omitted or `attach` - attach to the target's configured default shell session,
   or to `--name NAME`;
-- `list` — list persistent shell sessions;
-- `detach` — detach a live/stale client without killing the shell;
-- `kill` — terminate a named shell session.
+- `list` - list persistent shell sessions;
+- `detach` - detach a live/stale client without killing the shell;
+- `kill` - terminate a named shell session.
 
 The first positional after `shell` is always a d2b target address. Declared
 local VM names retain their existing behavior. Canonical direct-local workload
@@ -3206,7 +3206,7 @@ Runs or manages commands inside a running VM over the authenticated
 **guest-control transport**: the CLI opens an owner connection to the
 daemon public socket, the daemon reaches the VM's `guestd` over the
 authenticated guest-control vsock channel, and the endpoints exchange
-typed `exec` operations. There is **no SSH** and **no host PTY** — the
+typed `exec` operations. There is **no SSH** and **no host PTY** - the
 guest owns the PTY. Exec is admin-only (the same `SO_PEERCRED` admin
 gate as other privileged verbs); a launcher-role caller is rejected with
 the typed `authz-not-admin` error (exit `77`, AUTH) before any guest
@@ -3263,7 +3263,7 @@ status.
 
 **Execution identity and command resolution.** Every attached and
 detached exec runs the requested command as the VM's configured workload
-user (`ssh.user`) — **never root** — inside a real PAM login session
+user (`ssh.user`) - **never root** - inside a real PAM login session
 (`systemd-run --property=PAMName=login --uid=<user>`). The command sees
 the same login environment an interactive SSH login would
 (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, login-shell profile). `argv[0]`
@@ -3314,10 +3314,10 @@ foreground process group.
 
 Detached management:
 
-- **create** — `d2b vm exec -d <vm> -- <cmd> [args…]`: human output
+- **create** - `d2b vm exec -d <vm> -- <cmd> [args…]`: human output
   is one copy-pasteable `exec_id` line. JSON emits
   `{ "command": "vm exec", "vm": "<vm>", "execId": "<id>", "state": "<state>" }`.
-- **list** — `d2b vm exec <vm> list`: human output is a table with
+- **list** - `d2b vm exec <vm> list`: human output is a table with
   `execId`, state, start time, terminal status when available, aggregate
   and per-stream retained offset windows, and aggregate/per-stream
   dropped/truncated metadata. JSON
@@ -3326,12 +3326,12 @@ Detached management:
   "endOffset", "droppedBytes", "truncated" } ] }`; implementations also
   expose per-stream stdout/stderr offsets and dropped/truncated flags for
   resume-capable clients.
-- **status** — `d2b vm exec <vm> status <exec-id>`: human output is
+- **status** - `d2b vm exec <vm> status <exec-id>`: human output is
   the state plus terminal disposition. JSON emits
   `{ "command": "vm exec status", "vm": "<vm>", "execId": "<id>",
   "state", "reason"?, "exitCode"?, "signal"?, "startOffset",
   "endOffset", "droppedBytes", "truncated" }`.
-- **logs** — `d2b vm exec <vm> logs <exec-id>`: human output writes
+- **logs** - `d2b vm exec <vm> logs <exec-id>`: human output writes
   retained stdout/stderr bytes to the corresponding host streams and
   prints only bounded metadata warnings to stderr when bytes were
   dropped or truncated. An expired detached record is a typed failure
@@ -3344,7 +3344,7 @@ Detached management:
   `stderrEof` fields for offset resume. Logs are bounded ring buffers;
   dropped and truncated
   accounting is metadata, not log content.
-- **kill** — `d2b vm exec <vm> kill <exec-id>`: public name for
+- **kill** - `d2b vm exec <vm> kill <exec-id>`: public name for
   `ExecCancel`. Guestd requests graceful termination, waits a bounded
   grace window, then force-kills the workload if needed. The operation is
   idempotent: human output confirms the result, and JSON emits
@@ -3431,7 +3431,7 @@ shares the shell status number.
 single terminal stdout object.
 
 - success → `{ "command": "vm exec", "vm", "source": "guest", "exitCode", "reason": "exited"|"signaled", "guestExitCode"?|"signal"?, "stdoutBase64", "stderrBase64", "stdoutTruncated", "stderrTruncated" }`. Only a true guest `WIFEXITED`/`WIFSIGNALED` terminal is a success.
-- failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`lost-guestd`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source — never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
+- failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`lost-guestd`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source - never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
 
 Captured output in JSON envelopes is bounded; `stdoutTruncated` /
 `stderrTruncated` flag a clamp. argv, env, cwd, and stdio bytes never
@@ -3441,7 +3441,7 @@ session-establishment event (VM name, peer uid, negotiated tty).
 Detached create/kill daemon audit is similarly redacted: VM, peer uid,
 closed action/result enums, and the opaque exec id only.
 
-**Disposition:** `rust-native` — daemon public socket → authenticated
+**Disposition:** `rust-native` - daemon public socket → authenticated
 guest-control session → `guestd` exec RPCs; no SSH, no host PTY, no new
 privileged broker op (attached sessions live in-process in `d2bd`;
 detached state lives in guestd's detached registry).
@@ -3480,8 +3480,8 @@ detached state lives in guestd's detached registry).
 | `keys rotate` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunKeysRotate` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `audit` | `rust-native` | Audit is part of the daemon surface and keeps both human and JSON output contracts. |
 | `host check` | `rust-native` | Host check is a read-only daemon RPC by design. |
-| `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
-| `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
+| `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
+| `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
 | `host migrate-storage` | `rust-native` | Storage cutover dry-run planning is native and read-only; `--apply` / `--rollback` fail closed until the broker-backed mover lands. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |

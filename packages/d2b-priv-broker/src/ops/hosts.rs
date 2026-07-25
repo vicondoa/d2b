@@ -9,7 +9,7 @@
 //!
 //! - [`UpdateHostsRequest`] is the typed input the broker dispatcher
 //!   reconstructs from the wire envelope;
-//! - [`update_hosts_file`] is the entry point — pure logic + safe FS
+//! - [`update_hosts_file`] is the entry point - pure logic + safe FS
 //!   ops via [`crate::sys::path_safe`];
 //! - audit emission lives in the caller (`runtime.rs` dispatcher) so
 //!   one audit-log fd holds the only `O_APPEND` write handle per plan

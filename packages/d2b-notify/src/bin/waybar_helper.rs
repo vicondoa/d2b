@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `d2b-sk-waybar-helper` — Waybar custom module helper for d2b security-key status.
+//! `d2b-sk-waybar-helper` - Waybar custom module helper for d2b security-key status.
 //!
 //! Reads the durable security-key state file from the path given on the
 //! command line (or the default `/run/d2b/notify/sk-state.json`) and emits

@@ -42,7 +42,7 @@ default to `off` on first materialisation unless the
 
 When both directions are off, the guest-side
 `microvm.extraArgsScript` short-circuits and does **not** emit
-`--generic-vhost-user` — the guest sees no soundcard at all.
+`--generic-vhost-user` - the guest sees no soundcard at all.
 
 ## Options (host-side)
 
@@ -94,8 +94,8 @@ Per audio-enabled VM:
 - **`d2b-<vm>-snd` system user + group**
   ([`host-users.nix`](../../nixos-modules/host-users.nix)).
 - **`d2b.slice/<vm>/snd` runner**
-  ([`components/audio/host.nix`](../../nixos-modules/components/audio/host.nix))
-  — vhost-user-sound sidecar, broker-spawned via the daemon DAG.
+  ([`components/audio/host.nix`](../../nixos-modules/components/audio/host.nix)) -
+  vhost-user-sound sidecar, broker-spawned via the daemon DAG.
   Runs as `d2b-<vm>-snd:d2b-<vm>-snd`,
   `SupplementaryGroups = [ "audio" ]`. The runner is started on
   demand, with a belt-and-suspenders fallback at VM boot, and is
@@ -118,7 +118,7 @@ Per audio-enabled VM:
     `setfacl -m u:d2b-<vm>-gpu:x /run/d2b/vms/<vm>` and
     `setfacl -m u:d2b-<vm>-gpu:rw .../snd.sock`. Fails the unit
     hard if the socket never materialises.
-  - `Restart = "no"` — on-demand only.
+  - `Restart = "no"` - on-demand only.
 - **State file** `/var/lib/d2b/vms/<vm>/state/audio-state.json`
   (mode 0640, owner `d2bd:d2b`), initial contents
   `{"mic":"<allowMic>","speaker":"<allowSpeaker>"}`. The containing
@@ -159,28 +159,28 @@ CLI (`d2b audio` in the Rust CLI; there is no bash helper):
 
 - `d2b audio mic on|off <vm>`
 - `d2b audio speaker on|off <vm>`
-- `d2b audio off <vm>` — shorthand for both off.
-- `d2b audio status` / `d2b audio status <vm>` — reports
+- `d2b audio off <vm>` - shorthand for both off.
+- `d2b audio status` / `d2b audio status <vm>` - reports
   current grant state per VM.
 
 ## Lifecycle
 
 The audio runner is part of the daemon-supervised VM DAG. A
 `nixos-rebuild switch` updates the runner intent but does not cycle the
-running `vhost-user-sound` sidecar in place — vhost-user-sound's socket
+running `vhost-user-sound` sidecar in place - vhost-user-sound's socket
 connection to cloud-hypervisor cannot survive a restart, and killing the
 sidecar mid-VM produces silent speakers and mic state drift. After a rebuild,
 `d2b list` flags the VM with `[pending restart]` if its `current` closure has
 drifted from `booted`; apply with `d2b vm restart <vm> --apply` (clean down+up
 cycles the audio sidecar and CH together so the socket gets re-established). See
-[`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
+[`docs/reference/cli-contract.md` - Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
 ## Guest-side resources created
 
 In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix):
 
 - `microvm.hypervisor = "cloud-hypervisor"` (via `mkDefault`).
-- `microvm.extraArgsScript = audioArgsScript` — a shell helper
+- `microvm.extraArgsScript = audioArgsScript` - a shell helper
   invoked by microvm.nix's runner at VM start. Reads
   `audio-state.json`; if both directions are off, emits nothing
   (no virtio-snd device at all). Otherwise:
@@ -212,8 +212,8 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
 - When both directions are `off`, no virtio-snd device is attached
   to CH and no sidecar process exists. Setting either direction on
   starts the sidecar; setting both off again does NOT teardown the
-  device on the running VM (would unplug the soundcard mid-flight)
-  — the WirePlumber rule null-routes the streams instead.
+  device on the running VM (would unplug the soundcard mid-flight) -
+  the WirePlumber rule null-routes the streams instead.
 - Audio-enabled VMs MUST have `autostart = false`. Eval-time
   assertion in `audio/host.nix` enforces this so the daemon does not
   start a graphics/audio VM without an operator Wayland session.
@@ -234,10 +234,10 @@ sidecar. Compared to the GPU sidecar profile:
   `ProtectProc=invisible`, `LockPersonality`, `RestrictNamespaces`,
   `SystemCallArchitectures=native`, `SystemCallFilter =
   [ "@system-service" ]`, `UMask = "0077"`.
-- **`MemoryDenyWriteExecute = true`** — unlike the GPU sidecar,
+- **`MemoryDenyWriteExecute = true`** - unlike the GPU sidecar,
   vhost-device-sound has no JIT, so MDWE is on. This is the visible
   delta from the graphics-sidecar template.
-- `RestrictAddressFamilies = [ "AF_UNIX" "AF_NETLINK" ]` —
+- `RestrictAddressFamilies = [ "AF_UNIX" "AF_NETLINK" ]` -
   vhost-user is AF_UNIX, libpipewire uses AF_NETLINK for some
   introspection.
 - **`RestrictRealtime = false`** with `LimitRTPRIO = 95`,
@@ -264,7 +264,7 @@ sidecar. Compared to the GPU sidecar profile:
 ## Common gotchas / failure modes
 
 - **VM silent / no soundcard in `aplay -l`.** Both mic and speaker
-  are off — `d2b audio status <vm>` will confirm. Toggle one on
+  are off - `d2b audio status <vm>` will confirm. Toggle one on
   and restart the VM (`d2b vm stop <vm> --apply && d2b vm start <vm> --apply`) so
   `audioArgsScript` re-emits `--generic-vhost-user`.
 - **Audible static / dropped frames on the host's own playback
@@ -273,8 +273,8 @@ sidecar. Compared to the GPU sidecar profile:
   Verify the `90-d2b.conf` rule is in PipeWire's `client.conf.d/`
   (NOT WirePlumber's `wireplumber.conf.d/`), and that match keys
   are `d2b.mic` / `d2b.speaker` + `media.class`. Do not put
-  the rule under `monitor.rules` or `monitor.alsa.rules` on the host
-  — those match HARDWARE devices, not client streams.
+  the rule under `monitor.rules` or `monitor.alsa.rules` on the host -
+  those match HARDWARE devices, not client streams.
 - **`autostart = true` + `audio.enable = true` eval failure.**
   Intentional. Set one or the other. The sidecar lifecycle is
   bound to `d2b vm start <vm> --apply` from an operator session.
@@ -291,12 +291,12 @@ sidecar. Compared to the GPU sidecar profile:
 ## See also
 
 - [Design / threat model](../explanation/design.md)
-- [Provider capability matrix](./provider-capability-matrix.md) — per-provider
+- [Provider capability matrix](./provider-capability-matrix.md) - per-provider
   console and audio capability boundaries (Cloud Hypervisor, qemu-media, ACA).
-- [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding design for
+- [ADR 0041](../adr/0041-console-and-audio-controls.md) - binding design for
   provider-capability-aware console and audio.
-- [Manifest schema](./manifest-schema.md) — `units.snd` field;
+- [Manifest schema](./manifest-schema.md) - `units.snd` field;
   `audioStateFile` path.
-- [CLI contract](./cli-contract.md) — `d2b audio` subcommand.
-- [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
+- [CLI contract](./cli-contract.md) - `d2b audio` subcommand.
+- [`examples/graphics-workstation`](../../examples/graphics-workstation/) -
   enables audio alongside graphics + USBIP YubiKey.

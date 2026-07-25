@@ -12,7 +12,7 @@
 //!    The [`d2b_host::hardlink_farm`] primitive already
 //!    enforces the same-filesystem check + atomic `current`
 //!    symlink swap + stale `current.tmp` reconciliation. This
-//!    module MUST NOT re-implement any of that — it is a thin
+//!    module MUST NOT re-implement any of that - it is a thin
 //!    wrapper that resolves the closure paths from the trusted
 //!    bundle and delegates to the primitive.
 //! 2. CRITICAL INVARIANT: NEVER `chown -R`, `chmod -R`, or
@@ -66,7 +66,7 @@ pub enum StoreSyncError {
     VmMismatch { wire: String, resolved: String },
     /// Underlying hardlink-farm primitive returned a typed error
     /// (cross-fs, marker missing/unparseable, I/O failure). `stage`
-    /// records WHICH StoreSync phase invoked the primitive — the
+    /// records WHICH StoreSync phase invoked the primitive - the
     /// primitive's own error cannot disambiguate the phase, so it is
     /// tagged at the call-site.
     HardlinkFarm {
@@ -227,7 +227,7 @@ pub struct StoreSyncOutcome {
 /// `(vm, generation)` and returns either a typed outcome or a
 /// typed error. The dispatch layer is responsible for resolving
 /// `bundle_closure_ref` against the trusted bundle BEFORE calling
-/// this function — the daemon never names raw closure paths.
+/// this function - the daemon never names raw closure paths.
 ///
 /// ADR 0027 split layout: the broker is the sole canonical writer of
 /// `live/` (flat hardlink pool), `meta/generations/<id>/` (guest-served
@@ -240,7 +240,7 @@ pub struct StoreSyncOutcome {
 /// CRITICAL: This function uses the
 /// [`hardlink_farm::build_store_view`] primitive + its publish helpers.
 /// It MUST NOT call `chown`, `chmod`, `setfacl`, or any other recursive
-/// ownership/permission op on the per-VM store-view path — mutations
+/// ownership/permission op on the per-VM store-view path - mutations
 /// there propagate INTO `/nix/store` via the shared inodes of the
 /// hardlink farm.
 pub fn run_store_sync(
@@ -303,7 +303,7 @@ fn run_store_sync_inner(
 
     // Reconcile possible stale `state/current.tmp` / `meta/current.tmp`
     // left over by a previous crashed publish BEFORE building the new
-    // generation — keeps the split layout in a known-good shape.
+    // generation - keeps the split layout in a known-good shape.
     hardlink_farm::reconcile_split_current_tmp(&intent.hardlink_farm_path)
         .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
 
@@ -933,7 +933,7 @@ mod tests {
         // CRITICAL invariant: the per-VM store-view path must NOT
         // propagate mode/uid/gid mutations into /nix/store via the
         // shared inodes. We assert the source file's mode/owner is
-        // byte-identical post-sync — the broker handler must never
+        // byte-identical post-sync - the broker handler must never
         // call chown/chmod/setfacl recursively across the farm.
         let post_meta = std::fs::metadata(&src_file).unwrap();
         assert_eq!(post_meta.mode(), pre_mode, "source mode unchanged");

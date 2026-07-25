@@ -17,7 +17,7 @@
 
 {
   # ---------------------------------------------------------------
-  # Host NixOS baseline — PLACEHOLDER stubs so `nix flake check`
+  # Host NixOS baseline - PLACEHOLDER stubs so `nix flake check`
   # evaluates without touching real hardware. Replace these with
   # your real bootloader + hardware-configuration.nix + disk layout
   # when copying this example onto a live host.
@@ -45,7 +45,7 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.site — host-wide knobs.
+  # d2b.site - host-wide knobs.
   #
   # Headless example: no Wayland session, no lifecycle users, no
   # host-side YubiKey rules. Observability does not require any of
@@ -58,7 +58,7 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.observability — turn on the framework's telemetry layer.
+  # d2b.observability - turn on the framework's telemetry layer.
   #
   # Setting `enable = true` causes the framework to:
   #   * auto-declare `d2b.envs.obs`     (LAN  10.40.0.0/24,
@@ -75,7 +75,7 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.envs.work — the env that hosts the workload VM.
+  # d2b.envs.work - the env that hosts the workload VM.
   #
   # The `obs` env is auto-declared by `observability.enable` above,
   # so we only need to declare envs for *workload* VMs here. Pick
@@ -88,7 +88,7 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.vms.work-app — one headless workload VM that opts into
+  # d2b.vms.work-app - one headless workload VM that opts into
   # observability. The per-VM `observability.enable = true` toggle
   # attaches the guest-side telemetry agent and wires the OTLP relay path
   # through the host into `sys-obs`'s vsock receiver.

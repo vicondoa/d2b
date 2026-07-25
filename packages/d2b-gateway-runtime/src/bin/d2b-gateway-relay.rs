@@ -1,4 +1,4 @@
-//! `d2b-gateway-relay` — the handshake-gated relay endpoint (ADR 0032).
+//! `d2b-gateway-relay` - the handshake-gated relay endpoint (ADR 0032).
 //!
 //! Unlike the plain `d2b-relay` byte tunnel, this endpoint carries the
 //! per-session credential as the relay prologue:
@@ -7,7 +7,7 @@
 //!   binding it received over the MI-authenticated ACA control plane and writes
 //!   it as the relay prologue, then bridges the local Waypipe socket.
 //! - `listener` (on the gateway): verifies that prologue before bridging any
-//!   byte to the operator Waypipe socket — so display bytes are admitted only
+//!   byte to the operator Waypipe socket - so display bytes are admitted only
 //!   by the verified session credential.
 //!
 //! Session parameters arrive as env so the gateway can hand them to the agent

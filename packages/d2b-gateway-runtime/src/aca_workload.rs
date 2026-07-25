@@ -1,11 +1,11 @@
-//! `AcaGatewayWorkload` — the production [`GatewayWorkload`] adapter that drives
+//! `AcaGatewayWorkload` - the production [`GatewayWorkload`] adapter that drives
 //! the in-sandbox display agent through the Azure Container Apps data plane
 //! (ADR 0032, P0).
 //!
 //! The orchestrator hands this adapter an [`AgentSpawnRequest`] carrying the
 //! session binding + the one-shot secret `S`; the adapter shapes a single
 //! `executeShellCommand` body (delivered over the MI-authenticated, TLS ACA
-//! control plane — never the relay, never a persistent log) that:
+//! control plane - never the relay, never a persistent log) that:
 //!
 //!   1. receives `S` in the exec body, writes it to a tmpfile, reads it into
 //!      `D2B_SESSION_SECRET_B64`, and shreds the file (so `S` is never a

@@ -17,7 +17,7 @@
 # faithful to the retired bash gate's `nix eval` of each scenario while
 # staying hermetic (no `builtins.getFlake`). The positive "base" scenario
 # asserts the exact evidence JSON; each override scenario asserts the eval
-# THROWS (the bash gate additionally matched the message substring — that
+# THROWS (the bash gate additionally matched the message substring - that
 # precise text is not capturable by the harness's `expectedError` bucket,
 # so it relaxes to a throw assertion, the same faithful reduction the other
 # throw-case migrations took).

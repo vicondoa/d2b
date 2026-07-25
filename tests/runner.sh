@@ -36,8 +36,8 @@
 #              else /run/d2b-runner                (when EUID == 0)
 #              else $HOME/.local/state/d2b-runner  (otherwise, per XDG)
 #   RUN_DIR  = $RUN_ROOT/<RUN_ID>
-#     aggregate.log    — the shared lib.sh log (D2B_LOG) for this run
-#     <scriptname>.log — per-script stdout+stderr
+#     aggregate.log    - the shared lib.sh log (D2B_LOG) for this run
+#     <scriptname>.log - per-script stdout+stderr
 # RUN_ROOT is created mode 0700 owned by $EUID and validated on every
 # run; the prior /tmp/d2b-runner path is no longer used (it was
 # world-writable and let an unprivileged user influence root's log
@@ -50,7 +50,7 @@
 # RUN_DIR and older successful runs are pruned (newest 10 kept).
 # Failed runs are always retained for diagnostics.
 #
-# Honors D2B_VMS and D2B_RUN_ROOT — D2B_VMS is passed through to children
+# Honors D2B_VMS and D2B_RUN_ROOT - D2B_VMS is passed through to children
 # via the environment so the live integration scripts target the same VM set;
 # D2B_RUN_ROOT pins the log root (useful for CI).
 
@@ -410,7 +410,7 @@ run_one() {
 # ---------- main ----------
 
 if [ "$mode" = "list" ]; then
-  printf 'd2b test runner — available tests\n\n'
+  printf 'd2b test runner - available tests\n\n'
 fi
 
 pass=0

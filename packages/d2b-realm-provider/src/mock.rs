@@ -258,7 +258,7 @@ impl PersistentShellProvider for StrictPersistentShellProvider {
 
 /// A mux that advertises a fixed capability set and opens a stream only
 /// when (a) the open's authz capability matches the descriptor kind and
-/// (b) the required capability is advertised — otherwise it fails closed
+/// (b) the required capability is advertised - otherwise it fails closed
 /// with a typed `CapabilityDenied`. On success it returns
 /// a loopback substream so conformance can exercise the byte path.
 #[derive(Debug, Clone)]

@@ -98,8 +98,8 @@ Spec is the desired state. Rules:
 
 `spec` mirrors the D088 three-layer status shape with symmetric frozen names.
 Generic API/CLI/controllers author and reconcile only Layers 1 and 2; the
-Layer-3 Provider extension builds on — never shadows, overrides, renames, or
-duplicates — the fields below it.
+Layer-3 Provider extension builds on - never shadows, overrides, renames, or
+duplicates - the fields below it.
 
 | Layer | Location | Owner | Consumers |
 | --- | --- | --- | --- |
@@ -109,10 +109,10 @@ duplicates — the fields below it.
 
 ```yaml
 spec:
-  # Layer 2 — ResourceType base spec (provider-neutral; includes providerRef)
+  # Layer 2 - ResourceType base spec (provider-neutral; includes providerRef)
   providerRef: Provider/<name>
   # ...exact typed base fields frozen by the ResourceType schema...
-  # Layer 3 — optional canonical selected-Provider extension envelope
+  # Layer 3 - optional canonical selected-Provider extension envelope
   provider:
     schemaId: <provider-name>.d2bus.org/<ResourceType>/spec
     schemaVersion: "1.0"
@@ -156,7 +156,7 @@ spec, and an optional implementation extension under the same `spec.provider`
 envelope.
 
 **Provider self-description exception.** The `Provider` resource's spec remains
-`{ artifactId, config }` (D075) — the one documented exception to the
+`{ artifactId, config }` (D075) - the one documented exception to the
 `providerRef`-plus-`spec.provider` shape, because a `Provider` cannot carry a
 non-circular `spec.providerRef` to itself.
 
@@ -190,7 +190,7 @@ revisioned status API.
 
 Every resource's `status` has a frozen three-layer shape. Generic API, CLI, and
 controllers depend only on Layers 1 and 2; the Layer-3 Provider extension builds
-on — never replaces, overrides, or duplicates — the fields below it.
+on - never replaces, overrides, or duplicates - the fields below it.
 
 | Layer | Location | Owner | Consumers |
 | --- | --- | --- | --- |
@@ -200,7 +200,7 @@ on — never replaces, overrides, or duplicates — the fields below it.
 
 ```yaml
 status:
-  # Layer 1 — universal ResourceStatus base (present on every resource)
+  # Layer 1 - universal ResourceStatus base (present on every resource)
   observedGeneration: 4
   phase: Ready
   conditions: [ ... ]
@@ -219,11 +219,11 @@ status:
     lastAssessedAt: 2026-07-23T00:00:01Z
     owned: { count: 0, refs: [] }
     dependencies: { count: 0, refs: [] }
-  # Layer 2 — ResourceType-common, provider-neutral (required across all implementations)
+  # Layer 2 - ResourceType-common, provider-neutral (required across all implementations)
   resource:
     # exact typed fields frozen by the ResourceType schema
     ...
-  # Layer 3 — optional Provider-specific extension
+  # Layer 3 - optional Provider-specific extension
   provider:
     providerRef: Provider/<name>
     schemaId: <provider-name>.d2bus.org/<ResourceType>/status
@@ -308,7 +308,7 @@ bytes, argv/environment, state contents, or host/provider paths.
 `status.resource` is the provider-neutral, typed object frozen by the
 ResourceType schema. It holds the observation fields that every implementation
 of that ResourceType and every cross-resource/provider consumer must be able to
-read — for example Guest runtime readiness/capabilities, the Device claim base,
+read - for example Guest runtime readiness/capabilities, the Device claim base,
 Credential lease metadata, or the Volume attachment base. It extends the
 universal base (Layer 1) and never restates it. Generic API/CLI/controllers
 depend only on the universal base plus `status.resource`. Any field shared
@@ -573,9 +573,9 @@ the `Endpoint` ResourceType.
 
 ## Authority and cardinality (D097)
 
-Every scarce or singleton backing — a physical device, a singleton external
+Every scarce or singleton backing - a physical device, a singleton external
 service, a per-Zone runtime service, a per-Host/user/seat service, a fixed
-listener/store, or a globally-unique policy — is governed by a signed
+listener/store, or a globally-unique policy - is governed by a signed
 **`AuthorityDescriptor`**. It is a provider-neutral declaration attached to the
 owning typed Resource and its owning Provider (not a new opaque public ID, and
 **not** a new ResourceType unless an audit proves no existing type can own the
@@ -601,10 +601,10 @@ effects are rejected before they happen.
 conflicting authority Resource or Process **before any external effect**. The
 index key is scoped to the level at which a collision can actually occur:
 `zone`-scoped authorities are keyed by `(Zone, authorityClass, opaqueKeyDigest)`,
-but `host`, `physical-device`, `seat`, and `external-service` authorities — where
+but `host`, `physical-device`, `seat`, and `external-service` authorities - where
 **two Zones on the same host can collide over one physical/kernel backing** (a
 GPU, physical TPM, USB device, `/dev/kvm`, a passthrough NIC, a globally-unique
-vsock CID, or a fixed listener port) — are keyed **Host-global** by
+vsock CID, or a fixed listener port) - are keyed **Host-global** by
 `(Host, authorityClass, opaqueKeyDigest)`, not merely Zone-local. A Host-global
 authority admits exactly one owner across **all** Zones on that host; a second
 Zone claiming the same physical backing is a `duplicateConflict`. `authorityKey`
@@ -627,8 +627,8 @@ replace it. The shared deterministic conflict is
 status.
 
 **Status/spec base.** The universal status base exposes bounded provider-neutral
-authority state — `available`, current holder count, queue depth, arbitration,
-and update currency — with **no raw identity**; provider extension carries
+authority state - `available`, current holder count, queue depth, arbitration,
+and update currency - with **no raw identity**; provider extension carries
 implementation detail only. The spec base (or provider capability) declares the
 requested share mode and **cannot bypass** the descriptor.
 

@@ -3,7 +3,7 @@
 //! pure doc-vs-`nixos-modules/` string-manipulation completeness scanner: for
 //! every legacy systemd template / singleton the framework historically
 //! emitted, `docs/reference/privileges.md` must carry either a live broker-op
-//! row OR a documented retirement (obituary) — never a self-contradictory both.
+//! row OR a documented retirement (obituary) - never a self-contradictory both.
 //! It runs grep-only (no Nix eval/build), so it ports cleanly to Rust string
 //! parsing.
 //!
@@ -65,7 +65,7 @@ const LEGACY_UNITS: &[&str] = &[
 ];
 
 /// A line in the live region carries an obituary marker if it mentions any of
-/// these phrases — they signal "this row is the obituary in-place, not a
+/// these phrases - they signal "this row is the obituary in-place, not a
 /// contradictory live row". (`LIVE_OBIT_MARKERS` in the bash gate.)
 const LIVE_OBIT_MARKERS: &str = "Retired|retired|retires|deleted|obituary|MUST NOT|\
 scheduled.for.removal|folding their work|re-homed|replaced by|replacement|\
@@ -73,7 +73,7 @@ current surface|no longer exists|not emitted";
 
 /// Recursively collect every regular file under `dir`. Mirrors `grep -r`, which
 /// descends the whole tree and inspects every file (this gate's
-/// `nixos-modules/` tree is all text — `.nix`/`.rs`/`.py`/`.sh`/`.json`/
+/// `nixos-modules/` tree is all text - `.nix`/`.rs`/`.py`/`.sh`/`.json`/
 /// `.toml`).
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = fs::read_dir(dir)
@@ -117,17 +117,17 @@ fn module_lines() -> Vec<String> {
 //
 //   * the obituary region = lines from the
 //     `## Legacy systemd surface obituary` heading through (and including) the
-//     next top-level `## ` heading — the canonical index of retired units;
-//   * the live region      = every other line — the broker-op / runner-role /
+//     next top-level `## ` heading - the canonical index of retired units;
+//   * the live region      = every other line - the broker-op / runner-role /
 //     DAG-node surface that is the daemon-only end-state.
 //
 // Hard-fail modes:
 //   (1) emitted by nixos-modules/ but mentioned nowhere in the doc;
 //   (2) no longer emitted AND absent from the obituary index;
-//   (3) a live (unmarked) doc row AND an obituary row — contradictory.
+//   (3) a live (unmarked) doc row AND an obituary row - contradictory.
 //
 // Transitional state (still emitted AND already in the obituary) is a benign
-// warning, not a failure — the doc lands before the code-deletion sibling.
+// warning, not a failure - the doc lands before the code-deletion sibling.
 // ---------------------------------------------------------------------------
 #[test]
 fn legacy_systemd_surface_obituary_completeness() {
@@ -149,7 +149,7 @@ fn legacy_systemd_surface_obituary_completeness() {
     );
 
     // OBIT_START: 1-based line number of the obituary heading (starts-with,
-    // first match — mirrors `grep -n '^## ...' | head -1`).
+    // first match - mirrors `grep -n '^## ...' | head -1`).
     let obit_start = doc_lines
         .iter()
         .position(|l| l.starts_with(OBIT_HEADING))
@@ -196,7 +196,7 @@ fn legacy_systemd_surface_obituary_completeness() {
             .unwrap_or_else(|err| panic!("invalid emitted regex for '{pat}': {err}"));
         let emitted = module_lines.iter().any(|l| emitted_re.is_match(l));
 
-        // Doc citations must look like an actual systemd unit name — require the
+        // Doc citations must look like an actual systemd unit name - require the
         // pattern to abut a `.service`/`.socket`/`.timer`/`{`, an `@`, or a
         // `<vm>.` reference. Bare uid/principal mentions are not unit-name
         // citations.
@@ -242,7 +242,7 @@ fn legacy_systemd_surface_obituary_completeness() {
         // Failure (3): self-contradictory live row + obituary.
         if bare_live_hits > 0 && in_obit {
             errors.push(format!(
-                "'{pat}' has a live (unmarked) doc row AND an obituary row — contradictory"
+                "'{pat}' has a live (unmarked) doc row AND an obituary row - contradictory"
             ));
             continue;
         }

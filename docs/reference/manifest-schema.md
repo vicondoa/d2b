@@ -195,7 +195,7 @@ Version history:
   Grafana/Cloud-Hypervisor-exporter metadata with SigNoz UI and OTLP
   collector metadata while preserving vsock transport fields.
 - v5: combines the v4 SigNoz observability metadata with base Cloud
-  Hypervisor vsock semantics — the per-VM `observability.vsockCid` /
+  Hypervisor vsock semantics - the per-VM `observability.vsockCid` /
   `observability.vsockHostSocket` fields define the host-owned base
   Cloud Hypervisor vsock device shared by observability and guest
   control, not only the observability relay. These two changes each

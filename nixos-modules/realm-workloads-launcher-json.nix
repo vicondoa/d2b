@@ -1,6 +1,6 @@
 # nixos-modules/realm-workloads-launcher-json.nix
 #
-# Generates realm-workloads-launcher.json — stable desktop launcher metadata
+# Generates realm-workloads-launcher.json - stable desktop launcher metadata
 # consumed by Waybar / wlcontrol / wlterm / clip-picker and similar host-side
 # tooling that needs to discover and launch realm-owned workloads.
 #
@@ -34,7 +34,7 @@ let
   realmWorkloads = cfg._index.realms.workloads.enabled;
 
   # Derive vsockCid for a workload whose legacyVmName points to a local
-  # NixOS VM.  Null for non-nixos, missing, or no legacyVmName — callers
+  # NixOS VM.  Null for non-nixos, missing, or no legacyVmName - callers
   # must handle null.
   vsockCidFor = legacyVmName:
     if legacyVmName == null then null
@@ -104,7 +104,7 @@ let
       # Affirm that no secrets, credentials, or sensitive payloads appear.
       noSecretsOrCredentials = true;
       # appCommand and actions[].command are static operator-declared launch
-      # metadata — not sensitive command payloads or dynamic runtime data.
+      # metadata - not sensitive command payloads or dynamic runtime data.
       noSensitiveCommandPayloads = true;
       noOpaqueSessionHandles = true;
       noProviderTokens = true;

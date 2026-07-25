@@ -367,7 +367,7 @@ message ControlAck {
 // closed enum (NOT a free-form path); guestd maps the key to the host-declared
 // target path. The response is a single bounded payload; oversize files fail
 // with FileTooLarge BEFORE any read/allocation. The guest-reported size/sha256
-// are diagnostics only — the host recomputes both from the received bytes.
+// are diagnostics only - the host recomputes both from the received bytes.
 message ReadGuestFileRequest {
   RequestMetadata metadata = 1;
   GuestFileId file_id = 2;

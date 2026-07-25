@@ -162,7 +162,7 @@ Host prepare uses a privileged broker that the daemon uses to reconcile
 host state (cgroup delegation, bridges/TAPs, NetworkManager
 unmanaged config, `/etc/hosts` managed block, `inet d2b`
 nftables table, per-link sysctls, `modprobe`, device-node opens).
-**Addons MUST NOT bypass the broker** — that is, an addon may not
+**Addons MUST NOT bypass the broker** - that is, an addon may not
 ship a privileged systemd service that mutates any of those host
 surfaces directly. Instead:
 

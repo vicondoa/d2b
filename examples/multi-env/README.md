@@ -1,4 +1,4 @@
-# examples/multi-env — two isolated envs
+# examples/multi-env - two isolated envs
 
 Two `d2b.envs.<env>` instances side-by-side. Each env gets its
 own bridges, its own auto-declared net VM, its own dnsmasq pool, its
@@ -20,7 +20,7 @@ the throwaway browser, an LLM client) lives in another. They do
 not share a LAN, do not share a default route, and cannot
 laterally reach each other if one is compromised.
 
-If you only need one env, see [`../minimal/`](../minimal/) — multi-
+If you only need one env, see [`../minimal/`](../minimal/) - multi-
 env is for users whose threat model includes "I do not want my
 personal dev VM to be able to ARP-scan the corporate VM, even on
 the same physical host".
@@ -103,7 +103,7 @@ d2b.envs.personal = { lanSubnet = "10.30.0.0/24"; uplinkSubnet = "192.0.2.4/30";
 The two `sys-*-net` VMs are real microVMs, just declared by the
 framework instead of the user. They show up in `d2b list` like
 any other VM and can be inspected with `d2b console sys-work-net`.
-They are autostarted at host boot — see `d2b.vms.<name>.autostart`,
+They are autostarted at host boot - see `d2b.vms.<name>.autostart`,
 defaulted to `true` for net VMs by `network.nix`.
 
 ### Backend port allocation
@@ -119,7 +119,7 @@ which returns names sorted lexicographically:
 
 The sort-determinism matters: adding a new env shifts ports for
 any env that sorts after it. The uplink-side proxy bind
-(`<host-uplink-ip>:3240`) is stable regardless — guests address
+(`<host-uplink-ip>:3240`) is stable regardless - guests address
 `3240`, only the backend port behind the proxy moves. Pin it via
 `extraNetConfig` if you need cross-env stability.
 
@@ -135,8 +135,8 @@ d2b.vms.personal-app = { env = "personal"; index = 10; };  # → 10.30.0.10
 From `(env, index)`, the framework deterministically derives:
 
 - **IP**: `<lan-subnet-prefix>.<index>`.
-- **MAC**: `02:<8-hex-chars-of-sha256(env + "-lan")>:<index-as-2-hex-digits>`
-  — see `lib.nix`'s `mkMac`. Same env + index always yields the
+- **MAC**: `02:<8-hex-chars-of-sha256(env + "-lan")>:<index-as-2-hex-digits>` -
+  see `lib.nix`'s `mkMac`. Same env + index always yields the
   same MAC, so dnsmasq reservations are stable across rebuilds.
 - **Tap name**: `<env>-l<index>` on `br-<env>-lan`. Capped to 15 chars
   (Linux interface name limit); env names are constrained to ≤ 8
@@ -150,7 +150,7 @@ From `(env, index)`, the framework deterministically derives:
   - LAN → all other destinations: ACCEPT (masqueraded via the net
     VM's uplink → host → physical NIC).
 
-Index uniqueness is scoped **per-env** — `work-app.index = 10` and
+Index uniqueness is scoped **per-env** - `work-app.index = 10` and
 `personal-app.index = 10` is fine; the framework derives different
 MACs and IPs because the env name is part of the MAC seed and
 the LAN subnet differs.
@@ -162,7 +162,7 @@ d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 ```
 
 Unioned into every env's `hostBlocklist`, so a workload VM in
-*any* env cannot reach anything on the host's physical LAN — not
+*any* env cannot reach anything on the host's physical LAN - not
 just the host's own IP. Set this to whatever `ip route` says is
 your physical LAN.
 
@@ -224,17 +224,17 @@ changing behaviour.
 
 Each env's USBIP path is fully isolated:
 
-1. **Uplink proxy** — the broker-spawned per-env proxy runner binds to
+1. **Uplink proxy** - the broker-spawned per-env proxy runner binds to
    the env's host uplink IP on TCP/3240. Workload VMs in `work`
    `usbip attach` to `192.0.2.1`; in `personal` they hit `192.0.2.5`.
    A VM addressing the wrong env's uplink IP is firewalled off by
    that env's net VM.
-2. **Backend port** — the proxy forwards to a per-env loopback port
+2. **Backend port** - the proxy forwards to a per-env loopback port
    (`3241 + alphabetical-index`). Each env has its own broker-spawned
    usbipd backend runner, so the underlying usbipd processes are also
    separated. Attaching a YubiKey to the `work` env never exposes it
    on the `personal` env's path.
-3. **Net-VM nftables** — the LAN-to-uplink-IP carve-out names the
+3. **Net-VM nftables** - the LAN-to-uplink-IP carve-out names the
    env's own uplink IP. A `work` VM cannot reach the `personal`
    env's uplink IP via the routing fabric, because the `work` net
    VM's default route goes via the host's `192.0.2.1` and the host
@@ -318,7 +318,7 @@ expected `br-<env>-up` uplink bridge), common causes are:
 - **Chosen env CIDR overlaps a route the host already owns**
   (Tailscale subnet, WireGuard, VPN-pushed route). Pick a disjoint
   CIDR or unset the conflicting route source.
-- **Bridge `br-<env>-up` not present** — typically a botched
+- **Bridge `br-<env>-up` not present** - typically a botched
   rebuild. Re-run `sudo nixos-rebuild switch`, restart `d2bd` if the
   switch replaced it, and inspect `systemd-networkd` logs for the bridge.
 
@@ -349,7 +349,7 @@ expected `br-<env>-up` uplink bridge), common causes are:
   [`../graphics-workstation/`](../graphics-workstation/).
 - **Entra ID / Himmelblau.** See
   [`../with-entra-id/`](../with-entra-id/).
-- **Persistent state.** Both VMs are pure NixOS evals — no
+- **Persistent state.** Both VMs are pure NixOS evals - no
   `var.img`, no `microvm.volumes`, no TPM. Add those in your
   consumer config; nothing about per-env isolation changes.
 
@@ -361,17 +361,17 @@ running VM runners are re-adopted rather than cycled. After rebuilding,
 `d2b list` flags any VM whose declared closure has drifted from the
 running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
-[`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
+[`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
 for the exact predicate.
 
 ## See also
 
-- [`examples/minimal`](../minimal/) — read-and-copy headless starter
-- [`examples/graphics-workstation`](../graphics-workstation/) — desktop VM with Wayland + audio + USBIP
-- [`examples/with-entra-id`](../with-entra-id/) — Entra-ID composition via the sibling flake
-- [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
+- [`examples/minimal`](../minimal/) - read-and-copy headless starter
+- [`examples/graphics-workstation`](../graphics-workstation/) - desktop VM with Wayland + audio + USBIP
+- [`examples/with-entra-id`](../with-entra-id/) - Entra-ID composition via the sibling flake
+- [`templates/default`](../../templates/default/) - scaffold via `nix flake init`
 
 ## Daemon-backed variant (experimental)
 
@@ -386,7 +386,7 @@ In v1.1 the framework is daemon-only (per
 enabled VM is supervised by `d2bd`. The historical
 `d2b.vms.<vm>.supervisor` option (and the legacy systemd-template
 path it selected) was removed, so this variant no longer demonstrates
-mixed legacy/daemon supervision — it is retained only for the
+mixed legacy/daemon supervision - it is retained only for the
 network-knob coverage.
 
 What the variant changes on top of `configuration.nix`:
@@ -405,7 +405,7 @@ double opt-in for relaxed isolation between workload LAN TAPs in
 the same env. The other half is the site-level acknowledgement
 `d2b.site.allowUnsafeEastWest = true`. **Both must be true**
 for the per-tap `bridgePortFlags.isolated` flag to flip to `false`
-on workload LAN ports — anything less leaves the default isolation
+on workload LAN ports - anything less leaves the default isolation
 in place. The emitted `host.json` records the resolved state as
 `environments[].lan.effectiveEastWest` for operators to inspect
 without re-deriving the predicate.
@@ -436,7 +436,7 @@ the env MTU minus 40 bytes; `null` when `mssClamp` is unset).
 
 ### VM supervision (daemon-only)
 
-In v1.1 there is no `d2b.vms.<vm>.supervisor` option — it was
+In v1.1 there is no `d2b.vms.<vm>.supervisor` option - it was
 removed when the framework went daemon-only (per
 [ADR 0015](../../docs/adr/0015-daemon-only-clean-break.md)). Setting it
 now fails eval with a typed message. Every enabled VM is supervised by
@@ -448,7 +448,7 @@ Daemon-supervised VMs:
   `autostart = true` (the NixOS module emits no per-VM
   autostart template unit at all);
 - do NOT surface a per-node systemd `unit` in the emitted
-  `processes.json` (single-writer invariant — the daemon owns
+  `processes.json` (single-writer invariant - the daemon owns
   lifecycle via pidfd, so the bundle never points a systemd unit at a
   VM);
 - produce the env-level `host.json` network state and per-VM
@@ -487,7 +487,7 @@ double-opt-in, and that the daemon-supervised VMs surface no
 per-VM systemd unit references in the emitted `vms.json` /
 `processes.json`.
 
-> **Note on the in-tree path** — the version of `flake.nix` checked
+> **Note on the in-tree path** - the version of `flake.nix` checked
 > into this directory uses `d2b.url = "path:../..";` so the
 > example can be evaluated against the in-tree framework without a
 > network. When you copy this layout into your own repo, swap it

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/unit/meta/ci-coverage.sh — structural gate asserting every tests/*.sh is
+# tests/unit/meta/ci-coverage.sh - structural gate asserting every tests/*.sh is
 # wired into at least one CI workflow or test aggregator.
 #
 # Root-cause gap: static CI set drift.
@@ -15,7 +15,7 @@ HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 
 # ---------------------------------------------------------------------------
-# EXCLUDE_FROM_CI — intentional exclusions with rationale.
+# EXCLUDE_FROM_CI - intentional exclusions with rationale.
 # Each entry is the basename without leading "tests/" e.g. "lib.sh".
 # Keep sorted; add rationale comment above each entry.
 # ---------------------------------------------------------------------------
@@ -124,7 +124,7 @@ is_referenced() {
   if grep -qF "$rel" "${ref_files[@]}" 2>/dev/null; then
     return 0
   fi
-  # Bare stem match — covers loop entries like "  bundle-drift \" in static-fast.sh
+  # Bare stem match - covers loop entries like "  bundle-drift \" in static-fast.sh
   # and "  vm-submodule-eval; do" (last item in a for loop) in static.sh.
   # Require the stem be preceded by whitespace/quote and followed by
   # whitespace, backslash, quote, semicolon, or end-of-field.

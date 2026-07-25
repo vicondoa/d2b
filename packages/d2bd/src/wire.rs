@@ -105,7 +105,7 @@ impl Request {
     /// Concurrency lock class for this request. Read-only verbs take no
     /// lock and run fully in parallel; per-VM mutating verbs serialize on
     /// the named VM; global mutating verbs are mutually exclusive with
-    /// every per-VM op. The accept loop never holds this lock — it is
+    /// every per-VM op. The accept loop never holds this lock - it is
     /// acquired on the worker thread inside `dispatch_request`.
     pub fn lock_class(&self) -> crate::concurrency::OpLockClass {
         use crate::concurrency::OpLockClass;

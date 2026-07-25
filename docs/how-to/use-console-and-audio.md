@@ -12,7 +12,7 @@
 - You must be a member of the `d2b` group on the host.
 - For `d2b audio` commands, the target VM must have
   `d2b.vms.<vm>.audio.enable = true` in its NixOS configuration.
-  Confirm with `d2b vm status <vm>` — the audio field appears in the
+  Confirm with `d2b vm status <vm>` - the audio field appears in the
   capability summary for audio-enabled VMs.
 - For `d2b console` on an ACA sandbox, the sandbox must be running a
   guestd-compatible in-sandbox agent. If it is absent, the daemon
@@ -75,11 +75,11 @@
    The `enforcement` field reflects which side of the policy was
    applied:
 
-   - `host-and-guest` — host and guest enforcement are active (Cloud
+   - `host-and-guest` - host and guest enforcement are active (Cloud
      Hypervisor NixOS VMs with guestd).
-   - `host-only` — only host-side policy is available or applied.
-   - `guest-only` — only guest/provider policy is available or applied.
-   - `unsupported` — the provider does not support guest enforcement.
+   - `host-only` - only host-side policy is available or applied.
+   - `guest-only` - only guest/provider policy is available or applied.
+   - `unsupported` - the provider does not support guest enforcement.
      This is normal and expected for qemu-media VMs, not an error.
    Provider failures such as `provider-misconfigured` are not successful
    enforcement postures; they appear in the separate per-target error
@@ -174,15 +174,15 @@ root-owned d2b state.
 
 ## Related references
 
-- [Provider capability matrix](../reference/provider-capability-matrix.md) —
+- [Provider capability matrix](../reference/provider-capability-matrix.md) -
   full per-provider console and audio capability boundaries, including
   stream isolation and lock semantics.
-- [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding design
+- [ADR 0041](../adr/0041-console-and-audio-controls.md) - binding design
   decision.
-- [Audio component reference](../reference/components-audio.md) — NixOS
+- [Audio component reference](../reference/components-audio.md) - NixOS
   options, lifecycle, and hardening details for Cloud Hypervisor audio.
-- [CLI contract — `console`](../reference/cli-contract.md#console) — full
+- [CLI contract - `console`](../reference/cli-contract.md#console) - full
   argument and exit-code contract.
-- [CLI contract — `audio`](../reference/cli-contract.md#audio-status) — full
+- [CLI contract - `audio`](../reference/cli-contract.md#audio-status) - full
   audio subcommand contracts.
-- [Error codes](../reference/error-codes.md) — typed error catalog.
+- [Error codes](../reference/error-codes.md) - typed error catalog.

@@ -8,8 +8,8 @@ which minijail profiles constrain them.
 
 ## Top-level fields
 
-- `schemaVersion` — schema directory/version for this artifact.
-- `vms` — one process graph per VM.
+- `schemaVersion` - schema directory/version for this artifact.
+- `vms` - one process graph per VM.
 
 ## Per-VM process graph
 

@@ -1,4 +1,4 @@
-# d2b.site.* — host-level site knobs that every VM inherits,
+# d2b.site.* - host-level site knobs that every VM inherits,
 # plus the top-level `d2b.hostLanCidrs` list. Extracted from
 # options.nix for reviewability.
 { lib, ... }:
@@ -112,7 +112,7 @@
           this option's value will then thread through
           `daemon-config.json` → `d2bd` → `d2b-priv-broker
           serve --audit-retention-days <value>`). Until that wiring
-          lands, overriding this option is a no-op at runtime — the
+          lands, overriding this option is a no-op at runtime - the
           broker defaults to 14 days regardless.
 
           The option is exposed now so consumer NixOS configs can
@@ -172,7 +172,7 @@
 
         Defaults to `wayland-0`, correct when the host compositor is
         the first Wayland server on the seat. Set this to the actual
-        socket name when it is not — for example **niri** commonly
+        socket name when it is not - for example **niri** commonly
         lands on `wayland-1`. A mismatch makes the GPU sidecar fail
         with `vhost-user connection closed` (the socket it was told to
         open does not exist) and the broker refuse the ACL
@@ -216,7 +216,7 @@
         list is also added to the canonical `d2b`
         socket ACL group.
 
-        The framework does NOT create the users — declare them in
+        The framework does NOT create the users - declare them in
         your top-level NixOS config with `users.users.<name> = { …
         };`. d2b only adds the launcher groups to their
         `extraGroups`.
@@ -253,7 +253,7 @@
         (so the CLI can drive `ssh` to each VM without sudo).
 
         Default tracks `${"$"}{stateDir}/keys`. If you override
-        `stateDir`, override this too — the option default is a
+        `stateDir`, override this too - the option default is a
         literal path because Nix evaluates option defaults
         independently of other options.
 
@@ -316,7 +316,7 @@
         flag still pulls in the guest-side `usbip` CLI + `vhci_hcd`
         module, but the host side has no Yubikey-specific
         machinery installed. The `/dev/kvm` udev rule (locking the
-        device to `GROUP="kvm"`) stays in place regardless — it is
+        device to `GROUP="kvm"`) stays in place regardless - it is
         not a Yubikey-specific rule.
       '';
     };
@@ -352,7 +352,7 @@
         `microvm.vms.<vm>.specialArgs` after the framework's own
         baseline (`{ inherit inputs; }` where `inputs` is the
         d2b FLAKE's inputs). Consumer keys take precedence on
-        collision — set `inputs = consumerInputs;` here if your
+        collision - set `inputs = consumerInputs;` here if your
         per-VM modules need `inputs.<your-flake>` visibility (e.g.
         `inputs.entrablau`, `inputs.llm-agents`).
 
@@ -365,7 +365,7 @@
           into per-VM evals without re-importing it in each VM.
 
         Mirrors `home-manager.extraSpecialArgs` from the
-        Home-Manager NixOS module — same semantics, same intent.
+        Home-Manager NixOS module - same semantics, same intent.
       '';
     };
   };
@@ -373,7 +373,7 @@
   # Top-level option: CIDRs of the host's own physical LAN(s). These
   # get unioned into every `d2b.envs.<env>.hostBlocklist`
   # automatically, so a workload VM cannot reach any host on the
-  # wire the host itself sits on — not just the host's own IP.
+  # wire the host itself sits on - not just the host's own IP.
   #
   # Defaults to the empty list; override to your actual subnet.
   # `ip route` on the host will tell you what to put here, e.g.
@@ -386,11 +386,11 @@
     description = ''
       CIDRs of the host's own physical LAN(s). Automatically merged
       into every env's net-VM DROP rule so VMs cannot reach the
-      host's neighbours (printer, NAS, other workstations…) — not
+      host's neighbours (printer, NAS, other workstations…) - not
       just the host's IP.
 
       Same-env workload VMs share an env (and its `sys-<env>-net`
-      net VM) but cannot directly reach peer workload VMs —
+      net VM) but cannot directly reach peer workload VMs -
       workload taps are `Isolated = true` in the per-env LAN
       bridge. Traffic to peers and to the host's LAN both leave
       via the net VM (where the merged DROP rules apply); there

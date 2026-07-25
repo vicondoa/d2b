@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/tools/gen-flake-check-matrix-pin.sh — regenerate / verify the committed
+# tests/tools/gen-flake-check-matrix-pin.sh - regenerate / verify the committed
 # pin of x86_64-linux flake check names.
 #
 # The `pr-l1-static-fast` workflow discovers its hosted-runner x86_64 matrix
@@ -51,7 +51,7 @@ render() {
 
 if [ "$mode" = "check" ]; then
   if [ ! -f "$PIN" ]; then
-    echo "flake-check-matrix pin: MISSING $PIN — run 'make flake-matrix-pin'" >&2
+    echo "flake-check-matrix pin: MISSING $PIN - run 'make flake-matrix-pin'" >&2
     exit 1
   fi
   tmp=$(mktemp)

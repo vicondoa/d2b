@@ -12,25 +12,25 @@ find the current `host.json`, `processes.json`, `privileges.json`,
 
 ## Top-level fields
 
-- `schemaVersion` — schema directory/version for every referenced artifact.
-- `bundleVersion` — additive bundle contract rev (`11` in the current tree).
-- `publicManifestPath` — path to the public `vms.json` manifest.
-- `hostPath` — path to the private `host.json` artifact.
-- `processesPath` — path to the private `processes.json` artifact.
-- `storagePath` — path to the private `storage.json` artifact.
-- `syncPath` — path to the private `sync.json` artifact.
-- `allocatorPath` — path to the private `allocator.json` artifact.
-- `realmControllersPath` — path to the private `realm-controllers.json`
+- `schemaVersion` - schema directory/version for every referenced artifact.
+- `bundleVersion` - additive bundle contract rev (`11` in the current tree).
+- `publicManifestPath` - path to the public `vms.json` manifest.
+- `hostPath` - path to the private `host.json` artifact.
+- `processesPath` - path to the private `processes.json` artifact.
+- `storagePath` - path to the private `storage.json` artifact.
+- `syncPath` - path to the private `sync.json` artifact.
+- `allocatorPath` - path to the private `allocator.json` artifact.
+- `realmControllersPath` - path to the private `realm-controllers.json`
   artifact.
-- `realmIdentityPath` — path to the private `realm-identity.json` artifact.
-- `realmWorkloadsLauncherV2Path` — path to the argv-free launcher metadata
+- `realmIdentityPath` - path to the private `realm-identity.json` artifact.
+- `realmWorkloadsLauncherV2Path` - path to the argv-free launcher metadata
   served through the authorized public daemon API.
-- `unsafeLocalWorkloadsPath` — optional path to the private configured
+- `unsafeLocalWorkloadsPath` - optional path to the private configured
   unsafe-local workload artifact.
-- `privilegesPath` — path to the private `privileges.json` artifact.
-- `closures` — per-VM closure artifact paths.
-- `minijailProfiles` — shipped minijail profile metadata paths.
-- `generation` — source/build provenance for drift auditing.
+- `privilegesPath` - path to the private `privileges.json` artifact.
+- `closures` - per-VM closure artifact paths.
+- `minijailProfiles` - shipped minijail profile metadata paths.
+- `generation` - source/build provenance for drift auditing.
 
 ## Contract notes
 

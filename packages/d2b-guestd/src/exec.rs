@@ -464,7 +464,7 @@ impl ExecEntry {
     /// Idempotent cancellation. The process-group signal goes first and is
     /// lock-free, so it always reaches the group even while the supervisor is
     /// mid-`wait`. The reader tasks are aborted; the supervisor task is left to
-    /// run free — once `kill_group` makes the child exit, the supervisor reaps
+    /// run free - once `kill_group` makes the child exit, the supervisor reaps
     /// it via its owned waiter and finishes on its own.
     fn cancel(&self) {
         self.killer.kill_group();
@@ -875,7 +875,7 @@ where
 
         // Commit: swap the placeholder for the real entry iff it is still
         // present. If close_connection removed it during spawn, the connection
-        // is gone — tear the process down instead of tracking it.
+        // is gone - tear the process down instead of tracking it.
         let committed = {
             let mut execs = self.lock_execs();
             if execs.remove(&exec_id).is_some() {
@@ -1035,7 +1035,7 @@ where
 
     /// WriteStdin to an owned TTY exec at `offset` (optionally injecting VEOF
     /// via `close_after`). Returns the accepted-byte count, the new next-offset,
-    /// and whether stdin is now closed (partial-write-aware — see [`StdinWriteOk`]).
+    /// and whether stdin is now closed (partial-write-aware - see [`StdinWriteOk`]).
     pub async fn write_stdin(
         &self,
         owner: &ConnectionKey,
@@ -1485,7 +1485,7 @@ fn spawn_tty_supervisor(
 /// deadlock teardown.
 ///
 /// Drain: on a normal child exit (`outcome = Some`) the slave is gone, so the
-/// master read returns EOF/EIO on its own — the reader is given a bounded grace
+/// master read returns EOF/EIO on its own - the reader is given a bounded grace
 /// to drain trailing output before being aborted. On cancel/disconnect
 /// (`outcome = None`) the child may still be running, so the reader is aborted
 /// immediately to drop its master clone and force `SIGHUP`.
@@ -1504,7 +1504,7 @@ async fn teardown_tty(
         return;
     }
     // Entering Closing has already rejected new stdin/control RPCs. Release the
-    // master write half (abort+await the writer task — never lock-contend) and
+    // master write half (abort+await the writer task - never lock-contend) and
     // the control clone so two of the three master references are gone.
     tty.release_writer().await;
     let _ = tty.take_control();
@@ -1524,7 +1524,7 @@ async fn teardown_tty(
         if outcome.is_some() {
             match tokio::time::timeout(grace, &mut handle).await {
                 // Reader finished on its own (natural EOF). The JoinHandle
-                // future already completed here — must NOT be awaited again.
+                // future already completed here - must NOT be awaited again.
                 Ok(_joined) => {}
                 Err(_elapsed) => {
                     handle.abort();
@@ -1779,7 +1779,7 @@ mod tests {
         other_req.user = Some("alice".to_owned());
         assert!(validate_and_authorize(&other_req, &enabled_user).is_ok());
 
-        // Omitted wire user is fine — it is not consulted.
+        // Omitted wire user is fine - it is not consulted.
         let mut omitted = good_input();
         omitted.user = None;
         assert!(validate_and_authorize(&omitted, &enabled_user).is_ok());
@@ -1856,7 +1856,7 @@ mod tests {
                 "{label}: wire alice user must be ignored"
             );
 
-            // Omitted wire user is fine — it is not consulted.
+            // Omitted wire user is fine - it is not consulted.
             let mut omitted = mk();
             omitted.user = None;
             assert!(
@@ -3114,11 +3114,11 @@ mod tests {
     #[tokio::test]
     async fn total_exec_cap_counts_terminal_execs_and_blocks_both_paths() {
         // The EXEC_SESSIONS_PER_VM ceiling is the TOTAL retained-session cap and
-        // counts terminal (exited/cancelled) execs too — distinct from the
+        // counts terminal (exited/cancelled) execs too - distinct from the
         // ATTACHED_SESSIONS_PER_VM cap, which counts only running sessions. Fill
         // the runtime with exactly EXEC_SESSIONS_PER_VM terminal entries so the
-        // running count stays 0 (well under the attached cap): the next create —
-        // TTY or non-TTY — must fail with ExecCapacityExceeded, NOT
+        // running count stays 0 (well under the attached cap): the next create -
+        // TTY or non-TTY - must fail with ExecCapacityExceeded, NOT
         // AttachCapacityExceeded, and the rejected TTY create must allocate no
         // PTY (it fails before the spawner is reached).
         let policy = ExecPolicy {
@@ -3170,7 +3170,7 @@ mod tests {
         // The attached-session cap is shared: a mix of running non-TTY execs and
         // running interactive TTY sessions counts against ONE ceiling. Interleave
         // 4 non-TTY + 4 TTY running sessions to exactly fill
-        // ATTACHED_SESSIONS_PER_VM (8), then prove the 9th — of either kind —
+        // ATTACHED_SESSIONS_PER_VM (8), then prove the 9th - of either kind -
         // fails with AttachCapacityExceeded, and the rejected TTY create
         // allocates no PTY.
         assert_eq!(ATTACHED_SESSIONS_PER_VM, 8, "test interleave assumes cap 8");
@@ -3389,7 +3389,7 @@ mod tests {
         // accidentally loosening the attached ceiling.
         //
         // A dedicated spawner models a real child: its `wait()` parks until the
-        // ceiling's `kill_group()` fires, after which it reports `Signaled` — so
+        // ceiling's `kill_group()` fires, after which it reports `Signaled` - so
         // the supervisor's post-kill `wait()` actually returns (the generic
         // FakeWaiter would pend forever on the second wait).
         use tokio::sync::Notify;

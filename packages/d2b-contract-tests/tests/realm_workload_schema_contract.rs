@@ -153,7 +153,7 @@ fn workload_identity_definition_is_in_wire_protocol_schema() {
 }
 
 /// `workloadIdentity` must be a property of `ListEntry` in the wire-protocol
-/// schema, but MUST NOT appear in `required[]` (additive field — old daemons
+/// schema, but MUST NOT appear in `required[]` (additive field - old daemons
 /// omit it; new CLI consumers must tolerate its absence).
 #[test]
 fn workload_identity_is_additive_not_required_in_list_entry() {
@@ -334,9 +334,9 @@ fn realm_workloads_launcher_exposes_workload_id_field() {
 /// The launcher JSON emitter must expose `iconId`, `iconName`, and `iconGroupKey`
 /// in addition to the existing resolved `icon` field.
 ///
-/// - `iconId`       — raw launcher.icon.id value (null when not set)
-/// - `iconName`     — raw launcher.icon.name fallback value (null when not set)
-/// - `iconGroupKey` — stable clustering key for duplicate-icon / app-chooser
+/// - `iconId`       - raw launcher.icon.id value (null when not set)
+/// - `iconName`     - raw launcher.icon.name fallback value (null when not set)
+/// - `iconGroupKey` - stable clustering key for duplicate-icon / app-chooser
 ///   semantics; equals iconId when set, else iconName, else null
 ///
 /// These fields let desktop consumers (Waybar, wlcontrol, clip-picker) cluster
@@ -641,7 +641,7 @@ fn realm_controller_config_emitter_wires_workload_identity_fields() {
     assert!(
         emitter.contains("identity ="),
         "realm-controller-config emitter must nest workload identity under 'identity = {{ ... }}' \
-         (RealmControllerLocalWorkload.identity: Option<WorkloadIdentity> — deny_unknown_fields \
+         (RealmControllerLocalWorkload.identity: Option<WorkloadIdentity> - deny_unknown_fields \
          rejects flat identity keys at the workload root)"
     );
 

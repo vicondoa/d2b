@@ -1,4 +1,4 @@
-# Security-key CTAPHID proxy — guest-side component.
+# Security-key CTAPHID proxy - guest-side component.
 # Imported into the GUEST NixOS config by host.nix whenever a VM sets
 # `d2b.vms.<name>.usb.securityKey.enable = true`.
 #

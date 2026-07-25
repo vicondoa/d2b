@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-proofs.sh — `make test-proofs`: clippy + test the standalone proof
+# tests/test-proofs.sh - `make test-proofs`: clippy + test the standalone proof
 # crates under proofs/ (separate Cargo workspaces, not members of packages/).
 #
 #   * proofs/chunked-stdio-conformance
@@ -52,7 +52,7 @@ export CARGO_BUILD_RUSTC_WRAPPER="" RUSTC_WRAPPER=""
 # bootstrap above is skipped; but the pinned toolchain then auto-installs as
 # `minimal` (no clippy) on the first `cargo clippy`, which fails. Add clippy
 # explicitly and idempotently whenever rustup drives the toolchain. (Locally,
-# rustup is typically not on PATH — only the activated toolchain bin — and the
+# rustup is typically not on PATH - only the activated toolchain bin - and the
 # toolchain already carries clippy, so this is a no-op.)
 if command -v rustup >/dev/null 2>&1; then
   rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true

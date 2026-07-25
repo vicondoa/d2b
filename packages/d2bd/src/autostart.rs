@@ -15,7 +15,7 @@
 //!    each phase: up to N net VMs in parallel, then up to N
 //!    workloads in parallel.
 //! 3. **Degraded mode.** A net VM failure does NOT abort the
-//!    sequence — workloads in that env are marked
+//!    sequence - workloads in that env are marked
 //!    `Outcome::Degraded` (skipped with a reason), workloads in
 //!    other envs proceed normally, and the daemon continues
 //!    serving `status` / `doctor` / `audit` requests. A workload
@@ -67,7 +67,7 @@ pub struct VmAutostartEntry {
     pub is_net_vm: bool,
     /// True if the VM is an autostart candidate. Today this is
     /// derived heuristically from bundle shape (every non-graphics VM is
-    /// autostart-eligible — graphics VMs are excluded by `assertions.nix`);
+    /// autostart-eligible - graphics VMs are excluded by `assertions.nix`);
     /// in the daemon-only bundle the `autostart` flag becomes a first-class
     /// field and this is read straight off it.
     pub autostart: bool,
@@ -119,7 +119,7 @@ impl Default for AutostartConfig {
 pub enum Outcome {
     /// Successfully started this pass.
     Started,
-    /// `is_running` returned true before we tried — idempotency
+    /// `is_running` returned true before we tried - idempotency
     /// short-circuit, the daemon already has a live pidfd for the
     /// VM (covers SIGHUP / reconnect-after-crash flows).
     AlreadyRunning,
@@ -145,7 +145,7 @@ impl Outcome {
 
     /// True iff the outcome should propagate degradation
     /// downstream (Failed OR Degraded). NotAutostart is NOT
-    /// degraded — an operator explicitly opting a net VM out of
+    /// degraded - an operator explicitly opting a net VM out of
     /// autostart is not the same thing as a failure.
     pub fn is_degraded(&self) -> bool {
         matches!(self, Outcome::Failed { .. } | Outcome::Degraded { .. })
@@ -196,7 +196,7 @@ impl AutostartReport {
 
 /// Seam between [`execute_autostart`] and the per-VM start
 /// machinery. Implementations MUST be cheap to clone (or wrapped in
-/// `Arc`) — `execute_autostart` clones the trait object into each
+/// `Arc`) - `execute_autostart` clones the trait object into each
 /// `spawn_blocking` task it dispatches.
 ///
 /// Both methods are sync and called from inside
@@ -224,7 +224,7 @@ pub trait VmStarter: Send + Sync + 'static {
 ///    pin to their net VM's env in the plan.
 ///
 /// VMs that aren't autostart-eligible (today: VMs the manifest
-/// flags as graphics — see [`vm_is_autostart_eligible`]) appear in
+/// flags as graphics - see [`vm_is_autostart_eligible`]) appear in
 /// the plan with `autostart = false`. They are surfaced for
 /// observability but skipped by [`execute_autostart`].
 pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
@@ -284,7 +284,7 @@ pub async fn execute_autostart<S: VmStarter>(
 
 /// Variant of [`execute_autostart`] that accepts an additional set of VM
 /// names the caller has already classified as degraded (for reasons
-/// orthogonal to env-net-VM health — today: the kernel-module-check pass
+/// orthogonal to env-net-VM health - today: the kernel-module-check pass
 /// discovered an optional module the VM relies on is not loaded). Any VM whose name is in
 /// `pre_degraded` is reported as
 /// [`Outcome::Degraded`] with a stable
@@ -448,7 +448,7 @@ where
         match joined {
             Ok(pair) => indexed.push(pair),
             Err(join_err) => {
-                // Should not occur — the inner task already
+                // Should not occur - the inner task already
                 // catches its own panic via the
                 // spawn_blocking().await match arm. We surface a
                 // typed-error-shaped Failed entry to keep the
@@ -467,7 +467,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Test starter — records every `start` call (so we can
+    /// Test starter - records every `start` call (so we can
     /// assert ordering / parallelism) and lets each test pick the
     /// success/failure outcome per VM.
     struct FakeStarter {
@@ -643,7 +643,7 @@ mod tests {
 
     /// Degraded mode: a failure on `sys-work-net` does NOT block
     /// other envs' net VMs, and the workloads in the failed env
-    /// land as Degraded (not Failed — Failed is reserved for the
+    /// land as Degraded (not Failed - Failed is reserved for the
     /// direct start error).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn vm_failure_marks_degraded_without_blocking_siblings() {
@@ -735,7 +735,7 @@ mod tests {
 
     /// NotAutostart skips dispatch entirely (no start() call) and
     /// does NOT propagate as a degraded gate for that env's
-    /// workloads — opting a net VM out of autostart is an explicit
+    /// workloads - opting a net VM out of autostart is an explicit
     /// operator choice, not a failure.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn non_autostart_net_vm_does_not_degrade_workloads() {

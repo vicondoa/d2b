@@ -1,7 +1,7 @@
 //! `d2b-realm-transport` (ADR 0032): the transport-trait home
 //! plus an in-memory **loopback** [`TransportProvider`] used for
 //! conformance. The loopback connects a sender side to a listener side
-//! over `tokio::io::duplex` — no real socket is opened — so the
+//! over `tokio::io::duplex` - no real socket is opened - so the
 //! byte-carrying transport/mux contract can be exercised hermetically.
 //!
 //! Dependency direction: depends only on `d2b-realm-core` +

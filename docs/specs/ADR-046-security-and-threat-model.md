@@ -74,7 +74,7 @@ conflict; no such conflict exists as of this baseline (see
 [Current-code fit](#current-code-fit)).
 
 Scope: the v3 Zone resource/control plane described by the parent ADR and its
-spec set — Zone runtime, redb resource store, ComponentSession/d2b-bus,
+spec set - Zone runtime, redb resource store, ComponentSession/d2b-bus,
 core-controller, every standard ResourceType (D035), the frozen initial
 Provider catalog (D043-D049), Nix authoring/activation, and the CLI. Out of
 scope: pre-v3 (v1/v2) daemon/broker/bash surfaces already covered by
@@ -130,14 +130,14 @@ testable:
    [Signed package/manifest/schema/config trust](#signed-packagemanifestschemaconfig-trust-and-publisher-roots).
 2. **Zone resource store boundary.** Only the Zone runtime's redb coordinator
    reads/writes the store. Providers/controllers reach it only through
-   ComponentSession/d2b-bus and the native RBAC engine — never a direct
+   ComponentSession/d2b-bus and the native RBAC engine - never a direct
    handle, path, or ambient socket (D011, D006).
 3. **Component/process boundary.** Every controller, service, and worker is a
    distinct process/UID pair with least-privilege sandboxing; privileged
    effects cross this boundary only through an injected `EffectPort` trait
    (D077). See [Injected EffectPort boundary](#injected-effectport-boundary-and-the-privileged-broker).
-4. **d2b-bus/ComponentSession boundary.** All control-plane traffic —
-   local, user, guest, remote, and nested — is authenticated Noise traffic
+4. **d2b-bus/ComponentSession boundary.** All control-plane traffic -
+   local, user, guest, remote, and nested - is authenticated Noise traffic
    authorized by the native Role/RoleBinding engine; a payload cannot
    self-assert a role (D054, D040). See
    [ComponentSession Noise boundaries](#componentsession-noise-boundaries-and-binding)
@@ -174,7 +174,7 @@ compromised build pipeline, or a Provider process compromised at runtime
   2731-2735); runtime trust/conformance re-validation at activation;
   `PackageTrusted` condition (`trusted|revoked|expired-epoch|
   attestation-failed|conformance-failed`, RZC lines 671-683, 1753-1778).
-- **Recovery:** quarantine (not deletion) on trust/conformance failure — all
+- **Recovery:** quarantine (not deletion) on trust/conformance failure - all
   component Processes stopped, exported ResourceTypes withdrawn, state
   Volumes preserved for incident investigation (RZC lines 1752-1897,
   `provider-quarantine-on-trust-failure`, RZC line 2983).
@@ -203,7 +203,7 @@ authorization grant.
 ### AC3: Compromised Host or local same-UID malicious process
 
 A compromised Host process, or any process sharing a UID with a d2b
-component, is explicitly **not** contained by d2b — this matches
+component, is explicitly **not** contained by d2b - this matches
 `SECURITY.md`'s existing "does NOT defend against ... multi-user trust on a
 single host" and the historical "unlocked Secret Service is ambient to
 processes with the same uid" invariant. AC3 is scoped to what remains true
@@ -218,7 +218,7 @@ even under this assumption.
 - **Detection:** `no_isolation: true` audit records make a user-domain
   same-UID Host's reduced guarantee explicit and non-suppressible in status/
   CLI/audit (D067; see [User-domain Host: no isolation](#user-domain-host-no-isolation)).
-- **Recovery:** none beyond the explicit warning — this is a documented
+- **Recovery:** none beyond the explicit warning - this is a documented
   residual risk (see [Residual risks](#residual-risks-and-explicit-non-goals)),
   matching `SECURITY.md`'s unsafe-local threat-model carve-out.
 
@@ -258,7 +258,7 @@ package attempts to make the Zone runtime activate untrusted state.
   lines 126-137).
 - **Detection:** any mismatch aborts the **entire** bundle
   (`config-bundle-integrity-failed`, `bundle-schema-mismatch`,
-  `config-catalog-mismatch`) — never a partial activation.
+  `config-catalog-mismatch`) - never a partial activation.
 - **Recovery:** the prior activated generation remains live; generation
   counter rejects replay/downgrade (bundle `generation` must be strictly
   greater than `store_meta.active_configuration_revision`, RZC lines
@@ -280,7 +280,7 @@ self-assertion, wildcard permission claims, replayed handshake).
   non-bootstrap wildcard claim (RZC line 2985); denial decisions are never
   cached as allow (RZC lines 868-997).
 - **Recovery:** RoleBinding deletion is one atomic redb transaction (index
-  removal + `Deleted` revision + row removal) — no observable intermediate
+  removal + `Deleted` revision + row removal) - no observable intermediate
   state a racing caller could exploit (RZC lines 1062-1260).
 
 ### AC7: Privileged broker abuse (compromised Provider requesting broker action)
@@ -327,16 +327,16 @@ tenants.
 The Zone core (redb store, RBAC engine, ComponentSession/d2b-bus, and the two
 fixed bootstrap controllers `Provider/system-core` and
 `Provider/system-minijail`) is the only code trusted with ambient authority.
-Every other Provider — including all four Guest runtimes, both Volume
-Providers, and every interaction/credential/transport Provider — is a
+Every other Provider - including all four Guest runtimes, both Volume
+Providers, and every interaction/credential/transport Provider - is a
 semantic Provider: it decides *what* should happen and calls an injected,
 narrowly typed `EffectPort` trait to make it happen; it never decides *how*
 to reach the kernel/network/filesystem/cloud API directly (D077).
 
 | Property | Minimal core | Semantic Provider |
 | --- | --- | --- |
-| Broker/allocator access | Yes (core-controller + broker are the sole privileged executors) | No — never imports a broker client/DTO (D077) |
-| Bootstrap exception | `Provider/system-core` and `Provider/system-minijail` are the two fixed, non-configurable bootstrap Providers (D036, D051); embedded in the Zone runtime binary, pre-created before any other resource, and still subject to full trust/package/conformance validation (RZC lines 754-777, "not exempt from trust checks") | None — every other Provider is installed as an ordinary `Provider/<name>` resource before use (D016) |
+| Broker/allocator access | Yes (core-controller + broker are the sole privileged executors) | No - never imports a broker client/DTO (D077) |
+| Bootstrap exception | `Provider/system-core` and `Provider/system-minijail` are the two fixed, non-configurable bootstrap Providers (D036, D051); embedded in the Zone runtime binary, pre-created before any other resource, and still subject to full trust/package/conformance validation (RZC lines 754-777, "not exempt from trust checks") | None - every other Provider is installed as an ordinary `Provider/<name>` resource before use (D016) |
 | Own Process bootstrap | The fixed core-controller process launches every other Provider's static controller/service Processes and any *declared* optional per-component state Volumes (D078; a component declares a state Volume only under the storage-need test, D087) | A Provider controller never bootstraps its own Process; it may create authorized dynamic child Process/EphemeralProcess/primitive resources after it exists |
 | Status authority | Computes aggregate Provider status from component/dependency/process health (D085) | Writes status only for the ResourceTypes/fields it is explicitly authorized to own; never self-declares its own aggregate `Provider` resource status |
 | RBAC authority | Native Role/RoleBinding engine, wildcard Roles restricted to core-controller-generated Roles only | Cannot claim a wildcard permission (`resourceNames: ["*"]`/empty `executionRefs`) without explicit review (RZC lines 868-997, `provider-wildcard-permission-restricted`) |
@@ -371,7 +371,7 @@ build host cannot alone forge a trusted artifact:
    artifact manifest signature chain verified against the installed trust
    store; `conformanceAttestationDigest` verified present in the known
    attestation store; `configSchemaDigest` and `manifestDigest` verified
-   against the actual derivation output — any mismatch is a build failure,
+   against the actual derivation output - any mismatch is a build failure,
    not a runtime warning (RZC lines 2731-2735).
 2. **Runtime** (Zone activation): the activation controller re-verifies
    `catalogSha256` and all schema fingerprints before applying any bundle
@@ -384,7 +384,7 @@ in the signed Provider settings schema accepts **only** a
 `Credential/[a-z][a-z0-9-]*` ResourceRef string; a raw inline value is a
 build-time `inline-secret-in-settings`/`credential-value-must-be-ref` error
 (`ADR-046-resources-credential` lines 929-930, 954-957; RZC lines 479-527).
-`$credentialRef` is the only permitted `$`-prefixed key in config JSON — any
+`$credentialRef` is the only permitted `$`-prefixed key in config JSON - any
 other `$`-prefixed key is rejected at build time (RZC line 2396). A
 heuristic `contains_sensitive_shape` lint additionally scans every string
 value for PEM headers, bearer prefixes, AWS-key shapes, and long base64/hex
@@ -409,7 +409,7 @@ build (RZC line 3057).
 
 A Provider is one independently buildable, signed crate/package (D012), but
 it may declare up to 8 controller components, 8 service components, and 32
-worker process templates (D073); each is compiled to its own `binaryRef` —
+worker process templates (D073); each is compiled to its own `binaryRef` -
 a key into the package's `executableDigests` table binding that component to
 one exact, digest-identified binary (`ADR-046-resources-zone-control` lines
 754-777). `allowedDomains` (`system`/`user`) on each component prevents a
@@ -429,7 +429,7 @@ policy and stored RBAC are simultaneously active once
 Controllers own their watch/coalescing queues and retry decisions
 independently; workers have **no** `ResourceClient`, no d2b-bus/dependency
 portal, no Credential access, no CLI, no broker, and no child-spawn
-authority — every resource, FD, and config value they need is inherited
+authority - every resource, FD, and config value they need is inherited
 through their `LaunchTicket` (D078). This is the concrete mechanism behind
 [Process least privilege](#process-least-privilege-controllerserviceworker).
 
@@ -442,7 +442,7 @@ control-plane transport authentication layer. Three Noise profiles, all
 | Profile | Usage | Forbidden fallback |
 | --- | --- | --- |
 | `Nn` (ephemeral/ephemeral) | Bootstrap and intra-Zone local sessions where static keys are unavailable | Never used for sensitive credential delivery (D056) |
-| `Kk` (static/static) | Enrolled peer sessions — ZoneLink, credential delivery, guest control | Both sides must already have enrolled static keys; no downgrade to `Nn` |
+| `Kk` (static/static) | Enrolled peer sessions - ZoneLink, credential delivery, guest control | Both sides must already have enrolled static keys; no downgrade to `Nn` |
 | `IKpsk2` (initiator-known/responder-known + PSK) | One-time bootstrap using an allocator-issued single-use PSK | PSK is `Secret32` (zeroizing), checked single-use at handshake time |
 
 There is no `none`, local plaintext, HMAC, long-lived guest PSK, or weaker
@@ -460,7 +460,7 @@ concatenated and bound into the Noise prologue. Any tampering with the offer
 diverges the transcript and fails the handshake (ZR lines 96-124). The offer
 carries exactly one endpoint-policy allowed purpose, initiator role,
 responder role, service package, schema fingerprint, Noise profile, limit
-profile, and attachment policy — there is no semver range, ignored feature
+profile, and attachment policy - there is no semver range, ignored feature
 flag, codec fallback, or lower limit selected after failure.
 
 **Generation/revision binding.** The handshake `INIT` payload contains a
@@ -556,7 +556,7 @@ including for core-generated relay Roles.
 **RoleBinding immutability and atomic deletion.** `spec.roleRef` is immutable
 after creation. Deletion is one atomic redb write transaction: RBAC index
 entry removal, `Deleted` revision event, and resource row removal all commit
-together — there is no observable intermediate state a racing authorization
+together - there is no observable intermediate state a racing authorization
 check could exploit (RZC lines 1062-1260). A subject UID change invalidates
 existing sessions via `SubjectIdentityChanged`, and existing positive
 authorization-decision caches are invalidated; **denial decisions are never
@@ -568,7 +568,7 @@ with `rolebinding-scope-exceeds-role-rejected` (RZC lines 1062-1260).
 
 **Status write authority.** Only the core-controller handler may
 `update-status` for any Zone control resource (`zone-control-status-owner-only`,
-RZC line 3039) — a Provider cannot forge its own aggregate health.
+RZC line 3039) - a Provider cannot forge its own aggregate health.
 
 ## Exact recipient confidentiality
 
@@ -584,7 +584,7 @@ enforces exact-match recipient identity, never a class or wildcard match:
   value under `use-credential`, further narrowed by consumer/scope/structural
   checks; a request outside that intersection is rejected the same way.
 - **externalPrincipalSelector.** Bounded at 512 bytes canonical JSON and
-  restricted to opaque enrollment digests — it may not contain credential
+  restricted to opaque enrollment digests - it may not contain credential
   bytes, so an external-principal RoleBinding cannot be used to smuggle
   secret material into the RBAC index (RZC lines 1062-1260).
 - **Sensitive KK delivery.** Credential Providers may deliver raw token
@@ -593,7 +593,7 @@ enforces exact-match recipient identity, never a class or wildcard match:
   named by the Credential's signed descriptor/RBAC grant (D055, D056, D068);
   see [Credential security](#credential-security-end-to-end-delivery-and-zeroization).
 
-The common failure mode this prevents is a "close enough" recipient match —
+The common failure mode this prevents is a "close enough" recipient match -
 for example a Credential intended for one Provider component being readable
 by a sibling component of the same Provider, or by any subject holding a
 generic "read credentials" Role. Exact `consumerRef`/session-subject matching
@@ -607,7 +607,7 @@ and reconciles its own self-matching `ZoneLink/<name>` uplink. The compiler-only
 keeps only sealed allocation/topology state and authenticated route/projection
 status. It has no reciprocal ZoneLink row or ZoneLink handler. A parent accesses
 child resources only through the child's own Zone API over the authenticated
-route — it never mounts or mirrors the child store, and ordinary resource
+route - it never mounts or mirrors the child store, and ordinary resource
 references never cross Zones (D017).
 
 **Structural, not policy, enforcement.** No FD, credential, or host path is
@@ -627,7 +627,7 @@ misconfigured away (ZR lines 1779-1801):
   secret, or credential-lease byte may appear in any forwarded frame.
 - **Filesystem paths:** no filesystem path, socket path, device path, or Nix
   store path in routing metadata. `ZoneRoutePath` carries only Zone tree
-  edges and a session generation — no transport socket information or
+  edges and a session generation - no transport socket information or
   credential.
 - **Process identities:** no PIDs, pidfds, or broker operations propagate
   across a Zone boundary.
@@ -741,7 +741,7 @@ family via D043 and D050's Host/Guest split).
   `Provider.spec.config.executionRef`/`gatewayExecutionRef` absent or
   Host-pointing is a hard rejection, not a warning.
 - **No Host-domain subject has any Role/RoleBinding for the cloud/relay
-  Provider** — the RBAC grant itself does not exist for Host subjects, so
+  Provider** - the RBAC grant itself does not exist for Host subjects, so
   there is no privilege to escalate even if a Host process were compromised
   (ACA dossier, "No Host-level Azure transport; ZoneLink from gateway Guest
   only").
@@ -766,7 +766,7 @@ family via D043 and D050's Host/Guest split).
   auth."
 - **Bootstrap PSK single-use, sealed at rest.** Where a Guest bootstraps a
   cloud VM via `IKpsk2` (Azure VM `bootstrap-svc`), the PSK is sealed
-  ciphertext in a Volume — plaintext is held only in the controller process
+  ciphertext in a Volume - plaintext is held only in the controller process
   address space during the delivery window and zeroized immediately after
   (`ADR-046-provider-runtime-azure-virtual-machine.md` lines 412, 432, 447,
   450-454). Replay of a consumed PSK is rejected.
@@ -781,7 +781,7 @@ Every semantic Provider composes behavior by creating owned primitive
 resources and by calling one injected, narrowly typed, async `EffectPort`
 trait per domain (D077). No Provider process imports the broker, receives a
 broker socket/DTO, or directly opens a host path/device/systemd socket, or
-performs a privileged mutation — including the primitive Process/Volume/
+performs a privileged mutation - including the primitive Process/Volume/
 Network/Device Providers themselves.
 
 | Domain | EffectPort | Sole privileged executor | Enforcement |
@@ -805,7 +805,7 @@ second release variant. `action: Ensure` is the only acquisition form.
 The broker remains the sole privileged executor and independent audit owner
 (`ADR-046-provider-model-and-packaging`, D077). It re-derives every
 privileged parameter from allocator-approved leases and the trusted bundle,
-never from a caller-supplied raw parameter — carrying forward
+never from a caller-supplied raw parameter - carrying forward
 `SECURITY.md`'s existing "compromise of `d2bd` cannot escalate to arbitrary
 host mutation beyond the declared broker enum variants" invariant into the
 Zone/Provider model. Opaque `LaunchTicket`/lease IDs are passed across the
@@ -832,7 +832,7 @@ this as an explicit "MUST NOT"/"never" invariant for its domain:
 | ARM/cloud credential | "No ambient credential fallback (no `AZURE_CLIENT_ID`, `MSI_ENDPOINT`, SDK env chain)" | `ADR-046-provider-runtime-azure-virtual-machine.md` line 428 |
 
 Every FD a Provider process needs is delivered at a declared in-jail number
-by its `LaunchTicket` before the process's first instruction — never
+by its `LaunchTicket` before the process's first instruction - never
 discovered by path, environment variable, or ambient socket lookup. This is
 the concrete mechanism the table above enforces; see
 [LaunchTicket integrity](#launchticket-integrity).
@@ -845,11 +845,11 @@ Every component is one of three narrowly bounded classes (D078, D073):
 | --- | --- | --- |
 | Controller | Owns its watch/coalescing queue and retry decisions; may create authorized dynamic child Process/EphemeralProcess/primitive/vendor resources | Max 8 controllers per Provider |
 | Service | Exports ttrpc methods; may send typed internal requests to its controller for worker help | Max 8 services per Provider |
-| Worker | Ephemeral execution; **no** `ResourceClient`, no d2b-bus/dependency portal, no Credential access, no CLI, no broker, no child-spawn authority — everything is inherited via `LaunchTicket` | Max 32 worker templates per Provider |
+| Worker | Ephemeral execution; **no** `ResourceClient`, no d2b-bus/dependency portal, no Credential access, no CLI, no broker, no child-spawn authority - everything is inherited via `LaunchTicket` | Max 32 worker templates per Provider |
 
 A narrowly declared worker may own its exact workload child only when that
 child is the worker's manifest-fixed data-plane purpose under explicit
-descriptor policy (e.g. a shell-supervisor worker owning its shell) — this is
+descriptor policy (e.g. a shell-supervisor worker owning its shell) - this is
 the one, explicitly scoped exception to "workers have no child-spawn
 authority" (D078).
 
@@ -867,7 +867,7 @@ Sandbox defaults (`ADR-046-resources-host-guest-process-user`, D079):
   frozen value (D079): in-namespace UID/GID 0 maps to the host UID/GID of the
   Process's resolved `User/<name>` principal; the numeric host UID/GID is
   **never** in the public ResourceSpec, status, audit payload, or API
-  surface — resolution happens exclusively inside the private
+  surface - resolution happens exclusively inside the private
   effect-adapter state at launch time.
 
 **Eleven pidfd lifecycle/non-exportability invariants**
@@ -905,7 +905,7 @@ no older-kernel PID/PGID fallback.
 `InvocationID`+cgroup+`MainPID`/start-time rather than the pidfd primitive
 (D022); `Type=forking` is forbidden (daemonizing prevents pidfd-based
 identity verification), and the unit name alone must never be treated as
-process identity — identity requires verification against the unit's main
+process identity - identity requires verification against the unit's main
 PID (`ADR-046-resources-host-guest-process-user` lines 803, 818).
 
 A Process ResourceSpec must not contain: raw numeric UID/GID/supplementary
@@ -925,7 +925,7 @@ privileged executor (`ADR-046-provider-system-minijail.md` §7.4,
 `ADR-046-components-processes-and-sandbox`). It is bound to:
 
 - the Process/EphemeralProcess `ResourceRef`;
-- the resolved principal UID (never the numeric value itself — an opaque
+- the resolved principal UID (never the numeric value itself - an opaque
   resolved identity);
 - the spec generation;
 - the `CompiledSandboxPlan` digest (namespace/capability/seccomp
@@ -941,13 +941,13 @@ privileged executor (`ADR-046-provider-system-minijail.md` §7.4,
   never held open across an unrelated exec.
 - The compiled sandbox plan digest bound into the `LaunchTicket` is
   re-verified by the broker at exec time; any change between ticket issue
-  and exec fails the spawn closed — this prevents a TOCTOU window between
+  and exec fails the spawn closed - this prevents a TOCTOU window between
   the Provider deciding to launch and the broker actually launching
   (`ADR-046-provider-system-minijail.md` §22 Invariant 6, lines 1593-1596).
 - The pidfd is obtained atomically from `clone3(CLONE_PIDFD |
   CLONE_INTO_CGROUP)`: no window exists between clone and pidfd acquisition
   where a PID could be reused, and the process is placed in its cgroup leaf
-  before any instruction executes — no window exists for cgroup escape
+  before any instruction executes - no window exists for cgroup escape
   (§22 Invariants 2-3, lines 1567-1575).
 - Duplicate kernel objects (same `st_dev`/`st_ino`) presented as two FDs in
   one packet are rejected and cleaned up (`transport-unix`
@@ -978,8 +978,8 @@ Current `unsafe-local` becomes a user-only `Host` under `Provider/system-core`
 in v3, not a separate Provider (D042). It is `defaultDomain=user`,
 `allowedDomains=[user]`, `defaultUserRef` set, and
 `spec.isolationPosture = "none"` (a promoted Host base field). This is a genuine reduction in
-guarantee — a Process running there executes as the operator's own host UID
-with **no VM or Provider-managed isolation boundary** — and the spec
+guarantee - a Process running there executes as the operator's own host UID
+with **no VM or Provider-managed isolation boundary** - and the spec
 requires the reduction to be impossible to hide.
 
 `isolationPosture = "none"` is mandatory and non-suppressible across three
@@ -990,16 +990,16 @@ lines 1270-1278; `ADR-046-nix-configuration` lines 719-764;
 1. **Status.** `status.isolationPosture = "none"` is always present in
    `--json`; a `[no isolation]` annotation appears in `--human` table rows.
 2. **CLI/UI.** `d2b shell open` and `d2b exec run` emit
-   `warning: no isolation boundary — this process runs as your host user` to
+   `warning: no isolation boundary - this process runs as your host user` to
    stderr before attaching, unconditionally. **This warning has no
-   suppression flag** — there is no `--quiet`/`--no-warn` escape.
+   suppression flag** - there is no `--quiet`/`--no-warn` escape.
 3. **Audit.** Every `ProcessEffect` record (launch, stop, adopt, quarantine)
    for a Process under this Host carries `no_isolation=true` as a fixed
    closed audit label.
 
 `no_isolation` is audit-only. It **must not** appear as an OTEL metric label,
 span attribute, or structured log field, in either direction (D067;
-`ADR-046-telemetry-audit-and-support`) — this prevents the isolation
+`ADR-046-telemetry-audit-and-support`) - this prevents the isolation
 weakness itself from becoming a high-cardinality or externally-queryable
 telemetry dimension while keeping it fully auditable.
 
@@ -1010,8 +1010,8 @@ surfaces" (`ADR-046-resources-host-guest-process-user` lines 1270-1278).
 
 **Bidirectional rejection of `null` posture.** A Host with
 `defaultDomain=user`, `allowedDomains=[user]`, `defaultUserRef` set, and
-`isolationPosture=null` is rejected at both `validateSpec` and Nix eval time
-— the null/absent value may not be used to evade the explicit declaration
+`isolationPosture=null` is rejected at both `validateSpec` and Nix eval time -
+the null/absent value may not be used to evade the explicit declaration
 (`ADR-046-resources-host-guest-process-user` line ~391;
 `ADR-046-nix-configuration` line ~1806). Symmetrically, a system-domain
 Process (`domain: system`) targeting a user-only Host
@@ -1019,7 +1019,7 @@ Process (`domain: system`) targeting a user-only Host
 (`ADR-046-nix-configuration` lines 748-764).
 
 User reconcile itself must not hold OS-user credentials or perform
-authentication/login — it is purely observational (NSS lookup, home-stat,
+authentication/login - it is purely observational (NSS lookup, home-stat,
 group query); numeric UID/GID appearing in status is diagnostic-only and is
 never an authorization input (`ADR-046-resources-host-guest-process-user`
 lines 1184-1186, 1232-1233). Authorization always uses the canonical Zone
@@ -1040,11 +1040,11 @@ caller only as an opaque FD; it never appears in public status, audit
 records, CLI output, or telemetry (`ADR-046-resources-volume` lines 143,
 390-406). Resolving `sourcePolicyId` requires the
 `volume-local/source-policy-resolve` permission, granted only to
-`ProviderSupervisor` on behalf of `Provider/volume-local` — never the
+`ProviderSupervisor` on behalf of `Provider/volume-local` - never the
 controller process itself.
 
 **ACL: typed `User/<name>` refs only.** ACL principals are always typed
-`User/<name>` ResourceRefs in the same Zone — no numeric UID/GID form is
+`User/<name>` ResourceRefs in the same Zone - no numeric UID/GID form is
 accepted (`ADR-046-resources-volume` lines 204-214;
 `ADR-046-nix-configuration` lines 991-996). `foreignChildPolicy: fail` sets a
 `ForeignAclViolation` condition when the broker finds directory children not
@@ -1060,11 +1060,11 @@ Process with a narrow view fails with `volume-view-rights-exceeded` if it
 requests a right absent from its view declaration (`ADR-046-provider-state`
 lines 437-461).
 
-**Identity marker.** Every Volume has an identity marker — a regular file
+**Identity marker.** Every Volume has an identity marker - a regular file
 under the broker-maintained root recording `(st_dev, st_ino)`, `schemaId`,
 `schemaVersion`, and a tamper-evident HMAC digest (`ADR-046-provider-state`
 lines 301-321). Fail-closed rules: a missing marker after provisioning sets
-`markerStatus: missing` and the Volume transitions to `Failed` — the broker
+`markerStatus: missing` and the Volume transitions to `Failed` - the broker
 **never** silently re-provisions; an `st_ino` mismatch sets
 `markerStatus: replaced` and also fails closed. Neither condition
 auto-recovers; only an operator can remediate.
@@ -1080,7 +1080,7 @@ rejected with `component-quota-zero` (D035 catalog invariant,
 
 | Class | Access |
 | --- | --- |
-| `private` | Single-process only — no sharing between processes |
+| `private` | Single-process only - no sharing between processes |
 | `internal` | Same-Provider multi-component sharing permitted |
 | `shared-read` | Cross-Provider read-only sharing permitted |
 
@@ -1116,7 +1116,7 @@ canonical full Volume schema (extended with
 Each component mounts only its own declared view; there is **no cross-component
 or cross-Provider sharing** and no separate non-Volume "compartment" concept.
 For declared component state Volumes, `persistenceClass: persistent` is
-required — `ephemeral`, `cache`, and `config` are rejected with
+required - `ephemeral`, `cache`, and `config` are rejected with
 `component-persistence-class-forbidden`.
 
 **Status confidentiality is RBAC, not secret storage (D087).** Resource
@@ -1129,9 +1129,9 @@ bounded non-secret observations status does carry is provided by the status
 subresource's RBAC read authorization; status is never used to store a secret
 whose exposure would depend on redaction alone.
 
-**Three-layer status shape (D088).** All three status layers — the universal
+**Three-layer status shape (D088).** All three status layers - the universal
 `ResourceStatus` base, the ResourceType-common `status.resource`, and the
-optional Provider-specific `status.provider` — are redacted and non-secret. The
+optional Provider-specific `status.provider` - are redacted and non-secret. The
 `status.provider.details` extension schema is signed into and registered with
 the Provider package and is versioned; the resource store validates every
 `status.provider` write against that registered schema with strict unknown-field
@@ -1173,7 +1173,7 @@ status as persisted (`statusPersistence: pending`).
 
 **Currency and disruptive upgrade (D091).** The `status.update` currency object
 carries only bounded, non-secret observed/target generation/digest IDs and
-bounded/truncated owned/dependency refs — never secret material, raw artifact
+bounded/truncated owned/dependency refs - never secret material, raw artifact
 paths, or unbounded collections. Disruptive changes require an explicit,
 authorized `resource upgrade ... --apply`; a controller must report
 `UpgradeRequired` rather than silently disrupt a running workload, and the
@@ -1208,7 +1208,7 @@ delivered end-to-end (Noise_KK) only to the exact authenticated consumer process
 allowed by the Credential `consumerRef`/scope/RBAC; the Host, bus, and
 intermediate controllers see ciphertext only, so the Host never holds realm
 tokens/registries/audit (consistent with ADR 0032). d2b Credential status/audit/
-OTEL carry only bounded non-secret lease/login observations — never a token,
+OTEL carry only bounded non-secret lease/login observations - never a token,
 login URL, cookie, authority-conferring device code, or user PII; the
 interactive UI stream is a named ComponentSession stream direct to the Guest.
 Entrablau owns all Entra network/TLS egress; the credential-entra
@@ -1225,7 +1225,7 @@ Two invariants close the specific attacks Volume state is most exposed to:
 - **Store-view isolation.** virtiofsd serving `access: read-only` for the
   per-Guest Nix store ALWAYS uses `store-view/live` as `--shared-dir`, never
   the host's `/nix/store`; the `share.source == "/nix/store"` string in
-  `processes-json.nix`-equivalent config is an eval-time sentinel only —
+  `processes-json.nix`-equivalent config is an eval-time sentinel only -
   runtime virtiofsd always serves the isolated hardlink-farm subtree
   (`ADR-046-resources-volume` lines 820-822). The virtiofsd `--shared-dir`
   argv is delivered as a `/proc/self/fd/<N>` inherited-FD path, never a
@@ -1244,8 +1244,8 @@ Volume-layer enforcement of the same custody boundary described in
 [Gateway Guest custody](#gateway-guest-custody).
 
 **No bootstrap state Volume (D086, superseded by D087).** The fixed bootstrap
-components — the first `volume-local` controller instance on each execution
-target, and (where present) `system-core` and `system-minijail` — keep their
+components - the first `volume-local` controller instance on each execution
+target, and (where present) `system-core` and `system-minijail` - keep their
 bounded non-secret operational state in resource `status` and the core
 Operation ledger and declare **no** state Volume. Because no component requires
 a state Volume before a `volume-local` instance is Ready, there is no bootstrap
@@ -1265,7 +1265,7 @@ its own status alone.
 `volume-local` remains the single owner of the Volume ResourceType's layout/
 spec/ownership fields; `volume-virtiofs` is a separate attachment-
 implementation Provider that never writes Volume layout/spec/ownership
-fields — it writes only its own owned virtiofsd Process children and the
+fields - it writes only its own owned virtiofsd Process children and the
 per-attachment status entries it is authorized for (D083). Two controllers
 never write the same Volume resource row.
 
@@ -1298,10 +1298,10 @@ requirements (lines 440-476):
    non-zeroizing type for token bytes is a defect.
 5. `Debug` is hand-written and redacted; `#[derive(Debug)]` is forbidden on
    any type touching key material or token bytes.
-6. No auto-retry on an ambiguous outcome — a delivery-channel failure or
+6. No auto-retry on an ambiguous outcome - a delivery-channel failure or
    missing acknowledgment leaves state unchanged rather than assuming
    success and retrying.
-7. Immediate close and zeroize after delivery — no state is retained.
+7. Immediate close and zeroize after delivery - no state is retained.
 
 `SignChallenge` signatures use the same sensitive KK delivery channel as
 tokens (D068): the outer response carries only outcome metadata, and the
@@ -1346,14 +1346,14 @@ coarse `admin`, `identity-reset`, `observe`, or `revoke` alias.
 ## Content secrecy: clipboard, terminal, CTAP, notification
 
 A closed set of asset classes is explicitly, per-dossier, "never in any
-surface" — never audit, OTEL, Debug output, error messages, or structured
-logs — regardless of general redaction rules elsewhere. This table collects
+surface" - never audit, OTEL, Debug output, error messages, or structured
+logs - regardless of general redaction rules elsewhere. This table collects
 every such class with its exact source quote:
 
 | Sensitive asset | Provider | Explicit "never in any surface" statement | Source |
 | --- | --- | --- | --- |
 | CTAP payloads, PINs, CBOR assertions, FIDO credential material | `device-security-key` | "No CTAP payloads, PINs, CBOR assertions, or any FIDO credential material appear in any log, audit record, OTEL span attribute, metric label, or error message" | `ADR-046-provider-device-security-key.md` (Invariant I-7) |
-| Clipboard content bytes | `clipboard-wayland` | "clipboard bytes only as SCM_RIGHTS attachment FDs — NEVER in method arguments, stream frames, status, audit, or traces" | `ADR-046-provider-clipboard-wayland.md` (Invariant 1) |
+| Clipboard content bytes | `clipboard-wayland` | "clipboard bytes only as SCM_RIGHTS attachment FDs - NEVER in method arguments, stream frames, status, audit, or traces" | `ADR-046-provider-clipboard-wayland.md` (Invariant 1) |
 | Terminal/PTY bytes, argv, cwd, environment | `shell-terminal` | "No terminal bytes, argv, cwd, environment, paths, PIDs, unit names, usernames, session names, socket paths, or opaque handles may appear in Debug, audit, metrics, or span attributes" | `ADR-046-provider-shell-terminal.md` (SR-8) |
 | Notification summary, body, action text, icon ref | `notification-desktop` | "Notification summary, body, action text, and icon ref never appear in any audit field" | `ADR-046-provider-notification-desktop.md` §10.1 |
 | TPM NVRAM content | `device-tpm` | "No path, PID, NVRAM content in any audit payload (sensitivity: private)" | `ADR-046-provider-device-tpm.md` |
@@ -1378,7 +1378,7 @@ random, single-use (cleared from its store on first consumption), TTL 120 s,
 **FD-only delivery, never method arguments.** The universal pattern for
 transferring sensitive bytes between a compositor/host process and a
 consuming component is an `SCM_RIGHTS`-delivered FD (clipboard, D-Bus
-session, CTAP relay) — never a serialized byte payload inside a ttrpc
+session, CTAP relay) - never a serialized byte payload inside a ttrpc
 method argument, resource spec, or stream frame. This both keeps the bytes
 out of any place a redaction filter would need to catch them and keeps the
 delivery bounded by the same attachment-credit/CLOEXEC machinery as every
@@ -1400,7 +1400,7 @@ audit must be committed **before** the operation it describes completes.
 | Best-effort | Informational | Async | Dropped under rate limit |
 
 Audit unavailability for a privileged record **fails the operation closed**
-(`audit-unavailable`) — this is the concrete recovery control for AC8 that
+(`audit-unavailable`) - this is the concrete recovery control for AC8 that
 makes "attack under load, then corrupt state while audit is dropped"
 impossible for privileged operations (lines 1141-1165).
 
@@ -1447,7 +1447,7 @@ skipped (line 1846).
 audit.** Zone startup does not wait for `observability-otel`; unavailability
 causes bounded frame drops (`d2b_telemetry_drop_total`), never blocks Zone
 startup or a resource mutation (`ADR-046-provider-observability-otel.md`;
-D065). The Provider never reads from the authoritative audit sink — strict
+D065). The Provider never reads from the authoritative audit sink - strict
 separation between OTEL telemetry and authoritative audit is preserved even
 though both may describe the same underlying event.
 
@@ -1461,7 +1461,7 @@ row/index atomically; the audit subsystem appends the deletion record
 afterward using a dedup/exactly-once recovery key. Generation-retention
 pruning removes only the historical bundle record, never a live resource's
 finalizer state; a resource whose finalizers have not drained remains
-`Degraded`/blocked until it finishes normally — it is never silently
+`Degraded`/blocked until it finishes normally - it is never silently
 force-deleted to unblock a generation sweep.
 
 **Generation cleanup never touches controller/API-managed resources.**
@@ -1470,7 +1470,7 @@ generation receive an async `Delete`; `managedBy: controller` and
 `managedBy: api` resources are **never** touched by generation cleanup
 (D069). The Zone transitions to `Degraded` while cleanup is pending; if a
 cleanup candidate exceeds `cleanupStuckThreshold` (default 5 minutes), a
-`GenerationCleanupFailed` condition is set — the runtime never force-removes
+`GenerationCleanupFailed` condition is set - the runtime never force-removes
 finalizers to clear it (`ADR-046-resources-zone-control` lines 2808-2912).
 The generation counter itself rejects replay/downgrade: a bundle
 `generation` must be strictly greater than
@@ -1491,13 +1491,13 @@ resource of those types remains before the finalizer clears.
 **Credential revocation precedes finalizer clearing.** When a Credential
 resource has `deletionRequestedAt` set, the Zone runtime revokes the
 resolved secret binding **before** clearing the `core.credential-revoke`
-finalizer (RZC lines 2808-2821, 3108) — this closes the "delete the
+finalizer (RZC lines 2808-2821, 3108) - this closes the "delete the
 Credential resource but leave the underlying secret-service/IMDS/Entra
 binding live" gap.
 
 **Quarantine-not-kill is the universal ambiguous-identity response.** On any
-adoption ambiguity — a restarted controller finding a process/Volume/Guest it
-cannot unambiguously re-identify — the response is quarantine
+adoption ambiguity - a restarted controller finding a process/Volume/Guest it
+cannot unambiguously re-identify - the response is quarantine
 (`Degraded`/`Quarantined`, cgroup leaf isolated, no signal sent to the
 candidate process), never a broad kill:
 
@@ -1558,7 +1558,7 @@ ADR 0045, re-affirmed by `ADR-046-zone-routing`/`ADR-046-cli-and-operations`):
 **Zone-level ceilings** (`ADR-046-resources-zone-control`): `Quota`
 (`enforcementPolicy: hard` rejects with `quota-exceeded`; `soft` sets
 `overQuota: true` and warns; `quotaBytes: 0` is rejected outright);
-`EmergencyPolicy` (union semantics — the most restrictive enabled flag wins
+`EmergencyPolicy` (union semantics - the most restrictive enabled flag wins
 across `stopNewAdmissions`, `disconnectZoneLinks`, `stopProviderProcesses`,
 `drainOngoingOperations`; `drainDeadlineSeconds` bounded 1-300 s;
 `stopProviderProcesses` stops Processes **without** setting
@@ -1574,7 +1574,7 @@ unboundedly when credit is exhausted).
 **Checked arithmetic, never a panic path.** Every admission, fragmentation,
 queue-credit, and pre-allocation calculation uses checked arithmetic
 including all wire overhead; underflow, overflow, or a value above the
-selected profile limit is a typed pre-allocation rejection — it never
+selected profile limit is a typed pre-allocation rejection - it never
 reaches indexing, allocation, or a panic (historical main ADR 0045 lines
 1514-1523, carried forward unchanged as a `d2b-bus` invariant).
 
@@ -1605,7 +1605,7 @@ in the bundle; metadata and status only. When a Provider is quarantined, the
 bundle reports `bundle_completeness: "partial"` rather than silently omitting
 the gap or blocking entirely (`ADR046-doctor-002`). This is the concrete tool
 an operator or a coordinated-disclosure responder uses to gather evidence
-without themselves becoming a redaction bypass — it is bound by exactly the
+without themselves becoming a redaction bypass - it is bound by exactly the
 same audit/status redaction rules as every other read path in
 [Audit vs. OTEL](#audit-vs-otel-redaction-cardinality-durability).
 
@@ -1655,7 +1655,7 @@ live-session ceremony to delete Secret Service items and revoke TPM exports
 *because v2 allowed persisted, host-readable secret material to exist at
 all*. v3's [zero-secret invariant](#credential-security-end-to-end-delivery-and-zeroization)
 means Credential Providers never persist secret bytes in the resource
-store, audit, or telemetry in the first place — the backing secret (OS
+store, audit, or telemetry in the first place - the backing secret (OS
 keyring entry, IMDS binding, Entra token cache) lives entirely inside the
 owning OS/cloud provider, not inside d2b state. A v3 reset therefore does not
 need a bespoke pre-reset "delete d2b-owned Secret Service items" ceremony;
@@ -1683,7 +1683,7 @@ destruction) proceed.
 deletion (§8), a reset is atomic at its declared scope: every resource in
 scope is either fully torn down (finalizers drained, `Deleted` revision
 committed, `StateReset` record fsynced) or the reset fails closed and the
-scope remains in its pre-reset state — there is no state where a reset has
+scope remains in its pre-reset state - there is no state where a reset has
 "partially happened" and is silently retried later. A resumed reset after a
 crash resumes only from the durable `StateReset` record already committed
 for that generation; it never treats an in-progress reset as complete
@@ -1765,7 +1765,7 @@ time rejection, not an operational recommendation.
 - Any Provider claiming a wildcard permission
   (`resourceNames: ["*"]`/empty `executionRefs`) without being a
   core-controller-generated Role (RZC lines 868-997, line 2985).
-- Manifest-derived Provider spec fields set by the operator —
+- Manifest-derived Provider spec fields set by the operator -
   `spec.exports`, `spec.components`, `spec.dependencies`,
   `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy` are
   resolved only from the signed manifest (RZC lines 2722-2723).
@@ -1783,7 +1783,7 @@ time rejection, not an operational recommendation.
   crossing a Zone boundary (§10).
 - A relay/managed-identity/Entra credential mapped to a local Role/Admin
   (§11).
-- Cross-Zone credential minting — no parent-minted token delivered to a
+- Cross-Zone credential minting - no parent-minted token delivered to a
   child Zone (§11).
 - Exporting a Device, Endpoint, Binding, Credential, or backend directly; creating
   any import projection other than the factory-bound same-qualified-type
@@ -1836,7 +1836,7 @@ time rejection, not an operational recommendation.
 
 **Credential.**
 
-- `Noise_NN_*` for sensitive credential/`SignChallenge` delivery — `Kk` is
+- `Noise_NN_*` for sensitive credential/`SignChallenge` delivery - `Kk` is
   required (§19, D056).
 - `#[derive(Debug)]` on any type touching key material or token bytes (§19).
 - Auto-retry on an ambiguous credential-delivery outcome (§19).
@@ -1850,9 +1850,9 @@ time rejection, not an operational recommendation.
   neutralizer (carried forward unchanged from the pre-v3 baseline,
   `AGENTS.md` "Don'ts (security-relevant)").
 - Removing IPv6 suppression from either the bridge-creation path or the
-  periodic reconcile path — both are required together
+  periodic reconcile path - both are required together
   (`ADR-046-resources-network` INV-NET-002).
-- Reducing or emptying `hostBlocklist` — additive-only (INV-NET-004).
+- Reducing or emptying `hostBlocklist` - additive-only (INV-NET-004).
 - A workload VM name, user identifier, DHCP hostname, or workload label in a
   host nftables rule (INV-NET-006).
 - `CAP_NET_ADMIN`/`BIND_SERVICE`/`RAW` present in the host network namespace
@@ -1893,23 +1893,23 @@ time rejection, not an operational recommendation.
 
 ## Residual risks and explicit non-goals
 
-These are documented, accepted limitations — not gaps this spec claims to
+These are documented, accepted limitations - not gaps this spec claims to
 close. Each maps to the attacker class it is scoped against.
 
 1. **Compromised Host root, or any process sharing a UID with a d2b
    component, is not contained (AC3).** This matches `SECURITY.md`'s
    existing "does NOT defend against ... multi-user trust on a single host."
    A user-domain `Host` with `isolationPosture: "none"` makes this residual
-   risk explicit and non-suppressible (§16) rather than eliminating it —
+   risk explicit and non-suppressible (§16) rather than eliminating it -
    elimination would require a VM/sandbox boundary, which is precisely what
    `isolationPosture: "none"` declares is absent.
 2. **A fully compromised gateway Guest can still exhaust or misuse its own
    Zone's relay/cloud reachability.** Gateway custody (§11) bounds the blast
-   radius to that Guest and its Zone — it does not claim the Guest itself is
+   radius to that Guest and its Zone - it does not claim the Guest itself is
    unbreachable. A compromised gateway Guest cannot escalate to Host root,
    the privileged broker, sibling Zones, or unrelated Host-resident
    workloads, matching ADR 0032's "protection direction" framing.
-3. **TPM sealing binds TPM, host, user, and credential name — it does not
+3. **TPM sealing binds TPM, host, user, and credential name - it does not
    cryptographically bind a specific systemd unit or Process identity.**
    PID1/broker-assigned identity (DAC, mount namespace, sandbox
    configuration), not TPM cryptography, is what isolates the receiving
@@ -1953,7 +1953,7 @@ close. Each maps to the attacker class it is scoped against.
 | Main reuse source | main `a1cc0b2d`: `d2b-session`/`d2b-session-unix` (ComponentSession Noise/record/attachment machinery), `d2b-contracts/src/{public_wire.rs,provider_registry_v2.rs}` (typed RPC/registry shape), `d2b-priv-broker/src/ops/{swtpm_dir.rs,storage_contract.rs}` (fail-closed marker/quarantine pattern) |
 | Behavior retained | Broker-as-sole-privileged-executor; fail-closed typed errors; pidfd/InvocationID adoption identity; positive-capability provider traits; argv/secret/path redaction discipline; OTEL/audit architectural separation; quarantine-not-kill on ambiguous adoption (ADR 0034 continuation) |
 | Required delta | Native Zone resource plane/redb store; ComponentSession production wiring with native RBAC; Provider packaging/signing/trust/quarantine; primitive ResourceSpecs (Host/Guest/Process/Volume/Network/Device/User/Credential); ZoneLink/d2b-bus routing; per-Provider EffectPort boundary; StateReset audit contract |
-| Excluded assumptions | Historical main ADR 0045's Realm/gateway-VM-as-ResourceKind model, per-realm PID1 broker sockets, long-lived guest-control HMAC token, and whole-host factory-reset generation are not v3 architecture — D050 (Guest replaces gateway-VM-as-special-realm), D016/D017 (Zone/ZoneLink replace Realm), and this spec's own [reset boundary](#reset-boundary) supersede them for v3 |
+| Excluded assumptions | Historical main ADR 0045's Realm/gateway-VM-as-ResourceKind model, per-realm PID1 broker sockets, long-lived guest-control HMAC token, and whole-host factory-reset generation are not v3 architecture - D050 (Guest replaces gateway-VM-as-special-realm), D016/D017 (Zone/ZoneLink replace Realm), and this spec's own [reset boundary](#reset-boundary) supersede them for v3 |
 | Feasibility proof | Per-spec hermetic/Nix-eval/container/host-integration/fuzz suites named in [Implementation work items](#implementation-work-items) below and in every owning spec's own work-item validation column |
 | Future owner | `ADR046-security-*` work items below own cross-cutting security validation; each ResourceType/Provider spec's own `ADR046-*` work items own the implementation itself |
 
@@ -1971,9 +1971,9 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` |
 | Detailed design | One policy test enumerating every forbidden metric-label/audit-field value from §21 and the content-secrecy table in §20 (store paths, `no_isolation`, credential bytes, raw paths/argv/PID/cgroup, CTAP/clipboard/terminal/notification content) and asserting, by static scan of instrumentation call sites plus a redaction-guard runtime test, that no `ADR046-*` Provider crate emits any of them Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs as part of `make test-lint`/`make test-rust`; every Provider crate's own redaction test (e.g. `tests/stream_redaction.rs`) is a per-Provider instance of the same closed list |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic (`cargo test -p d2b-contract-tests policy_telemetry_redaction`); fails the build if a new Provider crate is added without a corresponding redaction test file under its `tests/` |
-| Removal proof | Not applicable — this is a permanent gate, not a migration |
+| Removal proof | Not applicable - this is a permanent gate, not a migration |
 
 ### ADR046-security-002
 
@@ -1987,7 +1987,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-session/tests/noise_conformance.rs`, `packages/d2b-session/fuzz/fuzz_targets/{handshake_offer,record_frame}.rs` |
 | Detailed design | Property/fuzz test suite over the three Noise profiles (§7): exact NN/KK/IKpsk2 vectors and rejection mutations (copied), plus new `cargo-fuzz` targets mutating the canonical handshake offer, preface, and encrypted record frame to assert no panic/UB and that every malformed input is a typed rejection (never a partial accept) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Wired into `make test-rust` (vectors) and a separate `make test-fuzz` target (new; time-boxed nightly run, not part of the PR-blocking gate) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic vector tests plus fuzz corpus with a minimum 4-hour nightly run and zero crashes/hangs as acceptance |
 | Removal proof | Not applicable |
 
@@ -2003,7 +2003,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-resource-store/tests/rbac_property.rs` |
 | Detailed design | Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers; (5) `relay` is accepted only as the canonical ZoneLink-scoped session verb with core-generated or explicit admin-policy provenance and exact target bounds; and (6) every forwarding hop independently requires relay plus the target verb Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs against the real redb-backed resource store test harness, not a mock |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic property test (`proptest`/`quickcheck`-style, minimum 10,000 cases per property) |
 | Removal proof | Not applicable |
 
@@ -2017,9 +2017,9 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None |
 | Reuse action | adapt |
 | Destination | `packages/d2b-bus/fuzz/fuzz_targets/zonelink_frame.rs`, `packages/d2b-bus/tests/zonelink_structural_rejection.rs` |
-| Detailed design | Fuzz + property suite asserting that no mutation of a ZoneLink-bound frame (attachment count, credential-shaped byte runs, path-shaped strings, PID-shaped integers) is ever forwarded — every such mutation is rejected at serialization with `attachment-not-permitted-over-zone-link` or the transport-specific equivalent, never silently dropped or partially forwarded Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design copied from `ADR-046-zone-routing.md` structural-rejection sections). |
+| Detailed design | Fuzz + property suite asserting that no mutation of a ZoneLink-bound frame (attachment count, credential-shaped byte runs, path-shaped strings, PID-shaped integers) is ever forwarded - every such mutation is rejected at serialization with `attachment-not-permitted-over-zone-link` or the transport-specific equivalent, never silently dropped or partially forwarded Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design copied from `ADR-046-zone-routing.md` structural-rejection sections). |
 | Integration | `make test-fuzz`; a companion container test (`tests/integration/containers/zonelink-cross-zone.rs`) runs two real Zone runtime containers connected by a real ZoneLink and asserts the same property end to end over the wire, not just in the frame-serialization unit |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Fuzz corpus (`cargo fuzz run zonelink_frame -- -runs=1000000`, zero crashes); container test passes in `make test-integration` |
 | Removal proof | Not applicable |
 
@@ -2035,9 +2035,9 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/xtask/src/effectport_boundary_check.rs`, wired into `make test-policy` |
 | Detailed design | For every crate under `packages/d2b-provider-*`, walk its `Cargo.toml` dependency graph and fail the build if it transitively depends on `d2b-priv-broker` or any crate exposing a raw broker client/DTO type; separately, grep-scan for direct syscalls forbidden per dossier (e.g. `socket(AF_VSOCK` in `transport-vsock`, `Command::new("systemctl"` in `system-systemd`) |
 | Integration | `make test-policy`; blocks any PR adding a forbidden dependency edge or forbidden syscall string to a Provider crate |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic (`cargo xtask effectport-boundary-check`); a negative test intentionally adds a forbidden dependency to a scratch crate and asserts the check fails |
-| Removal proof | Not applicable — permanent gate |
+| Removal proof | Not applicable - permanent gate |
 
 ### ADR046-security-006
 
@@ -2051,7 +2051,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-provider-system-minijail/tests/launchticket_toctou.rs` |
 | Detailed design | Fault-injection test that issues a `LaunchTicket`, then mutates the referenced `CompiledSandboxPlan` digest (simulating a race between issue and exec) before the broker execs, and asserts the spawn fails closed rather than launching with the old plan; a companion test kills the broker mid-`clone3` and asserts no half-initialized process (missing cgroup placement, non-zero host capabilities) is ever observable by a concurrent reader |
 | Integration | `make test-rust` (unit-level fault injection via a fake clock/fault-injecting `EffectPort` test double); a host/KVM integration test (`tests/host-integration/launchticket-toctou.nix`) repeats the same scenario against the real broker and real `clone3(2)` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection test plus `make test-host-integration` NixOS/KVM test; acceptance is zero observable non-zero-capability or missing-cgroup-placement windows across 10,000 injected-fault iterations |
 | Removal proof | Not applicable |
 
@@ -2067,7 +2067,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-contract-tests/tests/quarantine_not_kill_matrix.rs` |
 | Detailed design | One parameterized fault-injection matrix test, run once per adoption-capable Provider (`system-minijail`, `system-systemd`, `runtime-cloud-hypervisor`, `runtime-azure-container-apps`, `volume-local`), that restarts the controller with a deliberately ambiguous adoption candidate (duplicate InvocationID, mismatched marker inode, stale ACA operation handle) and asserts: (a) the resource transitions to `Degraded`/`Quarantined`, never `Deleted` or silently re-adopted; (b) no signal is sent to the ambiguous candidate process; (c) a `runtime-security-violation`-class audit record is emitted Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `make test-rust` for the in-process cases; `make test-host-integration` for the real-pidfd/real-cgroup cases (`tests/host-integration/quarantine-not-kill.nix`) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Matrix covers all five Providers listed; acceptance is 100% pass across all five with no signal sent to the ambiguous candidate in any case |
 | Removal proof | Not applicable |
 
@@ -2097,9 +2097,9 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None new |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-volume-local/tests/marker_tamper_fault_injection.rs` |
-| Detailed design | Fault-injection test that provisions a Volume, then out-of-band (as a simulated attacker with filesystem access) replaces the marker file, swaps the backing directory for a different inode on the same `st_dev`, and deletes the marker entirely — three separate scenarios — and asserts each transitions the Volume to `Failed` with `markerStatus: missing`/`replaced` respectively, never a silent re-provision, and that operator-only remediation is the only recovery path exercised |
+| Detailed design | Fault-injection test that provisions a Volume, then out-of-band (as a simulated attacker with filesystem access) replaces the marker file, swaps the backing directory for a different inode on the same `st_dev`, and deletes the marker entirely - three separate scenarios - and asserts each transitions the Volume to `Failed` with `markerStatus: missing`/`replaced` respectively, never a silent re-provision, and that operator-only remediation is the only recovery path exercised |
 | Integration | `make test-rust`; a host-integration variant (`tests/host-integration/volume-marker-tamper.nix`) repeats the inode-swap scenario against the real broker-maintained marker root on a real filesystem |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic + host/KVM fault-injection test; acceptance is 100% fail-closed across all three tamper scenarios |
 | Removal proof | Not applicable |
 
@@ -2113,9 +2113,9 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contract-tests/tests/zero_secret_invariant.rs` |
-| Detailed design | Static + dynamic gate: (1) static — every DTO type reachable from a `Credential`-adjacent module must implement a hand-written redacted `Debug` and must not derive `Debug`, enforced by a `#[forbid(clippy::derive_debug_ambient)]`-style custom lint or an `xtask` AST scan; (2) dynamic — a property test that generates random `Credential` delivery sessions and asserts the delivered token/`SignChallenge` byte sequence never appears, byte-for-byte, in any captured audit record, OTEL span, log line, or resource-store row taken during the same test run Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-resources-credential.md` §1.1). |
+| Detailed design | Static + dynamic gate: (1) static - every DTO type reachable from a `Credential`-adjacent module must implement a hand-written redacted `Debug` and must not derive `Debug`, enforced by a `#[forbid(clippy::derive_debug_ambient)]`-style custom lint or an `xtask` AST scan; (2) dynamic - a property test that generates random `Credential` delivery sessions and asserts the delivered token/`SignChallenge` byte sequence never appears, byte-for-byte, in any captured audit record, OTEL span, log line, or resource-store row taken during the same test run Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-resources-credential.md` §1.1). |
 | Integration | `make test-lint` (static scan) and `make test-rust` (dynamic property test) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic; the dynamic test additionally runs as a canary-byte test (a unique random marker is embedded in the token and searched for across every observability surface) |
 | Removal proof | Not applicable |
 
@@ -2131,7 +2131,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-provider-{clipboard-wayland,shell-terminal,device-security-key,notification-desktop}/tests/stream_redaction.rs` (one per Provider, same shared test helper crate) |
 | Detailed design | Shared canary-byte test helper: each Provider's test injects a unique random marker into its sensitive content path (clipboard bytes, terminal output, CTAP payload, notification body) and asserts the marker never appears in audit, OTEL, Debug output, or CLI error text captured during the test |
 | Integration | `make test-rust`; a container integration test (`tests/integration/containers/content-secrecy.rs`) runs a real Wayland/D-Bus mock session end to end for the clipboard/notification cases |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic canary-byte test per Provider (4 Providers, shared helper crate); container test for the two D-Bus/Wayland-mediated cases |
 | Removal proof | Not applicable |
 
@@ -2147,7 +2147,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-audit/tests/privileged_fail_closed.rs` |
 | Detailed design | Fault-injection test that makes the audit sink's fsync fail (simulated ENOSPC/EIO) during a privileged `ResourceMutation`/`RBACChange`/`StateReset` write, and asserts the originating operation itself fails with `audit-unavailable` rather than completing with a lost audit record; a companion test floods `Standard`/`Best-effort` records past `DEFAULT_AUDIT_WRITES_PER_SECOND` and asserts privileged records are never dropped or delayed by the resulting backpressure |
 | Integration | `make test-rust` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection test; acceptance is zero privileged-class operations that complete despite a failed durable audit write |
 | Removal proof | Not applicable |
 
@@ -2163,7 +2163,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-bus/tests/dos_ceiling_fault_injection.rs` |
 | Detailed design | Fault-injection/load test suite: (1) attachment-credit exhaustion at each of the six scopes (Packet/Request/Operation/Session/Process/Host), asserting typed rejection never a panic; (2) reconnect-storm exceeding `MAX_RECONNECT_ATTEMPTS`/`MAX_RECONNECT_WINDOW_MS`, asserting the session fails closed rather than looping; (3) ZoneLink hop-count/route-advertisement replay flood, asserting `hop-limit-exceeded`/`zone-advertisement-replay` rather than unbounded forwarding; (4) a stalled data stream under load, asserting control/cancellation traffic is never starved (priority-scheduling property) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | `make test-rust`; item (4) additionally runs as a container load test (`tests/integration/containers/backpressure-priority.rs`) with a real slow consumer |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection suite; container load test; acceptance is zero panics/unbounded-growth across all four scenarios |
 | Removal proof | Not applicable |
 
@@ -2179,7 +2179,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b/src/commands/{doctor,support_bundle}.rs` |
 | Detailed design | `d2b zone doctor` performs read-only status/audit-hash-chain checks with the redaction rules from §21 enforced on every field it prints; `d2b zone support-bundle` assembles a bounded archive of metadata+status (never spec bytes or `metadata.name`) and sets `bundle_completeness: "partial"` when any Provider in scope is quarantined, rather than omitting the gap silently Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-telemetry-audit-and-support.md`). |
 | Integration | `make test-rust` (CLI integration tests); a container test (`tests/integration/containers/support-bundle-quarantined.rs`) runs a real Zone with one quarantined Provider and asserts the bundle correctly reports `partial` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic CLI test asserting no spec byte or `metadata.name` appears in a generated bundle; container test for the quarantined-Provider case |
 | Removal proof | Not applicable |
 
@@ -2189,7 +2189,7 @@ close. Each maps to the attacker class it is scoped against.
 | --- | --- |
 | Work item ID | `ADR046-security-015` |
 | Dependency/owner | `ADR046-audit-001` (`StateReset` record), Volume/Credential lifecycle work items |
-| Current source | Historical main ADR 0045 factory-reset design (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, reset process overview and apply-command verification steps) — reused only as a design precedent for atomicity/fail-closed sequencing, not as v3 architecture (see [Reset boundary](#reset-boundary) for the explicitly excluded assumptions) |
+| Current source | Historical main ADR 0045 factory-reset design (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, reset process overview and apply-command verification steps) - reused only as a design precedent for atomicity/fail-closed sequencing, not as v3 architecture (see [Reset boundary](#reset-boundary) for the explicitly excluded assumptions) |
 | Reuse source | Same historical commit, sequencing pattern only (no code reuse; historical implementation was bash/systemd-generation-based and does not exist in any Rust crate) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/reset.rs`, `packages/d2b-core-controller/tests/reset_atomicity.rs` |
@@ -2209,11 +2209,11 @@ close. Each maps to the attacker class it is scoped against.
 | Reuse source | None |
 | Reuse action | adapt |
 | Destination | `tests/unit/gates/security-matrix-coverage.sh` |
-| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 19 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) — failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (pattern from `tests/unit/gates/drift-check.sh`). |
+| Detailed design | A drift-style gate that parses [Per-ResourceType threat matrix](#per-resourcetype-threat-matrix) and [Per-Provider-family threat matrix](#per-provider-family-threat-matrix), confirms every one of the 19 standard ResourceTypes and all 27 Provider dossiers under `docs/specs/providers/` has a row, and confirms every referenced dossier file actually contains a `## Security`-class section (by heading grep) - failing the gate if a new ResourceType/Provider is added without a corresponding row and dossier section Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (pattern from `tests/unit/gates/drift-check.sh`). |
 | Integration | `make test-drift` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic shell-script gate; a negative test adds a scratch Provider dossier missing a Security section and asserts the gate fails |
-| Removal proof | Not applicable — permanent gate |
+| Removal proof | Not applicable - permanent gate |
 
 ### ADR046-security-017
 
@@ -2221,13 +2221,13 @@ close. Each maps to the attacker class it is scoped against.
 | --- | --- |
 | Work item ID | `ADR046-security-017` |
 | Dependency/owner | `ADR046-routing-004`, gateway-custody Provider work items (`ADR046-aca-*`, `ADR046-azure-vm-*`, `ADR046-transport-relay-*`) |
-| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse source | None |
 | Reuse action | adapt |
 | Destination | `tests/integration/containers/malicious-child-zone.rs` |
 | Detailed design | Container-based penetration test running a real parent Zone and a deliberately malicious child Zone container. Before attack injection, assert the one ZoneLink row/handler exists only in the child store/runtime and the parent has only sealed `{ childZone, parentZone }` topology plus authenticated allocator/route projection state. The child then attempts, over that link: FD smuggling, credential-shaped byte injection, cross-Zone `ownerRef` forgery, capability-ceiling widening claims, and route-advertisement replay. Every attempt must be rejected by the parent with the specific typed error named in §10, and none may create a parent ZoneLink row or reach the parent's resource store, Credential state, or Host substrate Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `make test-integration` (requires podman, per `AGENTS.md` "Local Layer 1 + container integration") |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Container integration test; acceptance is zero successful attacks across all five attempted vectors |
 | Removal proof | Not applicable |
 
@@ -2243,7 +2243,7 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `docs/reference/security-manual-validation-checklist.md` (new reference doc, out of scope for this spec's own file but named here as the required destination for the future implementation PR) |
 | Detailed design | A checklist covering the scenarios that cannot be hermetically or even container-tested: (1) real Azure Container Apps/Azure VM credential rotation and revocation under `AzureEffectPort`, confirming zeroization on a real managed-identity/Entra token; (2) real TPM 2.0 hardware NVRAM persistence/tamper-marker behavior across a real host reboot; (3) real USBIP/security-key hardware mutual-exclusion enforcement with a physical FIDO2 device; (4) real Azure Relay listener/sender credential acquisition and relay-identity-not-local-auth verification against a live relay namespace Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (checklist pattern from `SECURITY.md`'s existing portability-roadmap manual milestones and `tests/README.md`'s manual hardware tier). |
 | Integration | Run manually before each tagged release touching a cloud/hardware Provider, per the existing `tests/README.md` manual-tier convention |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Checklist sign-off recorded in the release's validation evidence, not a CI gate (matches `D2b_LIVE=1` manual-tier precedent in `AGENTS.md`) |
 | Removal proof | Not applicable |
 
@@ -2259,6 +2259,6 @@ close. Each maps to the attacker class it is scoped against.
 | Destination | `packages/d2b-contract-tests/tests/minijail_process_ownership.rs`; `tests/host-integration/minijail-cgroup-kill.nix` |
 | Detailed design | Hermetic contract test proves only the broker that called `clone3` can produce the identity-bound `BrokerTerminalResult`; a non-parent poll-readable pidfd cannot be converted to status, while a verified duplicate holder can still request exact-main `pidfd_send_signal`. Host integration launches an owned descendant that calls `setsid(2)` plus an unrelated recycled-PGID decoy, performs graceful exact-main stop followed by anchored leaf `cgroup.kill`, and proves the owned leaf reaches `populated 0`, the broker reaps exactly once, the decoy survives, and rmdir/finalizer clearing wait for both proofs. Negative cases prove ambiguous adoption emits no signal/`cgroup.kill`, and Linux <5.14 or missing/unwritable `cgroup.kill` fails before spawn. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Hermetic contract test in `make test-rust`; real pidfd/cgroup scenario in `make test-host-integration` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Parent-only wait/reap, poll-readability-not-status, duplicate-holder signaling, setsid/PGID-reuse resistance, quarantine no-kill, exact-once reap, and Linux ≥5.14 platform-gate assertions all pass |
 | Removal proof | Old ProviderSupervisor/controller wait/reap and PGID-kill paths are removed only after this gate passes against the replacement |

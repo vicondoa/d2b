@@ -324,13 +324,13 @@ deprecations ship one minor release before removal.
 - Internal v2 constellation provider-abstraction crates
   ([ADR 0032](docs/adr/0032-d2b-v2-constellation-control-plane.md)),
   with **no user-facing behavior change**: `d2b-constellation-core`
-  (the pure, codec-neutral model — strongly-typed identifiers with
+  (the pure, codec-neutral model - strongly-typed identifiers with
   fail-closed deserialization, the capability model, the semantic
   `ConstellationFrame` with a trusted per-operation required-capability
   mapping, the redacted audit envelope, and a bounded trace context) and
-  `d2b-constellation-provider` (the async provider trait surface —
+  `d2b-constellation-provider` (the async provider trait surface -
   runtime/workload/display/transport/stream-mux/codec/credential/
-  daemon-access providers — with typed capability descriptors, structured
+  daemon-access providers - with typed capability descriptors, structured
   capability-denial errors, byte-carrying transport sessions, and
   fail-closed mock/conformance fixtures). The same change adds the
   remaining foundation crates: `d2b-constellation-codec-protobuf`
@@ -350,7 +350,7 @@ deprecations ship one minor release before removal.
 - Documentation for the v2 constellation control plane
   ([ADR 0032](docs/adr/0032-d2b-v2-constellation-control-plane.md)):
   the threat model in `docs/explanation/design.md` now describes the
-  realm-gateway trust boundary — the host daemon and broker hold no
+  realm-gateway trust boundary - the host daemon and broker hold no
   realm relay/provider credentials, remote node registries, or realm
   audit (those live inside a per-realm gateway guest VM); a realm relay
   is an untrusted, ciphertext-only rendezvous transport; relay identity
@@ -423,7 +423,7 @@ deprecations ship one minor release before removal.
   single-uid ACL (`--x` traversal on the per-VM state dir, `rw` on
   `vsock.sock`) scoped to the current socket inode. Because there is no
   CH-stop teardown hook carrying the socket path, the ACL is refreshed as
-  a revoke-then-grant on each cloud-hypervisor (re)spawn — any stale grant
+  a revoke-then-grant on each cloud-hypervisor (re)spawn - any stale grant
   left on a replaced or disabled socket inode is revoked before the live
   grant, so a prior generation cannot retain access (stop-time teardown is
   future work). Both the revoke and grant are audited with hash-only
@@ -439,7 +439,7 @@ deprecations ship one minor release before removal.
 
   `tty=true && detach=false` now routes to a PTY-backed,
   connection-owned, non-durable attached exec. PTY setup keeps
-  `unsafe_code = "forbid"` via a helper-exec pattern — a new `--tty-exec`
+  `unsafe_code = "forbid"` via a helper-exec pattern - a new `--tty-exec`
   mode of the static `d2b-exec-runner` performs the
   `setsid` + `TIOCSCTTY` + `tcsetwinsize` + `dup2` + `execve` handshake in
   safe `rustix`, so `d2b-guestd` never acquires a controlling
@@ -497,8 +497,8 @@ deprecations ship one minor release before removal.
   the socket *file* exists, so the failure was masked and host telemetry
   silently stopped reaching `sys-obs`. The broker now drops a
   provably-stale (non-listening) `host-egress.sock` before each
-  `OtelHostBridge` spawn — mirroring the existing cloud-hypervisor / video
-  socket preflight — so restarting the obs VM no longer wedges the host
+  `OtelHostBridge` spawn - mirroring the existing cloud-hypervisor / video
+  socket preflight - so restarting the obs VM no longer wedges the host
   telemetry path. A live listener is never removed, and only sockets under
   `/run/d2b/otel/` are eligible.
 
@@ -537,7 +537,7 @@ deprecations ship one minor release before removal.
   dispatched, because it built a nested async runtime on the request thread;
   and the guest reconciler matched a running workload's command against
   `systemctl show` output using exact, quote-aware argv tokens, but systemd
-  renders `ExecStart` argv as a literal, unescaped, space-joined string — so
+  renders `ExecStart` argv as a literal, unescaped, space-joined string - so
   live jobs (and any command containing a space, quote, backslash, or
   semicolon) were misclassified as foreign and reaped as `lost-guestd`
   shortly after starting. Workload identity is now matched against systemd's
@@ -551,7 +551,7 @@ deprecations ship one minor release before removal.
 
 - `d2b vm exec <vm> -- <cmd…>` (and `-it` for an interactive TTY):
   an admin-only operator command that runs a command inside a running
-  guest over the authenticated guest-control transport — CLI → daemon
+  guest over the authenticated guest-control transport - CLI → daemon
   `public.sock` → authenticated guest-control vsock → `guestd` exec
   RPCs. There is no SSH and no host PTY (the guest owns the PTY); the
   host only flips termios via an RAII raw-mode guard restored on every
@@ -581,7 +581,7 @@ deprecations ship one minor release before removal.
   command that outlives the originating connection, supervised by the root
   guest daemon through slot-based `systemd-run` transient units
   (`d2b-exec-<NN>.service`, scoped to a guest-internal `d2b-exec`
-  slice). Unit names and argv carry only the slot index — never the exec id,
+  slice). Unit names and argv carry only the slot index - never the exec id,
   argv, environment, or cwd. stdout/stderr are retained in slot-keyed files
   under a root-owned, 0700, boot-scoped `/run/d2b-exec` parent with
   drop-oldest truncation accounting: 4 MiB per stream, an exact 256 MiB
@@ -613,7 +613,7 @@ deprecations ship one minor release before removal.
   runtime as a per-exec `RuntimeMaxSec` backstop when non-zero.
 
 
-  `packages/d2b-contracts/proto/guest_control.proto` — generated schema plus
+  `packages/d2b-contracts/proto/guest_control.proto` - generated schema plus
   protobuf source for the ADR 0028 ttRPC contract, covering health, Hello,
   capabilities, exec lifecycle, chunked stdio RPC shapes, bounded health
   labels, bounded string identifiers/payload metadata, oneof-style terminal
@@ -680,7 +680,7 @@ deprecations ship one minor release before removal.
   redaction test coverage for stdout/stderr logs, telemetry, health, and
   CLI JSON.
 
-- `proofs/chunked-stdio-conformance` — executable safe-Rust proof for
+- `proofs/chunked-stdio-conformance` - executable safe-Rust proof for
   the selected Kata-style chunked stdio exec I/O protocol, covering
   byte-exact offset reads, idempotent stdin writes, slow-consumer bounds,
   concurrent attached fairness, stale sessions, EOF, resize, and signal
@@ -691,7 +691,7 @@ deprecations ship one minor release before removal.
   groups, PTY close/drain behavior, SIGWINCH resize semantics, and
   protocol-side TTY `CloseStdin`.
 
-- `docs/reference/guest-control-exec-io-credit-window.md` — bounded ttRPC
+- `docs/reference/guest-control-exec-io-credit-window.md` - bounded ttRPC
   duplex-stream exec I/O design using d2b `TerminalFrame` messages,
   explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI
   behavior, conformance matrix, risks, and required tests.
@@ -716,7 +716,7 @@ deprecations ship one minor release before removal.
   Collector, schema migrator, ClickHouse, and ClickHouse Keeper as native
   NixOS services.
 
-- `d2b.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
+- `d2b.site.niriVmBorders.{enable,outputPath}` - opt-in niri KDL
   window-rule include generator. When enabled, installs a KDL file at
   the configured path (default `/etc/d2b/niri-vm-borders.kdl`)
   containing a crosvm scanout-window hide rule and one
@@ -724,28 +724,28 @@ deprecations ship one minor release before removal.
   `d2b.<vm>.` app-id prefix that the host Wayland filter proxy
   writes onto guest windows. Include the file from niri config with
   `include "/etc/d2b/niri-vm-borders.kdl"`. Requires niri ≥ 0.1.9.
-- `d2b.vms.<vm>.graphics.niriBorderColor` — per-VM active border
+- `d2b.vms.<vm>.graphics.niriBorderColor` - per-VM active border
   color override for the generated niri rules, as a six-digit CSS hex
   color (`#rrggbb`). Defaults to `null`, which uses a deterministic
   palette color derived from the VM name.
-- `d2b.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions}`
-  — host-side Wayland filter controls for graphics VMs that opt into
+- `d2b.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions}` -
+  host-side Wayland filter controls for graphics VMs that opt into
   cross-domain forwarding. The filter is enabled by default when
   `graphics.crossDomainTrusted = true`, denies unknown/high-risk globals
   by default, and exposes explicit allow/deny/version-cap overrides.
-- `d2b.vms.<vm>.graphics.waylandFilter.{byteLogging,dmabufAllow,dmabufDeny}`
-  — default-off diagnostics and dmabuf format/modifier controls for the
+- `d2b.vms.<vm>.graphics.waylandFilter.{byteLogging,dmabufAllow,dmabufDeny}` -
+  default-off diagnostics and dmabuf format/modifier controls for the
   host-side Wayland filter. The filter preserves compositor dmabuf
   feedback by default and lets operators hide known-bad format/modifier
   pairs while keeping buffer creation requests fail-closed against the
   same policy.
-- `docs/how-to/niri-vm-borders.md` — how-to for enabling the niri
+- `docs/how-to/niri-vm-borders.md` - how-to for enabling the niri
   include, customizing colors, verifying the setup, and understanding
   the `crossDomainTrusted` requirement for app-id matching.
-- `docs/how-to/migrate-to-wayland-proxy.md` — migration guide covering
+- `docs/how-to/migrate-to-wayland-proxy.md` - migration guide covering
   app-id renaming, Xwayland fail-closed behavior, `crossDomainTrusted`
   requirement, niri rule updates, and rollback procedure.
-- `docs/reference/wayland-filter-warnings.md` — reference warning
+- `docs/reference/wayland-filter-warnings.md` - reference warning
   catalog for `graphics.waylandFilter` listing every warning condition,
   the triggering option or global, why the warning exists, and how to
   override intentionally.
@@ -764,7 +764,7 @@ deprecations ship one minor release before removal.
   `db.dump`, marker payloads) are redacted by construction. Host Alloy
   follows only this export glob (`local.file_match` + `loki.source.file`,
   following rotation) and the `alloy` identity receives focused
-  read/traverse ACLs to the export directory only — never the unified
+  read/traverse ACLs to the export directory only - never the unified
   broker audit log, the privileged daemon socket, or d2bd state. The
   Loki stream stays a host singleton (`vm="host"`, `env="host"`,
   `role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
@@ -776,7 +776,7 @@ deprecations ship one minor release before removal.
   [ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md) and
   `docs/reference/store-sync.md` § "Observability export".
 
-- `d2b store verify <vm> [--repair] [--json]` — explicit
+- `d2b store verify <vm> [--repair] [--json]` - explicit
   broker-backed live-pool integrity verification for the ADR 0027 split
   store-view. The CLI is thin and never reads `store-view` directly;
   `d2bd` sends a typed `BrokerRequest::StoreVerify` to the privileged
@@ -809,14 +809,14 @@ deprecations ship one minor release before removal.
   unshares its own mount namespace, makes propagation private, lazily detaches
   `/nix/store`, then runs the selected build/replace verb from stdin JSON.
 
-- `d2b config` verb group — the host-side review/approve workflow
+- `d2b config` verb group - the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
   in-guest edited file over the existing per-VM SSH key into a
   user-local staging copy; `config diff` shows a unified diff against a
   live file; `config approve` atomically writes the staged copy onto an
   operator-chosen target; `config reject` discards it; `config status`
   reports pending stagings. The CLI only writes its own staging area and
-  the operator-named `--to` target — it never auto-touches the config
+  the operator-named `--to` target - it never auto-touches the config
   tree. `approve`/`reject` are host-operator-only and are the
   authoritative containment boundary (the host only ever evaluates an
   operator-approved guest file); an eval-time namespace lint on
@@ -825,7 +825,7 @@ deprecations ship one minor release before removal.
   socket); the untrusted pull is bounded (size cap + timeout). `d2b
   up` / `start` and `d2b status` also print a human-output note when
   a VM has a pending un-approved staged config.
-- `d2b.vms.<vm>.guestConfigFile` — a dedicated, **guest-editable**
+- `d2b.vms.<vm>.guestConfigFile` - a dedicated, **guest-editable**
   per-VM NixOS module for the in-guest OS layer (packages, services,
   in-guest users, files). It is merged into the guest like `config`,
   but is **contained**: a best-effort eval-time namespace lint rejects
@@ -833,11 +833,11 @@ deprecations ship one minor release before removal.
   `d2b.*` (framework) option, naming the offending option(s)
   (detected by definition-existence over the real NixOS module set, so
   `imports`/`builtins.toFile`/`_file`-spoofing are caught). The lint is
-  defense-in-depth, not a sound sandbox — operator review/approve is the
+  defense-in-depth, not a sound sandbox - operator review/approve is the
   authoritative boundary; see
   [ADR 0024](docs/adr/0024-in-vm-guest-config-sync.md) for the trust
   model and the deferred sound-evaluator work. This is the foundation
-  for the in-VM config-sync workflow — an operator can edit this file
+  for the in-VM config-sync workflow - an operator can edit this file
   from inside the VM and sync it back for review. Host-owned settings
   stay in `config`, which the guest cannot edit. When set, the current
   approved guest config is also seeded into the VM (read-only at
@@ -857,7 +857,7 @@ deprecations ship one minor release before removal.
 ### Changed
 
 - `d2b vm exec` now runs the requested command as the VM's
-  configured workload user (`ssh.user`) — **never root** — inside a real
+  configured workload user (`ssh.user`) - **never root** - inside a real
   PAM login session (`systemd-run --property=PAMName=login
   --uid=<user>`). The command sees the same environment an interactive
   SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
@@ -865,7 +865,7 @@ deprecations ship one minor release before removal.
   browser) work unchanged; operators elevate with `sudo` inside the
   session. `guestd` host-fixes the exec identity and ignores the wire
   `user` field. The per-VM `guest.exec.allowRoot` and `guest.exec.users`
-  options are removed — enabling `guest.exec.enable = true` on a VM with
+  options are removed - enabling `guest.exec.enable = true` on a VM with
   a workload user is sufficient, and a VM whose `ssh.user` is unset,
   `root`, or otherwise invalid disables exec at eval time with a typed
   message. See
@@ -1026,7 +1026,7 @@ deprecations ship one minor release before removal.
   on the first runtime-directory step. The broker's path-safe directory
   opener resolved every path from `/` with `RESOLVE_NO_XDEV`, which
   fails with `EXDEV` ("Invalid cross-device link") the moment it must
-  cross a mount boundary — and the per-VM runtime dir lives under the
+  cross a mount boundary - and the per-VM runtime dir lives under the
   `/run` tmpfs, the tap device under `/dev`, cgroups under `/sys`, etc.
   Resolution now walks component by component and follows a *real*,
   pre-existing mount crossing (still refusing symlink / magic-link
@@ -1051,7 +1051,7 @@ Primarily a stabilization release per
 from the v1.x cycle close out and a live-VM smoke gate is now
 required before tagging. It also lands two default-off, opt-in
 graphics video-decode paths and unifies the lifecycle Unix group
-into a single `d2b` group — a breaking change for consumer
+into a single `d2b` group - a breaking change for consumer
 configs that referenced the legacy group names (see
 **Changed (breaking)** below).
 
@@ -1235,7 +1235,7 @@ Closes every v1.1 deferral.
   `otel_relay`, `otel_host_bridge`, `usbip_backend_per_env`,
   `usbip_proxy_per_env`). A `from_v2()` conversion shim is exported
   for incremental adoption; the CLI emit-side flip lands in v1.1.2.
-- **`d2b vm konsole <vm>`** — opens an SSH session to a VM in a
+- **`d2b vm konsole <vm>`** - opens an SSH session to a VM in a
   host terminal. Resolves the key from the bundle's
   `managed_keys.effective_key_path` and detaches via `setsid`.
 - **Atomic cgroup placement** via `clone3(CLONE_INTO_CGROUP)`. New
@@ -1352,7 +1352,7 @@ from the v0.x bash CLI + per-VM systemd templates: `d2bd` and
 
 ### Added
 
-- **`d2b host validate` / `host reconcile`** — host-side
+- **`d2b host validate` / `host reconcile`** - host-side
   preflight + degraded-mode recovery for the daemon's net-route
   monitor.
 - **Broker audit** (`OpAuditRecord`) at
@@ -1383,7 +1383,7 @@ ClearCodec sessions fall back to software decode transparently.
   implementation with BackendReqHandler for shmem_map/shmem_unmap,
   memfd-backed 256 MB SHM PCI BAR, read_config proxying, and a
   vring_bases fix that forces `SET_VRING_BASE(0)` on initial
-  activation — working around a CH bug where it reads `avail_idx`
+  activation - working around a CH bug where it reads `avail_idx`
   from guest memory, skipping buffers the driver pre-queued before
   `DRIVER_OK`.
 - **Crosvm vhost-user video-decoder backend**
@@ -1445,7 +1445,7 @@ ClearCodec sessions fall back to software decode transparently.
 
 Minor release introducing the **observability subsystem**: a new
 opt-in component category that provisions a single-host telemetry
-sink VM (`sys-obs-stack`) wired over virtio-vsock — no IP between
+sink VM (`sys-obs-stack`) wired over virtio-vsock - no IP between
 the observer and the observed VMs, no shared SSH credentials. The
 release ships per-VM Alloy agents, a Cloud Hypervisor metrics
 exporter, host-side journald forwarding, 6 provisioned Grafana
@@ -1482,7 +1482,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   metrics + the loopback CH-exporter `/metrics`. Pushes all signals
   through `d2b-otel-host-bridge.service` to the obs VM.
 - **Cloud Hypervisor metrics exporter**
-  (`d2b-ch-exporter.service`, pure-Bash + jq + curl + socat —
+  (`d2b-ch-exporter.service`, pure-Bash + jq + curl + socat -
   no new language runtime in the host closure). Polls each VM's CH
   REST socket (`/vmm.ping`, `/vm.info`, `/vm.counters`), exposes
   Prometheus text on `127.0.0.1:9101/metrics`. Counter allowlist
@@ -1491,11 +1491,11 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   schema rolls into `d2b_vm_unknown_counters_total`. Topology
   labels (`bridge`, `tap`, `tpm`, `graphics`, `audio`,
   `usbip_yubikey`) are off by default to keep the security-posture
-  surface narrow — flip
+  surface narrow - flip
   `d2b.observability.ch.exporter.includeTopologyLabels` on for
   debug. Detects both `microvm@<vm>.service` and
   `d2b-<vm>-gpu.service` so graphics VMs are reported running.
-- **Vsock transport** — no IP between VMs, no SSH credentials
+- **Vsock transport** - no IP between VMs, no SSH credentials
   between observer and observed. Cloud Hypervisor `--vsock cid=N,...`
   is appended to every observability-enabled VM and to
   `sys-obs-stack`; a per-VM `d2b-otel-relay@<vm>.service` (socat
@@ -1504,12 +1504,12 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   via `microvm@%i.service.wants` for headless VMs and via
   per-VM `wants` on `d2b-<vm>-gpu.service` for graphics VMs
   (graphics VMs do not use `microvm@`).
-- **CLI lifecycle telemetry** — `d2b up/down/switch/boot/test/
+- **CLI lifecycle telemetry** - `d2b up/down/switch/boot/test/
   rollback/gc/usb/audio` emit OTel spans via `otel-cli` and
   structured JSON journald events for every high-value lifecycle
   step. Spans are populated with allowed labels only (`vm.name`,
   `vm.env`, `vm.role`, `d2b.subcommand`, `systemd.unit`, `tap`,
-  `bridge`, `static_ip`, `generation`) — never command output, key
+  `bridge`, `static_ip`, `generation`) - never command output, key
   paths, or Nix store paths. `d2b_span_start` generates `trace_id` +
   `span_id` locally via `/dev/urandom` so Loki↔Tempo correlation
   works even when no upstream OTLP collector endpoint is configured;
@@ -1528,7 +1528,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   `D2bGuestTelemetryMissing`, `D2bObsVMStackUnhealthy`.
   Each rule individually toggleable via
   `d2b.observability.alerts.<name>.enable`. Notification
-  channels are intentionally unconfigured — operators choose
+  channels are intentionally unconfigured - operators choose
   Alertmanager / Grafana contact-points.
 - **Grafana auth**: defaults to authenticated access as
   `d2b-admin`. Password is generated at activation and stored
@@ -1545,7 +1545,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   per-VM-without-framework rejection, reserved-prefix exemption for
   `cfg.vmName`, env uplink CIDR materialization check.
 - **Tests**: `tests/observability-eval.sh` (23/23 cases, 1 promtool
-  skip when absent — covers option schema, auto-declaration,
+  skip when absent - covers option schema, auto-declaration,
   CID allocation, per-VM toggle defaults, name/prefix collisions,
   CLI-traces closure gating, relay ACL wiring, stack VM guest
   surface, dashboard schema validation, rule-file `promtool`
@@ -1554,20 +1554,20 @@ block. A new `AGENTS.md` policy makes the panel-review process a
 - **Examples**: `examples/with-observability/` minimal consumer
   flake validated by the per-example flake-check loop.
 - **Docs**:
-  - `docs/reference/components-observability.md` — option schema,
+  - `docs/reference/components-observability.md` - option schema,
     port/CID/UDS table, naming conventions, systemd unit
     inventory, dashboard inventory, alert severity table,
     security boundaries, label conventions, retention defaults,
     opt-out paths.
-  - `docs/how-to/enable-observability.md` — step-by-step recipe
+  - `docs/how-to/enable-observability.md` - step-by-step recipe
     including sops/agenix examples for both the Grafana
     secret-key and admin-password.
-  - `docs/explanation/design.md` — appended Observability section
+  - `docs/explanation/design.md` - appended Observability section
     explaining the vsock-vs-reverse-SSH-vs-guest-init trade-off,
     the two-bridge necessity, the alternatives-considered list,
     CLI attribute hygiene, and the trust-concentration risk on
     the obs VM.
-  - `docs/reference/manifest-schema.md` — `manifestVersion = 2`
+  - `docs/reference/manifest-schema.md` - `manifestVersion = 2`
     rationale.
 
 ### Changed
@@ -1577,7 +1577,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   reserved sentinel and a per-VM `observability` block
   (`enabled`, `vsockCid`, `vsockHostSocket`). Existing consumers
   who do not enable `d2b.observability.enable` see the new
-  fields populated with `enabled = false` defaults — the
+  fields populated with `enabled = false` defaults - the
   manifest still describes their VMs deterministically.
 - **`docs/reference/manifest-schema.{md,json}`** updated to
   describe the v2 schema.
@@ -1597,7 +1597,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   grants when an observed VM is later disabled.
 - `d2b-otel-acl-refresh` rejects symlinked state paths,
   validates resolved paths stay under the state root, and uses
-  `setfacl --physical` when available — closes the TOCTOU
+  `setfacl --physical` when available - closes the TOCTOU
   window on a group-writable state tree.
 - Grafana `secret_key` and admin password are never written to
   the world-readable Nix store. Both are generated atomically at
@@ -1632,10 +1632,10 @@ block. A new `AGENTS.md` policy makes the panel-review process a
 
 ### Deferred to v0.3.0
 
-- **`D2bVMStuckWithoutSSH` alert** — needs a new
+- **`D2bVMStuckWithoutSSH` alert** - needs a new
   CH-exporter metric (`d2b_vm_ssh_ready`) before the rule
   can be defined non-trivially.
-- **`d2b_vm_store_path_count`** — the Per-VM Store
+- **`d2b_vm_store_path_count`** - the Per-VM Store
   dashboard references this metric today but it is currently
   **future-work absent**: no exporter emits it yet. The dashboard
   panel renders empty until a future store-path-count exporter
@@ -1643,11 +1643,11 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   test gate treats it as a documented future-work exception
   rather than an unknown metric.
 - **`d2b_vm_counter_net_tx_bytes` and
-  `d2b_vm_counter_net_rx_bytes`** — referenced by the VM
+  `d2b_vm_counter_net_rx_bytes`** - referenced by the VM
   Resources network panel for legacy compatibility; the actual
   emitted metric names are `d2b_vm_counter_virtio_net_*`
   (CH v50 device naming). Documented as **future-work absent**
-  pending dashboard query simplification — both legacy and
+  pending dashboard query simplification - both legacy and
   modern names will resolve via Prometheus `or` until the legacy
   names are removed.
 - **Stable relay-binary interface.**
@@ -1701,7 +1701,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   used to generate these secrets in
   `/var/lib/d2b-observability/` (inside `sys-obs-stack`) have
   been removed. **Why**: putting both secrets inside the VM
-  pointed the trust flow the wrong way — anything on the host
+  pointed the trust flow the wrong way - anything on the host
   that needed the Grafana admin password (a launcher, a health
   probe, a backup) had to cross the VM boundary to read it, which
   in practice forced consumers to add an SSH-able operator
@@ -1796,8 +1796,8 @@ block. A new `AGENTS.md` policy makes the panel-review process a
      `microvm@%i.service`, but graphics VMs bypass that template
      (the GPU sidecar runs cloud-hypervisor directly). The
      refresh therefore only fired during `nixos-rebuild`
-     activation — often tens of minutes before the user actually
-     launched the graphics VM — and every one of those
+     activation - often tens of minutes before the user actually
+     launched the graphics VM - and every one of those
      activation-time refreshes timed out because the VM wasn't
      running yet. The pinned key stayed stale across rebuilds.
      Fix: also `Wants=d2b-known-hosts-refresh@<vm>.service`
@@ -1809,7 +1809,7 @@ block. A new `AGENTS.md` policy makes the panel-review process a
      unconditionally `exec`'d `konsole -e ssh …`. With a stale
      pin every probe failed silently with
      `Host key verification failed!`; konsole then exec'd into an
-     immediately-failing ssh and closed — observed by the user as
+     immediately-failing ssh and closed - observed by the user as
      the launcher "doing nothing" whether the VM was up or down.
      Fix: track probe success, classify the failure on timeout
      (host-key mismatch vs. unreachable), and surface
@@ -1823,7 +1823,7 @@ Patch release. Review of v0.1.6 caught a silent bug in the
 v0.1.5 lifecycle policy: three of the six per-VM sidecars used
 `unitConfig.X-RestartIfChanged = false` instead of the top-level
 NixOS option `restartIfChanged = false`. The two forms LOOK
-equivalent and both compile to a setting on the unit file —
+equivalent and both compile to a setting on the unit file -
 but NixOS's `switch-to-configuration` logic only reads
 `X-RestartIfChanged=` from the `[Service]` section. The
 `unitConfig.X-RestartIfChanged` form emits under `[Unit]`,
@@ -1906,18 +1906,18 @@ and adds regression tests for every v0.1.x patch.
 
 ### Added (tests)
 
-- `tests/unit/smoke/smoke-eval-extraspecialargs.nix` — regression for v0.1.1
+- `tests/unit/smoke/smoke-eval-extraspecialargs.nix` - regression for v0.1.1
   `extraSpecialArgs` propagation through `nixos-modules/host.nix:165`.
-- `tests/net-vm-network-eval.sh` extended — regression for v0.1.2
+- `tests/net-vm-network-eval.sh` extended - regression for v0.1.2
   `ConfigureWithoutCarrier` + route entry on the host's uplink bridge.
-- `tests/autostart-wiring-eval.sh` — covers `d2b@<vm>` as
+- `tests/autostart-wiring-eval.sh` - covers `d2b@<vm>` as
   template-only, multi-user.target.wants wiring, and
   `microvms.target.wants == []`.
-- `tests/unit/smoke/smoke-eval-graphics.nix` extended — regression for v0.1.4
+- `tests/unit/smoke/smoke-eval-graphics.nix` extended - regression for v0.1.4
   `/dev/net/tun rw` in the GPU sidecar's DeviceAllow.
-- `tests/unit/smoke/smoke-eval-tpm.nix` — regression for v0.1.4 swtpm parent-dir
+- `tests/unit/smoke/smoke-eval-tpm.nix` - regression for v0.1.4 swtpm parent-dir
   ACL traversal grant.
-- `tests/restart-policy-eval.sh` — regression for v0.1.5
+- `tests/restart-policy-eval.sh` - regression for v0.1.5
   `restartIfChanged = false` across all six services.
 - Negative-assertion regression in `tests/assertions-eval.sh`
   (`test_graphics_with_autostart`).
@@ -1944,7 +1944,7 @@ and adds regression tests for every v0.1.x patch.
     explaining why the GPU sidecar carries `DeviceAllow=/dev/net/tun`
     (v0.1.4), the `microvm-set-booted`-equivalent ExecStartPre
     (v0.1.5), and the swtpm-user ACL grant (v0.1.4).
-  - "Why not X" — new FAQ entry: "Why doesn't `nixos-rebuild
+  - "Why not X" - new FAQ entry: "Why doesn't `nixos-rebuild
     switch` restart VMs?", cross-linking to the cli-contract's
     pending-restart predicate.
   - Removed `tests/static.sh doesn't iterate examples` and
@@ -1953,7 +1953,7 @@ and adds regression tests for every v0.1.x patch.
 
 - **`docs/how-to/migrating-from-microvm.md`**:
   - Required minimum `d2b = github:vicondoa/d2b/v0.1.6`
-    (or later) — earlier versions exposed framework bugs that
+    (or later) - earlier versions exposed framework bugs that
     blocked real-world graphics + TPM bring-up. (Aligned with
     the CHANGELOG; v0.1.6 is the first release where the docs
     match the shipping code.)
@@ -1977,7 +1977,7 @@ and adds regression tests for every v0.1.x patch.
 - **`docs/reference/components-tpm.md`**:
   - Added the ACL traversal grant on the parent state dir to
     the documented host-side resources. No manual `chown`
-    required for v0.1.4+ consumers — the framework's
+    required for v0.1.4+ consumers - the framework's
     `d2bVmStatePerms` activation script handles it.
   - Updated the "DO NOT WIPE" warning to also point at the
     `pending-restart` indicator as the right signal for
@@ -2040,7 +2040,7 @@ config drift had built up.
 
 ### Added
 
-- **`d2b restart <vm> [--force]`** — convenience wrapper around
+- **`d2b restart <vm> [--force]`** - convenience wrapper around
   `down <vm>` + `up <vm>`. Idempotent (a stopped VM is just brought
   up). Graphics VMs still require a Wayland session for the up
   step. The `--force` flag is forwarded to the down step (lets you
@@ -2062,7 +2062,7 @@ config drift had built up.
   And `d2b status work-aad` adds:
 
   ```
-  pending-restart: YES — unit files changed; run `d2b restart work-aad` to apply
+  pending-restart: YES - unit files changed; run `d2b restart work-aad` to apply
     booted : /nix/store/...-microvm-cloud-hypervisor-work-aad
     current: /nix/store/...-microvm-cloud-hypervisor-work-aad
   ```
@@ -2074,8 +2074,8 @@ config drift had built up.
   is the lighter `restart`, not the per-VM-closure-rebuild
   `switch`). Pre-v0.1.6 docs may show the legacy strings.
 
-  Required because of the `restartIfChanged = false` changes below
-  — without that signal, consumers had no way to know their
+  Required because of the `restartIfChanged = false` changes below -
+  without that signal, consumers had no way to know their
   `nixos-rebuild switch` only landed unit-file changes and not VM
   behaviour.
 
@@ -2083,7 +2083,7 @@ config drift had built up.
 
 - **`restartIfChanged = false` on every per-VM lifecycle service.**
   Pre-v0.1.5, every `nixos-rebuild switch` that touched any of the
-  per-VM units killed the running VM mid-flight — for graphics
+  per-VM units killed the running VM mid-flight - for graphics
   VMs the GPU sidecar IS the cloud-hypervisor process, so its
   restart terminated CH, the guest's in-RAM Entra device-bound
   tokens evaporated, and the user lost their login session. Even
@@ -2109,7 +2109,7 @@ config drift had built up.
 - **`d2b-<vm>-gpu.service` updates the per-VM `booted`
   symlink.** Upstream microvm.nix's
   `microvm-set-booted@<vm>.service` only runs as part of
-  `microvm@<vm>.service`'s lifecycle — but graphics VMs bypass
+  `microvm@<vm>.service`'s lifecycle - but graphics VMs bypass
   that template (the GPU sidecar runs microvm-run directly).
   Pre-v0.1.5, `/var/lib/d2b/vms/<vm>/booted` simply didn't
   exist for graphics VMs, so the new pending-restart check
@@ -2159,7 +2159,7 @@ refused to boot).
   `d2b-<vm>-gpu` but not to `d2b-<vm>-swtpm`. The swtpm
   service starts as the swtpm user, opens its `StateDirectory=`
   (which systemd creates at the correct path), then tries to read
-  `tpm2-00.permall` — and EACCESes because traversing the parent
+  `tpm2-00.permall` - and EACCESes because traversing the parent
   dir requires +x for the swtpm user. libtpms enters failure mode
   and the VM boots with a freshly-initialised TPM, triggering
   Entra/Intune device-tampering alerts for tenant-enrolled VMs.
@@ -2167,13 +2167,13 @@ refused to boot).
   on `vm.tpm.enable`).
 
 - **`nixos-modules/base.nix`**: `d2b-load-host-keys.service`
-  inside the guest referenced `${"$"}{pkgs.coreutils}/bin/getent` —
+  inside the guest referenced `${"$"}{pkgs.coreutils}/bin/getent` -
   but `getent` is in glibc, not coreutils. The lookup silently
   failed with "No such file or directory" and the script printed
-  `user '<u>' not found in /etc/passwd — skipping` even though the
+  `user '<u>' not found in /etc/passwd - skipping` even though the
   user existed. Result: d2b-managed pubkeys + the consumer's
   `userAuthorizedKeys` never reached the guest's
-  `authorized_keys` — SSH worked only via any pubkey statically
+  `authorized_keys` - SSH worked only via any pubkey statically
   baked into the VM's `users.users.<u>.openssh.authorizedKeys.keys`.
   Fixed path to `${"$"}{pkgs.glibc.getent}/bin/getent`.
 
@@ -2201,7 +2201,7 @@ microvm.nix interaction.
   units for `autostart=true` VMs were emitted as separate unit files
   (via `systemd.services."d2b@${name}"`) that NixOS materialised
   WITHOUT the template's `ExecStart`/`ExecStop`/`PropagatesStopTo`/
-  `Type=oneshot` settings — so systemd refused them at boot with
+  `Type=oneshot` settings - so systemd refused them at boot with
   "Service has no ExecStart=, ExecStop=, or SuccessAction=. Refusing."
 
   Fix: drop the per-instance `systemd.services` declarations and
@@ -2224,7 +2224,7 @@ microvm.nix interaction.
 ## [0.1.2] - 2026-05-19
 
 Patch release. Surfaced during the first real consumer migration to
-v0.1.x — a runtime bootstrap deadlock between
+v0.1.x - a runtime bootstrap deadlock between
 `d2b-net-route-preflight.service` and the per-env uplink bridge.
 
 ### Fixed
@@ -2245,7 +2245,7 @@ v0.1.x — a runtime bootstrap deadlock between
   Existing v0.1.0 / v0.1.1 consumers can work around by running
   `sudo ip route add <env-lan>/<mask> via <env-uplink-gw> dev
   br-<env>-up` once per env before any
-  `nixos-rebuild switch` — but the proper fix is to upgrade to
+  `nixos-rebuild switch` - but the proper fix is to upgrade to
   v0.1.2 and re-rebuild.
 
 ## [0.1.1] - 2026-05-19
@@ -2266,7 +2266,7 @@ first real `/etc/nixos`-side migration to v0.1.0.
   d2b.site.extraSpecialArgs = { inherit inputs; };
   ```
   Mirrors `home-manager.extraSpecialArgs` from the Home-Manager
-  NixOS module — same semantics, same intent.
+  NixOS module - same semantics, same intent.
 
 ### Fixed
 
@@ -2323,16 +2323,16 @@ seam.
 
 ### Added
 
-- `flake.checks.<system>.eval-{minimal,multi-env,template,graphics}` —
+- `flake.checks.<system>.eval-{minimal,multi-env,template,graphics}` -
   the root flake now gates the example flakes + the template
   scaffold. The `graphics` check is x86_64-only.
 - `tests/static.sh` now iterates `examples/*/flake.nix` running
   `nix flake check --no-build --all-systems` on each.
-- `SECURITY.md` — disclosure path (GitHub Security Advisory primary;
+- `SECURITY.md` - disclosure path (GitHub Security Advisory primary;
   email fallback) plus the v0.1.0 alpha support matrix.
-- `docs/explanation/design.md` — full threat model + defenses-in-depth
+- `docs/explanation/design.md` - full threat model + defenses-in-depth
   list + a *Why not X* rationale FAQ (~823 LOC).
-- `docs/how-to/migrating-from-microvm.md` — option mapping +
+- `docs/how-to/migrating-from-microvm.md` - option mapping +
   step-by-step migration procedure + troubleshooting. Ordering is
   now build-before-state-move.
 - Five per-component reference docs under
@@ -2340,45 +2340,45 @@ seam.
   home-manager).
 - `docs/reference/manifest-schema.{md,json}` polished with a rendered
   example payload generated from `tests/unit/smoke/smoke-eval.nix`.
-- **`examples/minimal/`** — headless starter example: one env, one
+- **`examples/minimal/`** - headless starter example: one env, one
   workload VM, ~25-line flake. Provides a quick sanity test.
-- **`examples/graphics-workstation/`** — desktop VM with
+- **`examples/graphics-workstation/`** - desktop VM with
   `graphics.enable`, `audio.enable`, and `usbip.yubikey` all on.
   Exercises every host-side sidecar component.
-- **`examples/multi-env/`** — two parallel `d2b.envs.<env>`
+- **`examples/multi-env/`** - two parallel `d2b.envs.<env>`
   instances (work + personal) demonstrating per-env LAN
   isolation, per-env net VMs, per-env USBIP backends, and the
   route-preflight fail-closed gate.
-- **`examples/with-entra-id/`** — composition with the sibling
+- **`examples/with-entra-id/`** - composition with the sibling
   [`vicondoa/entrablau.nix`][entrablau] flake; shows how
   the two trees meet at `d2b.vms.<vm>.config.imports`
   without either flake depending on the other.
-- **`templates/default/`** — `nix flake init` scaffold with
+- **`templates/default/`** - `nix flake init` scaffold with
   seven numbered placeholder markers and a matching
   `assertions = [ … ]` block. `nix flake check` on an un-edited
   scaffold fails with actionable messages until each sentinel is
   replaced.
-- **`flake.templates.default`** — wires the template above so
+- **`flake.templates.default`** - wires the template above so
   consumers can `nix flake init -t github:vicondoa/d2b`.
 - **Manifest contract is now a documented, versioned interface.**
-  - `nixos-modules/manifest.nix` — typed `config.d2b.manifest`
+  - `nixos-modules/manifest.nix` - typed `config.d2b.manifest`
     `attrsOf submodule` option. Replaces the inline manifest
     construction previously folded into `cli.nix`. The Nix module
     system catches schema regressions at eval time.
   - `docs/reference/manifest-schema.md` + `docs/reference/manifest-schema.json`
-    (JSON Schema Draft 2020-12) — the v1 public manifest contract
+    (JSON Schema Draft 2020-12) - the v1 public manifest contract
     for downstream consumers such as the Rust CLI. The
     JSON Schema is the canonical type spec; the prose doc is a
     field-by-field walkthrough + compatibility policy.
-  - `docs/reference/cli-contract.md` — behavioural contract for any
+  - `docs/reference/cli-contract.md` - behavioural contract for any
     `d2b` CLI implementation (lifecycle FSM, signal semantics,
     exit codes, JSON vs human output, what is/is-not in scope).
   - `d2b.site.flakePath` is now derived as the CLI's default
     flake reference when unset (cli.nix lifecycle subcommands).
-- **`docs/README.md`** — Diataxis IA index (tutorials, how-to,
+- **`docs/README.md`** - Diataxis IA index (tutorials, how-to,
   reference, explanation). The reference quadrant landed first;
   the others landed before v0.1.0.
-- **Multi-arch eval coverage.** `tests/unit/smoke/smoke-eval-aarch64.nix` —
+- **Multi-arch eval coverage.** `tests/unit/smoke/smoke-eval-aarch64.nix` -
   cross-evaluates a headless workload VM on `aarch64-linux`,
   verifying the eval graph stays multi-arch clean. Runtime is still
   `x86_64-linux`-only (cloud-hypervisor + crosvm); aarch64 is
@@ -2394,29 +2394,29 @@ seam.
   maintainer's host setup. Every option is opt-in; defaults give a
   fully headless framework with no Wayland integration. Public
   options:
-  - `d2b.site.stateDir` — root of every d2b-managed state
+  - `d2b.site.stateDir` - root of every d2b-managed state
     file (default `/var/lib/d2b`). **Advisory only in v0.1.0**
     (see option description); full threading lands in v0.2.0.
-  - `d2b.site.keysDir` — directory for framework-managed
+  - `d2b.site.keysDir` - directory for framework-managed
     per-VM SSH keys (default `${stateDir}/keys`). Same advisory
     caveat for v0.1.0.
-  - `d2b.site.waylandUser` — primary Wayland user; required
+  - `d2b.site.waylandUser` - primary Wayland user; required
     for any VM with `graphics.enable = true` or `audio.enable =
     true`.
-  - `d2b.site.launcherUsers` — users added to the
+  - `d2b.site.launcherUsers` - users added to the
     `d2b-launcher` group (polkit grant for VM start/stop).
-  - `d2b.site.userAuthorizedKeys` — global authorized SSH
+  - `d2b.site.userAuthorizedKeys` - global authorized SSH
     keys merged into every VM at boot. Validated at eval time
     against an allowlist of supported key types; private-key
     markers rejected.
-  - `d2b.site.yubikey.enable` — host-side Yubico udev rules +
+  - `d2b.site.yubikey.enable` - host-side Yubico udev rules +
     `usbip-host` kernel module. Default true.
-  - `d2b.site.flakePath` — default flake reference for the
+  - `d2b.site.flakePath` - default flake reference for the
     `d2b` CLI's lifecycle subcommands (`build`, `switch`,
     `boot`, `test`). Nullable.
-- **`d2b.vms.<vm>.userAuthorizedKeys`** — per-VM
+- **`d2b.vms.<vm>.userAuthorizedKeys`** - per-VM
   authorized SSH keys, merged with `site.userAuthorizedKeys`.
-- **`d2b.audio.users`** — host-side option propagating an
+- **`d2b.audio.users`** - host-side option propagating an
   audio-group membership list into the guest. Default falls back
   to `[ vm.ssh.user ]` when unset.
 - **Framework-managed per-VM SSH keys.** Activation
@@ -2427,27 +2427,27 @@ seam.
   `<stateDir>/vms/<vm>/host-keys/host.pub` and injected into the
   guest at boot via virtiofs.
 - **`d2b keys` CLI subcommands.**
-  - `d2b keys list [--json]` — fingerprint + path + mtime
+  - `d2b keys list [--json]` - fingerprint + path + mtime
     per VM.
-  - `d2b keys show <vm>` — print the pubkey.
-  - `d2b keys rotate <vm>` — atomic rotate-and-verify with
+  - `d2b keys show <vm>` - print the pubkey.
+  - `d2b keys rotate <vm>` - atomic rotate-and-verify with
     SHA256-fingerprint-based old-key scrub + 3-generation
     retention (see Changed entry above).
-- **`d2b-load-host-keys.service`** (guest-side) — fail-closed
+- **`d2b-load-host-keys.service`** (guest-side) - fail-closed
   service that reads `/run/d2b-host-keys/` and writes the
   union of `host.pub` + user-authorized-keys into the SSH user's
   `~/.ssh/authorized_keys`.
-- **`scripts/migrate-d2b-v0.1.0.sh`** — one-shot host migration
+- **`scripts/migrate-d2b-v0.1.0.sh`** - one-shot host migration
   script for consumers upgrading from a pre-public in-tree d2b
   layout. Preserves TPM state byte-for-byte. Has `--dry-run` and
   `--rollback`. Committed under `scripts/` so CI can shellcheck it.
-- **`tests/unit/smoke/smoke-eval.nix`** — minimal consumer-style nixosSystem
+- **`tests/unit/smoke/smoke-eval.nix`** - minimal consumer-style nixosSystem
   that imports `d2b.nixosModules.default` and exercises the
   eval graph end-to-end. Wired into `tests/static.sh` Layer-1.
-- **`tests/assertions-eval.sh`** — 8 regression tests exercising every
+- **`tests/assertions-eval.sh`** - 8 regression tests exercising every
   eval-time invariant in the schema (CIDR shape, CIDR overlap, key
   validation, `waylandUser` presence, …).
-- **`nixos-modules/lib.nix#cidrOverlaps`** — pure-Nix IPv4 prefix
+- **`nixos-modules/lib.nix#cidrOverlaps`** - pure-Nix IPv4 prefix
   overlap helper used by network.nix assertions. Same file gains
   `parseCidr` as a public helper.
 - Initial flake skeleton with Apache-2.0 license, `x86_64-linux` +
@@ -2499,7 +2499,7 @@ seam.
   eval-time error explains the constraint. Headless workload VMs
   (`graphics.enable = false; audio.enable = false;`) DO evaluate on
   aarch64-linux for cross-eval testing. Actual runtime is still
-  x86_64-linux-only — the aarch64 path is eval-coverage only.
+  x86_64-linux-only - the aarch64 path is eval-coverage only.
 - `pkgs/{crosvm-patched,crosvm-seccomp,vhost-device-sound}/default.nix`
   now carry `meta.platforms = [ "x86_64-linux" ]`.
   `pkgs/spectrum-ch/default.nix` deliberately omits this (see
@@ -2511,7 +2511,7 @@ seam.
   the split.
 - **BREAKING for manifest consumers, security fix:** `sshKeyPath`
   removed from the per-VM JSON manifest. Security review flagged
-  the field as a private-key path leak — the manifest at
+  the field as a private-key path leak - the manifest at
   `/run/current-system/sw/share/d2b/vms.json` is world-readable,
   so exposing a per-VM private-key path leaks the location of
   secret material to every local user. The CLI now resolves the
@@ -2523,7 +2523,7 @@ seam.
   not from this world-readable file. The PUBLIC key path is not
   currently exposed; if a use case warrants it, a future
   `sshPubKeyPath` field is the recommended addition. `manifestVersion`
-  stays at `1` — the schema was published moments before release and
+  stays at `1` - the schema was published moments before release and
   no external consumers exist yet, so this is a free pre-v0.1.0 break.
 - `docs/reference/manifest-schema.json`: `manifestVersion.minimum`
   raised from `0` to `1`. The schema is the contract for v1+;
@@ -2539,12 +2539,12 @@ seam.
   specifics are framework-internal; and draws the line between
   contract-bound unit names (`d2b@<vm>.service`,
   `microvm@<vm>.service`) and framework-internal unit names
-  (sidecars, USBIP proxies — these MUST be read from the manifest's
+  (sidecars, USBIP proxies - these MUST be read from the manifest's
   `audioService` etc. fields, not hardcoded).
 - `tests/static.sh`: `nix flake check` now uses `--all-systems` so
   Layer-1 exercises both x86_64-linux and aarch64-linux flake
   outputs, not just the builder's system.
-- `tests/static.sh`: 6th manifest-contract check added — diffs the
+- `tests/static.sh`: 6th manifest-contract check added - diffs the
   field-name column of the prose Per-VM-entry table in
   `docs/reference/manifest-schema.md` against the JSON Schema's
   `$defs.vmEntry.properties` keys, failing the gate if either side
@@ -2594,7 +2594,7 @@ seam.
   (`LinkLocalAddressing=no`, `IPv6AcceptRA=false`); net VM nft rules
   DROP `ip6` forward. Net stack is IPv4-only by construction.
 - Route preflight oneshot (`d2b-net-route-preflight.service`) now
-  FAILS CLOSED on conflict — exit 1 on any env-vs-route mismatch
+  FAILS CLOSED on conflict - exit 1 on any env-vs-route mismatch
   instead of WARN+exit 0. `RemainAfterExit=true`, `Before=` each
   enabled d2b-managed VM unit, `RequiredBy=` each wrapper, so a
   stale host route blocks VM start until the operator clears it.
@@ -2682,7 +2682,7 @@ seam.
   catch-all (`matchConfig.Type = "ether"`) sorted lex-first against
   the per-MAC `10-uplink`/`10-lan` definitions and DHCP'd both NICs,
   preempting the static config. Now overridden via `lib.mkForce` with
-  a sentinel MAC that never matches. Workload VMs are unaffected —
+  a sentinel MAC that never matches. Workload VMs are unaffected -
   they still inherit the base.nix DHCP fallback.
 - **`nixos-modules/manifest.nix`:** dropped the redundant
   `default = { }` on the readOnly `d2b.manifest` option. The
@@ -2701,7 +2701,7 @@ seam.
   option but never read it.
 - `d2b keys rotate <vm>` now scrubs the OLD pubkey from the
   guest's `~/.ssh/authorized_keys` (matched by SHA256 fingerprint)
-  AFTER the new key is verified — rotation used to leave the old key
+  AFTER the new key is verified - rotation used to leave the old key
   authorized forever. Retention bounded: 3 most recent generations
   under `<keysDir>/old/<ts>/`; older are pruned post-rotation. Help
   text updated.
@@ -2733,18 +2733,18 @@ seam.
 
 - Three host-side activation scripts removed from
   `nixos-modules/host-activation.nix`:
-  - **`d2bSbctlBackup`** — moved maintainer-specific
+  - **`d2bSbctlBackup`** - moved maintainer-specific
     `*-backup.tar.gz` files from `$HOME` into `/var/lib/sbctl/backup/`.
     Not a framework concern. Consumers who relied on this should
     handle their own backup-file relocation outside d2b.
-  - **`d2bStoreChownRepair`** — one-shot repair for a past chown
+  - **`d2bStoreChownRepair`** - one-shot repair for a past chown
     bug (an earlier `modules/d2b/store.nix` revision leaked
     `group=kvm` into `/nix/store` inodes via the per-VM hardlink
     farm). New installs are unaffected. Consumers upgrading from a
     pre-public d2b that ran with the buggy revision should run the
     historical repair script from `/etc/nixos` once and then drop the
     activation script there; the bug cannot recur in public code.
-  - **`d2bMigrateState`** — one-shot renamer
+  - **`d2bMigrateState`** - one-shot renamer
     (`/var/lib/microvms/<vm>` → `/var/lib/d2b/vms/<vm>`, plus
     `/var/lib/swtpm/<vm>` → `vms/<vm>/swtpm/`). New installs land
     directly on the current layout. Pre-public consumers should use

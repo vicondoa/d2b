@@ -4,13 +4,13 @@
 //!
 //! 1. **Positive behavioral**: fork a child; child installs a BPF
 //!    compiled for `[DeviceClass::Kvm]`, then calls
-//!    `ioctl(-1, KVM_GET_API_VERSION, ...)` — a request code in the
+//!    `ioctl(-1, KVM_GET_API_VERSION, ...)` - a request code in the
 //!    allowlist. The BPF allows the syscall; the kernel returns `EBADF`
 //!    (fd=-1 is invalid) but does NOT deliver `SIGSYS`. Parent asserts
 //!    `WIFEXITED(status)` with the known exit code.
 //!
 //! 2. **Negative behavioral**: fork a child; child installs the same BPF,
-//!    then calls `ioctl(-1, 0x12345678, ...)` — a request code NOT in the
+//!    then calls `ioctl(-1, 0x12345678, ...)` - a request code NOT in the
 //!    allowlist. `SECCOMP_RET_KILL_PROCESS` kills the process. Parent
 //!    asserts `WIFSIGNALED && WTERMSIG == SIGSYS`.
 //!
@@ -42,7 +42,7 @@ const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
 /// An ioctl request code guaranteed absent from all per-role allowlists.
 const UNDECLARED_IOCTL: libc::c_ulong = 0x1234_5678;
 
-/// KVM_GET_API_VERSION — declared for [`DeviceClass::Kvm`].
+/// KVM_GET_API_VERSION - declared for [`DeviceClass::Kvm`].
 const KVM_GET_API_VERSION_REQ: libc::c_ulong = constants::KVM_GET_API_VERSION as libc::c_ulong;
 
 /// Child exit codes used in behavioral tests.
@@ -73,7 +73,7 @@ fn behavioral_positive_allowed_ioctl_does_not_sigsys() {
     if !can_set_no_new_privs() {
         eprintln!(
             "behavioral_positive_allowed_ioctl_does_not_sigsys: skip \
-             (PR_SET_NO_NEW_PRIVS unavailable — CAP_SYS_ADMIN may be required)"
+             (PR_SET_NO_NEW_PRIVS unavailable - CAP_SYS_ADMIN may be required)"
         );
         return;
     }
@@ -87,7 +87,7 @@ fn behavioral_positive_allowed_ioctl_does_not_sigsys() {
 
     if pid == 0 {
         // ── child ────────────────────────────────────────────────────
-        // SAFETY: child closure — raw libc calls are the only safe
+        // SAFETY: child closure - raw libc calls are the only safe
         // option here because Rust runtime state is not fork-safe.
         unsafe {
             // no_new_privs is mandatory before SECCOMP_SET_MODE_FILTER.
@@ -97,7 +97,7 @@ fn behavioral_positive_allowed_ioctl_does_not_sigsys() {
             if program.apply().is_err() {
                 libc::_exit(EXIT_INSTALL_FAILED);
             }
-            // Permitted ioctl — BPF allows it; kernel returns EBADF (fd=-1).
+            // Permitted ioctl - BPF allows it; kernel returns EBADF (fd=-1).
             libc::ioctl(-1, KVM_GET_API_VERSION_REQ);
             libc::_exit(EXIT_POSITIVE_OK);
         }
@@ -113,11 +113,11 @@ fn behavioral_positive_allowed_ioctl_does_not_sigsys() {
             );
             assert_eq!(
                 code, EXIT_POSITIVE_OK,
-                "child exited with {code} — expected {EXIT_POSITIVE_OK}"
+                "child exited with {code} - expected {EXIT_POSITIVE_OK}"
             );
         }
         WaitStatus::Signaled(_, sig, _) => {
-            panic!("child killed by signal {sig:?} — allowed ioctl must NOT SIGSYS");
+            panic!("child killed by signal {sig:?} - allowed ioctl must NOT SIGSYS");
         }
         other => panic!("unexpected wait status: {other:?}"),
     }
@@ -180,12 +180,12 @@ fn behavioral_negative_undeclared_ioctl_delivers_sigsys() {
             if code == EXIT_INSTALL_FAILED {
                 eprintln!(
                     "behavioral_negative_undeclared_ioctl_delivers_sigsys: skip \
-                     (seccomp install failed — may need CAP_SYS_ADMIN)"
+                     (seccomp install failed - may need CAP_SYS_ADMIN)"
                 );
                 return;
             }
             panic!(
-                "child exited normally ({code}) — undeclared ioctl should have been killed by BPF"
+                "child exited normally ({code}) - undeclared ioctl should have been killed by BPF"
             );
         }
         other => panic!("unexpected wait status: {other:?}"),

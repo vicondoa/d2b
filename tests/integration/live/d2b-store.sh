@@ -80,7 +80,7 @@ test_no_host_paths_in_vm() {
   log "test_no_host_paths_in_vm"
   # Pick a path that's in the host's system closure but NOT in any
   # VM's closure. The host's nixos-system-nixos-* derivation is a safe
-  # bet — it's the toplevel for the host, not any VM.
+  # bet - it's the toplevel for the host, not any VM.
   local host_sys vm
   host_sys=$(basename "$(readlink /run/current-system)")
   for vm in $D2B_VMS; do
@@ -193,7 +193,7 @@ test_build_gc_root() {
   if sudo -A nix-store --gc --print-roots 2>/dev/null | grep -q "$STATE_ROOT/$vm/result"; then
     ok "nix recognises $STATE_ROOT/$vm/result as a GC root"
   else
-    log "  (GC root not yet registered — only matters under nix-collect-garbage)"
+    log "  (GC root not yet registered - only matters under nix-collect-garbage)"
   fi
 }
 
@@ -216,7 +216,7 @@ test_generations_list() {
 # ---------------------------------------------------------------------
 test_host_rebuild_rehydrates() {
   log "test_host_rebuild_rehydrates"
-  # We don't actually rebuild — that would take forever. Instead we
+  # We don't actually rebuild - that would take forever. Instead we
   # confirm the activation hook is wired: a `system.activationScripts`
   # entry exists that invokes d2b-store-sync.
   if grep -q d2bStoreSync /run/current-system/activate; then
@@ -352,7 +352,7 @@ main() {
     full|*)         local -n SET=ALL_TESTS ;;
   esac
 
-  log "d2b test suite — log: $D2B_LOG  running-vm: ${D2B_RUNNING_VM:-<none>}"
+  log "d2b test suite - log: $D2B_LOG  running-vm: ${D2B_RUNNING_VM:-<none>}"
   local pass=0 fail_count=0
   for t in "${SET[@]}"; do
     if [ -n "$only" ] && [ "$t" != "$only" ]; then continue; fi

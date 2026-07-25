@@ -7,24 +7,24 @@ surface and the private broker operations.
 
 ## Top-level fields
 
-- `schemaVersion` — schema directory/version for this artifact.
-- `publicOperations` — public command rows (`list`, `status`, `host check`,
+- `schemaVersion` - schema directory/version for this artifact.
+- `publicOperations` - public command rows (`list`, `status`, `host check`,
   `vm start --dry-run`, and so on).
-- `brokerOperations` — private broker rows (`ValidateBundle`,
+- `brokerOperations` - private broker rows (`ValidateBundle`,
   `RunActivation`, `SpawnRunner`, `DelegateCgroupV2`, and friends).
 
 ## Per-operation fields
 
 Each operation row carries:
 
-- `operation` — stable enum/command name.
-- `subject` / `scope` — who and what the row targets.
-- `allowedGroups` — allowlist groups.
-- `brokerRequired` — whether the broker is required, conditional, or absent.
-- `destructive` — whether mutation/teardown is possible.
-- `secretAccess` — whether secrets are touched.
-- `audit` — retained fields + success/deny/error audit requirements.
-- `defaultForUnknown` — locked to `deny-and-audit`.
+- `operation` - stable enum/command name.
+- `subject` / `scope` - who and what the row targets.
+- `allowedGroups` - allowlist groups.
+- `brokerRequired` - whether the broker is required, conditional, or absent.
+- `destructive` - whether mutation/teardown is possible.
+- `secretAccess` - whether secrets are touched.
+- `audit` - retained fields + success/deny/error audit requirements.
+- `defaultForUnknown` - locked to `deny-and-audit`.
 
 ## Contract notes
 

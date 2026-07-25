@@ -210,7 +210,7 @@ d2b.zones.<zone-name>.resources.<resource-name> = {
     ownerRef = null;    # optional; names a declared resource in the same bundle
     labels   = { };     # optional; presentation/selector labels only
   };
-  spec = { /* exact ResourceTypeSchema field names — no renaming or extra nesting */ };
+  spec = { /* exact ResourceTypeSchema field names - no renaming or extra nesting */ };
 };
 ```
 
@@ -292,7 +292,7 @@ Provider names that Host as its controller execution target, and
 `Guest/work-vm` names both that Provider and a `nixos-system` artifact. The
 compact example omits unrelated types rather than using placeholder fields.
 
-**Evidence class:** `ADR-only` — v3 Nix modules do not exist at baseline
+**Evidence class:** `ADR-only` - v3 Nix modules do not exist at baseline
 `b5ddbed6`. Current source: `nixos-modules/options-realms-workloads.nix`,
 `nixos-modules/options-realms.nix`, `nixos-modules/unsafe-local-workloads-json.nix`
 (pre-ADR 0046 names). Target implemented by work item ADR046-cli-011.
@@ -720,7 +720,7 @@ authorization; a non-authorized caller is rejected with `expedited-not-authorize
 - 2: usage error
 - 3: cancelled or deadline exceeded
 
-## `d2b host` — Host resource commands
+## `d2b host` - Host resource commands
 
 Maps to the `Host` ResourceType. Default ResourceType context for positional
 name argument.
@@ -832,7 +832,7 @@ d2b host validate [--dry-run | --apply] [--wave <wave>]
 **Current v3 source:** `cmd_host_validate` at `packages/d2b/src/lib.rs:4941`.
 Evidence class: `implemented-and-reachable`.
 
-### Unsafe-local Host resources — isolation posture requirements
+### Unsafe-local Host resources - isolation posture requirements
 
 `Host` resources with `WorkloadProviderKind::UnsafeLocal` lineage have
 `defaultDomain=user`, `allowedDomains=[user]`, and `defaultUserRef=User/<name>`.
@@ -848,7 +848,7 @@ explicitly in:
    `status.isolationPosture` field MUST be `"none"` in `--json` output and
    presented as a visible `[no isolation]` annotation in `--human` table rows.
 2. **CLI/UI**: `d2b shell open Host/<name>` and `d2b exec run Host/<name> -- ...`
-   MUST emit a one-line `warning: no isolation boundary — this process runs as
+   MUST emit a one-line `warning: no isolation boundary - this process runs as
    your host user` line to stderr before attaching. The warning has NO
    suppression flag; it appears unconditionally in human output. JSON output
    carries `isolationPosture: "none"` in the response envelope.
@@ -865,17 +865,17 @@ without propagating the isolation posture through all three surfaces above.
 - `IsolationPosture::UnsafeLocal` at `d2b-realm-core/src/workload.rs:33`
 - `WorkloadExecutionPosture { isolation: IsolationPosture::UnsafeLocal, environment: EnvironmentPosture::SystemdUserManagerAmbient, execution_identity: ExecutionIdentityPosture::AuthenticatedRequesterUid }` at `workload.rs:207`
 - `WorkloadPublicSummary.execution_posture: WorkloadExecutionPosture` at `packages/d2b-contracts/src/public_wire.rs:267` (public inventory carries isolation posture today)
-- `nixos-modules/options-realms-workloads.nix:233` — "Host-user process runtime with no isolation boundary. Requires explicit realm policy opt-in."
-- `nixos-modules/unsafe-local-workloads-json.nix` — emits `runtimeKind = "unsafe-local"` and `providerId = "unsafe-local"` in private bundle
-- `packages/d2b-unsafe-local-helper/src/` — runtime helper; `packages/d2b-contracts/src/unsafe_local_wire.rs` — wire protocol
+- `nixos-modules/options-realms-workloads.nix:233` - "Host-user process runtime with no isolation boundary. Requires explicit realm policy opt-in."
+- `nixos-modules/unsafe-local-workloads-json.nix` - emits `runtimeKind = "unsafe-local"` and `providerId = "unsafe-local"` in private bundle
+- `packages/d2b-unsafe-local-helper/src/` - runtime helper; `packages/d2b-contracts/src/unsafe_local_wire.rs` - wire protocol
 
 Evidence class: `implemented-and-reachable` for isolation posture data path;
 `ADR-only` for the `Host` resource API shape and the `Provider/system-core` reconciler.
 
-## `d2b guest` — Guest resource commands
+## `d2b guest` - Guest resource commands
 
 Maps to the `Guest` ResourceType. Unsafe-local workloads are `Host` resources,
-never `Guest` — see §Unsafe-local Host resources above.
+never `Guest` - see §Unsafe-local Host resources above.
 
 ### `d2b guest get <name>`
 
@@ -973,7 +973,7 @@ d2b guest create [--zone <zone>]
 the activation Provider (`activation-nixos`). They are specified under
 `d2b activation` below.
 
-## `d2b process` — Process resource commands
+## `d2b process` - Process resource commands
 
 Maps to the `Process` ResourceType.
 
@@ -1015,7 +1015,7 @@ d2b process stop <name> [--zone <zone>]
 
 Standard resource verbs.
 
-## `d2b exec` — EphemeralProcess (one-shot exec)
+## `d2b exec` - EphemeralProcess (one-shot exec)
 
 `d2b exec` creates an `EphemeralProcess` resource and manages its lifecycle.
 This replaces the `d2b vm exec` sub-verb for the one-shot asynchronous exec
@@ -1143,7 +1143,7 @@ Sends `ExecCancel` SIGTERM/grace/SIGKILL sequence.
 
 **Successor to:** `d2b vm exec <vm> kill <id>`.
 
-## `d2b shell` — ShellSession (persistent terminal sessions)
+## `d2b shell` - ShellSession (persistent terminal sessions)
 
 Shell commands interact with the `shell-terminal` Provider's `ShellSession`
 ResourceType and attach to persistent named sessions.
@@ -1242,7 +1242,7 @@ d2b shell status <ShellSession>/<name> [--zone <zone>]
   [--json | --human]
 ```
 
-## `d2b volume` — Volume resource commands
+## `d2b volume` - Volume resource commands
 
 Maps to the `Volume` ResourceType.
 
@@ -1276,7 +1276,7 @@ d2b volume verify <name> [--zone <zone>]
 **Retained behavior:** non-destructive by default; `--repair` opts in to
 repairs; exit code reflects verification result.
 
-## `d2b network` — Network resource commands
+## `d2b network` - Network resource commands
 
 Maps to the `Network` ResourceType.
 
@@ -1291,7 +1291,7 @@ d2b network delete <name> [--revision <rev>]
 
 All accept `[--zone <zone>] [--json | --human]`.
 
-## `d2b device` — Device resource commands
+## `d2b device` - Device resource commands
 
 Maps to the `Device` ResourceType.
 
@@ -1368,7 +1368,7 @@ d2b device security-key test <Device>/<name> [--zone <zone>]
 
 **Successor to:** `d2b usb security-key test <vm>`.
 
-## `d2b endpoint` — Endpoint resource commands
+## `d2b endpoint` - Endpoint resource commands
 
 Maps to the `Endpoint` ResourceType (D092). Endpoints are provider-neutral
 managed endpoint identities produced by a `Process`, `Device`, `Guest`, or
@@ -1397,7 +1397,7 @@ All accept `[--zone <zone>] [--json | --human]`.
   deny-unknown; **no raw locator** (path/address/CID/port/fd/credential) appears
   in any field.
 - `d2b endpoint resolve <name>` resolves the `Endpoint/<name>` ResourceRef and
-  prints its provider-neutral resolution projection — `producerRef`,
+  prints its provider-neutral resolution projection - `producerRef`,
   `endpointClass`, transport class, readiness, and capability/locality
   observations. It NEVER prints or returns a private transport handle or raw
   locator; actual resolution to a private transport/FD happens only inside
@@ -1409,7 +1409,7 @@ All accept `[--zone <zone>] [--json | --human]`.
   follow the standard resource verbs and D091, so operators see endpoint update
   state and disruption without any raw locator exposure.
 
-## `d2b export` — ResourceExport commands (cross-Zone sharing, D096)
+## `d2b export` - ResourceExport commands (cross-Zone sharing, D096)
 
 Maps to the `ResourceExport` ResourceType. Runs in the owner/authority Zone. A
 `ResourceExport` shares one qualified owner `*Service` with child Zones through
@@ -1430,7 +1430,7 @@ d2b export delete <name> [--revision <rev>]
 
 All accept `[--zone <zone>] [--json | --human]`. `status` shows advertised/ready/
 revoking state, active/pending consumer counts, and bounded per-consumer lease
-summaries, owner-Service type/generation, and projection/factory fingerprints —
+summaries, owner-Service type/generation, and projection/factory fingerprints -
 **no backing Ref, raw bytes, path, device node, socket, secret, or token**.
 `create`/`update-spec` reject a non-Service target, absent/mismatched signed
 factory, cross-Zone Ref, unauthorized Zone, or non-exportable Provider.
@@ -1438,7 +1438,7 @@ factory, cross-Zone Ref, unauthorized Zone, or non-exportable Provider.
 and degrades every bound import/projection Service without deleting the owner
 Service.
 
-## `d2b import` — ResourceImport commands (cross-Zone sharing, D096)
+## `d2b import` - ResourceImport commands (cross-Zone sharing, D096)
 
 Maps to the `ResourceImport` ResourceType. Runs in the consumer (child) Zone. A
 `ResourceImport` binds a local `zoneLinkRef` and a bounded `exportKey` to a
@@ -1462,7 +1462,7 @@ d2b import delete <name> [--revision <rev>]
 All accept `[--zone <zone>] [--json | --human]`. `status` shows
 pending/reachable/bound/degraded/revoked, observed remote export generation and
 factory/projection fingerprints, local projection-Service Ref, lease state/
-count, and `status.update` currency — no remote Ref or raw locator.
+count, and `status.update` currency - no remote Ref or raw locator.
 `d2b import projection <name>` prints that Service Ref and bounded base status.
 
 `d2b import graph <name>` renders the deterministic local dependency graph:
@@ -1489,7 +1489,7 @@ waits for Bindings to be deleted/retargeted; it never deletes a Binding. It then
 releases the lease and deletes only the projection Service/provider-owned
 children.
 
-## `d2b resource authorities` — authority index (D097)
+## `d2b resource authorities` - authority index (D097)
 
 Reports the D097 authority index: which authority owns each scarce or singleton
 backing, its holders, and any conflict.
@@ -1503,9 +1503,9 @@ d2b resource authorities conflict <ResourceRef> [--zone <zone>] [--json | --huma
 - `d2b resource authorities` lists every authority-bearing Resource with its
   `authorityScope`, `cardinality`, `arbitration`, `available`, current holder
   count, and queue depth (the provider-neutral status base). No raw identity is
-  shown — the `authorityKey` appears only as a bounded opaque digest.
+  shown - the `authorityKey` appears only as a bounded opaque digest.
 - `holders <ResourceRef>` lists the current holders/leases of one authority
-  (bounded summaries only: consumer scope, lease state — no raw locator/token).
+  (bounded summaries only: consumer scope, lease state - no raw locator/token).
 - `conflict <ResourceRef>` shows whether a create/activation was rejected with
   `duplicateConflict` and prints the incumbent **owner digest** (the same digest
   a `Degraded` config activation reports), with no raw path/serial/address.
@@ -1513,7 +1513,7 @@ d2b resource authorities conflict <ResourceRef> [--zone <zone>] [--json | --huma
 Read verbs require ordinary `get`/`list` authorization on the owning
 ResourceType. This surface never creates or mutates an authority.
 
-## `d2b user` — User resource commands
+## `d2b user` - User resource commands
 
 Maps to the `User` ResourceType.
 
@@ -1525,7 +1525,7 @@ d2b user status <name>
 
 All accept `[--zone <zone>] [--json | --human]`.
 
-## `d2b credential` — Credential resource commands
+## `d2b credential` - Credential resource commands
 
 Maps to the `Credential` ResourceType. Credential bytes are never surfaced
 through the CLI; only opaque status/lease metadata is returned.
@@ -1558,7 +1558,7 @@ login deadline.
 **Current v3 source:** No direct current CLI mapping.
 Evidence class: `ADR-only`.
 
-## `d2b provider` — Provider resource commands
+## `d2b provider` - Provider resource commands
 
 ### `d2b provider list`
 
@@ -1678,7 +1678,7 @@ top-level `d2b --help` output. Each fetch is bounded by the per-Provider
 invocation only. No disk cache or cross-invocation cache is maintained. Startup
 latency for non-provider commands is zero.
 
-## `d2b zone` — Zone topology and self-resource commands
+## `d2b zone` - Zone topology and self-resource commands
 
 ```
 d2b zone get [<name>]           # omitting name fetches the current Zone self resource
@@ -1692,7 +1692,7 @@ All accept `[--json | --human]`.
 
 **Current v3 source:** `cmd_realm_list`, `cmd_realm_inspect` at
 `packages/d2b/src/lib.rs:5942,5958`. These read the **static Nix-generated file**
-`realm-entrypoints.json` (path constant in `lib.rs`) via `realm_policy_rows_raw()` —
+`realm-entrypoints.json` (path constant in `lib.rs`) via `realm_policy_rows_raw()` -
 NOT a live daemon API call. The file contains a `RealmEntrypointDocument { entries:
 BTreeMap<String, RealmEntrypointConfig> }` (from `d2b-realm-router` crate); entries
 have `mode: host-resident|gateway-backed` and optional `gateway` VM name.
@@ -1737,7 +1737,7 @@ authenticated route projections.
 `d2b guest start <gateway-guest>` plus `d2b exec run <gateway-guest> -- <cmd>`.
 See migration table.
 
-## `d2b quota` — Quota resource commands
+## `d2b quota` - Quota resource commands
 
 Maps to the `Quota` ResourceType. Quota resources define resource-consumption
 limits for a Zone or a subset of its resources. Quota and EmergencyPolicy are
@@ -1757,7 +1757,7 @@ d2b quota delete <name>       [--zone <zone>] [--revision <r>] [--json | --human
 **Evidence class:** `ADR-only`. Target implemented by standard resource verb
 infrastructure (ADR046-cli-002).
 
-## `d2b emergency-policy` — EmergencyPolicy resource commands
+## `d2b emergency-policy` - EmergencyPolicy resource commands
 
 Maps to the `EmergencyPolicy` ResourceType. EmergencyPolicy resources define
 Zone-wide emergency operational modes (e.g. forced shutdown, isolation,
@@ -1800,7 +1800,7 @@ their own resource types, not through Zone fields.
 | Unit | `d2b get Quota/default` routes to Zone catalog without a round-trip for type validation | Local type validation path |
 | Unit | `d2b get EmergencyPolicy/lockdown` routes correctly | Local type validation path |
 
-## `d2b activation` — activation-nixos Provider commands
+## `d2b activation` - activation-nixos Provider commands
 
 The `activation-nixos` Provider projects these CLI commands. They operate on
 the `activation-nixos`-specific ResourceTypes.
@@ -1898,7 +1898,7 @@ d2b activation migrate [--zone <zone>]
 
 **Successor to:** `d2b migrate`.
 
-### `d2b activation keys` — managed SSH key lifecycle
+### `d2b activation keys` - managed SSH key lifecycle
 
 ```
 d2b activation keys list [--json | --human]
@@ -1915,7 +1915,7 @@ d2b activation rotate-known-host <name> [--json | --human]
 `cmd_keys_trust`, `cmd_keys_rotate_known_host` at
 `packages/d2b/src/lib.rs:986ff`. Evidence class: `implemented-and-reachable`.
 
-### `d2b activation config` — guest-editable config lifecycle
+### `d2b activation config` - guest-editable config lifecycle
 
 ```
 d2b activation config sync <GuestRef> [--dry-run] [--json]
@@ -1947,7 +1947,7 @@ d2b guest console <name> [--zone <zone>]
 **Current v3 source:** `cmd_console` at `packages/d2b/src/lib.rs`. Evidence
 class: `implemented-and-reachable`.
 
-## `d2b audit` — audit log streaming
+## `d2b audit` - audit log streaming
 
 ```
 d2b audit [--zone <zone>]
@@ -1989,7 +1989,7 @@ The command invokes exactly
 grant: the admitted service performs bounded redacted internal reads and emits
 NDJSON.
 
-## `d2b op` — operation inspection
+## `d2b op` - operation inspection
 
 ```
 d2b op inspect [--zone <zone>]
@@ -2003,7 +2003,7 @@ d2b op inspect [--zone <zone>]
 **Current v3 source:** `cmd_op_inspect` at `packages/d2b/src/lib.rs:6098`.
 Evidence class: `implemented-and-reachable`.
 
-## `d2b auth` — authorization status
+## `d2b auth` - authorization status
 
 ```
 d2b auth status [--zone <zone>]
@@ -2018,7 +2018,7 @@ class: `implemented-and-reachable`.
 **Retained behavior:** SO_PEERCRED group-membership check display; no test-uid
 argument exposed in v3.
 
-## `d2b complete` — shell completion
+## `d2b complete` - shell completion
 
 ```
 d2b complete <shell>         # emit completion script (bash | zsh | fish)
@@ -2127,7 +2127,7 @@ Common fields in every `--json` envelope:
   "zoneRef": "Zone/dev",
   "operationId": "<operation-id>",
   "schemaVersion": 1,
-  "resource": { /* canonical ResourceSpec envelope — see §Canonical ResourceSpec JSON shape */ }
+  "resource": { /* canonical ResourceSpec envelope - see §Canonical ResourceSpec JSON shape */ }
 }
 ```
 
@@ -2303,7 +2303,7 @@ only, with no error.
 **Current v3 source:** No completion exists in v3 baseline. Evidence class:
 `ADR-only`.
 
-## Dynamic descriptors — safety bounds
+## Dynamic descriptors - safety bounds
 
 Provider CLI projections are Provider-supplied content. The CLI applies these
 bounds before rendering any projection:
@@ -2446,8 +2446,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | --- | --- |
 | Work item ID | `ADR046-cli-001` |
 | Dependency/owner | ADR046-identities-001, ADR046-api-001; CLI crate owner |
-| Current source | `packages/d2b/src/lib.rs`: `Context::from_env` (reads `D2B_PUBLIC_SOCKET` env or `/run/d2b/public.sock` default; single flat socket path — no zone-qualified path, no `ZoneContext`), `NativeCli`, `NativeCommand`, `dispatch`, `CliFailure`, `report_failure`, `stdout_is_tty`; socket path model: old `Context { public_socket, broker_socket }` → target: `ZoneContext { zone_name, socket_path, session_client }` |
-| Reuse source | main `a1cc0b2d` — copy/adapt these exact symbols: (1) `packages/d2b-client/src/client.rs` `Client<R,C,W>`, `ConnectedClient`, `CallOptions`, `CancellationToken`, `MetadataInput`, `RetryPolicy`, `Response` — copy unchanged as the async client foundation; (2) `packages/d2b-client/src/host_socket.rs` `HostSocketConnector::from_seqpacket_fd`, `local_daemon_endpoint_identity` — adapt: replace fixed `d2b.daemon.v2` service lookup with zone-scoped service identity; replace hardcoded `RealmPath::parse("local-root")` with `Zone/<name>`-derived target; (3) `packages/d2b-daemon-access/src/component_session.rs` `LocalUnixDaemonAccess::connect_component_session()` connect chain — adapt: replace `TargetInput::LocalRoot(realm)` with the v3 Zone target variant; adapt socket path discovery for per-Zone paths; (4) `packages/d2b-client/src/session.rs` `ComponentSessionConnector`, `ConnectedSession`, `NamedStream`, `SessionCall`, `SessionReply`, `SharedDriver` — copy unchanged; (5) `packages/d2b-client/src/target.rs` `RouteTable`, `RouteRecord`, `TargetInput`, `ResolvedTarget`, `TransportKind`, `TransportSelection` — copy unchanged, excluding `TargetInput::Realm/Workload/Provider` variants which carry ADR 0045 assumptions; (6) `packages/d2b-contracts/src/v2_component_session.rs` `LimitProfile::local_default()` constants: `MAX_REQUEST_LIFETIME_MS=900000`, `LOCAL_HANDSHAKE_DEADLINE_MS=5000`, `MAX_RECONNECT_ATTEMPTS=10`, `MAX_ACTIVE_NAMED_STREAMS=128`, `MAX_LOGICAL_MESSAGE_BYTES=1048576`, `named_stream_queue_bytes=262144`, `aggregate_named_stream_queue_bytes=4194304` — copy unchanged; these bound every CLI deadline and stream operation |
+| Current source | `packages/d2b/src/lib.rs`: `Context::from_env` (reads `D2B_PUBLIC_SOCKET` env or `/run/d2b/public.sock` default; single flat socket path - no zone-qualified path, no `ZoneContext`), `NativeCli`, `NativeCommand`, `dispatch`, `CliFailure`, `report_failure`, `stdout_is_tty`; socket path model: old `Context { public_socket, broker_socket }` → target: `ZoneContext { zone_name, socket_path, session_client }` |
+| Reuse source | main `a1cc0b2d` - copy/adapt these exact symbols: (1) `packages/d2b-client/src/client.rs` `Client<R,C,W>`, `ConnectedClient`, `CallOptions`, `CancellationToken`, `MetadataInput`, `RetryPolicy`, `Response` - copy unchanged as the async client foundation; (2) `packages/d2b-client/src/host_socket.rs` `HostSocketConnector::from_seqpacket_fd`, `local_daemon_endpoint_identity` - adapt: replace fixed `d2b.daemon.v2` service lookup with zone-scoped service identity; replace hardcoded `RealmPath::parse("local-root")` with `Zone/<name>`-derived target; (3) `packages/d2b-daemon-access/src/component_session.rs` `LocalUnixDaemonAccess::connect_component_session()` connect chain - adapt: replace `TargetInput::LocalRoot(realm)` with the v3 Zone target variant; adapt socket path discovery for per-Zone paths; (4) `packages/d2b-client/src/session.rs` `ComponentSessionConnector`, `ConnectedSession`, `NamedStream`, `SessionCall`, `SessionReply`, `SharedDriver` - copy unchanged; (5) `packages/d2b-client/src/target.rs` `RouteTable`, `RouteRecord`, `TargetInput`, `ResolvedTarget`, `TransportKind`, `TransportSelection` - copy unchanged, excluding `TargetInput::Realm/Workload/Provider` variants which carry ADR 0045 assumptions; (6) `packages/d2b-contracts/src/v2_component_session.rs` `LimitProfile::local_default()` constants: `MAX_REQUEST_LIFETIME_MS=900000`, `LOCAL_HANDSHAKE_DEADLINE_MS=5000`, `MAX_RECONNECT_ATTEMPTS=10`, `MAX_ACTIVE_NAMED_STREAMS=128`, `MAX_LOGICAL_MESSAGE_BYTES=1048576`, `named_stream_queue_bytes=262144`, `aggregate_named_stream_queue_bytes=4194304` - copy unchanged; these bound every CLI deadline and stream operation |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/lib.rs`, `packages/d2b/src/context.rs`, `packages/d2b/src/dispatch.rs` |
 | Detailed design | Introduce `ZoneContext` (zone name, socket path, ComponentSession client); implement `--zone`/`D2B_ZONE`/nearest-socket discovery using adapted `LocalUnixDaemonAccess::connect_component_session()` chain; introduce `ResourceRef` argument parser; introduce unified `--json`/`--human`/`--deadline` flag infrastructure bounded by `MAX_REQUEST_LIFETIME_MS=900s`; freeze `--json` schema version 1; stabilize exit code table. Excluded ADR 0045 assumptions: `TargetInput::Realm`, `TargetInput::Workload`, `TargetInput::Provider` variants; `RealmPath::parse("local-root")` / `RealmId::derive` pattern; `RealmPath`-based service owner types. |
@@ -2463,12 +2463,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-002` |
 | Dependency/owner | ADR046-cli-001, ADR046-api-001; CLI crate owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_vm_start`, `cmd_vm_stop`, `cmd_vm_restart`, `cmd_vm_status`, `cmd_vm_list`, `cmd_list`, `cmd_status`; wire types: `ListResponse { vms: Vec<ListEntry> }`, `StatusResponse { entries: Vec<VmStatus> }`, `VmLifecycleState` (old: Stopped/Starting/Booted/Running/Stopping/Restarting/Failed/Unknown) from `packages/d2b-contracts/src/public_wire.rs:2152,2158,2605`; `ListEntry.vm: String` = `WorkloadId`; `VmStatus.lifecycle.state: VmLifecycleState` → target Guest `phase` (Pending\|Ready\|Succeeded\|Degraded\|Failed\|Deleted\|Unknown; Starting/Stopping/Restarting → conditions/reasons); `WorkloadPublicSummary.execution_posture: WorkloadExecutionPosture` from `public_wire.rs:267` (carries `IsolationPosture`; unsafe-local entries have `IsolationPosture::UnsafeLocal`) |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::lifecycle()` (line 210), `DaemonClient::list_workloads()` (line 148), `DaemonClient::inspect()` (line 179); `DaemonMethod::Apply/Start/Stop/Restart/ListWorkloads` variants (lines 31-46) — adapt: replace `WorkloadLifecycleRequest`/`WorkloadName` with `Guest/<name>` ResourceRef; replace `TargetInput::Workload`-scoped calls with zone-root resource API calls; (2) `packages/d2b-contracts/src/generated_v2_services/daemon.rs` `WorkloadLifecycleProjection`, `DeploymentProjection`, `RuntimeProjection` — adapt field mapping to Guest resource spec/status; (3) `packages/d2b/src/lib.rs` `cmd_launch` (`LaunchArgs`) — adapt: the typed ComponentSession target resolution pattern applies but realm/workload-model types (`RealmPath`, `WorkloadName`) are excluded; behavior selected: idempotent apply with dry-run/apply precondition |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::lifecycle()` (line 210), `DaemonClient::list_workloads()` (line 148), `DaemonClient::inspect()` (line 179); `DaemonMethod::Apply/Start/Stop/Restart/ListWorkloads` variants (lines 31-46) - adapt: replace `WorkloadLifecycleRequest`/`WorkloadName` with `Guest/<name>` ResourceRef; replace `TargetInput::Workload`-scoped calls with zone-root resource API calls; (2) `packages/d2b-contracts/src/generated_v2_services/daemon.rs` `WorkloadLifecycleProjection`, `DeploymentProjection`, `RuntimeProjection` - adapt field mapping to Guest resource spec/status; (3) `packages/d2b/src/lib.rs` `cmd_launch` (`LaunchArgs`) - adapt: the typed ComponentSession target resolution pattern applies but realm/workload-model types (`RealmPath`, `WorkloadName`) are excluded; behavior selected: idempotent apply with dry-run/apply precondition |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/guest.rs` (`d2b guest start/stop/restart/list/status`); unsafe-local workloads go to `packages/d2b/src/host.rs` (`d2b host list/status/get`), NOT guest.rs |
 | Detailed design | Route Guest lifecycle (WorkloadProviderKind: LocalVm/QemuMedia/ProviderManaged) through `d2b.resource.v3` Get/UpdateSpec/Watch; map dry-run/apply to resource API precondition; `--no-wait-ready` exits on accepted; with-wait uses `d2b status --watch` loop. WorkloadProviderKind::UnsafeLocal entries MUST route to `d2b host` commands only; any code path that would return an unsafe-local entry from `d2b guest list` is a correctness violation. v2 commands (`d2b up/down/restart/list/status`, `d2b vm start/stop/restart/list/status`) are deleted at 3.0; replacement guidance remains documentation-only, with no migration-diagnostic command. |
 | Integration | ZoneContext → resource API client → Guest resource; status watch uses Watch stream |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Dry-run/apply/wait/no-wait-ready tests; zone-unavailable degraded path; JSON output schema tests; confirm v2 command paths are absent (compilation failure if any cmd_vm_start/stop alias re-introduced) |
 | Removal proof | Old `cmd_vm_start/stop/restart` seqpacket paths removed after Guest resource API paths are live with full test coverage |
 
@@ -2479,12 +2479,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-003` |
 | Dependency/owner | ADR046-cli-001, ADR046-api-001; CLI crate owner |
 | Current source | `packages/d2b/src/exec_client.rs` (entire FSM); `packages/d2b/src/terminal_client.rs`; `packages/d2b/src/lib.rs`: `cmd_vm_exec`, `cmd_vm_exec_management`, `VmExecArgs` |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::open_terminal(method, resource_id, operation_id, selection, options, cancellation)` returning `DaemonTerminal` (line 248) — copy-then-adapt: replaces the existing seqpacket Exec call; `DaemonMethod::Exec` (line 40) maps to `d2b exec run`; (2) `packages/d2b-contracts/src/generated_v2_services/terminal.rs` `TerminalOpenRequest`, `TerminalOpenResponse`, `TerminalStreamFrame`, `TerminalSelection`, `TerminalKind` — copy unchanged as the named-stream terminal wire protocol; (3) `packages/d2b-client/src/session.rs` `NamedStream` (`send`, `receive`, `cancel`, `close`, `is_terminal`) — copy unchanged; provides async stdio routing and cancel on disconnect; (4) `packages/d2b-client/src/daemon_service.rs` `GuestClient::inspect_exec()`, `cancel_exec()`, `open_exec_retained_log()` — adapt: rename from `WorkloadName`/`GuestClient` to `EphemeralProcess/<ref>` resource API; (5) `packages/d2b-session/src/streams.rs` `NamedStreamMux` limits (`MAX_ACTIVE_NAMED_STREAMS=128`, `named_stream_queue_bytes=262144`) — copy unchanged; bounds the exec stream pipeline; (6) `packages/d2b-session/src/cancellation.rs` `Cancellation`, `RequestRegistry` — copy unchanged; provides generation-bound per-request cancel; tests to adapt/import: `client.rs:terminal_uses_server_stream_and_validates_bidirectional_lifecycle`, `terminal_rejects_response_generation_and_non_server_stream_ids`, `invalid_terminal_selection_is_rejected_before_open_rpc`, `guest_exec_management_preserves_typed_state_and_cancel_correlation`, `guest_retained_log_open_binds_range_resource_and_selection`, `named_stream_fragments_over_queue_credit_and_has_terminal_actions`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`; excluded ADR 0045 assumptions: `GuestClient` internal `TargetInput::Workload`-scoped vsock routing (guest-control proxy uses old `WorkloadName`/`RealmPath` — these are excluded; v3 routes through resource API only) |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::open_terminal(method, resource_id, operation_id, selection, options, cancellation)` returning `DaemonTerminal` (line 248) - copy-then-adapt: replaces the existing seqpacket Exec call; `DaemonMethod::Exec` (line 40) maps to `d2b exec run`; (2) `packages/d2b-contracts/src/generated_v2_services/terminal.rs` `TerminalOpenRequest`, `TerminalOpenResponse`, `TerminalStreamFrame`, `TerminalSelection`, `TerminalKind` - copy unchanged as the named-stream terminal wire protocol; (3) `packages/d2b-client/src/session.rs` `NamedStream` (`send`, `receive`, `cancel`, `close`, `is_terminal`) - copy unchanged; provides async stdio routing and cancel on disconnect; (4) `packages/d2b-client/src/daemon_service.rs` `GuestClient::inspect_exec()`, `cancel_exec()`, `open_exec_retained_log()` - adapt: rename from `WorkloadName`/`GuestClient` to `EphemeralProcess/<ref>` resource API; (5) `packages/d2b-session/src/streams.rs` `NamedStreamMux` limits (`MAX_ACTIVE_NAMED_STREAMS=128`, `named_stream_queue_bytes=262144`) - copy unchanged; bounds the exec stream pipeline; (6) `packages/d2b-session/src/cancellation.rs` `Cancellation`, `RequestRegistry` - copy unchanged; provides generation-bound per-request cancel; tests to adapt/import: `client.rs:terminal_uses_server_stream_and_validates_bidirectional_lifecycle`, `terminal_rejects_response_generation_and_non_server_stream_ids`, `invalid_terminal_selection_is_rejected_before_open_rpc`, `guest_exec_management_preserves_typed_state_and_cancel_correlation`, `guest_retained_log_open_binds_range_resource_and_selection`, `named_stream_fragments_over_queue_credit_and_has_terminal_actions`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`; excluded ADR 0045 assumptions: `GuestClient` internal `TargetInput::Workload`-scoped vsock routing (guest-control proxy uses old `WorkloadName`/`RealmPath` - these are excluded; v3 routes through resource API only) |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/exec.rs` (`d2b exec run/attach/wait/status/list/logs/kill`) |
 | Detailed design | Map EphemeralProcess resource lifecycle; `exec run` creates resource and returns ref; `exec attach` opens named stream via adapted `DaemonClient::open_terminal(DaemonMethod::Exec, ...)` → `DaemonTerminal`; retain full `exec_client.rs` FSM and TTY machinery from baseline; retain `--json` envelope fields `source`/`reason`/`guestExitCode`/`signal`/`transportExitCode`; retain reserved exit codes 42/69/70/75/76/77. v2 commands (`d2b vm exec *`) are deleted at 3.0; no dispatch wiring. Excluded ADR 0045: `GuestClient` vsock/guest-control proxy path; `TargetInput::Workload`; old `WorkloadName`-keyed exec management. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-then-adapt. |
 | Integration | ZoneContext → EphemeralProcess Create → named stream attach via `DaemonClient::open_terminal` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Full `exec_client.rs` test suite migrated; adapted tests from main `client.rs:terminal_*` and `guest_exec_*`; TTY/raw-mode/RAII/signal tests; `--json` envelope/disambiguation tests; capacity/transport/auth/protocol exit-code tests; confirm v2 `cmd_vm_exec` path is absent |
 | Removal proof | Old `cmd_vm_exec` seqpacket path removed after `d2b exec` paths have equivalent coverage |
 
@@ -2495,12 +2495,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-004` |
 | Dependency/owner | ADR046-cli-001, `shell-terminal` Provider dossier; CLI crate owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_shell` (`ShellArgs.vm: String` = `WorkloadId` or `RealmTarget`; routes through `route_vm_target()` → `VmTargetRoute::Local\|Gateway`; gateway `Attach` fails closed via `shell_gateway_attach_failure()` with error class `gateway-shell-attach-unavailable` at lib.rs:1697,1780), `cmd_shell_attach`, `run_shell_fsm`, `ShellOwnerTransport`; wire: `ShellOp`, `ShellOpResponse`, `ShellAttachArgs { vm: String }`, `ShellListEntry`, `ShellSessionState` from `packages/d2b-contracts/src/public_wire.rs:1319,1394,1452,1409`; `exec_client.rs` signal/TTY machinery |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::open_terminal(DaemonMethod::Shell, ...)` returning `DaemonTerminal` — copy-then-adapt; same `TerminalOpenRequest`/`TerminalOpenResponse`/`DaemonTerminal` flow as cli-003, applied to shell open/attach; (2) `packages/d2b-contracts/src/generated_v2_services/shell.rs` and `shell_ttrpc.rs` `ShellService` methods: `ShellCreate`, `ShellAttach`, `ShellDetach`, `ShellList`, `ShellInspect`, `ShellKill`, `ShellCancel` (service definition); `ShellCreateRequest`/`ShellAttachRequest`/`ShellListResponse`/`ShellInspectResponse` — copy-then-adapt: these are the target ShellSession resource CRUD wire types; adapt field names from `workload_id`/`shell_name` to `Guest/<name>` ResourceRef; (3) `packages/d2b-client/src/session.rs` `NamedStream` — copy unchanged; used for shell I/O stream; (4) `packages/d2b-session/src/cancellation.rs` `Cancellation`, `RequestRegistry` — copy unchanged; (5) `packages/d2b-session/src/deadline.rs` `DeadlineBudget` — copy unchanged; shell sessions use per-operation deadline tracking; tests to adapt/import: `client.rs:shell_management_uses_typed_selection_result_and_terminal_outcome`, `named_stream_fragments_over_queue_credit_and_has_terminal_actions`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`, `concurrent_named_streams_route_events_without_cross_consumption`; excluded ADR 0045 assumptions: `VmTargetRoute::Gateway` shell routing and `realm_router` relay path; old `ShellOp`/`ShellOpResponse` seqpacket wire; unsafe-local helper shell protocol v2 |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::open_terminal(DaemonMethod::Shell, ...)` returning `DaemonTerminal` - copy-then-adapt; same `TerminalOpenRequest`/`TerminalOpenResponse`/`DaemonTerminal` flow as cli-003, applied to shell open/attach; (2) `packages/d2b-contracts/src/generated_v2_services/shell.rs` and `shell_ttrpc.rs` `ShellService` methods: `ShellCreate`, `ShellAttach`, `ShellDetach`, `ShellList`, `ShellInspect`, `ShellKill`, `ShellCancel` (service definition); `ShellCreateRequest`/`ShellAttachRequest`/`ShellListResponse`/`ShellInspectResponse` - copy-then-adapt: these are the target ShellSession resource CRUD wire types; adapt field names from `workload_id`/`shell_name` to `Guest/<name>` ResourceRef; (3) `packages/d2b-client/src/session.rs` `NamedStream` - copy unchanged; used for shell I/O stream; (4) `packages/d2b-session/src/cancellation.rs` `Cancellation`, `RequestRegistry` - copy unchanged; (5) `packages/d2b-session/src/deadline.rs` `DeadlineBudget` - copy unchanged; shell sessions use per-operation deadline tracking; tests to adapt/import: `client.rs:shell_management_uses_typed_selection_result_and_terminal_outcome`, `named_stream_fragments_over_queue_credit_and_has_terminal_actions`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`, `concurrent_named_streams_route_events_without_cross_consumption`; excluded ADR 0045 assumptions: `VmTargetRoute::Gateway` shell routing and `realm_router` relay path; old `ShellOp`/`ShellOpResponse` seqpacket wire; unsafe-local helper shell protocol v2 |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/shell.rs` (`d2b shell open/attach/list/detach/kill/status`) |
 | Detailed design | Route ShellSession resource lifecycle through resource API using adapted `ShellService` generated types; `shell open` → `ShellCreate` → `DaemonClient::open_terminal(Shell)` → `DaemonTerminal`; retain FSM/TTY/signal/RAII behavior from `run_shell_fsm`; `--name` required for kill; SIGHUP detaches without kill. v2 commands (`d2b shell <target> *`) are deleted at 3.0; no dispatch wiring. Excluded: gateway relay path (`VmTargetRoute::Gateway`); old `ShellOp`/`ShellOpResponse` seqpacket protocol; `TargetInput::Workload`-keyed realm routing. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-then-adapt. |
 | Integration | ZoneContext → ShellSession Create via `DaemonClient::open_terminal` → `NamedStream` I/O |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Shell list/detach/kill/attach unit tests (adapted from existing); adapted `client.rs:shell_management_*` and `named_stream_*` tests; TTY RAII/signal tests; confirm v2 `cmd_shell` path is absent |
 | Removal proof | Old `cmd_shell` seqpacket path removed after new shell commands have equivalent coverage |
 
@@ -2511,12 +2511,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-005` |
 | Dependency/owner | ADR046-cli-001, Provider model spec; CLI crate owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_audio`, `cmd_clipboard_arm`, `cmd_vm_display` |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-provider/src/rpc.rs` `RpcProviderProxy` — adapt: the CLI uses the inverse side (client calling provider via `ConnectedClient::invoke`); `RpcCall`, `RpcPayload`, `RpcResponse`, `RpcOperation` define the typed call shape for dynamic provider commands; (2) `packages/d2b-contracts/src/generated_v2_services/provider_runtime.rs`, `provider_display.rs`, `provider_audio.rs`, `provider_infrastructure.rs` — adapt: the generated service method types show what CLI projection verbs can be mapped to typed service calls; use as shape reference for the first audio/clipboard/display migration; (3) `packages/d2b-provider-toolkit/src/conformance.rs` `check_provider_conformance`, `check_descriptor_conformance` — copy-then-adapt into CLI-side projection conformance validation (bounds: 64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); (4) `packages/d2b-provider-toolkit/src/server.rs` `GeneratedProviderServiceServer::generated_services()` — server-side only; use as reference for what CLI InspectSchema receives; excluded ADR 0045 assumptions: `ProviderRegistry`/`ProviderAgentAdapter` are server-side and not used in CLI; `RpcProviderProxy` internal `AuthenticatedProviderRpc` pattern is server-side; tests to adapt: `conformance.rs:every_axis_passes_identical_in_process_and_rpc_conformance`, `generated_server_dispatches_closed_methods_over_authenticated_session` |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-provider/src/rpc.rs` `RpcProviderProxy` - adapt: the CLI uses the inverse side (client calling provider via `ConnectedClient::invoke`); `RpcCall`, `RpcPayload`, `RpcResponse`, `RpcOperation` define the typed call shape for dynamic provider commands; (2) `packages/d2b-contracts/src/generated_v2_services/provider_runtime.rs`, `provider_display.rs`, `provider_audio.rs`, `provider_infrastructure.rs` - adapt: the generated service method types show what CLI projection verbs can be mapped to typed service calls; use as shape reference for the first audio/clipboard/display migration; (3) `packages/d2b-provider-toolkit/src/conformance.rs` `check_provider_conformance`, `check_descriptor_conformance` - copy-then-adapt into CLI-side projection conformance validation (bounds: 64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); (4) `packages/d2b-provider-toolkit/src/server.rs` `GeneratedProviderServiceServer::generated_services()` - server-side only; use as reference for what CLI InspectSchema receives; excluded ADR 0045 assumptions: `ProviderRegistry`/`ProviderAgentAdapter` are server-side and not used in CLI; `RpcProviderProxy` internal `AuthenticatedProviderRpc` pattern is server-side; tests to adapt: `conformance.rs:every_axis_passes_identical_in_process_and_rpc_conformance`, `generated_server_dispatches_closed_methods_over_authenticated_session` |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/provider.rs` (`d2b provider list/get/status/inspect`; dynamic projection loading) |
 | Detailed design | `d2b provider list/get/status/inspect`; InspectSchema call returns dynamic projection descriptor using `ConnectedClient::invoke` with generated provider service types; projection bounds enforcement (64 KiB, 32 sub-verbs, 2s deadline, shell-escape, newline strip); define the single canonical built-in command registry consumed by parser/help/completion and Provider projection binding; make bind-time rejection the sole authority for built-in and Provider/Provider top-level-name collisions, with no dispatch fallback; render projected commands from their declared top-level subcommand names; audio/clipboard/display are the first providers to migrate their projections |
 | Integration | ZoneContext → Provider resource + InspectSchema via `ConnectedClient::invoke` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Projection size/name/timeout bounds tests; registry-completeness test asserting exact equality with all built-in parser commands; bind-time built-in and Provider/Provider collision rejection tests; negative test proving no collision fallback dispatch exists; audio/clipboard/display projection conformance tests asserting `d2b audio ...`, `d2b clipboard ...`, and `d2b display ...` rendering; completion script safety tests; adapted `conformance.rs` tests |
 | Removal proof | Built-in `cmd_audio`/`cmd_clipboard_arm`/`cmd_vm_display` removed only after Provider projection paths pass equivalence tests |
 
@@ -2532,7 +2532,7 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Destination | `packages/d2b/src/complete.rs` (`d2b complete bash/zsh/fish`) |
 | Detailed design | `d2b complete <shell>` emits completion script; uses clap `CommandFactory::command()` plus dynamic projection fetch (2s per-Provider, 10s total); result bounded at 256 KiB; shell-escaped; newlines stripped Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged (clap_complete). |
 | Integration | Standalone command; no Zone API required for static completion; Zone API used for dynamic Provider projection |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Completion script tests (bash/zsh/fish syntax valid); projection injection safety tests; deadline/partial-Provider tests |
 | Removal proof | Not applicable |
 
@@ -2543,12 +2543,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-007` |
 | Dependency/owner | ADR046-cli-001; CLI/activation Provider owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_build`, `cmd_generations`, `cmd_switch`, `cmd_boot`, `cmd_test`, `cmd_rollback`, `cmd_gc`, `cmd_migrate`, `cmd_keys_*`, `cmd_keys_trust`, `cmd_keys_rotate_known_host`, `ConfigCommand` variants |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::lifecycle()` with `DaemonMethod::Apply`, `DaemonMethod::Start`, `DaemonMethod::Stop`, `DaemonMethod::Restart` — copy-then-adapt: the apply/lifecycle dispatch pattern maps cleanly to `d2b activation switch/boot/test/rollback`; retain idempotency token and dry-run/apply precondition from `DaemonMethod::Apply`; (2) `packages/d2b-contracts/src/generated_v2_services/activation.rs` activation service method types — adapt: map `ActivationBuildRequest`, `ActivationSwitchRequest`, `ActivationGenerationsRequest` to typed CLI args; excluded ADR 0045 assumptions: `DaemonMethod::ListRealms` / `DaemonMethod::ListWorkloads` are not used; old `WorkloadName`-keyed dispatch is excluded |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-client/src/daemon_service.rs` `DaemonClient::lifecycle()` with `DaemonMethod::Apply`, `DaemonMethod::Start`, `DaemonMethod::Stop`, `DaemonMethod::Restart` - copy-then-adapt: the apply/lifecycle dispatch pattern maps cleanly to `d2b activation switch/boot/test/rollback`; retain idempotency token and dry-run/apply precondition from `DaemonMethod::Apply`; (2) `packages/d2b-contracts/src/generated_v2_services/activation.rs` activation service method types - adapt: map `ActivationBuildRequest`, `ActivationSwitchRequest`, `ActivationGenerationsRequest` to typed CLI args; excluded ADR 0045 assumptions: `DaemonMethod::ListRealms` / `DaemonMethod::ListWorkloads` are not used; old `WorkloadName`-keyed dispatch is excluded |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/activation.rs` (`d2b activation build/generations/switch/boot/test/rollback/gc/migrate/keys/trust/rotate-known-host/config`) |
 | Detailed design | Route through `activation-nixos` Provider service via `ConnectedClient::invoke` using adapted `DaemonMethod::Apply`/lifecycle dispatch pattern; retain dry-run/apply; retain guest-control transport for config sync (no SSH). v2 top-level activation commands (`d2b build/switch/boot/test/rollback/gc/migrate/keys/trust/rotate-known-host/config`) are deleted at 3.0; no dispatch wiring. |
 | Integration | ZoneContext → activation-nixos Provider service → resource API via `ConnectedClient::invoke` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All existing switch/boot/test/rollback/keys tests adapted; config sync/diff/approve/reject tests; confirm v2 top-level activation paths are absent; adapted `client.rs:daemon_typed_list_preserves_projection_and_truncation` apply pattern |
 | Removal proof | Old top-level activation verbs removed only after `d2b activation *` paths have equivalent coverage |
 
@@ -2559,12 +2559,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-008` |
 | Dependency/owner | ADR046-cli-001; CLI crate owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_host_check`, `cmd_host_prepare`, `cmd_host_destroy`, `cmd_host_doctor`, `cmd_host_install`, `cmd_host_reconcile`, `cmd_host_validate`; `host_validate.rs` |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-daemon-access/src/component_session.rs` `LocalUnixDaemonAccess::connect_component_session()` connect chain — adapt: the zone-local host commands use the same connect chain as cli-001; `d2b host prepare` and `d2b host doctor` both require a live `ZoneContext`; (2) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()` with `CallOptions` and `CancellationToken` — copy unchanged; used for Host resource Get/UpdateSpec/Status calls and broker-op dispatch; (3) `packages/d2b-contracts/src/generated_v2_services/broker.rs` broker operation request/response types — adapt: `BrokerHostPrepareRequest`, `BrokerHostDestroyRequest`, `BrokerHostDoctorRequest` (or equivalent) types define the CLI argument shape; retain broker-mediated ownership-marker semantics from baseline; excluded ADR 0045 assumptions: `TargetInput::Workload`-scoped broker routing is excluded; broker operation routing uses zone-root LocalRoot pattern only |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-daemon-access/src/component_session.rs` `LocalUnixDaemonAccess::connect_component_session()` connect chain - adapt: the zone-local host commands use the same connect chain as cli-001; `d2b host prepare` and `d2b host doctor` both require a live `ZoneContext`; (2) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()` with `CallOptions` and `CancellationToken` - copy unchanged; used for Host resource Get/UpdateSpec/Status calls and broker-op dispatch; (3) `packages/d2b-contracts/src/generated_v2_services/broker.rs` broker operation request/response types - adapt: `BrokerHostPrepareRequest`, `BrokerHostDestroyRequest`, `BrokerHostDoctorRequest` (or equivalent) types define the CLI argument shape; retain broker-mediated ownership-marker semantics from baseline; excluded ADR 0045 assumptions: `TargetInput::Workload`-scoped broker routing is excluded; broker operation routing uses zone-root LocalRoot pattern only |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/host.rs` (all `d2b host` subcommands) |
 | Detailed design | Route `host prepare/destroy` through Zone resource API Host reconcile operation via `ConnectedClient::invoke`; retain broker-mediated mutation and ownership-marker semantics; `host doctor` prefers Zone resource API status, falls back to local state files; `host check` retains exit-code 3; `host validate` retains wave/evidence-dir/scripts-dir/signature |
 | Integration | ZoneContext → Host resource; broker op path retained for emergency/shutdown-hook |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All existing host-check/prepare/destroy/doctor/install/reconcile/validate tests; exit-code 3 regression; doctor Zone-fallback/local-state-fallback tests |
 | Removal proof | Raw broker-socket paths removed only after Host resource API routes have equivalent coverage |
 
@@ -2575,12 +2575,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Work item ID | `ADR046-cli-009` |
 | Dependency/owner | ADR046-cli-001; CLI crate owner |
 | Current source | `packages/d2b/src/lib.rs`: `cmd_realm_list` (reads static `realm-entrypoints.json` via `realm_policy_rows_raw()`), `cmd_realm_inspect`, `cmd_realm_enter` (→ `realm_gateway_exec_args` → `cmd_vm_exec` with `-it bash -l`), `cmd_realm_run` (→ `cmd_vm_exec` with caller argv); wire output types: `RealmListOutputV1 { realms: Vec<RealmPolicyOutputV1> }`, `RealmInspectOutputV1 { realm: RealmPolicyOutputV1 }` from `packages/d2b-contracts/src/cli_output.rs:285,292,345`; `RealmPolicyOutputV1` fields: `realm` (= `RealmId`), `mode`, `gateway_vm`, `gateway_target`, `gateway_state`, `cross_realm_policy`, `credential_boundary`; `target_routing.rs`: `Route::Local { vm }`, `Route::Gateway { gateway, target }`, `resolve_access_route()`, `VmTargetRoute`; `d2b-realm-router::RealmEntrypointTable` |
-| Reuse source | main `a1cc0b2d` — reference only (no copy): `packages/d2b-realm-router/src/service_v2.rs` `RealmServiceServer`, `RealmServiceProcess`, `RealmMethod::Inspect`, `RealmMethod::ResolveRoute` — server-side multi-realm routing; this is the ADR 0045 multi-Zone topology and is **excluded** from v3 CLI as a direct reuse source; `packages/d2b-realm-router/src/remote_node.rs` `RemoteNodeRegistration`, `RemoteNodeEntry` — constellation remote routing; also excluded; note: `packages/d2b-client/src/daemon_service.rs` `DaemonClient::list_workloads()` and `DaemonMethod::ListRealms` are the closest live list-call patterns, but their zone/workload scoping uses `RealmPath`/`RealmId` types that are ADR 0045-specific; adapt `ConnectedClient::invoke()` with the v3 `ZoneService` topology-projection request instead; no main symbols are copied unchanged for cli-009; the projection type is an ADR-only deliverable owned by zone routing |
+| Reuse source | main `a1cc0b2d` - reference only (no copy): `packages/d2b-realm-router/src/service_v2.rs` `RealmServiceServer`, `RealmServiceProcess`, `RealmMethod::Inspect`, `RealmMethod::ResolveRoute` - server-side multi-realm routing; this is the ADR 0045 multi-Zone topology and is **excluded** from v3 CLI as a direct reuse source; `packages/d2b-realm-router/src/remote_node.rs` `RemoteNodeRegistration`, `RemoteNodeEntry` - constellation remote routing; also excluded; note: `packages/d2b-client/src/daemon_service.rs` `DaemonClient::list_workloads()` and `DaemonMethod::ListRealms` are the closest live list-call patterns, but their zone/workload scoping uses `RealmPath`/`RealmId` types that are ADR 0045-specific; adapt `ConnectedClient::invoke()` with the v3 `ZoneService` topology-projection request instead; no main symbols are copied unchanged for cli-009; the projection type is an ADR-only deliverable owned by zone routing |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/zone.rs` (`d2b zone get/list/status`) |
 | Detailed design | `d2b zone get [<name>]` fetches the current Zone self resource only for the local name; another declared name is inspected through the read-only Zone topology projection. `d2b zone list` lists sorted compiler-only `{ childZone, parentZone }` rows joined with authenticated route/projection status. `d2b zone status --watch` watches the corresponding projection revision. None of these commands lists or gets a parent-local ZoneLink: the sole ZoneLink resource and handler are child-local, while the parent owns only sealed allocator topology and authenticated route state. Generated DTO/golden tests reject ZoneLink names/spec/status/provider refs/fingerprints/transport settings in parent-side output. v2 commands (`d2b realm list/inspect/enter/run`) are deleted at 3.0; no dispatch wiring. Excluded ADR 0045: `RealmServiceServer`/`RealmServiceProcess` multi-realm service; `RemoteNodeRegistration` constellation routing; `TargetInput::Realm`; `RealmMethod::ResolveRoute`/`AuthorizeShortcut`/`RevokeShortcut`. |
 | Integration | ZoneContext → local Zone self-resource Get or `ZoneService` topology/route projection via `ConnectedClient::invoke` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Zone self-get plus topology list/get/status/watch tests; disconnected and stale authenticated-route projections; golden output contains `{ childZone, parentZone }` and route/projection status but no ZoneLink fields; parent store has no ZoneLink row or watch; confirm v2 `cmd_realm_*` paths are absent |
 | Removal proof | `cmd_realm_*` and `target_routing.rs` removed only after zone routes pass equivalence tests |
 
@@ -2590,13 +2590,13 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | --- | --- |
 | Work item ID | `ADR046-cli-010` |
 | Dependency/owner | ADR046-cli-001; CLI crate owner |
-| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()`, `ConnectedClient::invoke_with_attachments()`, `ConnectedClient::open_server_stream()` — copy unchanged; these are the three primitives for resource Get/List/Watch respectively; (2) `packages/d2b-client/src/session.rs` `NamedStream` (`send`, `receive`, `cancel`, `close`, `is_terminal`) — copy unchanged; Watch stream output arrives over a named stream; (3) `packages/d2b-session/src/deadline.rs` `DeadlineBudget` — copy unchanged; `--deadline` flag maps to `DeadlineBudget::admit_metadata` wall deadline; `MAX_REQUEST_LIFETIME_MS=900000` caps all Watch/List deadlines; (4) `packages/d2b-client/src/client.rs` `CancellationToken::cancel()` — copy unchanged; `SIGINT`/SIGTERM → `CancellationToken::cancel()` → propagated to `ConnectedClient::invoke` and `NamedStream`; (5) `packages/d2b-client/src/client.rs` `MetadataInput`, `RetryPolicy`, `CallOptions` — copy unchanged; `--idempotency-token` maps to `MetadataInput`; `RetryPolicy::mutating_once()` is the default for Create/UpdateSpec/Delete; tests to adapt/import: `client.rs:metadata_retries_and_cancellation_use_canonical_driver`, `mutating_retries_require_stable_idempotency`, `concurrent_named_streams_route_events_without_cross_consumption`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`; excluded ADR 0045 assumptions: `TargetInput::Workload/Realm/Provider` routing variants; `GuestClient` cross-realm proxy routing; old `DeploymentProjection`/`RuntimeProjection` ADR 0045-specific field types |
+| Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()`, `ConnectedClient::invoke_with_attachments()`, `ConnectedClient::open_server_stream()` - copy unchanged; these are the three primitives for resource Get/List/Watch respectively; (2) `packages/d2b-client/src/session.rs` `NamedStream` (`send`, `receive`, `cancel`, `close`, `is_terminal`) - copy unchanged; Watch stream output arrives over a named stream; (3) `packages/d2b-session/src/deadline.rs` `DeadlineBudget` - copy unchanged; `--deadline` flag maps to `DeadlineBudget::admit_metadata` wall deadline; `MAX_REQUEST_LIFETIME_MS=900000` caps all Watch/List deadlines; (4) `packages/d2b-client/src/client.rs` `CancellationToken::cancel()` - copy unchanged; `SIGINT`/SIGTERM → `CancellationToken::cancel()` → propagated to `ConnectedClient::invoke` and `NamedStream`; (5) `packages/d2b-client/src/client.rs` `MetadataInput`, `RetryPolicy`, `CallOptions` - copy unchanged; `--idempotency-token` maps to `MetadataInput`; `RetryPolicy::mutating_once()` is the default for Create/UpdateSpec/Delete; tests to adapt/import: `client.rs:metadata_retries_and_cancellation_use_canonical_driver`, `mutating_retries_require_stable_idempotency`, `concurrent_named_streams_route_events_without_cross_consumption`, `named_stream_grants_only_consumed_data_and_releases_blocked_sender`; excluded ADR 0045 assumptions: `TargetInput::Workload/Realm/Provider` routing variants; `GuestClient` cross-realm proxy routing; old `DeploymentProjection`/`RuntimeProjection` ADR 0045-specific field types |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/resource.rs` (standard `d2b get/list/watch/create/update-spec/delete/status` top-level verbs) |
 | Detailed design | Generic typed dispatch to resource API Get/List/Watch/Create/UpdateSpec/Delete using `ConnectedClient::invoke` (Get/List/Create/UpdateSpec/Delete) and `ConnectedClient::open_server_stream` + `NamedStream` (Watch); ResourceRef argument parsing and validation; page token pagination; `--phase`/`--label-selector` filters; `--deadline` bounded by `MAX_REQUEST_LIFETIME_MS=900s` via `DeadlineBudget`; Watch output streams resource events as JSON lines; JSON schema version field; `CancellationToken` wired to process signal handlers. Excluded: `GuestClient` vsock exec/shell routing; `TargetInput` realm/workload/provider variants. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-then-adapt. |
 | Integration | ZoneContext → `ConnectedClient` → resource API |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Get/list/watch/create/update-spec/delete tests per ResourceType; pagination/filter/watch-deadline tests; error-class/exit-code tests; adapted `client.rs:metadata_retries_*` and `mutating_retries_*` and `concurrent_named_streams_*` tests |
 | Removal proof | Not applicable (new surface) |
 
@@ -2606,8 +2606,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | --- | --- |
 | Work item ID | `ADR046-cli-011` |
 | Dependency/owner | ADR046-identities-002, ADR046-cli-001, ADR046-cli-002, ADR046-cli-007, ADR046-nix-014; Nix module owner + Zone runtime owner; `nixos-modules/assertions.nix` base migration precedes this item's unified-resource update |
-| Current source | Nix emitters: `nixos-modules/options-realms-workloads.nix` (current `d2b.envs.<e>.vms.<v>.*`), `nixos-modules/options-realms.nix` (`d2b.realms.*`), `nixos-modules/unsafe-local-workloads-json.nix` (unsafe-local source), `nixos-modules/bundle-artifacts.nix`, `nixos-modules/manifest.nix`, `nixos-modules/assertions.nix`; JSON output: `/etc/d2b/processes.json` (old bundle), `/etc/d2b/realm-entrypoints.json` (static realm index); Zone runtime apply path: `packages/d2bd/src/` (activation apply handler — pre-ADR 0046 path through `cmd_host_prepare`/broker; no live resource bundle apply); cleanup: no current resource-deletion-on-bundle-apply path at baseline |
-| Reuse source | None (new implementation; no main `a1cc0b2d` reuse — this is the Nix/Zone side, not the CLI client side) |
+| Current source | Nix emitters: `nixos-modules/options-realms-workloads.nix` (current `d2b.envs.<e>.vms.<v>.*`), `nixos-modules/options-realms.nix` (`d2b.realms.*`), `nixos-modules/unsafe-local-workloads-json.nix` (unsafe-local source), `nixos-modules/bundle-artifacts.nix`, `nixos-modules/manifest.nix`, `nixos-modules/assertions.nix`; JSON output: `/etc/d2b/processes.json` (old bundle), `/etc/d2b/realm-entrypoints.json` (static realm index); Zone runtime apply path: `packages/d2bd/src/` (activation apply handler - pre-ADR 0046 path through `cmd_host_prepare`/broker; no live resource bundle apply); cleanup: no current resource-deletion-on-bundle-apply path at baseline |
+| Reuse source | None (new implementation; no main `a1cc0b2d` reuse - this is the Nix/Zone side, not the CLI client side) |
 | Reuse action | replace |
 | Destination | Nix: `nixos-modules/options-zones.nix` (unified `d2b.zones.<zone>.resources` attrset; per-type `spec` sub-options generated from ResourceTypeSchema/Provider schema), `nixos-modules/bundle-emit.nix` (canonical JSON emit + SHA256 pin), `nixos-modules/assertions.nix` (updated); core controller: `packages/d2b-core-controller/src/configuration.rs`, `packages/d2b-core-controller/src/cleanup.rs`; Contracts: `packages/d2b-contracts/src/zone_bundle.rs` (new) |
 | Detailed design | **Nix shape:** `d2b.zones.<zone>.resources` is `attrsOf (submodule { type; optional metadata { ownerRef; labels; annotations }; spec })`. `spec` sub-options per `type` are generated from ResourceTypeSchema and signed Provider schemas; field names remain identical. `metadata.name`/`metadata.zone`/`apiVersion` are derived; status and all core metadata are rejected in input. Vendor-qualified types are admitted only when their schema is installed. **Nix emit:** `bundle-emit.nix` emits `/etc/d2b/zones/<zone>/resource-bundle.json` plus its integrity pin with canonical resource ordering and schema digests. **Core-controller apply:** `configuration.rs` verifies bundle/catalog integrity, applies Create/Update/no-op intents with bounded async concurrency, refreshes `configurationGeneration` for unchanged configuration-managed resources without waking their controller, handles controller/API name collisions per-item without seizing them, and asynchronously deletes only persisted `managedBy=configuration` resources absent from the new configured set. `cleanup.rs` consumes `Deleted` revision watches and maintains `PendingCleanup`; it never force-removes finalizers. **Prior generation retention:** `d2b.zones.<zone>.retainedGenerations`, default 3 and range 1–16, is a compiler setting outside `Zone.spec`; no TTL. Rollback reapplies a retained bundle as a new higher generation. |
@@ -2622,13 +2622,13 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | --- | --- |
 | Work item ID | `ADR046-cli-012` |
 | Dependency/owner | ADR046-cli-001, ADR046-cli-010; CLI crate owner |
-| Current source | None — net-new v3 work; `Endpoint` is a new standard ResourceType added by D092; no pre-ADR45 baseline equivalent |
-| Reuse source | main `a1cc0b2d` — copy/adapt: (1) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()` and `ConnectedClient::open_server_stream()` — copy unchanged; used for Endpoint Get/List/Status and Watch; (2) `packages/d2b-client/src/session.rs` `NamedStream` — copy unchanged; Watch stream output; (3) the ADR046-cli-010 generic resource-verb dispatch — reuse for `d2b endpoint get/list/watch/status`; the `d2b endpoint resolve` projection verb is net-new. No raw transport/FD handle type is imported into the CLI; resolution to a private transport/FD remains inside Core/ProviderSupervisor via EffectPort/LaunchTicket |
+| Current source | None - net-new v3 work; `Endpoint` is a new standard ResourceType added by D092; no pre-ADR45 baseline equivalent |
+| Reuse source | main `a1cc0b2d` - copy/adapt: (1) `packages/d2b-client/src/client.rs` `ConnectedClient::invoke()` and `ConnectedClient::open_server_stream()` - copy unchanged; used for Endpoint Get/List/Status and Watch; (2) `packages/d2b-client/src/session.rs` `NamedStream` - copy unchanged; Watch stream output; (3) the ADR046-cli-010 generic resource-verb dispatch - reuse for `d2b endpoint get/list/watch/status`; the `d2b endpoint resolve` projection verb is net-new. No raw transport/FD handle type is imported into the CLI; resolution to a private transport/FD remains inside Core/ProviderSupervisor via EffectPort/LaunchTicket |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/endpoint.rs` (`d2b endpoint get/list/watch/status/resolve`) |
 | Detailed design | Add `Endpoint` to the frozen standard ResourceType set (19 types; local ResourceRef parser accepts `Endpoint/<name>` with no Zone round-trip). Implement `d2b endpoint get/list/watch/status` over the ADR046-cli-010 generic verbs and `d2b endpoint resolve <name>` as a provider-neutral resolution projection printing `producerRef`, `endpointClass`, transport class, readiness, and capability/locality observations. Endpoint output is the base envelope only (base spec + base status per D092); any `status.provider` projection is bounded, redacted, and deny-unknown. **No raw locator** (path/address/CID/port/fd/credential) appears in any CLI field or the `resolve` projection. `status.update` currency and `d2b upgrade Endpoint/<name>` visibility follow the standard verbs and D091. `create`/`update-spec`/`delete` are rejected on the operator surface except for statically Nix/API-authored Endpoints whose schema permits it. |
 | Integration | ZoneContext → `ConnectedClient` → resource API for `Endpoint`; consumers reference endpoints only through `Endpoint/<name>` ResourceRefs |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `Endpoint` accepted as a frozen standard type; `Endpoint/<name>` parses locally without a Zone round-trip; `d2b endpoint get/list/watch/status/resolve` parse and route correctly; `get`/`resolve` output carries no raw path/address/CID/port/fd/credential; provider status projection is bounded/redacted; `d2b list Endpoint --updates` and `d2b upgrade Endpoint/<name>` expose `status.update` currency and disruption; operator `create`/`update-spec`/`delete` rejected for controller-owned Endpoints |
 | Removal proof | Not applicable (new surface) |
 
@@ -2638,12 +2638,12 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | --- | --- |
 | Work item ID | `ADR046-cli-013` |
 | Dependency/owner | ADR046-cli-001, ADR046-cli-010, ADR046-zone-control-019; CLI crate owner |
-| Current source | None — net-new v3 work; `ResourceExport`/`ResourceImport` are new standard ResourceTypes added by D096; no pre-ADR45 baseline equivalent |
-| Reuse source | ADR046-cli-010 generic resource-verb dispatch; `packages/d2b-client/src/client.rs` `ConnectedClient::invoke`/`open_server_stream` — copy unchanged |
+| Current source | None - net-new v3 work; `ResourceExport`/`ResourceImport` are new standard ResourceTypes added by D096; no pre-ADR45 baseline equivalent |
+| Reuse source | ADR046-cli-010 generic resource-verb dispatch; `packages/d2b-client/src/client.rs` `ConnectedClient::invoke`/`open_server_stream` - copy unchanged |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/share.rs` (`d2b export …` and `d2b import …` nouns) |
 | Detailed design | Add `ResourceExport` and `ResourceImport` to the frozen 19-type standard set while leaving qualified semantic/provider-neutral Service/Binding types dynamically cataloged. Implement export/import generic verbs, `d2b import projection`, and `d2b import graph`. Export accepts only a factory-bound owner Service. Import status exposes the same-semantic-type projection Service and verified factory/schema fingerprints; local `providerRef` selects the implementation. Graph renders import → projection Service → authored Bindings → controller-owned Process/Endpoint children with deterministic ownership/dependency edges. Binding spec is desired intent only and observations are status-only. Reject Device/Endpoint/Binding export targets, cross-Zone refs, absent/mismatched factory/type/fingerprints, implementation detail in the base, forbidden Providers, USB policy denial, unauthorized Zones, and capability-ceiling violations. No backing/remote refs, internal sessions/streams, FD, secret, path, locator, or bytes in output. Delete waits for authored Bindings to be removed/retargeted and never cascades them. |
 | Integration | ZoneContext → resource API; signed Provider factory catalog; owner/dependency indexes for graph rendering; consumers use authored Binding → local projection Service, never ResourceImport directly |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Both standard types parse locally; qualified semantic Service/Binding resolve dynamically; verbs route; Service-only export and factory/type/fingerprint/policy/capability rejections; projection preserves semantic Service type across local implementation selection; canonical minimal base works without `spec.provider`; graph shape exact and bounded; Binding never auto-created/deleted; Binding spec intent-only/status observations; no implementation detail/backing/remote-ref/session/stream/FD/secret/path/locator/bytes leakage |
 | Removal proof | Not applicable (new surface) |

@@ -39,7 +39,7 @@ contains the guestd-local service bindings.
   framework config-read RPC that grounds `d2b config sync` for
   guest-control VMs (the daemon's `ReadGuestConfig` bridge wraps it).
   `ReadGuestFileRequest` keys a **closed** `GuestFileId` enum (currently
-  only `guest-config`, the in-guest editable config working copy) — never
+  only `guest-config`, the in-guest editable config working copy) - never
   a free-form path; guestd maps the key to the host-declared target. The
   single-shot `ReadGuestFileResponse` returns bounded `content` (capped at
   `READ_GUEST_FILE_MAX_BYTES`; oversize files fail `FileTooLarge` BEFORE

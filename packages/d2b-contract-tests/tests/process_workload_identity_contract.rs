@@ -95,7 +95,7 @@ fn vm_process_dag_has_workload_identity_property() {
     );
 }
 
-/// `workloadIdentity` must NOT appear in `VmProcessDag.required[]` — it is an
+/// `workloadIdentity` must NOT appear in `VmProcessDag.required[]` - it is an
 /// additive field and old bundles omit it.
 #[test]
 fn vm_process_dag_workload_identity_is_not_required() {
@@ -108,7 +108,7 @@ fn vm_process_dag_workload_identity_is_not_required() {
     );
 }
 
-/// `VmProcessDag` must have `additionalProperties: false` — the
+/// `VmProcessDag` must have `additionalProperties: false` - the
 /// `deny_unknown_fields` invariant must be preserved after adding the new field.
 #[test]
 fn vm_process_dag_preserves_deny_unknown_fields() {
@@ -176,7 +176,7 @@ fn spawn_runner_request_has_workload_identity_property() {
     );
 }
 
-/// `workloadIdentity` must NOT appear in `SpawnRunnerRequest.required[]` — it
+/// `workloadIdentity` must NOT appear in `SpawnRunnerRequest.required[]` - it
 /// is additive so old daemons/brokers do not reject new wire messages.
 #[test]
 fn spawn_runner_request_workload_identity_is_not_required() {
@@ -282,7 +282,7 @@ fn vm_process_dag_with_null_workload_identity_deserializes() {
 }
 
 /// `VmProcessDag.workloadIdentity = None` must serialize with the field absent
-/// (not `null`) — the `skip_serializing_if = "Option::is_none"` invariant.
+/// (not `null`) - the `skip_serializing_if = "Option::is_none"` invariant.
 #[test]
 fn vm_process_dag_none_workload_identity_omitted_from_json() {
     let dag = VmProcessDag {
@@ -437,7 +437,7 @@ fn processes_json_nix_reads_runtime_provider_id_from_row() {
 
 /// The separation invariant: `processes-json.nix` must emit `workloadIdentity`
 /// blocks for BOTH `vmDag` (Cloud Hypervisor VMs) and `qemuMediaDag` (QEMU
-/// media VMs) — the two primary local VM runtime kinds. Both functions appear
+/// media VMs) - the two primary local VM runtime kinds. Both functions appear
 /// in the file and both must contain the realm workload identity lookup.
 #[test]
 fn processes_json_nix_emits_workload_identity_in_both_dag_functions() {

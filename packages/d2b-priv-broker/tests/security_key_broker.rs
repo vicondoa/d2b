@@ -1,4 +1,4 @@
-//! Integration: `OpenHidrawSecurityKey` broker op — audit field shape
+//! Integration: `OpenHidrawSecurityKey` broker op - audit field shape
 //! and wire round-trip.
 //!
 //! These tests exercise the public API only (no physical YubiKey and
@@ -84,7 +84,7 @@ fn open_hidraw_security_key_request_wire_round_trips() {
 }
 
 /// The `BrokerResponse::OpenHidrawSecurityKey` response body carries
-/// only the resolved selector label and device class — never a raw
+/// only the resolved selector label and device class - never a raw
 /// path (the fd itself travels out-of-band via `SCM_RIGHTS`).
 #[test]
 fn open_hidraw_security_key_response_wire_round_trips() {

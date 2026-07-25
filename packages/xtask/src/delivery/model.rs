@@ -2,13 +2,13 @@
 //!
 //! Spec section 12.1 binds every wave candidate to three digests:
 //!
-//! * `content_id` — digest of the wave's integrated tree. It is deliberately
+//! * `content_id` - digest of the wave's integrated tree. It is deliberately
 //!   free of commit history, so a history-only rebase that preserves every
 //!   byte of integrated content reproduces the same `content_id` (section
 //!   12.6).
-//! * `candidate_id` — digest of `content_id` plus the wave's dependency graph
+//! * `candidate_id` - digest of `content_id` plus the wave's dependency graph
 //!   and repository set.
-//! * `snapshot_sha256` — digest covering the same inputs byte-for-byte,
+//! * `snapshot_sha256` - digest covering the same inputs byte-for-byte,
 //!   including the exact base and head commits the snapshot binds. It is the
 //!   only one of the three that changes under a history-only rebase, which is
 //!   what makes it useful for detecting one.

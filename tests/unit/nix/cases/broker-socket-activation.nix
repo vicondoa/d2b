@@ -17,7 +17,7 @@
 # in an explanatory comment, which is excluded), plus that the ExecStart
 # assignment is still present (file not hollowed out). (B)-(D) migrate to
 # `mkEval` introspection of `systemd.sockets`, mirroring the bash gate's
-# nix eval — socketConfig fields are safe to force (unlike ExecStart).
+# nix eval - socketConfig fields are safe to force (unlike ExecStart).
 { mkEval, lib, flakeRoot, ... }:
 
 let

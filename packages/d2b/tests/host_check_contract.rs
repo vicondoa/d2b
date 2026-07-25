@@ -161,7 +161,7 @@ fn write_fixture(dir: &Path, name: &str, value: &Value) -> PathBuf {
 }
 
 /// Copy the fixture-smoke artifacts into `dir` and rewrite `bundle.json` so its
-/// `hostPath` / `processesPath` / `privilegesPath` are RELATIVE — see the
+/// `hostPath` / `processesPath` / `privilegesPath` are RELATIVE - see the
 /// module-level hermeticity note. When `drift` is set, additionally rewrite
 /// `closures/corp-vm.json` to break runner parity (mirrors
 /// `d2b_cli_smoke_bundle_tree_runner_drift`).

@@ -2208,7 +2208,7 @@
       "additionalProperties": false
     },
     "ReadGuestFileResponse": {
-      "description": "Single-shot bounded response. `content` is capped at `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics only — the host recomputes both from the received bytes.",
+      "description": "Single-shot bounded response. `content` is capped at `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics only - the host recomputes both from the received bytes.",
       "type": "object",
       "required": [
         "content",

@@ -8,7 +8,7 @@
 //! systemd oneshot (`d2b-audit-check.service`) and a daily timer
 //! (`d2b-audit-check.timer`) whose job was to read the broker's
 //! `/var/lib/d2b/audit/broker-<utc-date>.jsonl` daily files and
-//! sanity-check their shape — every record parseable as
+//! sanity-check their shape - every record parseable as
 //! [`OpAuditRecord`][broker], required header fields present, no
 //! orphan record whose `decision` contradicts the
 //! `error_kind`/`result` invariants the broker writer guarantees.
@@ -581,7 +581,7 @@ mod tests {
         v.as_object_mut()
             .unwrap()
             .insert("decision".to_owned(), Value::String("errored".into()));
-        // error_kind is null in good_record() — fine for allowed,
+        // error_kind is null in good_record() - fine for allowed,
         // orphan for errored.
         let line = v.to_string();
         let report = check_audit_lines([(None, line.as_str())]);

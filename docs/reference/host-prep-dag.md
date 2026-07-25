@@ -28,28 +28,28 @@ DAG.
 The complete step set for a workload VM (see "Canonical ordering"
 below for the dependency-edge diagram):
 
-1. `<vm>:ssh-host-key-preflight` — preflight, no deps
-2. `<vm>:ownership-matrix-check` — preflight, no deps
-3. `<vm>:apply-nm-unmanaged` — preflight, no deps; marks the per-VM
+1. `<vm>:ssh-host-key-preflight` - preflight, no deps
+2. `<vm>:ownership-matrix-check` - preflight, no deps
+3. `<vm>:apply-nm-unmanaged` - preflight, no deps; marks the per-VM
    tap-parent bridge as unmanaged in NetworkManager BEFORE tap
    creation so NM doesn't race the broker `TUNSETIFF` + `dev set
    master`
-4. `<vm>:apply-nftables-rules` — deps: `ssh-host-key-preflight`,
+4. `<vm>:apply-nftables-rules` - deps: `ssh-host-key-preflight`,
    `ownership-matrix-check`, `apply-nm-unmanaged`
-5. `<vm>:bring-up-tap-interface` — deps: `apply-nftables-rules`
-6. `<vm>:apply-sysctl` — runs AFTER tap creation so
+5. `<vm>:bring-up-tap-interface` - deps: `apply-nftables-rules`
+6. `<vm>:apply-sysctl` - runs AFTER tap creation so
    `/proc/sys/net/ipv4/conf/<ifname>/` entries exist; deps:
    `bring-up-tap-interface`
-7. `<vm>:set-bridge-port-flags` — pins `learning off`, `flood off`,
+7. `<vm>:set-bridge-port-flags` - pins `learning off`, `flood off`,
    `mcast_to_unicast off`; deps: `apply-sysctl`
-8. `<vm>:pre-open-vhost-net-fd` — deps: `set-bridge-port-flags`
+8. `<vm>:pre-open-vhost-net-fd` - deps: `set-bridge-port-flags`
    (waits for the bridge-port flags to be pinned before vhost-net
    adopts the path)
-9. `<vm>:bind-mount-from-hardlink-farm` — deps: `ownership-matrix-check`
+9. `<vm>:bind-mount-from-hardlink-farm` - deps: `ownership-matrix-check`
 
 Net VMs add one step:
 
-10. `<vm>:seed-dnsmasq-lease` — deps: `apply-nftables-rules`
+10. `<vm>:seed-dnsmasq-lease` - deps: `apply-nftables-rules`
 
 ## Dependency graph
 
@@ -74,7 +74,7 @@ ssh-host-key-preflight   ownership-matrix-check   apply-nm-unmanaged
 
 The DAG is statically derived from each VM's properties in the
 trusted bundle by `d2b_host::host_prep_dag::build_host_prep_dag`.
-There is no operator-tunable knob — the step set is a deterministic
+There is no operator-tunable knob - the step set is a deterministic
 function of the bundle.
 
 ## Broker-op contract
@@ -101,7 +101,7 @@ copy of the bundle.
 
 ```text
 SshHostKeyPreflight \
-OwnershipMatrixCheck \         (all three are siblings — no upstream deps)
+OwnershipMatrixCheck \         (all three are siblings - no upstream deps)
 ApplyNmUnmanaged   /
        │
        ▼
@@ -117,7 +117,7 @@ ApplySysctl                  (depends on tap so /proc/sys/.../<ifname>/ exists)
 SetBridgePortFlags           (depends on ApplySysctl)
        │
        ▼
-PreOpenVhostNetFd            (depends on SetBridgePortFlags — bridge flags pinned first)
+PreOpenVhostNetFd            (depends on SetBridgePortFlags - bridge flags pinned first)
 
 [net VMs only] SeedDnsmasqLease    (depends on ApplyNftablesRules)
 BindMountFromHardlinkFarm           (depends on OwnershipMatrixCheck)
@@ -130,7 +130,7 @@ dependency graph `microvm-setup@<vm>.service` +
 ## Failure semantics
 
 Step failure is **fail-fast**. The first step whose broker op fails
-aborts the host-prep DAG — subsequent steps are not dispatched, and
+aborts the host-prep DAG - subsequent steps are not dispatched, and
 the per-VM process DAG (`supervisor::dag`) is not invoked. The
 operator sees the typed envelope
 
@@ -160,13 +160,13 @@ handlers listed above still return `Unimplemented`.
 
 ## Cross-references
 
-- **Operating manual**: `AGENTS.md` §"Critical subsystems — handle
-  with care" row "Control plane" — this DAG lives in the
+- **Operating manual**: `AGENTS.md` §"Critical subsystems - handle
+  with care" row "Control plane" - this DAG lives in the
   control-plane scope and the operator-facing failure envelope is
   emitted by `d2bd::dispatch_broker_vm_start`.
-- **Module docs**: `packages/d2b-host/src/host_prep_dag.rs` —
+- **Module docs**: `packages/d2b-host/src/host_prep_dag.rs` -
   authoritative step kind definitions and topo-sort algorithm.
-- [`per-vm-state-ownership.md`](./per-vm-state-ownership.md) — the
+- [`per-vm-state-ownership.md`](./per-vm-state-ownership.md) - the
   `OwnershipMatrixCheck` preflight contract.
-- [`ssh-host-key-preflight.md`](./ssh-host-key-preflight.md) — the
+- [`ssh-host-key-preflight.md`](./ssh-host-key-preflight.md) - the
   `SshHostKeyPreflight` contract.

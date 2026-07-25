@@ -114,7 +114,7 @@ pub struct StreamDescriptor {
 ///
 /// Most stream kinds carry a single `Primary` channel. A `Stdio` stream in
 /// non-TTY mode multiplexes `Stdout` and `Stderr` over one stream so the
-/// two are ordered against each other yet still distinguishable — a peer
+/// two are ordered against each other yet still distinguishable - a peer
 /// MUST NOT have to open two streams (and two authz contexts) just to split
 /// stdout from stderr. The channel is a closed enum; an unknown channel is
 /// rejected at decode (fail-closed).

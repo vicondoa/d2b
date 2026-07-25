@@ -46,7 +46,7 @@ role system. The role:
   other per-VM principals).
 - Host capabilities: **empty** (hard invariant; broker `live_spawn_runner`
   rejects spawns with non-empty caps for this role).
-- Seccomp: **mandatory** — `seccompPolicyRef = "w1-wayland-proxy"`. The
+- Seccomp: **mandatory** - `seccompPolicyRef = "w1-wayland-proxy"`. The
   proxy parses untrusted guest Wayland bytes while holding the host
   compositor socket; spawning without a seccomp policy is rejected
   fail-closed in the broker `SpawnRunner` handler.
@@ -88,7 +88,7 @@ required; the `userNamespace` field is absent in the minijail profile.
   (`WlproxyWatchdogPolicy`) so unexpected wayland-proxy death triggers
   `StopRunnerRequested { runner_role: Gpu }`. The GPU runner silently
   blackholing Wayland traffic through a dead proxy socket is not
-  acceptable — the VM must be torn down or the proxy restarted.
+  acceptable - the VM must be torn down or the proxy restarted.
   `WlproxyWatchdogPolicy::stop_gpu_on_unexpected_exit` defaults to
   `true`.
 
@@ -98,7 +98,7 @@ required; the `userNamespace` field is absent in the minijail profile.
 |---|-------|-------|
 | 1 | **Fork model** | `clone3(CLONE_NEWCGROUP \| CLONE_INTO_CGROUP)` via `broker clone3_spawn_runner` |
 | 2 | **Wait/reap owner** | `pidfd-handoff (broker → d2bd)` via `SCM_RIGHTS` + `OpenPidfd` |
-| 3 | **In-NS mount-action** | `apply` — writable `/run/d2b-wlproxy/<vm>`, bind-mount `waylandHostSock → upstream` |
+| 3 | **In-NS mount-action** | `apply` - writable `/run/d2b-wlproxy/<vm>`, bind-mount `waylandHostSock → upstream` |
 | 4 | **Capability bounding set** | `empty` |
 | 5 | **Ambient capability set** | `empty` |
 | 6 | **Seccomp profile reference** | `w1-wayland-proxy` (mandatory; broker rejects absent policy) |
@@ -106,7 +106,7 @@ required; the `userNamespace` field is absent in the minijail profile.
 | 8 | **umask value** | `0o007` |
 | 9 | **RLIMIT_NPROC value** | `inherit` (Wave 2 / Lane A may set explicit limit) |
 | 10 | **oom_score_adj value** | `inherit` |
-| 11 | **CLONE_INTO_CGROUP usage** | `yes — d2b.slice/<vm>/wayland-proxy` |
+| 11 | **CLONE_INTO_CGROUP usage** | `yes - d2b.slice/<vm>/wayland-proxy` |
 
 ### What changes in Wave 2
 
@@ -115,7 +115,7 @@ lifecycle. The following are deferred to Wave 2:
 
 - Lane A: `d2b-wayland-proxy` binary crate; filtering policy;
   app-id and title rewriting; a future filtering-policy ADR.
-- Lane C: `processes-json.nix` and `host-activation.nix` integration —
+- Lane C: `processes-json.nix` and `host-activation.nix` integration -
   removing the real compositor socket from GPU runner bind-mounts,
   repointing `--wayland-sock`, and declaring the DAG edge.
 - Lane D: guest `wl-cross-domain-proxy` guest service replacement and

@@ -33,7 +33,7 @@ forwarding is independent of the scanout backend and unaffected.
 -        virtio::DisplayBackend::X(x_display),
 +    // security-r8-audio-11: port of talex5/crosvm@993b8e756.
 +    // Use ONLY the Stub backend so crosvm never opens a wl_compositor
-+    // client connection for the scanout display — no wl_surface, no
++    // client connection for the scanout display - no wl_surface, no
 +    // xdg_toplevel, no chromeless "crosvm" window on the host
 +    // compositor. The scanout protocol still validates against Stub;
 +    // SetScanout calls discard silently. Cross-domain wayland

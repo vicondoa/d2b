@@ -8,24 +8,24 @@ and daemon/broker execution.
 
 ## Top-level fields
 
-- `schemaVersion` — schema directory/version for this artifact.
-- `site` — host-wide site policy toggles.
-- `environments` — per-env network/firewall data.
-- `cloudHypervisorCapabilities` — capability matrix anchored to CH.
-- `fdOwnership` — broker-opened fd ownership table.
-- `runtimeProviders` — local runtime/provider catalog and support matrix.
-- `vmRuntimes` — per-VM runtime/provider rows with provider-neutral topology.
-- `qemuMedia` — optional qemu-media source contract. Physical USB sources
+- `schemaVersion` - schema directory/version for this artifact.
+- `site` - host-wide site policy toggles.
+- `environments` - per-env network/firewall data.
+- `cloudHypervisorCapabilities` - capability matrix anchored to CH.
+- `fdOwnership` - broker-opened fd ownership table.
+- `runtimeProviders` - local runtime/provider catalog and support matrix.
+- `vmRuntimes` - per-VM runtime/provider rows with provider-neutral topology.
+- `qemuMedia` - optional qemu-media source contract. Physical USB sources
   carry opaque refs and use the root-only enrollment registry; direct
   `image-file` sources carry operator-authored absolute image paths from Nix
   config and use `registryScope = "direct-config-path"`.
-- `hostsFile` — marked-block ownership rule for `/etc/hosts`.
-- `kernelModules` — allowed kernel module matrix and load policy.
-- `networkManager` — unmanaged-file materialization rules.
-- `nftables` — exact `inet d2b` table declaration.
-- `ifNameMappings` — derived bridge/TAP name exposure.
-- `ch` — Cloud Hypervisor handoff probe result.
-- `firewallCoexistencePolicy` — host firewall coexistence contract.
+- `hostsFile` - marked-block ownership rule for `/etc/hosts`.
+- `kernelModules` - allowed kernel module matrix and load policy.
+- `networkManager` - unmanaged-file materialization rules.
+- `nftables` - exact `inet d2b` table declaration.
+- `ifNameMappings` - derived bridge/TAP name exposure.
+- `ch` - Cloud Hypervisor handoff probe result.
+- `firewallCoexistencePolicy` - host firewall coexistence contract.
 
 ## Nested fields called out by the Layer-1 prose gate
 

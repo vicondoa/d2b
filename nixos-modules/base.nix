@@ -98,7 +98,7 @@ in
   # /run/d2b-store-meta share into the guest's local Nix DB
   # (/nix/var/nix/db/). Without this, `nix-store --query --valid` and
   # `nix-shell` both reject any closure path they didn't register
-  # themselves — so writableStoreOverlay-based Home Manager + ad-hoc
+  # themselves - so writableStoreOverlay-based Home Manager + ad-hoc
   # `nix-shell -p hello` would fail. The host writes db.dump as the
   # `registration` output of `pkgs.closureInfo`, which is the format
   # `nix-store --load-db` consumes.
@@ -123,7 +123,7 @@ in
         set -euo pipefail
         DUMP=/run/d2b-store-meta/current/db.dump
         if [ ! -f "$DUMP" ]; then
-          echo "d2b-load-store-db: $DUMP missing — skipping." >&2
+          echo "d2b-load-store-db: $DUMP missing - skipping." >&2
           exit 0
         fi
         # The dump is trusted (came from the host's hardlinked closure
@@ -172,15 +172,15 @@ in
         # Resolve target user. Empty = root (net VM case).
         SSH_USER="${if cfg.sshUser == null then "root" else cfg.sshUser}"
 
-        # Look up the user's home from /etc/passwd at boot — declarative
+        # Look up the user's home from /etc/passwd at boot - declarative
         # users.users.<u>.home would also work but requires propagating
         # the value through extra options.
         if ! USER_HOME=$(${pkgs.glibc.getent}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f6); then
-          echo "d2b-load-host-keys: user '$SSH_USER' not found in /etc/passwd — skipping" >&2
+          echo "d2b-load-host-keys: user '$SSH_USER' not found in /etc/passwd - skipping" >&2
           exit 0
         fi
         if [ -z "$USER_HOME" ]; then
-          echo "d2b-load-host-keys: user '$SSH_USER' has empty home — skipping" >&2
+          echo "d2b-load-host-keys: user '$SSH_USER' has empty home - skipping" >&2
           exit 0
         fi
 
@@ -194,7 +194,7 @@ in
         SSH_GID=$(${pkgs.glibc.getent}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f4)
         SSH_GROUP=$(${pkgs.glibc.getent}/bin/getent group "$SSH_GID" | ${pkgs.coreutils}/bin/cut -d: -f1)
         if [ -z "$SSH_GROUP" ]; then
-          echo "d2b-load-host-keys: could not resolve primary group for '$SSH_USER' (gid=$SSH_GID) — skipping" >&2
+          echo "d2b-load-host-keys: could not resolve primary group for '$SSH_USER' (gid=$SSH_GID) - skipping" >&2
           exit 0
         fi
 

@@ -49,7 +49,7 @@ const EXIT_SETUP_FAILED: i32 = 72;
 /// `as_byte()` discriminant; the values are a stable wire contract between the
 /// helper and guestd's PTY spawner. guestd maps ANY status byte to a typed
 /// `ExecCreate` spawn/setup failure, and only a bare EOF (the `O_CLOEXEC` status
-/// fd closing on a successful `execve`) to success — so every non-exec exit path
+/// fd closing on a successful `execve`) to success - so every non-exec exit path
 /// MUST write a byte first, or guestd would misread the exit as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HelperFailure {
@@ -140,7 +140,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
     // on a successful execve (guestd reads EOF == success).
     let status = match fcntl_dupfd_cloexec(stdout(), STATUS_DUP_MIN_FD) {
         Ok(fd) => fd,
-        // The dup failed, so we have no high CLOEXEC copy — but fd 1 is still the
+        // The dup failed, so we have no high CLOEXEC copy - but fd 1 is still the
         // inherited status pipe (the slave wiring has not run). Report a typed
         // byte on it before exiting so a bare EOF is never misread as success.
         Err(_) => {

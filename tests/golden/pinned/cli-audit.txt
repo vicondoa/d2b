@@ -1,4 +1,4 @@
-# cli-audit — `d2b audit` CLI-contract integration tests (audit_contract.rs).
+# cli-audit - `d2b audit` CLI-contract integration tests (audit_contract.rs).
 # Successor of cli-rust-native-audit.sh: daemon-down envelope + no-bash-fallback,
 # --strict not-yet-implemented, daemon auditResponse relay (in-process SEQPACKET
 # mock), and live d2bd --once admin-rejected authz. One bare libtest fn per

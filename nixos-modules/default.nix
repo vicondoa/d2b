@@ -1,6 +1,6 @@
 # d2b: a generic framework for declaring microVMs on this host.
 #
-# This module is the public entry point — pulled in by
+# This module is the public entry point - pulled in by
 # `nixosModules.default = import ./nixos-modules { inherit inputs; }`
 # in the flake. The closure-passed `inputs` argument lets each
 # sub-module that needs flake inputs get them via partial
@@ -9,10 +9,10 @@
 # deep-eval regression test in the smoke flake covers this wiring.
 #
 # Sub-modules consuming `inputs`
-#   * `host.nix` — `imports = [ inputs.microvm.nixosModules.host ]`
+#   * `host.nix` - `imports = [ inputs.microvm.nixosModules.host ]`
 #     (the original case the partial-application wiring was built
 #     for).
-#   * `components/home-manager.nix` — `imports =
+#   * `components/home-manager.nix` - `imports =
 #     [ inputs.home-manager.nixosModules.home-manager ]`. Imported
 #     conditionally by host.nix per-VM when `homeManager.enable =
 #     true`; the partial application flows through there.
@@ -44,11 +44,11 @@
     # readability; consumers should not import it directly. A future
     # commit deletes the stub file outright.
     # ./host-otel-relay-acl.nix
-    # ./vms.nix is INTENTIONALLY OMITTED from the public flake — VM
+    # ./vms.nix is INTENTIONALLY OMITTED from the public flake - VM
     # registrations are consumer-specific. Downstream users declare
     # their VMs via `d2b.vms.<name> = ...` in their own NixOS
     # module, which is merged into d2b.vms here via option-system
-    # semantics. There is no public file with example VMs (yet —
+    # semantics. There is no public file with example VMs (yet -
     # examples/ will demonstrate the pattern).
     ./observability-vm.nix
     ./clipboard.nix
@@ -81,7 +81,7 @@
     ./niri-vm-borders.nix
   ];
 
-  # Entra ID / Himmelblau is NOT auto-imported here — it lives in
+  # Entra ID / Himmelblau is NOT auto-imported here - it lives in
   # the sibling `vicondoa/entrablau.nix` flake. Consumers bring
   # it in per-VM
   #

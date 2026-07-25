@@ -42,7 +42,7 @@ fn broker_systemd_unit_declarations() {
     );
     let module = read_repo_file(rel);
 
-    // (a) gating REMOVED — the module must not wrap its config in
+    // (a) gating REMOVED - the module must not wrap its config in
     // `lib.mkIf cfg.daemonExperimental.enable`.
     assert!(
         !any_line_matches(
@@ -171,7 +171,7 @@ fn stop_dag_reconcile_surface() {
 //
 // Asserts `nixos-modules/processes-json.nix`, `closures-json.nix`,
 // `minijail-profiles.nix`, and `store.nix` do NOT directly read
-// `config.microvm.vms.<name>.config.config.*` — all per-VM runner config flows
+// `config.microvm.vms.<name>.config.config.*` - all per-VM runner config flows
 // through the d2b-owned helpers `d2bLib.vmRunner` / `d2bLib.vmToplevel` /
 // `d2bLib.vmDeclaredRunner` defined in `nixos-modules/lib.nix`. lib.nix itself is
 // allowed to contain the helper bodies (which DO read config.microvm.vms.*);

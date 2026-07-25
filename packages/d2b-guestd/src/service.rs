@@ -458,7 +458,7 @@ struct CapabilitiesInputs {
 /// invariant is locked by a unit test: every attached exec session streams
 /// stdout/stderr back via `ReadOutput`, so the host must never negotiate an
 /// attached session it cannot stream. Both flags are therefore gated on the
-/// SAME `exec_paths_present` input here, by construction — they can never
+/// SAME `exec_paths_present` input here, by construction - they can never
 /// diverge. Detached exec is gated separately on a reconciled registry backed
 /// by a resolved non-root workload user.
 fn derive_capabilities_config(inputs: CapabilitiesInputs) -> CapabilitiesConfig {
@@ -599,7 +599,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
     // and run the guest command as root. Resolve the workload user's UID from
     // the guest passwd DB and refuse UID 0 (any alias) or an unresolvable user
     // (fail closed). Refusal clears the workload user, disabling every exec
-    // path (non-TTY pipe and interactive PTY) — never root.
+    // path (non-TTY pipe and interactive PTY) - never root.
     let mut exec_uid: Option<u32> = None;
     let mut exec_gid: Option<u32> = None;
     if let Some(user) = config.exec_policy.exec_user.clone() {
@@ -640,7 +640,7 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
 
     // Exec runtime paths (the `systemd-run` binary + the `d2b-exec-runner`
     // PTY helper) are wired by the host whenever exec is enabled. Both reachable
-    // exec paths — the interactive PTY session and the non-interactive pipe —
+    // exec paths - the interactive PTY session and the non-interactive pipe -
     // run the requested command as the host-fixed workload user (never root)
     // inside a real PAM login session via `systemd-run --property=PAMName=login
     // --uid=<user>`. Both require these paths present and valid.
@@ -2727,7 +2727,7 @@ impl GuestControl for GuestControlService {
 
         // Interactive TTY exec: tty=true && !detached routes to the PTY-backed,
         // connection-owned attached path. `tty && detached` is an unsupported
-        // mode (no new wire kind) — it is rejected by the detached validator
+        // mode (no new wire kind) - it is rejected by the detached validator
         // above; this branch only handles the supported interactive create.
         if input.tty {
             let initial_size = request.initial_terminal_size.as_ref().and_then(|size| {
@@ -3712,7 +3712,7 @@ fn read_guest_file_safely(path: &Path) -> Result<Vec<u8>, pb::GuestControlErrorK
         }
     }
     let Some((leaf, dirs)) = names.split_last() else {
-        // The path was `/` — not a file.
+        // The path was `/` - not a file.
         return Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE);
     };
 
@@ -4000,7 +4000,7 @@ async fn run_wpctl_command(
         Ok(output)
     } else {
         // Surface bounded, sanitized stderr for operator diagnostics. Volume
-        // values, paths, and user identifiers are NOT logged — only the first
+        // values, paths, and user identifiers are NOT logged - only the first
         // WPCTL_STDERR_CAPTURE_LIMIT bytes of printable ASCII.
         let diag: String = output.stderr[..output.stderr.len().min(WPCTL_STDERR_CAPTURE_LIMIT)]
             .iter()
@@ -4077,7 +4077,7 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
     // detached retained-log faults: a quota breach is shed by the periodic
     // reaper (advise REDUCE_LOAD + a concrete retry window), while an unsafe
     // retained-log path is an internal guestd storage fault (advise checking
-    // the guestd service — a caller retry cannot fix it).
+    // the guestd service - a caller retry cannot fix it).
     let (remediation, retry_after_ms) = match kind {
         K::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED => (
             R::HEALTH_REMEDIATION_REDUCE_LOAD,
@@ -4181,7 +4181,7 @@ fn validate_detached_command(
         // recovers the running command from `systemctl show -p ExecStart`, whose
         // `argv[]` is a single line, so a `\n`/`\r` byte would split the property
         // and make the live workload unmatchable (silently reaped). Reject at
-        // create — as an invalid argument — so a detached job is not started
+        // create - as an invalid argument - so a detached job is not started
         // only to be reaped on the first reconcile. (The create error reuses the
         // existing InvalidArgv kind; its operator message is generic.)
         if arg.len() > MAX_ARG_BYTES
@@ -4716,7 +4716,7 @@ mod tests {
     fn detached_command_validation_rejects_newline_or_cr_in_argv() {
         // A detached argv byte that would split the single-line `systemctl show
         // -p ExecStart` property (newline / carriage return) is rejected at
-        // create — otherwise the running workload becomes unmatchable by the
+        // create - otherwise the running workload becomes unmatchable by the
         // identity reconciler and is silently reaped. Reject up front instead.
         for bad in ["a\nb", "a\rb", "trailing\n"] {
             let mut input = detached_input("/bin/sh");
@@ -4725,7 +4725,7 @@ mod tests {
             assert_eq!(err, ExecError::InvalidArgv, "argv {bad:?} must be rejected");
         }
         // A semicolon argument (now handled by raw identity matching) is still
-        // accepted — the newline guard must not over-restrict the common
+        // accepted - the newline guard must not over-restrict the common
         // `sh -c 'a ; b'` pattern.
         let mut ok = detached_input("/bin/sh");
         ok.argv = vec![
@@ -4783,7 +4783,7 @@ mod tests {
     #[test]
     fn audio_caps_not_advertised_without_runtime() {
         // Without a usable audio runtime (audio_usable=false), AudioStatus and
-        // AudioSet must not be advertised — handlers would return
+        // AudioSet must not be advertised - handlers would return
         // AudioPipeWireUnavailable fail-closed which would cause d2bd to
         // incorrectly report HostAndGuest enforcement.
         let cfg = derive_capabilities_config(CapabilitiesInputs {
@@ -4916,7 +4916,7 @@ mod tests {
     #[tokio::test]
     async fn audio_status_unavailable_without_runtime() {
         // When no audio runtime is configured, audio_status_inner must return
-        // AudioPipeWireUnavailable — never a success-shaped response.
+        // AudioPipeWireUnavailable - never a success-shaped response.
         use pb::GuestControlErrorKind as K;
         // test_service has audio=None by default (no with_audio_runtime call).
         let service = test_service(220);
@@ -4931,7 +4931,7 @@ mod tests {
     #[tokio::test]
     async fn audio_set_unavailable_without_runtime() {
         // When no audio runtime is configured, audio_set_inner must return
-        // AudioPipeWireUnavailable — never a success-shaped response.
+        // AudioPipeWireUnavailable - never a success-shaped response.
         use pb::GuestControlErrorKind as K;
         let service = test_service(221);
         let err = service
@@ -5785,7 +5785,7 @@ mod tests {
                 ExecError::ExecExpired,
                 Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
             ),
-            // Interactive TTY exec variants — none collapse silently; the
+            // Interactive TTY exec variants - none collapse silently; the
             // mode/validation faults map to ProtocolError deliberately.
             (
                 ExecError::InvalidTerminalSize,
@@ -5843,7 +5843,7 @@ mod tests {
         use pb::HealthRemediation as R;
 
         // Quota breach: shed load and retry after one reaper interval (the
-        // periodic GC frees retained-log space) — NOT a generic blind RETRY.
+        // periodic GC frees retained-log space) - NOT a generic blind RETRY.
         let quota = guest_error_kind(ExecError::RetainedLogQuotaExceeded);
         assert_eq!(
             quota.remediation.enum_value().unwrap(),
@@ -5855,7 +5855,7 @@ mod tests {
             K::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED
         );
 
-        // Unsafe retained-log path: an internal storage fault — advise checking
+        // Unsafe retained-log path: an internal storage fault - advise checking
         // the guestd service, and DO NOT advertise a retry window.
         let unsafe_path = guest_error_kind(ExecError::RetainedLogPathUnsafe);
         assert_eq!(
@@ -6105,7 +6105,7 @@ mod tests {
             .expect("exec_list ok");
         assert!(response.error.is_none(), "no error on same-boot list");
         assert_eq!(response.entries.len(), 3, "every seeded record is listed");
-        // Each entry exposes the argv DIGEST only — the wire entry structurally
+        // Each entry exposes the argv DIGEST only - the wire entry structurally
         // has no raw argv/env/cwd field, so no command bytes can leak through
         // ExecList. The retained-cap bound is exercised non-vacuously by
         // `exec_list_is_bounded_at_the_retained_cap` (this list of 3 is far
@@ -6173,7 +6173,7 @@ mod tests {
             response.entries.len() <= DETACHED_RETAINED_PER_VM,
             "ExecList response is bounded at the retained-per-VM cap"
         );
-        // Every listed slot is in-range and unique — no slot leaks past the cap.
+        // Every listed slot is in-range and unique - no slot leaks past the cap.
         let mut slots: Vec<u32> = response.entries.iter().map(|e| e.slot).collect();
         slots.sort_unstable();
         slots.dedup();

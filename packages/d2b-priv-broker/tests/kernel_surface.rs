@@ -70,7 +70,7 @@ fn open_dir_path_safe_follows_real_mount_but_refuses_symlink() {
 /// legitimately span `/run` tmpfs, `/dev` devtmpfs, `/sys` sysfs, ...,
 /// and planting a host-NS mount requires `CAP_SYS_ADMIN` = root, which
 /// is out of the broker's threat model), while a SYMLINK component is
-/// still refused — INCLUDING after a followed mount crossing — and a
+/// still refused - INCLUDING after a followed mount crossing - and a
 /// path crossing TWO mounts still resolves (NO_XDEV is re-applied per
 /// component, so the relax is scoped to exactly the crossing component).
 fn open_dir_path_safe_mount_contract_helper() {

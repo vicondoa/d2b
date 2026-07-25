@@ -1,4 +1,4 @@
-# tests/unit/smoke/smoke-eval-aarch64.nix — multi-arch eval gate.
+# tests/unit/smoke/smoke-eval-aarch64.nix - multi-arch eval gate.
 #
 # Sibling of tests/unit/smoke/smoke-eval.nix that pins the eval-target system to
 # `aarch64-linux`. Exercises the case the published refactor plan
@@ -8,8 +8,8 @@
 # vhost-device-sound pipeline (pkgs/spectrum-ch, pkgs/crosvm-patched,
 # pkgs/vhost-device-sound) is x86_64-only.
 #
-# The matching positive failure case — `graphics.enable = true` or
-# `audio.enable = true` on aarch64-linux — is verified by the
+# The matching positive failure case - `graphics.enable = true` or
+# `audio.enable = true` on aarch64-linux - is verified by the
 # `d2b-platform-gate` block in tests/assertions-eval.sh (not by
 # this file; this file's job is to keep the "headless eval passes"
 # invariant green).
@@ -60,7 +60,7 @@ let
       flake.nixosModules.default
       ({ lib, ... }: {
         # Minimal NixOS baseline so the eval graph can resolve. Same
-        # set as smoke-eval.nix — these knobs aren't exercised by
+        # set as smoke-eval.nix - these knobs aren't exercised by
         # d2b itself, they just make `system.build.toplevel`
         # reachable without a real disk or bootloader.
         boot.loader.grub.enable = false;
@@ -79,7 +79,7 @@ let
 
         # Single consumer-side user that satisfies launcherUsers +
         # ssh.user references. waylandUser is intentionally LEFT
-        # UNSET on aarch64 — the cross-domain Wayland forwarding it
+        # UNSET on aarch64 - the cross-domain Wayland forwarding it
         # configures is graphics-coupled, and the assertions schema
         # only requires it when a graphics or audio VM is declared
         # (we declare neither here).
@@ -93,14 +93,14 @@ let
           yubikey.enable = false;
         };
 
-        # One env — exercises network.nix materialisation, the
+        # One env - exercises network.nix materialisation, the
         # route preflight unit, and the CIDR validation chain.
         d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        # One headless workload VM — graphics + audio explicitly
+        # One headless workload VM - graphics + audio explicitly
         # LEFT OFF (their defaults are false, this is just a
         # readability marker). The host.nix platform gate
         # lets this through; any future regression that adds an
@@ -110,8 +110,8 @@ let
           env = "work";
           index = 10;
           ssh.user = "alice";
-          # graphics.enable = false (default) — gate stays inert
-          # audio.enable    = false (default) — gate stays inert
+          # graphics.enable = false (default) - gate stays inert
+          # audio.enable    = false (default) - gate stays inert
           config = {
             networking.hostName = lib.mkDefault "headless-vm";
             users.users.alice = {

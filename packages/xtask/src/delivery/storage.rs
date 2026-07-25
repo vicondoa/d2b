@@ -35,7 +35,7 @@
 //!
 //! Security properties preserved:
 //!
-//! * external-path refusal — the state root is rejected inside any declared
+//! * external-path refusal - the state root is rejected inside any declared
 //!   repository checkout and inside any enclosing Git working tree;
 //! * symlink-component rejection over the whole existing path prefix;
 //! * `0700` directories and `0600` files, verified after creation;

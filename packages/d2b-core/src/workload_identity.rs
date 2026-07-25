@@ -11,9 +11,9 @@
 //!
 //! # DTO version policy
 //!
-//! **Additive changes** — adding a new `Option<T>` field to an existing struct
+//! **Additive changes** - adding a new `Option<T>` field to an existing struct
 //! with `#[serde(default, skip_serializing_if = "Option::is_none")]`, or adding
-//! a new variant to [`WorkloadBackend`] — do not require a `bundleVersion` or
+//! a new variant to [`WorkloadBackend`] - do not require a `bundleVersion` or
 //! `schemaVersion` bump, because:
 //! - New code reading old JSON: the missing field deserializes as `None` / the
 //!   missing variant is unknown-but-skipped (if the consumer uses `deny_unknown_fields`
@@ -22,8 +22,8 @@
 //!   reject the new field, so Nix emitter and Rust DTO **must be updated
 //!   together** in the same commit.
 //!
-//! **Breaking changes** — removing or renaming a required field, changing the
-//! type of an existing field, or removing a variant — require **both** a
+//! **Breaking changes** - removing or renaming a required field, changing the
+//! type of an existing field, or removing a variant - require **both** a
 //! `bundleVersion` bump (in `packages/xtask/`) and a `schemaVersion` bump (in
 //! `docs/reference/schemas/`) together with a `CHANGELOG.md` entry under
 //! `## [Unreleased]`.
@@ -78,7 +78,7 @@ pub struct WorkloadIdentity {
     pub workload_name: Option<String>,
     /// Realm identifier of the owning realm controller.
     pub realm_id: RealmId,
-    /// Realm path (most-specific first) — the label sequence after the
+    /// Realm path (most-specific first) - the label sequence after the
     /// workload in the canonical target address.
     pub realm_path: RealmPath,
     /// Fully-qualified canonical target address, kept pre-rendered to avoid
@@ -132,7 +132,7 @@ impl WorkloadIdentity {
 ///
 /// # DTO version policy
 ///
-/// Adding a new variant here is additive — consumers that do not recognise the
+/// Adding a new variant here is additive - consumers that do not recognise the
 /// variant can reject it explicitly or skip it depending on context. Removing
 /// or renaming a variant is breaking and requires a `bundleVersion` +
 /// `schemaVersion` bump.

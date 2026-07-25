@@ -35,7 +35,7 @@
 #
 #   - `host-known-hosts.nix` reads the host-side pubkey directly
 #     instead of probing the live VM. The pinned known_hosts entry
-#     is authoritative from generation 1 — no TOFU drift on restart.
+#     is authoritative from generation 1 - no TOFU drift on restart.
 { config, pkgs, lib, ... }:
 
 let
@@ -47,7 +47,7 @@ let
   # AND in guest-sshd-host-keys.nix. Encoded as a `let` here so the
   # other call sites can re-derive identical paths from the same VM
   # name without re-stating the convention. They are not exported
-  # as options — this is a framework-internal contract.
+  # as options - this is a framework-internal contract.
   perVmHostKeysDir = name: "${cfg.site.stateDir}/vms/${name}/sshd-host-keys";
   perVmHostKeyPriv = name: "${perVmHostKeysDir name}/ssh_host_ed25519_key";
   perVmHostKeyPub  = name: "${perVmHostKeyPriv name}.pub";

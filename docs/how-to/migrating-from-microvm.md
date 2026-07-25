@@ -7,7 +7,7 @@
 > Reading time: ~15 minutes.
 > Difficulty: intermediate.
 
-`d2b` does not replace [`microvm.nix`][upstream] — it sits on top of it.
+`d2b` does not replace [`microvm.nix`][upstream] - it sits on top of it.
 The upstream module still owns the `microvm.vms.<vm>.config` evaluation,
 the hypervisor runners, the volume/share machinery, and the
 `microvm@<vm>.service` unit. `d2b` adds an opinionated layer above:
@@ -43,7 +43,7 @@ adoption will:
 - Tear down whatever taps / bridges / dnsmasq instances you ran by hand
   and replace them with per-env bridges + an auto-declared net VM.
 - Generate fresh per-VM Ed25519 SSH host keys under
-  `/var/lib/d2b/keys/` — your existing in-VM `authorized_keys` for
+  `/var/lib/d2b/keys/` - your existing in-VM `authorized_keys` for
   ssh-from-host will need to be updated (or just trust the framework's
   injection flow, below).
 
@@ -74,7 +74,7 @@ the existing taps), stop here and shrink the scope first.
 ## Option mapping
 
 For every common upstream pattern, the section below shows the
-`d2b` equivalent. Examples are minimal — copy what you need
+`d2b` equivalent. Examples are minimal - copy what you need
 into your real config.
 
 ### Pattern: one VM, one tap, host runs dnsmasq
@@ -151,7 +151,7 @@ share a bridge by hand, and reserve MACs yourself.
 
 `index` is unique **per env**. Both VMs share `br-work-lan` and route
 egress via `sys-work-net`, but they **cannot directly talk to each
-other** — workload taps are marked `Isolated = true` in the LAN bridge
+other** - workload taps are marked `Isolated = true` in the LAN bridge
 (see `nixos-modules/network.nix:376-386`), and the net VM does not
 forward eth1→eth1 (`nixos-modules/net.nix:135-155`). If you need
 explicit VM-to-VM traffic (e.g. service mesh inside an env), opt in
@@ -189,7 +189,7 @@ Leave both unset for the default isolated LAN.
 ```
 
 Disjoint `lanSubnet` and `uplinkSubnet`. Reusing `index = 10` across
-envs is fine — uniqueness is scoped per-env. There is no inter-env
+envs is fine - uniqueness is scoped per-env. There is no inter-env
 route; the two LAN bridges are independent.
 
 ### Pattern: tunneled uplinks (per-env MTU + MSS clamp)
@@ -241,7 +241,7 @@ cross-domain goes away.
 ```
 
 `graphics.enable = true` implicitly pins `microvm.hypervisor =
-"cloud-hypervisor"` — the only hypervisor wired for the GPU sidecar.
+"cloud-hypervisor"` - the only hypervisor wired for the GPU sidecar.
 Do not also start it with `systemctl start microvm@workstation`: use
 `d2b vm start workstation` from a Plasma/sway/Hyprland terminal so the
 sidecar can reach `$WAYLAND_DISPLAY`. See `examples/graphics-workstation/`.
@@ -306,7 +306,7 @@ d2b.vms.legacy = {
 ```
 
 The framework still gives you a per-VM `/nix/store`, the unit wrapper,
-and the manifest entry — just no env-derived addressing.
+and the manifest entry - just no env-derived addressing.
 
 ### Pattern: per-VM overrides of upstream knobs
 
@@ -333,7 +333,7 @@ d2b.vms.work-app = {
 ```
 
 Do **not** declare `microvm.shares = [{ source = "/nix/store"; ... }]`
-in here — the framework injects per-VM store + store-meta shares
+in here - the framework injects per-VM store + store-meta shares
 with `lib.mkForce` and a duplicate will produce a confusing module
 conflict.
 
@@ -363,9 +363,9 @@ has built cleanly. See "Rollback" at the end of this section.
 
    For each env, choose:
 
-   - `lanSubnet` — a `/24` for the workload bridge. Must not overlap
+   - `lanSubnet` - a `/24` for the workload bridge. Must not overlap
      `d2b.hostLanCidrs` or any other env's `lanSubnet`.
-   - `uplinkSubnet` — a `/30` for the host↔net-VM point-to-point link.
+   - `uplinkSubnet` - a `/30` for the host↔net-VM point-to-point link.
      Pick from RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`,
      `203.0.113.0/24`) so the addresses visibly belong to d2b.
 
@@ -413,7 +413,7 @@ has built cleanly. See "Rollback" at the end of this section.
    ```
 
    Do **not** also import the upstream `microvm.nixosModules.host`
-   manually — `d2b`'s default module pulls it in.
+   manually - `d2b`'s default module pulls it in.
 
 4. **Replace `microvm.vms.*` with `d2b.vms.*`** (code only).
    Apply the mapping from the previous section. For each VM `<name>`:
@@ -422,7 +422,7 @@ has built cleanly. See "Rollback" at the end of this section.
    - Move whatever was in `microvm.vms.<name>.config` into
      `d2b.vms.<name>.config` verbatim.
    - Keep `microvm.mem`, `microvm.vcpu`, `microvm.volumes`,
-     `microvm.hypervisor` inside that `config` block — they still
+     `microvm.hypervisor` inside that `config` block - they still
      resolve.
    - Set `env`, `index`, `ssh.user`.
 
@@ -441,7 +441,7 @@ has built cleanly. See "Rollback" at the end of this section.
      `br-<env>-lan`).
    - Duplicate `index` within an env.
 
-   If this fails, no state has moved — fix your config and re-run.
+   If this fails, no state has moved - fix your config and re-run.
 
 6. **Stop running VMs.** Once the build is clean:
 
@@ -492,7 +492,7 @@ only persistent system units the framework declares; rebuilds update
 the systemd unit files and `/etc/d2b/{bundle,host,processes,
 privileges}.json` but the broker's per-runner pidfd ownership
 protects in-flight session state (interactive Wayland clients,
-in-RAM Entra device-bound tokens, virtiofsd socket handshakes) —
+in-RAM Entra device-bound tokens, virtiofsd socket handshakes) -
 the runners are not respawned. Use `d2b vm restart <vm> --apply`
 to explicitly cycle a VM after a rebuild.
 
@@ -525,13 +525,13 @@ cleanly.)
 store paths plus the exact remediation command, so the user
 doesn't have to memorize which command applies which kind of
 change. For the full predicate semantics see
-[`docs/reference/cli-contract.md` — Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015).
+[`docs/reference/cli-contract.md` - Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015).
 
 ### Rollback
 
 - **Step 5 (build) fails:** no on-disk state has moved. Revert your
   config changes (`git checkout -- .` or undo the edits from steps
-  3–4) and rebuild against the old config — your existing VMs are
+  3–4) and rebuild against the old config - your existing VMs are
   untouched.
 - **Steps 6–7 succeed but step 8 (`switch`) fails:** the new closure
   is built but not active; state directories have been renamed. To
@@ -552,7 +552,7 @@ change. For the full predicate semantics see
 - **Per-env network isolation.** NAT-only egress, no inter-env
   routing, host-LAN drop rule applied by default.
 - **Per-VM /nix/store.** Each guest sees only its own closure plus
-  the microvm.nix runner — a closure-limited `/nix/store` view backed
+  the microvm.nix runner - a closure-limited `/nix/store` view backed
   by a per-VM hardlink farm under `/var/lib/d2b/vms/<vm>/store/`.
   Zero byte duplication. `d2b switch <vm> --apply` updates it live
   without a VM reboot. Back up `/var/lib/d2b/` only to encrypted,
@@ -563,7 +563,7 @@ change. For the full predicate semantics see
   table are the lifecycle-of-record. Single commands, clear exit
   codes (`docs/reference/cli-contract.md`).
 - **CLI ergonomics.** `d2b vm start / vm stop / status / list /
-  audio / usb` — no more remembering tap names, MAC byte counts, or
+  audio / usb` - no more remembering tap names, MAC byte counts, or
   which env's usbipd is bound to which `192.0.2.X`.
 - **SSH key management.** Per-VM Ed25519 keys generated at activation,
   ACL'd to the `d2b` group, injected into the guest
@@ -577,7 +577,7 @@ change. For the full predicate semantics see
 ## What microvm.nix users lose / what's d2b-only
 
 - **Single-user assumption.** `d2b.site.waylandUser` is a single
-  string — graphics + audio sidecars bind that user's
+  string - graphics + audio sidecars bind that user's
   `/run/user/<uid>/wayland-0` and `pipewire-0`. Multi-user desktops
   need additional work (out of scope for v0.1.0).
 - **Wayland-only graphics.** The crosvm GPU sidecar speaks Wayland
@@ -590,12 +590,12 @@ change. For the full predicate semantics see
   `graphics.enable = true` pins `microvm.hypervisor = cloud-hypervisor`
   (via `lib.mkDefault`); the same applies to `tpm.enable` and
   `audio.enable` (the vhost-user-sound device is wired only via
-  cloud-hypervisor's `--device` plumbing — see
+  cloud-hypervisor's `--device` plumbing - see
   `nixos-modules/components/audio/guest.nix:121-127`). You can still
   override per-VM via `d2b.vms.<vm>.config.microvm.hypervisor = ...`
   for headless VMs.
 - **Framework-owned shares.** Do not add a `/nix/store` entry to
-  `microvm.shares` in `d2b.vms.<vm>.config` — the framework
+  `microvm.shares` in `d2b.vms.<vm>.config` - the framework
   injects it with `lib.mkForce`.
 - **The daemon owns VM lifecycle.** In v1.0 (per ADR 0015) per-VM
   lifecycle moved fully to `d2bd` -> `d2b-priv-broker` via the
@@ -604,22 +604,22 @@ change. For the full predicate semantics see
 
 ## Naming conventions you'll see post-migration
 
-- `br-<env>-lan` — workload LAN bridge for env `<env>`.
-- `br-<env>-up` — point-to-point host↔net-VM bridge.
-- `sys-<env>-net` — auto-declared net VM (NAT + dnsmasq + nftables).
-- `vm-<vm>-<env>` / `vm-<vm>-up` — taps on the bridges above.
-- `d2b-sys-<env>-usbipd-proxy.service` — host-side USBIP proxy
+- `br-<env>-lan` - workload LAN bridge for env `<env>`.
+- `br-<env>-up` - point-to-point host↔net-VM bridge.
+- `sys-<env>-net` - auto-declared net VM (NAT + dnsmasq + nftables).
+- `vm-<vm>-<env>` / `vm-<vm>-up` - taps on the bridges above.
+- `d2b-sys-<env>-usbipd-proxy.service` - host-side USBIP proxy
   per env (retired as a host singleton and now a broker-spawned
   runner per ADR 0015; the unit name above is preserved as the
   cgroup leaf identifier).
-- `d2bd.service` — daemon control plane (read-only RPCs + dispatch
+- `d2bd.service` - daemon control plane (read-only RPCs + dispatch
   to broker; never root).
-- `d2b-priv-broker.{service,socket}` — socket-activated privileged
+- `d2b-priv-broker.{service,socket}` - socket-activated privileged
   broker (single audited host-mutation surface; see
   [`docs/reference/privileges.md`](../reference/privileges.md)).
-- broker-spawned VM runners — in v1.0 the broker `SpawnRunner` path is
+- broker-spawned VM runners - in v1.0 the broker `SpawnRunner` path is
   the lifecycle of record.
-- `d2b` — host group whose members can drive `vm start
+- `d2b` - host group whose members can drive `vm start
   / vm stop / vm restart` against `d2bd`'s public socket (mode
   0660, group `d2b`).
 
@@ -639,7 +639,7 @@ change. For the full predicate semantics see
 
 Back up `/var/lib/d2b/` only to encrypted, access-controlled media
 (TPM NVRAM and per-VM SSH keys live there). Restoring requires the
-same `d2b.site.keysDir` / `stateDir` layout — those are
+same `d2b.site.keysDir` / `stateDir` layout - those are
 advisory-only in v0.1.0 and effectively hardcoded.
 
 ## Troubleshooting
@@ -682,7 +682,7 @@ The guest's `authorized_keys` is populated at boot by
 
 **`microvm.vms.<vm>` declared in two places.**
 You left an old `microvm.vms.<name>` block alongside the new
-`d2b.vms.<name>`. Remove the old one — the framework manages
+`d2b.vms.<name>`. Remove the old one - the framework manages
 the translation.
 
 **Per-env net VM (`sys-<env>-net`) won't start.**

@@ -6,7 +6,7 @@ use d2b_contract_tests::load_bundle_resolver_from_env;
 // read-only without a carve-out, and cgroup subtrees confined to d2b/.
 //
 // This is the POSITIVE half of retiring the minijail-validator /
-// static-invariant-uid0 bash gates — it proves the real rendered output is
+// static-invariant-uid0 bash gates - it proves the real rendered output is
 // policy-compliant end-to-end. The NEGATIVE half (synthetic rejection cases)
 // lives in d2b-core unit tests over validate_minijail_profiles.
 //

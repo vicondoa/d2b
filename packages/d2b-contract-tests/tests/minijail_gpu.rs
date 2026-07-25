@@ -20,7 +20,7 @@
 //!
 //! The SOURCE-grep portions (the broker device-class claim, the gpu-render-node
 //! profile shape, the WaylandProxy Rust variant declarations) need no fixture
-//! and always run — they read the in-tree `.nix`/`.rs` modules via the repo-file
+//! and always run - they read the in-tree `.nix`/`.rs` modules via the repo-file
 //! helpers and assert per-line regex invariants, mirroring the bash `grep`/`awk`.
 //!
 //! Layer split (faithful to the bash gates):
@@ -29,7 +29,7 @@
 //!     stronger guarantee than the bash constant-vs-constant `assert_eq` or a
 //!     host-installed-profile drift scan) or, where the assertion targets the
 //!     in-tree Nix/Rust source, as a SOURCE-grep.
-//!   * The bash gates' opt-in live phases do NOT port — they are runtime
+//!   * The bash gates' opt-in live phases do NOT port - they are runtime
 //!     host-execution tests requiring root, a live host, and the role binaries:
 //!       - gpu: the cc-compiled `virtgpu_probe`, the `minijail0` positive arm
 //!         (`DRM_IOCTL_VIRTGPU_GET_CAPS` must not raise SIGSYS), the negative arm
@@ -46,7 +46,7 @@
 //!     tautological `assert_eq` of a shell variable against its own definition.
 //!     The host-side wayland SOURCE path is resolved by the broker at runtime
 //!     and is NOT expressed in the bundle's rendered RoleProfile (the gpu
-//!     profile's `bindMounts` is empty — the cross-domain wayland bind is a
+//!     profile's `bindMounts` is empty - the cross-domain wayland bind is a
 //!     runtime broker op, not a bundle artifact). The in-sandbox BIND_TARGET
 //!     convention IS grounded: the gpu profile exposes `/run/d2b-gpu/<vm>`
 //!     as a writable path, so `/run/d2b-gpu/<vm>/wayland-0` lives under it.
@@ -170,7 +170,7 @@ fn braced_block_interior(content: &str, start_literal: &str) -> Option<String> {
 /// bash gate asserted these against shell constants; the rendered RoleProfile
 /// is the strictly stronger ground truth. (The host-side `SOURCE_WAYLAND`
 /// `/run/user/<uid>/wayland-0` bind is a runtime broker op, not a bundle
-/// artifact — see the module-level spec-corrections note.)
+/// artifact - see the module-level spec-corrections note.)
 #[test]
 fn gpu_rendered_device_bind_matrix_and_wayland_target() {
     let Some(resolver) = load_full_bundle_resolver_from_env() else {
@@ -187,7 +187,7 @@ fn gpu_rendered_device_bind_matrix_and_wayland_target() {
             let p = &node.profile;
             let dev = &p.mount_policy.device_binds;
 
-            // bash lines 93-99: 6 entries, each under /dev — the rendered
+            // bash lines 93-99: 6 entries, each under /dev - the rendered
             // profile pins the exact ordered matrix.
             assert_eq!(
                 dev.as_slice(),
@@ -229,7 +229,7 @@ fn gpu_rendered_device_bind_matrix_and_wayland_target() {
     }
     assert!(
         seen > 0,
-        "feature-rich fixture has no Gpu node — corp-full enables graphics (regression)"
+        "feature-rich fixture has no Gpu node - corp-full enables graphics (regression)"
     );
 }
 
@@ -320,14 +320,14 @@ fn gpu_rendered_jail_shape() {
     }
     assert!(
         seen > 0,
-        "feature-rich fixture has no Gpu node — corp-full enables graphics (regression)"
+        "feature-rich fixture has no Gpu node - corp-full enables graphics (regression)"
     );
 }
 
 /// Broker Gpu role-device claim (bash lines 105-136): the
 /// `role_device_classes(Gpu)` source-of-truth in
 /// `packages/d2b-core/src/bundle_resolver.rs` (the closed allowlist the
-/// broker uses for OpenDevice dispatch) MUST match the P1 device matrix — it
+/// broker uses for OpenDevice dispatch) MUST match the P1 device matrix - it
 /// includes `kvm`, `dri`, `nvidia-ctl`, `nvidia-uvm`, `nvidia-render`, and
 /// `udmabuf`, and MUST NOT include `vfio` (not in the P1 GPU contract). The arm
 /// is shared with GpuRenderNode (`ProcessRole::Gpu | ProcessRole::GpuRenderNode
@@ -364,7 +364,7 @@ fn gpu_broker_role_device_claim_source() {
 
 /// D5/P2.3 gpu-render-node minijail profile shape (bash lines 420-501): the
 /// gpu-render-node `mkProfile` block in `nixos-modules/minijail-profiles.nix`
-/// must be present and carry the ADR-0021 broker-pre-NS shape — a
+/// must be present and carry the ADR-0021 broker-pre-NS shape - a
 /// `userNamespace` block referencing the gpu principal, `seccompPolicyRef =
 /// "w1-gpu-render-node"`, an EMPTY `deviceBinds` (fd-passing replaces
 /// bind-mounts), `umask = 7`, and the profile gated on
@@ -415,7 +415,7 @@ fn gpu_render_node_minijail_profile_source_shape() {
     // 5. deviceBinds empty (no `deviceBinds = [ /dev...` inside the block).
     assert!(
         !any_line_matches(&block, r"deviceBinds\s*=\s*\[\s*/dev"),
-        "D5/P2.3: gpu-render-node deviceBinds is non-empty — bind-mounts are skipped for \
+        "D5/P2.3: gpu-render-node deviceBinds is non-empty - bind-mounts are skipped for \
          user-NS spawns (fd-passing replaces bind-mounts)"
     );
 
@@ -699,6 +699,6 @@ fn wayland_proxy_rendered_profile_shape() {
     }
     assert!(
         seen > 0,
-        "feature-rich fixture has no wayland-proxy node — corp-full enables graphics (regression)"
+        "feature-rich fixture has no wayland-proxy node - corp-full enables graphics (regression)"
     );
 }

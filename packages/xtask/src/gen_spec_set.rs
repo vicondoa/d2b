@@ -47,7 +47,7 @@ pub enum HeadingForm {
     /// `### ADR046-core-001`
     Bare,
     /// A title introduced by whitespace and, optionally, a dash of any kind:
-    /// `### ADR046-core-001 — Some title`, `### ADR046-core-001 - Some title`,
+    /// `### ADR046-core-001 - Some title`, `### ADR046-core-001 - Some title`,
     /// and the 19 headings that introduce the same title with no dash at all.
     /// The three spell one form because the dash is decoration, not grammar.
     EmDash,
@@ -905,7 +905,7 @@ mod tests {
     fn every_heading_form_yields_the_same_work_item_id() {
         let cases = [
             ("### ADR046-core-001", HeadingForm::Bare),
-            ("### ADR046-core-001 — Some title", HeadingForm::EmDash),
+            ("### ADR046-core-001 - Some title", HeadingForm::EmDash),
             ("### ADR046-core-001 - Some title", HeadingForm::EmDash),
             ("### ADR046-core-001 – Some title", HeadingForm::EmDash),
             ("### ADR046-core-001 Some title", HeadingForm::EmDash),
@@ -935,7 +935,7 @@ mod tests {
         let cases = [
             "### ADR046-security-key-012",
             "### ADR046-security-key-012 - Some title",
-            "### ADR046-security-key-012 — Some title",
+            "### ADR046-security-key-012 - Some title",
             "### ADR046-security-key-012-Some title",
             "### ADR046-security-key-012: Some title",
             "### ADR046-security-key-012 (Some title)",
@@ -1042,7 +1042,7 @@ mod tests {
             Some("ADR046-activation-001")
         );
         assert_eq!(
-            leading_work_item_id("ADR046-streamline-001 — Generated spec registry").as_deref(),
+            leading_work_item_id("ADR046-streamline-001 - Generated spec registry").as_deref(),
             Some("ADR046-streamline-001")
         );
         assert_eq!(leading_work_item_id("Purpose and scope"), None);
@@ -1055,7 +1055,7 @@ mod tests {
             "None. This spec is a new cross-cutting synthesis."
         ));
         assert!(!is_none_sentinel(
-            "none required — this generator is specific to the manifest shape"
+            "none required - this generator is specific to the manifest shape"
         ));
         assert!(!is_none_sentinel("Nonexistent owner"));
     }

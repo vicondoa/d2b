@@ -7,7 +7,7 @@
 > `microvm@<vm>.service` templates. There is no longer a "default
 > mode" vs "native-only mode" axis, and there is no multi-step
 > deprecation timeline to track. See
-> [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
+> [ADR 0015 - daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
 > for the rationale, alternatives considered, and rollback limits.
 >
 > This page is kept at its original URL so that historical
@@ -22,10 +22,10 @@
 
 After the clean break, the only contract worth recording here is:
 
-1. The **post-clean-break per-verb matrix** — every CLI verb ships
+1. The **post-clean-break per-verb matrix** - every CLI verb ships
    exactly one path (daemon-native or pure Rust). The "legacy bash
    path" column collapses to a single `no` cell.
-2. The **per-wave evidence gate** — the mechanism that now gates the
+2. The **per-wave evidence gate** - the mechanism that now gates the
    per-wave `d2b.defaultSwitchReadiness.<wave>.validated = true`
    eval assertion (and that `d2b host validate` materialises). It
    no longer decides whether `d2b.daemonExperimental.enable`
@@ -39,10 +39,10 @@ After the clean break, the only contract worth recording here is:
    (`cli-contract.md`, `wave-evidence-schema.md`, ADR 0015,
    `host-validate.md`).
 
-Anything else that used to live on this page — the three-mode
+Anything else that used to live on this page - the three-mode
 bridge, the `D2B_NATIVE_ONLY` /
 `D2B_LEGACY_BASH_OPT_IN` escape hatches, and the staged bash
-warning / fail-loud / removal calendar — is gone with the clean
+warning / fail-loud / removal calendar - is gone with the clean
 break.
 
 ## Post-clean-break compatibility matrix
@@ -65,16 +65,16 @@ prose can see at a glance that the answer is now uniformly
 | `vm start`, `vm stop`, `vm restart`, `vm list` | daemon-native | no | Failures surface as typed daemon / broker envelopes (`daemon-down` exit 1, `not-yet-implemented` exit 78). |
 | `up`, `down`, `restart` (top-level aliases) | daemon-native | no | First-class aliases for `vm start/stop/restart`. Same envelope shape. |
 | `host prepare`, `host destroy` | daemon-native | no | Daemon-side host-prepare DAG. |
-| `host install` | daemon-native (broker `RunHostInstall`) | no | — |
+| `host install` | daemon-native (broker `RunHostInstall`) | no | - |
 | `host validate` | daemon-native | no | Writes the per-wave evidence files this page references below. See [`host-validate.md`](./host-validate.md). |
 | `build`, `generations` | pure Rust planner | no | Non-destructive, no daemon required. |
-| `switch`, `boot`, `test`, `rollback`, `gc` | daemon-native (broker `RunActivation` / `RunGc`) | no | — |
-| `keys list`, `keys show` | daemon-native (read-only) | no | — |
-| `keys rotate`, `trust`, `rotate-known-host` | daemon-native (broker `RunKeysRotate` / `RunHostKeyTrust` / `RunRotateKnownHost`) | no | — |
+| `switch`, `boot`, `test`, `rollback`, `gc` | daemon-native (broker `RunActivation` / `RunGc`) | no | - |
+| `keys list`, `keys show` | daemon-native (read-only) | no | - |
+| `keys rotate`, `trust`, `rotate-known-host` | daemon-native (broker `RunKeysRotate` / `RunHostKeyTrust` / `RunRotateKnownHost`) | no | - |
 | `migrate` | daemon-native (broker `RunMigrate`) | no | Dry-run analysis is local Rust; `--apply` goes through the broker. |
 | `usb attach`, `usb detach`, `usb probe` | daemon-native | no | USBIP live executors via the broker; attach binds/locks the busid before applying the firewall carve-out and ensuring per-env backend/proxy runners. |
 | `console`, `audio status`, `audio mic`, `audio speaker`, `audio off` | daemon-native | no | Rust CLI owns the surface; there is no bash helper fallback. |
-| `debug bundle` | daemon-native | no | — |
+| `debug bundle` | daemon-native | no | - |
 
 There is no `D2B_NATIVE_ONLY` and no `D2B_LEGACY_BASH_OPT_IN`.
 Both environment variables are unrecognised; setting them has no
@@ -89,7 +89,7 @@ the typed envelope catalog, see
 
 `d2b.daemonExperimental.enable` is no longer computed from wave
 readiness (no longer evidence-auto-flipped). It now defaults `true`,
-but it still functionally gates the daemon control plane — setting it
+but it still functionally gates the daemon control plane - setting it
 `false` reverts the host to the unsupported pre-daemon legacy state, so
 consumers should leave it at its default. The flip-gate subset
 `{w4Fu, w5Fu, w6Fu, w7Fu, w8Fu, w9Fu, p0, p0Fu, p1, p2, p3, p4}` is
@@ -100,7 +100,7 @@ What the evidence files **do** still gate is the per-wave readiness
 assertion. For each wave, an operator may set
 `d2b.defaultSwitchReadiness.<wave>.validated = true` only when an
 evidence file `<defaultFlipEvidenceDir>/<wave>.json` exists carrying
-the canonical `{wave, timestamp, operatorSignature}` schema — see
+the canonical `{wave, timestamp, operatorSignature}` schema - see
 [`wave-evidence-schema.md`](./wave-evidence-schema.md) for the full
 schema and validator. The eval-time assertion is fail-closed:
 asserting `validated = true` without the evidence file is rejected.
@@ -118,16 +118,16 @@ evidence files is `d2b host validate --apply`; see
 
 ## Cross-references
 
-- [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
-  — rationale, alternatives considered, why no compat /
+- [ADR 0015 - daemon-only clean break](../adr/0015-daemon-only-clean-break.md) -
+  rationale, alternatives considered, why no compat /
   deprecation path is acceptable, rollback limits.
-- [`cli-contract.md`](./cli-contract.md) — authoritative per-verb
+- [`cli-contract.md`](./cli-contract.md) - authoritative per-verb
   surface, exit codes, JSON shapes, signal semantics.
-- [`error-codes.md`](./error-codes.md) — typed envelope catalog.
-- [`wave-evidence-schema.md`](./wave-evidence-schema.md) — JSON
+- [`error-codes.md`](./error-codes.md) - typed envelope catalog.
+- [`wave-evidence-schema.md`](./wave-evidence-schema.md) - JSON
   schema for the evidence files this page's gate consumes.
-- [`host-validate.md`](./host-validate.md) — the verb that writes
+- [`host-validate.md`](./host-validate.md) - the verb that writes
   the evidence files.
-- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md)
-  — historical record of the rollout shape that preceded the clean
+- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md) -
+  historical record of the rollout shape that preceded the clean
   break.

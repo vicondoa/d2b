@@ -1,4 +1,4 @@
-# host-prepare-network — d2b-host + d2b-priv-broker network-reconcile
+# host-prepare-network - d2b-host + d2b-priv-broker network-reconcile
 # #[test]s. Successor of tests/host-prepare-network.sh, which ran a set of
 # focused `cargo test -p d2b-host --all-features -- <filter>` and
 # `cargo test -p d2b-priv-broker --all-features -- <filter>` invocations.

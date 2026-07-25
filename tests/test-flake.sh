@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-flake.sh — `make test-flake`: `nix flake check` for the build's
+# tests/test-flake.sh - `make test-flake`: `nix flake check` for the build's
 # NATIVE system only (bounded memory).
 #
 # CI shards the x86_64-linux checks one-job-per-check. The aarch64 PR job is a
@@ -29,7 +29,7 @@ cd "$ROOT"
 
 # git+file:// (never a bare path): source-capture from the git tree only, so the
 # sibling cargo target/ + scratch dirs stay invisible to the eval (disk-hygiene
-# contract — see tests/lib.sh d2b_flake_ref).
+# contract - see tests/lib.sh d2b_flake_ref).
 flake_ref=$(d2b_flake_ref "$ROOT")
 
 dump_flake_eval_segfault() {
@@ -226,7 +226,7 @@ fi
 # just that one flake check's derivation for the native system, matching the
 # `--no-build` semantics of the full sweep (evaluate + instantiate, do not
 # build). Sharding lets CI fan the checks out across parallel runners so no
-# single evaluator process holds every nixosSystem toplevel at once — the
+# single evaluator process holds every nixosSystem toplevel at once - the
 # OOM/swap-spill the monolithic `nix flake check` hit on a 16 GB hosted runner.
 # The complementary `test-flake-aarch64` job runs only the dedicated
 # smoke-eval-aarch64 expression. `D2B_FLAKE_OUTPUTS=1` (below) sweeps x86

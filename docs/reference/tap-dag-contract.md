@@ -55,7 +55,7 @@ the trusted bundle as `host.json::ifNameMapping`
 (`d2b_core::host::IfNameMapping`) and re-validated by the
 broker via `d2b_host::ifname::detect_collisions`. Two distinct
 keys hashing to the same derived ifname is a fail-closed emitter
-error (`IfNameError::IfNameCollision`) — there is no operator
+error (`IfNameError::IfNameCollision`) - there is no operator
 escape hatch.
 
 ## DAG position and ordering
@@ -74,12 +74,12 @@ apply-nftables-rules  --->  bring-up-tap-interface  --->  pre-open-vhost-net-fd
 
 **Upstream gates** (must succeed before tap creation):
 
-1. `<vm>:apply-nftables-rules` — declared `depends_on`. The
+1. `<vm>:apply-nftables-rules` - declared `depends_on`. The
    `inet d2b` table must hold the per-VM/per-busid carve-outs
    before the tap is attached to the bridge; this prevents a
    race where packets traverse the bridge before the firewall
    policy is in place.
-2. `ApplyNmUnmanaged` (host-wide, not per-VM) — enforced inside
+2. `ApplyNmUnmanaged` (host-wide, not per-VM) - enforced inside
    the broker handler via [`TapCreateGate`](../../packages/d2b-priv-broker/src/ops/tap.rs).
    The broker REFUSES `CreateTapFd` / `CreatePersistentTap`
    unless the prior `ApplyNmUnmanaged` op recorded either
@@ -91,11 +91,11 @@ apply-nftables-rules  --->  bring-up-tap-interface  --->  pre-open-vhost-net-fd
 
 **Downstream consumers** (must wait for tap creation):
 
-1. `<vm>:pre-open-vhost-net-fd` — declared `depends_on`. Vhost-net
+1. `<vm>:pre-open-vhost-net-fd` - declared `depends_on`. Vhost-net
    fd cannot be opened against a tap that does not yet exist.
 2. Per-VM process DAG `SpawnRunner` (cloud-hypervisor exec). The
    process DAG cannot begin until the entire host-prep DAG has
-   reported success — see
+   reported success - see
    [host-prep-dag.md §"Failure semantics"](./host-prep-dag.md#failure-semantics).
 
 **Tap → bridge attachment.** As part of the broker's tap-create
@@ -129,7 +129,7 @@ Broker op: `BrokerRequest::CreateTapFd`.
    derived ifname.
 2. Broker applies the per-link IPv6-off sysctl sequence
    (`disable_ipv6 = 1`, `accept_ra = 0`, `autoconf = 0`,
-   `addr_gen_mode = 1`) BEFORE attaching the tap to the bridge —
+   `addr_gen_mode = 1`) BEFORE attaching the tap to the bridge -
    so no IPv6 SLAAC/link-local packet ever leaves a d2b tap.
 3. Broker sets MAC + MTU per the resolved bundle intent.
 4. Broker attaches the tap to its env bridge with the
@@ -158,7 +158,7 @@ bundle build via `host.json::chConfig`).
    process exit.
 3. Broker calls `TUNSETOWNER(uid)` + `TUNSETGROUP(gid)` with the
    **exact** uid/gid of the runner that `SpawnRunner` will
-   exec — this is the per-VM runner uid (graphics VMs use
+   exec - this is the per-VM runner uid (graphics VMs use
    `d2b-<vm>-gpu` uid + `kvm` group; headless workloads use
    the `microvm` per-VM uid; per the networking
    guidance, the broker MUST bind to the same uid/gid the
@@ -241,7 +241,7 @@ envelope. The envelope is produced by the daemon and shaped as:
 The `op_kind` is the string returned by
 `HostPrepStepKind::BringUpTapInterface.broker_op_name()` which
 is always `"CreateTapFd"` regardless of whether the host's
-declared mode is `TapFd` or `PersistentTap` — the broker
+declared mode is `TapFd` or `PersistentTap` - the broker
 dispatches by request variant, not by step-kind label. The
 broker error string carries the concrete cause:
 
@@ -268,15 +268,15 @@ ownership marker so `ApplyNmUnmanaged` can succeed), the next
 
 ## Cross-references
 
-- **Host-prep DAG**: [host-prep-dag.md](./host-prep-dag.md) —
+- **Host-prep DAG**: [host-prep-dag.md](./host-prep-dag.md) -
   parent contract for the per-VM DAG this step lives in.
 - **Bridge port flags**: [`packages/d2b-host/src/bridge_port.rs`](../../packages/d2b-host/src/bridge_port.rs).
 - **Tap broker handlers**: [`packages/d2b-priv-broker/src/ops/tap.rs`](../../packages/d2b-priv-broker/src/ops/tap.rs).
 - **Derived ifname emitter**: [`packages/d2b-host/src/ifname.rs`](../../packages/d2b-host/src/ifname.rs).
-- **Host config DTO**: [`packages/d2b-core/src/host.rs`](../../packages/d2b-core/src/host.rs) — `ChNetHandoffMode`, `IfNameMapping`, `HostChConfig`.
-- **Failure envelope**: [`packages/d2b-host/src/host_prep_dag.rs`](../../packages/d2b-host/src/host_prep_dag.rs) — `HostPrepStepFailed`.
-- **Drift gate**: [`tests/tap-dag-contract-doc-eval.sh`](../../tests/tap-dag-contract-doc-eval.sh) — fails if any of the above implementation symbols diverge from this document.
+- **Host config DTO**: [`packages/d2b-core/src/host.rs`](../../packages/d2b-core/src/host.rs) - `ChNetHandoffMode`, `IfNameMapping`, `HostChConfig`.
+- **Failure envelope**: [`packages/d2b-host/src/host_prep_dag.rs`](../../packages/d2b-host/src/host_prep_dag.rs) - `HostPrepStepFailed`.
+- **Drift gate**: [`tests/tap-dag-contract-doc-eval.sh`](../../tests/tap-dag-contract-doc-eval.sh) - fails if any of the above implementation symbols diverge from this document.
 - **Related references**:
-  - [host-prep-dag.md](./host-prep-dag.md) — parent host-prep DAG scaffold.
-  - [stop-dag-reconcile.md](./stop-dag-reconcile.md) — reverse-order teardown contract.
-  - [per-vm-state-ownership.md](./per-vm-state-ownership.md) — per-VM uid/gid leaf ownership the persistent-tap mode binds to.
+  - [host-prep-dag.md](./host-prep-dag.md) - parent host-prep DAG scaffold.
+  - [stop-dag-reconcile.md](./stop-dag-reconcile.md) - reverse-order teardown contract.
+  - [per-vm-state-ownership.md](./per-vm-state-ownership.md) - per-VM uid/gid leaf ownership the persistent-tap mode binds to.

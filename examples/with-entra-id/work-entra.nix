@@ -49,7 +49,7 @@
   };
 
   # The Entra-ID configuration. Everything under `entrablau.*`
-  # is owned by the sibling `vicondoa/entrablau.nix` flake — see
+  # is owned by the sibling `vicondoa/entrablau.nix` flake - see
   # its README for the full schema and per-option semantics. The
   # generic placeholders below MUST be replaced with your tenant
   # values before this VM will actually authenticate against
@@ -79,7 +79,7 @@
       enable = true;
 
       # DMI / SMBIOS values bind-mounted into the himmelblau
-      # service mount namespaces only — defeats Intune flagging a
+      # service mount namespaces only - defeats Intune flagging a
       # virtualised guest as `Cloud Hypervisor` / `KVM`.
       #
       # GENERIC PLACEHOLDERS. In a real deployment you crib these

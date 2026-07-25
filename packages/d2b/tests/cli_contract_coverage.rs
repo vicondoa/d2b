@@ -67,7 +67,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
 
 /// `(flag label, argv tokens)` for a single flag invocation under a command.
 type FlagInvocation = (&'static str, &'static [&'static str]);
-/// `(command label, [flag invocations])` — a command's flag-coverage matrix.
+/// `(command label, [flag invocations])` - a command's flag-coverage matrix.
 type CommandFlagMatrix = (&'static str, &'static [FlagInvocation]);
 
 const FLAG_INVOCATIONS: &[CommandFlagMatrix] = &[

@@ -18,7 +18,7 @@
 # to the retired bash gate's `nix eval` of each scenario while staying hermetic
 # (no `builtins.getFlake`). Each positive scenario asserts the exact evidence
 # JSON; each policy-violation scenario asserts the eval THROWS (the bash gate
-# additionally matched the assertion message — that precise text is not
+# additionally matched the assertion message - that precise text is not
 # capturable by the harness's `expectedError` bucket, so it relaxes to a throw
 # assertion, the same faithful reduction the other throw-case migrations took).
 #

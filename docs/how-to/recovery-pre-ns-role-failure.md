@@ -8,8 +8,8 @@ In v1.2, the following per-VM roles run inside a single-entry
 user namespace created by the broker via `clone3(CLONE_NEWUSER)`
 before `execve` of the sidecar:
 
-- **virtiofsd** (since v1.1.2 — ADR 0021 original landing)
-- **swtpm** (v1.2 / D5 swtpm portion — fully closed)
+- **virtiofsd** (since v1.1.2 - ADR 0021 original landing)
+- **swtpm** (v1.2 / D5 swtpm portion - fully closed)
 - **gpu** in render-node-only configurations (v1.2 / D5 gpu portion)
 - **audio** with owned net-NS (v1.2 / D5 audio Tier 2)
 
@@ -33,14 +33,14 @@ reports `SpawnRunner failed at <role>`.
    | Exit code | Symbolic name              | Meaning |
    |-----------|----------------------------|---------|
    | 60        | `CHILD_EXIT_PRCTL`         | `prctl(NO_NEW_PRIVS)` or similar prctl failed |
-   | 61        | `CHILD_EXIT_UNSHARE`       | `unshare()` or `clone3(NEWUSER)` failed — often `EPERM` from `kernel.unprivileged_userns_clone = 0` |
+   | 61        | `CHILD_EXIT_UNSHARE`       | `unshare()` or `clone3(NEWUSER)` failed - often `EPERM` from `kernel.unprivileged_userns_clone = 0` |
    | 62        | `CHILD_EXIT_CGROUP`        | cgroup-v2 placement failed |
    | 63        | `CHILD_EXIT_MOUNT`         | mount-namespace operation failed; in user-NS context this is usually a regression of the mount-action-skip guard |
    | 70        | `CHILD_EXIT_SETGROUPS`     | `setgroups(0, NULL)` failed inside user-NS |
    | 71        | `CHILD_EXIT_SETGID`        | `setgid()` failed; uid_map / gid_map mis-written |
    | 72        | `CHILD_EXIT_SETUID`        | `setuid()` failed (same root cause as 71) |
    | 73        | `CHILD_EXIT_EXECVE`        | `execve` of the sidecar binary failed (often missing in profile, or pre-opened fd dup2 collision) |
-   | 74        | `CHILD_EXIT_USER_NS_SYNC`  | The broker parent's `/proc/<pid>/{uid,gid}_map` write failed — usually a TOCTOU race or principal-UID misconfiguration |
+   | 74        | `CHILD_EXIT_USER_NS_SYNC`  | The broker parent's `/proc/<pid>/{uid,gid}_map` write failed - usually a TOCTOU race or principal-UID misconfiguration |
    | 75        | `CHILD_EXIT_INVALID_UMASK` | umask value outside the valid [0o000, 0o777] range; should never fire if the manifest is consistent |
    | 76        | `CHILD_EXIT_PREOPEN_DUP2`  | dup2 of a pre-opened device fd (e.g. render-node fd handoff) failed |
 
@@ -74,7 +74,7 @@ Then `nixos-rebuild switch` and retry the VM start.
 
 If you need to ship a fix and the pre-NS is the blocker, you can
 temporarily disable it on a per-component basis. The components
-support a `brokerPreNs` boolean (or equivalent — check the
+support a `brokerPreNs` boolean (or equivalent - check the
 specific component's options):
 
 ```nix
@@ -99,7 +99,7 @@ means:
   with an already-allocated system UID. Run
   `bash tests/principal-uid-collision-eval.sh` to verify.
 - The broker process itself lost CAP_SETUID/CAP_SETGID between
-  `clone3` and the map write — usually a regression in
+  `clone3` and the map write - usually a regression in
   `packages/d2b-priv-broker/src/sys.rs` clone child closure.
 
 ### Scenario 4: Sidecar binary execve failed (exit 73)
@@ -136,6 +136,6 @@ catch regressions of the pre-NS path.
 
 ## Related docs
 
-- ADR 0021 — `docs/adr/0021-broker-user-namespace-for-virtiofsd.md`
-- ADR 0023 — `docs/adr/0023-runner-role-lifecycle-matrix.md`
-- v1.2 planning notes — deliverable description
+- ADR 0021 - `docs/adr/0021-broker-user-namespace-for-virtiofsd.md`
+- ADR 0023 - `docs/adr/0023-runner-role-lifecycle-matrix.md`
+- v1.2 planning notes - deliverable description

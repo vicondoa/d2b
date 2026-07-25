@@ -10,7 +10,7 @@
 //! - the broker itself does NOT set `PR_SET_CHILD_SUBREAPER` (it is
 //!   short-lived per operation);
 //! - reconciliation paths use `pidfd_open` keyed on pid + start-time
-//!   (`/proc/<pid>/stat` field 22) — both must match before the
+//!   (`/proc/<pid>/stat` field 22) - both must match before the
 //!   resulting fd is accepted.
 //!
 //! All real syscall surface is quarantined inside a tiny opt-in

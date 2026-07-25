@@ -14,11 +14,11 @@
 #   3. Every rendered d2b-* system user has a unique UID.
 # Plus two non-vacuity guards (the bash gate reported these counts):
 #   * 32 principal/uid profile entries are extracted.
-#   * They resolve to 5 distinct (principal, uid) pairs — one runner per VM
+#   * They resolve to 5 distinct (principal, uid) pairs - one runner per VM
 #     (work-app, personal-app, sys-work-net, sys-personal-net) plus
 #     d2bd.
 #
-# Reads only `.data.{uid,principal}` from each minijail profile entry —
+# Reads only `.data.{uid,principal}` from each minijail profile entry -
 # `.path` (writeText) and `.roleProfile` are never forced. multi-env is
 # graphics-free, so the cases contribute on every system and the expected
 # values are platform-independent.

@@ -1,6 +1,6 @@
 //! The gateway session ledger: the accepted-op idempotency/dedup table, the
 //! per-realm/principal quotas, and the display-session lifecycle state machine
-//! (ADR 0032 P0, design §3). Pure logic — no I/O — so it is exhaustively
+//! (ADR 0032 P0, design §3). Pure logic - no I/O - so it is exhaustively
 //! unit-testable without live providers.
 
 use crate::error::GatewayError;
@@ -77,14 +77,14 @@ pub struct TargetKey {
 }
 
 /// Quota limits enforced by the ledger (the in-process accounting; the
-/// gateway-daemon cgroup is the hard backstop — design §3).
+/// gateway-daemon cgroup is the hard backstop - design §3).
 #[derive(Debug, Clone)]
 pub struct LedgerLimits {
     /// Max concurrent (non-terminal) sessions per principal.
     pub max_sessions_per_principal: usize,
     /// Max concurrent (non-terminal) sessions per realm.
     pub max_sessions_per_realm: usize,
-    /// Max total tracked records (records bound — old terminal records are
+    /// Max total tracked records (records bound - old terminal records are
     /// GC'd first; if still over, opens fail closed).
     pub max_records: usize,
 }

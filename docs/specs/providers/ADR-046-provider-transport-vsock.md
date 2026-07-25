@@ -36,7 +36,7 @@ All sources in this section are from main commit
 `a1cc0b2da4a08ca3240a770a972fe4da6f912bef`. They are **not** present in
 the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 
-### `d2b-session-unix/src/vsock.rs` — framed vsock transport
+### `d2b-session-unix/src/vsock.rs` - framed vsock transport
 
 | Symbol | Selected behavior |
 | --- | --- |
@@ -46,7 +46,7 @@ the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 | `VsockTransportError` (12 variants) | `BindFailed`, `ConnectFailed`, `CidMismatch`, `PortMismatch`, `FrameTooLarge`, `UnexpectedEof`, `WriteTimeout`, `ReadTimeout`, `ConnectionReset`, `ProtocolError`, `Backpressure`, `Shutdown` |
 | `VsockEndpointPolicy` | `ExpectedCid { cid: u32 }` enforces that the connected peer CID equals the pre-negotiated value; connection from a mismatched CID is closed with `CidMismatch` without processing any bytes |
 
-**V3 destination — split by ownership**:
+**V3 destination - split by ownership**:
 
 - `FramedVsockTransport` framing utilities (2-byte length-prefix encode/decode,
   bounded frame allocation, EOF/reset classification) → `packages/d2b-provider-transport-vsock/src/framing.rs`.
@@ -58,7 +58,7 @@ the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 - `VsockTransportError` variants → `packages/d2b-provider-transport-vsock/src/errors.rs`
   (framing/bridge errors only; raw-socket error variants stay in the core adapter).
 
-**Tests** (`packages/d2b-session-unix/tests/unix_session.rs` — vsock subset):
+**Tests** (`packages/d2b-session-unix/tests/unix_session.rs` - vsock subset):
 
 | Test function | Covers | v3 destination |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 
 ---
 
-### `d2b-session-unix/src/adapter.rs` — `OwnedTransport` contract
+### `d2b-session-unix/src/adapter.rs` - `OwnedTransport` contract
 
 The `OwnedTransport` trait and `TransportPacket`/`TransportDescriptor` from
 main are the binding interface that `FramedVsockTransport` implements. The
@@ -161,7 +161,7 @@ Endpoint, or status handler.
 - Never transfers file descriptors (structural: `attachment_support = false`
   on the vsock `TransportDescriptor`).
 
-**Not in scope for this Provider** — owned by other components:
+**Not in scope for this Provider** - owned by other components:
 - ZoneLink reconcile loop, status condition writes, finalizers, and local
   route/session state → child Zone's core ZoneLink/delegation controller.
 - Noise handshake (KK, IKpsk2), ComponentSession lifecycle, credit/flow
@@ -227,25 +227,25 @@ mirror desired spec. The `Provider` resource itself keeps the D075
 ```text
 packages/d2b-provider-transport-vsock/
   src/
-    lib.rs          — crate root; Provider identity constant
-    service.rs      — VsockTransportService implementation; dispatches OpenTransport /
+    lib.rs          - crate root; Provider identity constant
+    service.rs      - VsockTransportService implementation; dispatches OpenTransport /
                       CloseTransport / ObserveTransport to effect port and bridge tasks
-    effect_port.rs  — VsockEffectPort async trait + OpaqueEndpointId / OpaqueBindingId
-    bridge.rs       — named-stream ↔ opaque AsyncRead+AsyncWrite byte pump task
-    framing.rs      — 2-byte big-endian length-prefix encode / decode (no raw sockets)
-    limits.rs       — per-connection and per-session constants
-    errors.rs       — VsockEffectError / FramingError / ServiceError typed hierarchy
+    effect_port.rs  - VsockEffectPort async trait + OpaqueEndpointId / OpaqueBindingId
+    bridge.rs       - named-stream ↔ opaque AsyncRead+AsyncWrite byte pump task
+    framing.rs      - 2-byte big-endian length-prefix encode / decode (no raw sockets)
+    limits.rs       - per-connection and per-session constants
+    errors.rs       - VsockEffectError / FramingError / ServiceError typed hierarchy
   tests/
-    framing.rs           — 2-byte framing, partial reads, frame-size bounds
-    effect_port_mock.rs  — FakeVsockEffectPort; opaque-ID mismatch / timeout injection
-    open_close.rs        — OpenTransport / CloseTransport service round-trip (fake port)
-    observe.rs           — ObserveTransport event stream (fake port)
-    redaction.rs         — no CID / port / path in Debug / log / audit output
-    schema.rs            — `spec.transportSettings` JSON Schema round-trip and rejection
-    state_volume.rs      — state Volume spec shape, User/<name> layout principal, no ComponentPrincipal
+    framing.rs           - 2-byte framing, partial reads, frame-size bounds
+    effect_port_mock.rs  - FakeVsockEffectPort; opaque-ID mismatch / timeout injection
+    open_close.rs        - OpenTransport / CloseTransport service round-trip (fake port)
+    observe.rs           - ObserveTransport event stream (fake port)
+    redaction.rs         - no CID / port / path in Debug / log / audit output
+    schema.rs            - `spec.transportSettings` JSON Schema round-trip and rejection
+    state_volume.rs      - state Volume spec shape, User/<name> layout principal, no ComponentPrincipal
   integration/
-    host_guest.rs    — real vsock socketpair via injected effect; OpenTransport + byte round-trip
-    no_fd_transfer.rs — structural attachment rejection over vsock transport
+    host_guest.rs    - real vsock socketpair via injected effect; OpenTransport + byte round-trip
+    no_fd_transfer.rs - structural attachment rejection over vsock transport
   README.md
 ```
 
@@ -514,7 +514,7 @@ dropped.
 
 ---
 
-## VsockEffectPort — injected interface
+## VsockEffectPort - injected interface
 
 `VsockEffectPort` is an async Rust trait injected at Provider startup. It
 abstracts all AF_VSOCK syscall access. The Provider never calls
@@ -579,7 +579,7 @@ selected-parent allocation; the Provider never receives the raw resolution.
 `cid`, `port`, `socketPath`, `token`, `password`, and any field whose value
 is or contains a raw socket address.
 
-**Reserved ports** — never allocated by `portClass: "d2b-link"`:
+**Reserved ports** - never allocated by `portClass: "d2b-link"`:
 - `14317`: OTLP gRPC relay (observability-otel)
 - `14318`: guestd ttrpc (guest-control, ADR 0028)
 - `14319`: OTLP HTTP relay (observability-otel)
@@ -591,15 +591,15 @@ Provider has no knowledge of them.
 
 ## ProviderStateSet
 
-A **ProviderStateSet** is the optional, query-time grouping — the set of the
+A **ProviderStateSet** is the optional, query-time grouping - the set of the
 *declared* Volume resources in a Zone whose `metadata.ownerRef` resolves to
 `Provider/<name>`. It is not a ResourceType and is empty for a Provider that
 declares no state Volume.
 
 `Provider/transport-vsock` declares **no** Provider state Volume; its
-`ProviderStateSet` is empty. Its bounded non-secret operational state — service
+`ProviderStateSet` is empty. Its bounded non-secret operational state - service
 readiness, transport-open/close reconcile stage, bounded connection/port
-observation counters, and closed-enum error detail — lives in the owning
+observation counters, and closed-enum error detail - lives in the owning
 resource's `status` subresource and the child core Operation ledger (D087).
 Port allocation and the port registry are selected-parent allocator state; the
 parent retains only that sealed allocator/route state. All ZoneLink session
@@ -802,9 +802,9 @@ metrics are NOT the Provider's responsibility.
 | --- | --- | --- | --- |
 | `d2b.transport.vsock.open.duration_ms` | Histogram | `role`, `result` | Time from `OpenTransport` receipt to vsock acquired or error |
 | `d2b.transport.vsock.open.total` | Counter | `role`, `result` | `OpenTransport` calls by outcome |
-| `d2b.transport.vsock.active` | Gauge | — | Currently open transport handles |
-| `d2b.transport.vsock.bytes_rx` | Counter | — | Bytes received from vsock side of bridge |
-| `d2b.transport.vsock.bytes_tx` | Counter | — | Bytes sent to vsock side of bridge |
+| `d2b.transport.vsock.active` | Gauge | - | Currently open transport handles |
+| `d2b.transport.vsock.bytes_rx` | Counter | - | Bytes received from vsock side of bridge |
+| `d2b.transport.vsock.bytes_tx` | Counter | - | Bytes sent to vsock side of bridge |
 | `d2b.transport.vsock.bridge_errors` | Counter | `error_kind` | Bridge task errors (framing, reset, timeout) |
 
 **Prohibited labels**: raw CID, raw port, socket path, `endpoint_id` or
@@ -948,7 +948,7 @@ expression.
 | Integration | Child Zone's core ZoneLink/delegation controller calls its same-Zone Provider with opaque IDs; Provider calls injected `VsockEffectPort`; live AF_VSOCK child-endpoint resolution remains in child core runtime while the selected parent retains only sealed peer/route state. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: hermetic unit + redaction test; `tests/effect_port_mock.rs` and `tests/redaction.rs`. |
-| Removal proof | None — net-new; no prior owner to remove. |
+| Removal proof | None - net-new; no prior owner to remove. |
 
 ### ADR046-vsock-002
 | Field | Value |
@@ -975,7 +975,7 @@ expression.
 | Integration | Child Zone's core ZoneLink/delegation controller is the only authorized caller; service opens named stream handles for child d2b-bus, releases them on close, and streams transport events for observe; no parent-side Provider or handler exists. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: service round-trip plus exact-shape tests; `tests/open_close.rs`, `tests/observe.rs`, `tests/topology.rs::{canonical_zonelink_spec_fields_are_exact,legacy_zonelink_provider_fields_are_rejected,transport_credentials_must_be_empty}`, and provider conformance tests. |
-| Removal proof | None — net-new; no prior owner to remove. |
+| Removal proof | None - net-new; no prior owner to remove. |
 
 ### ADR046-vsock-004
 | Field | Value |
@@ -988,7 +988,7 @@ expression.
 | Integration | Selected parent allocator issues a sealed endpoint/binding allocation without creating resources; child core resolves its local side, opens/accepts the AF_VSOCK endpoint, returns an opaque stream to its Provider service, and excludes reserved ports. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: integration test; `integration/host_guest.rs` exercises live open/close byte round-trip with the injected effect and proves the selected parent has only sealed allocator/route state, with no parent-store Provider/ZoneLink row. |
-| Removal proof | None — net-new core adapter; no prior owner to remove. |
+| Removal proof | None - net-new core adapter; no prior owner to remove. |
 
 ### ADR046-vsock-005
 | Field | Value |
@@ -1012,9 +1012,9 @@ expression.
 | Destination | `packages/d2b-provider-transport-vsock/integration/host_guest.rs` and `integration/no_fd_transfer.rs`. |
 | Detailed design | Integration test: fixture declares compiler-only `k1.parentZone = "local-root"`, puts the selected Provider and an exact six-field ZoneLink (`transportProviderRef`, validated `transportSettings`, empty `transportCredentials`, `disabled`, and `limits`, plus self-matching `childZoneName`) only in K1, and gives local-root only sealed allocator/route state; `integration/host_guest.rs` opens a real Linux vsock path through K1's `LiveVsockEffectPort`, then exercises `OpenTransport` + byte round-trip + `CloseTransport` and validates bridge throughput ≥ 512 MiB/s; `no_fd_transfer.rs` structurally rejects attachment packets and asserts no FD/ResourceRef crosses the Zone boundary. Primary reuse disposition: `create`. Preserved source-plan detail: net-new integration coverage with no FD transfer over vsock. |
 | Integration | Test drives K1-local Provider service, child `LiveVsockEffectPort`, d2b-bus `OwnedTransport`, byte bridge, close path, absent local-root reciprocal resource row, and attachment rejection across the integration lane. |
-| Data migration | None — docs/tooling only; no runtime state. |
+| Data migration | None - docs/tooling only; no runtime state. |
 | Validation | Proof type: integration test; `make test-integration` runs `host_guest.rs` and `no_fd_transfer.rs`. |
-| Removal proof | None — test coverage net-new; old duplicate vsock tests are retired only after successor assertions migrate. |
+| Removal proof | None - test coverage net-new; old duplicate vsock tests are retired only after successor assertions migrate. |
 
 ### ADR046-vsock-007
 | Field | Value |
@@ -1064,7 +1064,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
 sleep, and `cargo test -p d2b-provider-transport-vsock --lib --tests` completes in ≤2 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
-and the toolkit fakes/FakeEffectPort only — no process spawn, container,
+and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
 hardware, or live cloud, and no filesystem tree beyond tiny temp fixtures. Any
 scenario needing those lives only in `integration/`, which keeps a lane
@@ -1101,7 +1101,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1120,7 +1120,7 @@ Old and new suites never run in parallel indefinitely.
 - Role: `service` component; no ResourceType ownership; the child Zone's core
   ZoneLink/delegation controller is the sole ZoneLink reconciler and the only
   caller of this service.
-- ProviderStateSet: empty — `Provider/transport-vsock` declares no Provider
+- ProviderStateSet: empty - `Provider/transport-vsock` declares no Provider
   state Volume; its bounded non-secret operational state lives in `status`/the
   child core Operation ledger (D087). All ZoneLink session state is owned by the
   child Zone's core ZoneLink controller; the service holds only opaque

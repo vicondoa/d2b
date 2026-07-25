@@ -1,4 +1,4 @@
-# W3 L3 distro matrix — Fedora Server 40
+# W3 L3 distro matrix - Fedora Server 40
 os = fedora
 release = 40
 image_url = https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2

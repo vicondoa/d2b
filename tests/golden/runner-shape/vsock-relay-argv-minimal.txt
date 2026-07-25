@@ -4,10 +4,10 @@
 # Two shapes are covered (the EXEC form is OtelHostBridge's golden, not
 # this one):
 #
-#   1. stack-vm vsock-in  — obs stack VM listens on AF_VSOCK port 14317
+#   1. stack-vm vsock-in  - obs stack VM listens on AF_VSOCK port 14317
 #      and forwards into an in-guest Alloy UDS. Source: VSOCK-LISTEN,
 #      sink: UNIX-CONNECT.
-#   2. guest egress       — guest Alloy egresses via a UDS on the host
+#   2. guest egress       - guest Alloy egresses via a UDS on the host
 #      side that pipes into AF_VSOCK CID 2 (host) port 14317. Source:
 #      UNIX-LISTEN, sink: VSOCK-CONNECT.
 #

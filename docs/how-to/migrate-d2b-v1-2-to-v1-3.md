@@ -1,6 +1,6 @@
 # Migrate d2b v1.2 to v1.3
 
-## TL;DR — required steps for operators
+## TL;DR - required steps for operators
 
 For most v1.2 hosts the upgrade is two commands:
 
@@ -29,7 +29,7 @@ automatically, at VM start, through the privileged broker:
 - The directory is created (owned by the per-VM `d2b-<vm>-swtpm`
   principal, mode `0700`) on first start. **The manual
   `install -d -o d2b-<vm>-swtpm … /var/lib/d2b/vms/<vm>/swtpm`
-  workaround is no longer needed** — remove it from any operator
+  workaround is no longer needed** - remove it from any operator
   runbooks.
 - The per-VM state root `/var/lib/d2b/vms/<vm>/` is now `3770`
   (setgid **+ sticky**). The sticky bit prevents a non-owner per-VM
@@ -54,7 +54,7 @@ like device tampering).
 If you hit this and the loss was **unintentional**: restore the
 original `/var/lib/d2b/vms/<vm>/swtpm` NVRAM contents from backup,
 then start the VM. Creating an empty directory, a recursive `chown`,
-or a bare `nixos-rebuild` is **not** recovery — the TPM NVRAM + EK
+or a bare `nixos-rebuild` is **not** recovery - the TPM NVRAM + EK
 seed are irreplaceable and their absence is treated as tampering.
 
 If the TPM reset was **intentional** (you are deliberately wiping the

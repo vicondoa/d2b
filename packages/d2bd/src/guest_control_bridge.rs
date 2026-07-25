@@ -7,7 +7,7 @@
 //! production [`GuestControlSigner`] and nothing that drives the probe.
 //! This module supplies both:
 //!
-//! * [`BrokerSigner`] — the production signer. It forwards the
+//! * [`BrokerSigner`] - the production signer. It forwards the
 //!   probe-built [`GuestControlSignRequest`] verbatim to the privileged
 //!   broker and returns the broker-minted tag. It owns only the broker
 //!   socket path so it is `Send + Sync` and can move into the blocking
@@ -20,7 +20,7 @@
 //! Runtime boundary: every probe runs inside a fresh
 //! `new_current_thread().enable_all()` runtime with owned parameters.
 //! Callers on the multi-threaded daemon runtime MUST invoke the probe
-//! from `tokio::task::spawn_blocking` — never `Handle::current()`,
+//! from `tokio::task::spawn_blocking` - never `Handle::current()`,
 //! `block_in_place`, or a nested runtime.
 
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ fn map_broker_sign_response(
 ///
 /// Holds only the broker socket path and the shared per-attempt budget so
 /// it is `Send + Sync` and movable into the blocking probe worker. `sign`
-/// forwards the probe-built request verbatim — it never mints nonces,
+/// forwards the probe-built request verbatim - it never mints nonces,
 /// roles, or boot ids; the broker remains the sole minter of the tag.
 /// Each `sign` draws `min(cap, remaining)` from the budget so the broker
 /// round-trip shares the same absolute deadline as connect / ttRPC; a
@@ -678,7 +678,7 @@ pub fn activation_status_error_is_transient(error: &GuestSystemActivationError) 
 /// ttRPC / broker-sign. A terminal (auth/protocol/file) error returns
 /// immediately. Fails CLOSED: once the deadline has been reached (even
 /// after an overslept backoff) it does NOT start a fresh floored-to-1ms
-/// attempt — it surfaces a Timeout instead.
+/// attempt - it surfaces a Timeout instead.
 pub fn run_guest_control_config_read_loop(
     probe: &dyn GuestControlProbe,
     params: &ProbeParams,
@@ -1045,7 +1045,7 @@ impl ProbeClock for RealProbeClock {
 /// Terminal result of a readiness loop: the last probe outcome plus
 /// bounded-retry observability (attempt count and elapsed wall time).
 /// `attempts`/`elapsed` are intended as tracing FIELDS / histogram
-/// buckets — never metric labels (they are unbounded-ish / per-run).
+/// buckets - never metric labels (they are unbounded-ish / per-run).
 pub struct ReadinessProbeRun {
     pub outcome: Result<GuestControlHealthEvidence, GuestControlHealthError>,
     pub attempts: u32,
@@ -1164,7 +1164,7 @@ impl ReadinessObservation {
 
 /// Closed-enum label for the guest-reported health state of a probe
 /// outcome. Used as a metric/span label, so the range is a small fixed
-/// vocabulary — never free-form text and never guest-supplied content.
+/// vocabulary - never free-form text and never guest-supplied content.
 pub fn health_state_label(evidence: &GuestControlHealthEvidence) -> &'static str {
     use d2b_contracts::guest_proto::HealthState;
     match evidence.health.state.enum_value() {
@@ -1196,7 +1196,7 @@ pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
 
 /// Closed-enum label for the guest-reported health REASON of a probe
 /// outcome. Used as a metric/span label, so the range is the fixed
-/// `HealthReason` vocabulary — never free-form text and never
+/// `HealthReason` vocabulary - never free-form text and never
 /// guest-supplied content.
 pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static str {
     use d2b_contracts::guest_proto::HealthReason;
@@ -1646,7 +1646,7 @@ mod tests {
             &clock,
         );
         assert!(!guest_control_health_ready(&run.outcome));
-        // Exactly ONE probe attempt — the post-deadline 1ms attempt that
+        // Exactly ONE probe attempt - the post-deadline 1ms attempt that
         // the old `.max(1ms)` floor would have started never happens.
         assert_eq!(
             probe.attempt_timeouts.lock().unwrap().len(),
@@ -2094,7 +2094,7 @@ mod tests {
             ),
             "an exceeded deadline must surface as Timeout, got {result:?}"
         );
-        // Exactly ONE read attempt — the post-deadline 1ms attempt that
+        // Exactly ONE read attempt - the post-deadline 1ms attempt that
         // the old `.max(1ms)` floor would have started never happens.
         assert_eq!(
             probe.attempt_timeouts.lock().unwrap().len(),

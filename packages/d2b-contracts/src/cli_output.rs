@@ -42,7 +42,7 @@ pub struct ListItemOutputV2 {
     /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
     /// Present when the daemon has associated this entry with a realm workload
     /// identity. Absent for classical `d2b.vms` entries not yet adopted into
-    /// a realm. Additive — old CLI consumers must tolerate its absence.
+    /// a realm. Additive - old CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_target: Option<String>,
 }
@@ -438,7 +438,7 @@ pub struct StatusVmOutputV2 {
     /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
     /// Present when the daemon has associated this VM with a realm workload
     /// identity. Absent for classical VMs not yet adopted into a realm.
-    /// Additive — old CLI consumers must tolerate its absence.
+    /// Additive - old CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_target: Option<String>,
 }

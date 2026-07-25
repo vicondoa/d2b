@@ -4,7 +4,7 @@
 //! `exec` verb: a single `Start` op establishes the daemon-held authenticated
 //! guest-control session, then the remaining ops
 //! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) drive it. The
-//! CLI never opens a new connection per op and never allocates a host PTY —
+//! CLI never opens a new connection per op and never allocates a host PTY -
 //! the guest owns the PTY (helper-exec). This module is the pure FSM +
 //! host-termios safety; the real socket/signal/host wiring lives in `lib.rs`
 //! so the FSM is unit-testable against injected fakes.
@@ -202,7 +202,7 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
         "guest-control-stale-session" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
         // The daemon's admin gate refused the caller before any guest contact
         // (caller not in `d2b.site.adminUsers`). It is an authorization
-        // failure, NOT an internal bug — map it to the AUTH reserved code so
+        // failure, NOT an internal bug - map it to the AUTH reserved code so
         // it does not fall through to the internal (42) default.
         "authz-not-admin" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
         "guest-control-exec-internal" => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
@@ -311,7 +311,7 @@ pub fn exit_code_for_terminal(status: &ExecTerminalStatus) -> i32 {
 /// Validate + resolve a wire terminal status into an [`ExecOutcome`].
 /// Only a true guest `WIFEXITED` (0–255) or `WIFSIGNALED` (valid signo)
 /// resolves as a guest outcome. An out-of-range exit code, an out-of-range
-/// signal, or an abnormal `Error` slug is a transport/protocol failure — never
+/// signal, or an abnormal `Error` slug is a transport/protocol failure - never
 /// synthesized as a guest success/status.
 fn resolve_terminal(status: ExecTerminalStatus) -> Result<ExecOutcome, ExecClientError> {
     match &status {
@@ -537,7 +537,7 @@ where
 
         // 2. Forward host stdin. Drain any pending (unsent) bytes from a prior
         //    backpressured write FIRST, then read fresh host stdin only when the
-        //    pending buffer is empty — so a zero-accepted write never drops the
+        //    pending buffer is empty - so a zero-accepted write never drops the
         //    already-read remainder.
         if config.interactive && !stdin_done {
             if pending_stdin.is_empty() {
@@ -654,7 +654,7 @@ where
                      no terminal status",
                 ));
             }
-            // Still running but output EOF reported — keep polling Wait.
+            // Still running but output EOF reported - keep polling Wait.
         }
     }
 }
@@ -747,7 +747,7 @@ fn decode_error_frame(value: &Value) -> ExecClientError {
 // ---------------------------------------------------------------------------
 // Host terminal safety: a guard that restores termios + O_NONBLOCK on
 // EVERY exit/error/disconnect/panic via Drop. Uses only the safe rustix
-// termios/fcntl wrappers — no `unsafe`.
+// termios/fcntl wrappers - no `unsafe`.
 // ---------------------------------------------------------------------------
 
 /// Host stdin terminal operations behind a trait so the ordering logic in
@@ -1020,7 +1020,7 @@ impl TerminalHostIo for CapturingHostIo {
 
 // ---------------------------------------------------------------------------
 // Signal source: block the forwarded signals process-wide and let a
-// dedicated thread sigwait + enqueue. Enqueue-only — no termios/syscalls in a
+// dedicated thread sigwait + enqueue. Enqueue-only - no termios/syscalls in a
 // handler, and no `unsafe` (nix `SigSet` wrappers are safe).
 // ---------------------------------------------------------------------------
 
@@ -1043,8 +1043,8 @@ impl TerminalSignalSource for InstalledSignals {
 }
 
 /// Block SIGWINCH/SIGINT/SIGTERM/SIGTSTP/SIGHUP/SIGQUIT on the calling (main)
-/// thread — so spawned threads inherit the block and the terminal-driven
-/// signals are forwarded into the guest rather than acting on the host CLI —
+/// thread - so spawned threads inherit the block and the terminal-driven
+/// signals are forwarded into the guest rather than acting on the host CLI -
 /// and spawn a sigwait thread that enqueues each as an [`ExecSignal`].
 pub fn install_signals() -> io::Result<InstalledSignals> {
     use nix::sys::signal::{SigSet, Signal};
@@ -1105,7 +1105,7 @@ fn nix_errno_to_io(errno: nix::errno::Errno) -> io::Error {
 // no-op/restore-idempotent; (h) redaction (no stdio/argv bytes in errors).
 //
 // The FSM is driven entirely through the `ExecOwnerTransport` / `ExecHostIo` /
-// `ExecSignalSource` seams against in-memory fakes — no socket, no real tty.
+// `ExecSignalSource` seams against in-memory fakes - no socket, no real tty.
 // ===========================================================================
 #[cfg(test)]
 mod tests {
@@ -1656,7 +1656,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Exactly two writes; both carry the SAME "hello" bytes at offset 0 —
+        // Exactly two writes; both carry the SAME "hello" bytes at offset 0 -
         // the backpressured remainder was retried, not replaced by fresh stdin.
         assert_eq!(writes.len(), 2);
         assert_eq!(writes[0], (0, b"hello".to_vec()));

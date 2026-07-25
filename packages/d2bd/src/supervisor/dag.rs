@@ -5,7 +5,7 @@
 //! and drives them through a [`NodeRunner`] trait that abstracts the
 //! "spawn via broker + register pidfd + poll readiness" sequence.
 //!
-//! The executor itself does no system calls — the [`NodeRunner`]
+//! The executor itself does no system calls - the [`NodeRunner`]
 //! implementation does. That keeps the DAG logic testable in isolation
 //! and lets the production daemon swap in different runners (real
 //! broker, in-process fake, dry-run preview).
@@ -113,7 +113,7 @@ impl<'de> Deserialize<'de> for ApiReadyState {
 }
 
 /// Aggregate report returned by [`DagExecutor::run`]. Always lists
-/// every node in topo order — pending/skipped entries are explicit
+/// every node in topo order - pending/skipped entries are explicit
 /// rather than absent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

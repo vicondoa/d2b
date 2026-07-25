@@ -1,4 +1,4 @@
-# d2b — host scaffold
+# d2b - host scaffold
 
 You just ran:
 
@@ -9,9 +9,9 @@ nix flake init -t github:vicondoa/d2b
 This directory now contains a minimal, two-file [d2b] host
 configuration:
 
-- `flake.nix` — pins `nixpkgs` and `d2b`, declares one
+- `flake.nix` - pins `nixpkgs` and `d2b`, declares one
   `nixosConfigurations.<host>`.
-- `configuration.nix` — the host config: one Wayland user, one
+- `configuration.nix` - the host config: one Wayland user, one
   isolated env, one workload VM.
 
 `configuration.nix` is pre-filled with **sentinel placeholder
@@ -28,7 +28,7 @@ sub-step** (hostname; the Wayland user identity; the at-least-one
 SSH key under `d2b.site.userAuthorizedKeys`, which is the tail
 half of TODO 3). The remaining TODOs (1 hardware, 4 SSH-user
 echo, 5–7 network CIDRs) ship with values that PASS
-`nix flake check` — they are gated by **your judgement**, not by
+`nix flake check` - they are gated by **your judgement**, not by
 eval. Treat the assertion-passing scaffold as a starting point that
 still requires a manual review of TODOs 5–7 before activation.
 
@@ -41,7 +41,7 @@ ranges, `192.168.x.0/24`) are indistinguishable from real LANs, so
 they are flagged in comments rather than in `assertions = [ … ]`.
 
 The only assertion the scaffold trips that isn't a d2b-side
-TODO is NixOS's own `fileSystems."/"` check (TODO 1 — drop in a
+TODO is NixOS's own `fileSystems."/"` check (TODO 1 - drop in a
 real `hardware-configuration.nix`).
 
 [d2b]: https://github.com/vicondoa/d2b
@@ -57,15 +57,15 @@ you whether `nix flake check` will catch a missed edit):
 | 1 | `configuration.nix` | Bootloader, filesystems, hardware. Drop in a real `hardware-configuration.nix` from `nixos-generate-config`. | NixOS's own `fileSystems."/"` check |
 | 2 | `configuration.nix` | `networking.hostName` (sentinel: `TODO-set-hostname`). | assertion |
 | 3 | `configuration.nix` | Rename the `let user = "TODO-set-user"` binding at the top of the file. It threads through `users.users.<user>`, `d2b.site.{waylandUser,launcherUsers}`, and `d2b.vms.corp-vm.ssh.user`. Also add at least one public key to `d2b.site.userAuthorizedKeys`. | assertion (× 2) |
-| 4 | `configuration.nix` | `d2b.site.waylandUser` — keep at `user` for a graphical host, or set to `null` if you're going fully headless. | reviewed in TODO 3 |
-| 5 | `configuration.nix` | `d2b.hostLanCidrs` — your host's primary LAN CIDR(s). `ip route` will tell you. Default `192.168.1.0/24` is a plausible home LAN. | judgement only |
-| 6 | `configuration.nix` | `d2b.envs.<env>.lanSubnet` — the /24 your workload VMs sit on. Must not overlap TODO 5. Default `10.20.0.0/24` is a reasonable starting choice. | judgement + framework's CIDR-overlap check |
-| 7 | `configuration.nix` | `d2b.envs.<env>.uplinkSubnet` — point-to-point /30 between host and the env's auto-declared net VM. Default `192.0.2.0/30` is an RFC 5737 doc range. | judgement + framework's /30-shape check |
+| 4 | `configuration.nix` | `d2b.site.waylandUser` - keep at `user` for a graphical host, or set to `null` if you're going fully headless. | reviewed in TODO 3 |
+| 5 | `configuration.nix` | `d2b.hostLanCidrs` - your host's primary LAN CIDR(s). `ip route` will tell you. Default `192.168.1.0/24` is a plausible home LAN. | judgement only |
+| 6 | `configuration.nix` | `d2b.envs.<env>.lanSubnet` - the /24 your workload VMs sit on. Must not overlap TODO 5. Default `10.20.0.0/24` is a reasonable starting choice. | judgement + framework's CIDR-overlap check |
+| 7 | `configuration.nix` | `d2b.envs.<env>.uplinkSubnet` - point-to-point /30 between host and the env's auto-declared net VM. Default `192.0.2.0/30` is an RFC 5737 doc range. | judgement + framework's /30-shape check |
 
 `flake.nix` also contains two **optional renames** (the host
 attribute and the flake description). They are not numbered in the
 `TODO N:` scheme because they aren't required for a working
-deployment — but you probably want to rename them anyway:
+deployment - but you probably want to rename them anyway:
 
 - The flake's `description` (currently `"TODO: short description of this host"`)
 - The flake's `nixosConfigurations.desktop` attribute name
@@ -82,7 +82,7 @@ deployment — but you probably want to rename them anyway:
 #    defaults that pass eval but still need your review.
 nix flake check
 
-# 2. Build the host closure (no activation — useful for catching
+# 2. Build the host closure (no activation - useful for catching
 #    eval errors and pulling the closure into the local store).
 sudo nixos-rebuild build --flake .#desktop
 
@@ -120,7 +120,7 @@ d2b vm stop corp-vm --apply
 ```
 
 `sys-work-net` (and every per-env net VM) is `autostart = true` by
-construction in `nixos-modules/network.nix` — it has to come up
+construction in `nixos-modules/network.nix` - it has to come up
 before any workload VM can use the LAN. Workload VMs are NOT
 autostarted unless you flip `d2b.vms.<vm>.autostart = true`.
 
@@ -172,17 +172,17 @@ for the full semantics.
   `/nix/store` (the per-VM `/nix/store` is a hardlink farm).
 - CIDR overlap is an eval error, by design.
 - A graphics VM with `d2b.site.waylandUser = null` is an eval
-  error — there is no X11 fallback path.
+  error - there is no X11 fallback path.
 - The sentinel assertions only fire if you leave a TODO at its
   default value; replacing one sentinel without replacing the
   others still fails until they're all gone.
 
 ## See also
 
-- [`examples/minimal`](https://github.com/vicondoa/d2b/tree/main/examples/minimal) — read-and-copy headless starter
-- [`examples/graphics-workstation`](https://github.com/vicondoa/d2b/tree/main/examples/graphics-workstation) — desktop VM with Wayland + audio + USBIP
-- [`examples/multi-env`](https://github.com/vicondoa/d2b/tree/main/examples/multi-env) — two isolated envs (work + personal)
-- [`examples/with-entra-id`](https://github.com/vicondoa/d2b/tree/main/examples/with-entra-id) — Entra-ID composition via the sibling flake
+- [`examples/minimal`](https://github.com/vicondoa/d2b/tree/main/examples/minimal) - read-and-copy headless starter
+- [`examples/graphics-workstation`](https://github.com/vicondoa/d2b/tree/main/examples/graphics-workstation) - desktop VM with Wayland + audio + USBIP
+- [`examples/multi-env`](https://github.com/vicondoa/d2b/tree/main/examples/multi-env) - two isolated envs (work + personal)
+- [`examples/with-entra-id`](https://github.com/vicondoa/d2b/tree/main/examples/with-entra-id) - Entra-ID composition via the sibling flake
 
 See the upstream [README][readme] for the full quick-start, the
 threat model, and the design rationale.

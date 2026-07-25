@@ -45,7 +45,7 @@ export D2B_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 # and EVERY descendant (broker test daemons, sccache, parallel-gate
 # test subprocesses, nix/crosvm grandchildren, etc.) run WITHOUT the
 # lock fd. That is what actually prevents a leaked/orphaned child from
-# keeping the lock alive past static.sh's exit — and it holds even if
+# keeping the lock alive past static.sh's exit - and it holds even if
 # static.sh is SIGKILLed, since no descendant ever owned the fd. The
 # prior in-shell `exec {fd}>file; flock -x $fd` pattern leaked fd 10
 # into every child; an earlier `flock` wrapper WITHOUT `-o` still
@@ -317,7 +317,7 @@ d2b_static_parallel_script_gate() {
 # (profiled: cold `nix flake check` ~120s single-core vs the Rust gate's
 # cargo compile across all cores). The job's $ROOT footprint (cargo
 # `target/`, `d2b_mktemp` scratch dirs) is entirely gitignored, so the
-# concurrent git-fetcher flake evals never stat it — no source-capture race.
+# concurrent git-fetcher flake evals never stat it - no source-capture race.
 # Unlike the pool, this job is NOT harvested by `d2b_static_parallel_wait_all`,
 # so intermediate barriers don't block on it; it is joined explicitly.
 # Set D2B_STATIC_SERIAL_RUST=1 to disable the overlap (run the gate inline).
@@ -443,14 +443,14 @@ export D2B_STATIC_CACHE
 # workspace gate as a background long pole so its multi-core cargo
 # compile/clippy overlaps the SINGLE-CORE, lighter nix eval region that
 # immediately follows (parse+eval, the 120s flake check, and the smoke evals).
-# It is joined right after the smoke-eval barrier — BEFORE the memory-heavy
+# It is joined right after the smoke-eval barrier - BEFORE the memory-heavy
 # mid-tier eval pool + assertions-eval, which materialize multiple NixOS system
 # closures.
 #
 # OFF BY DEFAULT (opt-in): profiling showed the overlap saves wall-clock on the
 # cold flake-check path, but running the Rust gate's process-spawning tests
 # concurrently with the Nix eval region intermittently starves test
-# subprocesses (the PTY hangup test fails even with a 120s watchdog) — a
+# subprocesses (the PTY hangup test fails even with a 120s watchdog) - a
 # resource-contention flake, not a test bug. cargo test --workspace is reliable
 # when the Rust gate runs serially (the default). Opt into the overlap with
 # D2B_STATIC_PARALLEL_RUST=1 only where the wall-clock win outweighs the
@@ -477,7 +477,7 @@ cd "$ROOT"
 #     their own d2b.vms.<name> bindings).
 #   * audio.nix split into components/audio/{guest,host}.nix.
 #   * entra-id.nix moved to the sibling entrablau flake.
-# Consumer-specific `vms/<name>.nix` paths are excluded — they only
+# Consumer-specific `vms/<name>.nix` paths are excluded - they only
 # exist on the maintainer's host. The loop below skips any entry that
 # isn't present on disk so the gate stays useful for the public flake
 # AND for consumer trees that still carry workload VM definitions.
@@ -561,7 +561,7 @@ else
 fi
 d2b_static_gate_end "shellcheck --severity=warning on all d2b shell scripts"
 
-# v0.2.0 issue #6 — heuristic lint for the NixOS module-system trap
+# v0.2.0 issue #6 - heuristic lint for the NixOS module-system trap
 # where one module both declares `mkOption { default = ...; readOnly =
 # true; }` and assigns the same `d2b.*` option under `config`. A
 # perfect check would need Nix eval introspection; this brace-depth awk
@@ -712,7 +712,7 @@ d2b_static_parallel_smoke_eval_gate \
   20
 d2b_static_parallel_wait_all
 
-# Join the background Rust workspace gate HERE — after the lighter flake-check +
+# Join the background Rust workspace gate HERE - after the lighter flake-check +
 # smoke-eval region it was overlapping, but BEFORE the memory-heavy mid-tier
 # eval pool and assertions-eval below (those materialize multiple NixOS system
 # closures). Overlapping the Rust gate's process-spawning TESTS with that heavy
@@ -759,19 +759,19 @@ if [ -x "$ROOT/tests/broker-bundle-path-eval.sh" ]; then
   d2b_static_parallel_script_gate "tests/broker-bundle-path-eval.sh" "$ROOT/tests/broker-bundle-path-eval.sh"
 fi
 if [ -x "$ROOT/tests/principal-uid-collision-eval.sh" ]; then
-  # v1.2— stablePrincipalId UID-collision eval: asserts
+  # v1.2 - stablePrincipalId UID-collision eval: asserts
   # every declared principal maps to a unique UID and every UID falls in
   # [50000, 16827215]. Evaluated against examples/multi-env consumer flake.
   d2b_static_parallel_script_gate "tests/principal-uid-collision-eval.sh" "$ROOT/tests/principal-uid-collision-eval.sh"
 fi
 if [ -x "$ROOT/tests/umask-roundtrip-eval.sh" ]; then
-  # v1.2— umask end-to-end eval round-trip: asserts
+  # v1.2 - umask end-to-end eval round-trip: asserts
   # swtpm/gpu/audio umask=7 (0o007) propagates from minijail-profiles.nix
   # through processesJson.data without silent pipeline drop.
   d2b_static_parallel_script_gate "tests/umask-roundtrip-eval.sh" "$ROOT/tests/umask-roundtrip-eval.sh"
 fi
 if [ -x "$ROOT/tests/store-overlay-emit-eval.sh" ]; then
-  # v1.2— assert DiskInit plan-op emitted in processes.json
+  # v1.2 - assert DiskInit plan-op emitted in processes.json
   # CH node when writableStoreOverlay is set.
   d2b_static_parallel_script_gate "tests/store-overlay-emit-eval.sh" "$ROOT/tests/store-overlay-emit-eval.sh"
 fi
@@ -1027,7 +1027,7 @@ d2b_static_gate_end "manifest JSON contract (docs/reference/manifest-schema.json
 
 # The remaining gates evaluate a concrete consumer flake's
 # `nixosConfigurations.<D2B_HOST_CONFIG>` (default: `desktop`). On a fresh
-# clone of the public framework flake, there is no host config — those
+# clone of the public framework flake, there is no host config - those
 # gates simply skip with a SKIP line. On the maintainer's host (or any
 # consumer who passes `D2B_HOST_CONFIG=<their-host>`), they run as before.
 D2B_HOST_CONFIG=${D2B_HOST_CONFIG:-desktop}
@@ -1083,7 +1083,7 @@ if [ "$_HAS_HOST_CONFIG" = "1" ]; then
 #    rendered system.
 if sudo -A nixos-rebuild build --flake "$ROOT#$D2B_HOST_CONFIG" --no-link 2>/dev/null \
      | head -1 >/dev/null; then
-  : # nothing — just trigger the build cache
+  : # nothing - just trigger the build cache
 fi
 
 # 2. The audio.enable option must exist on every VM submodule.
@@ -1102,7 +1102,7 @@ if [ -n "$SYS" ]; then
   # null-targets vhost-device-sound's INPUT direction when d2b.mic
   # is "off" (and OUTPUT when d2b.speaker is "off") so it doesn't
   # auto-link to host devices uninvited. Note: this is a PipeWire
-  # client.conf.d file, NOT a WirePlumber rule — see the placement-
+  # client.conf.d file, NOT a WirePlumber rule - see the placement-
   # notes block in audio-host.nix.
   #
   # security-r8-audio-6: the match key shifted from broad
@@ -1124,7 +1124,7 @@ if [ -n "$SYS" ]; then
     fail "pipewire client stream-rule missing or malformed at /etc/pipewire/client.conf.d/90-d2b.conf"
   fi
   if [ -e "$SYS/etc/wireplumber/wireplumber.conf.d/90-d2b.conf" ]; then
-    fail "stale wireplumber rule present — should have moved to pipewire client.conf.d"
+    fail "stale wireplumber rule present - should have moved to pipewire client.conf.d"
   else
     ok "no stale wireplumber.conf.d/90-d2b.conf (moved to pipewire client.conf.d)"
   fi
@@ -1177,7 +1177,7 @@ else
   elif [ -d "$ROOT/packages" ]; then
     log "  SKIP: test-rust.sh (not present)"
   else
-    log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
+    log "  no packages/ - skipping rust workspace checks (W0a unstaged)"
   fi
   d2b_static_gate_end "tests/test-rust.sh"
 fi
@@ -1296,11 +1296,11 @@ d2b_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 ho
 # migrated to packages/d2b-contract-tests/tests/runner_shape_contract.rs.
 
 # -----------------------------------------------------------------------------
-# 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`
+# 7b / - per-example/template flake check. Each `examples/<name>/flake.nix`
 # pins `d2b.url = "path:../.."`, but we `--override-input d2b`
 # to `git+file://$ROOT` so the check runs the in-tree framework WITHOUT
 # copying the whole working tree (incl. the multi-GiB cargo `target/`)
-# into the store on every run — `git+file://` only ships git-tracked
+# into the store on every run - `git+file://` only ships git-tracked
 # files. Eval-only (`--no-build --all-systems`); a build-level gate
 # already lives in the root flake's `checks.<system>.*` (also 7b).
 # `--no-write-lock-file` keeps the gate read-only so validation never
@@ -1379,7 +1379,7 @@ if [ -d "$ROOT/examples" ]; then
   done
   shopt -u nullglob
 else
-  log "  (no examples/ directory — skipping)"
+  log "  (no examples/ directory - skipping)"
 fi
 d2b_static_parallel_wait_all
 if [ -f "$ROOT/examples/with-entra-id/flake.nix" ]; then
@@ -1445,7 +1445,7 @@ NIX
   # intentional TODO sentinels and by overriding d2b to this tree.
   d2b_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input d2b 'git+file://$ROOT'"
 else
-  log "  (no templates/default/flake.nix — skipping)"
+  log "  (no templates/default/flake.nix - skipping)"
 fi
 d2b_static_parallel_wait_all
 d2b_static_gate_end "per-example/template flake check"

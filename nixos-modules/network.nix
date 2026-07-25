@@ -258,7 +258,7 @@ in
         message = "d2b.envs: CIDR overlap between "
           + "${p.a.env}.${p.a.kind} (${p.a.cidr}) and "
           + "${p.b.env}.${p.b.kind} (${p.b.cidr}). "
-          + "Even containment counts as overlap — VMs would alias "
+          + "Even containment counts as overlap - VMs would alias "
           + "the same host bits and the host routing table cannot "
           + "disambiguate which env's bridge to reach.";
       }) overlapping)
@@ -266,7 +266,7 @@ in
         assertion = false;
         message = "d2b.envs.${o.env}.${o.kind} (${o.cidr}) "
           + "overlaps with `d2b.hostLanCidrs` entry "
-          + "\"${o.host}\". Pick a non-overlapping range — the "
+          + "\"${o.host}\". Pick a non-overlapping range - the "
           + "framework's static-route + NAT scheme requires every "
           + "env subnet to be disjoint from the host's primary LAN.";
       }) envVsHost)
@@ -289,7 +289,7 @@ in
     # The host's real upstream is `eno1`, which NetworkManager owns
     # (Setup=unmanaged in networkctl). systemd-networkd-wait-online
     # ignores unmanaged interfaces, so it has no real notion of
-    # "the host is online" anyway — disabling it cleanly removes a
+    # "the host is online" anyway - disabling it cleanly removes a
     # 2-minute timeout on every switch with no functional downside.
     # (NetworkManager has its own wait-online if anyone needs it.)
     wait-online.enable = false;
@@ -433,13 +433,13 @@ in
 
   # ---------------------------------------------------------------------------
   # Host firewall.
-  # The LAN bridges: host has no IP there — deny everything (no host
+  # The LAN bridges: host has no IP there - deny everything (no host
   # service should ever bind there). Uplink bridges: allow only the
   # USBIP carve-out and conntrack returns.
   # ---------------------------------------------------------------------------
   networking.firewall.interfaces = lib.mkMerge (lib.mapAttrsToList
     (envName: m: {
-      # No allows on the lan bridge — host has no IP there anyway.
+      # No allows on the lan bridge - host has no IP there anyway.
       "${m.lanBridge}" = {
         allowedTCPPorts = [ ];
         allowedUDPPorts = [ ];

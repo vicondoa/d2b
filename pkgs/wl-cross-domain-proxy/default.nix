@@ -2,7 +2,7 @@
 #
 # This package provides the plain Wayland-over-virtio-gpu transport inside
 # d2b graphics VMs. It intentionally does NOT perform filtering, global
-# hiding, app-id rewriting, or Xwayland proxying — those responsibilities
+# hiding, app-id rewriting, or Xwayland proxying - those responsibilities
 # belong to the host-side d2b-wayland-proxy binary. The split is
 # deliberate: wl-cross-domain-proxy only bridges the kernel virtio-gpu
 # cross-domain transport to a guest Wayland socket; every security-relevant
@@ -63,7 +63,7 @@ pkgs.rustPlatform.buildRustPackage rec {
       wl-cross-domain-proxy is a minimal guest-side Wayland proxy that
       bridges Wayland clients inside a VM to the host compositor via the
       virtio-gpu cross-domain kernel interface. It does not filter globals,
-      rewrite app IDs, or proxy Xwayland — those are host-side concerns.
+      rewrite app IDs, or proxy Xwayland - those are host-side concerns.
     '';
     homepage = "https://codeberg.org/drakulix/wl-cross-domain-proxy";
     license = pkgs.lib.licenses.mit;

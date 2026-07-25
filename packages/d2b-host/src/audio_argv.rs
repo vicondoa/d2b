@@ -77,10 +77,10 @@ pub enum AudioArgvError {
     /// The audio sidecar binary path MUST be the per-VM copy at
     /// `/run/d2b/vms/<vm>/d2b-<vm>` (so libpipewire's
     /// `init_prgname()` derives `application.name = "d2b-<vm>"`
-    /// from `/proc/self/exe`). Any other path — including a
+    /// from `/proc/self/exe`). Any other path - including a
     /// Nix-store direct path, another VM's per-VM copy, a
     /// `current-system` symlink that resolves into the store, or
-    /// any other absolute executable — defeats the
+    /// any other absolute executable - defeats the
     /// stream-tracking design.
     SidecarBinaryPathNotPerVmCopy {
         path: String,
@@ -229,7 +229,7 @@ mod tests {
         ));
     }
 
-    /// Another VM's per-VM copy is also refused — the binary path is
+    /// Another VM's per-VM copy is also refused - the binary path is
     /// keyed on the input's
     /// `vm_name`.
     #[test]

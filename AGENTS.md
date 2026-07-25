@@ -3,7 +3,7 @@
 Operating manual for AI coding agents (Copilot CLI, GitHub Copilot,
 Cursor, …) and human contributors working on **`vicondoa/d2b`
 itself**. If you are *consuming* d2b in your own NixOS host
-config, start at [README.md](./README.md) instead — this file is for
+config, start at [README.md](./README.md) instead - this file is for
 people changing the framework.
 
 ## What this is
@@ -145,7 +145,7 @@ changelog fragment under `changelog.d/`.
 
 ### Fragments (`changelog.d/`)
 
-When more than one branch is in flight, do **not** edit `CHANGELOG.md` —
+When more than one branch is in flight, do **not** edit `CHANGELOG.md` -
 every branch appending to the same `## [Unreleased]` block is a guaranteed
 merge conflict. Write one `changelog.d/<branch-name>.md` fragment instead,
 holding the same `### <Section>` headings and entries you would have added
@@ -197,13 +197,13 @@ git merge --no-ff phase-a phase-b phase-c
 ```
 
 If two branches touch the same lines, fall back to a normal
-sequential merge with conflict resolution — octopus only works for
+sequential merge with conflict resolution - octopus only works for
 clean disjoint scopes.
 
 #### Finish-of-work invariant: merge back into the primary clone
 
 A worktree is a workspace, not a destination. When an agent's scope
-is done — implementation green, tests green, panel signed off — the
+is done - implementation green, tests green, panel signed off - the
 agent merges the worktree branch back into `main` in the **primary
 clone (`projects/d2b`)** before declaring the task complete.
 Finished work sitting on a side worktree branch is not done; it is
@@ -309,10 +309,10 @@ host, prefer `d2b down <vm> --apply` followed by
 
 #### Integrator-prep-first pattern (W3 onwards)
 
-For waves whose thematic scopes are NOT file-disjoint by default —
+For waves whose thematic scopes are NOT file-disjoint by default -
 W3 host-prepare is the canonical example, with scopes s1–s5
 naturally sharing `packages/d2b-contracts`, `packages/d2b-core`
-DTOs, schemas, and `Cargo.toml` workspace pins — the wave is
+DTOs, schemas, and `Cargo.toml` workspace pins - the wave is
 preceded by an **integrator API/contract prep commit landed
 directly on `main`** before any scope worktree is opened. That
 prep commit:
@@ -321,7 +321,7 @@ prep commit:
   privileges row, schema regeneration, and `Cargo.toml`
   workspace-dep change the parallel scope commits will read;
 - carries the canonical trailing tag `( W3 )` (no scope label
-  inside the parens — scope labels are subject-prefix only,
+  inside the parens - scope labels are subject-prefix only,
   e.g. `s2 host: reconcile bridge port flags ( W3 )`);
 - leaves every scope's owned files untouched so each scope
   worktree opens against a stable contract.
@@ -406,17 +406,17 @@ CLI, the manifest contract.
 Anything **identity- or workload-specific** lives in a sibling
 flake and is composed per-VM:
 
-- [`vicondoa/entrablau.nix`][entrablau] — Microsoft Entra ID
+- [`vicondoa/entrablau.nix`][entrablau] - Microsoft Entra ID
   joins (Himmelblau + TPM-bound machine credential).
 
 Optional **desktop companion** pieces also live in sibling flakes:
 
-- `vicondoa/d2b-toolkit` — shared Rust/Nix client DTOs, public-socket
+- `vicondoa/d2b-toolkit` - shared Rust/Nix client DTOs, public-socket
   framing, redaction wrappers, Wayland color parsing, and Waybar helpers for
   desktop integrations.
-- `vicondoa/d2b-wlterm` — Home Manager module and user-session launcher for
+- `vicondoa/d2b-wlterm` - Home Manager module and user-session launcher for
   persistent guest shells.
-- `vicondoa/weezterm` — WeezTerm package/provider integration used by the
+- `vicondoa/weezterm` - WeezTerm package/provider integration used by the
   terminal launcher when a d2b-aware terminal build is desired.
 
 Consumer flakes that combine these pieces keep a single nixpkgs and toolkit
@@ -498,7 +498,7 @@ effects routed through a typed `d2b-priv-broker` op declared
 in `packages/d2b-contracts/` and audited in
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce
 a new `systemd.services.*` declaration in `nixos-modules/` for
-per-VM work — the `tests/legacy-unit-denylist-eval.sh` gate will
+per-VM work - the `tests/legacy-unit-denylist-eval.sh` gate will
 reject it. See
 [`docs/explanation/daemon-lifecycle.md`](./docs/explanation/daemon-lifecycle.md)
 for the DAG node taxonomy and
@@ -526,16 +526,16 @@ acceptable.
 
 For each phase:
 
-1. **Plan review** — panel reviews the plan; iterate until 8/8
+1. **Plan review** - panel reviews the plan; iterate until 8/8
    sign-off (or N/N for the selected panel size). The integrator may
    not dispatch implementation subagents until this gate passes.
-2. **Implementation** — dispatch subagents in parallel per the
+2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
-3. **Integration** — integrator merges subagent output.
-4. **Work review** — panel reviews the integrated diff; iterate via
+3. **Integration** - integrator merges subagent output.
+4. **Work review** - panel reviews the integrated diff; iterate via
    fix-subagents until 8/8 sign-off (or N/N for the selected panel
    size).
-5. **Advance** — only now may the integrator begin the next phase's
+5. **Advance** - only now may the integrator begin the next phase's
    plan review.
 
 Panel prompts MUST include the validation evidence the integrator already
@@ -630,7 +630,7 @@ Example: `( W1fu1 H3 )` means "wave 1, follow-up round 1,
 addresses finding ranked HIGH-3."
 
 Inline references to a specific commit in prose elsewhere may
-use the compact form `(W2fu4 H10)` for readability — that's
+use the compact form `(W2fu4 H10)` for readability - that's
 shorthand for citing a commit, not the literal trailing tag
 that the commit subject must end with. The trailing-tag form
 in the commit subject itself always uses the spaced canonical
@@ -681,7 +681,7 @@ The root flake exposes these eval-only checks under
 | `eval-minimal`         | `examples/minimal/configuration.nix` against the framework module set.    |
 | `eval-multi-env`       | `examples/multi-env/configuration.nix` (two isolated envs).               |
 | `eval-template`        | `templates/default/configuration.nix` with sentinel fields overridden so the assertion block passes (TODO 2/3 substitutes). |
-| `eval-graphics`        | `examples/graphics-workstation/configuration.nix`. **x86_64-linux only** — the framework's `checkVmPlatform` gate refuses graphics on aarch64. |
+| `eval-graphics`        | `examples/graphics-workstation/configuration.nix`. **x86_64-linux only** - the framework's `checkVmPlatform` gate refuses graphics on aarch64. |
 
 `with-entra-id` is intentionally absent from the root `flake.checks`
 because it depends on the sibling `entrablau` input, which the
@@ -713,9 +713,9 @@ organised **by version**, never by development phase.
     Keep-a-Changelog groups (`Added`, `Changed`, `Fixed`,
     `Deprecated`, `Removed`, `Security`). There are no
     `### Added (W6)`-style subsection headers in a released section.
-  - Strip every internal process marker — wave/phase/revision/
+  - Strip every internal process marker - wave/phase/revision/
     follow-up/panel/round/finding tags such as `W3`, `W4-fu`,
-    `( W1fu3 H20 )`, `P6`, `D5/P2.3` — from the released prose.
+    `( W1fu3 H20 )`, `P6`, `D5/P2.3` - from the released prose.
   - Each released section reads as a coherent, consumer-facing
     summary of what changed, not as a log of how the work was
     organised internally.
@@ -725,10 +725,10 @@ organised **by version**, never by development phase.
 
 ### Process markers stay out of shipped artifacts
 
-Internal development bookkeeping — wave tags (`W3`, `W4-fu`,
+Internal development bookkeeping - wave tags (`W3`, `W4-fu`,
 `W2-followup`), phase tags (`P0`–`P7`, `v1.1-P4`, `ph6-…`),
 decision codes (`D5/P2.3`), follow-up/round/finding refs
-(`fu3`, `H20`, `(rust-1)`) — is for organising work, not for
+(`fu3`, `H20`, `(rust-1)`) - is for organising work, not for
 shipping. Do **not** introduce these markers into:
 
 - source comments in `nixos-modules/`, `pkgs/`, or `packages/`;
@@ -751,7 +751,7 @@ they are load-bearing:
 - this file and the other process docs (Panel review, Commit
   conventions, `## Daemon-only end-state (P6 onward)`) that
   *document* the methodology;
-- `docs/adr/**` — ADRs are dated historical records and may name the
+- `docs/adr/**` - ADRs are dated historical records and may name the
   wave/phase that produced a decision;
 - commit messages and PR descriptions on in-development feature
   branches (see Commit conventions).
@@ -783,30 +783,30 @@ fields that request panel, agent, or model metadata.
 > The trailing wave-tag scheme below applies to in-development
 > commits on feature branches / worktrees, where wave/phase tags are
 > load-bearing planning context. It does not license process markers
-> in shipped code, docs, or released CHANGELOG sections — see
+> in shipped code, docs, or released CHANGELOG sections - see
 > [Versioning & changelog](#versioning--changelog).
 
 - **Subject.** Short, imperative, prefixed with the touched
   area: `net: fix 10-eth-dhcp neutralization`,
   `manifest: bump manifestVersion to 2`,
   `cli: tighten exit-code table`.
-- **Body.** Wrap at ~72 cols. Explain *why*, not what — the diff
+- **Body.** Wrap at ~72 cols. Explain *why*, not what - the diff
   shows the what.
-- **Traceability — canonical tag form (forward, W2fu4+).**
+- **Traceability - canonical tag form (forward, W2fu4+).**
   Every commit subject MUST end with a trailing parenthesized
   tag in one of these exact forms:
 
-  - `( W<N> )` — wave-N implementer work (no finding ref)
-  - `( W<N>fu<M> )` — wave-N follow-up round M integrator
+  - `( W<N> )` - wave-N implementer work (no finding ref)
+  - `( W<N>fu<M> )` - wave-N follow-up round M integrator
     merge (no finding ref); merge-shape suffixes like
     `octopus` are NOT permitted in the tag
-  - `( W<N>fu<M> <S><N> )` — single finding fixed in
+  - `( W<N>fu<M> <S><N> )` - single finding fixed in
     follow-up round M. The finding-tag is `<S><N>` where
     `<S>` is the severity letter from the reviewer JSON
     (`C` = critical, `H` = high, `M` = medium, `L` = low)
     and `<N>` is the ordinal within that severity. Example:
     `( W2fu1 H3 )` = wave 2, follow-up 1, HIGH-3.
-  - `( W<N>fu<M> <S1><N1> <S2><N2> ... )` — multi-finding
+  - `( W<N>fu<M> <S1><N1> <S2><N2> ... )` - multi-finding
     follow-up commit when two or more findings genuinely express
     one coherent change and scattering them would not add
     review value. The trailing tag enumerates every finding
@@ -821,9 +821,9 @@ fields that request panel, agent, or model metadata.
     multi-finding only when the alternative is three or more
     trivially-small commits that all express the same
     statement.
-  - `( W<N> <S><N> )` — single finding fixed inside the
+  - `( W<N> <S><N> )` - single finding fixed inside the
     wave itself (rare; usually findings come during follow-ups)
-  - `( W<N>a-<H> )` or `( W<N>a H<H> )` — post-wave **opening
+  - `( W<N>a-<H> )` or `( W<N>a H<H> )` - post-wave **opening
     phase** that closes specific Spec-corrections deferrals or
     ships infrastructure work. Used when the work is genuinely
     pre-wave-N+1 prep rather than an in-wave follow-up. Examples:
@@ -847,7 +847,7 @@ fields that request panel, agent, or model metadata.
   it as the exception, not the default.
 
   No leading-tag form. No partition/topic words inside the
-  parenthesized tag — those go in prose. Every commit
+  parenthesized tag - those go in prose. Every commit
   produced in a panel-fix round MUST carry the relevant
   tag; see [Panel review](#panel-review) for the mapping
   and phase-gate policy.
@@ -875,7 +875,7 @@ fields that request panel, agent, or model metadata.
 - Test eval expressions MUST resolve the flake via `git+file://$ROOT`
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
-  `path:` fetcher, which copies the ENTIRE working tree into the store —
+  `path:` fetcher, which copies the ENTIRE working tree into the store -
   including the multi-GiB `packages/target` cargo artifacts (measured:
   ~36 GB / 5+ min per cold eval, re-triggered every time a cargo build
   churns `target/`). `git+file://` copies only git-tracked files
@@ -886,7 +886,7 @@ fields that request panel, agent, or model metadata.
   then parses (jq, etc.), add `--quiet --no-warn-dirty` so the git+file
   `fetching git input` / `Git tree is dirty` stderr diagnostics don't
   corrupt the parsed JSON. (c) git+file sees uncommitted edits to
-  TRACKED files but NOT untracked files — identical to `nix flake check`,
+  TRACKED files but NOT untracked files - identical to `nix flake check`,
   so "commit before building" still holds (see "Edit -> commit ->
   validate").
 - Every test script that creates repo-local scratch state MUST use
@@ -942,7 +942,7 @@ fields that request panel, agent, or model metadata.
   `D2B_POST_GATE_DEEP_GC_SUDO=1` uses `sudo -n` and skips fail-open
   with a clear log if passwordless sudo isn't available. Threshold
   defaults to 7 days; override with `D2B_POST_GATE_DEEP_GC_DAYS=N`.
-  Off by default — this is operator policy, not gate policy.
+  Off by default - this is operator policy, not gate policy.
 - `D2B_SKIP_WITH_ENTRA_ID=1` skips the per-example flake check for
   `examples/with-entra-id` when its pinned `vicondoa/entrablau.nix`
   input fails the per-example cargo fetch with a transient crates.io
@@ -971,26 +971,26 @@ fields that request panel, agent, or model metadata.
   in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).
 
-## Critical subsystems — handle with care
+## Critical subsystems - handle with care
 
 Touch these only with a clear plan and a corresponding test run.
 
 | System                              | Where                                                                                  | Risk if broken                                                            |
 | ----------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Net VM networking / firewall        | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring) | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/net-vm-network-eval.sh`. |
-| Per-VM `/nix/store` hardlink farm   | `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel — do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** — hardlinks can't cross FS boundaries; if split, `d2b vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` — recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit. |
-| TPM persistence (per-VM swtpm)      | `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-host/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-priv-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink — emitting the path-free `PrepareSwtpmDir` audit op. | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` tests. |
-| USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker — there is no per-env `d2b-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
-| GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH — pidfd handoff means the child outlives a daemon reconnect — but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
+| Per-VM `/nix/store` hardlink farm   | `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel - do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** - hardlinks can't cross FS boundaries; if split, `d2b vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit. |
+| TPM persistence (per-VM swtpm)      | `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-host/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-priv-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink - emitting the path-free `PrepareSwtpmDir` audit op. | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` tests. |
+| USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker - there is no per-env `d2b-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
+| GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH - pidfd handoff means the child outlives a daemon reconnect - but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
 | Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate with `tests/video-contract-eval.sh`, `tests/video-argv-shape.sh`, and `tests/minijail-validator-video.sh`. |
 | UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly. |
-| Unsafe-local provider, launcher, and persistent-shell helper | `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md` | `unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope—not the reconnectable helper or d2bd—owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup. |
+| Unsafe-local provider, launcher, and persistent-shell helper | `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md` | `unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope - not the reconnectable helper or d2bd - owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup. |
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
-| Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
-| Control plane — `d2bd` + `d2b-priv-broker` | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/d2bd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
+| Manifest bundle - private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
+| Control plane - `d2bd` + `d2b-priv-broker` | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/d2bd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
 | Storage lifecycle / restart / synchronization | Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](./docs/explanation/storage-lifecycle.md) | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/d2b`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority. |
 | Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. |
-| Guest-control exec session table    | `packages/d2bd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/d2bd/src/lib.rs`, `packages/d2b/src/exec_client.rs`, `packages/d2b-contracts/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`) | Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same detached guest-control backend with launcher authority because argv is resolved exclusively from the hash-verified private bundle. Both run through `d2bd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) — never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`d2b-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `d2b vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`d2b vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs and configured local-VM launches also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** — the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs before arbitrary exec session setup; configured launch instead requires local launcher/admin authority and a trusted configured item. Old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id, while configured-launch audit adds target/item/operation correlation without execution details. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices. |
+| Guest-control exec session table    | `packages/d2bd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/d2bd/src/lib.rs`, `packages/d2b/src/exec_client.rs`, `packages/d2b-contracts/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`) | Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same detached guest-control backend with launcher authority because argv is resolved exclusively from the hash-verified private bundle. Both run through `d2bd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) - never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`d2b-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `d2b vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`d2b vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs and configured local-VM launches also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** - the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs before arbitrary exec session setup; configured launch instead requires local launcher/admin authority and a trusted configured item. Old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id, while configured-launch audit adds target/item/operation correlation without execution details. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices. |
 | Unsafe-local persistent shells | `packages/d2bd/src/{workload_dispatch,unsafe_local_helper,unsafe_local_terminal,shell_backend}.rs`, shell owner dispatch in `packages/d2bd/src/lib.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor}.rs`, and `tests/host-integration/unsafe-local-helper.nix` | `d2b shell` remains **admin-only** for every provider. Unsafe-local target identity and `defaultName`/`maxSessions` come only from the hash-verified private bundle; public `ShellOp` keeps protocol v3 and carries no policy, uid, argv, env, cwd, or path. The daemon dispatches helper protocol v2 to the exact `SO_PEERCRED` uid, validates exactly one connected CLOEXEC stream fd, and multiplexes terminal protocol v1 behind a fresh opaque public handle. Disconnect/`CloseAttach` detach but never kill; `Kill` targets only the helper-verified transient user scope. Shells survive CLI, daemon, and helper reconnects while that scope and the non-lingering user manager live. User logout ends them by design. User scopes provide lifecycle ownership, **not containment from other processes with the same host uid**. There is no root unit, broker op, per-VM service, SSH path, host-shell fallback, direct-compositor fallback, or automatic replay after an ambiguous daemon timeout. Never log/audit/label shell names, supervisor ids, public handles, terminal bytes, helper diagnostics, PIDs, unit names, argv, env, cwd, or paths; audit may use configured target/peer uid and fixed digests, while metrics use closed provider/component/operation/outcome/error labels. |
 | Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. There is no polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/d2bd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check. |
 | SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `d2b keys rotate` MUST NOT touch consumer-supplied keys. |
@@ -1039,7 +1039,7 @@ Touch these only with a clear plan and a corresponding test run.
   Wave/phase/revision/follow-up/finding tags (`W3`, `W4-fu`, `P6`,
   `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts,
   pre-release `[Unreleased]`, ADRs, this file's process sections,
-  and feature-branch commits — never in shipped source comments,
+  and feature-branch commits - never in shipped source comments,
   shipped docs prose, CLI help/error text, or released CHANGELOG
   sections. See [Versioning & changelog](#versioning--changelog).
   The functional `d2b.defaultSwitchReadiness.<wave>` option
@@ -1047,7 +1047,7 @@ Touch these only with a clear plan and a corresponding test run.
 - **Don't let a host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside
-  a per-realm gateway guest VM — never in `d2bd`, the broker, the
+  a per-realm gateway guest VM - never in `d2bd`, the broker, the
   host bundle, host-readable storage, or any host-side activation
   artifact. A relay-authenticated peer is never mapped to local
   `Admin`; `SO_PEERCRED` + `d2b` group membership stays the only
@@ -1085,9 +1085,9 @@ broker op mutating host state.
   are out of scope; d2b never reads/writes them), threaded
   cgroups, `cgroup.kill` on `d2b.slice` or any ancestor of
   a daemon-owned leaf, and **Phase B (post-delegation) runtime
-  mutation while running as uid 0** (Phase A privileged setup
-  — `+controllers` cascade, slice/leaf `mkdir`, `fchown` to
-  `d2bd`'s uid/gid — legitimately runs as root per ADR 0011
+  mutation while running as uid 0** (Phase A privileged setup -
+  `+controllers` cascade, slice/leaf `mkdir`, `fchown` to
+  `d2bd`'s uid/gid - legitimately runs as root per ADR 0011
   Decision item 2; the uid != 0 invariant applies to the
   steady-state cgroup code path after privilege drop). See
   [`docs/reference/cgroup-delegation.md`](./docs/reference/cgroup-delegation.md)
@@ -1161,79 +1161,79 @@ contract:
 
 ## References
 
-- [docs/adr/0015-daemon-only-clean-break.md](./docs/adr/0015-daemon-only-clean-break.md)
-  — **the binding architectural decision** for the daemon-only
+- [docs/adr/0015-daemon-only-clean-break.md](./docs/adr/0015-daemon-only-clean-break.md) -
+  **the binding architectural decision** for the daemon-only
   end-state: `d2bd` + `d2b-priv-broker` are the only
   persistent root surfaces.
-- [docs/adr/0017-no-bash-fallbacks-invariant.md](./docs/adr/0017-no-bash-fallbacks-invariant.md)
-  — the Rust CLI never invokes bash; CI gates enforce no new
+- [docs/adr/0017-no-bash-fallbacks-invariant.md](./docs/adr/0017-no-bash-fallbacks-invariant.md) -
+  the Rust CLI never invokes bash; CI gates enforce no new
   `Command::new("bash")` sites.
-- [docs/adr/0018-microvm-nix-removal.md](./docs/adr/0018-microvm-nix-removal.md)
-  — d2b owns its per-VM substrate via `vm-options.nix` +
+- [docs/adr/0018-microvm-nix-removal.md](./docs/adr/0018-microvm-nix-removal.md) -
+  d2b owns its per-VM substrate via `vm-options.nix` +
   `vm-evaluator.nix`; the `microvm.nix` flake input is gone.
-- [docs/adr/0021-broker-user-namespace-for-virtiofsd.md](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md)
-  — broker pre-establishes a single-entry user namespace via
+- [docs/adr/0021-broker-user-namespace-for-virtiofsd.md](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md) -
+  broker pre-establishes a single-entry user namespace via
   `clone3(CLONE_NEWUSER)` so virtiofsd runs fake-root inside the
   NS while exposing **zero** host capabilities. Any change to the
   virtiofsd minijail profile or argv shape MUST preserve this
   contract.
-- [docs/adr/0031-bare-command-and-detached-exec.md](./docs/adr/0031-bare-command-and-detached-exec.md)
-  — bare command-name exec resolution and enabled detached
+- [docs/adr/0031-bare-command-and-detached-exec.md](./docs/adr/0031-bare-command-and-detached-exec.md) -
+  bare command-name exec resolution and enabled detached
   workload-user exec with VM-first management verbs.
-- [docs/adr/0032-d2b-v2-constellation-control-plane.md](./docs/adr/0032-d2b-v2-constellation-control-plane.md)
-  — evolves `d2bd` into a transport-neutral constellation
+- [docs/adr/0032-d2b-v2-constellation-control-plane.md](./docs/adr/0032-d2b-v2-constellation-control-plane.md) -
+  evolves `d2bd` into a transport-neutral constellation
   daemon. **Load-bearing invariant:** the host daemon/broker hold
   **no** realm relay/provider credentials, remote node registries,
   or realm audit (those live inside a per-realm gateway guest); and
-  **relay identity is not local auth** — relay credentials
+  **relay identity is not local auth** - relay credentials
   authenticate relay/transport access only, are never mapped to a local
   lifecycle role, and `SO_PEERCRED` + `d2b` group membership remains
   the sole local lifecycle authz surface.
-- [docs/adr/0034-storage-lifecycle-restart-and-synchronization.md](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md)
-  — selected design for generated storage, restart/adoption, and
+- [docs/adr/0034-storage-lifecycle-restart-and-synchronization.md](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md) -
+  selected design for generated storage, restart/adoption, and
   synchronization contracts. **Load-bearing invariant:** normal daemon
   restarts are continuation events; recover/adopt/quarantine before
   cleanup, never persist pidfd authority, and route host storage/lock
   mutation through broker-resolved opaque ids.
-- [README.md](./README.md) — consumer-facing intro, install,
+- [README.md](./README.md) - consumer-facing intro, install,
   manual integration walkthrough.
-- [CHANGELOG.md](./CHANGELOG.md) — Keep-a-Changelog, entries
+- [CHANGELOG.md](./CHANGELOG.md) - Keep-a-Changelog, entries
   accumulate under `## Unreleased` until a tag cuts them.
-- [SECURITY.md](./SECURITY.md) — disclosure path + scope.
-- [docs/explanation/design.md](./docs/explanation/design.md) —
+- [SECURITY.md](./SECURITY.md) - disclosure path + scope.
+- [docs/explanation/design.md](./docs/explanation/design.md) -
   threat model, defenses-in-depth list, *Why not X* FAQ.
-- [docs/explanation/daemon-lifecycle.md](./docs/explanation/daemon-lifecycle.md)
-  — daemon DAG executor, pidfd handoff, supervisor reconciliation.
-- [docs/reference/privileges.md](./docs/reference/privileges.md) —
+- [docs/explanation/daemon-lifecycle.md](./docs/explanation/daemon-lifecycle.md) -
+  daemon DAG executor, pidfd handoff, supervisor reconciliation.
+- [docs/reference/privileges.md](./docs/reference/privileges.md) -
   authoritative broker op catalogue.
-- [docs/reference/daemon-api.md](./docs/reference/daemon-api.md) —
+- [docs/reference/daemon-api.md](./docs/reference/daemon-api.md) -
   `public.sock` wire surface, audit format, retention.
 - [docs/reference/manifest-schema.md](./docs/reference/manifest-schema.md)
-  + [docs/reference/manifest-schema.json](./docs/reference/manifest-schema.json)
-  — the manifest contract.
-- [docs/reference/cli-contract.md](./docs/reference/cli-contract.md) —
+  + [docs/reference/manifest-schema.json](./docs/reference/manifest-schema.json) -
+  the manifest contract.
+- [docs/reference/cli-contract.md](./docs/reference/cli-contract.md) -
   CLI lifecycle FSM, signal semantics, exit codes, JSON vs human
   output.
-- [docs/reference/realm-policy.md](./docs/reference/realm-policy.md) —
+- [docs/reference/realm-policy.md](./docs/reference/realm-policy.md) -
   host-resident vs gateway-backed realm policy, default-deny
   cross-realm behavior, and `d2b realm list` / `inspect`
   inspection surfaces.
-- [docs/reference/constellation-observability.md](./docs/reference/constellation-observability.md)
-  — bounded `d2b op inspect`, TraceContext handling, degraded partial
+- [docs/reference/constellation-observability.md](./docs/reference/constellation-observability.md) -
+  bounded `d2b op inspect`, TraceContext handling, degraded partial
   results, and telemetry redaction/cardinality constraints.
-- [docs/how-to/configure-work-gateway.md](./docs/how-to/configure-work-gateway.md)
-  — configure a dedicated work/provider realm gateway and verify the
+- [docs/how-to/configure-work-gateway.md](./docs/how-to/configure-work-gateway.md) -
+  configure a dedicated work/provider realm gateway and verify the
   default-deny boundary.
-- [docs/how-to/migrate-d2b-v0-to-v1.md](./docs/how-to/migrate-d2b-v0-to-v1.md)
-  — consumer migration guide for v0.x → v1.0.
-- [docs/how-to/migrate-d2b-v1-0-to-v1-1.md](./docs/how-to/migrate-d2b-v1-0-to-v1-1.md)
-  — consumer migration guide for v1.0 → v1.1.
-- [docs/how-to/migrate-d2b-v1-1-to-v1-2.md](./docs/how-to/migrate-d2b-v1-1-to-v1-2.md)
-  — consumer migration guide for v1.1 → v1.2, including the
+- [docs/how-to/migrate-d2b-v0-to-v1.md](./docs/how-to/migrate-d2b-v0-to-v1.md) -
+  consumer migration guide for v0.x → v1.0.
+- [docs/how-to/migrate-d2b-v1-0-to-v1-1.md](./docs/how-to/migrate-d2b-v1-0-to-v1-1.md) -
+  consumer migration guide for v1.0 → v1.1.
+- [docs/how-to/migrate-d2b-v1-1-to-v1-2.md](./docs/how-to/migrate-d2b-v1-1-to-v1-2.md) -
+  consumer migration guide for v1.1 → v1.2, including the
   canonical `d2b` lifecycle group rename.
-- [docs/how-to/migrating-from-microvm.md](./docs/how-to/migrating-from-microvm.md)
-  — option mapping for users coming from raw microvm.nix
+- [docs/how-to/migrating-from-microvm.md](./docs/how-to/migrating-from-microvm.md) -
+  option mapping for users coming from raw microvm.nix
   (scoped to new installs).
-- [tests/README.md](./tests/README.md) — full test layering,
+- [tests/README.md](./tests/README.md) - full test layering,
   including Layer-2 integration tests.
-- [LICENSE](./LICENSE) — Apache-2.0.
+- [LICENSE](./LICENSE) - Apache-2.0.

@@ -394,7 +394,7 @@ EOF
             # mkfs.ext4 on the new image so the guest kernel can
             # mount it.  CRITICAL: this disk MUST include the same
             # CH disk argv defaults (`direct`, `image_type`,
-            # `num_queues`) the regular volume path emits — without
+            # `num_queues`) the regular volume path emits - without
             # them CH 52 falls back to an auto-detected mode that
             # leaves the guest unable to bring up the
             # /nix/store-overlayfs upper, hanging early in
@@ -503,7 +503,7 @@ EOF
       # full `/nix/store`. `share.source` stays `/nix/store` as the
       # eval-time sentinel that the guest-mount + overlay + readiness
       # logic keys off, but virtiofsd is pointed at the per-VM hardlink
-      # live pool `<stateDir>/<vm>/store-view/live` — the canonical
+      # live pool `<stateDir>/<vm>/store-view/live` - the canonical
       # closure-only per-VM store. virtiofsd still execs from the real host
       # `/nix/store` (kept mounted in its runner namespace) and only
       # *serves* the farm, so the guest sees a closure-only store. This
@@ -994,7 +994,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         lib.unique (
           (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) [ "video" ])
           # When the wayland-proxy filter is active, GPU depends on
-          # wayland-proxy (not directly on the gpu/render-node node — gpu
+          # wayland-proxy (not directly on the gpu/render-node node - gpu
           # is behind wayland-proxy in the readiness chain). Cloud Hypervisor
           # waits on gpu/video directly, so preVmmNodeIds still names the
           # gpu/video node; the wayland-proxy edge is declared separately below.

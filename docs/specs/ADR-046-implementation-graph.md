@@ -1,6 +1,6 @@
 # ADR 0046 implementation graph (generated)
 
-> **Generated index — not a normative member.** This file and its companion
+> **Generated index - not a normative member.** This file and its companion
 > [`ADR-046-implementation-graph.json`](ADR-046-implementation-graph.json) are
 > deterministically generated from
 > [`ADR-046-spec-set.json`](ADR-046-spec-set.json),

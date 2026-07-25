@@ -9,7 +9,7 @@
 //!
 //!   1. With d2bd's public socket missing, every mutating verb surfaces
 //!      the typed `daemon-down` envelope (`code == "daemon-down"`,
-//!      `exitCode == 1`) and exits 1 — even when the removed
+//!      `exitCode == 1`) and exits 1 - even when the removed
 //!      `D2B_LEGACY_BASH_OPT_IN=1` escape hatch is set.
 //!   2. The `D2B_LEGACY_CLI_PATH` / `D2B_LEGACY_CLI` poison-pill is
 //!      NEVER invoked: it is wired to an executable sentinel that would
@@ -18,7 +18,7 @@
 //!      touching bash.
 //!   4. `vm exec` reaches `cmd_vm_exec` through real clap parsing + dispatch.
 //!
-//! Layer 1: no live daemon, no microvm spawn, no D2B_FIXTURES. Self-contained —
+//! Layer 1: no live daemon, no microvm spawn, no D2B_FIXTURES. Self-contained -
 //! always runs. Runs in seconds.
 //!
 //! The `daemon-down` envelope is the private `HostErrorEnvelope` DTO (not part
@@ -231,7 +231,7 @@ fn legacy_bash_opt_in_is_a_no_op() {
     assert_ne!(
         out.status.code(),
         Some(99),
-        "D2B_LEGACY_BASH_OPT_IN was honoured — the escape hatch must be removed\nstderr:\n{}",
+        "D2B_LEGACY_BASH_OPT_IN was honoured - the escape hatch must be removed\nstderr:\n{}",
         stderr_of(&out),
     );
     assert_eq!(

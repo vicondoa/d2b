@@ -10,7 +10,7 @@ single rule:
 > classified in `tests/migration-ledger.toml` (`make check-inventory` fails
 > closed otherwise).
 
-## Decision tree — which kind of test?
+## Decision tree - which kind of test?
 
 Pick the row that matches what you are asserting. The group sets the `make`
 target and where the test lives.
@@ -19,14 +19,14 @@ target and where the test lives.
 | --- | --- | --- | --- |
 | Rust logic / argv / DTO behaviour, or a **fake-backed** kernel/broker canary, or KVM-free runtime integration (sockets, `unshare` netns) | **A** | `test-rust` | `#[test]` in the owning crate (`cargo nextest`) |
 | Generated artifact == its **shipped, committed** copy (schema / docs / CLI / manpage) | **B** | `test-drift` | `xtask gen-* && git diff` (canonical) + `insta` |
-| A property of a **rendered bundle artifact** (privileges/host/processes/minijail JSON) | **C** | `test-contract` | `packages/d2b-contract-tests` — parse the fixture into a `d2b-core` DTO + assert |
+| A property of a **rendered bundle artifact** (privileges/host/processes/minijail JSON) | **C** | `test-contract` | `packages/d2b-contract-tests` - parse the fixture into a `d2b-core` DTO + assert |
 | A **pure-Nix value / option / internal-config** fact | **D** | `test-nix-unit` | `nix-unit` over an introspection fixture |
 | That a **misconfig is rejected** at eval | **E** | `test-nix-unit` | `nix-unit` (Bucket-A value over `config.assertions`; Bucket-B `expectedError`) |
 | That a config **builds** / a schema is strict | **F** | `test-flake` | `flake.checks` (realized via `nix build`) |
 | A **source/doc cross-reference** or structural-policy invariant | **H** | `test-policy` | the policy scanner / a focused gate |
 | Foreign-userland portability for static binaries | **G-container** | `test-integration` | `tests/integration/containers/*.sh` under rootless podman; local host/manual pre-PR, not the PR pipeline |
 | Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; local NixOS/KVM host/manual pre-PR, not the PR pipeline |
-| Real **device passthrough** (GPU/YubiKey/hardware-TPM) or a **full microVM boot** | **G-hw** | `test-hardware` | a NixOS host **with the devices** — **not runnable in CI** |
+| Real **device passthrough** (GPU/YubiKey/hardware-TPM) or a **full microVM boot** | **G-hw** | `test-hardware` | a NixOS host **with the devices** - **not runnable in CI** |
 
 ### Group F hosted-runner caveat
 
@@ -48,12 +48,12 @@ failure mode is gone.
 
 Default when unsure: if it can be expressed as an assertion over a rendered
 artifact, it is **C** (Rust contract test). Ad-hoc bash that shells out to
-`nix eval` / `cargo test` is **rejected** by the placement gate — use a target.
+`nix eval` / `cargo test` is **rejected** by the placement gate - use a target.
 
 ## Fast inner loop (one assertion)
 
 ```bash
-# Contract (C) — reuse the smoke fixture, run one test:
+# Contract (C) - reuse the smoke fixture, run one test:
 make test-fixtures                       # builds the fixture, prints D2B_FIXTURES
 D2B_FIXTURES=<that path> cargo nextest run -p d2b-contract-tests -E 'test(my_new_case)'
 
@@ -61,7 +61,7 @@ D2B_FIXTURES=<that path> cargo nextest run -p d2b-contract-tests -E 'test(my_new
 # Nix value (D/E): add a case to the nix-unit suite and run `make test-nix-unit`
 ```
 
-No ledger/mutation ceremony is required for a *new* test — that machinery is
+No ledger/mutation ceremony is required for a *new* test - that machinery is
 migration-scoped. You only must: (1) put the test behind a `make` target, and
 (2) keep `make check-inventory` green (add a ledger row if you add a script).
 
@@ -74,7 +74,7 @@ The PR template checklist is mandatory:
 - `make test-host-integration` passes on the host before PR creation.
 - If you touched GPU/YubiKey/hardware-TPM or a full microVM boot, run
   `make test-hardware` on a NixOS host **with the devices** and paste results
-  (CI cannot — hosted runners have KVM but no devices).
+  (CI cannot - hosted runners have KVM but no devices).
 - New/changed tests are wired into a `make` target and `make check-inventory`
   is green.
 - Docs (`docs/**`, `AGENTS.md`, `tests/README.md`) and `.github/workflows/*`

@@ -16,8 +16,8 @@ persistent handle `0x81000001` (ECC P-256 preferred, RSA-2048
 fallback) so downstream services (Himmelblau, sbctl, systemd-tpm2-setup
 consumers) can bind keys without bootstrapping themselves.
 
-TPM state — including the SRK and any keys bound to it by services
-running inside the VM — is **persisted on the host** at
+TPM state - including the SRK and any keys bound to it by services
+running inside the VM - is **persisted on the host** at
 `/var/lib/d2b/vms/<vm>/swtpm/`.
 
 ## Options (host-side)
@@ -36,7 +36,7 @@ all guest-side wiring is unconditional within the module.
 
 - **`d2b-<vm>-swtpm` system user + group**
   ([`host-users.nix`](../../nixos-modules/host-users.nix)). Static
-  per-VM user — `DynamicUser = false` so state under
+  per-VM user - `DynamicUser = false` so state under
   `/var/lib/d2b/vms/<vm>/swtpm/` has a stable owner.
 - **`d2b-<vm>-swtpm.service`**
   ([`host-sidecars.nix`](../../nixos-modules/host-sidecars.nix)).
@@ -53,7 +53,7 @@ all guest-side wiring is unconditional within the module.
     graphics VMs.
   - `partOf = [ "microvms.target" ]` so a system-wide microvm
     restart cycles it; `Restart = "on-failure"`, `RestartSec = 2`.
-  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) — a
+  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) - a
     `nixos-rebuild switch` updates the unit file but does NOT
     cycle the running swtpm. Killing swtpm under a live VM means
     the guest loses its TPM socket and Entra/Intune device-bound
@@ -64,7 +64,7 @@ all guest-side wiring is unconditional within the module.
     CHANGELOG.)
 - **State directory** `/var/lib/d2b/vms/<vm>/swtpm/`, mode 0700
   owned by `d2b-<vm>-swtpm`. Contents are swtpm NVRAM + state
-  blobs — not human-readable, not portable across VMs. In the
+  blobs - not human-readable, not portable across VMs. In the
   daemon/broker model the privileged broker **provisions this
   directory on first VM start** (fd-safe create, owner
   `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared); an
@@ -72,10 +72,10 @@ all guest-side wiring is unconditional within the module.
   (never wiped). If a previously-provisioned directory is missing or
   replaced, the broker **fails the start closed**
   (`previously-provisioned-swtpm-state-missing`) rather than
-  re-creating an empty TPM — see
+  re-creating an empty TPM - see
   [components-tpm recovery](#) and the v1.2→v1.3 migration guide.
 - **Parent-dir posture.** The VM's state root at
-  `/var/lib/d2b/vms/<vm>/` is `d2bd:users 3770` — `setgid`
+  `/var/lib/d2b/vms/<vm>/` is `d2bd:users 3770` - `setgid`
   so role users inherit the group, and **sticky (`+t`)** so a
   per-VM role UID (which holds rwx via POSIX ACL) cannot rename or
   unlink the principal-owned `swtpm/` directory it does not own. The
@@ -92,14 +92,14 @@ all guest-side wiring is unconditional within the module.
 `d2b-<vm>-swtpm.service` carries `restartIfChanged = false`
 (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
 A `nixos-rebuild switch` updates the unit file but does NOT cycle
-the running swtpm — killing swtpm under a live VM tears down the
+the running swtpm - killing swtpm under a live VM tears down the
 CH TPM socket, the guest's libtpms enters failure mode, and
 Entra/Intune device-bound creds become unreachable. After a
 rebuild, `d2b list` flags the VM with `[pending restart]` if
 its `current` closure has drifted from `booted`; apply with
 `d2b vm restart <vm> --apply` (clean down+up cycles swtpm and CH
 together so the TPM socket survives the round-trip). See
-[`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
+[`docs/reference/cli-contract.md` - Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
 ## Guest-side resources created
 
@@ -107,17 +107,17 @@ together so the TPM socket survives the round-trip). See
 - `microvm.cloud-hypervisor.extraArgs =
   [ "--tpm" "socket=/run/d2b/vms/<hostname>/tpm.sock" ]`.
 - `security.tpm2.enable = true`.
-- `boot.kernelModules = [ "tpm" "tpm_crb" ]` — belt-and-suspenders;
+- `boot.kernelModules = [ "tpm" "tpm_crb" ]` - belt-and-suspenders;
   the kernel normally auto-probes when it sees the CH TPM CRB at
   `fed40000-fed40fff`.
 - `environment.systemPackages = [ pkgs.tpm2-tools ]` for in-guest
   diagnostics (`tpm2_getcap properties-fixed`, `tpm2_getrandom 16`).
-- `systemd.services.tpm2-flush-sessions` — early oneshot, wanted by
+- `systemd.services.tpm2-flush-sessions` - early oneshot, wanted by
   `sysinit.target`, that flushes only loaded/saved TPM sessions via
   `/dev/tpmrm0`. This prevents stale swtpm saved sessions from filling
   the TPM active-session table after guest reboots while preserving NV
   indices and persistent handles.
-- `systemd.services.tpm2-srk-provision` — oneshot, `RemainAfterExit`,
+- `systemd.services.tpm2-srk-provision` - oneshot, `RemainAfterExit`,
   `wantedBy = [ "multi-user.target" ]`. Idempotently provisions the
   SRK at `0x81000001`. Pins `TPM2TOOLS_TCTI = "device:/dev/tpmrm0"`
   to skip the tabrmd D-Bus probe and orders after
@@ -132,7 +132,7 @@ together so the TPM socket survives the round-trip). See
   no other user (including the kvm group) can reach the control
   protocol out-of-band.
 - swtpm NVRAM persists across `d2b vm start`/`d2b vm stop` cycles
-  and across host reboots — by design. Anything the guest binds to
+  and across host reboots - by design. Anything the guest binds to
   the TPM (LUKS keys, Himmelblau device key, sbctl PCR policies)
   survives a VM restart.
 - The SRK at `0x81000001` exists exactly once. The provisioning
@@ -152,7 +152,7 @@ together so the TPM socket survives the round-trip). See
   `ProtectKernelTunables`, `ProtectKernelLogs`,
   `ProtectControlGroups`, `LockPersonality`,
   `MemoryDenyWriteExecute = true`.
-- `RestrictAddressFamilies = [ "AF_UNIX" ]` — swtpm needs no network.
+- `RestrictAddressFamilies = [ "AF_UNIX" ]` - swtpm needs no network.
 - `UMask = "0007"` (v1.1.2-final, was `"0177"`): the broker's child
   closure honours the `umask` field declared in the swtpm role
   profile, which sets `umask = 0o007` so the bound control socket is
@@ -169,7 +169,7 @@ together so the TPM socket survives the round-trip). See
   replacing this directory regenerates a fresh, empty TPM with a
   new endorsement key. To remote IdPs (Entra ID via Himmelblau,
   any TPM-bound enrolment) this looks like device tampering and
-  forces re-enrolment — and, depending on the IdP, may require
+  forces re-enrolment - and, depending on the IdP, may require
   out-of-band admin action to unblock. Treat the directory as part
   of the VM's stable identity.
 - **Backups: encrypted, access-controlled media only.** swtpm state
@@ -191,10 +191,10 @@ together so the TPM socket survives the round-trip). See
 
 ## See also
 
-- [Design / threat model](../explanation/design.md) — TPM-bound
+- [Design / threat model](../explanation/design.md) - TPM-bound
   credentials at rest is one of the in-scope threats.
-- [Manifest schema](./manifest-schema.md) — `units.swtpm` field.
-- [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
+- [Manifest schema](./manifest-schema.md) - `units.swtpm` field.
+- [`examples/graphics-workstation`](../../examples/graphics-workstation/) -
   enables `tpm.enable` alongside graphics + audio.
-- [`examples/with-entra-id`](../../examples/with-entra-id/) — uses
+- [`examples/with-entra-id`](../../examples/with-entra-id/) - uses
   the swtpm to bind the Entra device key.

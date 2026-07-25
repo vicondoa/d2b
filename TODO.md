@@ -17,7 +17,7 @@ error: flake 'git+file:///…/d2b?shallow=1' does not provide attribute
 
 Any local `nix develop` in the repo root fails the same way. Observed
 red on PR #31 and PR #32; not specific to either change (both have
-clean Rust locally — the job never gets as far as building).
+clean Rust locally - the job never gets as far as building).
 
 **Root cause.** `flake.nix` exposes `nixosModules`, `templates`, and
 `checks`, but **no `devShells` / `devShell` output**, so the CI's
@@ -53,12 +53,12 @@ closed before the VM runner spawns.
 `tests/assertions-eval.sh` now evaluates its 26-case batch via a
 minimal `lib.evalModules` (d2b modules + `nixos/modules/misc/assertions.nix`
 + namespace sinks in `tests/unit/nix/eval-cases/shared.nix`) instead of a full
-`nixpkgs.lib.nixosSystem` per case — the batch dropped from ~2 min to
+`nixpkgs.lib.nixosSystem` per case - the batch dropped from ~2 min to
 ~68 s. The remaining wall time (~9 min) is dominated by the ~9 tail
 "probe" cases at the bottom of the gate, each of which spawns a
 SEPARATE `nix-instantiate` whose cost is process startup
 (`builtins.getFlake` + nixpkgs import), not module eval. Fold those
-probes into the single batch process — extend the case schema in
+probes into the single batch process - extend the case schema in
 `shared.nix` with an optional `probe` projection (reusing the now-safe
 faithful `systemd` sink for the cases that read
 `config.systemd.services` / `config.systemd.tmpfiles.rules`) so the
@@ -86,7 +86,7 @@ wiring a `cli-schemas` drift gate so it can't silently drift again.
 ## `privileges-doc-completeness-eval.sh` reports 10 contradictory doc rows
 
 `tests/privileges-doc-completeness-eval.sh` fails with 10
-"has a live (unmarked) doc row AND an obituary row — contradictory"
+"has a live (unmarked) doc row AND an obituary row - contradictory"
 violations for retired units (`microvm-tap-interfaces@`,
 `microvm-set-booted@`, `microvm-pci-devices@`, `d2b-*-store-sync`,
 `d2b-known-hosts-refresh@`, `d2b-vfsd-watchdog@`,
@@ -111,7 +111,7 @@ issued.
 
 **Evidence.** `packages/d2b-host/src/usbip_argv.rs` has a complete
 `generate_guest_usbip_ssh_argv` (ssh-hardened `usbip attach/detach`
-driver) — but `grep` shows it is **never called** anywhere outside its
+driver) - but `grep` shows it is **never called** anywhere outside its
 own module/tests. `dispatch_broker_usbip_bind` in
 `packages/d2bd/src/lib.rs` ends after `UsbipProxyReconcile`. So
 after `d2b usb attach`, `usbip port` in the guest is empty and no
@@ -123,7 +123,7 @@ specified but not implemented.
 **Impact.** USB passthrough is half-wired: the documented one-command
 flow (`d2b usb attach`) silently leaves the device unusable in the
 guest. Every consumer must hand-roll a guest-side import. Confirmed
-2026-06-07 with the Openterface KVM in `work-ssd` — host bind succeeded,
+2026-06-07 with the Openterface KVM in `work-ssd` - host bind succeeded,
 `usbip probe` showed `bound`, but the guest had no device until a manual
 in-VM `usbip attach`. Worked around with a temporary guest-side poller
 systemd unit (`openterface-usbip-import` in `/etc/nixos/vms/work-ssd.nix`)
@@ -169,7 +169,7 @@ VM-only live-activation path (build new closure → sync to per-VM store
 - As root via `sudo d2b switch sys-work-net --apply`:
   `authz-not-a-launcher: peer uid 0 is not in
   d2b.site.launcherUsers`. (sudo runs as uid 0, which is not a
-  launcher — so `d2b switch` must NOT be run under sudo, but
+  launcher - so `d2b switch` must NOT be run under sudo, but
   nothing in the CLI/help says so.)
 - As the launcher user `paydro`:
   `RunActivation failed (code: broker-error, exit 78) … The daemon
@@ -189,7 +189,7 @@ The working alternative is the slow path: `nixos-rebuild switch`
 1. Fix the `RunActivation` bundle-intent resolution so a freshly
    built+synced per-VM closure is actually found by the broker (the
    intent id the daemon sends must match what the broker resolves from
-   the current bundle — likely a stale-bundle / intent-id-derivation
+   the current bundle - likely a stale-bundle / intent-id-derivation
    mismatch; `d2b audit --strict` was suggested as the way to dump
    the intent id, wire that into the error remediation).
 2. Until fixed, make `d2b switch` fail fast with a clear message
@@ -201,7 +201,7 @@ The working alternative is the slow path: `nixos-rebuild switch`
 
 **Current state.** Declaring a new workload VM in an existing env
 (e.g. `work-ssd` in `work`) regenerates the env's `sys-<env>-net`
-closure — its dnsmasq config gains the new `dhcp-host=<mac>,<ip>,<name>`
+closure - its dnsmasq config gains the new `dhcp-host=<mac>,<ip>,<name>`
 reservation. But a `nixos-rebuild switch` reports
 `d2b-store-sync: sys-work-net already at generation N; nothing to
 do` and does **not** push the new closure into the **running**
@@ -213,7 +213,7 @@ process-alive), its tap attaches to `br-<env>-lan`, but it never gets
 its reserved DHCP lease, so it never reaches the network. d2b's
 `guest-ssh-readiness` node times out at the deadline and the whole VM
 start **rolls back**. From the operator's seat the new VM "just won't
-start" with no obvious cause — the real fault is a stale sibling
+start" with no obvious cause - the real fault is a stale sibling
 `sys-<env>-net`. Reproduced 2026-06-07 adding `work-ssd` to the `work`
 env: `sys-work-net` stayed on closure `076c5f4…` (pre-change) while the
 new closure carried `dhcp-host=02:76:53:AE:57:14,10.20.0.20,work-ssd`.
@@ -224,12 +224,12 @@ the new VM.
 
 **Right answer.** Adding/removing a workload VM in an env should
 automatically reconcile that env's auto-declared `sys-*` VMs whose
-closure is a function of the env membership — at minimum
+closure is a function of the env membership - at minimum
 `sys-<env>-net` (dnsmasq reservations + any per-VM nft/host entries),
 and any other sys VM whose config enumerates sibling VMs. Options:
 1. The host activation `d2b-store-sync` + supervisor should detect
    that a running `sys-<env>-net`'s declared closure changed and either
-   auto-`switch` it (preferred for net VMs — dnsmasq reload is cheap
+   auto-`switch` it (preferred for net VMs - dnsmasq reload is cheap
    and non-disruptive) or at least flag it `[pending restart]` in
    `d2b vm list` / `vm status` with a clear remediation.
 2. Better: make the per-VM DHCP reservation a runtime reconcile the
@@ -259,7 +259,7 @@ host switch for the new VM to get its lease.
 > `d2b.site`.
 
 **Original observation (2026-06-07, historic).** `nixos-modules/processes-json.nix`
-hardcoded the host compositor socket name as `wayland-0` in four places — the
+hardcoded the host compositor socket name as `wayland-0` in four places - the
 `gpuRunner` and `gpuRenderNodeRunner` each set
 `--wayland-sock /run/user/<uid>/wayland-0` and
 `WAYLAND_DISPLAY=wayland-0`. On a host whose primary compositor is NOT
@@ -284,7 +284,7 @@ setgid bit at `mkdir` time, so they land as mode `2750` instead of the
 path=/var/lib/d2b/vms/<vm>/sshd-host-keys drift_count=2` (then
 `.../host-keys drift_count=1` once the first is fixed). The CLI
 surfaces this only as `daemon returned unknown mutating-verb
-outcome:` — the typed drift reason is buried in the d2bd journal.
+outcome:` - the typed drift reason is buried in the d2bd journal.
 Reproduced on a freshly-declared `work-ssd` VM (2026-06-07); existing
 VMs (`work-aad`) created before the regression are unaffected because
 their dirs predate the setgid-inheritance path.
@@ -305,7 +305,7 @@ their dirs predate the setgid-inheritance path.
    ignore S_ISGID when the parent is setgid), and auto-reconcile via a
    broker `chmod` op instead of failing closed.
 
-Option 1 is preferred — keep the matrix strict; make the creator honor
+Option 1 is preferred - keep the matrix strict; make the creator honor
 it.
 
 **Also:** surface the typed `ownership-matrix drift` reason through the
@@ -358,7 +358,7 @@ inside consumer flakes. `nixos-modules/vm-options.nix` declares
 with consumer flakes that still set `microvm.mem`, `microvm.shares`,
 `microvm.writableStoreOverlay`, etc. That backward-compat shim is
 also why every comment in the framework reads "microvm.nix's
-cloud-hypervisor runner" and "microvm.nix's generator" — the names
+cloud-hypervisor runner" and "microvm.nix's generator" - the names
 imply an upstream dependency that no longer exists. New contributors
 and operators reading the code are misled into thinking microvm.nix
 is still load-bearing.
@@ -370,26 +370,26 @@ then delete them.
 
 ### Framework files with live `microvm.*` writers (must rename)
 
-- `nixos-modules/host.nix` lines 108, 257, 260-262, 306 — declares
+- `nixos-modules/host.nix` lines 108, 257, 260-262, 306 - declares
   `microvm.interfaces`, `microvm.vsock.cid`, `microvm.hypervisor`,
   `microvm.cloud-hypervisor.extraArgs`, `microvm.shares`
   per-VM. This is the primary translation site.
-- `nixos-modules/net.nix` line 380 — declares the net-VM's
+- `nixos-modules/net.nix` line 380 - declares the net-VM's
   `microvm = { hypervisor; vcpu; mem; volumes; interfaces; }`
   block.
-- `nixos-modules/components/graphics.nix` line 332 — writes
+- `nixos-modules/components/graphics.nix` line 332 - writes
   `microvm = { hypervisor; cloud-hypervisor; … }` for graphics VMs.
-- `nixos-modules/components/tpm.nix` lines 16, 25 —
+- `nixos-modules/components/tpm.nix` lines 16, 25 -
   `microvm.hypervisor`, `microvm.cloud-hypervisor.extraArgs`.
-- `nixos-modules/components/audio/guest.nix` lines 126, 130 —
+- `nixos-modules/components/audio/guest.nix` lines 126, 130 -
   `microvm.hypervisor`, `microvm.extraArgsScript`.
-- `nixos-modules/components/video/guest.nix` lines 15, 17 —
+- `nixos-modules/components/video/guest.nix` lines 15, 17 -
   `microvm.hypervisor`, `microvm.cloud-hypervisor.extraArgs`.
-- `nixos-modules/components/observability/guest.nix` line 207 —
+- `nixos-modules/components/observability/guest.nix` line 207 -
   `microvm.hypervisor`.
-- `nixos-modules/vm-guest-base.nix` line 71 — `microvm.kernelParams`.
-- `nixos-modules/observability-vm.nix` line 53 — `microvm.mem`.
-- `nixos-modules/processes-json.nix` lines 183, 417, 454, 607 —
+- `nixos-modules/vm-guest-base.nix` line 71 - `microvm.kernelParams`.
+- `nixos-modules/observability-vm.nix` line 53 - `microvm.mem`.
+- `nixos-modules/processes-json.nix` lines 183, 417, 454, 607 -
   reads `microvm.vsock.cid`, `microvm.graphics.socket`,
   `microvm.shares` from the evaluated per-VM config.
 
@@ -404,7 +404,7 @@ Roughly 20+ files including `vm-options.nix` (header block),
 line 148 / 160 / 300 in option doc-strings),
 `options-site.nix`, `assertions.nix` lines 307-323 (the graphics
 + autostart assertion talks about `microvm@<vm>.service` and "the
-upstream microvm.nix runner" — those units don't exist anymore).
+upstream microvm.nix runner" - those units don't exist anymore).
 Component modules carry stale comments about `microvm.nix's
 cloud-hypervisor runner` / `microvm.nix's generator`. Rewrite each
 to describe current behavior: "the broker's `SpawnRunner` op
@@ -433,19 +433,19 @@ broker/daemon path; drop the "microvm.nix's X" framing.
 The dependency is no longer used by d2b but the consumer flake
 still pulls it in. Drop:
 
-- `/etc/nixos/flake.nix` lines 28-31 — `inputs.microvm` block.
-- `/etc/nixos/flake.nix` line 45 — `microvm` in the outputs
+- `/etc/nixos/flake.nix` lines 28-31 - `inputs.microvm` block.
+- `/etc/nixos/flake.nix` line 45 - `microvm` in the outputs
   function signature.
-- `/etc/nixos/flake.nix` line 125 — stale "checks.security-suite"
+- `/etc/nixos/flake.nix` line 125 - stale "checks.security-suite"
   comment that blames `inputs.microvm.nixosModules.host`.
-- `/etc/nixos/modules/d2b-config.nix` line 53 — stale comment.
-- `/etc/nixos/vms/d2b-test.nix` lines 29-42 — `microvm = { mem;
+- `/etc/nixos/modules/d2b-config.nix` line 53 - stale comment.
+- `/etc/nixos/vms/d2b-test.nix` lines 29-42 - `microvm = { mem;
   vcpu; volumes; }` block; rename to the new d2b-native
   namespace.
-- `/etc/nixos/vms/personal-dev.nix` lines 98-142 — same;
+- `/etc/nixos/vms/personal-dev.nix` lines 98-142 - same;
   particularly `microvm.writableStoreOverlay` (referenced in
   `nixos-modules/options-vms.nix` line 160).
-- `/etc/nixos/vms/work-aad.nix` lines 336-354 — same.
+- `/etc/nixos/vms/work-aad.nix` lines 336-354 - same.
 
 The consumer migration is mechanical (one-time `sed`-style rename)
 once the framework provides the new option names. Until then, the
@@ -455,7 +455,7 @@ deprecation shim must accept BOTH spellings.
 
 - `scripts/MIGRATION-PRE-V0.1.0.md` and
   `scripts/migrate-d2b-v0.1.0.sh` mention microvm.nix as
-  historical context — leave alone.
+  historical context - leave alone.
 - `pkgs/spectrum-ch/` and `pkgs/crosvm-patched/` mention
   microvm.nix because they're forks of upstream binaries that
   microvm.nix also patches; the comments are documenting heritage,
@@ -484,7 +484,7 @@ microvm.graphics.socket             →  d2b.vms.<vm>.runner.graphics.socket
 microvm.extraArgsScript             →  d2b.vms.<vm>.runner.extraArgsScript
 ```
 
-(Names are illustrative — pick a final shape during implementation.)
+(Names are illustrative - pick a final shape during implementation.)
 
 The deprecation shim in `vm-options.nix` should `lib.warn` once per
 eval when a consumer flake still uses `microvm.*`, and the new
@@ -497,7 +497,7 @@ namespace becomes the documented API across `README.md`,
 **Symptom.** `d2b host prepare --apply` and several other CLI verbs
 short-circuit with `tier-0-legacy-uses-nixos-module` (exit 78) and
 the misleading remediation `Add at least one VM with
-d2b.vms.<vm>.supervisor = "d2bd"` — even though the
+d2b.vms.<vm>.supervisor = "d2bd"` - even though the
 `supervisor` option was removed in v1.1 (daemon-only is the ONLY
 mode) and the deployed bundle absolutely uses the daemon path.
 
@@ -507,7 +507,7 @@ mode) and the deployed bundle absolutely uses the daemon path.
 `context.load_bundle_context()` returns `Ok(None)` or any error. The
 `.ok().flatten()` chain SILENTLY swallows the actual failure. In
 practice the CLI runs as a launcher user (`paydro`) who cannot read
-`/etc/d2b/bundle.json` (root:d2bd 0640) — so every CLI
+`/etc/d2b/bundle.json` (root:d2bd 0640) - so every CLI
 invocation from the launcher misclassifies the deployment as legacy
 and the operator is told to set a long-removed option.
 
@@ -540,7 +540,7 @@ misleading.
   `cmd_host_prepare`, `cmd_host_destroy`, related callers).
 - `nixos-modules/bundle.nix` (file mode declaration) if widening
   the bundle perms is the path chosen.
-- `docs/reference/error-codes.md` — drop the
+- `docs/reference/error-codes.md` - drop the
   `#tier-0-legacy-uses-nixos-module` and
   `#single-writer-conflict` anchors.
 
@@ -577,12 +577,12 @@ inconsistency). The supervisor decision logic needs to either:
 
 **Files to start from.**
 
-- `packages/d2b-priv-broker/src/sys.rs` — the reaper claims to
+- `packages/d2b-priv-broker/src/sys.rs` - the reaper claims to
   use `waitid(P_PIDFD)` + signalfd; verify it runs.
-- `packages/d2bd/src/supervisor/pidfd.rs` —
+- `packages/d2bd/src/supervisor/pidfd.rs` -
   `PidfdTable::snapshot` writes the file; check where entries are
   REMOVED.
-- `packages/d2bd/src/supervisor/mod.rs` — the `ChildReaped` IPC
+- `packages/d2bd/src/supervisor/mod.rs` - the `ChildReaped` IPC
   consumer (if it exists).
 - The daemon's `already has a registered supervisor pidfd` envelope
   is emitted from the start-DAG preflight; check what it's reading.
@@ -607,14 +607,14 @@ a registered client of the live `pipewire-0`.
 
 **Root cause.** The broker's `SpawnRunner{role: Audio}` fires during
 the VM start DAG, which currently runs during `d2bd`'s autostart
-on boot — before the operator has logged in and before
+on boot - before the operator has logged in and before
 `/run/user/<uid>/pipewire-0` exists. The sidecar starts as the
 `d2b-<vm>-snd` system user (uid in a dedicated range), opens
 whatever PipeWire path is available at the time (often nothing,
 sometimes a previous session that's since died), and never
 reconnects when a new `pipewire-0` appears at user login. Cloud
 Hypervisor's `--generic-vhost-user` connection to the sidecar is
-also one-shot — even if we respawn the sidecar with the live PW env,
+also one-shot - even if we respawn the sidecar with the live PW env,
 CH stays bound to the dead handshake.
 
 **Pre-v1.0 (bash CLI) behaviour that worked.** The bash `d2b up
@@ -664,13 +664,13 @@ operator's login was a hard prerequisite for invoking the CLI.
 
 **Files / code paths to start from.**
 
-- `packages/d2b-priv-broker/src/live_handlers.rs` — `SpawnRunner`
+- `packages/d2b-priv-broker/src/live_handlers.rs` - `SpawnRunner`
   handler; the audio policy ref is `w1-audio`.
-- `packages/d2bd/src/supervisor/pidfd.rs` — pidfd lifecycle; this
+- `packages/d2bd/src/supervisor/pidfd.rs` - pidfd lifecycle; this
   is where the respawn-on-death watchdog needs to land.
-- `packages/d2bd/src/lib.rs` — autostart + `VmStartRunner::spawn_runner`;
+- `packages/d2bd/src/lib.rs` - autostart + `VmStartRunner::spawn_runner`;
   this is where the session-readiness gate would live.
-- `nixos-modules/components/audio/host.nix` — the existing host
+- `nixos-modules/components/audio/host.nix` - the existing host
   config rules (WirePlumber `client.conf.d/90-d2b.conf` etc.) are
   fine; only the spawn timing is wrong.
 

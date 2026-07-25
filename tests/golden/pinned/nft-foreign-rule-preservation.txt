@@ -1,4 +1,4 @@
-# nft-foreign-rule-preservation — d2b-host nftables foreign-rule
+# nft-foreign-rule-preservation - d2b-host nftables foreign-rule
 # preservation + drift-detection #[test]s. Successor of
 # tests/nft-foreign-rule-preservation.sh, which only ran these #[test]s
 # (`cargo test -p d2b-host --all-features`); they already run in the

@@ -8,7 +8,7 @@
 //!   [u32 LE: length (must equal CTAPHID_REPORT_LEN)] [length bytes: payload]
 //!
 //! A received length field that does not equal `CTAPHID_REPORT_LEN` is a
-//! protocol error — the connection must be dropped and restarted.
+//! protocol error - the connection must be dropped and restarted.
 
 use std::io;
 

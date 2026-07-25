@@ -1,4 +1,4 @@
-//! A bounded, low-cardinality protocol token (ADR 0032) — used for the
+//! A bounded, low-cardinality protocol token (ADR 0032) - used for the
 //! handshake `codec_id` and the peer-context `auth_mechanism`. Both are
 //! peer-controlled, so they are bounded + shape-checked at decode and
 //! their `Debug` only ever prints the bounded token (never unbounded peer

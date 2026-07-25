@@ -3,7 +3,7 @@
 //! writable-paths}.sh`.
 //!
 //! Two layers:
-//!   * **synthetic** — the original positive/negative `jq` fixtures, now driving
+//!   * **synthetic** - the original positive/negative `jq` fixtures, now driving
 //!     the typed `d2b_core::static_invariants` validators directly. These
 //!     live here (not as `d2b-core` `#[cfg(test)]` unit tests) because
 //!     `d2b-core` sets `[lib] test = false` (its libtest surface is the
@@ -11,7 +11,7 @@
 //!     The contract crate IS gated (the D2B_FIXTURES step in
 //!     `tests/tools/rust-workspace-checks.sh`), and these synthetic cases need no
 //!     fixture, so they run there unconditionally.
-//!   * **rendered** — the validators run against the REAL rendered fixture-smoke
+//!   * **rendered** - the validators run against the REAL rendered fixture-smoke
 //!     artifacts (`manifest.json` / bundle profiles), a strictly stronger
 //!     guarantee than the bash grep over a synthetic fixture.
 

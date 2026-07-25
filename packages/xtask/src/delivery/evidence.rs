@@ -4,7 +4,7 @@
 //! `cargo xtask delivery wave validate-import` records that one validator lane
 //! ran against one candidate and what it returned. Three lanes report into the
 //! same candidate: required GitHub CI, the heavy-gated local and host
-//! validators, and — through its own tooling — the ten-role panel.
+//! validators, and - through its own tooling - the ten-role panel.
 //!
 //! # How raw output is kept out of Git
 //!
@@ -35,7 +35,7 @@
 //! 3. the optional `--candidate` guard lets a lane state which candidate it
 //!    believes it ran against, and a mismatch is refused.
 //!
-//! Importing a `failed` result succeeds — recording a failure is a successful
+//! Importing a `failed` result succeeds - recording a failure is a successful
 //! import. A lane with no record at all is pending, and `wave seal` treats
 //! pending and failed alike: neither permits merge.
 
