@@ -2697,9 +2697,9 @@ Documents:
 | Reuse action | adapt |
 | Destination | `nixos-modules/zone-resources.nix` (per §ADR046-pstate-010); `root-config.schema.json` in the Provider package |
 | Detailed design | `sourcePolicies` in Provider root config (opaque IDs; no raw host paths); path prefix injection by resource compiler into private bundle (never into ResourceSpec or operator-authored Nix); `controllerExecutionRef` in Provider config; all eval-time validation rules per §Nix configuration including `sourcePolicyId` validation; artifact catalog entry; Provider and Volume resource authoring shapes |
-| Integration | NixOS build emits `/etc/d2b/zones/<zone>/resources.json`; Zone daemon activates bundle and creates Volume resources; volume-local controller reconciles |
+| Integration | NixOS build emits `/etc/d2b/zones/<zone>/resource-bundle.json`; Zone daemon activates bundle and creates Volume resources; volume-local controller reconciles |
 | Data migration | `nixos-modules/storage-json.nix` path rows superseded by Volume resources; `nixos-modules/store.nix` activation superseded by store-view Volume |
-| Validation | All Nix eval-time validation rules; `contentId` determinism; credential-ref guard; unknown Provider config key → build fail |
+| Validation | All Nix eval-time validation rules; `contentHash` determinism; credential-ref guard; unknown Provider config key → build fail |
 | Removal proof | `nixos-modules/storage-json.nix` and `nixos-modules/store.nix` per-VM rows retired only after Volume resources replace every path row and all consumers complete bundle-format migration |
 
 ### ADR046-vl-011 - Workspace policy gate

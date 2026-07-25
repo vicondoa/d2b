@@ -1488,7 +1488,7 @@ The Device spec carries **no** `artifactId` field. Binary paths for crosvm
 
 ### Activation and publication path
 
-1. NixOS build produces `/etc/d2b/zones/<zone>/resources.json` (root:d2bd 0640).
+1. NixOS build produces `/etc/d2b/zones/<zone>/resource-bundle.json` (root:d2bd 0640).
 2. Zone runtime reads the bundle at startup and on generation-change signal.
 3. Resources with `managedBy=configuration` absent from the new generation
    receive `deletionRequestedAt`; the Zone transitions to `Degraded/pending-cleanup`.

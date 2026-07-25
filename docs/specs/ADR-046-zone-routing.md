@@ -1136,7 +1136,7 @@ Bundle rules:
   name or wall-clock time. The Zone runtime and audit records refer to this
   value as `generationId`; the two names denote the same digest.
 - The bundle carries no base64url `integrity` field and no `resourceCount`.
-  Integrity is the five-member digest chain frozen in
+  Integrity is the four-member digest chain frozen in
   `ADR-046-nix-configuration.md` section "Bundle contract (canonical)" (D119),
   of which `contentHash` is the generation-identity member. All digests use the
   D101 `sha256:<hex>` spelling; base64url is not used.
@@ -1175,26 +1175,40 @@ When a new bundle is installed (e.g. after `nixos-rebuild switch`):
 2. Computes diff against the active generation by generationId.
    If generationId is unchanged, no action required.
 
-3. For each resource in the new bundle:
+3. Atomic durable commit - the sole activation point, owned by the sole
+   durable writer ADR046-routing-013. The daemon config controller writes
+   `/var/lib/d2b/zones/<zone>/configuration/generation.json` (active
+   contentHash, prior contentHash, retainedGenerations, retention-ring
+   metadata) and stages the outgoing bundle into the retention ring in one
+   durable operation - temp file in the same directory, write, fsync, rename
+   over the target, fsync the parent directory - under the bundle-file OFD
+   lock. The new generation is active only when this commit returns success.
+   The commit precedes all intent queuing (steps 4-5) and reconcile
+   notification (step 6), so a crash can never leave a new generation active
+   without a durably recorded rollback target.
+
+4. For each resource in the new bundle (queued only after step 3 returns):
    a. Absent from store → queue Create intent (sets configurationGeneration).
    b. Present, spec changed → queue UpdateSpec intent (updates configurationGeneration).
    c. Present, spec unchanged → no-op (configurationGeneration refreshed in place).
 
-4. For each resource in the prior bundle whose configurationGeneration matches
+5. For each resource in the prior bundle whose configurationGeneration matches
    the prior generationId and that is absent from the new bundle:
    → queue Delete intent (asynchronous, non-blocking).
    Core sets `deletionRequestedAt` on the resource immediately and adds
    a Pending condition to signal cleanup is in progress.
 
-5. Activation completes synchronously once all intents are queued.
-   The Zone runtime begins applying intents asynchronously.
+6. Reconcile loops are notified only after step 3 and begin applying the
+   queued intents asynchronously. Activation is already complete at step 3;
+   intent application and cleanup are post-activation reconciliation, never
+   part of the activation point.
 
-6. Zone Resource phase after diff:
+7. Zone Resource phase after diff:
    - Pending  → while any Create or UpdateSpec intent is in-flight.
    - Degraded → all Creates/Updates done; one or more Delete intents pending.
    - Ready    → all intents complete; no pending cleanup.
 
-7. Prior generation bundles are retained in a capped ring
+8. Prior generation bundles are retained in a capped ring
    (default 3, range 1..16, no TTL) until explicitly pruned or rolled back.
    See "Prior generation retention and rollback" below.
 ```
@@ -1301,12 +1315,19 @@ under `/var/lib/d2b/zones/<zone>/configuration/prior/`:
 Retention is count-only: the oldest bundle is pruned when a new generation
 is added and the count would exceed `retainedGenerations`. No time-based expiry.
 
-- **Rollback**: writing a retained bundle back to
-  `/etc/d2b/zones/<zone>/resource-bundle.json` (e.g. via `nixos-rebuild switch`
-  to a previous NixOS generation) triggers a reverse diff. Resources with
-  `deletionRequestedAt` set have the field cleared and their Pending
-  condition removed (Delete intent cancelled if not yet executed);
-  resources added in the now-superseded generation receive Delete intents.
+- **Rollback**: rolling back does **not** rewrite `/etc` in place. The runtime
+  restages a retained prior bundle as a **new** generation: it re-runs the
+  atomic `generation.json` commit (activation step 3) with the retained
+  bundle's `contentHash` as the new active pointer and the current generation
+  recorded as the new prior pointer, then applies the reverse diff once that
+  commit returns. Resources with `deletionRequestedAt` set have the field
+  cleared and their Pending condition removed (Delete intent cancelled if not
+  yet executed); resources added in the now-superseded generation receive
+  Delete intents. A `nixos-rebuild switch` to a previous NixOS generation
+  reinstalls the earlier bundle at
+  `/etc/d2b/zones/<zone>/resource-bundle.json`, which the runtime activates
+  through the same restage-as-new-generation commit rather than by trusting the
+  rewritten `/etc` file as already-active.
 - **Pruning on cleanup failure**: prior bundles are never forcibly pruned
   while a Delete intent originating from their configurationGeneration is
   still in flight.
@@ -1994,6 +2015,55 @@ Reconnect on an already-enrolled link re-enters at `KK` from
 `EnrollmentCommitted` (the sealed enrollment record is reused); it does not
 consume a PSK or re-run IKpsk2. Only `Unenrolled` -> `IKpsk2` consumes a PSK.
 
+### Key lifecycle and cryptoperiods
+
+The allocator-issued bootstrap PSK and the enrolled KK transport session each
+have a frozen lifetime. These parameters are protocol constants owned by the
+child-local ZoneLink handler and the parent allocator; they are not ZoneLink
+`spec` fields and never extend the locked six-field schema.
+
+**Bootstrap PSK lifetime and reissue.** The allocator issues at most one live
+single-use PSK per link identity generation; issuing a fresh PSK durably
+invalidates any prior outstanding PSK, so at most one PSK is ever consumable.
+Each PSK carries an absolute expiry `BOOTSTRAP_PSK_TTL_MS` (default 300000;
+frozen range 60000..3600000). The child MUST complete the `Unenrolled -> IKpsk2
+-> EnrollmentCommitted` transition before that expiry. A PSK presented after
+expiry is refused at bootstrap admission with `bootstrap-psk-expired`; the link
+stays `Unenrolled` and a fresh allocator-issued PSK is required. PSK consumption
+is atomic and single-use (§ZoneLink session state machine): any completed or
+attempted IKpsk2 handshake burns the PSK.
+
+**IKpsk2 authentication failure.** A failed IKpsk2 bootstrap handshake (bad PSK,
+prologue mismatch, or a static-key admission the allocator refuses) burns the
+single-use PSK and fails closed with `bootstrap-handshake-failed`. The link
+returns to `Unenrolled`; the same PSK is never retried, and a fresh
+allocator-issued PSK is required before another IKpsk2 attempt.
+
+**Enrolled KK cryptoperiod and rehandshake.** An established `Ready` KK
+ComponentSession has a maximum lifetime `KK_SESSION_MAX_LIFETIME_MS` (default
+86400000; frozen range 3600000..604800000). On expiry the handler performs a
+fresh enrolled KK rehandshake from the persisted `EnrollmentCommitted` record (a
+new `linkEpoch` is assigned, old-epoch pinned-path tracking is cleared, and
+resource traffic resumes only after the state reaches `Ready` again). Renewal is
+always a fresh `Noise_KK` handshake against the sealed enrollment record; the
+IKpsk2 bootstrap session is never rekeyed or reused, and there is no in-band
+record-layer rekey of a live session.
+
+**Enrolled KK authentication failure.** An enrolled KK handshake whose peer
+static key does not match the sealed enrollment fingerprint fails closed with
+`zone-link-enrollment-key-mismatch`. The link stays `EnrollmentCommitted` and
+reports `Degraded`, and retries the enrolled KK handshake under the bounded
+reconnect budget (`spec.limits.reconnectMaxAttempts` within
+`spec.limits.reconnectWindowSecs`). It never downgrades to an IKpsk2 or an
+unauthenticated handshake to recover.
+
+**No fallback below the enrolled contract.** Once a link is
+`EnrollmentCommitted`, the only handshake it may attempt is the enrolled KK
+handshake. Fallback to IKpsk2 or to any unauthenticated pattern (for example
+`Noise_NN`) is prohibited. Only a durable revocation (§Revocation) that marks
+the sealed enrollment invalidated returns the link to `Unenrolled` and permits a
+fresh allocator-issued PSK and a new IKpsk2 bootstrap.
+
 ### Link failure and restart
 
 When a child-local ZoneLink ComponentSession disconnects:
@@ -2507,7 +2577,7 @@ The following transitions are NOT simple textual renames:
 | Detailed design | Child-local ZoneLink handler in core-controller: consumes the exact six-field ZoneLink schema from ADR046-zone-control-002 and manages local ResourceSpec→allocator-bound session→advertisement lifecycle; crash-safe enrollment-and-session state machine `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` where only `Unenrolled -> IKpsk2` consumes the allocator-issued single-use PSK (once), the sealed enrollment record (child static key-pin) is committed in one durable transaction before the enrolled KK handshake, reconnect re-enters at `KK` from `EnrollmentCommitted` without a PSK, and resource traffic (advertisements, intent replay, cursor resync, forwarded calls) is prohibited until `Ready`; per-window crash recovery (consumed-PSK crash fails closed `bootstrap-psk-consumed` and requires a fresh PSK, persist crash before commit stays `Unenrolled`, teardown crash re-derives from the durable invalidation marker); revocation invalidates both the sealed enrollment record and the active KK session and requires a fresh PSK plus a new IKpsk2 afterwards while refusing any pre-revocation static key; Provider-internal reconnect backoff bounded by `spec.limits`; advertisement issuance/renewal/withdrawal using enrolled KK ComponentSession; child-store route cursor and bounded outbound intent queue; private allocator capability-scope changes; D088 `status.resource` writer; aggregate metrics use only closed semantic phase/reason/outcome labels and never `link_name_hash` or another ZoneLink/Zone/resource identity label; Nix-compiled `parentZone` selects the parent allocator, which alone owns privileged listeners, placement, and route namespace and creates no reciprocal resource. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Child core-controller process → local transport Provider → sealed binding for the allocator selected by `parentZone` → d2b-bus ComponentSession; child ZoneLink handler exchanges advertisements while that parent ZoneRouteEngine admits/withdraws them |
 | Data migration | New ZoneLink resources from Nix configuration; no prior enrollment compatibility |
-| Validation | Session lifecycle tests; state-machine transition tests `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; fault-injection cells for each crash window (consumed-PSK crash fails closed `bootstrap-psk-consumed` and refuses PSK reuse; persist crash before enrollment commit stays `Unenrolled`; teardown crash re-derives `Unenrolled` from the durable invalidation marker); old-KK-rejection cell asserting a peer presenting a pre-revocation static key is refused before any resource exchange; resource-traffic-before-`Ready` rejection cell; reconnect/disabled/revocation/allocator-policy-change; revocation invalidates both enrollment and active session and re-enrollment requires a fresh PSK plus new IKpsk2; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
+| Validation | Session lifecycle tests; state-machine transition tests `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; fault-injection cells for each crash window (consumed-PSK crash fails closed `bootstrap-psk-consumed` and refuses PSK reuse; persist crash before enrollment commit stays `Unenrolled`; teardown crash re-derives `Unenrolled` from the durable invalidation marker); old-KK-rejection cell asserting a peer presenting a pre-revocation static key is refused before any resource exchange; resource-traffic-before-`Ready` rejection cell; key-lifecycle cells: an expired bootstrap PSK is refused with `bootstrap-psk-expired` and issuing a fresh PSK invalidates any prior outstanding PSK; a failed IKpsk2 handshake burns the PSK and returns `Unenrolled` with `bootstrap-handshake-failed`; an enrolled KK session past `KK_SESSION_MAX_LIFETIME_MS` performs a fresh enrolled KK rehandshake from `EnrollmentCommitted` (new `linkEpoch`, no PSK, no IKpsk2 reuse); an enrolled KK key mismatch fails closed `zone-link-enrollment-key-mismatch`, stays `EnrollmentCommitted`/`Degraded`, and retries only under the bounded reconnect budget; a `EnrollmentCommitted` link never downgrades to IKpsk2 or an unauthenticated pattern and only a durable revocation returns it to `Unenrolled`; reconnect/disabled/revocation/allocator-policy-change; revocation invalidates both enrollment and active session and re-enrollment requires a fresh PSK plus new IKpsk2; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
 | Removal proof | `RemoteNodeRegistry` retired after all enrolled peer routing moves to ZoneLink handler |
 
 ### ADR046-routing-005
@@ -2681,7 +2751,7 @@ The following transitions are NOT simple textual renames:
 | Reuse source | `realm-controller-config-json.nix` structural template; `xtask gen-schemas` extension point (main `a1cc0b2d` unchanged in this area) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/zone-resources-json.nix` (new), private local-root allocator bootstrap compiler/sealer input (not a ResourceSpec or public bundle), `nixos-modules/bundle-artifacts.nix` (new row for per-Zone `resource-bundle.json`), `packages/xtask/src/main.rs` (`gen-zone-schemas` subcommand emitting `docs/reference/schemas/v3/<Type>.schema.json` for Zone and ZoneLink; `gen-zone-nix-options` subcommand emitting `nixos-modules/generated/options-zones-<Type>.nix`) |
-| Detailed design | `zone-resources-json.nix` iterates `d2b.zones.<zone>.resources.*` to produce the canonical sorted resource list: for each entry, render `{ apiVersion, type, metadata: { name, zone, ownerRef: <if-authored>, labels: <if-authored>, annotations: <if-authored> }, spec: <spec-attrs-canonical> }`. Separately canonicalize sorted `{ childZone, parentZone }` rows from the compiler-only topology and seal them into the private allocator bootstrap input; `parentZone` never enters a resource bundle or `Zone.spec`, and a topology digest change releases/reallocates affected edges independently of resource `generationId`. Per-Zone generation is strict: local root's generated bundle contains no ZoneLink; a non-root Zone's enabled uplink and referenced transport Provider appear together only in that child's bundle; no emitter copies either resource into the selected parent's bundle. The bundle JSON omits `managedBy` and `configurationGeneration`; the configuration service/core sets those fields when activating the validated bundle. Sort all resources by `(type, zone, name)`. Compute `contentHash` as the D101 digest `sha256:<64 lowercase hex>` over the canonical sorted `resources` array (this value is the generation identity, also referred to as `generationId`). The bundle carries no base64url `integrity` field; integrity is the five-member digest chain frozen in `ADR-046-nix-configuration.md` section "Bundle contract (canonical)" (D119). Install at `/etc/d2b/zones/<zone>/resource-bundle.json` root:d2bd 0640. Canonical form: all object keys sorted lexicographically; order-significant arrays preserved; schema-declared set-like arrays sorted lexicographically; all optional fields emitted with defaults; no field renaming or restructuring. Build-time validation runs in a Nix derivation: (1) validate the complete parent map (non-root required, local-root forbidden, declared target, one scalar parent, not self, acyclic, max 16 names); (2) validate each resource against the committed JSON Schema, including the exact six-field ZoneLink schema from ADR046-zone-control-002; (3) validate `transportSettings` for each child-local ZoneLink against its same-Zone Provider's `transportSettingsSchema` - `transportProviderRef` is always explicit, never inferred or defaulted; (4) resolve every same-Zone `transportCredentials` ref; (5) verify `childZoneName == metadata.zone`, at most one uplink resource per non-root Zone, and no local-root uplink; (6) check for duplicate `(type, zone, name)` tuples. Private route capability policy is sealed in allocator bootstrap state and is not a ZoneLink ResourceSpec field. Providers MUST commit their `transportSettingsSchema` before any ZoneLink can reference them. Drift gates: `xtask gen-zone-schemas && git diff --exit-code` and `xtask gen-zone-nix-options && git diff --exit-code` both wired into `make test-drift`. Add `checks.${system}.zone-schema-drift` to `flake.nix`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and adapt. |
+| Detailed design | `zone-resources-json.nix` iterates `d2b.zones.<zone>.resources.*` to produce the canonical sorted resource list: for each entry, render `{ apiVersion, type, metadata: { name, zone, ownerRef: <if-authored>, labels: <if-authored>, annotations: <if-authored> }, spec: <spec-attrs-canonical> }`. Separately canonicalize sorted `{ childZone, parentZone }` rows from the compiler-only topology and seal them into the private allocator bootstrap input; `parentZone` never enters a resource bundle or `Zone.spec`, and a topology digest change releases/reallocates affected edges independently of resource `generationId`. Per-Zone generation is strict: local root's generated bundle contains no ZoneLink; a non-root Zone's enabled uplink and referenced transport Provider appear together only in that child's bundle; no emitter copies either resource into the selected parent's bundle. The bundle JSON omits `managedBy` and `configurationGeneration`; the configuration service/core sets those fields when activating the validated bundle. Sort all resources by `(type, zone, name)`. Compute `contentHash` as the D101 digest `sha256:<64 lowercase hex>` over the canonical sorted `resources` array (this value is the generation identity, also referred to as `generationId`). The bundle carries no base64url `integrity` field; integrity is the four-member digest chain frozen in `ADR-046-nix-configuration.md` section "Bundle contract (canonical)" (D119). Install at `/etc/d2b/zones/<zone>/resource-bundle.json` root:d2bd 0640. Canonical form: all object keys sorted lexicographically; order-significant arrays preserved; schema-declared set-like arrays sorted lexicographically; all optional fields emitted with defaults; no field renaming or restructuring. Build-time validation runs in a Nix derivation: (1) validate the complete parent map (non-root required, local-root forbidden, declared target, one scalar parent, not self, acyclic, max 16 names); (2) validate each resource against the committed JSON Schema, including the exact six-field ZoneLink schema from ADR046-zone-control-002; (3) validate `transportSettings` for each child-local ZoneLink against its same-Zone Provider's `transportSettingsSchema` - `transportProviderRef` is always explicit, never inferred or defaulted; (4) resolve every same-Zone `transportCredentials` ref; (5) verify `childZoneName == metadata.zone`, at most one uplink resource per non-root Zone, and no local-root uplink; (6) check for duplicate `(type, zone, name)` tuples. Private route capability policy is sealed in allocator bootstrap state and is not a ZoneLink ResourceSpec field. Providers MUST commit their `transportSettingsSchema` before any ZoneLink can reference them. Drift gates: `xtask gen-zone-schemas && git diff --exit-code` and `xtask gen-zone-nix-options && git diff --exit-code` both wired into `make test-drift`. Add `checks.${system}.zone-schema-drift` to `flake.nix`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and adapt. |
 | Integration | The local-root allocator consumes sealed parent topology independently of resource bundles; `nixos-modules/bundle-artifacts.nix` installs each per-Zone `resource-bundle.json`; ADR046-routing-013 Zone runtime reads it on startup |
 | Data migration | None; new artifact file |
 | Validation | `drift: zone-resource-schema`, `drift: zone-nix-options`, `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle` (K0 has no ZoneLink; K1 contains its self-matching ZoneLink and same-Zone transport Provider; neither is copied to K0), `build: zone-link-exact-six-fields`, `build: transport-settings-unknown-field`, `build: transport-credential-ref`, `build: missing-transport-provider`; run `make flake-matrix-pin` after adding flake checks |
@@ -2697,8 +2767,8 @@ The following transitions are NOT simple textual renames:
 | Main reuse source | `packages/d2b-state/src/` (main `a1cc0b2d`): atomic state, audit segment primitives adapted for generation tracking |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/configuration.rs` (defined by ADR-046-core-controllers); shared bundle DTOs may live in `packages/d2b-core/` |
-| Detailed design | Implement the configuration ownership and cleanup contract from the "Configuration ownership and cleanup contract" section. `configuration.rs` owns: (1) reading and integrity-verifying `/etc/d2b/zones/<zone>/resource-bundle.json` on startup and SIGHUP; (2) diffing against active generation by `generationId` (no-op if unchanged); (3) queuing Create/UpdateSpec/Delete intents - core sets `configurationGeneration` and `managedBy` when applying Create/UpdateSpec; Delete targets only resources where BOTH `managedBy` equals the configuration service's value AND `configurationGeneration` matches the prior bundle - resources with `managedBy=controller` or `managedBy=api` are never seized; (4) setting `deletionRequestedAt` on pending-delete resources immediately and adding a Pending condition; (5) writing the prior bundle into the capped ring at `/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id>.json` (default retainedGenerations=3, range 1..16, no TTL; prune oldest when count would exceed limit); (6) enforcing boundary invariants (no diff-delete for absent `configurationGeneration`, `managedBy` collision guard, live controller-child teardown guard); (7) driving finalizer drain + controller-child cascade before completing a Delete; (8) on successful deletion: one store transaction writes the `Deleted` revision/change event and removes the resource row and all index entries; the authoritative audit record (`zone-resource-cleanup`) is appended from the committed revision with dedup/exactly-once recovery and is NOT part of the store transaction; (9) tracking `deletionRequestedAt`/`cleanupConfigGeneration`/`cleanupError`/`cleanupAttempt` per resource; (10) on rollback: clearing `deletionRequestedAt` and Pending condition for revived resources; (11) never pruning a prior bundle while a Delete intent from its `configurationGeneration` is in flight. OFD lock on the bundle file prevents concurrent activation races. Generation state persisted atomically at `/var/lib/d2b/zones/<zone>/configuration/generation.json` (root:d2bd 0640). The `spec` object comparison for UpdateSpec detection uses the canonical JSON form so two identical specs always compare equal regardless of Nix rendering order. Resource phase transitions: Pending while Create/UpdateSpec in-flight; Degraded while cleanup pending; Ready when clean; Failed on permanent error. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Implement the configuration ownership and cleanup contract from the "Configuration ownership and cleanup contract" section. `configuration.rs` owns: (1) reading and integrity-verifying `/etc/d2b/zones/<zone>/resource-bundle.json` on startup and SIGHUP; (2) diffing against active generation by `generationId` (no-op if unchanged); (3) queuing Create/UpdateSpec/Delete intents - core sets `configurationGeneration` and `managedBy` when applying Create/UpdateSpec; Delete targets only resources where BOTH `managedBy` equals the configuration service's value AND `configurationGeneration` matches the prior bundle - resources with `managedBy=controller` or `managedBy=api` are never seized; (4) setting `deletionRequestedAt` on pending-delete resources immediately and adding a Pending condition; (5) writing the prior bundle into the capped ring at `/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id>.json` (default retainedGenerations=3, range 1..16, no TTL; prune oldest when count would exceed limit); (6) enforcing boundary invariants (no diff-delete for absent `configurationGeneration`, `managedBy` collision guard, live controller-child teardown guard); (7) driving finalizer drain + controller-child cascade before completing a Delete; (8) on successful deletion: one store transaction writes the `Deleted` revision/change event and removes the resource row and all index entries; the authoritative audit record (`zone-resource-cleanup`) is appended from the committed revision with dedup/exactly-once recovery and is NOT part of the store transaction; (9) tracking `deletionRequestedAt`/`cleanupConfigGeneration`/`cleanupError`/`cleanupAttempt` per resource; (10) on rollback: clearing `deletionRequestedAt` and Pending condition for revived resources; (11) never pruning a prior bundle while a Delete intent from its `configurationGeneration` is in flight. OFD lock on the bundle file prevents concurrent activation races. ADR046-routing-013 is the **sole durable writer** of the per-Zone generation record: no other work item writes `generation.json`. Activation ordering is fixed - after integrity-verify (1) and diff (2), the controller performs a single atomic durable commit of `/var/lib/d2b/zones/<zone>/configuration/generation.json` (root:d2bd 0640): the active `contentHash`, the prior `contentHash`, `retainedGenerations`, and the retention-ring metadata are written together via temp-file + fsync + rename-over-target + parent-directory fsync under the bundle-file OFD lock, and the outgoing bundle is staged into the retention ring in that same commit. This commit is the sole activation point: the new generation is active only when it returns success, and it precedes all intent queuing (3) and reconcile notification. A normal daemon restart is a continuation event (ADR 0034): on startup the controller reads `generation.json`, adopts the recorded active generation when its staged bundle is present and integrity-verifies, and otherwise quarantines the ambiguous generation and continues serving from the recorded prior pointer. Recovery adopts or quarantines before any cleanup; no prior bundle is pruned while it is a rollback target or an in-flight Delete from its generation could still be needed. The `spec` object comparison for UpdateSpec detection uses the canonical JSON form so two identical specs always compare equal regardless of Nix rendering order. Resource phase transitions: Pending while Create/UpdateSpec in-flight; Degraded while cleanup pending; Ready when clean; Failed on permanent error. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b-core-controller` configuration service activates on bundle install and SIGHUP; zone-controller reconcile loops in `d2b-core-controller` consume the queued intents; d2b-bus resource API exposes `status.phase` and `pendingCleanup` via Get/Watch on the active generation resource |
 | Data migration | None; new runtime component |
-| Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup |
+| Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup; activation-ordering tests: the atomic `generation.json` commit is performed before any intent is queued (before-rename ordering) and reconcile is notified only after the commit returns (before-notify ordering); restart-adoption of a committed active generation whose staged bundle integrity-verifies; quarantine of an ambiguous or interrupted generation with continued service from the recorded prior pointer; cleanup-order (adopt or quarantine before any prune, and no prune of a bundle that is still a rollback target or an in-flight Delete source) |
 | Removal proof | `realm_access_resolver.rs` (B) retires after `d2b-core-controller` configuration tracking is live; `RealmControllersJson` (C) retires after all hosts migrated to Zone bundles |

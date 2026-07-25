@@ -1303,26 +1303,37 @@ bundle file alongside other ResourceTypes. The bundle is produced by the
 
 ```json
 {
+  "schemaVersion": 3,
   "bundleVersion": 1,
   "zone": "dev",
-  "nixConfigGeneration": 42,
-  "emittedAt": "2026-07-22T00:00:00.000Z",
-  "digestAlgorithm": "sha256",
-  "digest": "<sha256-hex of canonical-json-body>",
+  "contentHash": "sha256:<64 lowercase hex>",
+  "artifactCatalogDigest": "sha256:<64 lowercase hex>",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
   "resources": [
-    { "type": "Credential", "name": "local-keyring", "spec": { ... } },
-    { "type": "Credential", "name": "work-entra",    "spec": { ... } }
-  ]
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Credential",
+      "metadata": { "name": "local-keyring", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Credential",
+      "metadata": { "name": "work-entra", "zone": "dev" }, "spec": { } }
+  ],
+  "providerSchemaDigests": {
+    "Provider/<name>": "sha256:<64 lowercase hex>"
+  }
 }
 ```
 
+The canonical field set, digest preimages, and the four-member digest chain are
+frozen in `ADR-046-nix-configuration` ("Zone resource bundle" and "Digest
+chain"); this section does not restate them. The block above shows only the
+Credential entries as they appear inside the single Zone `resources` array.
+
 Rules:
 
-- `resources` is sorted lexicographically by `(type, name)` before digest
+- `resources` is sorted lexicographically by `(type, name)` before `contentHash`
   computation. The order is deterministic and reproducible.
-- `digest` covers the UTF-8 encoding of the canonical JSON of the `resources`
-  array (without the `digest` field itself). The digest is computed by Nix at
-  eval time using a pure derivation and committed into the store; the
+- `contentHash` covers the UTF-8 encoding of the canonical JSON of the
+  `resources` array (excluding the top-level `contentHash`,
+  `artifactCatalogDigest`, and `generatedAt` fields). It is computed by Nix at
+  eval time using a fixed-output derivation and committed into the store; the
   `activation-nixos` Provider verifies it before applying.
 - The bundle file is stored at
   `/etc/d2b/zones/<zone>/resource-bundle.json` by the NixOS activation script.
@@ -1330,8 +1341,9 @@ Rules:
 - The bundle includes all Nix-managed ResourceTypes for the Zone, not only
   Credentials. Credential entries appear in the `resources` array sorted with
   all other types.
-- `nixConfigGeneration` is the NixOS system configuration generation number
-  (from `config.system.nixos.version` or the NixOS generation number).
+- The bundle carries no numeric configuration-generation field; the Zone runtime
+  assigns the monotonic `configurationGeneration` ordinal in its durable
+  generation record at activation.
 - A NixOS build failure (schema validation, secret-shape detection, reference
   resolution) prevents the bundle from being emitted. The prior bundle remains
   on disk until replaced by a successful build.
@@ -1493,7 +1505,7 @@ status:
 
 | Event | Fields retained |
 | --- | --- |
-| Bundle activated (new NixOS generation) | Zone, `activationGeneration`, `nixConfigGeneration`, bundle digest, resource create/update/skip counts, removed count |
+| Bundle activated (new NixOS generation) | Zone, `activationGeneration`, bundle `contentHash`, resource create/update/skip counts, removed count |
 | Configuration-managed resource removed (async delete issued) | Zone, Credential ResourceRef, `activationGeneration`, `deletionRequestedAt`, reason `nix-generation-removed` |
 | Cleanup complete | Zone, Credential ResourceRef, final `phase=Deleted`, `activationGeneration`, `cleanupLatencyMs` |
 | Cleanup stalled | Zone, Credential ResourceRef, stall duration, last error code |

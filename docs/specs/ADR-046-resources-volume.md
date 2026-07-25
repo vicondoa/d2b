@@ -1401,40 +1401,54 @@ NixOS generation:
 
 ```json
 {
-  "schemaVersion": "resources.d2bus.org/zone-bundle/v1",
+  "schemaVersion": 3,
+  "bundleVersion": 1,
   "zone": "dev",
-  "generationId": "<SHA-256 of sorted canonical resource JSON set>",
-  "emittedAt": "2026-07-22T21:00:00.000Z",
-  "resources": {
-    "Provider/volume-local":    { "digest": "<SHA-256>" },
-    "Provider/volume-virtiofs": { "digest": "<SHA-256>" },
-    "User/d2b-work-vm-runner":  { "digest": "<SHA-256>" },
-    "Volume/work-state":        { "digest": "<SHA-256>" },
-    "Volume/store-view-work-vm":{ "digest": "<SHA-256>" }
-  },
-  "resourceOrder": [
-    "Provider/volume-local",
-    "Provider/volume-virtiofs",
-    "User/d2b-work-vm-runner",
-    "Volume/store-view-work-vm",
-    "Volume/work-state"
+  "contentHash": "sha256:<64 lowercase hex over sorted canonical resources array>",
+  "artifactCatalogDigest": "sha256:<64 lowercase hex>",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "resources": [
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Provider",
+      "metadata": { "name": "volume-local", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Provider",
+      "metadata": { "name": "volume-virtiofs", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "User",
+      "metadata": { "name": "d2b-work-vm-runner", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Volume",
+      "metadata": { "name": "store-view-work-vm", "zone": "dev" }, "spec": { } },
+    { "apiVersion": "resources.d2bus.org/v3", "type": "Volume",
+      "metadata": { "name": "work-state", "zone": "dev" }, "spec": { } }
   ],
-  "bundleDigest": "<SHA-256 of this document with bundleDigest omitted>"
+  "providerSchemaDigests": {
+    "Provider/volume-local": "sha256:<64 lowercase hex>",
+    "Provider/volume-virtiofs": "sha256:<64 lowercase hex>"
+  }
 }
 ```
 
-Resources are sorted by `"<type>/<name>"` lexicographically. The bundle digest
-covers all resource digests and ordering. The configuration publication handler
-verifies the bundle digest before activation and rejects any modified or
+The canonical bundle field set, digest preimages, and the four-member digest
+chain are frozen in `ADR-046-nix-configuration` ("Zone resource bundle" and
+"Digest chain"); this section does not restate or fork them. The block above
+shows only the Volume-related entries as they appear inside the single
+canonical `resources` array.
+
+Resources are sorted by `(type, name)` lexicographically. The bundle
+`contentHash` is the SHA-256 over that sorted canonical `resources` array (the
+top-level `contentHash`, `artifactCatalogDigest`, and `generatedAt` fields are
+excluded from the preimage); it is the generation identity. There is no
+per-resource digest field and no separate `bundleDigest`/`resourceOrder` member:
+the sorted array is self-ordering and the `contentHash` covers every resource
+body. The configuration publication handler verifies `contentHash` and
+`artifactCatalogDigest` before activation and rejects any modified or
 partially-applied bundle.
 
-The full resource JSON bodies are embedded in the bundle (or in a
-content-addressed sidecar file keyed by digest); the `digest` field in the
-index is the SHA-256 of the canonical JSON body. When core activates the bundle
-it sets `metadata.managedBy = "configuration"` and
-`metadata.configurationGeneration = <generationId>` on each activated resource.
-These are the authoritative markers for configuration-owned resources; there is
-no `configOwned` field in the bundle index.
+The full resource JSON bodies are embedded inline in the `resources` array. When
+core activates the bundle it sets `metadata.managedBy = "configuration"` and
+`metadata.configurationGeneration = <runtime ordinal>` (the monotonic ordinal
+the Zone daemon assigns at activation, recorded in its durable generation
+record, not the bundle `contentHash`) on each activated resource. These are the
+authoritative markers for configuration-owned resources; there is no
+`configOwned` field in the bundle.
 
 ### Store-view Volume (Nix resource compiler output)
 
@@ -1533,7 +1547,7 @@ When a Volume is absent from the new Nix generation but its resource row carries
    The audit subsystem appends the deletion audit record afterward, using a
    dedup/exactly-once recovery key so a retried recovery never produces a
    duplicate audit entry.
-6. Prior generation retention is governed by the Zone's `priorGenerationCount`
+6. Prior generation retention is governed by the Zone's `retainedGenerations`
    (default 3, range 1..16). No time-based TTL applies.
 
 ### Guest/Process children during Volume cleanup
@@ -1565,7 +1579,7 @@ generation bundle includes it.
 
 ### Prior generation retention
 
-The Zone retains the last `priorGenerationCount` prior generations (default 3,
+The Zone retains the last `retainedGenerations` prior generations (default 3,
 range 1..16). Within the retained set, an operator may reactivate any prior
 generation:
 - The configuration handler re-activates the prior bundle (atomic single Zone
@@ -1721,7 +1735,7 @@ audit record.
 | Current source | `nixos-modules/storage-json.nix` (current Nix eval-time validation via `lib.asserts`; schema checked by `d2b-contract-tests/tests/storage_sync_contracts.rs`); `packages/d2bd/src/` (current config activation / host-prepare dispatch) |
 | Reuse action | create |
 | Destination | `nixos-modules/resources-volume.nix` (Nix eval-time schema validation, canonical JSON emission, bundle digest); `packages/d2b-core-controller/src/configuration.rs` (config-publication handler cleanup logic); `packages/d2b-contracts/src/v3/zone_bundle.rs` (bundle index schema) |
-| Detailed design | **Nix eval/build validation**: implement all 15 validation steps in §Nix eval/build validation as Nix assertions; abort build on any failure with structured error (Volume name + field path + error class); provider-specific settings schema (`root-config.schema.json`, `attachment.schema.json`) read from the private artifact catalog entry for each Provider's `artifactId` by the resource compiler; validate against `lib.evalModules`-compatible schema; emit canonical sorted JSON with all defaults materialized; compute SHA-256 per resource; emit Zone resource bundle with `generationId` and `bundleDigest`. **Config-publication handler cleanup**: on new bundle activation, diff resources with `metadata.managedBy = "configuration"` between new and prior bundle; issue async Delete for resources absent from new bundle; mark deleted resources with `ConfigurationRemoved` condition; track pending-cleanup set in Zone status; Zone status is `Degraded/PendingCleanup` while prior-generation deletions are in progress; activation is immediate but Zone readiness reflects cleanup completion. **Config-owned vs controller-created distinction**: `metadata.managedBy = "configuration"` is the authoritative marker set by core at activation; the bundle index carries only digests; controller-created resources have `metadata.managedBy = "controller"` and are never touched by the configuration cleanup pass. **Prior generation retention**: retain `priorGenerationCount` prior generations (default 3, range 1..16); no time-based TTL; when count is exceeded prune oldest generation from the store with a tamper-evident audit record. **Generation reactivation**: re-activate any retained prior bundle via `ActivateGeneration` operation; cancel in-flight Deletes for resources being reinstated; issue Deletes for resources added by the aborted new generation. |
+| Detailed design | **Nix eval/build validation**: implement all 15 validation steps in §Nix eval/build validation as Nix assertions; abort build on any failure with structured error (Volume name + field path + error class); provider-specific settings schema (`root-config.schema.json`, `attachment.schema.json`) read from the private artifact catalog entry for each Provider's `artifactId` by the resource compiler; validate against `lib.evalModules`-compatible schema; emit canonical sorted JSON with all defaults materialized; emit Zone resource bundle with `contentHash` over the sorted `resources` array and `artifactCatalogDigest` anchoring the site artifact catalog (no per-resource `digest` and no separate `bundleDigest`). **Config-publication handler cleanup**: on new bundle activation, diff resources with `metadata.managedBy = "configuration"` between new and prior bundle; issue async Delete for resources absent from new bundle; mark deleted resources with `ConfigurationRemoved` condition; track pending-cleanup set in Zone status; Zone status is `Degraded/PendingCleanup` while prior-generation deletions are in progress; activation is immediate but Zone readiness reflects cleanup completion. **Config-owned vs controller-created distinction**: `metadata.managedBy = "configuration"` is the authoritative marker set by core at activation; the bundle carries full resource envelopes with no per-resource digest member; controller-created resources have `metadata.managedBy = "controller"` and are never touched by the configuration cleanup pass. **Prior generation retention**: retain `retainedGenerations` prior generations (default 3, range 1..16); no time-based TTL; when count is exceeded prune oldest generation from the store with a tamper-evident audit record. **Generation reactivation**: re-activate any retained prior bundle via `ActivateGeneration` operation; cancel in-flight Deletes for resources being reinstated; issue Deletes for resources added by the aborted new generation. |
 | Integration | `nixos-modules/default.nix` wires resources-volume.nix; `d2b-core-controller` config-publication handler consumes the bundle; all Volume controllers observe `ConfigurationRemoved` condition and respond to finalizer triggers |
 | Data migration | Full d2b 3.0 reset; no partial import of prior generation state |
 | Validation | Tests per §Cleanup contract - Tests for removed-resource cleanup table (10 tests); nix-unit: `volume_canonical_json_golden_vector`, `volume_bundle_digest_covers_all_resources`, `provider_schema_validation_rejects_unknown_fields`, `symlink_target_escape_rejected_at_eval`, `tmpfs_without_quota_rejected_at_eval`, `layout_bounds_1025_entries_rejected`, `attachment_bounds_65_rejected`, `conflicting_host_paths_rejected`; integration: cleanup audit redaction, generation reactivation, prior-generation pruning |

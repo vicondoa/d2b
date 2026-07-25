@@ -1607,7 +1607,7 @@ from the Nix configuration:
 6. Stalled cleanup surfaces as `Degraded` / `nix-cleanup-stalled` with bounded
    retry.
 7. `activation-nixos` activation completes without blocking on cleanup.
-8. Up to `retainedConfigurationMax` (default 3, range 1-16) prior bundles
+8. Up to `retainedGenerations` (default 3, range 1-16) prior bundles
    retained; rollback re-creates Credential resources from retained bundle
    (fresh leases acquired; prior IMDS tokens are not restored).
 9. Controller-created and API-created Credential resources are never deleted by

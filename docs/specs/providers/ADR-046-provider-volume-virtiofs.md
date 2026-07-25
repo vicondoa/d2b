@@ -1360,7 +1360,7 @@ status:
 
 ### 17.4 Prior-generation retention
 
-The Zone retains the last `priorGenerationCount` generations (default 3, range 1-16).
+The Zone retains the last `retainedGenerations` generations (default 3, range 1-16).
 A Volume that has been deleted but whose generation is within the retention window may be
 reactivated via `ActivateGeneration`. Reactivation cancels in-flight Delete for the Volume
 and its owned Exports and Processes; the controller reconciles from the retained spec.
