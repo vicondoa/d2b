@@ -30,10 +30,12 @@ changed_files=$(git diff --name-only --diff-filter=ACMRTD "$merge_base..HEAD")
 code_changed=0
 changelog_changed=0
 
-# A change is "code" if it touches an executable or configuration surface, not
-# only the three languages the old gate recognized. A deleted shell script or a
-# Makefile behaviour change must ship a note; only prose (Markdown, LICENSE)
-# and the changelog machinery itself are exempt.
+# A change needs a release note unless it touches only prose or a data/binary
+# asset. Rather than enumerate every executable extension - which silently
+# missed whole surfaces such as `.patch` and `.proto` - the default is "code",
+# and only an explicit prose/data allowlist is exempt. A deleted module, a
+# Makefile behaviour change, a patch, or a protocol definition all require a
+# note; Markdown, LICENSE/COPYING text, and binary assets do not.
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case "$path" in
@@ -46,18 +48,19 @@ while IFS= read -r path; do
     changelog.d/*.md)
       changelog_changed=1
       ;;
-    *.md|LICENSE|LICENSE.*)
-      # Prose. Documentation-only changes are exempt from the note requirement.
-      ;;
-    *.rs|*.nix|*.sh|*.bash|*.pl|*.py|*.rb|*.js|*.ts \
-    |Makefile|*/Makefile|*.mk|makefile|*/makefile \
-    |*.toml|*.lock|*.json|*.yaml|*.yml \
-    |.github/workflows/*|.github/actions/*)
-      code_changed=1
+    *.md|*.markdown|*.txt|*.rst|*.adoc \
+    |LICENSE|LICENSE.*|COPYING|COPYING.* \
+    |*.png|*.jpg|*.jpeg|*.gif|*.svg|*.webp|*.ico|*.pdf \
+    |*.woff|*.woff2|*.ttf|*.otf)
+      # Prose, documentation, or a data/binary asset: exempt from the note
+      # requirement.
       ;;
     *)
-      # Everything else (data fixtures, images, plain text) neither requires nor
-      # blocks a note.
+      # Every other path is an executable or configuration surface - Rust, Nix,
+      # shell, Make, TOML/JSON/YAML, a `.patch`, a `.proto`, or any unrecognized
+      # extension. Fail closed: an unknown surface needs a note rather than
+      # slipping through.
+      code_changed=1
       ;;
   esac
 done <<<"$changed_files"

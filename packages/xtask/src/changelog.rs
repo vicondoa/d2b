@@ -11,13 +11,41 @@
 //! and fail-closed: a fragment that does not parse aborts the run with the
 //! offending file and line instead of dropping the entry on the floor.
 
-use std::{fmt, fs, path::Path};
+use std::{fmt, fs, io::Write, path::Path};
 
 /// Directory holding unfolded fragments, relative to the repository root.
 pub const FRAGMENT_DIR: &str = "changelog.d";
 
 /// Changelog the fragments fold into, relative to the repository root.
 pub const CHANGELOG_FILE: &str = "CHANGELOG.md";
+
+/// Transaction directory for an in-flight fold, relative to the repository
+/// root. It lives on the same filesystem as `CHANGELOG.md` and `changelog.d/`
+/// so every rename into and out of it is atomic. A fixed (non-PID) name lets a
+/// later invocation discover an interrupted transaction and recover it.
+const TXN_DIR: &str = ".changelog-fold-txn";
+
+/// Journal file inside `TXN_DIR` recording the durable transaction state.
+const TXN_JOURNAL: &str = "journal";
+
+/// Staged replacement changelog inside `TXN_DIR`, promoted by an atomic rename.
+const TXN_STAGED: &str = "CHANGELOG.md.new";
+
+/// Byte-for-byte backup of the pre-fold changelog inside `TXN_DIR`, used to
+/// restore the original on rollback.
+const TXN_BACKUP: &str = "CHANGELOG.md.bak";
+
+/// Subdirectory of `TXN_DIR` holding fragments reserved (moved aside) for the
+/// in-flight fold.
+const TXN_RESERVED: &str = "reserved";
+
+/// Journal marker written and fsynced once the transaction is prepared but
+/// before the changelog is promoted. Recovery from this state rolls back.
+const STATE_PREPARED: &str = "PREPARED";
+
+/// Journal marker written and fsynced only after the changelog promotion rename
+/// has returned. Recovery from this state rolls forward (finishes cleanup).
+const STATE_COMMITTED: &str = "COMMITTED";
 
 /// Heading of the block fragments fold into.
 pub const UNRELEASED_HEADING: &str = "## [Unreleased]";
@@ -406,6 +434,15 @@ fn load_fragments(repo_root: &Path) -> Result<Vec<Fragment>, FoldError> {
 /// With no fragments present nothing is read, written, or deleted, so a second
 /// run is a no-op.
 pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
+    // A prior fold may have been interrupted mid-transaction, leaving a durable
+    // journal. Resolve it before reading fragments so a rolled-back transaction
+    // restores its reserved fragments and a committed one is finished. Recovery
+    // mutates the tree, so it only runs in the mutating mode; `--check` stays
+    // read-only.
+    if mode == Mode::Apply {
+        recover(repo_root)?;
+    }
+
     let fragments = load_fragments(repo_root)?;
     if fragments.is_empty() {
         return Ok(Outcome {
@@ -444,88 +481,347 @@ pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
         return Ok(outcome);
     }
 
-    apply_fold(repo_root, &changelog_path, &folded, &outcome.folded)?;
+    apply_fold(
+        repo_root,
+        &changelog_path,
+        &changelog,
+        &folded,
+        &outcome.folded,
+    )?;
 
     Ok(outcome)
 }
 
-/// Commit a computed fold to disk atomically, with rollback on any failure.
+/// Boundary at which a test may simulate an abrupt process death, leaving the
+/// transaction journal on disk exactly as a real crash would.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
+enum FoldStage {
+    /// Journal is durably `PREPARED`; no fragment reserved, changelog untouched.
+    AfterPrepare,
+    /// The `usize`-th fragment (0-based) has just been reserved.
+    AfterReserve(usize),
+    /// Every fragment is reserved; the changelog is not yet promoted.
+    AfterReserveAll,
+    /// The changelog promotion rename and the `COMMITTED` journal write have
+    /// both returned; only cleanup remains.
+    AfterCommit,
+}
+
+/// A test hook's decision at a fold boundary.
+#[cfg(test)]
+enum HookOutcome {
+    Continue,
+    /// Return immediately without rollback or cleanup, as if the process had
+    /// died. The journal and any reserved state stay on disk for recovery.
+    Crash,
+}
+
+/// fsync a directory at `path` so a rename/create/unlink inside it is durable.
+fn sync_dir(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+/// Write `data` to `path`, truncating, and fsync it before returning.
+fn write_sync(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    file.write_all(data)?;
+    file.sync_all()
+}
+
+/// Durable transaction journal contents.
+struct Journal {
+    state: String,
+}
+
+/// Write the journal marker `state` into `txn` and fsync both the file and the
+/// transaction directory so the state transition is crash-durable.
+fn write_journal(txn: &Path, state: &str) -> std::io::Result<()> {
+    write_sync(
+        &txn.join(TXN_JOURNAL),
+        format!("state={state}\n").as_bytes(),
+    )?;
+    sync_dir(txn)
+}
+
+/// Read the journal from `txn`, if present and well-formed.
+fn read_journal(txn: &Path) -> Option<Journal> {
+    let text = fs::read_to_string(txn.join(TXN_JOURNAL)).ok()?;
+    let state = text
+        .lines()
+        .find_map(|line| line.strip_prefix("state="))?
+        .to_string();
+    Some(Journal { state })
+}
+
+/// Resolve any transaction left on disk by an interrupted fold.
 ///
-/// The changelog rewrite and the fragment removals are made all-or-nothing so a
-/// partial write or a failed removal can never leave a corrupted changelog,
-/// duplicated entries on retry, or a half-consumed fragment set. The steps:
+/// The `COMMITTED` marker is written and fsynced only after the changelog
+/// promotion rename returns, so its presence proves the promotion happened:
+/// recovery finishes forward by discarding the transaction (the reserved
+/// fragments are already consumed). Any earlier state - or an unreadable
+/// journal - means the promotion did not durably happen, so recovery rolls
+/// back: reserved fragments return to `changelog.d/` and the original changelog
+/// is restored from its backup. Either way the tree ends fully folded or fully
+/// unfolded, never half-consumed.
+fn recover(repo_root: &Path) -> Result<(), FoldError> {
+    let txn = repo_root.join(TXN_DIR);
+    if !txn.exists() {
+        return Ok(());
+    }
+
+    let committed = read_journal(&txn)
+        .map(|journal| journal.state == STATE_COMMITTED)
+        .unwrap_or(false);
+
+    if committed {
+        finish_forward(repo_root, &txn)
+    } else {
+        roll_back(repo_root, &txn)
+    }
+}
+
+/// Discard a committed transaction: the promotion already happened, so only the
+/// consumed fragments and staging state remain to be cleared.
+fn finish_forward(repo_root: &Path, txn: &Path) -> Result<(), FoldError> {
+    fs::remove_dir_all(txn).map_err(|err| {
+        FoldError::single(format!(
+            "{TXN_DIR}: cannot finish committed fold recovery: {err}"
+        ))
+    })?;
+    sync_dir(repo_root).map_err(|err| {
+        FoldError::single(format!(
+            "{TXN_DIR}: cannot durably remove transaction: {err}"
+        ))
+    })
+}
+
+/// Undo an uncommitted transaction: return every reserved fragment to
+/// `changelog.d/` and restore the original changelog from its backup, then
+/// remove the transaction directory. Restorative steps run before the backup is
+/// consumed so a crash mid-rollback stays recoverable on the next pass. Errors
+/// are surfaced, never swallowed.
+fn roll_back(repo_root: &Path, txn: &Path) -> Result<(), FoldError> {
+    let fragment_dir = repo_root.join(FRAGMENT_DIR);
+    let reserved_dir = txn.join(TXN_RESERVED);
+    if reserved_dir.exists() {
+        let entries = fs::read_dir(&reserved_dir).map_err(|err| {
+            FoldError::single(format!("{TXN_DIR}/{TXN_RESERVED}: cannot read: {err}"))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                FoldError::single(format!(
+                    "{TXN_DIR}/{TXN_RESERVED}: cannot read entry: {err}"
+                ))
+            })?;
+            let name = entry.file_name();
+            let canonical = fragment_dir.join(&name);
+            fs::rename(entry.path(), &canonical).map_err(|err| {
+                FoldError::single(format!(
+                    "{FRAGMENT_DIR}/{}: cannot restore reserved fragment: {err}",
+                    name.to_string_lossy()
+                ))
+            })?;
+        }
+        sync_dir(&fragment_dir).map_err(|err| {
+            FoldError::single(format!(
+                "{FRAGMENT_DIR}: cannot durably restore fragments: {err}"
+            ))
+        })?;
+    }
+
+    let backup = txn.join(TXN_BACKUP);
+    if backup.exists() {
+        let changelog_path = repo_root.join(CHANGELOG_FILE);
+        // Renaming the backup over the changelog is atomic and, by removing the
+        // backup, makes the restore idempotent: a re-run sees no backup and
+        // leaves the already-restored changelog alone.
+        fs::rename(&backup, &changelog_path).map_err(|err| {
+            FoldError::single(format!(
+                "{CHANGELOG_FILE}: cannot restore from backup: {err}"
+            ))
+        })?;
+        sync_dir(repo_root).map_err(|err| {
+            FoldError::single(format!(
+                "{CHANGELOG_FILE}: cannot durably restore backup: {err}"
+            ))
+        })?;
+    }
+
+    fs::remove_dir_all(txn).map_err(|err| {
+        FoldError::single(format!(
+            "{TXN_DIR}: cannot remove rolled-back transaction: {err}"
+        ))
+    })?;
+    sync_dir(repo_root).map_err(|err| {
+        FoldError::single(format!(
+            "{TXN_DIR}: cannot durably remove transaction: {err}"
+        ))
+    })
+}
+
+/// Commit a computed fold to disk as a crash-recoverable transaction.
 ///
-/// 1. Stage the new changelog into a private staging directory on the same
-///    filesystem as the target (a rename across it is atomic).
-/// 2. Reserve every consumed fragment by moving it into the staging directory
-///    *before* the changelog is promoted, so a failure here rolls back to the
-///    original tree byte-for-byte.
-/// 3. Promote the staged changelog over `CHANGELOG.md` with a single atomic
-///    rename.
-/// 4. Discard the staging directory. It lives outside `changelog.d/`, so even a
-///    failed final cleanup cannot poison a later fold (the fragments are already
-///    gone from their canonical names, so a retry is a no-op).
+/// The changelog rewrite and the fragment removals are made all-or-nothing, and
+/// - unlike a plain staging directory - the transaction survives an abrupt
+/// process death: a durable journal plus a byte backup of the original
+/// changelog let a later invocation ([`recover`]) either finish a committed
+/// fold or roll an uncommitted one all the way back. No interruption can leave
+/// a corrupted changelog, duplicated entries on retry, or a half-consumed
+/// fragment set. The steps, each made durable before the next:
+///
+/// 1. **Prepare.** Create `TXN_DIR`, write a byte backup of the current
+///    changelog and the staged replacement, and fsync a `PREPARED` journal.
+///    Until this is durable the tree is untouched.
+/// 2. **Reserve.** Move each consumed fragment into `TXN_DIR/reserved/`,
+///    fsyncing the directories after each move. A crash here recovers as a
+///    rollback: the reserved fragments return and the changelog is untouched.
+/// 3. **Commit.** Promote the staged changelog over `CHANGELOG.md` with one
+///    atomic rename, then fsync a `COMMITTED` journal. The journal write is the
+///    linearization point: a crash before it rolls back (restoring the original
+///    changelog from the backup); a crash after it rolls forward.
+/// 4. **Cleanup.** Remove `TXN_DIR`. A crash here is finished by recovery.
 fn apply_fold(
     repo_root: &Path,
     changelog_path: &Path,
+    original: &str,
     folded: &str,
     folded_names: &[String],
 ) -> Result<(), FoldError> {
+    apply_fold_hooked(
+        repo_root,
+        changelog_path,
+        original,
+        folded,
+        folded_names,
+        #[cfg(test)]
+        &mut |_| HookOutcome::Continue,
+    )
+}
+
+fn apply_fold_hooked(
+    repo_root: &Path,
+    changelog_path: &Path,
+    original: &str,
+    folded: &str,
+    folded_names: &[String],
+    #[cfg(test)] hook: &mut dyn FnMut(FoldStage) -> HookOutcome,
+) -> Result<(), FoldError> {
+    // A crash simulated by a test hook returns this sentinel without running
+    // rollback or cleanup, leaving the transaction on disk for recovery. A real
+    // error (below) instead recovers inline before returning.
+    macro_rules! crash_if_hooked {
+        ($stage:expr) => {
+            #[cfg(test)]
+            if let HookOutcome::Crash = hook($stage) {
+                return Err(FoldError::single("simulated crash"));
+            }
+        };
+    }
+    // `original`, `changelog_path`, and (in non-test builds) the hook are all
+    // consumed below; nothing to silence.
+
     let fragment_dir = repo_root.join(FRAGMENT_DIR);
-    let staging = repo_root.join(format!(".changelog-fold.{}.tmp", std::process::id()));
+    let txn = repo_root.join(TXN_DIR);
 
-    // A stale staging directory from an interrupted earlier run must not leak
-    // into this one.
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir(&staging).map_err(|err| {
-        FoldError::single(format!(
-            "{CHANGELOG_FILE}: cannot create staging directory: {err}"
-        ))
-    })?;
-
-    let staged_changelog = staging.join("CHANGELOG.md.new");
-    if let Err(err) = fs::write(&staged_changelog, folded) {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(FoldError::single(format!(
-            "{CHANGELOG_FILE}: cannot stage rewrite: {err}"
-        )));
+    // Any leftover transaction (from an earlier crash) is resolved before a new
+    // one begins, so two transactions never coexist.
+    if txn.exists() {
+        recover(repo_root)?;
     }
 
-    // Reserve fragments by moving them aside. `reserved` records the moves so
-    // they can be undone in reverse if a later step fails.
-    let mut reserved: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
-    let rollback = |reserved: &[(std::path::PathBuf, std::path::PathBuf)]| {
-        for (canonical, aside) in reserved.iter().rev() {
-            let _ = fs::rename(aside, canonical);
-        }
-        let _ = fs::remove_dir_all(&staging);
+    // --- Prepare -----------------------------------------------------------
+    // Helper: on a real I/O error, recover (rolling the just-started
+    // transaction back) and surface the original reason.
+    let prepare = || -> Result<(), FoldError> {
+        fs::create_dir(&txn).map_err(|err| {
+            FoldError::single(format!(
+                "{TXN_DIR}: cannot create transaction directory: {err}"
+            ))
+        })?;
+        sync_dir(repo_root).map_err(|err| {
+            FoldError::single(format!(
+                "{TXN_DIR}: cannot durably create transaction: {err}"
+            ))
+        })?;
+        write_sync(&txn.join(TXN_BACKUP), original.as_bytes()).map_err(|err| {
+            FoldError::single(format!(
+                "{TXN_DIR}/{TXN_BACKUP}: cannot back up changelog: {err}"
+            ))
+        })?;
+        write_sync(&txn.join(TXN_STAGED), folded.as_bytes()).map_err(|err| {
+            FoldError::single(format!(
+                "{TXN_DIR}/{TXN_STAGED}: cannot stage rewrite: {err}"
+            ))
+        })?;
+        fs::create_dir(txn.join(TXN_RESERVED)).map_err(|err| {
+            FoldError::single(format!("{TXN_DIR}/{TXN_RESERVED}: cannot create: {err}"))
+        })?;
+        write_journal(&txn, STATE_PREPARED).map_err(|err| {
+            FoldError::single(format!("{TXN_DIR}/{TXN_JOURNAL}: cannot write: {err}"))
+        })?;
+        Ok(())
     };
+    if let Err(err) = prepare() {
+        let _ = recover(repo_root);
+        return Err(err);
+    }
+    crash_if_hooked!(FoldStage::AfterPrepare);
 
-    for name in folded_names {
+    // --- Reserve -----------------------------------------------------------
+    // The reservation index is only read by the test crash hook; keep
+    // `enumerate` so that hook can name a specific boundary.
+    #[allow(clippy::unused_enumerate_index)]
+    for (_index, name) in folded_names.iter().enumerate() {
         let canonical = fragment_dir.join(name);
-        let aside = staging.join(name);
+        let aside = txn.join(TXN_RESERVED).join(name);
         if let Err(err) = fs::rename(&canonical, &aside) {
-            rollback(&reserved);
-            return Err(FoldError::single(format!(
+            let err = FoldError::single(format!(
                 "{FRAGMENT_DIR}/{name}: cannot reserve for removal: {err}"
-            )));
+            ));
+            let _ = recover(repo_root);
+            return Err(err);
         }
-        reserved.push((canonical, aside));
+        if let Err(err) = sync_dir(&fragment_dir).and_then(|()| sync_dir(&txn.join(TXN_RESERVED))) {
+            let err = FoldError::single(format!(
+                "{FRAGMENT_DIR}/{name}: cannot durably reserve: {err}"
+            ));
+            let _ = recover(repo_root);
+            return Err(err);
+        }
+        crash_if_hooked!(FoldStage::AfterReserve(_index));
     }
+    crash_if_hooked!(FoldStage::AfterReserveAll);
 
-    // Promote the rewrite. Only now does CHANGELOG.md change.
-    if let Err(err) = fs::rename(&staged_changelog, changelog_path) {
-        rollback(&reserved);
-        return Err(FoldError::single(format!(
-            "{CHANGELOG_FILE}: cannot promote rewrite: {err}"
-        )));
+    // --- Commit ------------------------------------------------------------
+    // The atomic rename is the only moment CHANGELOG.md changes; the fsynced
+    // COMMITTED journal that follows is the transaction's linearization point.
+    if let Err(err) = fs::rename(txn.join(TXN_STAGED), changelog_path) {
+        let err = FoldError::single(format!("{CHANGELOG_FILE}: cannot promote rewrite: {err}"));
+        let _ = recover(repo_root);
+        return Err(err);
     }
+    if let Err(err) = sync_dir(repo_root) {
+        let err = FoldError::single(format!("{CHANGELOG_FILE}: cannot durably promote: {err}"));
+        let _ = recover(repo_root);
+        return Err(err);
+    }
+    if let Err(err) = write_journal(&txn, STATE_COMMITTED) {
+        // The promotion is already durable but the commit marker is not. Rather
+        // than risk a rollback that would undo a visible changelog change,
+        // surface the failure; a re-run's recovery sees a non-committed journal
+        // and rolls back cleanly to the backed-up original.
+        let err = FoldError::single(format!(
+            "{TXN_DIR}/{TXN_JOURNAL}: cannot commit transaction: {err}"
+        ));
+        let _ = recover(repo_root);
+        return Err(err);
+    }
+    crash_if_hooked!(FoldStage::AfterCommit);
 
-    // The fold is committed. The reserved fragments are already gone from their
-    // canonical names, so discarding the staging directory is pure cleanup; a
-    // failure here cannot corrupt the changelog or double-fold on retry.
-    let _ = fs::remove_dir_all(&staging);
-    Ok(())
+    // --- Cleanup -----------------------------------------------------------
+    finish_forward(repo_root, &txn)
 }
 
 /// `cargo xtask changelog-fold [--check]`.
@@ -1023,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_repo_leaves_tree_unchanged_when_staging_cannot_be_created() {
+    fn fold_repo_leaves_tree_unchanged_when_transaction_cannot_be_created() {
         let repo = TempRepo::new("stage-fail");
         repo.write_changelog(CHANGELOG);
         repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
@@ -1034,15 +1330,15 @@ mod tests {
         if fs::create_dir(repo.root.join(".probe-writable")).is_ok() {
             let _ = fs::remove_dir(repo.root.join(".probe-writable"));
             fs::set_permissions(&repo.root, fs::Permissions::from_mode(0o755)).unwrap();
-            eprintln!("skipping fold_repo staging-failure test: running as root");
+            eprintln!("skipping fold_repo transaction-failure test: running as root");
             return;
         }
 
-        let err = fold_repo(&repo.root, Mode::Apply).expect_err("staging fails");
+        let err = fold_repo(&repo.root, Mode::Apply).expect_err("transaction create fails");
         assert!(
             err.reasons()
                 .iter()
-                .any(|reason| reason.contains("staging directory")),
+                .any(|reason| reason.contains("transaction directory")),
             "{err}"
         );
 
@@ -1053,5 +1349,169 @@ mod tests {
             vec!["feature-a.md".to_string()],
             "fragment left intact"
         );
+    }
+
+    /// Compute the fold inputs for `repo` exactly as `fold_repo` would, so a
+    /// test can drive `apply_fold_hooked` directly with a crash hook.
+    fn compute_fold(repo: &TempRepo) -> (String, String, Vec<String>) {
+        let fragments = load_fragments(&repo.root).expect("load fragments");
+        let original = fs::read_to_string(repo.root.join(CHANGELOG_FILE)).expect("read changelog");
+        let folded = fold_unreleased(&original, &fragments).expect("fold");
+        let names = fragments.iter().map(|f| f.name.clone()).collect();
+        (original, folded, names)
+    }
+
+    /// Drive a fold to `crash_at`, then abandon it exactly as a crashed process
+    /// would: the transaction directory is left on disk for recovery.
+    fn crash_at_boundary(repo: &TempRepo, crash_at: FoldStage) {
+        let (original, folded, names) = compute_fold(repo);
+        let changelog_path = repo.root.join(CHANGELOG_FILE);
+        let mut fired = false;
+        let result = apply_fold_hooked(
+            &repo.root,
+            &changelog_path,
+            &original,
+            &folded,
+            &names,
+            &mut |stage| {
+                if stage == crash_at {
+                    fired = true;
+                    HookOutcome::Crash
+                } else {
+                    HookOutcome::Continue
+                }
+            },
+        );
+        assert!(fired, "crash hook never fired at {crash_at:?}");
+        assert!(
+            result.is_err(),
+            "a simulated crash returns the sentinel error"
+        );
+        assert!(
+            repo.root.join(TXN_DIR).exists(),
+            "the crash leaves the transaction on disk for recovery"
+        );
+    }
+
+    /// Crash at `crash_at`, then prove the tree recovers with every entry folded
+    /// exactly once (no data loss, no double-fold) and no residual transaction.
+    /// `committed` says whether the crash landed after the linearization point,
+    /// so the crash left the changelog already promoted.
+    fn assert_recovers(tag: &str, crash_at: FoldStage, committed: bool) {
+        let repo = TempRepo::new(tag);
+        repo.write_changelog(CHANGELOG);
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+        repo.write_fragment("feature-b.md", "### Fixed\n\n- fix from b\n");
+
+        crash_at_boundary(&repo, crash_at);
+
+        if committed {
+            assert!(
+                repo.changelog().contains("- from a\n"),
+                "an after-commit crash leaves the changelog already promoted"
+            );
+        } else {
+            assert_eq!(
+                repo.changelog(),
+                CHANGELOG,
+                "a before-commit crash leaves the changelog untouched"
+            );
+        }
+
+        // A fresh invocation recovers the interrupted transaction before doing
+        // anything else, then folds whatever remains.
+        let outcome = fold_repo(&repo.root, Mode::Apply).expect("recover then fold");
+
+        let folded = repo.changelog();
+        assert_eq!(
+            folded.matches("- from a\n").count(),
+            1,
+            "entry a appears exactly once: {folded}"
+        );
+        assert_eq!(
+            folded.matches("- fix from b\n").count(),
+            1,
+            "entry b appears exactly once: {folded}"
+        );
+        assert!(repo.fragment_names().is_empty(), "every fragment consumed");
+        assert!(
+            !repo.root.join(TXN_DIR).exists(),
+            "recovery clears the transaction directory"
+        );
+
+        if committed {
+            assert!(
+                outcome.folded.is_empty(),
+                "an after-commit crash is finished by recovery, so the fold is a no-op"
+            );
+        } else {
+            assert_eq!(
+                outcome.folded.len(),
+                2,
+                "a before-commit crash rolls back, so both fragments re-fold"
+            );
+        }
+    }
+
+    #[test]
+    fn recovers_after_crash_following_prepare() {
+        assert_recovers("crash-prepare", FoldStage::AfterPrepare, false);
+    }
+
+    #[test]
+    fn recovers_after_crash_following_first_reservation() {
+        assert_recovers("crash-reserve-0", FoldStage::AfterReserve(0), false);
+    }
+
+    #[test]
+    fn recovers_after_crash_following_last_reservation() {
+        assert_recovers("crash-reserve-1", FoldStage::AfterReserve(1), false);
+    }
+
+    #[test]
+    fn recovers_after_crash_following_all_reservations() {
+        assert_recovers("crash-reserve-all", FoldStage::AfterReserveAll, false);
+    }
+
+    #[test]
+    fn recovers_after_crash_following_commit() {
+        assert_recovers("crash-commit", FoldStage::AfterCommit, true);
+    }
+
+    #[test]
+    fn recover_is_a_no_op_without_a_transaction() {
+        let repo = TempRepo::new("recover-noop");
+        repo.write_changelog(CHANGELOG);
+        recover(&repo.root).expect("no transaction to recover");
+        assert_eq!(repo.changelog(), CHANGELOG, "changelog untouched");
+        assert!(!repo.root.join(TXN_DIR).exists(), "no transaction created");
+    }
+
+    #[test]
+    fn recovery_rolls_forward_only_a_committed_journal() {
+        // A transaction whose journal never reached COMMITTED must roll back
+        // even though its reserved fragments were moved aside, restoring the
+        // original changelog from the backup.
+        let repo = TempRepo::new("recover-rollback");
+        repo.write_changelog(CHANGELOG);
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+
+        crash_at_boundary(&repo, FoldStage::AfterReserve(0));
+        // The reserved fragment is out of changelog.d/ and inside the txn.
+        assert!(
+            repo.fragment_names().is_empty(),
+            "fragment reserved, not in place"
+        );
+        let txn = repo.root.join(TXN_DIR);
+        assert!(txn.join(TXN_RESERVED).join("feature-a.md").exists());
+
+        recover(&repo.root).expect("rollback recovery");
+        assert_eq!(repo.changelog(), CHANGELOG, "original changelog restored");
+        assert_eq!(
+            repo.fragment_names(),
+            vec!["feature-a.md".to_string()],
+            "reserved fragment restored"
+        );
+        assert!(!txn.exists(), "transaction cleared");
     }
 }
