@@ -80,7 +80,7 @@ pub const PANEL_ROLES: [PanelRole; 10] = [
 
 macro_rules! digest_identifier {
     ($name:ident, $label:literal) => {
-        #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+        #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
         #[serde(transparent)]
         pub struct $name(String);
 
@@ -94,6 +94,20 @@ macro_rules! digest_identifier {
 
             pub fn as_str(&self) -> &str {
                 &self.0
+            }
+        }
+
+        // Deserialize routes through `parse` rather than the transparent
+        // derive so serde cannot construct a digest from a malformed length,
+        // uppercase hex, or arbitrary text: the validator that guards every
+        // constructed value guards a decoded one too.
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::parse(value).map_err(serde::de::Error::custom)
             }
         }
 
@@ -818,6 +832,48 @@ mod tests {
         assert!(ContentId::parse("A".repeat(64)).is_err());
         assert!(SnapshotSha256::parse("0".repeat(63)).is_err());
         assert!(CandidateId::parse("0".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn deserializing_a_malformed_digest_is_rejected() {
+        // Deserialize must run the same validator `parse` runs, so a hand-edited
+        // artifact cannot smuggle a malformed digest past the newtype.
+        for malformed in [
+            "\"not-a-digest\"",
+            "\"\"",
+            &format!("\"{}\"", "A".repeat(64)),
+            &format!("\"{}\"", "0".repeat(63)),
+            &format!("\"{}\"", "0".repeat(65)),
+            "\"g0000000000000000000000000000000000000000000000000000000000000000\"",
+            "42",
+        ] {
+            assert!(
+                serde_json::from_str::<ContentId>(malformed).is_err(),
+                "ContentId accepted {malformed}"
+            );
+            assert!(
+                serde_json::from_str::<CandidateId>(malformed).is_err(),
+                "CandidateId accepted {malformed}"
+            );
+            assert!(
+                serde_json::from_str::<SnapshotSha256>(malformed).is_err(),
+                "SnapshotSha256 accepted {malformed}"
+            );
+        }
+    }
+
+    #[test]
+    fn deserializing_a_well_formed_digest_round_trips() {
+        let digest = format!("\"{}\"", "a".repeat(64));
+        let content: ContentId = serde_json::from_str(&digest).expect("content id");
+        let candidate: CandidateId = serde_json::from_str(&digest).expect("candidate id");
+        let snapshot: SnapshotSha256 = serde_json::from_str(&digest).expect("snapshot digest");
+        assert_eq!(content.as_str(), "a".repeat(64));
+        assert_eq!(
+            serde_json::to_string(&candidate).expect("serialize"),
+            digest
+        );
+        assert_eq!(serde_json::to_string(&snapshot).expect("serialize"), digest);
     }
 
     #[test]
