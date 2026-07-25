@@ -140,8 +140,10 @@ envelope described above, with a kebab-case `code` that resolves to a stable
 anchor so the CLI, the goldens, and cross-references share one target. Probe
 codes that originate as a broker audit decision (for example the `cgroup-*`,
 `ifname-*`, and `nm-managed-foreign-conflict` codes) reuse their anchor in
-the [Audit decision code catalog](#audit-decision-code-catalog) below; the
-rows here catalog the probe-only codes. The authoritative field-by-field
+the [Audit decision code catalog](#audit-decision-code-catalog) below, and
+the shared `daemon-down` connectivity refusal is anchored with the other
+host-verb refusal codes above; the rows here anchor the remaining
+`host check` probe codes. The authoritative field-by-field
 spec for each code is its golden pair under
 `tests/golden/cli-output/host-check-<code>.{json,txt}`; the rows below carry
 the anchor and a one-line summary of what the probe checks.
