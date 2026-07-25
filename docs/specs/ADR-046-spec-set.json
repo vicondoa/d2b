@@ -84,11 +84,11 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "114624468cb8e235ad72c30517dd7fc56afe77d1e66e6d3015a0fb5e4c71fb4e",
+      "sha256" : "c65db8d991b15ec784aefc479b70ff0eef9d2e5b4bc204192068813be3f0a2a5",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
-      "version" : 1,
+      "version" : 2,
       "workItemPrefixes" : [
         "decisions"
       ]
