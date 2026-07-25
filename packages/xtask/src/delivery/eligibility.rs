@@ -9,23 +9,59 @@
 //!   byte-identical proof in [`history_proof`](super::history_proof);
 //! * every required GitHub check is green.
 //!
-//! # Where the check statuses come from
+//! # The merge target and how to capture it
 //!
 //! This stage performs no network I/O and shells out to nothing. It reads one
-//! merge-target artifact the integrator produces out of band - in practice
-//! from `gh pr view --json` or `gh api` - describing the wave's current
-//! pull-request stack: each pull request's repository, number, base and head
-//! refs and object IDs, and its list of required checks with their
-//! conclusions, plus the current integrated material. Everything the gate
-//! decides is a function of the seal and that artifact, so the gate is
-//! hermetic, offline, and reproducible, and a stale or hand-edited target is
-//! caught by the same digest re-derivation every other stage uses.
+//! merge-target document describing the wave's current pull-request stack, and
+//! decides eligibility as a pure function of that document and the seal, so the
+//! gate is hermetic, offline, and reproducible. A stale or hand-edited target
+//! is caught by the same digest re-derivation every other stage uses.
 //!
-//! The cost of that choice is that freshness of the check statuses is the
-//! integrator's responsibility: the artifact is a snapshot of GitHub state at
-//! the moment it was captured. It is captured immediately before merge, in
-//! the same step that merges, which is the same freshness window a direct API
-//! call inside this process would have.
+//! A merge target is a [`MergeTarget`] JSON document:
+//!
+//! ```text
+//! {
+//!   "artifact_kind": "d2b-delivery/merge-target",
+//!   "schema_version": <DELIVERY_SCHEMA_VERSION>,
+//!   "material": { ...the wave's currently integrated CandidateMaterial... },
+//!   "pull_requests": [
+//!     {
+//!       "repository": "<logical repository id>",
+//!       "number": <pull request number>,
+//!       "base_ref": "<base branch>",
+//!       "base_oid": "<base commit object id>",
+//!       "head_ref": "<head branch>",
+//!       "head_oid": "<head commit object id>",
+//!       "required_checks": [ { "name": "<check>", "conclusion": "success" } ]
+//!     }
+//!   ]
+//! }
+//! ```
+//!
+//! `material` is the wave's currently integrated material, re-derived after any
+//! rebase; it has the same shape the snapshot recorded. Each pull request lists
+//! its repository, number, base and head refs and object IDs, and its required
+//! checks with their conclusions.
+//!
+//! ## Recipe
+//!
+//! The integrator captures this document out of band from `gh pr view --json`
+//! or `gh api` immediately before merge, in the same step that merges (the same
+//! freshness window a direct API call inside this process would have), then
+//! installs it into the candidate:
+//!
+//! ```text
+//! cargo xtask delivery wave merge-target \
+//!     --seal   <state>/<wave>/<candidate>/seal.json \
+//!     --target ./merge-target.json \
+//!     --repo   <logical-id>=<checkout-root>
+//! ```
+//!
+//! `merge-target` validates the document's shape, canonicalizes its material,
+//! and writes the canonical `merge-target.json` under the candidate.
+//! `merge-eligibility` then reads that captured target when no `--target` path
+//! is given, so the input the gate consumes is produced by a supported command
+//! rather than dropped in by hand.
 //!
 //! Anything short of green fails closed: a pending, failed, neutral, skipped,
 //! cancelled, or duplicated required check, a pull request with no required
@@ -56,6 +92,7 @@ use super::{
 pub const MERGE_TARGET_ARTIFACT_KIND: &str = "d2b-delivery/merge-target";
 pub const MERGE_ELIGIBILITY_ARTIFACT_KIND: &str = "d2b-delivery/merge-eligibility";
 pub const MERGE_ELIGIBILITY_FILE: &str = "merge-eligibility.json";
+pub const MERGE_TARGET_FILE: &str = "merge-target.json";
 
 /// Upper bound on pull requests and required checks a target may declare.
 const MAX_PULL_REQUESTS: usize = 64;
@@ -140,13 +177,62 @@ pub struct EligibilityRecord {
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let seal_path = options.required_path("--seal")?;
-    let target_path = options.required_path("--target")?;
+    let target_path = options.optional_path("--target")?;
     let state = prepare_state(&mut options)?;
     options.finish()?;
 
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
-    let target: MergeTarget = read_json_file(&target_path, "merge target")?;
+    let target = load_target(&candidate, target_path.as_deref())?;
     evaluate(&candidate, &seal, &target)
+}
+
+/// `cargo xtask delivery wave merge-target`.
+///
+/// Captures the wave's current pull-request stack into the candidate as
+/// `merge-target.json`, so `merge-eligibility` has a supported, candidate-
+/// addressed input it can find without a `--target` path. The raw target the
+/// integrator supplies with `--target` is a [`MergeTarget`] document (see this
+/// module's header for the schema and recipe); capture validates its shape,
+/// canonicalizes its material, and installs it. It does not decide
+/// eligibility: `merge-eligibility` still re-derives every clause of the gate
+/// from the seal and the captured target.
+pub fn run_capture(args: &[String]) -> Result<WorkflowOutput> {
+    let mut options = CliOptions::parse(args)?;
+    let seal_path = options.required_path("--seal")?;
+    let target_path = options.required_path("--target")?;
+    let state = prepare_state(&mut options)?;
+    options.finish()?;
+
+    let (candidate, _seal) = open_sealed_candidate(&state, &seal_path)?;
+    let target: MergeTarget = read_json_file(&target_path, "merge target")?;
+    capture(&candidate, target)
+}
+
+/// Validates a raw merge target's shape, canonicalizes its material, and
+/// installs it candidate-addressed. Capture does not decide eligibility.
+pub(crate) fn capture(candidate: &CandidateDir, mut target: MergeTarget) -> Result<WorkflowOutput> {
+    target.validate()?;
+    target.material.canonicalize()?;
+    let digests = target.material.digests()?;
+    candidate.write_json(MERGE_TARGET_FILE, &target)?;
+
+    WorkflowOutput::ok(WaveCommand::MergeTarget)
+        .with_digests(&digests)
+        .with_artifact(candidate, &candidate.resolve(MERGE_TARGET_FILE)?)
+}
+
+/// Resolves the merge target either from an explicit `--target` path or, when
+/// none is given, from the target captured under the candidate.
+fn load_target(candidate: &CandidateDir, target_path: Option<&Path>) -> Result<MergeTarget> {
+    match target_path {
+        Some(path) => read_json_file(path, "merge target"),
+        None => candidate.read_json(MERGE_TARGET_FILE).map_err(|error| {
+            DeliveryError::usage(format!(
+                "no --target given and no captured merge target at {MERGE_TARGET_FILE}; run \
+                 `cargo xtask delivery wave merge-target` first ({error})"
+            ))
+        }),
+    }
 }
 
 /// Confirms every clause of spec section 12.4 for the wave's stack.
@@ -647,5 +733,61 @@ mod tests {
                 .kind(),
             DeliveryErrorKind::Usage
         );
+    }
+
+    #[test]
+    fn capture_installs_a_candidate_addressed_merge_target() {
+        let scratch = Scratch::new("capture-installs");
+        let (candidate, _seal, _snapshot) = sealed(&scratch);
+
+        let output = capture(&candidate, target(fixtures::material())).expect("capture");
+        assert_eq!(output.operation, "merge-target");
+        assert_eq!(
+            output.artifact.as_deref(),
+            Some("merge-target.json"),
+            "capture must report a candidate-relative key, not an absolute path"
+        );
+
+        let stored: MergeTarget = candidate
+            .read_json(MERGE_TARGET_FILE)
+            .expect("captured merge target");
+        assert_eq!(stored.artifact_kind, MERGE_TARGET_ARTIFACT_KIND);
+        assert_eq!(stored.pull_requests.len(), 1);
+    }
+
+    #[test]
+    fn merge_eligibility_reads_the_captured_target_when_no_target_is_given() {
+        let scratch = Scratch::new("capture-fallback");
+        let (candidate, seal, _snapshot) = sealed(&scratch);
+        capture(&candidate, target(fixtures::material())).expect("capture");
+
+        let resolved = load_target(&candidate, None).expect("fallback to the captured target");
+        let output = evaluate(&candidate, &seal, &resolved).expect("eligible from the fallback");
+        assert_eq!(output.operation, "merge-eligibility");
+
+        let record: EligibilityRecord = candidate
+            .read_json(MERGE_ELIGIBILITY_FILE)
+            .expect("eligibility record");
+        assert!(record.eligible);
+    }
+
+    #[test]
+    fn merge_eligibility_without_a_target_or_capture_is_a_usage_error() {
+        let scratch = Scratch::new("capture-missing");
+        let (candidate, _seal, _snapshot) = sealed(&scratch);
+
+        let error = load_target(&candidate, None)
+            .expect_err("no --target and no captured target must fail closed");
+        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
+        assert!(error.message().contains("merge-target"), "{error}");
+    }
+
+    #[test]
+    fn capture_rejects_a_malformed_target() {
+        let scratch = Scratch::new("capture-malformed");
+        let (candidate, _seal, _snapshot) = sealed(&scratch);
+        let mut wrong_kind = target(fixtures::material());
+        wrong_kind.artifact_kind = "d2b-delivery/wave-seal".to_owned();
+        assert!(capture(&candidate, wrong_kind).is_err());
     }
 }
