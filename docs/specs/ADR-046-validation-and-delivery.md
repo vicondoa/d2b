@@ -28,7 +28,7 @@ branch/worktree/GC cleanup policy; and the release/cutover gate.
 
 This spec is documentation only. It creates no crates, dependencies, Nix
 modules, services, controllers, Providers, state stores, CI workflows, or
-`xtask` subcommands. Per ADR 0046 decision D024, future W0–W7 implementation
+`xtask` subcommands. Per ADR 0046 decision D024, future W0–W8 implementation
 (§3) requires a separate request. This spec is the binding contract that
 request must follow; it does not itself begin that work, and no cleanup,
 branch deletion, or worktree removal described in §14 is performed by this
@@ -84,6 +84,15 @@ prerequisites, its implementation branch MAY open earlier than its assigned
 wave boundary under the speculative-readiness rule in §6 — the wave number
 below is the latest-safe placement, not the earliest-possible one.
 
+This rule derives a wave only for a spec. `ADR046-W8` (§3.2) has no spec
+members and is therefore **not** produced by the layering above: it is a
+terminal delivery-process wave whose contents — the tooling and process
+friction accumulated while delivering `ADR046-W0`–`ADR046-W7`, in the
+categories signoff, build, test, merge, codegen, and disk — are triaged and
+fixed at `ADR046-W7` close rather than read off a `Depends on` edge. Its
+only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
+§4 template unchanged, including exactly one binding ten-role panel (§12.3).
+
 ### 3.2 Wave assignment table
 
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
@@ -95,15 +104,17 @@ below is the latest-safe placement, not the earliest-possible one.
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
 | `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
-| `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release gate (§15) |
+| `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
+| `ADR046-W8` | None — no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`–`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
-Waves are numbered `ADR046-W0`…`ADR046-W7` — an ADR-046-scoped namespace,
+Waves are numbered `ADR046-W0`…`ADR046-W8` — an ADR-046-scoped namespace,
 distinct from this repository's general per-plan `Wn` commit-tag convention
 in `AGENTS.md`. Commit subjects for ADR 0046 implementation work use
 `( ADR046-W<n> )`, `( ADR046-W<n>fu<m> )`, and
 `( ADR046-W<n>fu<m> <S><n> )` following the same severity/ordinal grammar
 `AGENTS.md` already defines, so existing tooling and human reviewers read one
-consistent tag shape.
+consistent tag shape. `ADR046-W8` takes the same grammar with no exception:
+`( ADR046-W8 )`, `( ADR046-W8fu<m> )`, `( ADR046-W8fu<m> <S><n> )`.
 
 ### 3.3 Wave 6 provider families (file-disjoint parallel tracks)
 
@@ -169,6 +180,10 @@ placement and for the speculative-readiness check in §6.
 | all 27 `provider-*` dossiers | see §3.3; every dossier's deepest edge resolves to a W5 spec (`resources-host-guest-process-user`, `resources-volume`, `resources-device`, `resources-zone-control`, `resources-credential`, `telemetry-audit-and-support`, `cli-and-operations`, or `nix-configuration`) | W6 |
 | `security-hardening`, `streamline`, `reset-and-cutover`, `feasibility-proofs` (forthcoming) | the entire manifest (cross-cutting closing review) | W7 |
 
+`ADR046-W8` has no row above because it has no spec members (§3.1). Its only
+prerequisite is `ADR046-W7`'s exit criteria (§4); its work items are recorded
+at `ADR046-W7` close rather than derived from a `Depends on` edge.
+
 ### 3.5 Machine-readable implementation graph (D095)
 
 The wave topology in §3.1–§3.4 and the file-overlap graph in §6 are also emitted
@@ -185,9 +200,11 @@ re-derives launch order or parallelism from this prose. Per D095:
   (`d2b-adr-implementation-graph`), `schemaVersion`, `adr` (`0046`), and `status`.
   It carries one `node` for every one of the 55 member specs and every work item
   in `ADR-046-work-items.json`, each mapped **exactly once** to a `wave`
-  (`W0`–`W7`), a file-disjoint `parallelGroup`, `owner`/`destinations`,
-  `entryContracts`, `prerequisites`, `blockers` (empty in a `Proposed` plan
-  unless an explicit blocker is recorded), `exitGate`, and `topologicalRank`. It
+  (`W0`–`W7`; `W8` contributes no node until its work items are recorded at
+  `ADR046-W7` close, per §3.1), a file-disjoint `parallelGroup`,
+  `owner`/`destinations`, `entryContracts`, `prerequisites`, `blockers`
+  (empty in a `Proposed` plan unless an explicit blocker is recorded),
+  `exitGate`, and `topologicalRank`. It
   carries typed `edges`: `spec-depends-on` (cross-wave spec dependency),
   `shared-contract` (same-wave spec prep barrier), `work-item-depends-on`,
   `implements-spec` (work item → its spec), and `file-overlap-order` (same-wave
@@ -250,9 +267,12 @@ an anti-serialization violation (see §6 and `ADR046-streamline-013`).
 
 ## 4. Per-wave entry/exit criteria
 
-Every wave (`ADR046-W0`…`ADR046-W7`) uses this template. A wave's exit
+Every wave (`ADR046-W0`…`ADR046-W8`) uses this template. A wave's exit
 criteria are its successor's entry criteria; there is no partial-wave
-advance.
+advance. `ADR046-W8` is no exception: having no spec members satisfies its
+spec-scoped entry and exit clauses vacuously, but every remaining clause —
+snapshot immutability, validator lanes, exactly one binding ten-role panel,
+seal, and merge eligibility — applies to it unchanged.
 
 **Entry criteria (all required):**
 
@@ -493,8 +513,8 @@ are Accepted; per the parent ADR's "Current-code fit" table and
 6. This spec's own `ADR046-W7` ("streamline & cutover") is the wave that
    performs bulk final deletion of every remaining `RETAIN`-until-parity row,
    gated by `ADR-046-reset-and-cutover`'s destructive-cutover mechanics and
-   by the release/cutover gate in §15. No deletion happens in this
-   documentation-only change.
+   verified by the release/cutover gate in §15, which is evaluated at
+   `ADR046-W8` exit. No deletion happens in this documentation-only change.
 
 ## 10. Validation matrix
 
@@ -881,8 +901,9 @@ with the production encrypted named-stream implementation.
 Deferred in content to `ADR-046-reset-and-cutover` (forthcoming, required
 before `ADR046-W7` per §3.4); this spec fixes only the **gate shape**:
 `ADR046-W7`'s exit criteria (§4) additionally require every destructive-reset
-test named by that spec to pass on the `ADR046-W7` candidate snapshot before
-the release/cutover gate (§15) opens.
+test named by that spec to pass on the `ADR046-W7` candidate snapshot, and
+the release/cutover gate (§15) re-requires them on the `ADR046-W8` snapshot
+before it opens.
 
 ### 10.14 CLI/Nix examples/docs
 
@@ -1223,25 +1244,30 @@ executed as part of landing this spec.
 
 ## 15. Release/cutover gate
 
-`ADR046-W7` ("streamline & cutover") does not close, and d2b 3.0 does not
-release, until all of:
+The release/cutover gate is evaluated at **`ADR046-W8` exit**, not at
+`ADR046-W7` exit. `ADR046-W7` performs the destructive cutover (§9), but
+`ADR046-W8` (friction closure, §3.1/§3.2) is the program's terminal wave and
+therefore produces the tree that actually ships; gating on `ADR046-W7` would
+release a candidate that a later wave still modifies. `ADR046-W8` does not
+close, and d2b 3.0 does not release, until all of:
 
 1. `ADR-046-streamline`, `ADR-046-security-and-threat-model`,
    `ADR-046-reset-and-cutover`, `ADR-046-feasibility-and-spikes`, and this
    validation spec are `Accepted` and their own work items' `Validation`
    evidence is imported per §12.2.
 2. Every `DELETE`/`REPLACE` row in `ADR-046-current-code-migration-map` has
-   satisfied its removal-proof test (§9) on the `ADR046-W7` candidate
-   snapshot — this is the destructive-cutover gate; d2b 3.0 does not ship
-   with both the v3-pre-ADR-0046 code path and its successor coexisting
+   satisfied its removal-proof test (§9) on the `ADR046-W8` candidate
+   snapshot — the removal proofs `ADR046-W7` established must still hold on
+   the shipping tree. This is the destructive-cutover gate; d2b 3.0 does not
+   ship with both the v3-pre-ADR-0046 code path and its successor coexisting
    indefinitely.
-3. The `ADR046-W7` snapshot has passed §10's complete matrix, including the
+3. The `ADR046-W8` snapshot has passed §10's complete matrix, including the
    manual hardware/live/cloud tiers (§10.11) at least once with recorded
    external evidence (not required to be green in CI, but required to be
    evidenced), and the reset/cutover scenarios (§10.13) defined by
    `ADR-046-reset-and-cutover`.
 4. The ten-role panel (§12.3) has returned unanimous signoff on the
-   `ADR046-W7` snapshot with zero recommendations, and
+   `ADR046-W8` snapshot with zero recommendations, and
    `cargo xtask delivery wave seal` + `merge-eligibility` both pass.
 5. `CHANGELOG.md` carries a new version header under the project's existing
    Keep-a-Changelog convention (`AGENTS.md` → "Changelog & Releases"),
@@ -1265,7 +1291,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Current anchor | This repository's `AGENTS.md` "Panel review" (8/N-role phase gate, no candidate snapshot/seal), "Stacked PR workflow for large waves," "Worktrees for parallel agents," `tests/AGENTS.md`/`tests/README.md` Layer-1/Layer-2 taxonomy, and `Makefile` targets (`make check-tier0`, `test-unit`, `test-lint`, `test-rust`, `test-proofs`, `test-flake`, `test-drift`, `test-policy`, `check`, `check-static`, `test`, `test-integration`, `test-host-integration`) |
 | Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool are `ADR-only` in this repository today — they exist as a proven, documented process on this codebase's sibling ADR-0045 lineage and are adopted here by explicit copy/adapt under D001/D041, not invented fresh |
 | Behavior retained | Layer-1-first bias, closed drift/meta-gate set, hermetic mocking discipline, commit-before-build convention, no-AI-metadata-in-Git convention, worktree/branch hygiene, `KillMode=process` restart-continuation semantics |
-| Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`–`ADR046-W7` wave graph and its file-overlap/shared-prep contracts |
+| Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`–`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
 | Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; extend the existing ten-role panel table unchanged |
 | Replacement/deletion | Nothing in this repository's current validation/delivery tooling is removed by this spec; `ADR046-delivery-00x` work items (§17) are additive tooling built alongside, not instead of, the existing `Makefile`/panel-review process, until `ADR046-W7` explicitly retires any tooling the migration map marks `DELETE`/`REPLACE` |
 | Feasibility proof | The sibling-lineage candidate-snapshot/panel/seal contract supplies the reuse design named in §11/§12; `ADR-046-feasibility-and-spikes` owns the ADR-0046-specific redb/reconciliation/session/package/state numeric proofs cited in §10.4 |
