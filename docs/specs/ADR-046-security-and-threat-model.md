@@ -798,7 +798,7 @@ Network/Device Providers themselves.
 | Process (systemd) | `SystemdProcessEffectPort` | `Provider/system-systemd` controller via D-Bus transient unit API | Controller never connects to the systemd D-Bus socket directly and never calls `systemctl` as a subprocess |
 | Volume | `VolumeEffectPort` | `Provider/volume-local` controller + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir`; key rotation is requested only through `VolumeEffectPort::rotate_sealing_key` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
 | Network | `NetworkEffectPort` | `Provider/network-local` controller + broker `CreatePersistentTap`/`DeletePersistentTap`/`SetBridgePortFlags`/`ApplyNftables`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
-| Device (USBIP) | `UsbipEffectPort` | Core adapter + broker `UsbipBindFirewallRule { action: Ensure \| Remove }` for both acquisition and release | Network-local never owns USBIP TCP/3240 exposure; there is no separate release operation |
+| Device (USBIP) | `UsbipEffectPort` | Core adapter + broker `ApplyNftablesProjection { action: Apply \| Remove }` (D-NETWORK-004) for both acquisition and release | Network-local never owns USBIP TCP/3240 exposure; release is net-new privileged surface, not a capability of the shipped whole-table `UsbipBindFirewallRule` op |
 | Device (vsock) | `VsockEffectPort` | Zone runtime `LiveVsockEffectPort` | `tokio-vsock` is not a dependency of `transport-vsock` (INV-VSOCK-004) |
 | Cloud (ARM/ACA) | `AzureEffectPort` | The cloud runtime Provider's own controller, confined to the gateway Guest | All calls non-blocking; `AzureOperationHandle` is opaque, max 256 bytes |
 
@@ -806,9 +806,14 @@ These names are the planned closed ADR 0046 broker-operation contract even
 where the baseline has no corresponding variant yet. In particular,
 `RotateSealingKey` is the sole broker effect behind
 `VolumeEffectPort::rotate_sealing_key`; `DeletePersistentTap` is a new
-idempotent peer to `CreatePersistentTap`; and USBIP release dispatches the
-existing `UsbipBindFirewallRule` with closed `action: Remove`, not a renamed or
-second release variant. `action: Ensure` is the only acquisition form.
+idempotent peer to `CreatePersistentTap`; and USBIP acquisition and release both
+dispatch the new closed `ApplyNftablesProjection` op with `action: Apply` and
+`action: Remove` (D-NETWORK-004). USBIP release is **net-new privileged
+surface**: the shipped `UsbipBindFirewallRule` op is bind-only, has no `action`
+field and no release path, and does a whole-table `inet d2b` replace, so it can
+neither express per-projection release nor preserve sibling markers. It is a new
+privileged operation, not a renamed op or an `action: Remove` variant bolted
+onto the shipped `UsbipBindFirewallRule`.
 
 The broker remains the sole privileged executor and independent audit owner
 (`ADR-046-provider-model-and-packaging`, D077). It re-derives every
