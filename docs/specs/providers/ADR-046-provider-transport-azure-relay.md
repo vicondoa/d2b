@@ -743,13 +743,25 @@ spec:
   lifecyclePolicy: producer-owned
 status:
   phase: Ready
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: Available
-  leaseAvailability: Available
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: Available
+    leaseAvailability: Available
   conditions: []
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ---
 apiVersion: resources.d2bus.org/v3
 type: Endpoint
@@ -773,12 +785,13 @@ spec:
   lifecyclePolicy: producer-owned
 status:
   phase: Ready
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: Available
-  leaseAvailability: Available
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: Available
+    leaseAvailability: Available
   conditions: []
   update:
     state: Current

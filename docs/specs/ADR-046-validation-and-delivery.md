@@ -988,8 +988,12 @@ new test framework.
 **Runtime ledger + timing gate.** A machine-readable test-runtime ledger and
 a timing gate reuse the existing `xtask`/Make tooling (no new top-level
 `tests/*.sh` gate): they record the reference runner, repetition count, and
-per-test/crate/shard p95, enforce the budgets above, report the top slow
-tests, apply a historical regression threshold, and emit a CI artifact.
+per-test/crate/shard p95, enforce the absolute budgets above, report the top slow
+tests, and emit a CI artifact. The gate holds no baseline and makes no
+historical-regression claim - a slower run that still fits its budget passes -
+and growing the census to a real multi-crate shard inventory plus a genuine
+cross-machine reference baseline is the deferred follow-up
+`runtime-ledger-full-census-and-real-shards`.
 `make test-rust` and the Layer-1 hermetic shards run concurrently; expensive
 integration lanes take the sole heavy-gate slot (§11). CI caches compile
 outputs, but correctness never depends on the cache, and cold compile time is
@@ -1456,11 +1460,11 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-007` |
 | Dependency/owner | `ADR046-W0`; delivery-tooling integrator |
-| Current source | the test-runtime ledger has since landed as `packages/xtask/src/test_runtime_ledger.rs`, invoked by `make test-runtime-ledger` against the pinned `tests/runtime-ledger-baseline.json`/`tests/runtime-ledger-census.json` and run as the `test-runtime-ledger` Layer-1 job; this codebase's earlier `tests/tools/` timing logs (`d2b-static-timing.$$/`) remain ad hoc and are not this candidate-bound ledger, so remaining effort is hardening the census/regression enforcement, not creation |
+| Current source | the test-runtime ledger has since landed as `packages/xtask/src/test_runtime_ledger.rs`, invoked by `make test-runtime-ledger` against the pinned `tests/runtime-ledger-census.json` and run as the `test-runtime-ledger` Layer-1 job; this codebase's earlier `tests/tools/` timing logs (`d2b-static-timing.$$/`) remain ad hoc and are not this candidate-bound ledger, so remaining effort is the deferred follow-up `runtime-ledger-full-census-and-real-shards` (grow the census to a real multi-crate shard inventory and add a cross-machine reference baseline), not creation and not a historical-regression gate |
 | Reuse source | existing `xtask`/`libtest --format=json` timing output; no new test framework |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 shard targets |
-| Detailed design | Measures execution-only time (after build, warm cache) per test/crate/shard against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, applies a historical regression threshold, and emits a machine-readable CI artifact; the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
+| Detailed design | Measures execution-only time (after build, warm cache) per test/crate/shard against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, and emits a machine-readable CI artifact against absolute per-test/crate/shard budgets with no baseline and no historical-regression claim (the full census across a real multi-crate shard inventory and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`); the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
 | Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; a synthetic timing regression fails the gate; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |

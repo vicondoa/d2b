@@ -669,12 +669,13 @@ spec:
   lifecyclePolicy: producer-owned
 status:
   phase: Ready
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: Available
-  leaseAvailability: NotRequired
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: Available
+    leaseAvailability: NotRequired
   conditions: []
   update:
     state: Current

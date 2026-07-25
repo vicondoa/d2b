@@ -227,10 +227,11 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  endpointGeneration: 7
-  observedProducerGeneration: 3
-  connectionAvailability: available
+  resource:
+    readiness: Ready
+    endpointGeneration: 7
+    observedProducerGeneration: 3
+    connectionAvailability: available
   update:
     state: Current
     reasons: []

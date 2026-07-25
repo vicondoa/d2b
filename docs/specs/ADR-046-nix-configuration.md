@@ -328,6 +328,7 @@ metadata:
 spec: {}
 status:
   phase: Ready
+  resource: {}
   update:
     state: Current
     reasons: []
@@ -762,6 +763,7 @@ d2b.zones.dev.resources.host-system = {
     providerRef    = "Provider/system-core";
     defaultDomain  = "system";
     allowedDomains = ["system" "user"];   # admits user-domain Processes
+    # d2b-lint: expect-d116-eval-error
     # defaultUserRef intentionally omitted -> eval error (D116 superset invariant)
     budget         = { cpu = {}; memory = {}; pids = {}; fds = {}; io = {}; storage = {}; network = {}; };
   };
@@ -1490,10 +1492,11 @@ spec:
   groups:  []
 status:
   phase:                    Unknown
-  observedUid:              null
-  observedGid:              null
-  observedHome:             null
-  sessionManagerAvailable:  false
+  resource:
+    observedUid:              null
+    observedGid:              null
+    observedHome:             null
+    sessionManagerAvailable:  false
   update:
     state: Current
     reasons: []
