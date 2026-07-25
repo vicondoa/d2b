@@ -71,12 +71,26 @@ impl DeliveryErrorKind {
         }
     }
 
-    /// Process exit code for this failure class. Never zero.
+    /// Process exit code for this failure class.
+    ///
+    /// Each class maps to a distinct code drawn from the BSD `sysexits.h`
+    /// range so a caller can branch on the reason without parsing stderr:
+    ///
+    /// | Class           | Code | `sysexits.h` name |
+    /// | --------------- | ---- | ----------------- |
+    /// | `Usage`         | `64` | `EX_USAGE`        |
+    /// | `Invalid`       | `65` | `EX_DATAERR`      |
+    /// | `Unimplemented` | `69` | `EX_UNAVAILABLE`  |
+    /// | `Environment`   | `72` | `EX_OSFILE`       |
+    ///
+    /// The four codes are distinct and all nonzero, so success is never
+    /// confused with a failure and no two classes share a code.
     pub fn exit_code(self) -> u8 {
         match self {
-            Self::Invalid | Self::Environment => 1,
-            Self::Usage => 2,
-            Self::Unimplemented => 3,
+            Self::Usage => 64,
+            Self::Invalid => 65,
+            Self::Unimplemented => 69,
+            Self::Environment => 72,
         }
     }
 }
@@ -188,6 +202,35 @@ mod tests {
             DeliveryErrorKind::Environment,
         ] {
             assert_ne!(kind.exit_code(), 0, "{kind:?} must not exit zero");
+        }
+    }
+
+    #[test]
+    fn each_failure_class_maps_to_a_distinct_sysexits_code() {
+        // The exact public contract: a caller branches on these codes, so both
+        // the individual values and their mutual distinctness are load-bearing.
+        assert_eq!(DeliveryErrorKind::Usage.exit_code(), 64);
+        assert_eq!(DeliveryErrorKind::Invalid.exit_code(), 65);
+        assert_eq!(DeliveryErrorKind::Unimplemented.exit_code(), 69);
+        assert_eq!(DeliveryErrorKind::Environment.exit_code(), 72);
+
+        let codes = [
+            DeliveryErrorKind::Usage,
+            DeliveryErrorKind::Unimplemented,
+            DeliveryErrorKind::Invalid,
+            DeliveryErrorKind::Environment,
+        ]
+        .map(DeliveryErrorKind::exit_code);
+        let unique = codes
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), codes.len(), "exit codes must be distinct");
+        for code in codes {
+            assert!(
+                (64..=78).contains(&code),
+                "{code} is outside the sysexits range"
+            );
         }
     }
 
