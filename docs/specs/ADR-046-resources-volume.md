@@ -1151,7 +1151,7 @@ uniform Nix shape that mirrors the canonical ResourceSpec JSON nearly identicall
 
 ```nix
 d2b.zones."<zone>".resources."<name>" = {
-  type = "ResourceType";   # required; matches canonical spec
+  type = "<ResourceType>";   # required; matches canonical spec
   spec = {
     # exact ResourceType spec fields - same keys and nesting as canonical JSON
   };

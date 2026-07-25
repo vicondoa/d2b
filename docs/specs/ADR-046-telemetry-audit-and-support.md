@@ -192,7 +192,8 @@ Operators cannot suppress or override it:
   "status": {
     "phase": "Ready",
     "isolationPosture": "none",
-    "isolationPostureMessage": "This host resource runs processes as the authenticated user with no isolation boundary. All child processes share the host user environment."
+    "isolationPostureMessage": "This host resource runs processes as the authenticated user with no isolation boundary. All child processes share the host user environment.",
+    "...": "plus the universal status base (status.update and status.resource); elided here to focus on isolationPosture"
   }
 }
 ```
