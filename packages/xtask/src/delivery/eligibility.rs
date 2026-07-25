@@ -22,8 +22,9 @@
 //! ```text
 //! {
 //!   "artifact_kind": "d2b-delivery/merge-target",
-//!   "schema_version": <DELIVERY_SCHEMA_VERSION>,
-//!   "material": { ...the wave's currently integrated CandidateMaterial... },
+//!   "schema_version": <integer, equal to the candidate's seal.json schema_version>,
+//!   "material": <the candidate's integrated material, copied verbatim from
+//!                seal.json's "material" object>,
 //!   "pull_requests": [
 //!     {
 //!       "repository": "<logical repository id>",
@@ -38,10 +39,16 @@
 //! }
 //! ```
 //!
-//! `material` is the wave's currently integrated material, re-derived after any
-//! rebase; it has the same shape the snapshot recorded. Each pull request lists
-//! its repository, number, base and head refs and object IDs, and its required
+//! `material` is not authored by hand: it is byte-for-byte the `material`
+//! object from the candidate's `seal.json` (equivalently `snapshot.json`),
+//! which `merge-target` re-derives and re-canonicalizes so a rebase is caught
+//! by the same digest check every stage uses. Each pull request lists its
+//! repository, number, base and head refs and object IDs, and its required
 //! checks with their conclusions.
+//!
+//! The complete schema and a precise offline recipe are published through
+//! `cargo xtask delivery wave help` (the `merge-target` stage's `schema`
+//! field), so a contributor can produce the document without reading source.
 //!
 //! ## Recipe
 //!
@@ -51,8 +58,15 @@
 //! installs it into the candidate:
 //!
 //! ```text
+//! SEAL=<state-root>/<wave>/<candidate>/seal.json
+//! jq -n --slurpfile s "$SEAL" '{
+//!     artifact_kind: "d2b-delivery/merge-target",
+//!     schema_version: $s[0].schema_version,
+//!     material: $s[0].material,
+//!     pull_requests: [ /* one object per repository */ ]
+//!   }' > merge-target.json
 //! cargo xtask delivery wave merge-target \
-//!     --seal   <state>/<wave>/<candidate>/seal.json \
+//!     --seal   "$SEAL" \
 //!     --target ./merge-target.json \
 //!     --repo   <logical-id>=<checkout-root>
 //! ```
@@ -78,6 +92,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{CliOptions, WaveCommand, WorkflowOutput},
+    evidence,
     history_proof::{self, HistoryVerdict},
     model::{
         CandidateId, CandidateMaterial, ContentId, GitObjectFormat, RepositoryRecord,
@@ -181,6 +196,8 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let state = prepare_state(&mut options)?;
     options.finish()?;
 
+    let seal_path = state.resolve_artifact_ref(&seal_path);
+    let target_path = target_path.map(|path| state.resolve_artifact_ref(&path));
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
     let target = load_target(&candidate, target_path.as_deref())?;
     evaluate(&candidate, &seal, &target)
@@ -203,6 +220,9 @@ pub fn run_capture(args: &[String]) -> Result<WorkflowOutput> {
     let state = prepare_state(&mut options)?;
     options.finish()?;
 
+    // `--seal` chains from a prior stage, so it resolves under the state root.
+    // `--target` is the integrator's own out-of-band capture, taken verbatim.
+    let seal_path = state.resolve_artifact_ref(&seal_path);
     let (candidate, _seal) = open_sealed_candidate(&state, &seal_path)?;
     let target: MergeTarget = read_json_file(&target_path, "merge target")?;
     capture(&candidate, target)
@@ -248,6 +268,22 @@ pub fn evaluate(
 
     let mut material = target.material.clone();
     material.canonicalize()?;
+    let current_digests = material.digests()?;
+
+    // The history proof establishes only that the integrated content is
+    // byte-identical, which keeps the sealed panel attestation valid across a
+    // history-only rebase. It says nothing about the validator lanes: a rebase
+    // moves `snapshot_sha256`, which unbinds every prior lane record, so the
+    // seal alone must never carry a lane result across it. Re-read the lanes
+    // against the current snapshot digest, so a rebased candidate is eligible
+    // only once every lane has rerun and re-imported.
+    evidence::require_passing_lanes(
+        candidate,
+        &current_digests.candidate_id,
+        &current_digests.content_id,
+        &current_digests.snapshot_sha256,
+    )?;
+
     let verdicts = check_stack(&material, &target.pull_requests)?;
 
     let record = EligibilityRecord {
@@ -265,9 +301,8 @@ pub fn evaluate(
     };
     candidate.write_json(MERGE_ELIGIBILITY_FILE, &record)?;
 
-    let digests = material.digests()?;
     WorkflowOutput::ok(WaveCommand::MergeEligibility)
-        .with_digests(&digests)
+        .with_digests(&current_digests)
         .with_artifact(candidate, &candidate.resolve(MERGE_ELIGIBILITY_FILE)?)
 }
 
@@ -554,9 +589,43 @@ mod tests {
     }
 
     #[test]
-    fn a_history_only_rebase_stays_eligible_through_the_proof() {
+    fn a_history_only_rebase_needs_current_lanes_but_keeps_the_panel() {
+        use crate::delivery::{
+            evidence::EvidenceLane,
+            panel::tests::rebased,
+            seal::tests::{evidence as lane_evidence, import as import_evidence},
+        };
+
         let scratch = Scratch::new("eligibility-rebase");
-        let (candidate, seal, _snapshot) = sealed(&scratch);
+        let (candidate, seal, snapshot) = sealed(&scratch);
+
+        // A history-only rebase preserves the candidate address and its sealed
+        // panel attestation, but it moves `snapshot_sha256`, so every prior
+        // validator-lane record is bound to the stale snapshot. Until the lanes
+        // rerun and re-import against the new snapshot, the candidate is not
+        // eligible - the seal alone never carries a lane result across a rebase.
+        let error = evaluate(&candidate, &seal, &target(rebased_material()))
+            .expect_err("stale lanes must block eligibility");
+        assert!(error.message().contains("current snapshot"), "{error}");
+
+        // Re-import both lanes bound to the rebased snapshot, exactly as the
+        // integrator would after rerunning them, and the candidate becomes
+        // eligible again - proving the panel survived the rebase while the
+        // validator evidence had to be refreshed.
+        let rebased_snapshot = rebased(&snapshot);
+        import_evidence(
+            &candidate,
+            &lane_evidence(&rebased_snapshot, EvidenceLane::GithubCi, "layer1-check"),
+        );
+        import_evidence(
+            &candidate,
+            &lane_evidence(
+                &rebased_snapshot,
+                EvidenceLane::LocalHost,
+                "make-test-integration",
+            ),
+        );
+
         let output = evaluate(&candidate, &seal, &target(rebased_material())).expect("eligible");
         assert_eq!(
             output.candidate_id.as_deref(),
@@ -566,6 +635,7 @@ mod tests {
         let record: EligibilityRecord = candidate
             .read_json(MERGE_ELIGIBILITY_FILE)
             .expect("eligibility record");
+        assert!(record.eligible);
         assert_eq!(record.history, HistoryVerdict::HistoryOnlyRebase);
         assert_ne!(
             record.sealed_snapshot_sha256,
@@ -744,8 +814,15 @@ mod tests {
         assert_eq!(output.operation, "merge-target");
         assert_eq!(
             output.artifact.as_deref(),
-            Some("merge-target.json"),
-            "capture must report a candidate-relative key, not an absolute path"
+            Some(
+                format!(
+                    "{}/{}/merge-target.json",
+                    candidate.wave(),
+                    candidate.candidate_id().as_str()
+                )
+                .as_str()
+            ),
+            "capture must report a state-root-relative reference, not an absolute path"
         );
 
         let stored: MergeTarget = candidate

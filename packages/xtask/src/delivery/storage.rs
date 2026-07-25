@@ -27,46 +27,56 @@
 //!
 //! # Implementation note: path safety
 //!
-//! The implementation this module was adapted from anchored every operation on
-//! directory file descriptors, using `openat`, `mkdirat`, `renameat_with`, and
-//! `fchmodat` through `rustix` and `nix`. This one uses `std`, extended with
-//! `O_NOFOLLOW` and post-open verification, so it holds these properties
-//! without hand-rolling directory-fd anchoring:
+//! The write path anchors every operation on a chain of verified directory
+//! file descriptors rather than resolving a pathname per syscall. A pathname
+//! write is atomic only within whichever directory each syscall happens to
+//! resolve; an attacker who replaces an intermediate directory or the parent
+//! between validation and use can redirect the temp create, the rename, and
+//! the parent fsync into another writable directory, including a reviewed
+//! checkout. Anchoring closes that window:
 //!
 //! * external-path refusal - the state root is rejected inside any declared
 //!   repository checkout and inside any enclosing Git working tree;
-//! * symlink rejection over the whole resolved path - every read, write, and
-//!   list first rejects a path any component of which is a symlink, including
-//!   the leaf;
-//! * `O_NOFOLLOW` on the leaf - the artifact leaf is opened with `O_NOFOLLOW`,
-//!   so a symlink swapped in after the component walk still cannot be followed;
-//! * post-open verification - a written leaf is confirmed by `fstat` to be a
-//!   regular file, mode `0600`, owned by the current effective user, before any
-//!   byte is written;
-//! * create-new temp then atomic rename - writes land in a fresh
-//!   `O_CREAT | O_EXCL | O_NOFOLLOW` temp in the verified parent, are fsynced,
-//!   and are renamed into place, with the parent directory fsynced afterwards.
-//!   `rename` replaces the destination name rather than following it, so it can
-//!   never truncate a file a symlink pointed at;
+//! * directory-descriptor walk - the candidate directory is opened once, and
+//!   every component beneath it is opened relative to its parent's descriptor
+//!   with `O_DIRECTORY | O_NOFOLLOW` (or `openat2` with
+//!   `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` where the kernel provides it), so
+//!   a symlinked component is rejected rather than traversed and no ancestor is
+//!   ever re-resolved by name;
+//! * each opened directory is verified by `fstat` to be a real `0700`
+//!   directory owned by the current effective user before it is used;
+//! * create-new temp then atomic rename, all fd-relative - the temp is created
+//!   with `openat(O_CREAT | O_EXCL | O_NOFOLLOW)` in the pinned parent, verified
+//!   by `fstat` to be a regular `0600` file owned by us, written, fsynced, and
+//!   `renameat`d into place against the *same* pinned parent fd, which is then
+//!   fsynced; a newly created directory has its parent fsynced too;
+//! * an `O_NOFOLLOW` `fstatat` rejects a symlink planted at the leaf name, so a
+//!   pre-planted symlink fails closed rather than being silently replaced;
+//! * an RAII temp guard `unlinkat`s the temp against its pinned parent until a
+//!   successful rename disarms it, so no failure path leaves a stale temp
+//!   behind, and a cleanup failure is folded into the primary error;
 //! * `0700` directories and `0600` files, verified after creation;
 //! * bounded reads, so a hostile artifact cannot exhaust memory;
 //! * traversal-proof relative paths, so no caller can address a file outside
 //!   the candidate directory.
 //!
-//! A residual TOCTOU window remains between the component walk and the leaf
-//! open, but `O_NOFOLLOW` plus the create-new-then-rename write shape mean the
-//! worst an attacker racing that window can do is make an operation fail, never
-//! make it write through a symlink into a reviewed checkout.
+//! Public write diagnostics name only the candidate-relative artifact key, so
+//! a storage failure written to stderr never carries `HOME`, the local
+//! username, or a checkout, store, or temp path.
 
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, DirBuilder, File},
     io::{Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::{
+        fd::{AsFd, BorrowedFd, OwnedFd},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags};
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
@@ -128,6 +138,22 @@ impl StateRoot {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Resolves an artifact reference a prior stage reported.
+    ///
+    /// An absolute path is taken verbatim, so an operator may still point a
+    /// stage at any snapshot or seal on disk. A relative reference - exactly
+    /// the `<wave>/<candidate>/<artifact>` value a prior stage printed in its
+    /// `artifact` field (see [`CandidateDir::state_relative_key`]) - resolves
+    /// under this state root, so one stage's output chains directly into the
+    /// next stage's `--snapshot` or `--seal`.
+    pub fn resolve_artifact_ref(&self, reference: &Path) -> PathBuf {
+        if reference.is_absolute() {
+            reference.to_path_buf()
+        } else {
+            self.path.join(reference)
+        }
     }
 
     /// Opens, creating if absent, the candidate directory for one wave.
@@ -244,20 +270,22 @@ impl CandidateDir {
         Ok(self.path.join(relative))
     }
 
-    /// The bounded, candidate-relative key for an artifact path under this
-    /// candidate directory.
+    /// The state-root-relative reference for an artifact path under this
+    /// candidate directory: `<wave>/<candidate>/<artifact>`.
     ///
-    /// Structured output reports this logical key, never the absolute state
-    /// path, so no CI or operator log carries `HOME`, the local username, or a
-    /// checkout or store path.
-    pub fn artifact_key(&self, path: &Path) -> Result<String> {
-        let relative = path.strip_prefix(&self.path).map_err(|_| {
-            DeliveryError::new("delivery artifact is not under its candidate directory")
+    /// This leaks no absolute path, `HOME`, username, checkout, or store path,
+    /// yet names the wave and candidate, so a later stage resolves it under the
+    /// same state root (see [`StateRoot::resolve_artifact_ref`]) and one
+    /// stage's reported `artifact` chains directly into the next stage's
+    /// `--snapshot` or `--seal` without a contributor reconstructing the path.
+    pub fn state_relative_key(&self, path: &Path) -> Result<String> {
+        let relative = path.strip_prefix(&self.root).map_err(|_| {
+            DeliveryError::new("delivery artifact is not under the delivery state root")
         })?;
         relative
             .to_str()
             .map(str::to_owned)
-            .ok_or_else(|| DeliveryError::new("delivery artifact key is not UTF-8"))
+            .ok_or_else(|| DeliveryError::new("delivery artifact reference is not UTF-8"))
     }
 
     /// Writes a JSON artifact and returns its SHA-256 digest.
@@ -271,19 +299,22 @@ impl CandidateDir {
     }
 
     /// Writes raw artifact bytes and returns their SHA-256 digest.
+    ///
+    /// The write is anchored on the candidate directory descriptor: every
+    /// intermediate directory is opened, verified, and (when absent) created
+    /// relative to its parent's descriptor, and the temp create, rename, and
+    /// directory fsync all run against those pinned descriptors. A symlink
+    /// swapped into any component after the walk is rejected rather than
+    /// traversed, so a write can never be redirected into another directory.
     pub fn write_bytes(&self, relative: impl AsRef<Path>, bytes: &[u8]) -> Result<String> {
         if bytes.len() > MAX_ARTIFACT_BYTES {
             return Err(DeliveryError::new(format!(
                 "delivery artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
             )));
         }
-        let path = self.resolve(relative)?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| DeliveryError::new("delivery artifact path has no parent directory"))?;
-        create_private_dir(parent)?;
-        reject_symlink_components(&path)?;
-        write_file_atomically(&path, parent, bytes)?;
+        let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
+        write_anchored(&self.path, relative, bytes)?;
         Ok(sha256_bytes(bytes))
     }
 
@@ -522,103 +553,306 @@ fn unique_suffix() -> String {
 /// name an attacker could have swapped after the component walk.
 fn verify_regular_file(
     file: &File,
-    path: &Path,
+    label: &str,
     require_mode: Option<u32>,
     require_owner: bool,
 ) -> Result<()> {
     let metadata = file.metadata().map_err(|error| {
-        DeliveryError::environment(format!(
-            "cannot stat delivery artifact {}: {error}",
-            path.display()
-        ))
+        DeliveryError::environment(format!("cannot stat delivery artifact {label}: {error}"))
     })?;
     if !metadata.is_file() {
         return Err(DeliveryError::new(format!(
-            "delivery artifact is not a regular file: {}",
-            path.display()
+            "delivery artifact is not a regular file: {label}"
         )));
     }
     if let Some(mode) = require_mode
         && metadata.permissions().mode() & 0o777 != mode
     {
         return Err(DeliveryError::new(format!(
-            "delivery artifact must have mode {mode:04o}: {}",
-            path.display()
+            "delivery artifact must have mode {mode:04o}: {label}"
         )));
     }
     if require_owner && metadata.uid() != nix::unistd::geteuid().as_raw() {
         return Err(DeliveryError::new(format!(
-            "delivery artifact is not owned by the current user: {}",
-            path.display()
+            "delivery artifact is not owned by the current user: {label}"
         )));
     }
     Ok(())
 }
 
-/// Writes bytes into a fresh temp in the verified parent and atomically renames
-/// it into place.
+/// Writes bytes beneath the candidate directory, anchored on verified
+/// directory descriptors the whole way down.
 ///
-/// The temp is created with `O_CREAT | O_EXCL | O_NOFOLLOW`, so a pre-planted
-/// symlink at the temp name cannot be followed or reused, and is verified to be
-/// a regular `0600` file owned by us before any byte is written. `rename`
-/// replaces the destination name rather than following it, so even a symlink
-/// raced into the leaf between the component walk and the rename cannot make the
-/// write land on the symlink's target.
-fn write_file_atomically(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()> {
-    let file_name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
-    let temp = parent.join(format!(".{file_name}.tmp.{}", unique_suffix()));
+/// The candidate directory is opened once as the anchor; every intermediate
+/// directory is opened (or created and its parent fsynced) relative to its
+/// parent's descriptor and verified by `fstat` to be a real `0700` directory
+/// owned by us. The temp create, the rename, and the containing-directory
+/// fsync all run against the *same* pinned parent descriptor, so replacing a
+/// directory by name after the walk cannot redirect any of them. A per-syscall
+/// `O_NOFOLLOW` on each single-component open is equivalent to
+/// `RESOLVE_NO_SYMLINKS`, and opening each name relative to its parent
+/// descriptor is equivalent to `RESOLVE_BENEATH`, so the walk cannot be
+/// diverted upward or through a symlink.
+fn write_anchored(candidate: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
+    let relative_key = relative
+        .to_str()
+        .ok_or_else(|| DeliveryError::new("delivery artifact key is not UTF-8"))?
+        .to_owned();
 
-    let mut file = File::options()
-        .write(true)
-        .create_new(true)
-        .mode(STATE_FILE_MODE)
-        .custom_flags(LEAF_OPEN_FLAGS)
-        .open(&temp)
-        .map_err(|error| {
-            DeliveryError::environment(format!(
-                "cannot create delivery artifact {}: {error}",
-                temp.display()
-            ))
-        })?;
+    let components: Vec<&OsStr> = relative
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
+    // `validate_anchored_relative` guarantees at least one `Normal` component
+    // and no traversal, so a leaf always exists and every name is a plain
+    // component.
+    let (leaf, dirs) = components
+        .split_last()
+        .ok_or_else(|| DeliveryError::new("delivery artifact path has no leaf"))?;
+    let leaf = leaf
+        .to_str()
+        .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
+
+    let anchor = open_directory_anchor(candidate)?;
+
+    // Retain every directory descriptor so each open is anchored on a pinned
+    // parent, never re-resolved by name.
+    let mut chain: Vec<OwnedFd> = Vec::new();
+    for dir in dirs {
+        let name = dir
+            .to_str()
+            .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
+        let child = {
+            let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+            open_or_create_directory(parent, name)?
+        };
+        chain.push(child);
+    }
+
+    let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+    write_leaf(parent, leaf, &relative_key, bytes)
+}
+
+/// Opens the candidate directory as the write anchor.
+fn open_directory_anchor(candidate: &Path) -> Result<OwnedFd> {
+    rustix::fs::open(
+        candidate,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot open the delivery candidate directory: {error}"
+        ))
+    })
+}
+
+/// Opens a child directory relative to `parent`, creating it (and fsyncing
+/// `parent` so the new entry is durable) when it is absent, then verifies the
+/// opened descriptor is a real `0700` directory owned by us.
+fn open_or_create_directory(parent: BorrowedFd<'_>, name: &str) -> Result<OwnedFd> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = match rustix::fs::openat(parent, name, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => {
+            rustix::fs::mkdirat(parent, name, Mode::from_bits_truncate(STATE_DIR_MODE)).map_err(
+                |error| {
+                    DeliveryError::environment(format!(
+                        "cannot create delivery state directory {name}: {error}"
+                    ))
+                },
+            )?;
+            rustix::fs::fsync(parent).map_err(|error| {
+                DeliveryError::environment(format!(
+                    "cannot fsync delivery directory after creating {name}: {error}"
+                ))
+            })?;
+            rustix::fs::openat(parent, name, flags, Mode::empty()).map_err(|error| {
+                DeliveryError::environment(format!(
+                    "cannot open delivery state directory {name}: {error}"
+                ))
+            })?
+        }
+        Err(error) => {
+            return Err(DeliveryError::environment(format!(
+                "cannot open delivery state directory {name}: {error}"
+            )));
+        }
+    };
+    verify_anchored_directory(fd.as_fd(), name)?;
+    Ok(fd)
+}
+
+/// Confirms an opened directory descriptor is a real `0700` directory owned by
+/// the current effective user, using `fstat` on the descriptor rather than a
+/// path so it describes the object actually pinned.
+fn verify_anchored_directory(fd: BorrowedFd<'_>, name: &str) -> Result<()> {
+    let stat = rustix::fs::fstat(fd).map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot stat delivery state directory {name}: {error}"
+        ))
+    })?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+        return Err(DeliveryError::new(format!(
+            "delivery state path is not a directory: {name}"
+        )));
+    }
+    if (stat.st_mode as u32) & 0o777 != STATE_DIR_MODE {
+        return Err(DeliveryError::new(format!(
+            "delivery state directory must have mode 0700: {name}"
+        )));
+    }
+    if stat.st_uid != nix::unistd::geteuid().as_raw() {
+        return Err(DeliveryError::new(format!(
+            "delivery state directory is not owned by the current user: {name}"
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects a symlink planted at the leaf name in the pinned parent.
+///
+/// `renameat` replaces the destination name rather than following it, so
+/// without this check a symlinked leaf would be silently replaced rather than
+/// refused; the delivery contract is to fail closed on a symlinked leaf.
+fn reject_leaf_symlink(parent: BorrowedFd<'_>, leaf: &str, relative_key: &str) -> Result<()> {
+    match rustix::fs::statat(parent, leaf, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => {
+            if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink {
+                Err(DeliveryError::new(format!(
+                    "delivery artifact leaf is a symlink: {relative_key}"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(error) => Err(DeliveryError::environment(format!(
+            "cannot inspect delivery artifact {relative_key}: {error}"
+        ))),
+    }
+}
+
+/// Writes bytes into a fresh temp in the pinned parent and atomically renames
+/// it into place, all fd-relative to that parent.
+///
+/// The temp is created with `O_CREAT | O_EXCL | O_NOFOLLOW`, verified to be a
+/// regular `0600` file owned by us, written, fsynced, and `renameat`d into the
+/// leaf name against the *same* parent descriptor, which is then fsynced so the
+/// rename is durable. A [`TempFile`] guard unlinks the temp against the parent
+/// descriptor on every failure path until the rename disarms it, and folds a
+/// cleanup failure into the returned error so no stale temp hides silently.
+fn write_leaf(parent: BorrowedFd<'_>, leaf: &str, relative_key: &str, bytes: &[u8]) -> Result<()> {
+    reject_leaf_symlink(parent, leaf, relative_key)?;
+
+    let temp_name = format!(".{leaf}.tmp.{}", unique_suffix());
+    let temp_fd = rustix::fs::openat(
+        parent,
+        temp_name.as_str(),
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_bits_truncate(STATE_FILE_MODE),
+    )
+    .map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot create delivery artifact {relative_key}: {error}"
+        ))
+    })?;
+
+    let mut guard = TempFile::new(parent, temp_name);
+    let mut file = File::from(temp_fd);
+
     // Pin the mode exactly, so an unusual umask cannot leave it wider than
     // 0600, then verify the descriptor before writing.
-    file.set_permissions(fs::Permissions::from_mode(STATE_FILE_MODE))?;
-    if let Err(error) = verify_regular_file(&file, &temp, Some(STATE_FILE_MODE), true) {
-        drop(file);
-        let _ = fs::remove_file(&temp);
-        return Err(error);
+    if let Err(error) = file.set_permissions(fs::Permissions::from_mode(STATE_FILE_MODE)) {
+        return Err(guard.fail(DeliveryError::environment(format!(
+            "cannot set mode on delivery artifact {relative_key}: {error}"
+        ))));
+    }
+    if let Err(error) = verify_regular_file(&file, relative_key, Some(STATE_FILE_MODE), true) {
+        return Err(guard.fail(error));
     }
 
-    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        return Err(guard.fail(DeliveryError::environment(format!(
+            "cannot write delivery artifact {relative_key}: {error}"
+        ))));
+    }
     drop(file);
-    if let Err(error) = written {
-        let _ = fs::remove_file(&temp);
-        return Err(DeliveryError::environment(format!(
-            "cannot write delivery artifact {}: {error}",
-            temp.display()
-        )));
+
+    if let Err(error) = rustix::fs::renameat(parent, guard.name(), parent, leaf) {
+        return Err(guard.fail(DeliveryError::environment(format!(
+            "cannot install delivery artifact {relative_key}: {error}"
+        ))));
+    }
+    guard.disarm();
+
+    rustix::fs::fsync(parent).map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot fsync delivery directory for {relative_key}: {error}"
+        ))
+    })
+}
+
+/// An RAII guard that unlinks a create-new temp against its pinned parent
+/// descriptor until a successful rename disarms it.
+///
+/// The guard borrows the parent descriptor and unlinks by name with
+/// `unlinkat`, so cleanup targets the same pinned directory the temp was
+/// created in and can never be redirected. [`TempFile::fail`] folds a cleanup
+/// failure into the primary error; [`Drop`] is a best-effort backstop for any
+/// path that returns without calling `fail` or `disarm`.
+struct TempFile<'parent> {
+    parent: BorrowedFd<'parent>,
+    name: String,
+    armed: bool,
+}
+
+impl<'parent> TempFile<'parent> {
+    fn new(parent: BorrowedFd<'parent>, name: String) -> Self {
+        Self {
+            parent,
+            name,
+            armed: true,
+        }
     }
 
-    if let Err(error) = fs::rename(&temp, path) {
-        let _ = fs::remove_file(&temp);
-        return Err(DeliveryError::environment(format!(
-            "cannot install delivery artifact {}: {error}",
-            path.display()
-        )));
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    // Fsync the parent so the rename survives a crash.
-    File::open(parent)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|error| {
-            DeliveryError::environment(format!(
-                "cannot fsync delivery directory {}: {error}",
-                parent.display()
-            ))
-        })
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    /// Consumes a primary error, unlinks the temp, and folds any cleanup
+    /// failure into the returned error so a stale temp cannot hide silently.
+    fn fail(&mut self, primary: DeliveryError) -> DeliveryError {
+        match self.unlink() {
+            Some(cleanup) => DeliveryError::of(primary.kind(), format!("{primary}; {cleanup}")),
+            None => primary,
+        }
+    }
+
+    /// Best-effort unlink; returns a candidate-relative message on a
+    /// non-`ENOENT` failure and disarms so `Drop` does not retry.
+    fn unlink(&mut self) -> Option<String> {
+        if !self.armed {
+            return None;
+        }
+        self.armed = false;
+        match rustix::fs::unlinkat(self.parent, self.name.as_str(), AtFlags::empty()) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => None,
+            Err(error) => Some(format!(
+                "the temporary delivery artifact could not be removed: {error}"
+            )),
+        }
+    }
+}
+
+impl Drop for TempFile<'_> {
+    fn drop(&mut self) {
+        let _ = self.unlink();
+    }
 }
 
 fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>> {
@@ -633,7 +867,7 @@ fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>> {
                 path.display()
             ))
         })?;
-    verify_regular_file(&file, path, None, false)?;
+    verify_regular_file(&file, &path.display().to_string(), None, false)?;
     let mut buffer = Vec::new();
     file.take(limit as u64 + 1).read_to_end(&mut buffer)?;
     if buffer.len() > limit {
@@ -815,6 +1049,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_artifact_reference_chains_under_the_state_root() {
+        let scratch = Scratch::new("artifact-ref");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        candidate
+            .write_json(SNAPSHOT_FILE, &serde_json::json!({ "wave": "w0" }))
+            .expect("write snapshot");
+
+        let reference = candidate
+            .state_relative_key(&candidate.snapshot_path())
+            .expect("state-relative reference");
+        assert_eq!(
+            reference,
+            format!("w0/{}/snapshot.json", candidate_id().as_str())
+        );
+        assert!(
+            !reference.starts_with('/'),
+            "the reference must not be an absolute path: {reference}"
+        );
+        assert!(
+            !reference.contains(&scratch.path.display().to_string()),
+            "the reference must not leak the state path: {reference}"
+        );
+
+        // A later stage resolves that reference to the same file, so one
+        // stage's reported artifact chains straight into the next.
+        assert_eq!(
+            root.resolve_artifact_ref(Path::new(&reference)),
+            candidate.snapshot_path()
+        );
+        // An absolute path is still honored verbatim.
+        let absolute = candidate.snapshot_path();
+        assert_eq!(root.resolve_artifact_ref(&absolute), absolute);
+    }
+
+    #[test]
     fn a_traversing_artifact_path_is_refused() {
         let scratch = Scratch::new("traversal");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
@@ -922,6 +1192,81 @@ pub(crate) mod tests {
         assert_eq!(
             candidate.list(EVIDENCE_DIR).expect("list"),
             vec![OsString::from("layer1.json")]
+        );
+    }
+
+    #[test]
+    fn a_failed_rename_leaves_no_temp_behind() {
+        let scratch = Scratch::new("rename-failure");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+
+        // Seed the evidence directory, then plant a *directory* at the artifact
+        // leaf so the final rename fails after the temp has been created.
+        candidate
+            .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"{}")
+            .expect("seed evidence directory");
+        let leaf_dir = candidate.path().join(EVIDENCE_DIR).join("layer1.json");
+        fs::create_dir(&leaf_dir).expect("plant a directory at the leaf");
+
+        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
+        let error = candidate
+            .write_bytes(&relative, b"{}")
+            .expect_err("a rename onto a directory must fail");
+        assert_eq!(error.kind(), DeliveryErrorKind::Environment);
+
+        // The RAII guard removed the temp: only the seed file and the planted
+        // directory remain, with no `.layer1.json.tmp.*` leftover.
+        let names = candidate.list(EVIDENCE_DIR).expect("list evidence");
+        assert!(
+            names
+                .iter()
+                .all(|name| !name.to_string_lossy().starts_with(".layer1.json.tmp")),
+            "a failed rename must not leave a temp behind: {names:?}"
+        );
+    }
+
+    #[test]
+    fn a_write_failure_diagnostic_carries_no_absolute_path() {
+        let scratch = Scratch::new("leak-free-error");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+
+        candidate
+            .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"{}")
+            .expect("seed evidence directory");
+        let leaf_dir = candidate.path().join(EVIDENCE_DIR).join("layer1.json");
+        fs::create_dir(&leaf_dir).expect("plant a directory at the leaf");
+
+        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
+        let error = candidate
+            .write_bytes(&relative, b"{}")
+            .expect_err("the write must fail");
+
+        // `run_cli` writes `error` verbatim to stderr, so asserting on the
+        // message is equivalent to asserting on failure stderr. It must carry
+        // no absolute path: not the state root, the candidate directory, the
+        // scratch checkout, `HOME`, the build tree, or a temp name.
+        let message = error.message();
+        for leaked in [
+            candidate.path().to_string_lossy(),
+            root.path().to_string_lossy(),
+            scratch.path.to_string_lossy(),
+        ] {
+            assert!(
+                !message.contains(leaked.as_ref()),
+                "a write failure must not leak {leaked}: {message}"
+            );
+        }
+        assert!(
+            !message.contains(".tmp.")
+                && !message.contains("/home")
+                && !message.contains("/target/"),
+            "a write failure must not leak HOME, a build path, or a temp path: {message}"
+        );
+        assert!(
+            message.contains("evidence/layer1.json"),
+            "a write failure must name the candidate-relative key: {message}"
         );
     }
 }

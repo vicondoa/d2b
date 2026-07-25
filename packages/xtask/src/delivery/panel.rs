@@ -619,6 +619,7 @@ pub(crate) fn parse_snapshot_invocation(args: &[String]) -> Result<(StateRoot, P
     let snapshot_path = options.required_path("--snapshot")?;
     let state = prepare_state(&mut options)?;
     options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     Ok((state, snapshot_path))
 }
 
@@ -628,6 +629,7 @@ fn parse_attest_invocation(args: &[String]) -> Result<(StateRoot, PathBuf, PathB
     let records_dir = options.required_path("--records")?;
     let state = prepare_state(&mut options)?;
     options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     Ok((state, snapshot_path, records_dir))
 }
 
@@ -839,8 +841,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output.artifact.as_deref(),
-            Some("panel-request.json"),
-            "the artifact must be a candidate-relative key, not an absolute path"
+            Some(format!("w0/{}/panel-request.json", snapshot.candidate_id.as_str()).as_str()),
+            "the artifact must be a state-root-relative reference, not an absolute path"
         );
 
         let stored = stored_request(&candidate, &snapshot).expect("stored request");

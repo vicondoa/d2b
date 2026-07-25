@@ -21,6 +21,15 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 # handle, signalfd, and process-group signalling. Already used by d2b, d2bd,
 # and the broker at the same version, so this adds no new supply-chain edge.
 nix = { version = "0.29", default-features = false, features = ["fs", "signal", "user"] }
+# Directory-descriptor-anchored file operations for the delivery state
+# writer: `openat`/`openat2`/`mkdirat`/`renameat`/`unlinkat`/`fsync` relative
+# to a pinned, verified parent fd, so a temp create, rename, and directory
+# fsync cannot be redirected by a symlink swapped in after the component walk.
+# `nix` 0.29 returns a bare `RawFd` from `openat`, which would need `unsafe` to
+# own; the crate forbids `unsafe`, so `rustix` (already a workspace dependency
+# used by d2b, d2bd, and the broker, so no new supply-chain edge) is the only
+# way to get an owned, safe anchored-open API.
+rustix = { workspace = true }
 protobuf-codegen = "3.7.2"
 serde.workspace = true
 ttrpc-codegen = "0.6.0"

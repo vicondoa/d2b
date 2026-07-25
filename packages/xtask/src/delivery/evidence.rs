@@ -40,7 +40,7 @@
 //! pending and failed alike: neither permits merge.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::Read,
     path::{Path, PathBuf},
@@ -231,12 +231,13 @@ impl EvidenceRecord {
 
 /// Routes `cargo xtask delivery wave validate-import`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
-    let request = ImportRequest::parse(args)?;
+    let mut request = ImportRequest::parse(args)?;
     let checkouts = request.checkout_roots()?;
     let root = StateRoot::prepare(
         &checkouts.values().cloned().collect::<Vec<_>>(),
         request.state_dir.as_deref(),
     )?;
+    request.snapshot_path = root.resolve_artifact_ref(&request.snapshot_path);
     run_with_root(&request, &root)
 }
 
@@ -273,6 +274,14 @@ fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOu
             "the repositories now integrate to candidate {}, not the snapshot's candidate {}; \
              evidence for superseded content is refused, so re-snapshot and rerun this lane",
             current.candidate_id, sealed.candidate_id
+        )));
+    }
+    if current.snapshot_sha256 != sealed.snapshot_sha256 {
+        return Err(DeliveryError::new(format!(
+            "candidate {} kept its address but its commit history moved, so the sealed snapshot \
+             digest is stale; a history-only rebase preserves the panel record but never a lane \
+             result, so re-snapshot in place and rerun this lane against the current snapshot",
+            sealed.candidate_id
         )));
     }
 
@@ -366,6 +375,47 @@ pub fn read_lane_records(
             }
             record.ensure_bound(candidate_id, content_id, snapshot_sha256)?;
             records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+/// Reads the imported validator evidence bound to the given snapshot digests
+/// and enforces the seal-time lane invariants against it: at least one record,
+/// every record a pass, and every required lane present.
+///
+/// Both `wave seal` and `merge-eligibility` call this against the *current*
+/// snapshot digest, so a history-only rebase - which moves `snapshot_sha256`
+/// and therefore unbinds every prior lane record through
+/// [`EvidenceRecord::ensure_bound`] - is caught identically at seal time and
+/// at the merge gate: the candidate is eligible only once every lane has rerun
+/// and re-imported against the new snapshot. Panel evidence is unaffected
+/// because it binds `candidate_id`/`content_id`, which a rebase preserves.
+pub fn require_passing_lanes(
+    candidate: &CandidateDir,
+    candidate_id: &CandidateId,
+    content_id: &ContentId,
+    snapshot_sha256: &SnapshotSha256,
+) -> Result<Vec<EvidenceRecord>> {
+    let records = read_lane_records(candidate, candidate_id, content_id, snapshot_sha256)?;
+    if records.is_empty() {
+        return Err(DeliveryError::new(
+            "no validator evidence bound to the current snapshot; every lane must rerun and \
+             re-import against the current history before this candidate is eligible",
+        ));
+    }
+    let mut present = BTreeSet::new();
+    for record in &records {
+        record.ensure_passed()?;
+        present.insert(record.lane);
+    }
+    for lane in REQUIRED_EVIDENCE_LANES {
+        if !present.contains(&lane) {
+            return Err(DeliveryError::new(format!(
+                "validator lane {} has no passing result bound to the current snapshot; a \
+                 pending or stale lane never permits a seal or a merge",
+                lane.as_str()
+            )));
         }
     }
     Ok(records)
@@ -619,8 +669,14 @@ mod tests {
         );
         assert_eq!(
             output.artifact.as_deref(),
-            Some("evidence/local-host/test-integration.json"),
-            "the artifact must be a candidate-relative key, not an absolute path"
+            Some(
+                format!(
+                    "w0/{}/evidence/local-host/test-integration.json",
+                    snapshot.candidate_id.as_str()
+                )
+                .as_str()
+            ),
+            "the artifact must be a state-root-relative reference, not an absolute path"
         );
         let expected = fixture
             .state()

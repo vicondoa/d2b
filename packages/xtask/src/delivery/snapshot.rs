@@ -189,11 +189,16 @@ pub fn read_file(path: &Path) -> Result<WaveSnapshot> {
 /// Rederives a sealed candidate's content digests from the repositories as
 /// they stand now.
 ///
-/// Base and head commits are left as the snapshot recorded them because
-/// neither feeds `content_id` or `candidate_id`; only the integrated tree and
-/// the fingerprinted objects are reread. A wave whose content moved therefore
-/// rederives to a different candidate, which is exactly the section 12.6
-/// invalidation rule.
+/// The integration tree and the fingerprinted objects are reread so a content
+/// change rederives to a different `content_id`/`candidate_id`, which is the
+/// section 12.6 invalidation rule. The head commit is reread too, so a
+/// history-only rebase - which preserves the tree but rewrites the commit -
+/// reproduces the same candidate address while moving `snapshot_sha256`. That
+/// asymmetry is what lets panel evidence (bound to `content_id`/`candidate_id`)
+/// survive a rebase while validator-lane evidence (additionally bound to
+/// `snapshot_sha256`) does not. The base commit is left as recorded because no
+/// base ref is carried into rederivation; a moved head alone is sufficient to
+/// invalidate the recorded snapshot digest.
 pub fn rederive(
     snapshot: &WaveSnapshot,
     checkouts: &BTreeMap<String, PathBuf>,
@@ -211,6 +216,7 @@ pub fn rederive(
         ensure_committed(&root, &repository.id)?;
         let head = resolve(&root, DEFAULT_HEAD_REF, "^{commit}")?;
         repository.integration_tree_oid = resolve(&root, &head, "^{tree}")?;
+        repository.head_oid = head.clone();
         heads.insert(repository.id.clone(), (root, head));
     }
     for list in [
@@ -795,6 +801,129 @@ pub(crate) mod tests {
             1,
             "a history-only rebase rewrites the snapshot in place"
         );
+    }
+
+    #[test]
+    fn a_real_git_rebase_keeps_the_panel_but_never_the_validator_lanes() {
+        use crate::delivery::{
+            evidence::{self, EvidenceLane},
+            panel::{
+                self,
+                tests::{record_files, write_record_dir},
+            },
+            seal::{
+                self,
+                tests::{evidence as lane_evidence, import as import_evidence},
+            },
+            storage::{SEAL_FILE, tests::Scratch},
+        };
+
+        // Snapshot the wave from a real Git repository, then attest a
+        // unanimous panel and import both validator lanes - every artifact
+        // bound to the baseline history.
+        let fixture = GitFixture::new("rebase-e2e");
+        let baseline = take(&fixture);
+        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+        let snapshot_path = root
+            .path()
+            .join("w0")
+            .join(baseline.candidate_id.as_str())
+            .join(SNAPSHOT_FILE);
+        let (candidate, view) =
+            panel::open_candidate(&root, &snapshot_path).expect("open candidate");
+
+        panel::request(&candidate, &view).expect("panel request");
+        let records = Scratch::new("rebase-e2e-records");
+        let dir = write_record_dir(&records, &record_files(&view));
+        panel::attest(&candidate, &view, &dir).expect("unanimous panel attests");
+        import_evidence(
+            &candidate,
+            &lane_evidence(&view, EvidenceLane::GithubCi, "layer1-check"),
+        );
+        import_evidence(
+            &candidate,
+            &lane_evidence(&view, EvidenceLane::LocalHost, "make-test-integration"),
+        );
+        seal::seal(&candidate, &view).expect("the baseline candidate seals");
+
+        // A real history-only rebase: amend HEAD so the commit OID changes
+        // while the tree is byte-identical.
+        let before = fixture.head();
+        fixture.git(&[
+            "commit",
+            "--quiet",
+            "--amend",
+            "--message",
+            "rebased onto the new base",
+        ]);
+        assert_ne!(before, fixture.head(), "the amend must rewrite history");
+
+        // Rederiving from the rebased repository reproduces the content-only
+        // address but moves the snapshot digest with the head.
+        let checkouts = BTreeMap::from([("github.com/example/d2b".to_owned(), fixture.repo())]);
+        let rederived = rederive(&baseline, &checkouts).expect("rederive after the rebase");
+        assert_eq!(
+            rederived.content_id, baseline.content_id,
+            "content survives a history-only rebase"
+        );
+        assert_eq!(
+            rederived.candidate_id, baseline.candidate_id,
+            "the candidate address survives a history-only rebase"
+        );
+        assert_ne!(
+            rederived.snapshot_sha256, baseline.snapshot_sha256,
+            "the snapshot digest moves with the head"
+        );
+
+        // Re-snapshot in place so the candidate now holds the rebased history.
+        let rebased = take(&fixture);
+        assert_eq!(rebased.candidate_id, baseline.candidate_id);
+        assert_ne!(rebased.snapshot_sha256, baseline.snapshot_sha256);
+        let (candidate, rebased_view) =
+            panel::open_candidate(&root, &snapshot_path).expect("reopen the rebased candidate");
+
+        // Panel evidence SURVIVES: the ten records bind content, which the
+        // rebase preserved, so they re-attest against the rebased snapshot.
+        let request = panel::stored_request(&candidate, &rebased_view)
+            .expect("the stored panel request still matches the rebased content");
+        panel::attested_records(&candidate, &request)
+            .expect("panel evidence survives a history-only rebase");
+
+        // Validator evidence does NOT survive: the imported lanes bind the
+        // baseline snapshot digest, so they read as stale against the rebased
+        // snapshot and a reseal fails closed until every lane re-imports.
+        let stale = evidence::require_passing_lanes(
+            &candidate,
+            &rebased_view.candidate_id,
+            &rebased_view.content_id,
+            &rebased_view.snapshot_sha256,
+        )
+        .expect_err("validator evidence must not survive a rebase");
+        assert!(
+            stale.message().contains("stale snapshot"),
+            "unexpected message: {stale}"
+        );
+        seal::seal(&candidate, &rebased_view)
+            .expect_err("a reseal must fail until every lane re-imports");
+
+        // Once the lanes rerun and re-import against the rebased snapshot the
+        // candidate seals again, proving the asymmetry end to end.
+        import_evidence(
+            &candidate,
+            &lane_evidence(&rebased_view, EvidenceLane::GithubCi, "layer1-check"),
+        );
+        import_evidence(
+            &candidate,
+            &lane_evidence(
+                &rebased_view,
+                EvidenceLane::LocalHost,
+                "make-test-integration",
+            ),
+        );
+        seal::seal(&candidate, &rebased_view).expect("reseal after the lanes re-import");
+        let record: seal::SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
+        assert_eq!(record.snapshot_sha256, rebased_view.snapshot_sha256);
+        assert_eq!(record.candidate_id, baseline.candidate_id);
     }
 
     #[test]

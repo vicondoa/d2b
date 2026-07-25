@@ -62,7 +62,20 @@ use super::{
 #[serde(deny_unknown_fields)]
 pub struct SealedLane {
     pub lane: EvidenceLane,
-    pub validations: Vec<String>,
+    pub validations: Vec<SealedValidation>,
+}
+
+/// One accepted validation, bound by the SHA-256 of the exact evidence record
+/// the seal accepted.
+///
+/// Recording the record digest makes the seal commit to the precise validator
+/// evidence it was built from, so evidence cannot be swapped under a seal after
+/// the fact and a reader can tell which record each lane entry vouches for.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SealedValidation {
+    pub validation: String,
+    pub record_sha256: String,
 }
 
 /// The sealed record.
@@ -115,6 +128,12 @@ impl SealRecord {
             ));
         }
         self.panel.validate()?;
+        for lane in &self.evidence {
+            for validation in &lane.validations {
+                validate_identifier(&validation.validation, "sealed validation")?;
+                validate_sha256(&validation.record_sha256, "sealed evidence record digest")?;
+            }
+        }
         ensure_required_lanes(&self.evidence.iter().map(|lane| lane.lane).collect())
     }
 }
@@ -155,41 +174,43 @@ pub fn seal(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Workflo
 }
 
 /// Reads every imported evidence record through the one shared reader and
-/// groups the passing ones by lane.
+/// groups the passing ones by lane, binding each record's digest into the
+/// seal.
 ///
-/// The reader is [`evidence::read_lane_records`], the exact function the
-/// writer's own read path uses, so `seal` consumes precisely what
-/// `wave validate-import` produced: the canonical nested layout
-/// `evidence/<lane>/<validation>.json`, bound to this candidate's three
-/// digests. Because a lane and validation together address one file, a lane
-/// can never hold two records for one validation, so re-importing is idempotent
-/// rather than a conflict.
+/// The reader is [`evidence::require_passing_lanes`], the exact enforcement
+/// `merge-eligibility` also runs, so `seal` consumes precisely what
+/// `wave validate-import` produced against the *current* snapshot: the
+/// canonical nested layout `evidence/<lane>/<validation>.json`, bound to this
+/// candidate's three digests, non-empty, all passing, and covering every
+/// required lane. Because a lane and validation together address one file, a
+/// lane can never hold two records for one validation, so re-importing is
+/// idempotent rather than a conflict.
 fn sealed_lanes(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Vec<SealedLane>> {
-    let records = evidence::read_lane_records(
+    let records = evidence::require_passing_lanes(
         candidate,
         &snapshot.candidate_id,
         &snapshot.content_id,
         &snapshot.snapshot_sha256,
     )?;
-    if records.is_empty() {
-        return Err(DeliveryError::new(
-            "no validator evidence for this candidate; import every lane's result first",
-        ));
-    }
-    let mut lanes: BTreeMap<EvidenceLane, BTreeSet<String>> = BTreeMap::new();
+    let mut lanes: BTreeMap<EvidenceLane, BTreeMap<String, String>> = BTreeMap::new();
     for record in records {
-        record.ensure_passed()?;
+        let record_sha256 = sha256_bytes(&serde_json::to_vec(&record)?);
         lanes
             .entry(record.lane)
             .or_default()
-            .insert(record.validation);
+            .insert(record.validation, record_sha256);
     }
-    ensure_required_lanes(&lanes.keys().copied().collect())?;
     Ok(lanes
         .into_iter()
         .map(|(lane, validations)| SealedLane {
             lane,
-            validations: validations.into_iter().collect(),
+            validations: validations
+                .into_iter()
+                .map(|(validation, record_sha256)| SealedValidation {
+                    validation,
+                    record_sha256,
+                })
+                .collect(),
         })
         .collect())
 }
@@ -276,8 +297,8 @@ pub(crate) mod tests {
         assert_eq!(output.operation, "seal");
         assert_eq!(
             output.artifact.as_deref(),
-            Some("seal.json"),
-            "the artifact must be a candidate-relative key, not an absolute path"
+            Some(format!("w0/{}/seal.json", snapshot.candidate_id.as_str()).as_str()),
+            "the artifact must be a state-root-relative reference, not an absolute path"
         );
 
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
