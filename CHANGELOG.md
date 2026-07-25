@@ -38,6 +38,10 @@ deprecations ship one minor release before removal.
   `Proposed` to `Accepted`. This satisfies the manifest-acceptance portion of
   the ADR 0046 delivery contract's Gate 0 precondition for implementation
   work. No crates, services, controllers, or Providers are created.
+- Bound the ADR 0046 delivery contract's binding ten-role wave panel
+  (`ADR-046-validation-and-delivery` §12.3) to `gpt-5.6-sol` at reasoning
+  effort `xhigh`, replacing the earlier model binding, and added
+  `reasoning_effort` to the panel-receipt attestation record.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
 
