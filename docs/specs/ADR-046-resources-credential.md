@@ -134,8 +134,8 @@ metadata:
   ownerRef: null            # optional; see §Ownership
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   providerRef: Provider/credential-entra
   scope:
@@ -171,14 +171,14 @@ status:
       reason: lease-active
       message: ""
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
     - type: RotationDue
       status: "False"
       reason: within-window
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
-  lastReconciledAt: 2026-07-22T00:00:01Z
-  startedAt: 2026-07-22T00:00:01Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
+  startedAt: 2026-07-22T00:00:01.000Z
   completedAt: null
   outcome: null
   credential:
@@ -188,7 +188,7 @@ status:
     sourceVersion: <opaque bounded token; not a secret>
     expiresAtUnixMs: 1753228801000
     issuedAtUnixMs: 1753225201000
-    lastRefreshedAt: 2026-07-22T00:00:01Z
+    lastRefreshedAt: 2026-07-22T00:00:01.000Z
     lastRotatedAt: null
     placementBinding: user-agent     # user-agent | host-system | guest-agent
 ```
@@ -1293,7 +1293,7 @@ bundle file alongside other ResourceTypes. The bundle is produced by the
   "bundleVersion": 1,
   "zone": "dev",
   "nixConfigGeneration": 42,
-  "emittedAt": "2026-07-22T00:00:00Z",
+  "emittedAt": "2026-07-22T00:00:00.000Z",
   "digestAlgorithm": "sha256",
   "digest": "<sha256-hex of canonical-json-body>",
   "resources": [

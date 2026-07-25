@@ -543,8 +543,8 @@ status:
   observedGeneration: 1
   phase: Ready                        # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   # Host-specific:
@@ -751,8 +751,8 @@ status:
   observedGeneration: 1
   phase: Ready                        # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   # Guest-specific:
@@ -981,8 +981,8 @@ status:
   observedGeneration: 1
   phase: Ready                        # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   # Process-specific:
@@ -1337,15 +1337,15 @@ status:
   observedGeneration: 1
   phase: Succeeded                    # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; EphemeralProcess steady lifecycle is Pending→Succeeded|Failed|Unknown; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:02Z"
-  completedAt: "2026-07-22T00:00:05Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:02.000Z"
+  completedAt: "2026-07-22T00:00:05.000Z"
   outcome:
     code: process-exited              # see outcome codes below
     exitCode: 0
     message: ""
     retryable: false
-    occurredAt: "2026-07-22T00:00:05Z"
+    occurredAt: "2026-07-22T00:00:05.000Z"
   # EphemeralProcess-specific:
   providerImplementation: ""
   processIdentityDigest: ""
@@ -1533,7 +1533,7 @@ status:
   observedGeneration: 1
   phase: Ready                          # Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown; long-lived resources do not steadily use Succeeded; Deleted is a terminal event-only phase (row removed after emit)
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
   startedAt: null
   completedAt: null
   outcome: null

@@ -1214,10 +1214,10 @@ status:
       reason: pending-delete-intents
       message: "2 resources pending deletion"
   pendingCleanup:
-    - { type: ZoneLink, name: old-link,     zone: k1, deletionRequestedAt: 2026-07-22T21:00:00Z }
-    - { type: Zone,     name: removed-zone, zone: removed-zone, deletionRequestedAt: 2026-07-22T21:00:00Z }
+    - { type: ZoneLink, name: old-link,     zone: k1, deletionRequestedAt: 2026-07-22T21:00:00.000Z }
+    - { type: Zone,     name: removed-zone, zone: removed-zone, deletionRequestedAt: 2026-07-22T21:00:00.000Z }
   priorConfigurationGeneration: <prior-id>
-  lastGenerationChange: 2026-07-22T21:00:00Z
+  lastGenerationChange: 2026-07-22T21:00:00.000Z
 ```
 
 Per-resource cleanup tracking fields (set by core on the pending-delete resource):

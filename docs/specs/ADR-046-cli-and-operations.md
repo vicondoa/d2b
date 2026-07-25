@@ -175,7 +175,7 @@ validated locally at compile time against the names defined in this spec
 (19 standard types; `Endpoint` added by D092; `ResourceExport` and
 `ResourceImport` added by D096). A syntactically
 valid type name that contains an API qualifier (e.g.
-`widgets.example.org.WidgetResource`)
+`widgets.d2bus.org.WidgetResource`)
 is passed through to the live Zone catalog; the API returns
 `resource-schema-invalid` if the Zone does not recognize it. Any other
 unrecognized type name fails locally with exit code 2 and class `ref-invalid`
@@ -318,8 +318,8 @@ metadata and the optional Provider status extension are omitted.
     "ownerRef": null,
     "finalizers": [],
     "deletionRequestedAt": null,
-    "createdAt": "2026-07-22T00:00:00Z",
-    "updatedAt": "2026-07-22T10:30:00Z",
+    "createdAt": "2026-07-22T00:00:00.000Z",
+    "updatedAt": "2026-07-22T10:30:00.000Z",
     "managedBy": "configuration",
     "configurationGeneration": 7
   },
@@ -343,8 +343,8 @@ metadata and the optional Provider status extension are omitted.
     "observedGeneration": 3,
     "phase": "Ready",
     "conditions": [],
-    "lastReconciledAt": "2026-07-22T10:30:05Z",
-    "startedAt": "2026-07-22T10:30:05Z",
+    "lastReconciledAt": "2026-07-22T10:30:05.000Z",
+    "startedAt": "2026-07-22T10:30:05.000Z",
     "completedAt": null,
     "outcome": null,
     "update": {
@@ -355,7 +355,7 @@ metadata and the optional Provider status extension are omitted.
       "disruption": "None",
       "preserveState": true,
       "operationId": null,
-      "lastAssessedAt": "2026-07-22T10:30:05Z",
+      "lastAssessedAt": "2026-07-22T10:30:05.000Z",
       "owned": { "count": 1, "refs": ["Process/work-vm-vmm"] },
       "dependencies": { "count": 1, "refs": ["Provider/runtime-cloud-hypervisor"] }
     },

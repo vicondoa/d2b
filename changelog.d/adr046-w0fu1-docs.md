@@ -1,10 +1,12 @@
 ### Changed
 
-- ADR 0046 spec set: aligned the resource object-model examples with the frozen
-  datetime, universal-status, outcome, and ResourceType-name decisions so every
-  illustrative envelope uses millisecond timestamps, carries `status.resource`
-  and `status.update`, uses the `retryAfterMs` outcome scalar, and qualifies
-  vendor ResourceType names with the `d2bus.org` grammar.
+- ADR 0046 spec set: aligned the illustrative examples across every resource and
+  topology spec with the frozen datetime, universal-status, outcome, and
+  ResourceType-name decisions so every persisted-datetime literal uses
+  millisecond precision (`YYYY-MM-DDTHH:MM:SS.sssZ`), every universal envelope
+  carries `status.resource` and `status.update`, retry scalars use the
+  `retryAfterMs` shape, and vendor ResourceType names qualify with the
+  `d2bus.org` grammar.
 - ADR 0046 Host/Guest execution policy: froze a single `defaultUserRef`
   invariant across the decision register, terminology, Nix, and resource specs -
   `defaultUserRef` is required whenever `allowedDomains` contains `user`.

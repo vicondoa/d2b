@@ -1628,7 +1628,7 @@ typed conditions):
 ```json
 {
   "metadata": {
-    "deletionRequestedAt": "2026-07-22T21:00:00Z",
+    "deletionRequestedAt": "2026-07-22T21:00:00.000Z",
     "managedBy": "configuration",
     "name": "observability-otel",
     "zone": "work"

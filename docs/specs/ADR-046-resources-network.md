@@ -108,8 +108,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   providerRef: Provider/network-local
 
@@ -335,33 +335,33 @@ status:
       status: "True"
       reason: bridges-present
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
     - type: NetVmReady
       status: "True"
       reason: guest-ready
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:02Z
+      lastTransitionAt: 2026-07-22T00:00:02.000Z
     - type: DhcpReady
       status: "True"
       reason: dnsmasq-bound
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:02Z
+      lastTransitionAt: 2026-07-22T00:00:02.000Z
     - type: FirewallReady
       status: "True"
       reason: nft-applied
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
     - type: CidrConflict
       status: "False"
       reason: no-conflict
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:00Z
+      lastTransitionAt: 2026-07-22T00:00:00.000Z
     - type: ExternalNicAuthorityReady
       status: "True"
       reason: external-physical-nic-claimed
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
-  lastReconciledAt: 2026-07-22T00:00:02Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
+  lastReconciledAt: 2026-07-22T00:00:02.000Z
   outcome: null
 
   # --- Network-specific typed fields ---
@@ -2014,7 +2014,7 @@ store path and a different `contentHash`.
   "bundleVersion": 1,
   "zone": "dev",
   "contentHash": "sha256:e3b0c44298fc1c149afbf4c8996fb924...",
-  "generatedAt": "1970-01-01T00:00:00Z",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
   "resources": [
     {
       "apiVersion": "resources.d2bus.org/v3",
@@ -2239,7 +2239,7 @@ conditions:
     reason: prior-generation-resources-pending
     message: "1 resource(s) from configurationGeneration 6 pending deletion"
     observedGeneration: 7
-    lastTransitionAt: 2026-07-22T00:10:00Z
+    lastTransitionAt: 2026-07-22T00:10:00.000Z
 ```
 
 The Zone's aggregate `phase` is `Degraded` (not `Failed`) while `PendingCleanup`
@@ -2250,14 +2250,14 @@ The Network resource undergoing deletion reports:
 ```yaml
 # Network/old-net status excerpt
 phase: Degraded
-deletionRequestedAt: "2026-07-22T00:10:00Z"
+deletionRequestedAt: "2026-07-22T00:10:00.000Z"
 conditions:
   - type: NetworkDraining
     status: "True"
     reason: configuration-generation-removed
     message: "absent from Zone configurationGeneration 7; deletion in progress"
     observedGeneration: 3
-    lastTransitionAt: 2026-07-22T00:10:00Z
+    lastTransitionAt: 2026-07-22T00:10:00.000Z
   - type: ReconcileError
     status: "False"
     reason: none

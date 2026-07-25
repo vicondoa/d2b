@@ -525,7 +525,7 @@ Volume status:
 ```yaml
 snapshots:
   - id: snap-<opaque>
-    createdAt: 2026-07-22T00:00:00Z
+    createdAt: 2026-07-22T00:00:00.000Z
     schemaVersion: "1.0"
     sizeBytes: 12345678
     trigger: pre-migration
@@ -599,7 +599,7 @@ conditions:
     reason: active-incident
     message: bounded operator description
     observedGeneration: 3
-    lastTransitionAt: 2026-07-22T00:01:00Z
+    lastTransitionAt: 2026-07-22T00:01:00.000Z
 ```
 
 The `IncidentHold` condition:
@@ -827,7 +827,7 @@ Bundle envelope:
   "zone": "dev",
   "generation": 7,
   "contentId": "sha256:<hex-of-canonical-sorted-resources-array>",
-  "emittedAt": "2026-07-22T04:00:00Z",
+  "emittedAt": "2026-07-22T04:00:00.000Z",
   "resources": [ /* sorted rendered resource objects */ ]
 }
 ```
