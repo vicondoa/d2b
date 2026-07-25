@@ -26,9 +26,9 @@
 //! * The wrapper owns the child's process group: it starts the child as a
 //!   process-group leader, forwards terminating signals to the whole group,
 //!   escalates to `SIGKILL` after [`TERMINATION_GRACE`], reaps the child, and
-//!   sweeps the group when the run was interrupted. A `Ctrl-C` or an external
-//!   timeout therefore cannot orphan a running heavy lane that still holds a
-//!   slot.
+//!   unconditionally sweeps the group with `SIGKILL` once the leader exits. A
+//!   `Ctrl-C`, an external timeout, or a signal that races the leader's exit
+//!   therefore cannot orphan a descendant that still holds the slot.
 //!
 //! The wrapper receives those signals through a `signalfd`, which requires
 //! them to be blocked. A blocked signal mask survives `execve`, and a wrapped
@@ -239,30 +239,28 @@ fn flock_for(kind: libc::c_short) -> libc::flock {
     }
 }
 
+/// Attempt a whole-file exclusive open file description lock without blocking,
+/// operating directly on a raw descriptor.
+///
+/// Applying `F_WRLCK` through a descriptor whose open file description already
+/// holds the lock is idempotent and succeeds; applying it when a *different*
+/// description holds the lock fails with `EAGAIN`/`EACCES`. That distinction is
+/// what makes an `F_OFD_SETLK` through an inherited descriptor an atomic proof
+/// of which description owns a slot.
+fn try_lock_fd(fd: RawFd) -> std::result::Result<(), Errno> {
+    let lock = flock_for(libc::F_WRLCK as libc::c_short);
+    fcntl(fd, FcntlArg::F_OFD_SETLK(&lock)).map(drop)
+}
+
 /// Attempt a whole-file exclusive open file description lock without blocking.
 fn try_lock(file: &File) -> std::result::Result<(), Errno> {
-    let lock = flock_for(libc::F_WRLCK as libc::c_short);
-    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map(drop)
+    try_lock_fd(file.as_raw_fd())
 }
 
 /// Release a whole-file open file description lock.
 fn unlock(file: &File) -> std::result::Result<(), Errno> {
     let lock = flock_for(libc::F_UNLCK as libc::c_short);
     fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map(drop)
-}
-
-/// Whether some *other* open file description holds a conflicting write lock on
-/// `file`.
-///
-/// `F_OFD_GETLK` reports the lock that would block a write lock placed through
-/// this descriptor. Because it never reports the calling description's own
-/// locks, querying through a freshly opened, unlocked handle answers exactly
-/// "is any other description holding this slot?" - `F_WRLCK` means yes,
-/// `F_UNLCK` means the slot is genuinely free.
-fn other_description_holds_write_lock(file: &File) -> std::result::Result<bool, Errno> {
-    let mut lock = flock_for(libc::F_WRLCK as libc::c_short);
-    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_GETLK(&mut lock))?;
-    Ok(lock.l_type != libc::F_UNLCK as libc::c_short)
 }
 
 /// Resolve the directory the gate directory is created under.
@@ -335,16 +333,28 @@ impl GateDir {
 
     /// Create (if needed) and validate `<root>/d2b-heavy-gates/uid-<uid>`.
     ///
-    /// The shared `d2b-heavy-gates` parent is created private to us (mode
-    /// `0700`) rather than sticky and world-writable, so a peer cannot win the
-    /// create race, own the directory, and then rename our slot directory to
-    /// let us mint fresh slot inodes past the two-lane limit. If the parent
-    /// already exists it is accepted only when [`shared_parent_is_trusted`]
-    /// holds - ours-and-private, or a root-owned parent an administrator
-    /// provisioned. Every subsequent slot operation is anchored to the
-    /// directory descriptor opened here (via `/proc/self/fd`), so renaming the
-    /// path components after preparation cannot switch the semaphore namespace
-    /// mid-run.
+    /// The selected root (`XDG_RUNTIME_DIR`, else `TMPDIR`, else `/tmp`) is
+    /// opened and `fstat`ed *first*. A root a non-root peer owns, or an
+    /// owned-but-loosely-permissioned root, is refused: otherwise that peer
+    /// could rename the whole verified `d2b-heavy-gates` directory between
+    /// invocations, so a later invocation would create a *second* semaphore
+    /// namespace and both would run two lanes each. Anchoring within a single
+    /// invocation (via `/proc/self/fd`) protects that invocation's inodes but
+    /// cannot preserve one namespace across invocations; only trusting the root
+    /// can. A root is trusted when it is ours and not group- or world-writable
+    /// (a per-user runtime directory), or root-owned and either locked down or
+    /// sticky (like `/tmp`) - exactly [`shared_parent_is_trusted`].
+    ///
+    /// The shared `d2b-heavy-gates` parent is then created *relative to that
+    /// anchored root descriptor* and private to us (mode `0700`) rather than
+    /// sticky and world-writable, so a peer cannot win the create race, own the
+    /// directory, and then rename our slot directory to let us mint fresh slot
+    /// inodes past the two-lane limit. If the parent already exists it is
+    /// accepted only when [`shared_parent_is_trusted`] holds - ours-and-private,
+    /// or a root-owned parent an administrator provisioned. Every subsequent
+    /// slot operation is anchored to the directory descriptor opened here, so
+    /// renaming the path components after preparation cannot switch the
+    /// semaphore namespace mid-run.
     pub fn prepare(root: &Path, uid: u32) -> Result<Self> {
         let path = gate_dir_path(root, uid);
         let shared = path
@@ -352,16 +362,37 @@ impl GateDir {
             .expect("the per-uid slot directory always has a parent")
             .to_path_buf();
 
-        // Create the shared parent private to us. If it already exists and we
-        // own it, normalise its mode to 0700 rather than reject: a world- or
-        // group-writable directory lets any peer rename our entries even when
-        // we own it (and non-sticky world-writable dirs let anyone rename any
-        // child), so locking it down is the actual remedy - and it repairs a
-        // stale loose-moded directory left by an older run. A parent owned by
-        // someone else is never normalised; it is verified and, unless it is a
-        // trusted root-owned parent, refused.
-        create_dir_with_mode(&shared, 0o700)?;
-        let shared_dir = open_directory(&shared)?;
+        // Anchor to the root itself before creating anything beneath it. A
+        // peer-owned or owned-but-loose root is refused so the shared directory
+        // cannot be renamed out from under a future invocation.
+        let root_dir = open_directory(root)?;
+        let root_stat = fstat(root_dir.as_raw_fd()).map_err(|errno| {
+            GateError::environment(format!("cannot stat {}: {errno}", root.display()))
+        })?;
+        if !shared_parent_is_trusted(root_stat.st_uid, root_stat.st_mode as u32, uid) {
+            return Err(GateError::environment(format!(
+                "the heavy-gate root {} is owned by uid {} with mode {:o}; refusing to create a \
+                 semaphore namespace under a directory a peer could rename. Point \
+                 XDG_RUNTIME_DIR at a per-user runtime directory, or set TMPDIR to a directory \
+                 you own privately (mode 0700) or a root-owned sticky directory.",
+                root.display(),
+                root_stat.st_uid,
+                root_stat.st_mode as u32 & 0o7777,
+            )));
+        }
+
+        // Create the shared parent private to us, relative to the anchored
+        // root descriptor. If it already exists and we own it, normalise its
+        // mode to 0700 rather than reject: a world- or group-writable directory
+        // lets any peer rename our entries even when we own it (and non-sticky
+        // world-writable dirs let anyone rename any child), so locking it down
+        // is the actual remedy - and it repairs a stale loose-moded directory
+        // left by an older run. A parent owned by someone else is never
+        // normalised; it is verified and, unless it is a trusted root-owned
+        // parent, refused.
+        let shared_anchor = anchored_path(&root_dir, GATE_DIR_NAME);
+        create_dir_with_mode(&shared_anchor, 0o700)?;
+        let shared_dir = open_directory(&shared_anchor)?;
         let mut shared_stat = fstat(shared_dir.as_raw_fd()).map_err(|errno| {
             GateError::environment(format!("cannot stat {}: {errno}", shared.display()))
         })?;
@@ -547,7 +578,8 @@ impl GateDir {
     }
 
     /// Whether `fd` is genuine evidence that this process runs inside a slot an
-    /// ancestor wrapper already holds.
+    /// ancestor wrapper already holds, claiming the slot atomically as part of
+    /// the proof.
     ///
     /// Returns `true` only when every one of the following holds, so a forged
     /// or stale [`GATE_ACTIVE_ENV`] marker can never skip acquisition:
@@ -558,8 +590,28 @@ impl GateDir {
     /// * that descriptor's device and inode match the canonical
     ///   `slot-<index>` file in this verified, uid-private gate directory, so
     ///   it cannot be an attacker-controlled file elsewhere; and
-    /// * the slot is genuinely locked by some other open file description
-    ///   (the ancestor's), proven through an independent handle.
+    /// * a nonblocking `F_OFD_SETLK` write lock issued *through the inherited
+    ///   descriptor itself* succeeds.
+    ///
+    /// That final step is the atomic ownership proof. Placing the lock through
+    /// `fd` (not a fresh handle) means:
+    ///
+    /// * if `fd`'s open file description already holds the slot lock - the only
+    ///   way a genuine ancestor handoff looks - the call is idempotent and
+    ///   succeeds, and the lock stays held through the exec shim because the
+    ///   descriptor stays open;
+    /// * if the slot is unheld, the lock is safely *acquired* on this same
+    ///   description, so the nested run holds a real slot rather than running a
+    ///   third lane unsynchronised; and
+    /// * if any *other* open file description holds the slot, the call fails
+    ///   with `EAGAIN`/`EACCES` and nesting is rejected.
+    ///
+    /// The previous form issued `F_OFD_GETLK` on a *fresh* handle, which proved
+    /// only that *some* description held the slot - not that the advertised
+    /// descriptor did - so a forged unlocked descriptor passed whenever any
+    /// unrelated lane happened to hold that slot, and the lock could be dropped
+    /// between the query and its use. Claiming through `fd` removes both the
+    /// impersonation and the TOCTOU window.
     pub fn descriptor_is_locked_slot(&self, index: usize, fd: RawFd) -> bool {
         if index >= SLOT_COUNT || fd < 0 {
             return false;
@@ -588,9 +640,15 @@ impl GateDir {
         if slot_stat.st_dev != inherited.st_dev || slot_stat.st_ino != inherited.st_ino {
             return false;
         }
-        // The independent handle proves the slot is genuinely held; a forged
-        // marker naming an unlocked slot fails here.
-        other_description_holds_write_lock(&slot).unwrap_or(false)
+        // Atomic ownership proof: claim the slot lock through the inherited
+        // descriptor itself. Success means this description now holds the slot
+        // (idempotently, if it already did); contention means another
+        // description owns it and nesting must be rejected. There is no window
+        // between checking and using the lock because the check *is* the claim.
+        match try_lock_fd(fd) {
+            Ok(()) => true,
+            Err(_) => false,
+        }
     }
 }
 
@@ -1133,9 +1191,10 @@ struct SuperviseOutcome {
 /// * Once the child is observed exited, drain *again* while the forwarded
 ///   signal mask is still blocked, catching a signal delivered between the
 ///   last drain and the exit.
-/// * Sweep the whole process group with `SIGKILL` whenever any interrupt was
-///   observed, so no descendant can outlive the wrapper still holding the
-///   inherited slot descriptor.
+/// * Unconditionally sweep the whole process group with `SIGKILL` after the
+///   leader exits, so no descendant can outlive the wrapper still holding the
+///   inherited slot descriptor - even if a signal is pending that will kill
+///   the wrapper the moment the mask is restored.
 fn supervise_loop<Poll, Drain, Forward, Sweep, Nap, Now>(
     mut poll_exit: Poll,
     mut drain: Drain,
@@ -1187,18 +1246,25 @@ where
 
     // The child has exited, but the forwarded-signal mask is still blocked.
     // Drain once more so a termination signal that landed between the final
-    // drain and the exit is still recorded as an interruption.
+    // drain and the exit is still recorded as an interruption for the exit
+    // code.
     for signal in drain() {
         if interrupt.is_none() {
             interrupt = Some(signal);
         }
     }
 
-    if interrupt.is_some() {
-        // The run was interrupted, so anything still alive in the lane's
-        // process group is an orphan that would keep holding this slot.
-        sweep();
-    }
+    // Unconditionally sweep the whole process group with SIGKILL before the
+    // caller restores the forwarded-signal mask. The round-1 fix swept only
+    // when an interrupt had been *observed*, which left a gap: a signal
+    // arriving after this final drain but before a conditional sweep stays
+    // pending, and `SignalRelay::drop` then unblocks it and kills the wrapper
+    // while descendants that inherited the slot descriptor are still alive,
+    // orphaning the slot. Sweeping unconditionally guarantees the process
+    // group is gone before the mask is restored, so a late pending signal can
+    // only terminate an already-childless wrapper, which releases the slot as
+    // it exits.
+    sweep();
 
     Ok(SuperviseOutcome {
         code: exit.code,
@@ -1323,6 +1389,11 @@ mod tests {
                 .join(format!("{label}-{}-{sequence}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("scratch directory is creatable");
+            // Lock the scratch root down to 0700 so the gate's root-trust
+            // check is deterministic regardless of the runner's umask: an
+            // owned-but-group-writable root is (correctly) refused by prepare.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .expect("scratch root mode is settable");
             Self { path }
         }
 
@@ -1559,7 +1630,16 @@ mod tests {
 
         let error = GateDir::prepare(scratch.path(), getuid().as_raw()).unwrap_err();
         assert_eq!(error.kind(), GateErrorKind::Environment);
-        assert!(error.message().contains("symlink"));
+        // Opening the shared parent through the anchored root descriptor with
+        // O_DIRECTORY|O_NOFOLLOW refuses a symlinked final component: depending
+        // on how the kernel resolves it under /proc/self/fd this surfaces as
+        // ELOOP ("symlink") or ENOTDIR ("not a directory"). Either way the
+        // symlink is never followed into a decoy directory.
+        assert!(
+            error.message().contains("symlink") || error.message().contains("not a directory"),
+            "a symlinked shared parent is refused without being followed: {}",
+            error.message()
+        );
     }
 
     #[test]
@@ -1572,6 +1652,35 @@ mod tests {
         let error = GateDir::prepare(scratch.path(), getuid().as_raw()).unwrap_err();
         assert_eq!(error.kind(), GateErrorKind::Environment);
         assert!(error.message().contains("group- or world-accessible"));
+    }
+
+    #[test]
+    fn prepare_rejects_a_group_writable_root() {
+        // A root we own but that is group- or world-writable is refused: a peer
+        // in that directory could rename the whole `d2b-heavy-gates` tree out
+        // from under a later invocation, splitting the semaphore into a second
+        // namespace. Only a private (0700) or root-owned sticky root is trusted.
+        let scratch = Scratch::new("loose-root");
+        fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o777)).unwrap();
+
+        let error = GateDir::prepare(scratch.path(), getuid().as_raw()).unwrap_err();
+        assert_eq!(error.kind(), GateErrorKind::Environment);
+        assert!(
+            error.message().contains("heavy-gate root"),
+            "the failure names the untrusted root: {}",
+            error.message()
+        );
+        // Restore a sane mode so Scratch teardown can remove the tree.
+        let _ = fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700));
+    }
+
+    #[test]
+    fn prepare_accepts_a_private_root() {
+        // The common, safe case: a per-user runtime directory we own privately.
+        let scratch = Scratch::new("private-root");
+        let dir = GateDir::prepare(scratch.path(), getuid().as_raw())
+            .expect("a 0700 owned root is trusted");
+        assert!(dir.path().ends_with(format!("uid-{}", getuid().as_raw())));
     }
 
     #[test]
@@ -1894,14 +2003,16 @@ mod tests {
     }
 
     #[test]
-    fn a_marker_naming_an_unlocked_slot_is_rejected() {
+    fn an_uncontended_unlocked_descriptor_is_claimed_atomically() {
         let _serial = exclusive();
         let scratch = Scratch::new("unlocked-slot");
         let dir = gate_dir_under(scratch.path());
 
-        // A live descriptor on the real slot inode, but with no lock held by
-        // any description, must not be accepted: presence of the file is not
-        // proof the semaphore is engaged.
+        // A live O_RDWR descriptor on the real slot inode with no other
+        // description holding the lock. The atomic proof claims the lock
+        // through this very descriptor, so verification accepts it and the
+        // slot is now genuinely held on this description - the nested run
+        // therefore occupies a real slot rather than running unsynchronised.
         let slot = OpenOptions::new()
             .read(true)
             .write(true)
@@ -1911,10 +2022,63 @@ mod tests {
             .open(dir.slot_anchor(0))
             .expect("slot opens");
         assert!(
-            !dir.descriptor_is_locked_slot(0, slot.as_raw_fd()),
-            "an unlocked slot inode is not a held slot"
+            dir.descriptor_is_locked_slot(0, slot.as_raw_fd()),
+            "an uncontended descriptor is accepted and the slot is claimed atomically"
+        );
+        // Prove the lock is now genuinely held on that description: a separate
+        // acquisition attempt on the same slot must now see it busy.
+        assert!(
+            dir.try_acquire(0).unwrap().is_none(),
+            "the slot lock is held by the claimed descriptor, so a fresh acquisition is busy"
         );
         drop(slot);
+    }
+
+    #[test]
+    fn a_separate_open_is_rejected_while_another_description_holds_the_slot() {
+        let _serial = exclusive();
+        let scratch = Scratch::new("separate-open");
+        let dir = gate_dir_under(scratch.path());
+
+        // A genuine lane holds slot 0 through one open file description.
+        let guard = dir.try_acquire(0).unwrap().expect("slot 0 is free");
+
+        // A forged marker supplies an independent O_RDWR open on the very same
+        // slot inode - correct device and inode, current uid, regular file -
+        // but from a *separate* open file description that does not hold the
+        // lock. The round-1 GETLK-on-a-fresh-handle form accepted this because
+        // *some* description (the guard's) held the slot; the atomic
+        // SETLK-through-the-inherited-descriptor form rejects it because the
+        // claim conflicts with the guard's lock.
+        let separate = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(dir.slot_anchor(0))
+            .expect("separate open succeeds");
+        let separate_stat = fstat(separate.as_raw_fd()).expect("fstat succeeds");
+        let slot_stat = fstat(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(dir.slot_anchor(0))
+                .expect("slot reopens")
+                .as_raw_fd(),
+        )
+        .expect("fstat succeeds");
+        assert_eq!(
+            (separate_stat.st_dev, separate_stat.st_ino),
+            (slot_stat.st_dev, slot_stat.st_ino),
+            "the separate open really does name the canonical slot inode, so only the \
+             lock-ownership check can reject it"
+        );
+        assert!(
+            !dir.descriptor_is_locked_slot(0, separate.as_raw_fd()),
+            "a descriptor from a separate open is rejected while another description holds \
+             the slot, so a forged marker cannot smuggle in a third lane"
+        );
+        drop(separate);
+        drop(guard);
     }
 
     #[test]
@@ -2061,7 +2225,10 @@ mod tests {
     }
 
     #[test]
-    fn supervise_loop_leaves_a_clean_exit_untouched() {
+    fn supervise_loop_sweeps_the_group_even_after_a_clean_exit() {
+        use std::cell::Cell;
+
+        let sweeps = Cell::new(0u32);
         let outcome = supervise_loop(
             || {
                 Ok(Some(ChildExit {
@@ -2070,8 +2237,8 @@ mod tests {
                 }))
             },
             Vec::new,
-            |_signal| panic!("no signal should be forwarded"),
-            || panic!("a clean run must not sweep the group"),
+            |_signal| panic!("no signal should be forwarded on a clean exit"),
+            || sweeps.set(sweeps.get() + 1),
             || {},
             Instant::now,
         )
@@ -2079,5 +2246,110 @@ mod tests {
 
         assert_eq!(outcome.interrupt, None);
         assert_eq!(outcome.code, Some(3));
+        assert_eq!(
+            sweeps.get(),
+            1,
+            "the group is swept once even on a clean exit, so a pending signal that kills the \
+             wrapper after the mask is restored cannot leave a slot-holding descendant behind"
+        );
+    }
+
+    /// Extract the recipe body (the tab-indented command lines) for a Makefile
+    /// rule so the inventory guard can assert what it routes through. Returns
+    /// `None` when no such rule exists.
+    fn makefile_recipe(makefile: &str, target: &str) -> Option<String> {
+        let mut in_recipe = false;
+        let mut recipe = String::new();
+        for line in makefile.lines() {
+            if !in_recipe {
+                if line.starts_with('\t') {
+                    continue;
+                }
+                if let Some((lhs, _)) = line.split_once(':')
+                    && lhs.trim() == target
+                {
+                    in_recipe = true;
+                }
+                continue;
+            }
+            if let Some(command) = line.strip_prefix('\t') {
+                recipe.push_str(command);
+                recipe.push('\n');
+            } else {
+                break;
+            }
+        }
+        if in_recipe { Some(recipe) } else { None }
+    }
+
+    /// Inventory guard for the sole-use invariant: every live, hardware, and
+    /// performance entrypoint must route through the heavy-gate semaphore, so a
+    /// future lane cannot be added that silently bypasses it. This walks the
+    /// on-disk entrypoints instead of a hand-maintained list, so a new live
+    /// script, a new aggregating runner, or a new bare heavy make target fails
+    /// this test until it is gated.
+    #[test]
+    fn every_live_and_heavy_entrypoint_routes_through_the_gate() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("packages/xtask resolves to a repo root");
+
+        // 1. Every live-lane script must self-guard: invoked directly, it must
+        //    re-exec through `xtask heavy-gate` exactly once.
+        let live_dir = root.join("tests/integration/live");
+        let mut live_scripts: Vec<PathBuf> = fs::read_dir(&live_dir)
+            .expect("the live-lane directory is readable")
+            .map(|entry| entry.expect("a readable dir entry").path())
+            .filter(|path| path.extension() == Some(OsStr::new("sh")))
+            .collect();
+        live_scripts.sort();
+        assert!(
+            !live_scripts.is_empty(),
+            "expected at least one live-lane script under {}",
+            live_dir.display()
+        );
+        for script in &live_scripts {
+            let body = fs::read_to_string(script)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", script.display()));
+            assert!(
+                body.contains("heavy-gate --") && body.contains("D2B_HEAVY_GATE"),
+                "live-lane script {} does not re-exec through the heavy-gate semaphore; add the \
+                 self-guard block so a direct invocation cannot bypass the sole-use invariant",
+                script.display()
+            );
+        }
+
+        // 2. The aggregating runner and the layer dispatcher (which drives the
+        //    hardware and perf lanes) must also self-guard.
+        for relative in ["tests/runner.sh", "tests/tools/run-layer.sh"] {
+            let path = root.join(relative);
+            let body = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            assert!(
+                body.contains("heavy-gate --") && body.contains("D2B_HEAVY_GATE"),
+                "{relative} does not re-exec through the heavy-gate semaphore"
+            );
+        }
+
+        // 3. Every public heavy make target must invoke $(HEAVY_GATE); its raw
+        //    work lives behind a heavy-lane-* guarded target.
+        let makefile =
+            fs::read_to_string(root.join("Makefile")).expect("the repo Makefile is readable");
+        for target in [
+            "test-integration",
+            "test-host-integration",
+            "test-hardware",
+            "perf",
+            "pre-tag",
+            "smoke-lite",
+        ] {
+            let recipe = makefile_recipe(&makefile, target)
+                .unwrap_or_else(|| panic!("the Makefile has no recipe for `{target}`"));
+            assert!(
+                recipe.contains("$(HEAVY_GATE)"),
+                "public heavy target `{target}` does not route through $(HEAVY_GATE):\n{recipe}"
+            );
+        }
     }
 }
