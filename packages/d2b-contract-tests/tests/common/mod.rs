@@ -37,6 +37,7 @@
 use rnix::{SyntaxKind, SyntaxNode};
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::fmt;
+use std::path::Path;
 
 /// A parse failure. Callers treat any `Err` as fail-closed: a block that
 /// carries a check's textual trigger but that the real parser cannot model is
@@ -98,6 +99,19 @@ pub fn collect_maps<'a>(node: &'a Node, out: &mut Vec<&'a [Entry]>) {
         }
         _ => {}
     }
+}
+
+/// A repository-relative display string for a path, so a lint diagnostic or a
+/// panic message never prints the checkout root or a username-bearing absolute
+/// path into a CI log. Falls back to the final path component - never the
+/// absolute path - when the path is not under the repository root.
+pub fn rel_display(path: &Path) -> String {
+    if let Ok(rel) = path.strip_prefix(d2b_contract_tests::repo_root()) {
+        return rel.to_string_lossy().into_owned();
+    }
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<redacted>".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +194,28 @@ pub fn key_line(lines: &[&str], key: &str) -> Option<usize> {
 const PH_SENTINEL: &str = "__d2b_ph__";
 const ELIDE_SENTINEL: &str = "__d2b_elided__";
 const OPAQUE_SENTINEL: &str = "__d2b_opaque__";
+
+/// Synthetic entry key under which a `d2b-lint: <token>` comment is surfaced
+/// into the parsed model. A lint that pins an intentional negative example to a
+/// specific resource reads the marker as a direct child of the exact map or
+/// list element that lexically contains the comment, so the marker binds to one
+/// parsed resource rather than a whole fenced block. Only Nix carries comments
+/// through the parser; JSON has no comments and a YAML parser discards them, so
+/// a marker only ever surfaces from a Nix fence.
+pub const LINT_MARKER_KEY: &str = "__d2b_lint_marker__";
+
+/// The `<token>` of a `d2b-lint: <token>` comment, or `None` for any other
+/// comment. Strips a `#` line comment or a `/* ... */` block comment and the
+/// `d2b-lint:` prefix, so only the deliberate lint marker surfaces.
+fn lint_marker_from_comment(text: &str) -> Option<String> {
+    let mut t = text.trim();
+    if let Some(rest) = t.strip_prefix("/*") {
+        t = rest.strip_suffix("*/").unwrap_or(rest);
+    }
+    let t = t.trim_start_matches(['#', '/']).trim();
+    let rest = t.strip_prefix("d2b-lint:")?;
+    Some(rest.trim().to_string())
+}
 
 fn scalar_to_node(s: String) -> Node {
     if s == "..." {
@@ -815,6 +851,22 @@ fn nix_attrset_entries(node: &SyntaxNode) -> Vec<Entry> {
             .map(|v| nix_node_to_node(&v))
             .unwrap_or(Node::Opaque);
         insert_path(&mut entries, &segments, value);
+    }
+    // Surface any `d2b-lint: <token>` comment that is a direct child of this
+    // attrset as a synthetic entry, so a lint can bind an intentional-negative
+    // marker to the exact resource that lexically contains it rather than to
+    // the whole fenced block.
+    for tok in node.children_with_tokens() {
+        if let Some(t) = tok.as_token()
+            && t.kind() == SyntaxKind::TOKEN_COMMENT
+            && let Some(marker) = lint_marker_from_comment(t.text())
+        {
+            entries.push(Entry {
+                key: LINT_MARKER_KEY.to_string(),
+                val: Node::Scalar(marker),
+                line: 0,
+            });
+        }
     }
     entries
 }

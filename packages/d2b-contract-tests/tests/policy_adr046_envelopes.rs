@@ -77,8 +77,8 @@ impl std::fmt::Display for Violation {
 mod common;
 
 use common::{
-    Entry, Node, collect_maps, direct_child, fenced_blocks, key_line, mentions_key,
-    parse_block_docs,
+    Entry, LINT_MARKER_KEY, Node, collect_maps, direct_child, fenced_blocks, key_line,
+    mentions_key, parse_block_docs, rel_display,
 };
 
 // ---------------------------------------------------------------------------
@@ -101,23 +101,40 @@ use common::{
 // A spec may also show an *intentional negative example* - an authored shape
 // meant to be rejected, e.g. the block that demonstrates the D116 eval-time
 // failure by deliberately omitting `defaultUserRef`. That exemption is pinned to
-// exactly one file and one marker: it applies only in
-// `docs/specs/ADR-046-nix-configuration.md`, only to a block carrying the exact
-// comment `d2b-lint: expect-d116-eval-error`, and only when that marker occurs
-// exactly once in the file. The same marker in any other file, or a duplicated
-// marker, does not suppress anything - it fails closed.
+// exactly one file, one marker, and one resource: it applies only in
+// `docs/specs/ADR-046-nix-configuration.md`, only when the exact comment
+// `d2b-lint: expect-d116-eval-error` occurs exactly once in the file, and then
+// only to the single parsed resource that lexically contains that marker. The
+// marker is read from the parsed document (a synthetic child surfaced by the Nix
+// parser), so a second unmarked resource in the same fence is still reported.
+// The same marker in any other file, or a duplicated marker, does not suppress
+// anything - it fails closed.
 // ---------------------------------------------------------------------------
 
 const D116_EXEMPT_FILE: &str = "docs/specs/ADR-046-nix-configuration.md";
 const D116_EXEMPT_MARKER: &str = "d2b-lint: expect-d116-eval-error";
+const D116_EXEMPT_MARKER_TOKEN: &str = "expect-d116-eval-error";
 
 /// Whether `line` is exactly the pinned D116 negative-example marker comment.
 /// Only a comment line (`#` or `//`) carrying exactly the marker text qualifies,
 /// so a stray mention in prose or a string value cannot suppress a violation.
+/// Used only to count markers across the file for the exactly-once file guard;
+/// the per-resource binding reads the parsed marker instead.
 fn is_d116_marker_line(line: &str) -> bool {
     let t = line.trim();
     let t = t.trim_start_matches(['#', '/']).trim();
     t == D116_EXEMPT_MARKER
+}
+
+/// Whether this exact resource map is the pinned D116 negative example: it
+/// carries the parsed `d2b-lint: expect-d116-eval-error` marker as a direct
+/// child or one level down under its `spec`. Binding to the parsed marker rather
+/// than to any marker line in the fence keeps the exemption scoped to one
+/// resource, so an unmarked violating sibling in the same fence is still flagged.
+fn resource_carries_d116_marker(map: &[Entry]) -> bool {
+    resource_entry(map, LINT_MARKER_KEY)
+        .map(|e| matches!(&e.val, Node::Scalar(s) if s == D116_EXEMPT_MARKER_TOKEN))
+        .unwrap_or(false)
 }
 
 /// The Host/Guest type of a mapping, if it declares one as a direct child.
@@ -183,22 +200,25 @@ fn intends_user_domain_host_guest(lines: &[&str]) -> bool {
 
 fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
     let marker_count = content.lines().filter(|l| is_d116_marker_line(l)).count();
+    let exemption_active = file == D116_EXEMPT_FILE && marker_count == 1;
     let mut out = Vec::new();
     for block in fenced_blocks(content) {
         if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
-        let exempt = file == D116_EXEMPT_FILE
-            && marker_count == 1
-            && block.lines.iter().any(|l| is_d116_marker_line(l));
         let docs = match parse_block_docs(&block.lang, &block.lines) {
             Ok(docs) => docs,
             Err(_) => {
                 // Fail closed: a block the real parser cannot model but that
-                // plainly declares a user-domain Host/Guest is a parser gap,
-                // not a pass. Never fail closed on a block that does not intend
-                // this authoring context, and never on the pinned exemption.
-                if !exempt && intends_user_domain_host_guest(&block.lines) {
+                // plainly declares a user-domain Host/Guest is a parser gap, not
+                // a pass. The one exception is the pinned negative example: when
+                // the exemption is active and this unparseable block carries the
+                // marker line, it is the deliberate teaching block and is not
+                // flagged. A per-resource decision is impossible without a parse
+                // tree, so this fallback is intentionally coarse.
+                if intends_user_domain_host_guest(&block.lines)
+                    && !(exemption_active && block.lines.iter().any(|l| is_d116_marker_line(l)))
+                {
                     out.push(Violation {
                         file: file.to_string(),
                         line: block.body_start + 1,
@@ -225,7 +245,9 @@ fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
                 if ref_is_set(resource_entry(m, "defaultUserRef").map(|e| &e.val)) {
                     continue;
                 }
-                if exempt {
+                // Per-resource exemption: suppress only the single parsed
+                // resource that carries the pinned marker, never a sibling.
+                if exemption_active && resource_carries_d116_marker(m) {
                     continue;
                 }
                 let line =
@@ -401,7 +423,7 @@ fn spec_markdown_files() -> Vec<PathBuf> {
 
 fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", dir.display()));
+        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(dir)));
     for entry in entries {
         let entry = entry.expect("dir entry");
         let path = entry.path();
@@ -415,16 +437,11 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn scan_spec_tree(scanner: fn(&str, &str) -> Vec<Violation>) -> Vec<Violation> {
-    let root = repo_root();
     let mut out = Vec::new();
     for path in spec_markdown_files() {
-        let rel = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
+        let rel = rel_display(&path);
         let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", path.display()));
+            .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(&path)));
         out.extend(scanner(&rel, &content));
     }
     out
@@ -662,6 +679,86 @@ d2b.zones.dev.resources.host-system = {
     );
 }
 
+#[test]
+fn d116_exemption_binds_to_one_resource_not_the_whole_fence() {
+    // The exemption must suppress only the single parsed resource that carries
+    // the marker, never every violating resource in the same fence. Here one
+    // fence declares the marked negative example beside an unmarked, genuinely
+    // violating sibling; only the sibling must be reported.
+    let marked_plus_sibling = "\
+```nix
+d2b.zones.dev.resources.host-teaching = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+    # defaultUserRef intentionally omitted -> eval error
+    # d2b-lint: expect-d116-eval-error
+  };
+};
+d2b.zones.dev.resources.host-real = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+```";
+    assert_eq!(
+        scan_d116(D116_EXEMPT_FILE, marked_plus_sibling).len(),
+        1,
+        "the unmarked violating sibling must still be reported"
+    );
+
+    // Moving the marker onto the OTHER resource keeps exactly one report: the
+    // suppression follows the marked resource, not a fixed position in the
+    // fence. Combined with the both-unmarked case below (two reports), this
+    // proves the binding is per-resource, not fence-wide.
+    let sibling_first = "\
+```nix
+d2b.zones.dev.resources.host-real = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+d2b.zones.dev.resources.host-teaching = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+    # defaultUserRef intentionally omitted -> eval error
+    # d2b-lint: expect-d116-eval-error
+  };
+};
+```";
+    assert_eq!(
+        scan_d116(D116_EXEMPT_FILE, sibling_first).len(),
+        1,
+        "suppression follows the marked resource regardless of order"
+    );
+
+    // With no marker at all, both violating resources are reported: the marker
+    // is doing the suppression, and it suppresses exactly one.
+    let both_unmarked = "\
+```nix
+d2b.zones.dev.resources.host-a = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+d2b.zones.dev.resources.host-b = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+```";
+    assert_eq!(
+        scan_d116(D116_EXEMPT_FILE, both_unmarked).len(),
+        2,
+        "with no marker both violating resources are reported"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Universal-status fixtures.
 // ---------------------------------------------------------------------------
@@ -849,6 +946,94 @@ fn universal_status_treats_bundle_envelopes_as_a_distinct_contract() {
 }
 
 #[test]
+fn universal_status_classifies_each_document_not_the_whole_fence() {
+    // Classification is per document, not per fence: a recognized, complete
+    // envelope in a fence must never mask an unrecognized sibling in the same
+    // fence. Here a valid live envelope precedes a sibling that carries an
+    // `apiVersion` but neither `type` nor `resourceType`; the sibling must
+    // still be reported as unclassifiable.
+    let recognized_then_unrecognized = "\
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Widget
+status:
+  phase: Ready
+  update:
+    state: Current
+  resource:
+    availability: ready
+---
+apiVersion: resources.d2bus.org/v3
+metadata:
+  name: mystery
+```";
+    let v = scan_universal_status("f.md", recognized_then_unrecognized);
+    assert_eq!(
+        v.len(),
+        1,
+        "the unrecognized sibling must still be reported: {}",
+        report("dbg", &v)
+    );
+    assert!(
+        v[0].text.contains("neither a `type` nor a `resourceType`"),
+        "the report must name the unclassifiable-envelope reason: {}",
+        report("dbg", &v)
+    );
+
+    // A recognized bundle envelope (resourceType) must likewise not mask an
+    // unrecognized live sibling that omits its status base.
+    let bundle_then_incomplete = "\
+```yaml
+apiVersion: resources.d2bus.org/v3
+resourceType: Role
+metadata:
+  name: process-controller
+status: null
+---
+apiVersion: resources.d2bus.org/v3
+type: Widget
+status:
+  phase: Ready
+```";
+    let v = scan_universal_status("f.md", bundle_then_incomplete);
+    assert_eq!(
+        v.len(),
+        1,
+        "the incomplete live sibling behind a bundle must be reported: {}",
+        report("dbg", &v)
+    );
+    assert!(v[0].text.contains("status.update") || v[0].text.contains("status.resource"));
+
+    // Nix fences carrying an `apiVersion` are scanned too, and each attrset is
+    // classified independently. Here a complete live envelope sits beside an
+    // unrecognized sibling; only the sibling is reported.
+    let nix_mixed = "\
+```nix
+d2b.docs.recognized = {
+  apiVersion = \"resources.d2bus.org/v3\";
+  type = \"Widget\";
+  status = {
+    phase = \"Ready\";
+    update = { state = \"Current\"; };
+    resource = { availability = \"ready\"; };
+  };
+};
+d2b.docs.unrecognized = {
+  apiVersion = \"resources.d2bus.org/v3\";
+  metadata = { name = \"mystery\"; };
+};
+```";
+    let v = scan_universal_status("f.md", nix_mixed);
+    assert_eq!(
+        v.len(),
+        1,
+        "a Nix fence must be scanned and classified per attrset: {}",
+        report("dbg", &v)
+    );
+    assert!(v[0].text.contains("neither a `type` nor a `resourceType`"));
+}
+
+#[test]
 fn universal_status_accepts_fragment_and_abbreviated_shapes() {
     // A complete envelope carrying both keys is clean.
     let clean = envelope_with_status(COMPLETE_STATUS);
@@ -912,10 +1097,10 @@ A caller reads Credential.status.credential.leaseState the same way.";
 // ---------------------------------------------------------------------------
 
 #[test]
-fn round5_parser_bypasses_are_closed() {
-    // Every counterexample the round-5 review cited for the envelope lints,
-    // asserted rejected (or accepted) through the public scanner, so a
-    // regression that reopens a bypass fails here.
+fn parser_backed_scanners_reject_structural_bypasses() {
+    // Each structural counterexample below is asserted rejected (or accepted)
+    // through the public scanner, so a regression that reopens a bypass fails
+    // here.
 
     // 1. An escaped JSON key `"ty\u0070e"` decodes to `type`, so the document is
     //    classified as a LIVE envelope and its incomplete status is flagged. The

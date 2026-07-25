@@ -407,6 +407,7 @@ mod common;
 
 use common::{
     Entry, Node, collect_maps, direct_child, fenced_blocks, mentions_key, parse_block_docs,
+    rel_display,
 };
 
 // ---------------------------------------------------------------------------
@@ -961,7 +962,7 @@ fn spec_markdown_files() -> Vec<PathBuf> {
 
 fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", dir.display()));
+        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(dir)));
     for entry in entries {
         let entry = entry.expect("dir entry");
         let path = entry.path();
@@ -977,16 +978,11 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
 /// Scan the real spec tree with `scanner`, returning every violation with a
 /// repo-relative file path.
 fn scan_spec_tree(scanner: fn(&str, &str) -> Vec<Violation>) -> Vec<Violation> {
-    let root = repo_root();
     let mut out = Vec::new();
     for path in spec_markdown_files() {
-        let rel = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
+        let rel = rel_display(&path);
         let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", path.display()));
+            .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(&path)));
         out.extend(scanner(&rel, &content));
     }
     out
@@ -1109,9 +1105,9 @@ fn d103_at_field_context_catches_malformed_instants_outside_the_candidate_shape(
 
 #[test]
 fn d103_rejects_a_conformant_prefix_carrying_trailing_or_leading_junk() {
-    // Round-4 bypass: a conformant 24-byte instant with junk glued on. The
-    // previous shape pass anchored on the conformant prefix and accepted it; the
-    // token is now validated whole, so the trailing junk is rejected.
+    // A conformant 24-byte instant with junk glued directly onto it. Validating
+    // only the conformant prefix accepts it; the token is now validated whole, so
+    // the trailing junk is rejected.
     assert!(
         !scan_d103("f.md", "createdAt: 2026-07-22T00:00:00.000Zjunk").is_empty(),
         "a conformant prefix with trailing junk must be rejected"
@@ -1358,9 +1354,9 @@ fn d104_type_field_context_catches_unknown_unqualified_names() {
 
 #[test]
 fn d104_validates_quoted_json_and_indented_nix_type_fields() {
-    // Round-4 bypass: the old `^type`-anchored regex saw only a bare, zero-indent
-    // YAML `type:`. A quoted JSON `"type"` and an indented Nix `type =` slipped
-    // through unvalidated. The structural pass reads all three identically.
+    // A `^type`-anchored regex sees only a bare, zero-indent YAML `type:`. A
+    // quoted JSON `"type"` and an indented Nix `type =` slip through unvalidated
+    // under that approach. The structural pass reads all three identically.
     let bad_json = concat!(
         "```json\n",
         "{\n",
@@ -1456,9 +1452,9 @@ fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
     assert!(!scan_d108("f.md", "retryAfterMs: -1").is_empty()); // signed
     assert!(!scan_d108("f.md", "retryAfterMs: 0").is_empty()); // zero
     assert!(!scan_d108("f.md", "retryAfterMs: 86400001").is_empty()); // over ceiling
-    // Round-4 bypass: an unrecognised non-decimal token in value position (a
-    // pseudo-scientific literal, or a bare word) must be rejected. The previous
-    // fall-through silently accepted anything it could not classify.
+    // An unrecognised non-decimal token in value position (a pseudo-scientific
+    // literal, or a bare word) must be rejected. A classify-then-fall-through
+    // reader silently accepts anything it cannot classify.
     assert!(
         !scan_d108("f.md", "retryAfterMs: 1e3").is_empty(),
         "a scientific-notation literal must be rejected"
@@ -1528,9 +1524,9 @@ fn d108_scanner_flags_superseded_and_non_integer_retry_shapes_only() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn round5_parser_bypasses_are_closed() {
-    // Every counterexample the round-5 review cited, asserted rejected through
-    // the public scanner, so a regression that reopens a bypass fails here.
+fn parser_backed_scanners_reject_structural_bypasses() {
+    // Each structural counterexample below is asserted rejected through the
+    // public scanner, so a regression that reopens a bypass fails here.
 
     // D103: a conformant instant with a `_`-suffixed junk token. The candidate
     // token is extended over `_`, so the WHOLE token is judged, not the 24-byte
