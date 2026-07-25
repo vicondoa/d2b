@@ -595,7 +595,7 @@ status:
   observedGeneration: 1
   phase: Ready          # Pending|Ready|Degraded|Failed|Deleted|Unknown
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:00.000Z"
   resource:
     # Per-workload attachment phases - opaque phase only; no raw IfName or IP
     attachments:

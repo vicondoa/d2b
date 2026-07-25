@@ -1,10 +1,10 @@
 ### Changed
 
-- ADR 0046 spec set: aligned the illustrative examples across every resource and
-  topology spec with the frozen datetime, universal-status, outcome, and
-  ResourceType-name decisions so every persisted-datetime literal uses
-  millisecond precision (`YYYY-MM-DDTHH:MM:SS.sssZ`), every universal envelope
-  carries `status.resource` and `status.update`, retry scalars use the
+- ADR 0046 spec set: aligned the illustrative examples across every resource,
+  topology, and Provider-dossier spec with the frozen datetime, universal-status,
+  outcome, and ResourceType-name decisions so every persisted-datetime literal
+  uses millisecond precision (`YYYY-MM-DDTHH:MM:SS.sssZ`), every universal
+  envelope carries `status.resource` and `status.update`, retry scalars use the
   `retryAfterMs` shape, and vendor ResourceType names qualify with the
   `d2bus.org` grammar.
 - ADR 0046 Host/Guest execution policy: froze a single `defaultUserRef`

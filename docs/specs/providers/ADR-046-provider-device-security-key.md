@@ -1302,7 +1302,7 @@ status:
     health: healthy | degraded | failed | unknown
     holderRefs:
       - security-key.d2bus.org.SecurityKeyService/<authority>
-    lastProbedAt: "2026-07-22T00:05:00Z"
+    lastProbedAt: "2026-07-22T00:05:00.000Z"
   provider:
     providerRef: Provider/device-security-key
     schemaId: device-security-key.d2bus.org/Device/status

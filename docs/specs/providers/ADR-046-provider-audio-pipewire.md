@@ -535,8 +535,8 @@ metadata:
   finalizers:
     - audio-pipewire.d2bus.org/sidecar-stopped
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:01:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:01:00.000Z
 spec:
   providerRef: Provider/audio-pipewire
   serviceRef: audio.d2bus.org.AudioService/host-audio
@@ -564,7 +564,7 @@ status:
     - type: ServiceReady
       status: "True"
       reason: referenced-audio-service-ready
-  lastReconciledAt: 2026-07-22T00:01:01Z
+  lastReconciledAt: 2026-07-22T00:01:01.000Z
   resource:
     channels:
       speaker:

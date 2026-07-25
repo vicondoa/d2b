@@ -304,7 +304,7 @@ status:
       status: "True"
       reason: health-probe-ok
       observedGeneration: 1
-  lastReconciledAt: 2026-07-22T00:00:01Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
 ```
 
 | Field | Type | Required | Default | Constraints |

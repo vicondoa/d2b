@@ -1090,7 +1090,7 @@ status:
   resource:
     childZoneUid: <store-generated-uid>
     connected: true
-    lastConnectedAt: 2026-07-22T00:00:00Z
+    lastConnectedAt: 2026-07-22T00:00:00.000Z
     lastDisconnectedAt: null
     lastSentRevision: 14
     lastAckedRevision: 14
@@ -1116,11 +1116,11 @@ status:
         - type: RelayConnected
           status: "True"
           reason: websocket-open
-          lastTransitionAt: 2026-07-22T00:00:00Z
+          lastTransitionAt: 2026-07-22T00:00:00.000Z
         - type: CredentialValid
           status: "True"
           reason: lease-active
-          lastTransitionAt: 2026-07-22T00:00:01Z
+          lastTransitionAt: 2026-07-22T00:00:01.000Z
 ```
 
 Rules:

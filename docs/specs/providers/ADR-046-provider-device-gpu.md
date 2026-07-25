@@ -175,8 +175,8 @@ metadata:
   ownerRef: Guest/corp-vm
   finalizers: [device-gpu.d2bus.org/worker-stopped]
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   providerRef: Provider/device-gpu
   deviceClass: physical
@@ -204,7 +204,7 @@ status:
   observedGeneration: 1
   phase: Ready
   conditions: []
-  lastReconciledAt: 2026-07-22T00:00:01Z
+  lastReconciledAt: 2026-07-22T00:00:01.000Z
   device:
     present: true
     health: healthy
@@ -213,10 +213,10 @@ status:
       - holderRef: Guest/corp-vm
         claim: exclusive
         passthrough: gpu-virtio
-        claimedAt: 2026-07-22T00:00:01Z
+        claimedAt: 2026-07-22T00:00:01.000Z
         health: healthy
     provisionedAt: null
-    lastProbedAt: 2026-07-22T00:00:00Z
+    lastProbedAt: 2026-07-22T00:00:00.000Z
     providerDiagnostic: null
 ```
 

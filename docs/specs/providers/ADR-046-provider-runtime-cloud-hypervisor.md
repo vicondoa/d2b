@@ -1446,23 +1446,23 @@ status:
       status: "True"
       reason: vmm-process-ready
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
     - type: BootstrapReady
       status: "True"
       reason: all-bootstrap-resources-ready
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:02Z
+      lastTransitionAt: 2026-07-22T00:00:02.000Z
     - type: GuestReachable
       status: "True"
       reason: guest-control-health-passed
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:03Z
+      lastTransitionAt: 2026-07-22T00:00:03.000Z
     - type: CapabilitiesVerified
       status: "True"
       reason: all-attachments-ready
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:01Z
-  lastReconciledAt: 2026-07-22T00:00:03Z
+      lastTransitionAt: 2026-07-22T00:00:01.000Z
+  lastReconciledAt: 2026-07-22T00:00:03.000Z
   resource:
     observedLifecyclePhase: running
     runtimeReady: true
