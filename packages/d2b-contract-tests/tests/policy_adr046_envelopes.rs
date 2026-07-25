@@ -115,6 +115,17 @@ fn indent(line: &str) -> usize {
 // - i.e. an execution-policy authoring context. A block that shows a Host spec
 // without `allowedDomains`, or `allowedDomains` without a Host/Guest `type`, is
 // a focused fragment and is not judged.
+//
+// A spec may also show an *intentional negative example* - an authored shape
+// that is meant to be rejected, e.g. the block that demonstrates the D116
+// eval-time failure by deliberately omitting `defaultUserRef`. Such a block is
+// structurally a violation, but flagging it would push the author to "fix"
+// correct teaching content. It is exempted only when it carries the explicit,
+// greppable marker comment `d2b-lint: expect-d116-...` inside the fence (any
+// comment line mentioning both `d2b-lint` and `d116`). This mirrors the
+// universal-status `...` elision exemption: an unambiguous authoring signal,
+// never English sentiment, so a real declaration - which never carries such a
+// self-incriminating marker - stays flagged.
 // ---------------------------------------------------------------------------
 
 fn d116_host_guest() -> Regex {
@@ -166,6 +177,23 @@ fn default_user_ref_is_set(block: &[&str]) -> bool {
     }
 }
 
+/// Whether a judged block is an explicitly marked intentional negative example.
+/// The signal is a greppable marker comment naming both `d2b-lint` and `d116`
+/// (case-insensitive), e.g. `# d2b-lint: expect-d116-eval-error`. Only a comment
+/// line (leading `#`, `//`, or Nix `#`) may carry it, so a stray mention in a
+/// string value cannot suppress a real violation.
+fn d116_marked_negative_example(block: &[&str]) -> bool {
+    block.iter().any(|l| {
+        let t = l.trim_start();
+        let is_comment = t.starts_with('#') || t.starts_with("//");
+        if !is_comment {
+            return false;
+        }
+        let lower = t.to_ascii_lowercase();
+        lower.contains("d2b-lint") && lower.contains("d116")
+    })
+}
+
 fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
     let host_guest = d116_host_guest();
     let mut out = Vec::new();
@@ -188,6 +216,11 @@ fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
             continue;
         }
         if default_user_ref_is_set(&block.lines) {
+            continue;
+        }
+        // An explicitly marked intentional negative example is documenting the
+        // rejection, not declaring a resource; do not flag it.
+        if d116_marked_negative_example(&block.lines) {
             continue;
         }
         out.push(Violation {
@@ -454,6 +487,44 @@ fn d116_accepts_clean_and_exempt_shapes() {
     // A Markdown schema table (never inside a fence) is not scanned.
     let table = "| field | rule |\n| type: Host | allowedDomains [system, user] |";
     assert!(scan_d116("f.md", table).is_empty());
+
+    // An explicitly marked intentional negative example (the D116 eval-error
+    // teaching block) is exempt: it documents the rejection, and forcing a ref
+    // into it would corrupt correct content.
+    let marked = "\
+```nix
+d2b.zones.dev.resources.host-system = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+    # defaultUserRef intentionally omitted -> eval error
+    # d2b-lint: expect-d116-eval-error
+  };
+};
+```";
+    assert!(
+        scan_d116("f.md", marked).is_empty(),
+        "marked negative example"
+    );
+
+    // The SAME shape without the marker is still a violation: a real
+    // declaration never carries the suppression comment, so detection of
+    // genuine misses is not weakened.
+    let unmarked = "\
+```nix
+d2b.zones.dev.resources.host-system = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+    # defaultUserRef intentionally omitted -> eval error
+  };
+};
+```";
+    assert_eq!(
+        scan_d116("f.md", unmarked).len(),
+        1,
+        "unmarked stays flagged"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -520,6 +591,45 @@ fn universal_status_accepts_complete_fragment_and_abbreviated_shapes() {
     // A non-YAML fence is never a YAML envelope.
     let json = "```json\n{ \"apiVersion\": \"resources.d2bus.org/v3\", \"type\": \"Widget\", \"status\": {} }\n```";
     assert!(scan_universal_status("f.md", json).is_empty());
+}
+
+#[test]
+fn universal_status_ignores_prose_field_path_references() {
+    // Legitimate explanatory prose references a status field path under the
+    // spec's documented `status.<field>` -> `status.resource.<field>` mapping
+    // convention. These are correct content, not resource-envelope examples,
+    // and MUST NOT be flagged: the scanner only reads fenced YAML documents,
+    // and prose lacks the five top-level envelope keys regardless.
+    let prose = "\
+Each credential surfaces its expiry as `Credential.status.credential.expiresAtUnixMs`,
+which the provider maps onto `status.resource.expiresAtUnixMs` per the universal
+status base. The envelope carries apiVersion, type, metadata, spec and status,
+and its status.update block records the reconcile generation.
+
+A caller reads Credential.status.credential.leaseState the same way.";
+    assert!(
+        scan_universal_status("prose.md", prose).is_empty(),
+        "{}",
+        report("dbg", &scan_universal_status("prose.md", prose))
+    );
+
+    // The same prose alongside a genuinely correct fenced envelope: the fence
+    // is scanned and passes, and the prose reference is still ignored, so the
+    // document as a whole is clean.
+    let mixed = format!(
+        "The `status.credential` field maps to `status.resource` in examples.\n\n{}\n\nSee `Credential.status.credential.expiresAtUnixMs` above.",
+        envelope_with_status(COMPLETE_STATUS)
+    );
+    assert!(
+        scan_universal_status("mixed.md", &mixed).is_empty(),
+        "{}",
+        report("dbg", &scan_universal_status("mixed.md", &mixed))
+    );
+
+    // A shorthand schema table using `status.credential` column text is prose,
+    // not a fenced YAML envelope, so it is never scanned.
+    let table = "| field | maps to |\n| status.credential.expiresAtUnixMs | status.resource.expiresAtUnixMs |";
+    assert!(scan_universal_status("table.md", table).is_empty());
 }
 
 // ---------------------------------------------------------------------------

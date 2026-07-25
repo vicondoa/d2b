@@ -9,7 +9,14 @@
   `status.resource`. Both lints judge only complete envelopes: a focused
   fragment, a shorthand schema table, and a status body deliberately elided
   with `...` are exempt, so the lints enforce the contract without flagging
-  illustrative snippets.
+  illustrative snippets. The universal-status lint reads only fenced YAML
+  documents, so explanatory prose that references a field path such as
+  `Credential.status.credential.expiresAtUnixMs` under the documented
+  `status.<field>` mapping convention is never flagged. The Host/Guest lint
+  additionally exempts an intentional negative example - a shape authored to be
+  rejected - when it carries the greppable marker comment `d2b-lint:
+  expect-d116-...`, so a teaching block that deliberately omits `defaultUserRef`
+  to demonstrate the eval-time failure is not mistaken for a real declaration.
 
 ### Changed
 
