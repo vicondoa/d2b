@@ -47,10 +47,10 @@ pub enum HeadingForm {
     /// `### ADR046-core-001`
     Bare,
     /// A title introduced by whitespace and, optionally, a dash of any kind:
-    /// `### ADR046-core-001 - Some title`, `### ADR046-core-001 - Some title`,
-    /// and the 19 headings that introduce the same title with no dash at all.
-    /// The three spell one form because the dash is decoration, not grammar.
-    EmDash,
+    /// `### ADR046-core-001 - Some title`, the en-dash spelling, and the 19
+    /// headings that introduce the same title with no dash at all. They spell
+    /// one form because the dash is decoration, not grammar.
+    Dash,
     /// `### ADR046-core-001: Some title`
     Colon,
     /// `### ADR046-core-001 (Some title)`
@@ -62,7 +62,7 @@ pub enum HeadingForm {
 /// generator instead of silently shrinking the manifest.
 const EXPECTED_HEADING_FORMS: &[(HeadingForm, usize)] = &[
     (HeadingForm::Bare, 356),
-    (HeadingForm::EmDash, 112),
+    (HeadingForm::Dash, 112),
     (HeadingForm::Colon, 51),
     (HeadingForm::Parenthetical, 24),
 ];
@@ -71,7 +71,7 @@ impl HeadingForm {
     fn label(self) -> &'static str {
         match self {
             Self::Bare => "bare",
-            Self::EmDash => "em-dash title",
+            Self::Dash => "dash title",
             Self::Colon => "colon title",
             Self::Parenthetical => "parenthetical title",
         }
@@ -93,7 +93,7 @@ fn heading_form(rest: &str, id: &str) -> HeadingForm {
     } else if trimmed.starts_with('(') {
         HeadingForm::Parenthetical
     } else {
-        HeadingForm::EmDash
+        HeadingForm::Dash
     }
 }
 
@@ -905,10 +905,13 @@ mod tests {
     fn every_heading_form_yields_the_same_work_item_id() {
         let cases = [
             ("### ADR046-core-001", HeadingForm::Bare),
-            ("### ADR046-core-001 - Some title", HeadingForm::EmDash),
-            ("### ADR046-core-001 - Some title", HeadingForm::EmDash),
-            ("### ADR046-core-001 – Some title", HeadingForm::EmDash),
-            ("### ADR046-core-001 Some title", HeadingForm::EmDash),
+            ("### ADR046-core-001 - Some title", HeadingForm::Dash),
+            // The em-dash is banned in this repository's own prose, so the
+            // separator this parser must still tolerate is written as an
+            // escape rather than as a literal character.
+            ("### ADR046-core-001 \u{2014} Some title", HeadingForm::Dash),
+            ("### ADR046-core-001 – Some title", HeadingForm::Dash),
+            ("### ADR046-core-001 Some title", HeadingForm::Dash),
             ("### ADR046-core-001: Some title", HeadingForm::Colon),
             (
                 "### ADR046-core-001 (Some title)",
@@ -935,7 +938,7 @@ mod tests {
         let cases = [
             "### ADR046-security-key-012",
             "### ADR046-security-key-012 - Some title",
-            "### ADR046-security-key-012 - Some title",
+            "### ADR046-security-key-012 \u{2014} Some title",
             "### ADR046-security-key-012-Some title",
             "### ADR046-security-key-012: Some title",
             "### ADR046-security-key-012 (Some title)",
