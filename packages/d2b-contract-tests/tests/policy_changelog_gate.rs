@@ -247,6 +247,64 @@ fn a_deletion_without_notes_fails_and_a_fragment_passes() {
 }
 
 #[test]
+fn a_patch_or_proto_change_without_notes_fails() {
+    // A patch-only change ships behaviour and must carry a note.
+    let repo = FixtureRepo::new("patch-edit");
+    repo.seed();
+    repo.write(
+        "0001-fix-thing.patch",
+        "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+    );
+    repo.commit("patch add, no notes");
+    let (passed, out) = repo.run_gate();
+    assert_gate(passed, &out, false, "patch edit without notes");
+
+    // A protocol-definition change is code too.
+    let repo = FixtureRepo::new("proto-edit");
+    repo.seed();
+    repo.write(
+        "wire.proto",
+        "syntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
+    );
+    repo.commit("proto add, no notes");
+    let (passed, out) = repo.run_gate();
+    assert_gate(passed, &out, false, "proto edit without notes");
+
+    // And a fragment satisfies the gate for a proto change.
+    let repo = FixtureRepo::new("proto-fragment");
+    repo.seed();
+    repo.write(
+        "wire.proto",
+        "syntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
+    );
+    repo.write("changelog.d/branch.md", VALID_FRAGMENT);
+    repo.commit("proto add with fragment");
+    let (passed, out) = repo.run_gate();
+    assert_gate(passed, &out, true, "proto edit with fragment");
+}
+
+#[test]
+fn a_patch_or_proto_deletion_without_notes_fails() {
+    // Seed a repo that already carries a patch and a proto, then delete them.
+    let repo = FixtureRepo::new("patch-delete");
+    repo.write("CHANGELOG.md", VALID_CHANGELOG);
+    repo.write(
+        "0001-fix-thing.patch",
+        "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+    );
+    repo.write(
+        "wire.proto",
+        "syntax = \"proto3\";\nmessage M { int32 a = 1; }\n",
+    );
+    repo.commit("seed patch and proto");
+    repo.remove("0001-fix-thing.patch");
+    repo.remove("wire.proto");
+    repo.commit("delete patch and proto, no notes");
+    let (passed, out) = repo.run_gate();
+    assert_gate(passed, &out, false, "patch/proto deletion without notes");
+}
+
+#[test]
 fn a_prose_only_change_needs_no_notes() {
     let repo = FixtureRepo::new("prose");
     repo.seed();
