@@ -127,16 +127,21 @@ deployed d2b state.
 
 `make test-runtime-ledger` is the hermetic execution-budget Layer-1 job
 (also run by `make test-unit` / `make check` through
-`tests/layer1-jobs.json`). It times a pinned closed census of crates and
-shards (`tests/runtime-ledger-census.json`) against a pinned baseline
-(`tests/runtime-ledger-baseline.json`) after a warm build so compilation
-is excluded from the timings. When you intentionally add, remove, or
-rename a census test you MUST regenerate the baseline in the same change
-with `make runtime-ledger-regen` and commit the updated census/baseline
-pins. The ledger's exact enforcement scope is still being finalized and
-may be rescoped; if its shape here diverges from the current `Makefile`
-targets or `tests/layer1-jobs.json`, treat those as authoritative and
-flag the drift for the integrator rather than hand-editing the pins.
+`tests/layer1-jobs.json`). After a warm build (so compilation is excluded
+from the timings), it records execution-only p95s for the pinned closed
+crate census (`tests/runtime-ledger-census.json`, presently a single crate)
+and enforces absolute per-test and per-crate budgets: it fails any p95 over
+its frozen budget, an incomplete or under-repeated run, or a census that does
+not reproduce the pin exactly. It is a pure absolute-budget gate - it holds
+no baseline and makes no historical-regression claim, so a slower run that
+still fits its budget passes, and there is no regeneration workflow to run
+when you change a census test (edit the census pin directly). Growing the
+census to a real multi-crate shard inventory (with a per-shard budget) and
+adding a cross-machine reference baseline for a true historical-regression
+gate is the named deferred follow-up
+`runtime-ledger-full-census-and-real-shards`. If its shape here diverges from
+the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
+authoritative and flag the drift for the integrator.
 
 ### Heavy lanes
 

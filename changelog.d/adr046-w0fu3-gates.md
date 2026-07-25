@@ -40,7 +40,7 @@
 - The runtime execution-budget ledger is now an honest absolute budget gate. It
   records genuine repeated execution-only samples, recomputes p95 from those
   samples, audits that every scope is measured on every repetition, requires the
-  crate and shard census to reproduce a pinned closed set exactly, and runs the
+  crate census to reproduce a pinned closed set exactly, and runs the
   hermetic placement lint over the census crates' integration tests. It no
   longer holds a synthetic baseline or claims historical-regression detection;
   the gate now runs as part of the local pre-merge check as well as in CI.

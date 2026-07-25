@@ -341,18 +341,17 @@ changelog-fold:
 .PHONY: test-runtime-ledger
 
 ## test-runtime-ledger - hermetic execution-budget gate. Reads the pinned
-##   closed census (D2B_RUNTIME_CENSUS) of crates and shards, warm-builds those
-##   census crates so compilation never lands in the timings, then collects
-##   repeated *execution-only* samples at three granularities - per test (from a
-##   crate-qualified libtest JSON stream), per crate (summed from that stream's
-##   per-test exec_time, so cargo's dependency-freshness overhead never lands in
-##   the timing), and per hermetic shard (summed across the census crates) -
-##   across D2B_RUNTIME_REPETITIONS runs. It records them into a deterministic,
-##   portable ledger carrying an operator-supplied runner label instead of a
-##   hostname, then enforces the absolute per-test / per-crate / per-shard
-##   budgets, the complete-census audit (non-empty scopes, matching repetition
-##   counts, one sample per repetition), and the closed-census audit (the crate
-##   and shard sets reproduce the pin exactly). It also runs the hermetic
+##   closed census (D2B_RUNTIME_CENSUS) of crates, warm-builds those census
+##   crates so compilation never lands in the timings, then collects repeated
+##   *execution-only* samples at two granularities - per test (from a
+##   crate-qualified libtest JSON stream) and per crate (summed from that
+##   stream's per-test exec_time, so cargo's dependency-freshness overhead never
+##   lands in the timing) - across D2B_RUNTIME_REPETITIONS runs. It records them
+##   into a deterministic, portable ledger carrying an operator-supplied runner
+##   label instead of a hostname, then enforces the absolute per-test /
+##   per-crate budgets, the complete-census audit (non-empty scopes, matching
+##   repetition counts, one sample per repetition), and the closed-census audit
+##   (the crate set reproduces the pin exactly). It also runs the hermetic
 ##   placement lint over the census crates' integration tests.
 ##
 ##   This is an absolute budget gate: every recorded p95 is judged only against
@@ -361,9 +360,10 @@ changelog-fold:
 ##
 ##   Deferred follow-up (tracked as runtime-ledger-full-census-and-real-shards):
 ##   grow the census beyond the single pinned crate to a real multi-crate shard
-##   inventory, and add a genuine cross-machine reference baseline so a true
-##   historical-regression gate can be built on top of these budgets. Until that
-##   lands, no baseline is recorded and none is required.
+##   inventory with a per-shard budget, and add a genuine cross-machine
+##   reference baseline so a true historical-regression gate can be built on top
+##   of these budgets. Until that lands, there is no shard dimension, no
+##   baseline is recorded, and none is required.
 ##
 ##   All cargo invocations run from packages/ (not the repo root via
 ##   --manifest-path) so packages/.cargo/config.toml - and its sccache
@@ -384,9 +384,8 @@ test-runtime-ledger:
 	reps='$(D2B_RUNTIME_REPETITIONS)'; \
 	rm -rf "$$work"; mkdir -p "$$work"; \
 	crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
-	shards="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field shards)"; \
-	if [ -z "$$crates" ] || [ -z "$$shards" ]; then \
-	  echo "test-runtime-ledger: the pinned census names no crates or no shards" >&2; exit 1; fi; \
+	if [ -z "$$crates" ]; then \
+	  echo "test-runtime-ledger: the pinned census names no crates" >&2; exit 1; fi; \
 	echo "test-runtime-ledger: linting hermetic placement across the census crates' integration tests"; \
 	lint_files=""; \
 	for crate in $$crates; do \
@@ -404,7 +403,6 @@ test-runtime-ledger:
 	while [ "$$rep" -lt "$$reps" ]; do \
 	  rep=$$((rep + 1)); \
 	  echo "test-runtime-ledger: repetition $$rep/$$reps"; \
-	  shard_total=0; \
 	  for crate in $$crates; do \
 	    json="$$work/$$crate-$$rep.json"; \
 	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --tests --quiet -- \
@@ -415,10 +413,6 @@ test-runtime-ledger:
 	        sed -E 's/.*"exec_time": ([0-9.]+).*/\1/' | \
 	        awk '{ s += $$1 } END { printf "%d", (s * 1000) + 0.5 }')"; \
 	    args="$$args --crate $$crate=$$cdur --crate-libtest-json $$crate=$$json"; \
-	    shard_total=$$((shard_total + cdur)); \
-	  done; \
-	  for shard in $$shards; do \
-	    args="$$args --shard $$shard=$$shard_total"; \
 	  done; \
 	done; \
 	( cd packages && $(D2B_LEDGER_XTASK) record \

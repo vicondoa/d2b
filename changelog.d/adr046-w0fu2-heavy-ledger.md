@@ -24,15 +24,16 @@
   and an inventory guard fails closed if a new live entrypoint or bare heavy
   make target is added without gating.
 - The runtime execution-budget ledger now enforces a pinned closed census: it
-  requires a baseline and a census, measures execution-only time from warmed,
-  crate-qualified libtest streams so compilation is excluded, reproduces the
-  expected test, crate, and shard sets exactly, rejects baseline id loss and
-  repetition mismatch, and runs as a required Layer-1 job.
+  requires a census, measures execution-only time from warmed, crate-qualified
+  libtest streams so compilation is excluded, reproduces the expected test and
+  crate sets exactly, rejects census id loss and repetition mismatch, and runs
+  as a required Layer-1 job. It holds no baseline and makes no
+  historical-regression claim.
 
 ### Security
 
 - The runtime ledger validates a short closed runner-label grammar, bounds
   printable test identifiers, row counts, and libtest input size, and rejects
-  control characters both when emitting and when loading ledgers and baselines,
-  so host paths, multi-line log injection, and unbounded artifact cardinality
+  control characters both when emitting and when loading ledgers, so host
+  paths, multi-line log injection, and unbounded artifact cardinality
   can no longer reach the recorded or printed output.

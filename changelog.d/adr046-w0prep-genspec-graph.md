@@ -8,13 +8,16 @@
   `docs/specs/ADR-046-implementation-graph.json` and its Markdown rendering
   from the two manifests plus the recorded wave topology, including
   topological ranks, parallel groups, and the critical path.
-- `cargo xtask test-runtime-ledger` records and enforces the hermetic
-  execution budgets for individual tests, crates, and Layer-1 shards, with an
-  optional historical regression threshold and a source lint for
-  non-hermetic placement and wall-clock reads.
-- `make test-runtime-ledger` times the Layer-1 shard targets named in
-  `D2B_RUNTIME_SHARDS`, records them into a portable ledger, and fails closed
-  on any budget violation.
+- `cargo xtask test-runtime-ledger` records and enforces absolute hermetic
+  execution budgets for individual tests and crates, plus a source lint for
+  non-hermetic placement and wall-clock reads. It holds no baseline and makes
+  no historical-regression claim; a real multi-crate shard inventory and a
+  cross-machine regression baseline are the deferred follow-up
+  `runtime-ledger-full-census-and-real-shards`.
+- `make test-runtime-ledger` warm-builds the census crates pinned in
+  `tests/runtime-ledger-census.json`, records their execution-only per-test
+  and per-crate timings into a portable ledger, and fails closed on any
+  per-test or per-crate budget violation.
 - A fail-closed contract test independently re-derives the Gate 0 bijection
   between the specification Markdown, both manifests, and the implementation
   graph, and asserts the generated artifacts are byte-portable.

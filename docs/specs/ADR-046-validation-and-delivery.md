@@ -216,10 +216,10 @@ re-derives launch order or parallelism from this prose. Per D095:
   work-item mapping and `work-item-depends-on` derive from
   `ADR-046-work-items.json`; the W6 `file-overlap-order` edges derive from §3.3.
 - **Generation.** The repository generator is checked in. The
-  `cargo run -p xtask -- spec-registry` command
-  (`packages/xtask/src/gen_spec_set.rs`) writes `ADR-046-spec-set.json` and
-  `ADR-046-work-items.json` from the exact Markdown bytes, and
-  `cargo run -p xtask -- implementation-graph`
+  `cargo run --manifest-path packages/Cargo.toml -p xtask -- spec-registry`
+  command (`packages/xtask/src/gen_spec_set.rs`) writes `ADR-046-spec-set.json`
+  and `ADR-046-work-items.json` from the exact Markdown bytes, and
+  `cargo run --manifest-path packages/Cargo.toml -p xtask -- implementation-graph`
   (`packages/xtask/src/implementation_graph.rs`) reads the two manifests plus
   this section and writes sorted output with no timestamps or host paths. Both
   run under the fail-closed `make test-drift` gate. `ADR046-streamline-001` and
@@ -287,7 +287,7 @@ seal, and merge eligibility - applies to it unchanged.
    an open, unresolved contention flag from an earlier wave.
 3. The wave's Git Town stack (§5) has been proposed against the exact parent
    commit named in its dependency edges (§3.4), not against a stale `v3`.
-4. The `cargo xtask heavy-gate` semaphore (§11) is available (not held past
+4. The heavy-gate semaphore (§11) is available (not held past
    its 30-minute timeout by a stale prior-wave validation run).
 5. The fast hermetic suite (§10.16) passes within its execution budgets on the
    wave's entry tree; it is the required default inner loop for every change
@@ -297,16 +297,18 @@ seal, and merge eligibility - applies to it unchanged.
 
 1. Every spec's work items assigned to this wave show `Validation` evidence
    satisfying §10's applicable matrix rows, imported per §12.2, including the
-   §10.16 runtime-ledger artifact showing every hermetic budget met (or a
-   classified crypto/property exception) with no timing regression.
+   §10.16 runtime-ledger artifact showing every absolute hermetic budget met
+   (or a classified crypto/property exception).
 2. The immutable candidate snapshot (§12.1) for this wave's integrated tree
    has all required CI, local, and host validator lanes reporting (pending is
    acceptable only while the PR is open, per §13; not at wave close).
 3. The ten-role panel (§12.3) has returned unanimous `signoff: true` against
    that exact snapshot, with zero outstanding `recommendations`.
-4. `cargo xtask delivery wave seal` (§12.4) has produced a sealed record
+4. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`
+   (§12.4) has produced a sealed record
    binding this wave's `candidate_id`/`content_id`/`snapshot_sha256`.
-5. `cargo xtask delivery wave merge-eligibility` reports eligible for every
+5. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility`
+   reports eligible for every
    PR in the wave's stack, and each has merged root-to-leaf through GitHub
    (§13).
 6. Post-wave cleanup (§14) is recorded as pending for the integrator (not
@@ -440,7 +442,7 @@ the other claimant's worktree opens:
 | `packages/d2b-contract-tests/tests/workspace_policy.rs` | every Provider crate-layout assertion (D059/`ADR046-pstate-011`-equivalent gates), one row per Provider | integrator batches one appended assertion per merged `ADR046-W6` slice; a slice's own PR adds only its own assertion function, appended after the current last function, never reordering existing ones |
 | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` | regenerated after every spec status/work-item-state change (§8) | integrator-only; regenerated and committed as the last commit of each wave, never inside a slice's own PR |
 | `packages/d2b-core-controller/src/rbac.rs`, `authz_audit.rs` | `resource-api-and-authorization` (W0-adjacent api-002 work item), `resources-zone-control` (Role/RoleBinding schema), `telemetry-audit-and-support` (audit hooks) | `resources-zone-control` (W5) lands the concrete Role/RoleBinding schema atop the W0 `authz.rs` skeleton; `telemetry-audit-and-support` (W5, parallel) adds only its own `authz_audit.rs` audit-emission hooks, a distinct file, so this is a false-positive overlap once split at the file (not module) level - recorded here so the integrator does not accidentally serialize two already-disjoint files under one shared symbol name |
-| `CHANGELOG.md` `## [Unreleased]` block | every slice in every wave (`ADR046-W0`-`ADR046-W8`), because the changelog gate requires release notes for any code change | no slice edits `CHANGELOG.md`; each slice writes one `changelog.d/<branch>.md` fragment carrying standard Keep a Changelog `### <Section>` headings (see `changelog.d/README.md`), which no other slice touches, and the integrator runs `cargo xtask changelog-fold` at wave close to collate every fragment into `## [Unreleased]` by section and delete the consumed fragments. The `test-changelog` gate accepts either a `CHANGELOG.md` entry or a fragment, so slices never need the shared file |
+| `CHANGELOG.md` `## [Unreleased]` block | every slice in every wave (`ADR046-W0`-`ADR046-W8`), because the changelog gate requires release notes for any code change | no slice edits `CHANGELOG.md`; each slice writes one `changelog.d/<branch>.md` fragment carrying standard Keep a Changelog `### <Section>` headings (see `changelog.d/README.md`), which no other slice touches, and the integrator runs `cargo run --manifest-path packages/Cargo.toml -p xtask -- changelog-fold` at wave close to collate every fragment into `## [Unreleased]` by section and delete the consumed fragments. The `test-changelog` gate accepts either a `CHANGELOG.md` entry or a fragment, so slices never need the shared file |
 
 Any newly discovered contention during wave execution is added to this table
 in the same PR that discovers it; the parent decision register process
@@ -970,6 +972,13 @@ new test framework.
 | Each Layer-1 hermetic shard (`make test-rust` split) | ≤60 s |
 | Classified bounded crypto/property exception | named per test; capped case count; declared higher per-test budget |
 
+The runtime-ledger gate today enforces only the individual-test and
+per-crate rows above over its pinned closed census (presently a single
+crate). The multi-suite aggregate and per-shard rows are target budgets for
+the deferred follow-up `runtime-ledger-full-census-and-real-shards`, which
+grows the census to a real multi-crate shard inventory; the gate has no shard
+dimension until that lands.
+
 **Placement rules (a violation must move, never gain a sleep/timeout/`#[ignore]`):**
 
 - `src/` units and `tests/` are in-process only - deterministic fake
@@ -988,10 +997,11 @@ new test framework.
 **Runtime ledger + timing gate.** A machine-readable test-runtime ledger and
 a timing gate reuse the existing `xtask`/Make tooling (no new top-level
 `tests/*.sh` gate): they record the reference runner, repetition count, and
-per-test/crate/shard p95, enforce the absolute budgets above, report the top slow
-tests, and emit a CI artifact. The gate holds no baseline and makes no
-historical-regression claim - a slower run that still fits its budget passes -
-and growing the census to a real multi-crate shard inventory plus a genuine
+per-test/crate p95, enforce the absolute per-test and per-crate budgets above,
+report the top slow tests, and emit a CI artifact. The gate holds no baseline
+and makes no historical-regression claim - a slower run that still fits its
+budget passes - and there is no shard dimension today: growing the census to a
+real multi-crate shard inventory (with a per-shard budget) plus a genuine
 cross-machine reference baseline is the deferred follow-up
 `runtime-ledger-full-census-and-real-shards`.
 `make test-rust` and the Layer-1 hermetic shards run concurrently; expensive
@@ -1008,9 +1018,9 @@ migration/replacement work item names the exact old test selectors/files with
 a keep/adapt/move/delete disposition and a removal gate, and updates
 `tests/layer1-jobs.json`, closed gate manifests, flake/matrix/Nix-unit pins,
 generated ledgers, and CI workflow shards. Policy self-tests assert that an
-intentional slow/sleep/process/network test in a hermetic tier is rejected, a
-timing regression fails the gate, parallel isolation holds, and a retired
-legacy selector is absent.
+intentional slow/sleep/process/network test in a hermetic tier is rejected, an
+over-budget test or crate fails the gate, an incomplete or shrunk census fails
+closed, parallel isolation holds, and a retired legacy selector is absent.
 
 ## 11. Heavy-gate: sole use
 
@@ -1021,8 +1031,20 @@ redb benchmark suite (§10.4), and any cloud-tier manual run (§10.11) - MUST
 run only through one shared semaphore:
 
 ```bash
-cargo xtask heavy-gate -- <command> [args...]
+cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- <command> [args...]
 ```
+
+Invoke `xtask` this way from the repository root throughout this document so
+that root-relative path arguments and any wrapped `make` command resolve
+against the repository root; this is the form `xtask --help` emits.
+`cargo run --manifest-path` keeps the working directory at the repository root
+but, because cargo config discovery is cwd-based, does not pick up the
+`sccache` rustc-wrapper declared in `packages/.cargo/config.toml`. That
+wrapper is immaterial here: the xtask binary build is trivial and the wrapped
+`make` targets run their own cargo invocations from `packages/`, where the
+wrapper still applies. If you specifically want the wrapper for the xtask
+build itself, run `cd packages && cargo xtask ...` instead and pass any file
+arguments relative to `packages/`.
 
 This is adopted by copy/adapt (per D001/D041) from the equivalent tooling
 already proven on this codebase's sibling ADR-0045 lineage: a two-slot
@@ -1057,7 +1079,7 @@ snapshot binding:
   (digest of `content_id` + dependency graph + repository set);
 - a `snapshot_sha256` covering the same inputs, byte-for-byte.
 
-This mirrors `cargo xtask delivery wave help`'s `snapshot` subcommand as
+This mirrors `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave help`'s `snapshot` subcommand as
 already specified for this codebase's sibling ADR-0045 lineage (built here as
 work item `ADR046-delivery-002`, §17, by copy/adapt per D001/D041). Any
 content change after the snapshot - including generated output, dependency
@@ -1078,7 +1100,7 @@ gating each other:
    `make test-host-integration`, and (for waves touching device Providers)
    `make test-hardware`, all wrapped in the heavy-gate (§11), run by the
    integrator on the development host and imported as evidence via
-   `cargo xtask delivery wave validate-import` (built as work item
+   `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import` (built as work item
    `ADR046-delivery-003`, §17).
 3. **The ten-role panel** (§12.3), run against the same snapshot.
 
@@ -1114,10 +1136,10 @@ reasoning_effort: xhigh
 | `observability` | Metric-label cardinality, span-attribute hygiene, log/audit shape, retention, exporter correctness |
 | `kernel` | pidfd, cgroup, namespace, mount, signal, ioctl, filesystem semantics; kernel-version assumptions |
 
-`cargo xtask delivery wave panel-request` writes the candidate-bound request
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request` writes the candidate-bound request
 (binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ten-role
 roster, and the required `gpt-5.6-sol` model at reasoning effort `xhigh`).
-`cargo xtask delivery wave panel-attest` validates a directory containing
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest` validates a directory containing
 exactly one record per role, each shaped exactly as this repository's sibling
 ADR-0045-lineage panel-receipt artifact:
 
@@ -1150,12 +1172,12 @@ tooling (if not already present) is work item `ADR046-delivery-004`/`-005`
 
 ### 12.4 Seal, merge target, and merge eligibility
 
-`cargo xtask delivery wave seal` requires all ten panel records
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal` requires all ten panel records
 present, unanimous, and bound to the same `candidate_id`/`content_id`/
 `snapshot_sha256`, plus every §12.2 validator lane reporting success on that
 exact snapshot.
 
-`cargo xtask delivery wave merge-target` then captures the wave's current
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target` then captures the wave's current
 pull-request stack into a canonical `merge-target.json` under the candidate.
 The step performs no network I/O: the integrator produces the input out of
 band from `gh pr view --json` or `gh api` in the same step that merges (the
@@ -1163,7 +1185,7 @@ same freshness window a direct API call inside the process would have), then
 installs it:
 
 ```bash
-cargo xtask delivery wave merge-target \
+cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target \
     --seal   <state>/<wave>/<candidate>/seal.json \
     --target ./merge-target.json \
     --repo   <logical-id>=<checkout-root>
@@ -1202,7 +1224,7 @@ canonicalizes `material`, and writes the canonical `merge-target.json` so the
 gate's input is produced by a supported command rather than dropped in by
 hand.
 
-`cargo xtask delivery wave merge-eligibility` then confirms,
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility` then confirms,
 per PR in the wave's stack: the seal exists, the PR's current base/head
 still matches the sealed snapshot's recorded OIDs (or a history-only rebase
 has passed the byte-identical proof in §12.6), and every required GitHub
@@ -1263,7 +1285,7 @@ merge (§13.3).
 
 ### 13.3 Merge order
 
-1. Merge proceeds only after `cargo xtask delivery wave merge-eligibility`
+1. Merge proceeds only after `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility`
    reports eligible (§12.4) for every PR in the wave's stack.
 2. Merges follow the wave's Git Town stack root-to-leaf: `ADR046-W0`'s four
    serial steps merge in their stacked order; a wave's parallel slices
@@ -1327,7 +1349,7 @@ close, and d2b 3.0 does not release, until all of:
    `ADR-046-reset-and-cutover`.
 4. The ten-role panel (§12.3) has returned unanimous signoff on the
    `ADR046-W8` snapshot with zero recommendations, and
-   `cargo xtask delivery wave seal` + `merge-eligibility` both pass.
+   `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal` + `merge-eligibility` both pass.
 5. `CHANGELOG.md` carries a new version header under the project's existing
    Keep-a-Changelog convention (`AGENTS.md` → "Changelog & Releases"),
    summarized by version with every internal wave/finding process marker
@@ -1412,7 +1434,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-004` |
 | Dependency/owner | `ADR046-delivery-002`; spec-set integrator |
-| Current source | `packages/xtask/src/gen_spec_set.rs` (invoked as `cargo run -p xtask -- spec-registry`) has since landed and now generates the `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract described in `docs/specs/README.md`; remaining effort is hardening, not creation |
+| Current source | `packages/xtask/src/gen_spec_set.rs` (invoked as `cargo run --manifest-path packages/Cargo.toml -p xtask -- spec-registry`) has since landed and now generates the `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract described in `docs/specs/README.md`; remaining effort is hardening, not creation |
 | Reuse source | none required - this generator is specific to the `docs/specs/ADR-046-*` manifest shape |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` |
@@ -1463,11 +1485,11 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Current source | the test-runtime ledger has since landed as `packages/xtask/src/test_runtime_ledger.rs`, invoked by `make test-runtime-ledger` against the pinned `tests/runtime-ledger-census.json` and run as the `test-runtime-ledger` Layer-1 job; this codebase's earlier `tests/tools/` timing logs (`d2b-static-timing.$$/`) remain ad hoc and are not this candidate-bound ledger, so remaining effort is the deferred follow-up `runtime-ledger-full-census-and-real-shards` (grow the census to a real multi-crate shard inventory and add a cross-machine reference baseline), not creation and not a historical-regression gate |
 | Reuse source | existing `xtask`/`libtest --format=json` timing output; no new test framework |
 | Reuse action | adapt |
-| Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 shard targets |
-| Detailed design | Measures execution-only time (after build, warm cache) per test/crate/shard against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, and emits a machine-readable CI artifact against absolute per-test/crate/shard budgets with no baseline and no historical-regression claim (the full census across a real multi-crate shard inventory and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`); the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
+| Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 crate targets |
+| Detailed design | Measures execution-only time (after build, warm cache) per test/crate against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, and emits a machine-readable CI artifact against absolute per-test/crate budgets with no baseline, no shard dimension, and no historical-regression claim (the full census across a real multi-crate shard inventory with a per-shard budget and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`); the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
 | Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; a synthetic timing regression fails the gate; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
+| Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; an over-budget test or crate fails the gate; an incomplete or shrunk census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |
 
 ### ADR046-delivery-008
