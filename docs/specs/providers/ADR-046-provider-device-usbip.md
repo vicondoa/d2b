@@ -631,8 +631,8 @@ Process resources. They are semantic steps executed through injected EffectPorts
 - `usbip unbind --busid <id>` - `UnbindBusid` host EffectPort step
 - Per-busid OFD lock acquisition / release - `AcquireLease` / `ReleaseLease` host EffectPort steps
 - nftables firewall carve-out - `apply_firewall` /
-  `UsbipBindFirewallRule { action: Ensure, ... }` and `release_firewall` /
-  `UsbipBindFirewallRule { action: Remove, ... }`
+  `ApplyNftablesProjection { action: Apply, ... }` and `release_firewall` /
+  `ApplyNftablesProjection { action: Remove, ... }`
 - Guest-side `usbip attach` / `usbip detach` - `UsbipGuestEffectPort` steps
 
 The host adapter and guest supervisor adapter execute these internally.
@@ -777,9 +777,9 @@ pub trait UsbipEffectPort: Send + Sync {
     ) -> Result<(), UsbipEffectError>;
 
     /// Acquire a reference to the Network relay's nftables carve-out through
-    /// UsbipBindFirewallRule with action Ensure.
+    /// ApplyNftablesProjection with action Apply.
     /// The adapter validates that device_uid and network_uid are in the same Zone
-    /// before dispatching UsbipBindFirewallRule through the privileged broker.
+    /// before dispatching ApplyNftablesProjection through the privileged broker.
     /// Wrong-Zone returns WrongZone immediately without any host mutation.
     async fn apply_firewall(
         &self,
@@ -800,7 +800,7 @@ pub trait UsbipEffectPort: Send + Sync {
     ) -> Result<FirewallObservation, UsbipEffectError>;
 
     /// Remove the exact nftables carve-out through the same
-    /// UsbipBindFirewallRule request with action Remove. Validated absence is
+    /// ApplyNftablesProjection request with action Remove. Validated absence is
     /// success. The caller retains status/authority until this returns success.
     async fn release_firewall(
         &self,
@@ -839,34 +839,57 @@ pub trait UsbipGuestEffectPort: Send + Sync {
 }
 ```
 
-The framework-internal broker DTO is one closed request, not separate apply and
-release operations:
+The framework-internal broker DTO for the firewall carve-out is **not** an
+extension of the shipped `UsbipBindFirewallRule` request. The shipped
+`UsbipBindFirewallRule` op is canon
+(`packages/d2b-contracts/src/broker_wire.rs`,
+`packages/d2b-priv-broker/src/ops/usbip_firewall.rs`): it carries a single
+`bundle_usbip_firewall_intent_ref`, has **no `action` field and no release
+path**, and routes through the whole-table `render_owned_table_replace_script`
+in `ops/nft.rs`, which deletes and recreates the entire `inet d2b` table. That
+op cannot express per-projection release and cannot preserve sibling markers, so
+this Provider does **not** map `apply_firewall`/`release_firewall` onto it.
+
+Instead, both acquisition and release dispatch the new closed
+`ApplyNftablesProjection` broker op - the same projection-scoped op
+`Provider/network-local` uses (D-NETWORK-004 in `ADR-046-resources-network.md`).
+Release is therefore **net-new privileged surface**, not a rename of, or an
+`action: Remove` variant bolted onto, the shipped `UsbipBindFirewallRule` op:
 
 ```rust
-#[derive(Serialize, Deserialize)]
-pub enum UsbipBindFirewallRuleAction {
-    Ensure,
+// Defined once, in packages/d2b-contracts/src/broker_wire.rs (D-NETWORK-004);
+// device-usbip reuses it and declares no second projection op.
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub enum NftProjectionAction {
+    Apply,
     Remove,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UsbipBindFirewallRuleRequest {
-    pub action: UsbipBindFirewallRuleAction,
-    pub scope: OpaqueUsbipFirewallScope,
-    pub expected_network_generation: u64,
-    pub expected_service_generation: u64,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplyNftablesProjectionRequest {
+    pub bundle_nft_projection_ref: BundleOpId,
+    pub action: NftProjectionAction,
+    pub expected_projection_generation: u64,
+    pub tracing_span_id: Option<TracingSpanId>,
 }
 ```
 
-The closed action values are exactly `Ensure|Remove`; unknown values fail
-decoding. Both actions bind the expected Network and authority Service
-generations. `apply_firewall` maps only to `Ensure`; `release_firewall` maps only
-to `Remove`. `OpaqueUsbipFirewallScope` is resolved by Core from the validated
-Device/Network identities and carries the exact per-Network/per-busid ownership
-projection without exposing its bytes to the Provider. The request accepts no
+The closed action values are exactly `Apply|Remove`; unknown values fail
+decoding. `apply_firewall` maps only to `Apply`; `release_firewall` maps only to
+`Remove`. `bundle_nft_projection_ref` is an opaque reference that Core resolves
+from the integrity-pinned private bundle to this Device's exact
+per-Network/per-busid USBIP projection - the ownership marker plus rule set of
+the resolved `ResolvedUsbipFirewallIntent` (`nft_rule_body` + `desired_hash`) -
+without exposing its bytes to the Provider. The request accepts no
 Provider-supplied IfName, address, path, busid, ownership marker, or rule body.
-There is no release variant or second broker op.
+`expected_projection_generation` is the fence the broker validates against the
+live projection realization; the controller derives it from the current
+Network/Service realization and refreshes it whenever either resource generation
+advances. Because the op is projection-scoped it mutates only this Device's USBIP
+marker and byte-preserves every other marker in `inet d2b` - both sibling
+device-usbip per-busid markers and every `Provider/network-local` marker - so the
+two Providers preserve each other's rules by construction instead of racing the
+whole-table replace.
 
 ### Adapter responsibilities (framework-internal, NOT in Provider crate)
 
@@ -880,11 +903,13 @@ The core adapter that implements `UsbipEffectPort` is owned by the framework
    if they differ.
 3. Acquires / releases the per-busid OFD lock at
    `/run/d2b/locks/usbip/<busid>` - adapter-internal; no controller visibility.
-4. Dispatches the existing closed `UsbipBindFirewallRule` request through the
-   privileged broker (the sole privileged executor), using action `Ensure` for
+4. Dispatches the closed `ApplyNftablesProjection` request through the
+   privileged broker (the sole privileged executor), using action `Apply` for
    apply and `Remove` for release, for the complete per-Network/per-busid
-   TCP/3240 exposure. No generic network-local allow is a prerequisite and no
-   separate release op exists.
+   TCP/3240 exposure. No generic network-local allow is a prerequisite; release
+   is a distinct `action: Remove` on the same projection op and is net-new
+   privileged surface, not a capability of the shipped whole-table
+   `UsbipBindFirewallRule` op.
 5. Records the broker/core audit record **post-effect** (after the host mutation
    completes); audit is not atomic with resource store commits.
 6. Reads the same ownership projection for drift through `observe_firewall`;
@@ -892,13 +917,15 @@ The core adapter that implements `UsbipEffectPort` is owned by the framework
 7. Returns typed `UsbipEffectError` variants to the controller; no broker wire
    types, lock paths, audit structs, or nftables details leak.
 
-For `Remove`, the adapter supplies the opaque Network/busid ownership identity,
-the token, and expected Network/Service generations. The broker validates the
-generation fence and exact ownership marker before mutation. It removes only
-that ownership projection; validated absence is idempotent success, while a
-foreign marker fails closed. A transient error is retryable with the retained
+For `Remove`, the adapter supplies the opaque projection reference, the token,
+and the `expected_projection_generation` fence derived from the current
+Network/Service realization. The broker validates the generation fence and exact
+ownership marker before mutation. It removes only that ownership projection and
+byte-preserves every sibling device-usbip and network-local marker; validated
+absence is idempotent success, while a foreign marker fails closed with
+`foreign-nft-rule-preserved`. A transient error is retryable with the retained
 token/fence. `FirewallGenerationMismatch` causes a fresh dependency/status read
-before requeue and never deletes a newer realization.
+before requeue and never deletes a newer realization or the whole table.
 
 The audit record emitted by the adapter contains: zone, device name-digest,
 network name-digest, operation tag, outcome, error_class, and correlation_id.
@@ -922,7 +949,7 @@ host-module/backend → physical-lock → withhold → network-firewall/relay
 | Host module/backend | `ensure_kernel_module` and adopt/create the Host backend Process | exactly one per Host; idempotently shared |
 | Physical lock | `acquire_lease(device_uid)` | exclusive OFD claim for the Service's local Device |
 | Withhold | `withhold_device(device_uid, token)` | requires the exclusive token |
-| Network firewall/relay | reference-counted `apply_firewall` → `UsbipBindFirewallRule { action: Ensure, ... }`, `observe_firewall`, and adopt/create the Network relay Process/Endpoint authority | exactly one TCP 3240 multiplexer and firewall authority per Network; exact per-busid rules; expected Network/Service generations required |
+| Network firewall/relay | reference-counted `apply_firewall` → `ApplyNftablesProjection { action: Apply, ... }`, `observe_firewall`, and adopt/create the Network relay Process/Endpoint authority | exactly one TCP 3240 multiplexer and firewall authority per Network; exact per-busid rules; generation-fenced projection mutation that byte-preserves sibling markers |
 | Bind busid | `bind_busid(device_uid, token)` | requires backend and relay Ready |
 | Service Ready | commit Service authority status | no Guest is attached yet |
 
@@ -937,7 +964,7 @@ An attached Binding then reconciles:
 
 Binding teardown is Guest detach → private Endpoint/proxy deletion → Service slot
 release. Service deletion first drains all Bindings and exports/imports, then
-unbinds the busid, confirms `UsbipBindFirewallRule { action: Remove, ... }`,
+unbinds the busid, confirms `ApplyNftablesProjection { action: Remove, ... }`,
 then releases firewall status/token and relay authority references, releases withhold and
 physical lock, and finally releases Host backend/module references. Shared Host
 or Network authorities remain while another Service references them.
@@ -1189,10 +1216,12 @@ holds a raw address or IfName.
 The Network controller does **not** own the USBIP firewall carve-out.
 `D-NETWORK-002` in `ADR-046-resources-network` confirms:
 `device-usbip` owns the firewall semantic authority. The `apply_firewall`
-EffectPort step maps to `UsbipBindFirewallRule` action `Ensure`, and
-`release_firewall` maps to action `Remove` on that same request. These are the
-only paths that create or remove the nftables rule; no separate release op exists;
-the Network controller must not create, remove, or reference USBIP firewall
+EffectPort step maps to `ApplyNftablesProjection` action `Apply`, and
+`release_firewall` maps to action `Remove` on that same projection op. These are
+the only paths that create or remove the nftables rule; release is net-new
+privileged surface, not a capability of the shipped whole-table
+`UsbipBindFirewallRule` op; the Network controller must not create, remove, or
+reference USBIP firewall
 rules. `observe_firewall` is the only USBIP drift reader, and strict USBIP
 provider status is the only status authority. Network-local emits no generic
 TCP/3240 host or net-VM allow and excludes device-usbip markers from its digest.
@@ -1213,7 +1242,7 @@ Teardown on deletion request:
    and releases the Service/import lease.
 3. For an authority Service, drains dependent Bindings and exports, unbinds its
    busid, calls `release_firewall(device_uid, network_uid, firewall_token,
-   expected_fence)` which maps to `UsbipBindFirewallRule` action `Remove`, waits
+   expected_fence)` which maps to `ApplyNftablesProjection` action `Remove`, waits
    for confirmed effect, and only then clears firewall status/token and releases
    the relay authority reference, releases withhold and physical lease, and
    finally releases the Host backend/module reference; shared authorities remain
@@ -1279,8 +1308,8 @@ from any persisted snapshot.
 ### Audit (broker/core)
 
 The privileged broker emits an audit record **after** each
-`UsbipBindFirewallRule` attempt reaches a completed success, failure, or denial
-outcome. The core resource store emits its own audit record after each
+`ApplyNftablesProjection` attempt (for this Provider's USBIP projection) reaches
+a completed success, failure, or denial outcome. The core resource store emits its own audit record after each
 `ResourceMutationBatch` commit. These two audit records are independent events;
 the Provider controller does not own, submit, or claim ownership of either.
 
@@ -1294,12 +1323,12 @@ Each broker-emitted audit record contains:
 | --- | --- |
 | `subject` | Provider Process identity digest |
 | `zone` | Zone name |
-| `op` | `UsbipBindFirewallRule` |
-| `action` | `Ensure` or `Remove` |
+| `op` | `ApplyNftablesProjection` |
+| `action` | `Apply` or `Remove` |
 | `resource_type` | `usb.d2bus.org.UsbService` |
 | `resource_name_digest` | Stable hash of Service name; never raw busid or path |
-| `expected_network_generation` | Generation fence supplied to the closed request |
-| `expected_service_generation` | Authority Service generation fence supplied to the closed request |
+| `projection_digest` | Opaque projection-scoped digest of this Device's USBIP marker; never rule text, marker body, or projection bytes |
+| `expected_projection_generation` | Projection generation fence supplied to the closed request; derived from the current Network/Service realization |
 | `outcome` | `success \| failure \| denied` |
 | `error_class` | closed-set slug |
 | `correlation_id` | operation/trace ID from reconcile context |
@@ -1440,9 +1469,11 @@ authoritative values come from the signed bundle.
 
 `Provider/device-usbip` is the **semantic owner** of the USBIP nftables
 carve-out. Only `apply_firewall` mapped to
-`UsbipBindFirewallRule { action: Ensure, ... }` and `release_firewall` mapped
-to `UsbipBindFirewallRule { action: Remove, ... }` may create or remove USBIP
-TCP/3240 exposure; there is no separate release op. `observe_firewall` is its only
+`ApplyNftablesProjection { action: Apply, ... }` and `release_firewall` mapped
+to `ApplyNftablesProjection { action: Remove, ... }` may create or remove USBIP
+TCP/3240 exposure; release is net-new privileged surface on the same projection
+op (D-NETWORK-004), not a capability of the shipped whole-table
+`UsbipBindFirewallRule` op. `observe_firewall` is its only
 drift reader. Network-local emits no host or net-VM USBIP allow and owns no
 USBIP status. The ownership marker used in the nftables comment is constructed
 and verified by the adapter from opaque Network and busid identity, not the
@@ -1456,17 +1487,19 @@ The adapter enforces that:
 - each Service still receives exact per-busid authorization under that
   per-Network relay; releasing one busid cannot retain or remove another's
   exposure;
-- the closed `UsbipBindFirewallRule` operation installs every required
-  host-ingress/coexistence hook atomically for action `Ensure`, and action
-  `Remove` removes only the exact ownership projection, so no generic uplink
-  allow can bypass the per-busid decision;
+- the closed `ApplyNftablesProjection` operation installs every required
+  host-ingress/coexistence hook atomically for action `Apply`, and action
+  `Remove` removes only the exact ownership projection while byte-preserving
+  every sibling marker, so no generic uplink allow can bypass the per-busid
+  decision and no whole-table replace can erase a network-local or sibling
+  device-usbip marker;
 - `observe_firewall` hashes only the exact device-usbip ownership projection
   and writes drift solely to the owning Service's strict provider status;
-- `Ensure` and `Remove` are the only accepted action values; decoding any
+- `Apply` and `Remove` are the only accepted action values; decoding any
   other value fails closed;
-- both actions are bound to expected Network and authority Service
-  generations; stale values return
-  `UsbipEffectError::FirewallGenerationMismatch` with no mutation;
+- both actions are bound to the `expected_projection_generation` fence derived
+  from the current Network and authority Service realization; a stale value
+  returns `UsbipEffectError::FirewallGenerationMismatch` with no mutation;
 - `Remove` is idempotent when the exact owned rule is already absent and the
   trusted ownership state has no foreign replacement;
 - a `release_firewall` with a token that does not match the installed rule
@@ -1712,7 +1745,7 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | `packages/d2bd/src/usbip_state_machine.rs` - `CANONICAL_STEPS`, `UsbipBusidStep`, step ordering | Adapt step ordering into `src/reconcile.rs` EffectPort model; remove all broker-call sites | Step semantics and idempotency invariants preserved |
 | `packages/d2bd/src/usbip_reconcile_state.rs` - desired/carrier/bind/proxy state enums | Split into typed Service authority and per-Guest Binding status | Restart-safe reconcile model preserved without putting attachment state on Device |
 | `packages/d2b-host/src/usbip_argv.rs` - argv generators | Remain in `d2b-host`; called by the core adapter only | Provider crate has no compile dependency on `d2b-host` |
-| `packages/d2b-priv-broker/src/ops/usbip_firewall.rs` - `bind_firewall_rule`, audit structs | Adapter-internal only; Provider crate never imports this | Preserve the one closed `UsbipBindFirewallRule` request and extend it with exact action enum `Ensure|Remove` plus generation fencing; no separate release op; audit structs remain broker-internal and `UsbipBindFirewallRuleAudit` never becomes visible to Provider |
+| `packages/d2b-priv-broker/src/ops/usbip_firewall.rs` - `bind_firewall_rule`, audit structs | Adapter-internal only; Provider crate never imports this | The shipped `bind_firewall_rule`/`UsbipBindFirewallRule` op is canon and is not extended: it is bind-only, has no `action` field or release path, and does a whole-table replace. The v3 per-projection firewall model instead maps `apply_firewall`/`release_firewall` onto the new closed `ApplyNftablesProjection` op (D-NETWORK-004), so release is net-new privileged surface. Audit structs remain broker-internal and `UsbipBindFirewallRuleAudit` never becomes visible to Provider |
 | `packages/d2b-priv-broker/src/ops/usbip_host.rs` - `withhold_device` impl | Adapter-internal | Same as above |
 | `packages/d2b-priv-broker/src/ops/usbip_lock.rs` - OFD lock | Adapter-internal | Lock fd never leaves adapter |
 | `packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs` | Split into fast Provider `tests/wrong_zone.rs` admission coverage and real `tests/host-integration/usbip-service.nix` firewall coverage | Old duplicate retires only after both successors pass |
@@ -1750,19 +1783,19 @@ in `d2b-contracts`; trait only. Add conformance tests in `d2b-contracts/tests/us
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-usbip-001, ADR046-zone-control-024; UsbipBindFirewallRule broker op; d2b-host usbip argv support; framework core adapter owner |
+| Dependency/owner | ADR046-usbip-001, ADR046-zone-control-024; ApplyNftablesProjection broker op (D-NETWORK-004); d2b-host usbip argv support; framework core adapter owner |
 | Current source | packages/d2bd/src/usbip_state_machine.rs, packages/d2bd/src/usbip_reconcile_state.rs, packages/d2b-host/src/usbip_argv.rs, packages/d2b-priv-broker/src/ops/usbip_firewall.rs, usbip_host.rs, and usbip_lock.rs |
 | Reuse action | adapt |
 | Destination | packages/d2b-core/src/device_usbip_adapter.rs |
-| Detailed design | Implement UsbipEffectPort in the core adapter: signed-bundle busid lookup, same-Zone validation, trusted physical-USB identity resolution, mandatory Core-derived `physical-usb-backing/v1` digest and exact `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every security-key/USB Provider, exclusive OFD claim, sole ownership of all USBIP TCP/3240 and exact per-Network/per-busid effects through the existing closed `UsbipBindFirewallRule` request with action enum `Ensure|Remove`, ownership-scoped observe/release, anti-spoof probe, one shared Host module/backend authority, one Core-derived D097 relay Endpoint/firewall authority per Network, D097 authority-index preflight/adoption, and post-effect audit. `Ensure` applies; `Remove` uses the same request, binds expected Network/Service generations, validates exact ownership, succeeds idempotently on validated absence, and fails closed on a foreign marker. No separate release op exists. Complete the shared claim before any open, withhold, bind, module, relay, firewall, or attachment effect; never expose raw busid, identity digest, path, fd, bind address, nftables body, audit structs, or broker wire types. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt into framework-internal adapter. |
+| Detailed design | Implement UsbipEffectPort in the core adapter: signed-bundle busid lookup, same-Zone validation, trusted physical-USB identity resolution, mandatory Core-derived `physical-usb-backing/v1` digest and exact `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every security-key/USB Provider, exclusive OFD claim, sole ownership of all USBIP TCP/3240 and exact per-Network/per-busid effects through the new closed `ApplyNftablesProjection` request with action enum `Apply|Remove` (D-NETWORK-004; the shipped whole-table `UsbipBindFirewallRule` op is not the firewall path), ownership-scoped observe/release, anti-spoof probe, one shared Host module/backend authority, one Core-derived D097 relay Endpoint/firewall authority per Network, D097 authority-index preflight/adoption, and post-effect audit. `Apply` applies; `Remove` uses the same projection op, binds the `expected_projection_generation` fence derived from the current Network/Service realization, validates exact ownership, succeeds idempotently on validated absence, byte-preserves every sibling marker, and fails closed on a foreign marker. Release is net-new privileged surface, not an extension of the shipped op. Complete the shared claim before any open, withhold, bind, module, relay, firewall, or attachment effect; never expose raw busid, identity digest, path, fd, bind address, nftables body, audit structs, or broker wire types. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt into framework-internal adapter. |
 | Integration | Reconcile framework injects the adapter into Provider/device-usbip; D097 authority index gates effects; adapter calls privileged broker and d2b-host argv helpers behind the semantic trait. |
 | Data migration | Full d2b 3.0 reset; adapter resumes from Service/Binding status and authority owner proofs rather than daemon-coupled snapshots |
-| Validation | Fast packages/d2b-core/tests/device_usbip_adapter.rs covers same-Zone gate, exact shared physical backing tuple derivation, byte-identical keys for USB/security-key views of one fake token, Provider-private-class/digest bypass rejection, `physical-usb-backing-conflict` before effects, separate USBIP module/relay authorities, one-module/one-relay reuse, exact closed `Ensure|Remove` decoding and same-request broker mapping, unknown-action rejection, expected Network/Service generation binding, exact Network/busid firewall scoping, validated-absence `Remove`, foreign-marker failure without mutation, ownership-scoped drift/status, transient retry with retained token/authority, independent per-busid release, no network-local dependency, anti-spoof, redaction, and no digest/busid/path/fd exposure. |
+| Validation | Fast packages/d2b-core/tests/device_usbip_adapter.rs covers same-Zone gate, exact shared physical backing tuple derivation, byte-identical keys for USB/security-key views of one fake token, Provider-private-class/digest bypass rejection, `physical-usb-backing-conflict` before effects, separate USBIP module/relay authorities, one-module/one-relay reuse, exact closed `Apply|Remove` decoding and same `ApplyNftablesProjection` broker mapping, unknown-action rejection, `expected_projection_generation` fence binding, exact Network/busid firewall scoping, validated-absence `Remove`, foreign-marker failure without mutation, sibling network-local and device-usbip marker preservation, ownership-scoped drift/status, transient retry with retained token/authority, independent per-busid release, no network-local dependency, anti-spoof, redaction, and no digest/busid/path/fd exposure. |
 | Removal proof | Old daemon-coupled adapter call sites are removed by ADR046-usbip-009 after Provider wiring and adapter tests pass. |
 
 Implement the adapter: busid lookup from signed bundle, same-Zone check, OFD lock
-management, broker dispatch for `UsbipBindFirewallRule` actions
-`Ensure|Remove`, sysfs withhold, post-effect
+management, broker dispatch of `ApplyNftablesProjection` actions
+`Apply|Remove` (D-NETWORK-004), sysfs withhold, post-effect
 audit emission. The adapter MUST NOT expose any raw busid, lock path, or broker wire
 type to the trait caller. Add unit tests for same-Zone gate and anti-spoof logic in
 `packages/d2b-core/tests/device_usbip_adapter.rs`.
@@ -1805,10 +1838,10 @@ of this Provider.
 | Current source | packages/d2bd/src/usbip_state_machine.rs and packages/d2bd/src/usbip_reconcile_state.rs |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-device-usbip/src/{controller,reconcile,export_import}.rs |
-| Detailed design | Reconcile provider-neutral authority/projection `UsbService` and per-Guest `UsbBinding` resources through strict USBIP Provider extensions, consuming UsbipEffectPort, the exact shared Host-global physical USB tuple, USBIP-private D097 authorities, and signed D096 ExportAdapter/ImportAdapter. Enforce same-Zone base and provider refs; ResourceExport authority-Service-only target; same-type ResourceImport-owned projection with `providerRef`, semantic base/import fields, no `spec.provider`, and no physical fields/effects; route selection from the signed local descriptor/import record; semantic factory fingerprint independent of separately authenticated adapter identity; exclusive fair Binding admission; encrypted bounded named-stream control/data; D088 layered status; Service/Binding finalizers; restart adoption; declared/explicit modes; no session/transfer resources. Firewall reconcile maps apply to `UsbipBindFirewallRule` action `Ensure`; finalization maps release to action `Remove` on the same request with expected Network/Service generations. Finalization retains firewall token/status and relay authority until confirmed effect, retries transient failure, refreshes on generation mismatch, and blocks fail-closed on a foreign marker. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt step machine into Provider reconcile loop. |
+| Detailed design | Reconcile provider-neutral authority/projection `UsbService` and per-Guest `UsbBinding` resources through strict USBIP Provider extensions, consuming UsbipEffectPort, the exact shared Host-global physical USB tuple, USBIP-private D097 authorities, and signed D096 ExportAdapter/ImportAdapter. Enforce same-Zone base and provider refs; ResourceExport authority-Service-only target; same-type ResourceImport-owned projection with `providerRef`, semantic base/import fields, no `spec.provider`, and no physical fields/effects; route selection from the signed local descriptor/import record; semantic factory fingerprint independent of separately authenticated adapter identity; exclusive fair Binding admission; encrypted bounded named-stream control/data; D088 layered status; Service/Binding finalizers; restart adoption; declared/explicit modes; no session/transfer resources. Firewall reconcile maps apply to `ApplyNftablesProjection` action `Apply`; finalization maps release to action `Remove` on the same projection op (D-NETWORK-004) with the `expected_projection_generation` fence derived from the current Network/Service realization. Finalization retains firewall token/status and relay authority until confirmed effect, retries transient failure, refreshes on generation mismatch, and blocks fail-closed on a foreign marker. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt step machine into Provider reconcile loop. |
 | Integration | Controller watches Device/Host/Network/Guest/Endpoint/Export/Import dependencies, calls injected EffectPorts, commits ResourceMutationBatch updates, coordinates children from ADR046-usbip-005, and delegates only semantic export/import admission to the Provider adapter while core owns D096 routing/lifecycle. |
 | Data migration | Full d2b 3.0 reset; no direct import of d2bd usbip_reconcile_state snapshots |
-| Validation | Fast tests/controller_state_machine.rs, service_binding_schema.rs, export_import.rs, authority_conflict.rs, async_loop.rs, finalizer.rs, and wrong_zone.rs cover authority/projection/Binding lifecycle, Service-only export, projection `spec.provider` rejection, semantic fingerprint stability under adapter identity changes plus separate descriptor authentication, D088 `status.resource`/`status.provider` placement, shared physical tuple collision before effects, encrypted fake streams, no physical projection effect, exclusivity, restart, WrongZone degradation, exact `Ensure|Remove` mapping, and firewall status/token/authority retention until `Remove` confirmation. |
+| Validation | Fast tests/controller_state_machine.rs, service_binding_schema.rs, export_import.rs, authority_conflict.rs, async_loop.rs, finalizer.rs, and wrong_zone.rs cover authority/projection/Binding lifecycle, Service-only export, projection `spec.provider` rejection, semantic fingerprint stability under adapter identity changes plus separate descriptor authentication, D088 `status.resource`/`status.provider` placement, shared physical tuple collision before effects, encrypted fake streams, no physical projection effect, exclusivity, restart, WrongZone degradation, exact `Apply|Remove` `ApplyNftablesProjection` mapping, and firewall status/token/authority retention until `Remove` confirmation. |
 | Removal proof | packages/d2bd/src/usbip_state_machine.rs and usbip_reconcile_state.rs are deleted by ADR046-usbip-009 once Provider parity tests pass. |
 
 Implement the Service authority/projection and Binding attachment step machines.
@@ -1819,7 +1852,7 @@ mode, and D096 export/import stream revocation.
 
 Tests required:
 - `tests/controller_state_machine.rs`: full bring-up / teardown with a
-  `FakeUsbipEffectPort`, including `Ensure`/`Remove`, generation mismatch,
+  `FakeUsbipEffectPort`, including `Apply`/`Remove`, generation mismatch,
   validated absence, transient retry, and foreign-marker failure
 - `tests/async_loop.rs`: receiver dispatches Service/Binding B while A awaits an effect
 - `tests/finalizer.rs`: finalizer add/clear through partial progress; no
@@ -1857,7 +1890,7 @@ private proxies/Endpoints. Attach/detach remains an EffectPort call.
 | Current source | packages/d2bd/src/usbip_reconcile_state.rs state fields |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-device-usbip/src/status.rs |
-| Detailed design | Define provider-neutral `UsbService` `status.resource` with whole-device availability/access counts, authority-only `physical-usb-backing` claim state, and projection-only common import state; define `UsbBinding.status.resource` with generic attachment phase/queue/generation/timestamps. Define separate strict `status.provider` USBIP details: Device probe, owner backend/relay, USBIP-owned `firewallState`/opaque digest/observed generation, imported-route observations, and Binding proxy/private Endpoint/subphase. During `UsbipBindFirewallRule` action `Remove`, strict status remains `firewallState: releasing`; the token and relay authority remain held until confirmed success, including validated absence. No common access/import/attachment field appears directly under `status`; no USBIP module, Network, Endpoint, proxy, server/client, port, firewall, or busid field enters base status; no raw backing digest, busid, path, fd, address, session/transfer ID, remote identity, or payload appears anywhere. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt state fields to typed status.provider.details. |
+| Detailed design | Define provider-neutral `UsbService` `status.resource` with whole-device availability/access counts, authority-only `physical-usb-backing` claim state, and projection-only common import state; define `UsbBinding.status.resource` with generic attachment phase/queue/generation/timestamps. Define separate strict `status.provider` USBIP details: Device probe, owner backend/relay, USBIP-owned `firewallState`/opaque digest/observed generation, imported-route observations, and Binding proxy/private Endpoint/subphase. During `ApplyNftablesProjection` action `Remove`, strict status remains `firewallState: releasing`; the token and relay authority remain held until confirmed success, including validated absence. No common access/import/attachment field appears directly under `status`; no USBIP module, Network, Endpoint, proxy, server/client, port, firewall, or busid field enters base status; no raw backing digest, busid, path, fd, address, session/transfer ID, remote identity, or payload appears anywhere. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt state fields to typed status.provider.details. |
 | Integration | Controller writes each extension atomically with its resource's common status; dependency/update propagation is Device/Export → Service/projection → Binding. |
 | Data migration | Full d2b 3.0 reset; current d2bd reconcile state is not imported |
 | Validation | Fast tests/status_serde.rs covers generic base status plus three strict USBIP detail schemas, exact `status.resource` placement for access/import/attachment/backing claim, exact `status.provider` placement for relay/firewall implementation observations, drift transition and ownership, `releasing` retention until `Remove` confirmation, rejection of semantic fields directly under `status`, mode-dependent omissions, bounded counts/refs, unknown-field denial, and a deny corpus proving USBIP-only fields are rejected from base and Network status. |
@@ -1879,7 +1912,7 @@ not ResourceTypes or compatibility aliases.
 | Current source | packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs plus new integration scenarios |
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-device-usbip/{src,tests,integration/README.md}; tests/host-integration/usbip-service.nix; tests/host-integration/hardware/usbip-service.sh |
-| Detailed design | Put provider-neutral Service/Binding base-schema separation, strict USBIP extensions, projection `spec.provider` rejection, D088 layered status, semantic factory-fingerprint independence from Provider/adapter identity, exact shared physical backing tuple/conflict, one Core-derived per-Network relay Endpoint/firewall authority, exact per-busid firewall ownership/drift/release through one `UsbipBindFirewallRule` request with closed `Ensure|Remove`, generation fencing, idempotent validated-absence `Remove`, foreign-marker fail-closed behavior, and status/token/authority retention until confirmation, arbitration, same-type export/import, encrypted fake-stream, and least-privilege process/Endpoint shape coverage in fast Layer-1 Rust tests. Include a fake direct-local Provider proving the same base contract has no USBIP dependency. Reserve runNixOSTest for real Linux usbip_host/vhci_hcd, usbipd, namespaces/nftables, TCP 3240, zero network-local carve-out, and Guest checks; reserve the hardware script for an approved physical device. Use existing Make gates only. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing network-scoping assertion and add new scenarios. |
+| Detailed design | Put provider-neutral Service/Binding base-schema separation, strict USBIP extensions, projection `spec.provider` rejection, D088 layered status, semantic factory-fingerprint independence from Provider/adapter identity, exact shared physical backing tuple/conflict, one Core-derived per-Network relay Endpoint/firewall authority, exact per-busid firewall ownership/drift/release through the closed `ApplyNftablesProjection` op with actions `Apply|Remove` (D-NETWORK-004), generation fencing, idempotent validated-absence `Remove`, foreign-marker fail-closed behavior, and status/token/authority retention until confirmation, arbitration, same-type export/import, encrypted fake-stream, and least-privilege process/Endpoint shape coverage in fast Layer-1 Rust tests. Include a fake direct-local Provider proving the same base contract has no USBIP dependency. Reserve runNixOSTest for real Linux usbip_host/vhci_hcd, usbipd, namespaces/nftables, TCP 3240, zero network-local carve-out, and Guest checks; reserve the hardware script for an approved physical device. Use existing Make gates only. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing network-scoping assertion and add new scenarios. |
 | Integration | Layer-2 lanes exercise actual kernel/backend/relay/Guest/device paths and do not duplicate pure controller/schema cases. Cross-Zone protocol logic remains hermetic with fake peers; the runNixOSTest only proves its real-system integration. |
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | `make test-host-integration` runs the non-hardware real-kernel case on a capable host; `make test-hardware` runs the explicit manual device case. No Layer-1 test opens a device, loads a module, creates a namespace, or listens on a socket. |
@@ -1889,7 +1922,7 @@ Required tests:
 
 | Path | Scenario | Gate |
 | --- | --- | --- |
-| `tests/host-integration/usbip-service.nix` | Real modules, one Host backend, one Core-derived multiplexed Network TCP 3240 Endpoint/firewall authority, exact per-busid rules, `UsbipBindFirewallRule` `Ensure|Remove` only, generation-bound ownership-scoped drift/status/release, idempotent validated-absence `Remove`, foreign-marker fail-closed, authority retained until effect confirmation, zero network-local carve-out, wrong-Zone denial, and least-privilege Guest Binding proxy/attach/revocation with fake USB backend | `make test-host-integration` |
+| `tests/host-integration/usbip-service.nix` | Real modules, one Host backend, one Core-derived multiplexed Network TCP 3240 Endpoint/firewall authority, exact per-busid rules, `ApplyNftablesProjection` `Apply|Remove` only, generation-bound ownership-scoped drift/status/release, sibling network-local and device-usbip marker preservation, idempotent validated-absence `Remove`, foreign-marker fail-closed, authority retained until effect confirmation, zero network-local carve-out, wrong-Zone denial, and least-privilege Guest Binding proxy/attach/revocation with fake USB backend | `make test-host-integration` |
 | `tests/host-integration/hardware/usbip-service.sh` | Approved physical USB device, exclusive busid, second-Binding fairness, shared Host-global USB/security-key authority conflict, data/detach, no fd/path crossing | `make test-hardware`; manual only |
 
 `packages/d2b-provider-device-usbip/integration/README.md` must document:
@@ -1909,10 +1942,10 @@ Required tests:
 | Current source | nixos-modules/components/usbip.nix guest wiring and new Zone resource declarations |
 | Reuse action | adapt |
 | Destination | nixos-modules/components/usbip.nix, nixos-modules/options-zones.nix, nixos-modules/assertions.nix |
-| Detailed design | Add Provider config; remove the old per-VM option; emit provider-neutral authority `UsbService`, per-Guest `UsbBinding`, strict USBIP Provider envelopes, and optional ResourceExport/ResourceImport authoring shapes; imported same-type projection Services remain Core-created with no `spec.provider`. Assert same-Zone base/provider refs, projection ownerRef/forbidden implementation and physical fields, Service-only export target, one Host backend/Network relay, exact Core-derived Host-global `(Host, physical-usb-backing, opaqueKeyDigest)` exclusion shared by USB/security-key, Provider-private-class bypass rejection, one `UsbipBindFirewallRule` contract with exact actions `Ensure|Remove` and no separate release operation, and retain guest vhci_hcd/tools. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt guest module, remove host-side option surface, and extend eval assertions. |
+| Detailed design | Add Provider config; remove the old per-VM option; emit provider-neutral authority `UsbService`, per-Guest `UsbBinding`, strict USBIP Provider envelopes, and optional ResourceExport/ResourceImport authoring shapes; imported same-type projection Services remain Core-created with no `spec.provider`. Assert same-Zone base/provider refs, projection ownerRef/forbidden implementation and physical fields, Service-only export target, one Host backend/Network relay, exact Core-derived Host-global `(Host, physical-usb-backing, opaqueKeyDigest)` exclusion shared by USB/security-key, Provider-private-class bypass rejection, the closed `ApplyNftablesProjection` firewall contract with exact actions `Apply|Remove` (D-NETWORK-004; release is net-new privileged surface, not an extension of the shipped whole-table `UsbipBindFirewallRule` op), and retain guest vhci_hcd/tools. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt guest module, remove host-side option surface, and extend eval assertions. |
 | Integration | Nix compiler emits Device plus provider-neutral `UsbService`/`UsbBinding` and explicit D096 resources consumed by core/Provider; guest runtime supplies USBIP proxy/attach tools; generated base and provider-extension schemas/fingerprints remain canonical. |
 | Data migration | Full d2b 3.0 reset; operators reauthor old per-VM options as Device + authority/projection Service + per-Guest Binding |
-| Validation | Fast tests/unit/nix/cases/usbip-*.nix cover schema shape, Core projection `spec.provider` rejection, D088 layered status fixtures including USBIP-owned firewall state and `releasing` retention, all reference/owner/export assertions, byte-identical USB/security-key tuple collision and private-class bypass rejection, one Core-derived 3240 Endpoint/firewall authority per Network, exact `Ensure|Remove` broker action surface with unknown values rejected and no second op, least-privilege consumer policy, absence of network-local 3240 rules, old-option removal, and guest module retention. |
+| Validation | Fast tests/unit/nix/cases/usbip-*.nix cover schema shape, Core projection `spec.provider` rejection, D088 layered status fixtures including USBIP-owned firewall state and `releasing` retention, all reference/owner/export assertions, byte-identical USB/security-key tuple collision and private-class bypass rejection, one Core-derived 3240 Endpoint/firewall authority per Network, exact `Apply|Remove` `ApplyNftablesProjection` action surface with unknown values rejected and no USBIP-specific second projection op, least-privilege consumer policy, absence of network-local 3240 rules, old-option removal, and guest module retention. |
 | Removal proof | d2b.vms.<vm>.usbip.yubikey and host-side USBIP module paths are removed at reset once Zone resource emitter coverage passes. |
 
 - Add `d2b.zones.<zone>.providers.device-usbip.config.controllerExecutionRef` option.
@@ -1979,11 +2012,11 @@ with a capped case count and declared higher per-test budget.
 | --- | --- |
 | `service_binding_schema.rs` | Provider-neutral authority/projection `UsbService` and `UsbBinding` base schemas plus strict USBIP Provider envelopes; canonical minimal base; same-Zone refs; imported projection ResourceImport ownerRef, `spec.provider` rejection, and physical-field denial; same-type Service-only explicit export; Device/Endpoint/Binding export denial |
 | `provider_neutral_base.rs` | Base specs/status reject USBIP port, Network, Endpoint, proxy, server/client, firewall, and busid fields; a fake direct-local Provider implements the same base types without USBIP schemas or aliases |
-| `controller_state_machine.rs` | Authority and Binding sequences with fake ports; shared Host backend/Network relay; Binding-owned proxy/private Endpoint; declared/explicit attach; restart and reverse teardown; apply maps to `Ensure`, release maps to `Remove`, and teardown retains firewall token/status/relay authority until confirmation |
+| `controller_state_machine.rs` | Authority and Binding sequences with fake ports; shared Host backend/Network relay; Binding-owned proxy/private Endpoint; declared/explicit attach; restart and reverse teardown; apply maps to `ApplyNftablesProjection` action `Apply`, release maps to action `Remove`, and teardown retains firewall token/status/relay authority until confirmation |
 | `authority_conflict.rs` | USBIP, fake direct-local USB, and security-key Providers resolve one fake token to a byte-identical Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple; private-class/digest bypass fails; the second claim returns `physical-usb-backing-conflict` before effects; one Host USBIP module/backend; one Core-derived TCP 3240 relay Endpoint/firewall authority per Network; multiplex reuse and deterministic conflicts |
 | `export_import.rs` | ResourceExport targets authority `usb.d2bus.org.UsbService` only; ResourceImport preserves that exact type and creates an ownerRef projection with no `spec.provider`; semantic factory fingerprint is stable under Provider/adapter identity changes while signed descriptor authentication remains exact; encrypted bounded fake control/data streams; generation/fingerprint/revocation; no fd/path/busid; sessions/transfers remain internal |
 | `effect_port_contract.rs` | `UsbipEffectPort` and `UsbipGuestEffectPort` trait object safety; firewall apply/observe/release signatures callable from Provider crate; release requires NetworkUid, borrowed FirewallToken, and FirewallGenerationFence; `FirewallGenerationMismatch`; no import of broker types or `d2b-priv-broker`; compile-time `UsbipEffectError: Clone + PartialEq + Eq`; `TransientDetail` clone/equality and manual Debug/Display both produce `<redacted>` |
-| `firewall_ownership.rs` | Exact per-Network/per-busid intent; one closed `UsbipBindFirewallRule` request; exact `Ensure|Remove` decode with unknown-action rejection; apply/release same-request mapping; expected Network/Service generation binding; one relay listener/base hook with independent busid entries; idempotent validated-absence `Remove`; foreign marker fail-closed without mutation; ownership-scoped drift and strict Service provider status; transient retry retains token/status/authority; release one busid preserves another; Network digest/status unaffected; no network-local generic rule dependency |
+| `firewall_ownership.rs` | Exact per-Network/per-busid intent; the closed `ApplyNftablesProjection` op (no USBIP-specific projection op); exact `Apply|Remove` decode with unknown-action rejection; apply/release same projection-op mapping; `expected_projection_generation` fence binding derived from Network/Service realization; one relay listener/base hook with independent busid entries; idempotent validated-absence `Remove`; foreign marker fail-closed without mutation; ownership-scoped drift and strict Service provider status; transient retry retains token/status/authority; release one busid preserves another; a network-local marker and every sibling device-usbip marker are byte-preserved across apply and release; Network digest/status unaffected; no network-local generic rule dependency; concurrent same-projection apply serialized by the generation fence with no whole-table replace |
 | `relay_endpoint_authority.rs` | Exactly one D097 relay Endpoint authority per Network; Core-derived key; multiplexed Service holders; duplicate conflict before listen/firewall effect; adapter/exact-active-Binding-only resolution; LaunchTicket connected stream; generic Network readers denied |
 | `conformance.rs` | Device/`UsbService`/`UsbBinding` ResourceTypeSchema round-trip, signed USBIP extension fingerprints, deny_unknown_fields, and Provider capability advertisement |
 | `state_volume.rs` | Controller Volume schema conformance: `stateSchema: {}`, layout `ownerRef: User/<name>` (not ComponentPrincipal), `sensitivityClass: private`, single `state` view; no cross-component Volume; dirfd delivery to controller only |
@@ -2002,7 +2035,7 @@ network bind, namespace operation, process spawn, or device open.
 
 | Path | Scenario | Gate |
 | --- | --- | --- |
-| `tests/host-integration/usbip-service.nix` | Real NixOS boot, `usbip_host`/`vhci_hcd`, one Network TCP 3240 relay Endpoint authority multiplexing two fake USB backends, exact per-busid rules, closed `Ensure|Remove` request, drift/status/reapply, generation-bound independent release, validated-absence idempotency, foreign-marker fail-closed, status/authority retention until confirmed `Remove`, zero network-local TCP/3240 rule, wrong-Zone denial, least-privilege Binding proxy/attach/revocation | `make test-host-integration`; capable host |
+| `tests/host-integration/usbip-service.nix` | Real NixOS boot, `usbip_host`/`vhci_hcd`, one Network TCP 3240 relay Endpoint authority multiplexing two fake USB backends, exact per-busid rules, the closed `ApplyNftablesProjection` op with `Apply|Remove`, drift/status/reapply, generation-bound independent release, validated-absence idempotency, foreign-marker fail-closed, sibling network-local and device-usbip marker preservation, status/authority retention until confirmed `Remove`, zero network-local TCP/3240 rule, wrong-Zone denial, least-privilege Binding proxy/attach/revocation | `make test-host-integration`; capable host |
 | `tests/host-integration/hardware/usbip-service.sh` | Approved physical USB device: shared Host-global backing and exclusive busid claims, attach/data/detach, second Binding fairness, USBIP/security-key conflict, and no fd/path crossing | `make test-hardware`; manual hardware only |
 
 `packages/d2b-provider-device-usbip/integration/README.md` indexes these Layer-2
