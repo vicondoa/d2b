@@ -146,8 +146,9 @@ authoritative and flag the drift for the integrator.
 ### Heavy lanes
 
 Every Layer-2, host-integration, hardware, live, and perf-heavy command
-runs through **one** semaphore: `cargo xtask heavy-gate`. It grants two
-slots per uid via open file description locks so concurrent heavy lanes
+runs through **one** semaphore, invoked from the repository root as `cargo
+run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate`. It grants
+two slots per uid via open file description locks so concurrent heavy lanes
 cannot oversubscribe the shared Nix store, cargo target directory, or KVM
 device. Do not add a second lock file, sleep-and-retry loop, or per-crate
 guard.
@@ -167,12 +168,24 @@ The structure is public-lane-plus-guarded-internal:
   the same semaphore.
 
 Run a heavy lane through its public target (or, for an arbitrary command,
-`cargo xtask heavy-gate -- <command>`) whenever another heavy lane might
-be running; the bare internal targets stay available only for a serial
-console. Live-host and hardware tests obey the same rule: use the gated
-live-VM smoke entrypoints (`make pre-tag` for the full gate, `make
-smoke-lite` for the lite gate) or wrap a raw live script as `cargo xtask
-heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate --
+<command>`) whenever another heavy lane might be running; the bare internal
+targets stay available only for a serial console. Live-host and hardware
+tests obey the same rule: use the gated live-VM smoke entrypoints (`make
+pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
+raw live script as `cargo run --manifest-path packages/Cargo.toml -p xtask
+-- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
+
+The `cargo run --manifest-path packages/Cargo.toml` form is deliberate:
+there is no root cargo workspace, so the bare `cargo xtask` alias resolves
+only when the working directory is `packages/`, and running it from the
+repository root fails with `no such command: xtask`. Because cargo config
+discovery is cwd-based, invoking `xtask` from the root via `--manifest-path`
+silently drops the `sccache` configuration in `packages/.cargo/config.toml`;
+that is immaterial for the gate itself. When it matters for a specific
+command, `cd packages && cargo xtask <command>` is the equivalent form -
+pick one per command and pass file arguments relative to the directory you
+run from.
 
 Invoking a live script directly is safe but not the documented path: each
 one re-executes itself through the semaphore exactly once when
@@ -213,20 +226,30 @@ The one exception is an **intentional negative example**: a fenced example
 (typically a Nix block) authored to *teach* the rule by demonstrating the
 eval-time failure that omitting `defaultUserRef` produces. Deleting that
 counter-example would lose correct teaching content, so the lint preserves
-it - but only when the block carries a greppable marker comment **inside
-the fence** that names both `d2b-lint` and `d116` (the lint matches those
-two tokens case-insensitively; the marker in use is spelled
-`# d2b-lint: expect-d116-eval-error`).
+it - but only under three exact conditions it enforces together, not the
+looser "names both `d2b-lint` and `d116`" shape earlier drafts of this
+section described:
 
-This is an unambiguous authoring signal for an intentional-rejection
-example, not a general suppression switch. It exempts only the marked
-teaching block, and the envelope lint is being pinned so the exemption
-resolves to a specific documenting file and block rather than anywhere the
-comment happens to appear. Never reach for it to silence a D116 failure on
-a shape that is meant to be valid - correct the shape instead. If you are
-adding a legitimate negative example and the exact marker spelling has
-since moved, take the requirement from `policy_adr046_envelopes` (a comment
-naming both `d2b-lint` and `d116`), not from this paragraph.
+- **One exact, case-sensitive marker.** A comment line **inside the fence**
+  whose text, after its `#` or `//` prefix is stripped, equals the marker
+  string exactly. The current spelling is `# d2b-lint: expect-d116-eval-error`;
+  the match is a whole-string, case-sensitive comparison, so a paraphrase or a
+  comment that merely mentions the `d2b-lint` and `d116` tokens does not
+  qualify.
+- **One pinned file.** The marker is honoured only in the single documenting
+  file the lint pins (currently `docs/specs/ADR-046-nix-configuration.md`).
+  The same comment anywhere else exempts nothing and fails closed.
+- **Exactly once.** The marker must appear a single time in that file. A
+  second copy makes the exemption fail closed for the whole file, so every
+  D116 block there is flagged again.
+
+This is an unambiguous authoring signal for one intentional-rejection
+example, never a general suppression switch. Never reach for it to silence a
+D116 failure on a shape that is meant to be valid - correct the shape
+instead. `policy_adr046_envelopes` is the authority for the exact spelling,
+the pinned file, and the single-occurrence scope; a concurrent hardening may
+tighten them further, so if you are adding a legitimate negative example take
+the current requirement from that lint, not from this paragraph.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](./tests/AGENTS.md).
@@ -256,7 +279,8 @@ holding the same `### <Section>` headings and entries you would have added
 to the block. Two branches never write the same file.
 
 The integrator folds the fragments at merge time with
-`make changelog-fold` (`cargo xtask changelog-fold`): entries collate by
+`make changelog-fold` (`cargo run --manifest-path packages/Cargo.toml -p
+xtask -- changelog-fold`): entries collate by
 section into `## [Unreleased]` in Keep a Changelog order, released
 versions are untouched, and the consumed fragments are deleted. A
 fragment with an unknown heading, a repeated heading, an empty section, or
