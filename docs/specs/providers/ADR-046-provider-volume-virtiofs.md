@@ -356,12 +356,13 @@ spec:
   lifecyclePolicy: owner-ref-child
 status:
   phase: Ready
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: Available
-  leaseAvailability: Available
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: Available
+    leaseAvailability: Available
   conditions: []
   update:
     state: Current

@@ -1323,12 +1323,13 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
   update:
     state: Current
     reasons: []
@@ -1364,12 +1365,13 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
   update:
     state: Current
     reasons: []
@@ -1404,12 +1406,13 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
   update:
     state: Current
     reasons: []
@@ -1449,12 +1452,13 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
   update:
     state: Current
     reasons: []

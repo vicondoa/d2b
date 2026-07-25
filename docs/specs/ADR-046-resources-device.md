@@ -114,7 +114,7 @@ status:
   phase: Ready
   conditions: []
   lastReconciledAt: 2026-07-22T00:00:01.000Z
-  device:
+  resource:
     present: true
     health: healthy
     holderRefs: [Guest/corp-vm]

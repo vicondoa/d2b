@@ -108,6 +108,7 @@ spec:
     runtimeTmpfsQuotaInodes: 1024
 status:
   phase: Pending
+  resource: {}
   update:
     state: Current
     reasons: []

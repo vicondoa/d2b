@@ -123,28 +123,29 @@ spec:
 status:
   phase: Ready
   observedGeneration: 1
-  packageDigest: "sha256:<hex>"
-  manifestDigest: "sha256:<hex>"
-  configSchemaDigest: "sha256:<hex>"
-  signatureId: "d2b-official:<fingerprint>"
-  trustEpoch: 1
-  conformanceAttestationDigest: "sha256:<hex>"
-  exports:
-    resourceTypes:
-      - name: Host
-        version: 1
-        schemaDigest: "sha256:<hex>"
-      - name: User
-        version: 1
-        schemaDigest: "sha256:<hex>"
-  components:
-    controllers:
-      - id: host-controller
-        phase: Ready
-      - id: user-controller
-        phase: Ready
-  dependencyHealth: []
-  disabledCondition: null
+  resource:
+    packageDigest: "sha256:<hex>"
+    manifestDigest: "sha256:<hex>"
+    configSchemaDigest: "sha256:<hex>"
+    signatureId: "d2b-official:<fingerprint>"
+    trustEpoch: 1
+    conformanceAttestationDigest: "sha256:<hex>"
+    exports:
+      resourceTypes:
+        - name: Host
+          version: 1
+          schemaDigest: "sha256:<hex>"
+        - name: User
+          version: 1
+          schemaDigest: "sha256:<hex>"
+    components:
+      controllers:
+        - id: host-controller
+          phase: Ready
+        - id: user-controller
+          phase: Ready
+    dependencyHealth: []
+    disabledCondition: null
   update:
     state: Current
     reasons: []
@@ -616,12 +617,13 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
   update:
     state: Current
     reasons: []

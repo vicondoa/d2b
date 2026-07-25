@@ -131,6 +131,7 @@ status:
   startedAt: 2026-07-22T00:00:00.000Z
   completedAt: null
   outcome: null
+  resource: {}
   update:
     state: Current
     reasons: []
@@ -1053,6 +1054,7 @@ status:
   startedAt: null
   completedAt: null
   outcome: null
+  resource: {}
   update:
     state: Current
     reasons: []
@@ -1317,6 +1319,7 @@ status:
   startedAt: null
   completedAt: null
   outcome: null
+  resource: {}
   update:
     state: Current
     reasons: []

@@ -648,17 +648,19 @@ The D094 execution budgets in `ADR-046-validation-and-delivery` §10.16 are
 measurable and are recorded, not asserted by feel:
 
 - **Reference runner.** The pinned CI/reference runner class (fixed vCPU/RAM
-  shape) is recorded with the ledger; the same class is used for the
-  historical regression comparison so a budget change reflects test cost, not
-  hardware drift.
+  shape) is recorded with the ledger so a recorded figure reflects test cost,
+  not hardware drift; a genuine cross-machine reference baseline is the
+  deferred follow-up `runtime-ledger-full-census-and-real-shards`.
 - **Repetitions and statistic.** Each measured test/crate/shard is executed a
   fixed, recorded repetition count with a warm cache; the reported figure is
   the p95 of execution-only time (build excluded).
-- **Fail/regression policy.** A run fails when any budget in §10.16 is
-  exceeded or when a test/crate/shard regresses beyond the recorded historical
-  threshold versus the previous committed ledger. A classified crypto/property
-  exception is compared only against its own declared per-test budget and
-  capped case count.
+- **Fail policy.** A run fails when a budget in §10.16 is exceeded on the
+  freshly recorded ledger; the gate holds no baseline and makes no
+  historical-regression claim, so a slower run that still fits its budget
+  passes. A historical-regression gate built on top of these budgets is the
+  deferred follow-up `runtime-ledger-full-census-and-real-shards`. A classified
+  crypto/property exception is compared only against its own declared per-test
+  budget and capped case count.
 - **Cold compile tracked separately.** Cold compilation time is recorded on a
   separate line and optimized through shared cache and dependency discipline;
   it is never mixed into the execution budgets, and correctness never depends
@@ -859,8 +861,8 @@ decisions/work items" row.
 | Reuse source | existing `libtest --format=json` timing output and `xtask` (no new test framework) |
 | Reuse action | adapt |
 | Destination | `proofs/test-runtime-budget-spike/`; the committed baseline ledger consumed by `ADR046-delivery-007` |
-| Detailed design | Establishes the D094 measurement baseline: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a regression |
-| Integration | Output ledger shape is consumed by the runtime ledger/timing gate; establishes the historical threshold seed |
+| Detailed design | Establishes the D094 measurement reference: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a budget violation |
+| Integration | Output ledger shape is consumed by the runtime ledger/timing gate as absolute per-test/crate/shard budgets; a historical-regression baseline built on top of them is the deferred follow-up `runtime-ledger-full-census-and-real-shards` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets |
 | Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces the baseline against the real crate set |
