@@ -861,8 +861,9 @@ fields that request panel, agent, or model metadata.
   (W2fu4 H10) for the full retrospective.
 
 - **Signing.** Sign-offs / GPG signing are not used.
-- **Typography.** No em-dash (U+2014) in the subject or the body; use
-  a spaced hyphen. See the Don'ts entry for the repository-wide rule.
+- **Typography.** Only the ASCII hyphen `-` may spell a dash in the
+  subject or the body. See the Don'ts entry for the repository-wide rule
+  and the banned codepoint list.
 - **AI/tool attribution.** Do not tag or list the AI agent, assistant,
   or model used in commit subjects, commit bodies, PR descriptions,
   changelog entries, or shipped docs. Do not add `Co-authored-by`
@@ -1046,23 +1047,32 @@ Touch these only with a clear plan and a corresponding test run.
   sections. See [Versioning & changelog](#versioning--changelog).
   The functional `d2b.defaultSwitchReadiness.<wave>` option
   surface is the one deliberate exception.
-- **Don't use the em-dash character (U+2014, spelled `\u2014`)
-  anywhere in the repository.** Not in source, comments, string
-  literals, CLI help or error text, documentation prose, ADRs, specs,
-  changelog entries, commit messages, or PR bodies. Use a spaced
-  hyphen ` - `, or restructure the sentence. This rule deliberately
-  names the codepoint rather than printing the character, because the
+- **Don't spell a dash with anything but the ASCII hyphen `-`.** Not in
+  source, comments, string literals, CLI help or error text, documentation
+  prose, ADRs, specs, changelog entries, commit messages, or PR bodies.
+  The banned class is every non-ASCII dash codepoint: U+2010 hyphen,
+  U+2011 non-breaking hyphen, U+2012 figure dash, U+2013 en dash,
+  U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign, U+FE58 small
+  em dash, and U+FF0D fullwidth hyphen. Where one of those would have
+  separated clauses, use a spaced hyphen ` - ` or restructure the
+  sentence; where it joined a range or a compound, close it up to `-`.
+  This rule names codepoints rather than printing characters, because the
   gate below would flag this very line. `make check-tier0` scans every
-  tracked and every non-ignored untracked file and fails closed with
-  the offending `file:line` list, so a reintroduced em-dash breaks the
-  build rather than surviving review. When a test genuinely needs the
-  codepoint (a parser tolerance case, the gate's own pattern) spell it
-  as an escape such as `"\u{2014}"` or `$'\u2014'`, never as the
-  character. The en-dash `-` (U+2013) is deliberately out of scope:
-  the ADR-046 work-item tokenizer treats it as a separator while a
-  plain hyphen is an ID character, so rewriting a range like
-  `ADR046-network-001-004` would mint a nonexistent dependency ID.
-  Banning it is a separate decision.
+  tracked and every non-ignored untracked file and fails closed with the
+  offending `file:line` list, so a reintroduced character breaks the build
+  rather than surviving review. When a test genuinely needs one of them
+  (a parser tolerance case, the gate's own patterns) spell it as an escape
+  such as `"\u{2014}"` or `$'\u2014'`, never as the character.
+  One hazard is worth knowing before you paste text in: the ADR-046
+  work-item tokenizer treats a typographic dash as a token separator but a
+  plain hyphen as an id character, so an id range that was spelled with a
+  typographic dash fuses into a single grammatically valid but nonexistent
+  id when normalized. `spec-registry` fails closed on the dangling
+  dependency rather than corrupting the graph. Respell such a range as an
+  enumeration instead of defeating the check; see the `Dependency/owner`
+  cell for `ADR046-network-005` in
+  `docs/specs/ADR-046-resources-network.md` for the shape that survives
+  normalization.
 - **Don't let a host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside

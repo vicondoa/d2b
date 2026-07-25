@@ -4,7 +4,7 @@
 # Pure host-local checks only:
 #   * bash -n on tracked shell scripts under tests/, scripts/, harness/ubuntu/
 #   * shellcheck --severity=warning on the same scripts when available
-#   * repository-wide em-dash (U+2014) ban
+#   * repository-wide ban on every non-ASCII dash codepoint
 #
 # Intentionally excludes nix eval, cargo fmt/clippy/test, and derivation
 # materialization; those stay in tests/static-fast.sh and tests/static.sh.
@@ -13,11 +13,23 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
-# U+2014 EM DASH, spelled as a shell escape rather than as the literal
-# character. Two reasons, both load-bearing: the gate below bans that character
-# repository-wide and would otherwise flag its own source, and a future editor
-# cannot "helpfully" retype the pattern as the character it is looking for.
-EM_DASH=$'\u2014'
+# Every non-ASCII dash codepoint. Only the plain ASCII hyphen may spell a dash
+# anywhere in this repository, so the whole class is rejected rather than just
+# the characters that happen to appear today; a future paste of any of them
+# fails the same way.
+#
+#   U+2010 hyphen            U+2011 non-breaking hyphen  U+2012 figure dash
+#   U+2013 en dash           U+2014 em dash              U+2015 horizontal bar
+#   U+2212 minus sign        U+FE58 small em dash        U+FF0D fullwidth hyphen
+#
+# Each is spelled as a shell escape rather than as the literal character. Two
+# reasons, both load-bearing: the scan below would otherwise flag its own
+# source, and a future editor cannot "helpfully" retype a pattern as the
+# character it is looking for.
+DASHES=(
+  $'\u2010' $'\u2011' $'\u2012' $'\u2013' $'\u2014'
+  $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
+)
 
 log() {
   printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2
@@ -32,7 +44,7 @@ fail() {
   exit 1
 }
 
-# Fail closed on any em-dash under `$1`.
+# Fail closed on any non-ASCII dash under `$1`.
 #
 # When `$1` is the root of a git work tree the scope is every file git would
 # ship plus every untracked file that is not ignored, which excludes .git/,
@@ -42,10 +54,10 @@ fail() {
 # directory is invisible to git ls-files and would otherwise scan nothing. Both
 # paths hand grep the whole file list at once rather than looping per file, and
 # grep -I drops binaries so the scan cannot choke on one.
-scan_em_dash() {
+scan_dashes() {
   local root="$1"
-  local -a files=()
-  local hits toplevel
+  local -a files=() patterns=()
+  local dash hits toplevel
 
   root=$(cd "$root" && pwd -P)
   toplevel=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)
@@ -54,19 +66,23 @@ scan_em_dash() {
   else
     mapfile -d '' files < <(cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0)
   fi
-  [ "${#files[@]}" -gt 0 ] || fail "em-dash scan found no files under $root"
+  [ "${#files[@]}" -gt 0 ] || fail "dash scan found no files under $root"
 
-  hits=$(cd "$root" && grep -nHIF -e "$EM_DASH" -- "${files[@]}") || true
+  for dash in "${DASHES[@]}"; do
+    patterns+=(-e "$dash")
+  done
+
+  hits=$(cd "$root" && grep -nHIF "${patterns[@]}" -- "${files[@]}") || true
   if [ -n "$hits" ]; then
     printf '%s\n' "$hits" >&2
-    fail "em-dash (U+2014) is banned repository-wide ($(printf '%s\n' "$hits" | wc -l) line(s) above); use a spaced hyphen ' - ' or restructure the sentence"
+    fail "only the ASCII hyphen '-' may spell a dash; a banned dash codepoint appears on $(printf '%s\n' "$hits" | wc -l) line(s) above"
   fi
-  ok "no em-dash (U+2014) in ${#files[@]} files"
+  ok "no non-ASCII dash in ${#files[@]} files"
 }
 
 # Exposed so the gate's own test can drive the scan over a fixture tree.
-if [ "${1:-}" = "--scan-em-dash" ]; then
-  scan_em_dash "${2:-$ROOT}"
+if [ "${1:-}" = "--scan-dashes" ]; then
+  scan_dashes "${2:-$ROOT}"
   exit 0
 fi
 
@@ -86,6 +102,6 @@ else
   log "  SKIP: shellcheck not installed; syntax-only tier0 pass"
 fi
 
-scan_em_dash "$ROOT"
+scan_dashes "$ROOT"
 
 ok "tier0 fast gate complete"
