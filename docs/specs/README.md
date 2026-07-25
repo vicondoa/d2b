@@ -17,7 +17,7 @@ The parent decision is
 The parent and every manifest-listed spec form one atomic normative set:
 
 - all files move from `Proposed` to `Accepted` together, and every member is
-  `Proposed` today; this is a documentation-only set under user review;
+  `Accepted`; this is a documentation-only set;
 - a content change to any member invalidates validation and panel evidence for
   the set;
 - no spec may silently override another spec;

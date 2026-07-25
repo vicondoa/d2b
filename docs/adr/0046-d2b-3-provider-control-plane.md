@@ -437,8 +437,8 @@ manifests. The generated implementation DAG
 spec and work item to a dependency-ordered `W0`–`W7` launch wave and a
 file-disjoint parallel group; like the manifests it is a generated non-member
 artifact and does not change the 55-member count. This decision and every member
-are `Proposed` and reviewed as one atomic unit; the PR delivers documentation
-only.
+are `Accepted` and were reviewed as one atomic unit; the PR delivers
+documentation only.
 
 Foundation and platform (15): resource object model / three-layer status
 ([`ADR-046-resource-object-model`](../specs/ADR-046-resource-object-model.md)),
