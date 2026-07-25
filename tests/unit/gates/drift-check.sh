@@ -55,6 +55,8 @@ run_xtask gen-cli-shell-artifacts
 run_xtask gen-cli-schemas
 run_xtask gen-guest-proto
 run_xtask gen-guest-ttrpc
+run_xtask spec-registry
+run_xtask implementation-graph
 
 drift_paths=(
   docs/reference/schemas/
@@ -63,6 +65,10 @@ drift_paths=(
   docs/manpages/
   docs/completions/
   docs/reference/cli-output/
+  docs/specs/ADR-046-spec-set.json
+  docs/specs/ADR-046-work-items.json
+  docs/specs/ADR-046-implementation-graph.json
+  docs/specs/ADR-046-implementation-graph.md
   packages/d2b-contracts/src/generated
   packages/d2b-guestd/src/generated
 )

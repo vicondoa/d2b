@@ -90,7 +90,10 @@ use d2b_realm_core::{
 use schemars::schema::RootSchema;
 
 mod delivery;
+mod gen_spec_set;
+mod implementation_graph;
 mod inventory;
+mod test_runtime_ledger;
 
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
@@ -358,9 +361,18 @@ fn main() -> std::process::ExitCode {
             run_inventory(Some(PathBuf::from(output.as_str())))
         }
         [command, rest @ ..] if command == "delivery" => delivery::run_cli(rest),
+        [command] if command == "spec-registry" => {
+            run_task("spec-registry", || gen_spec_set::generate(repo_root()?))
+        }
+        [command] if command == "implementation-graph" => run_task("implementation-graph", || {
+            implementation_graph::generate(repo_root()?)
+        }),
+        [command, rest @ ..] if command == "test-runtime-ledger" => {
+            test_runtime_ledger::run_cli(rest)
+        }
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-eligibility|help> [options]>"
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|spec-registry|implementation-graph|test-runtime-ledger <record|check|lint|help> [options]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
