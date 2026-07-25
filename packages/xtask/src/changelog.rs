@@ -444,16 +444,88 @@ pub fn fold_repo(repo_root: &Path, mode: Mode) -> Result<Outcome, FoldError> {
         return Ok(outcome);
     }
 
-    fs::write(&changelog_path, folded)
-        .map_err(|err| FoldError::single(format!("{CHANGELOG_FILE}: cannot write: {err}")))?;
-    for name in &outcome.folded {
-        let path = repo_root.join(FRAGMENT_DIR).join(name);
-        fs::remove_file(&path).map_err(|err| {
-            FoldError::single(format!("{FRAGMENT_DIR}/{name}: cannot remove: {err}"))
-        })?;
-    }
+    apply_fold(repo_root, &changelog_path, &folded, &outcome.folded)?;
 
     Ok(outcome)
+}
+
+/// Commit a computed fold to disk atomically, with rollback on any failure.
+///
+/// The changelog rewrite and the fragment removals are made all-or-nothing so a
+/// partial write or a failed removal can never leave a corrupted changelog,
+/// duplicated entries on retry, or a half-consumed fragment set. The steps:
+///
+/// 1. Stage the new changelog into a private staging directory on the same
+///    filesystem as the target (a rename across it is atomic).
+/// 2. Reserve every consumed fragment by moving it into the staging directory
+///    *before* the changelog is promoted, so a failure here rolls back to the
+///    original tree byte-for-byte.
+/// 3. Promote the staged changelog over `CHANGELOG.md` with a single atomic
+///    rename.
+/// 4. Discard the staging directory. It lives outside `changelog.d/`, so even a
+///    failed final cleanup cannot poison a later fold (the fragments are already
+///    gone from their canonical names, so a retry is a no-op).
+fn apply_fold(
+    repo_root: &Path,
+    changelog_path: &Path,
+    folded: &str,
+    folded_names: &[String],
+) -> Result<(), FoldError> {
+    let fragment_dir = repo_root.join(FRAGMENT_DIR);
+    let staging = repo_root.join(format!(".changelog-fold.{}.tmp", std::process::id()));
+
+    // A stale staging directory from an interrupted earlier run must not leak
+    // into this one.
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir(&staging).map_err(|err| {
+        FoldError::single(format!(
+            "{CHANGELOG_FILE}: cannot create staging directory: {err}"
+        ))
+    })?;
+
+    let staged_changelog = staging.join("CHANGELOG.md.new");
+    if let Err(err) = fs::write(&staged_changelog, folded) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(FoldError::single(format!(
+            "{CHANGELOG_FILE}: cannot stage rewrite: {err}"
+        )));
+    }
+
+    // Reserve fragments by moving them aside. `reserved` records the moves so
+    // they can be undone in reverse if a later step fails.
+    let mut reserved: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    let rollback = |reserved: &[(std::path::PathBuf, std::path::PathBuf)]| {
+        for (canonical, aside) in reserved.iter().rev() {
+            let _ = fs::rename(aside, canonical);
+        }
+        let _ = fs::remove_dir_all(&staging);
+    };
+
+    for name in folded_names {
+        let canonical = fragment_dir.join(name);
+        let aside = staging.join(name);
+        if let Err(err) = fs::rename(&canonical, &aside) {
+            rollback(&reserved);
+            return Err(FoldError::single(format!(
+                "{FRAGMENT_DIR}/{name}: cannot reserve for removal: {err}"
+            )));
+        }
+        reserved.push((canonical, aside));
+    }
+
+    // Promote the rewrite. Only now does CHANGELOG.md change.
+    if let Err(err) = fs::rename(&staged_changelog, changelog_path) {
+        rollback(&reserved);
+        return Err(FoldError::single(format!(
+            "{CHANGELOG_FILE}: cannot promote rewrite: {err}"
+        )));
+    }
+
+    // The fold is committed. The reserved fragments are already gone from their
+    // canonical names, so discarding the staging directory is pure cleanup; a
+    // failure here cannot corrupt the changelog or double-fold on retry.
+    let _ = fs::remove_dir_all(&staging);
+    Ok(())
 }
 
 /// `cargo xtask changelog-fold [--check]`.
@@ -765,6 +837,221 @@ mod tests {
         assert!(
             err.reasons()[0].contains("no '## [Unreleased]' heading"),
             "{err}"
+        );
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    /// A throwaway repository tree under the gitignored `.agent-tmp/` scratch
+    /// root, cleaned up on drop even when a test panics.
+    struct TempRepo {
+        root: PathBuf,
+    }
+
+    impl TempRepo {
+        fn new(tag: &str) -> Self {
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(2)
+                .expect("repo root above packages/xtask")
+                .to_path_buf();
+            let base = repo_root.join(".agent-tmp").join("xtask-changelog");
+            fs::create_dir_all(&base).expect("create scratch base");
+            let unique = format!(
+                "{tag}.{}.{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let root = base.join(unique);
+            fs::create_dir_all(root.join(FRAGMENT_DIR)).expect("create changelog.d");
+            TempRepo { root }
+        }
+
+        fn write_changelog(&self, body: &str) {
+            fs::write(self.root.join(CHANGELOG_FILE), body).expect("write changelog");
+        }
+
+        fn write_fragment(&self, name: &str, body: &str) {
+            fs::write(self.root.join(FRAGMENT_DIR).join(name), body).expect("write fragment");
+        }
+
+        fn changelog(&self) -> String {
+            fs::read_to_string(self.root.join(CHANGELOG_FILE)).expect("read changelog")
+        }
+
+        fn fragment_names(&self) -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(self.root.join(FRAGMENT_DIR))
+                .expect("read changelog.d")
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.root, fs::Permissions::from_mode(0o755));
+            let _ = fs::set_permissions(
+                self.root.join(FRAGMENT_DIR),
+                fs::Permissions::from_mode(0o755),
+            );
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn load_fragments_rejects_a_non_md_regular_file() {
+        let repo = TempRepo::new("non-md");
+        repo.write_fragment("valid.md", "### Added\n\n- ok\n");
+        repo.write_fragment("notes.txt", "loose text file\n");
+        let err = load_fragments(&repo.root).expect_err("non-.md entry rejected");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("notes.txt") && reason.contains("must be named")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn load_fragments_rejects_a_symlink_fragment() {
+        let repo = TempRepo::new("symlink");
+        repo.write_changelog(CHANGELOG);
+        repo.write_fragment("real.md", "### Added\n\n- ok\n");
+        std::os::unix::fs::symlink(
+            repo.root.join(CHANGELOG_FILE),
+            repo.root.join(FRAGMENT_DIR).join("link.md"),
+        )
+        .expect("create symlink");
+        let err = load_fragments(&repo.root).expect_err("symlink rejected");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("link.md") && reason.contains("not a regular file")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn load_fragments_rejects_invalid_utf8() {
+        let repo = TempRepo::new("utf8");
+        fs::write(
+            repo.root.join(FRAGMENT_DIR).join("bad.md"),
+            [0xffu8, 0xfe, 0x00, 0x41],
+        )
+        .expect("write non-utf8 bytes");
+        let err = load_fragments(&repo.root).expect_err("invalid utf-8 rejected");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("bad.md") && reason.contains("cannot read")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn load_fragments_skips_readme_and_accepts_valid_fragments() {
+        let repo = TempRepo::new("readme");
+        repo.write_fragment(FRAGMENT_README, "not a fragment, just docs\n");
+        repo.write_fragment("change.md", "### Added\n\n- ok\n");
+        let fragments = load_fragments(&repo.root).expect("valid load");
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragments[0].name, "change.md");
+    }
+
+    #[test]
+    fn fold_repo_applies_rewrite_and_consumes_every_fragment() {
+        let repo = TempRepo::new("apply");
+        repo.write_changelog(CHANGELOG);
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+        repo.write_fragment("feature-b.md", "### Fixed\n\n- fix from b\n");
+
+        let outcome = fold_repo(&repo.root, Mode::Apply).expect("fold applies");
+        assert_eq!(outcome.folded.len(), 2);
+
+        let folded = repo.changelog();
+        assert!(folded.contains("- from a\n"), "{folded}");
+        assert!(folded.contains("- fix from b\n"), "{folded}");
+        assert!(repo.fragment_names().is_empty(), "fragments consumed");
+
+        let again = fold_repo(&repo.root, Mode::Apply).expect("second run is a no-op");
+        assert!(again.folded.is_empty());
+        assert_eq!(
+            repo.changelog(),
+            folded,
+            "second run leaves changelog stable"
+        );
+    }
+
+    #[test]
+    fn fold_repo_rolls_back_when_a_fragment_cannot_be_reserved() {
+        let repo = TempRepo::new("reserve-fail");
+        repo.write_changelog(CHANGELOG);
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+        let before = repo.changelog();
+
+        let dir = repo.root.join(FRAGMENT_DIR);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        // Root bypasses directory permission bits; the injection is a no-op then.
+        if fs::rename(dir.join("feature-a.md"), dir.join(".probe")).is_ok() {
+            let _ = fs::rename(dir.join(".probe"), dir.join("feature-a.md"));
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipping fold_repo reservation-failure test: running as root");
+            return;
+        }
+
+        let err = fold_repo(&repo.root, Mode::Apply).expect_err("reservation fails");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("cannot reserve")),
+            "{err}"
+        );
+
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(repo.changelog(), before, "changelog left byte-unchanged");
+        assert_eq!(
+            repo.fragment_names(),
+            vec!["feature-a.md".to_string()],
+            "fragment left intact"
+        );
+    }
+
+    #[test]
+    fn fold_repo_leaves_tree_unchanged_when_staging_cannot_be_created() {
+        let repo = TempRepo::new("stage-fail");
+        repo.write_changelog(CHANGELOG);
+        repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
+        let before = repo.changelog();
+
+        fs::set_permissions(&repo.root, fs::Permissions::from_mode(0o555)).unwrap();
+        // Root bypasses directory permission bits; the injection is a no-op then.
+        if fs::create_dir(repo.root.join(".probe-writable")).is_ok() {
+            let _ = fs::remove_dir(repo.root.join(".probe-writable"));
+            fs::set_permissions(&repo.root, fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipping fold_repo staging-failure test: running as root");
+            return;
+        }
+
+        let err = fold_repo(&repo.root, Mode::Apply).expect_err("staging fails");
+        assert!(
+            err.reasons()
+                .iter()
+                .any(|reason| reason.contains("staging directory")),
+            "{err}"
+        );
+
+        fs::set_permissions(&repo.root, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(repo.changelog(), before, "changelog left byte-unchanged");
+        assert_eq!(
+            repo.fragment_names(),
+            vec!["feature-a.md".to_string()],
+            "fragment left intact"
         );
     }
 }
