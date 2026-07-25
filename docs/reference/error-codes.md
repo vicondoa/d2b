@@ -132,6 +132,62 @@ Note: the `tier-0-legacy-uses-nixos-module` and
 originate as broker-side audit decisions; the CLI re-uses the same
 docs anchors when intercepting them before reaching the broker.
 
+## Host-check diagnostic codes
+
+`d2b host check` runs a battery of host-posture probes. A probe that reports
+a required failure or an advisory warning emits the same host-verb refusal
+envelope described above, with a kebab-case `code` that resolves to a stable
+anchor so the CLI, the goldens, and cross-references share one target. Probe
+codes that originate as a broker audit decision (for example the `cgroup-*`,
+`ifname-*`, and `nm-managed-foreign-conflict` codes) reuse their anchor in
+the [Audit decision code catalog](#audit-decision-code-catalog) below; the
+rows here catalog the probe-only codes. The authoritative field-by-field
+spec for each code is its golden pair under
+`tests/golden/cli-output/host-check-<code>.{json,txt}`; the rows below carry
+the anchor and a one-line summary of what the probe checks.
+
+| docs anchor | code | exit code | probe |
+| --- | --- | --- | --- |
+| <a id="no-kvm"></a>`#no-kvm` | `no-kvm` | `1` | Whether `/dev/kvm` is present and accessible. |
+| <a id="no-cgroup-v2"></a>`#no-cgroup-v2` | `no-cgroup-v2` | `1` | Whether the host runs the unified cgroup v2 hierarchy. |
+| <a id="unsupported-kernel"></a>`#unsupported-kernel` | `unsupported-kernel` | `1` | Whether the running kernel meets d2b's minimum supported version. |
+| <a id="missing-group"></a>`#missing-group` | `missing-group` | `1` | Whether the `d2b` group exists on the host. |
+| <a id="socket-perms-wrong"></a>`#socket-perms-wrong` | `socket-perms-wrong` | `1` | Whether `/run/d2b/public.sock` has the mode/owner/group `d2bd.service` asserts on bind. There is no `d2bd.socket` unit: the daemon binds the socket itself and re-asserts its mode/owner/group each time it binds, so `systemctl restart d2bd.service` recreates the socket and repairs the drift. |
+| <a id="stale-lock"></a>`#stale-lock` | `stale-lock` | `1` | Whether a `/run/d2b/locks/<vm>` lockfile is owned by a live process. |
+| <a id="manifest-skew"></a>`#manifest-skew` | `manifest-skew` | `1` | Whether the installed manifest matches the activated NixOS generation. |
+| <a id="hardlink-fs-mismatch"></a>`#hardlink-fs-mismatch` | `hardlink-fs-mismatch` | `1` | Whether the per-VM `/nix/store` hardlink farm filesystem supports hardlinks into `/nix/store`. |
+| <a id="nftables-conflict"></a>`#nftables-conflict` | `nftables-conflict` | `1` | Whether a conflicting nft framework is active alongside d2b's policy. |
+| <a id="firewall-coexistence-mismatch"></a>`#firewall-coexistence-mismatch` | `firewall-coexistence-mismatch` | `1` | Whether the declared `firewallCoexistence` manager matches the running stack. |
+| <a id="foreign-nft-rule-shadows-d2b"></a>`#foreign-nft-rule-shadows-d2b` | `foreign-nft-rule-shadows-d2b` | `1` | Whether a higher-priority foreign nft rule shadows the `inet d2b` table. |
+| <a id="nm-reload-failed"></a>`#nm-reload-failed` | `nm-reload-failed` | `1` | Whether `nmcli general reload conf` succeeded after writing the unmanaged drop-in. |
+| <a id="tap-creation-denied"></a>`#tap-creation-denied` | `tap-creation-denied` | `1` | Whether the broker can create a TAP fd via `TUNSETIFF` (requires `CAP_NET_ADMIN`). |
+| <a id="profile-rejects-root"></a>`#profile-rejects-root` | `profile-rejects-root` | `1` | Whether the minijail profile refuses uid 0 inside the sandbox. |
+| <a id="seccomp-denial"></a>`#seccomp-denial` | `seccomp-denial` | `1` | Whether the seccomp policy denies undeclared syscalls. |
+
+Every row's exit `1` is an advisory `#host-check-warning`; `host check` still
+returns exit `2` (`#host-check-failure`) whenever its summary carries a
+required failure.
+
+## Host-prepare and host-destroy apply codes
+
+`d2b host prepare --apply` and `d2b host destroy --apply` refuse before or
+during their mutation when a precondition fails, emitting the same host-verb
+refusal envelope with a kebab-case `code` anchored here. Broker-side audit
+decisions these verbs surface (for example the `nft-coexistence-*`,
+`route-preflight-*`, and `cgroup-*` codes) are cataloged under
+[Audit decision code catalog](#audit-decision-code-catalog); the rows below
+are the apply-path codes that do not originate as a broker audit decision.
+The authoritative field-by-field spec for each code is its golden pair under
+`tests/golden/cli-output/host-prepare-<code>.{json,txt}` or
+`tests/golden/cli-output/host-destroy-<code>.{json,txt}`.
+
+| docs anchor | code | exit code | what_was_checked | observed_state |
+| --- | --- | --- | --- | --- |
+| <a id="legacy-no-prepare-apply"></a>`#legacy-no-prepare-apply` | `legacy-no-prepare-apply` | `78` | Whether a legacy bash dispatch attempted a mutating `host prepare --apply`. | The legacy bash path is retired; the CLI refuses by design and directs the operator to re-run the Rust `d2b host prepare --apply`. |
+| <a id="nft-foreign-rule-flush-attempted"></a>`#nft-foreign-rule-flush-attempted` | `nft-foreign-rule-flush-attempted` | `1` | Whether an nft apply refused to flush a foreign table. | The broker observed an nft ruleset replace targeting a non-d2b table and refused; d2b never flushes foreign rules, so this is fail-closed. Restrict nft batches to `table inet d2b`. |
+| <a id="legacy-no-destroy-apply"></a>`#legacy-no-destroy-apply` | `legacy-no-destroy-apply` | `78` | Whether a legacy bash dispatch attempted a mutating `host destroy --apply`. | The legacy bash path is retired; the CLI refuses by design and directs the operator to re-run the Rust `d2b host destroy --apply`. |
+| <a id="vm-still-running-refused"></a>`#vm-still-running-refused` | `vm-still-running-refused` | `1` | Whether all VMs in the bundle are stopped before `host destroy --apply`. | At least one VM is still running (a cloud-hypervisor process was detected); stop the listed VMs with `d2b down <vm>` and retry the destroy. |
+
 ## `vm exec` exit codes
 
 `d2b vm exec` applies its own reserved exit-code contract on top
