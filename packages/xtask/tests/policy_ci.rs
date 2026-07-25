@@ -9,6 +9,12 @@ const ALLOWLISTED_WORKFLOWS: &[&str] = &[
     ".github/workflows/release-host-binaries.yml",
 ];
 
+const V3_PR_GATE_WORKFLOWS: &[&str] = &[
+    ".github/workflows/eval-with-entra-id.yml",
+    ".github/workflows/pr-eval-shell-tests.yml",
+    ".github/workflows/pr-l1-static-fast.yml",
+];
+
 const APPROVED_MAKE_TARGETS: &[&str] = &[
     "check",
     "check-ci",
@@ -120,4 +126,19 @@ fn ci_uses_make_allowlist_is_intentional_and_bounded() {
         ],
         "workflow make-target exceptions must stay reviewed and bounded"
     );
+}
+
+#[test]
+fn v3_pr_gates_are_enabled() {
+    for rel in V3_PR_GATE_WORKFLOWS {
+        let content = read_repo_file(rel);
+        assert!(
+            content.contains("pull_request:\n    branches: [main, v3]"),
+            "{rel} must run for pull requests targeting main and v3"
+        );
+        assert!(
+            content.contains("push:\n    branches: [main, v3]"),
+            "{rel} must run for pushes to main and v3"
+        );
+    }
 }
