@@ -90,6 +90,7 @@ use d2b_realm_core::{
 use schemars::schema::RootSchema;
 
 mod delivery;
+mod heavy_gate;
 mod inventory;
 
 const SCHEMA_VERSION: &str = "v2";
@@ -358,9 +359,10 @@ fn main() -> std::process::ExitCode {
             run_inventory(Some(PathBuf::from(output.as_str())))
         }
         [command, rest @ ..] if command == "delivery" => delivery::run_cli(rest),
+        [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-eligibility|help> [options]>"
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-eligibility|help> [options]|heavy-gate -- <command> [args...]>"
             );
             std::process::ExitCode::FAILURE
         }
