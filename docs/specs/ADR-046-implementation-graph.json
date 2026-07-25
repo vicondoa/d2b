@@ -16234,7 +16234,7 @@
       "exitGate" : "ADR046-W4 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-network-005",
       "kind" : "work-item",
-      "owner" : "ADR046-network-001–004; network-local controller owner; D-NETWORK-001, D-NETWORK-002, and D-NETWORK-003 resolved",
+      "owner" : "ADR046-network-001 to 004; network-local controller owner; D-NETWORK-001, D-NETWORK-002, and D-NETWORK-003 resolved",
       "parallelGroup" : "wi:ADR-046-resources-network",
       "prerequisites" : [
         "ADR-046-resources-network",

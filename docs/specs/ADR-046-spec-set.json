@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "734a35f2fe60790ef556cf8135cddee54b2e0a7786cfb6c13907f3dd5437c16a",
+      "sha256" : "ac7ce9b69bfe3d3831dcbb330aef286e90291f0b65a6fe90e9baaf04896c7552",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
