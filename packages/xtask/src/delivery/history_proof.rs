@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn a_different_wave_fails_the_proof() {
         let mut changed = rebased();
-        changed.wave = "w1".to_owned();
+        changed.wave = "W1".to_owned();
         let error = prove(&fixtures::material(), &changed).expect_err("different wave");
         assert!(error.message().contains("different waves"), "{error}");
     }

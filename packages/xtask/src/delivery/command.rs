@@ -1,6 +1,6 @@
 //! Delivery CLI argument parsing, the `wave` subcommand table, and dispatch.
 //!
-//! `main.rs` forwards `cargo xtask delivery <args...>` here. Each workflow
+//! `main.rs` forwards `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery <args...>` here. Each workflow
 //! stage owns its own module; this file only routes to it and fails closed for
 //! any stage that has not landed.
 
@@ -37,7 +37,7 @@ A merge-target document (the --target input) is:
   \"pull_requests\": [
     {
       \"repository\": \"<logical repository id, exactly as passed to --repo>\",
-      \"number\": <pull request number>,
+      \"number\": 42,
       \"base_ref\": \"<base branch name>\",
       \"base_oid\": \"<base commit object id, 40 or 64 hex characters>\",
       \"head_ref\": \"<head branch name>\",
@@ -50,7 +50,8 @@ A merge-target document (the --target input) is:
 Every required check must read \"success\"; pending, failure, neutral, skipped, \
 cancelled, stale, timed_out, action_required, and startup_failure all fail \
 closed, as does a pull request with no required checks or a sealed repository \
-with no pull request.
+with no pull request. Every \"number\" is a positive integer identifying the \
+pull request (42 above is an example); 0 is rejected.
 
 Offline recipe (no network I/O happens inside this stage):
 
@@ -65,7 +66,7 @@ Offline recipe (no network I/O happens inside this stage):
       material: $s[0].material,
       pull_requests: [ /* one object per repository, shaped as above */ ]
     }' > merge-target.json
-  cargo xtask delivery wave merge-target \
+  cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target \
       --seal \"$SEAL\" --target merge-target.json --repo <logical-id>=<checkout-root>
 
 merge-target validates the shape, canonicalizes the material, and installs \
@@ -164,38 +165,40 @@ impl WaveCommand {
     /// express.
     pub fn synopsis(self) -> &'static str {
         match self {
-            Self::Help => "cargo xtask delivery wave help",
+            Self::Help => {
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave help"
+            }
             Self::Snapshot => {
-                "cargo xtask delivery wave snapshot --program NAME --wave ID \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot --program NAME --wave ID \
                  --repo LOGICAL_ID=CHECKOUT_ROOT --base LOGICAL_ID=REVISION \
                  [--head LOGICAL_ID=REVISION] [--edge FROM=TO] \
                  [--generated NAME=LOGICAL_ID:PATH] [--dependency NAME=LOGICAL_ID:PATH] \
                  [--contract NAME=LOGICAL_ID:PATH] [--state-dir DIR]"
             }
             Self::ValidateImport => {
-                "cargo xtask delivery wave validate-import --snapshot PATH --validation NAME \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import --snapshot PATH --validation NAME \
                  --result passed|failed --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--lane github-ci|local-host] [--command TEXT] [--log PATH] [--locator TEXT] \
                  [--candidate CANDIDATE_ID] [--state-dir DIR]"
             }
             Self::PanelRequest => {
-                "cargo xtask delivery wave panel-request --snapshot PATH \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request --snapshot PATH \
                  --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
             }
             Self::PanelAttest => {
-                "cargo xtask delivery wave panel-attest --snapshot PATH --records DIR \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest --snapshot PATH --records DIR \
                  --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
             }
             Self::Seal => {
-                "cargo xtask delivery wave seal --snapshot PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal --snapshot PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
             }
             Self::MergeTarget => {
-                "cargo xtask delivery wave merge-target --seal PATH --target PATH \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target --seal PATH --target PATH \
                  --repo LOGICAL_ID=CHECKOUT_ROOT [--state-dir DIR]"
             }
             Self::MergeEligibility => {
-                "cargo xtask delivery wave merge-eligibility --seal PATH \
+                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility --seal PATH \
                  --repo LOGICAL_ID=CHECKOUT_ROOT [--target PATH] [--state-dir DIR]"
             }
         }
@@ -311,7 +314,7 @@ impl StateHelp {
                 .to_owned(),
             layout:
                 "delivery state is laid out as <state-root>/<wave>/<candidate>/<artifact>, for \
-                 example <state-root>/w0/<candidate-id>/snapshot.json"
+                 example <state-root>/W0/<candidate-id>/snapshot.json"
                     .to_owned(),
             chaining:
                 "each stage reports its output in the artifact field as a state-root-relative \
@@ -376,7 +379,7 @@ pub struct WorkflowCommandHelp {
     pub work_item: String,
 }
 
-/// Routes `cargo xtask delivery <args...>`.
+/// Routes `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery <args...>`.
 pub fn dispatch(args: &[String]) -> Result<WorkflowOutput> {
     match args {
         [group, rest @ ..] if group == "wave" => dispatch_wave(rest),
@@ -440,7 +443,9 @@ fn usage() -> String {
         .map(WaveCommand::as_str)
         .collect::<Vec<_>>()
         .join("|");
-    format!("usage: cargo xtask delivery wave <{stages}> [options]")
+    format!(
+        "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave <{stages}> [options]"
+    )
 }
 
 /// Long-option parser shared by every wave stage.
@@ -687,7 +692,7 @@ mod tests {
             "\"required_checks\"",
             "\"conclusion\": \"success\"",
             "seal.json",
-            "cargo xtask delivery wave merge-target",
+            "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target",
         ] {
             assert!(
                 schema.contains(token),

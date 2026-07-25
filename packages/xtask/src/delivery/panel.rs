@@ -49,7 +49,7 @@ use super::{
         PANEL_ATTESTATION_ARTIFACT_KIND, PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY,
         PANEL_REASONING_EFFORT_POLICY, PANEL_REQUEST_ARTIFACT_KIND, PANEL_ROLES, PanelRole,
         SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes,
-        validate_bounded_string, validate_identifier, validate_sha256,
+        validate_bounded_string, validate_identifier, validate_program_wave, validate_sha256,
     },
     storage::{CandidateDir, MAX_JSON_BYTES, PANEL_DIR, PANEL_REQUEST_FILE, StateRoot},
 };
@@ -194,8 +194,7 @@ impl PanelRequest {
             "panel record",
         )?;
         ensure_schema(self.record_schema_version, "panel record")?;
-        validate_identifier(&self.program, "program")?;
-        validate_identifier(&self.wave, "wave")?;
+        validate_program_wave(&self.program, &self.wave)?;
         ensure_panel_binding(&self.provider, &self.model_version, &self.reasoning_effort)?;
         if self.roles != PANEL_ROLES {
             return Err(DeliveryError::new(
@@ -520,7 +519,7 @@ pub fn open_candidate(
     Ok((candidate, snapshot))
 }
 
-/// `cargo xtask delivery wave panel-request`.
+/// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request`.
 pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
     let (state, snapshot_path) = parse_snapshot_invocation(args)?;
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
@@ -537,7 +536,7 @@ pub fn request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Work
         .with_artifact(candidate, &candidate.panel_request_path())
 }
 
-/// `cargo xtask delivery wave panel-attest`.
+/// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest`.
 pub fn run_attest(args: &[String]) -> Result<WorkflowOutput> {
     let (state, snapshot_path, records_dir) = parse_attest_invocation(args)?;
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
@@ -841,7 +840,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output.artifact.as_deref(),
-            Some(format!("w0/{}/panel-request.json", snapshot.candidate_id.as_str()).as_str()),
+            Some(format!("W0/{}/panel-request.json", snapshot.candidate_id.as_str()).as_str()),
             "the artifact must be a state-root-relative reference, not an absolute path"
         );
 

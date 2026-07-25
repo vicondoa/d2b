@@ -288,9 +288,9 @@ pub enum EvidenceResult {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateMaterial {
-    /// Delivery program the wave belongs to, for example `adr046`.
+    /// Delivery program the wave belongs to; always `ADR046`.
     pub program: String,
-    /// Wave identifier from spec section 3.2, for example `w0`.
+    /// Wave identifier from spec section 3.2, one of `W0`..`W8`.
     pub wave: String,
     pub repository_set: Vec<RepositoryRecord>,
     pub dependency_graph: Vec<DependencyEdge>,
@@ -320,8 +320,7 @@ impl CandidateMaterial {
             MAX_DEPENDENCY_EDGES,
             "dependency edges",
         )?;
-        validate_identifier(&self.program, "program")?;
-        validate_identifier(&self.wave, "wave")?;
+        validate_program_wave(&self.program, &self.wave)?;
 
         self.repository_set.sort();
         self.dependency_graph.sort();
@@ -607,6 +606,50 @@ pub fn validate_identifier(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// The one delivery program this tooling serves: ADR 0046. Spec section 3.2
+/// (`docs/specs/ADR-046-validation-and-delivery.md`) defines a closed wave
+/// namespace `ADR046-W0`..`ADR046-W8`, split here into the fixed program
+/// component and the closed wave component.
+pub const ADR046_PROGRAM: &str = "ADR046";
+
+/// The closed set of ADR 0046 wave identifiers, `W0` through `W8`. There is no
+/// generic or operator-chosen wave: a value outside this set - a username, a
+/// branch name, or any free-form string - is rejected before it can name a
+/// state directory or be emitted in an artifact reference.
+pub const ADR046_WAVES: [&str; 9] = ["W0", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"];
+
+/// Rejects any wave outside the closed ADR 0046 namespace.
+///
+/// The wave becomes a path component (`<state-root>/<wave>/<candidate>/...`)
+/// and is echoed verbatim in every stage's `artifact` reference, so allowing a
+/// free-form identifier would let a username or other operator string leak
+/// into structured output. Membership in the fixed [`ADR046_WAVES`] set is the
+/// only accepted form.
+pub fn validate_wave(wave: &str) -> Result<()> {
+    if !ADR046_WAVES.contains(&wave) {
+        return Err(DeliveryError::new(format!(
+            "delivery wave must be one of {} - the closed ADR 0046 wave namespace",
+            ADR046_WAVES.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects any program/wave pair outside the closed ADR 0046 namespace.
+///
+/// The program must be exactly [`ADR046_PROGRAM`] and the wave must be a member
+/// of [`ADR046_WAVES`]. This is the single gate every stage runs before it
+/// creates delivery state or emits an artifact reference, so no name-like value
+/// can reach a state directory name or structured stdout.
+pub fn validate_program_wave(program: &str, wave: &str) -> Result<()> {
+    if program != ADR046_PROGRAM {
+        return Err(DeliveryError::new(format!(
+            "delivery program must be {ADR046_PROGRAM} - the only supported ADR 0046 program"
+        )));
+    }
+    validate_wave(wave)
+}
+
 pub fn validate_repository_id(id: &str) -> Result<()> {
     validate_bounded_string(id, "repository identity")?;
     let parts = id.split('/').collect::<Vec<_>>();
@@ -689,8 +732,8 @@ pub(crate) mod fixtures {
 
     pub fn material() -> CandidateMaterial {
         CandidateMaterial {
-            program: "adr046".to_owned(),
-            wave: "w0".to_owned(),
+            program: "ADR046".to_owned(),
+            wave: "W0".to_owned(),
             repository_set: vec![RepositoryRecord {
                 id: "github.com/example/d2b".to_owned(),
                 object_format: GitObjectFormat::Sha1,
@@ -874,6 +917,56 @@ mod tests {
             digest
         );
         assert_eq!(serde_json::to_string(&snapshot).expect("serialize"), digest);
+    }
+
+    #[test]
+    fn the_wave_namespace_is_the_closed_adr046_set() {
+        // Every closed wave is accepted.
+        for wave in ADR046_WAVES {
+            validate_wave(wave).expect("a closed wave is accepted");
+            validate_program_wave(ADR046_PROGRAM, wave).expect("the closed pair is accepted");
+        }
+        // Name-like and free-form waves are rejected: a username, a branch
+        // name, the historical lowercase spelling, and an out-of-range number.
+        for wave in [
+            "alice",
+            "feature-branch",
+            "w0",
+            "W9",
+            "",
+            "W0 ",
+            "adr046-w0",
+        ] {
+            assert!(
+                validate_wave(wave).is_err(),
+                "a wave outside the closed set must be rejected: {wave:?}"
+            );
+            assert!(
+                validate_program_wave(ADR046_PROGRAM, wave).is_err(),
+                "the pair must be rejected for a name-like wave: {wave:?}"
+            );
+        }
+        // The program is fixed: a name-like program is rejected even with a
+        // valid wave.
+        for program in ["alice", "adr046", "ADR-046", "ADR047", ""] {
+            assert!(
+                validate_program_wave(program, "W0").is_err(),
+                "a program outside the closed namespace must be rejected: {program:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_like_wave_is_rejected_by_canonicalize() {
+        let mut named = material();
+        "alice".clone_into(&mut named.wave);
+        let error = named
+            .digests()
+            .expect_err("a name-like wave must not derive digests");
+        assert!(
+            error.message().contains("closed ADR 0046 wave namespace"),
+            "unexpected message: {error}"
+        );
     }
 
     #[test]

@@ -166,7 +166,7 @@ impl From<serde_json::Error> for DeliveryError {
     }
 }
 
-/// Entry point for `cargo xtask delivery <args...>`.
+/// Entry point for `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery <args...>`.
 ///
 /// Renders the workflow result as one JSON object on stdout, or a diagnostic
 /// on stderr with the failure class' nonzero exit code.

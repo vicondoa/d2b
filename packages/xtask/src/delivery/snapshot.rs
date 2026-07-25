@@ -1,7 +1,7 @@
 //! Immutable candidate snapshot creation (spec section 12.1, work item
 //! `ADR046-delivery-002`).
 //!
-//! `cargo xtask delivery wave snapshot` binds one wave's stack into a single
+//! `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot` binds one wave's stack into a single
 //! immutable candidate:
 //!
 //! * the exact base commit and head commit of every repository in the wave's
@@ -43,8 +43,8 @@ use super::{
     model::{
         CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge, Fingerprint,
         GitObjectFormat, RepositoryRecord, SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema,
-        sha256_bytes, validate_git_ref, validate_identifier, validate_repo_relative_path,
-        validate_repository_id,
+        sha256_bytes, validate_git_ref, validate_identifier, validate_program_wave,
+        validate_repo_relative_path, validate_repository_id,
     },
     storage::{CandidateDir, MAX_ARTIFACT_BYTES, MAX_JSON_BYTES, SNAPSHOT_FILE, StateRoot},
 };
@@ -120,7 +120,7 @@ impl WaveSnapshot {
     }
 }
 
-/// Routes `cargo xtask delivery wave snapshot`.
+/// Routes `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let request = SnapshotRequest::parse(args)?;
     let root = StateRoot::prepare(&request.checkout_roots()?, request.state_dir.as_deref())?;
@@ -282,8 +282,7 @@ impl SnapshotRequest {
         let state_dir = options.optional_path("--state-dir")?;
         options.finish()?;
 
-        validate_identifier(&program, "program")?;
-        validate_identifier(&wave, "wave")?;
+        validate_program_wave(&program, &wave)?;
 
         let mut repositories = Vec::with_capacity(checkouts.len());
         for (id, checkout) in checkouts {
@@ -688,9 +687,9 @@ pub(crate) mod tests {
         pub(crate) fn snapshot_args(&self) -> Vec<String> {
             [
                 "--program",
-                "adr046",
+                "ADR046",
                 "--wave",
-                "w0",
+                "W0",
                 "--repo",
                 &format!("github.com/example/d2b={}", self.repo().display()),
                 "--base",
@@ -717,7 +716,7 @@ pub(crate) mod tests {
         read_file(
             &root
                 .path()
-                .join("w0")
+                .join("W0")
                 .join(current_candidate(fixture).as_str())
                 .join(SNAPSHOT_FILE),
         )
@@ -795,7 +794,7 @@ pub(crate) mod tests {
         assert_eq!(baseline.candidate_id, rebased.candidate_id);
         assert_ne!(baseline.snapshot_sha256, rebased.snapshot_sha256);
         assert_eq!(
-            std::fs::read_dir(fixture.state().join("w0"))
+            std::fs::read_dir(fixture.state().join("W0"))
                 .expect("list wave directory")
                 .count(),
             1,
@@ -826,7 +825,7 @@ pub(crate) mod tests {
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let snapshot_path = root
             .path()
-            .join("w0")
+            .join("W0")
             .join(baseline.candidate_id.as_str())
             .join(SNAPSHOT_FILE);
         let (candidate, view) =
@@ -932,7 +931,7 @@ pub(crate) mod tests {
         let snapshot = take(&fixture);
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let candidate = root
-            .existing_candidate("w0", &snapshot.candidate_id)
+            .existing_candidate("W0", &snapshot.candidate_id)
             .expect("candidate");
 
         let mut forged = snapshot.clone();
@@ -954,7 +953,7 @@ pub(crate) mod tests {
         let fixture = GitFixture::new("snapshot-tamper");
         let mut snapshot = take(&fixture);
         snapshot.verify().expect("an untouched snapshot verifies");
-        snapshot.material.wave = "w1".to_owned();
+        snapshot.material.wave = "W1".to_owned();
         assert!(
             snapshot.verify().is_err(),
             "edited material must fail verification"
@@ -975,7 +974,7 @@ pub(crate) mod tests {
         let snapshot = take(&fixture);
         let expected = fixture
             .state()
-            .join("w0")
+            .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join(SNAPSHOT_FILE);
         assert!(expected.is_file(), "snapshot must live at {expected:?}");
