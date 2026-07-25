@@ -5,6 +5,20 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
+
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This live lane mutates real host, KVM, and daemon state, so it must never
+# bypass the heavy-gate semaphore that serialises every heavy lane against the
+# shared host and devices. When invoked outside the gate, re-exec through it
+# exactly once; the gate exports D2B_HEAVY_GATE across the re-exec so the next
+# pass runs the real work.
+if [ -z "${D2B_HEAVY_GATE:-}" ]; then
+  _hg_xtask="${CARGO_TARGET_DIR:-$ROOT/packages/target}/debug/xtask"
+  if [ ! -x "$_hg_xtask" ]; then
+    ( cd "$ROOT/packages" && cargo build --quiet -p xtask )
+  fi
+  exec "$_hg_xtask" heavy-gate -- bash "$0" "$@"
+fi
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 

@@ -34,7 +34,8 @@
       "test-flake-x86",
       "test-flake-aarch64",
       "test-drift",
-      "test-policy"
+      "test-policy",
+      "test-runtime-ledger"
     ],
     "rollupJob": "check",
     "rollupNeeds": [
@@ -46,7 +47,8 @@
       "test-flake-x86",
       "test-flake-aarch64",
       "test-drift",
-      "test-policy"
+      "test-policy",
+      "test-runtime-ledger"
     ],
     "allowedSkippedRollupJobs": ["test-changelog"]
   },
@@ -161,6 +163,15 @@
       "ciJobId": "test-policy",
       "needs": ["tier0"],
       "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-runtime-ledger": {
+      "displayName": "Runtime execution-budget ledger gate",
+      "makeTarget": "test-runtime-ledger",
+      "ciKind": "rust",
+      "ciJobId": "test-runtime-ledger",
+      "needs": ["tier0"],
+      "timeoutMinutes": 30,
       "runsOn": "ubuntu-latest"
     }
   }
