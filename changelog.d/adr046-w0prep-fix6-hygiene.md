@@ -8,3 +8,12 @@
   resolves to a stable anchor in `docs/reference/error-codes.md`, so the
   `docs_anchor` an operator follows from a diagnostic lands on a real entry
   rather than a dangling link.
+- Corrected the AGENTS.md description of the envelope-lint negative-example
+  exemption so it matches the lint: one exact, case-sensitive marker, honoured
+  only in the single pinned documenting file and only when it appears once,
+  with `policy_adr046_envelopes` named as the authority for the exact spelling.
+- Corrected the contributor documentation for running heavy gates and folding
+  changelog fragments: the `xtask` alias resolves only from `packages/`, so the
+  documented invocation is now the root-safe
+  `cargo run --manifest-path packages/Cargo.toml -p xtask -- ...`, with the
+  `cd packages && cargo xtask ...` alternative noted for the `sccache` path.
