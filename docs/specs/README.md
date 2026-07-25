@@ -37,7 +37,7 @@ manifests, and the generated implementation-graph artifacts
 **Foundation and platform (15):**
 
 - [`ADR-046-decision-register`](ADR-046-decision-register.md) - resolved
-  decisions (through D098)
+  decisions (through D118)
 - [`ADR-046-terminology-and-identities`](ADR-046-terminology-and-identities.md)
 - [`ADR-046-resource-object-model`](ADR-046-resource-object-model.md)
 - [`ADR-046-resource-store-redb`](ADR-046-resource-store-redb.md)
