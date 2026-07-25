@@ -623,19 +623,124 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
             ))
         })?;
     if !output.status.success() {
-        // Report the git operation and its exit status, never the checkout path
-        // or the raw subprocess stderr (git error text routinely interpolates
-        // absolute paths).
+        // git returns the same nonzero status for a missing object, dubious
+        // ownership, a permission error, corruption, and not-a-repository, so a
+        // bare exit status is undiagnosable. Map the well-known stderr classes
+        // to stable, path-free reason codes; for anything unrecognized emit a
+        // bounded sanitized cause with the checkout root, every path token, and
+        // control characters redacted. The raw subprocess stderr, which
+        // routinely interpolates absolute paths, is never forwarded verbatim.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = classify_git_stderr(&stderr);
+        let status = match output.status.code() {
+            Some(code) => format!("exit status {code}"),
+            None => "terminated by signal".to_owned(),
+        };
+        let cause = if reason == GitFailureReason::Unclassified {
+            format!("; cause: {}", sanitize_git_cause(&stderr))
+        } else {
+            String::new()
+        };
         return Err(DeliveryError::new(format!(
-            "git {} failed in the repository checkout{}",
+            "git {} failed in the repository checkout ({status}; reason: {}{cause})",
             args.join(" "),
-            match output.status.code() {
-                Some(code) => format!(" (exit status {code})"),
-                None => String::new(),
-            }
+            reason.code()
         )));
     }
     Ok(output.stdout)
+}
+
+/// A git failure mapped to a safe, path-free reason code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitFailureReason {
+    MissingObject,
+    NotARepository,
+    UnsafeOwnership,
+    PermissionDenied,
+    CorruptRepository,
+    Unclassified,
+}
+
+impl GitFailureReason {
+    fn code(self) -> &'static str {
+        match self {
+            Self::MissingObject => "missing-object",
+            Self::NotARepository => "not-a-repository",
+            Self::UnsafeOwnership => "unsafe-ownership",
+            Self::PermissionDenied => "permission-denied",
+            Self::CorruptRepository => "corrupt-repository",
+            Self::Unclassified => "unclassified",
+        }
+    }
+}
+
+/// Maps git's stderr to a stable reason code without echoing any of it.
+///
+/// The reason codes carry no path or host detail, so they are always safe to
+/// surface. Ordering is by specificity: ownership and repository-shape
+/// failures are recognized before the broad missing-object class.
+fn classify_git_stderr(stderr: &str) -> GitFailureReason {
+    let lower = stderr.to_ascii_lowercase();
+    let has = |needle: &str| lower.contains(needle);
+    if has("dubious ownership") || has("unsafe repository") {
+        GitFailureReason::UnsafeOwnership
+    } else if has("not a git repository") {
+        GitFailureReason::NotARepository
+    } else if has("permission denied") {
+        GitFailureReason::PermissionDenied
+    } else if has("corrupt") || has("loose object") || has("unable to read tree") {
+        GitFailureReason::CorruptRepository
+    } else if has("does not exist")
+        || has("not a valid object")
+        || has("unknown revision")
+        || has("bad revision")
+        || has("ambiguous argument")
+        || has("no such path")
+    {
+        GitFailureReason::MissingObject
+    } else {
+        GitFailureReason::Unclassified
+    }
+}
+
+/// Reduces an unrecognized git stderr to a bounded, path-free snippet.
+///
+/// The first non-empty line is kept; every whitespace-separated token that
+/// carries a `/` (an absolute or relative filesystem path, or a URL) is
+/// replaced with `<path>`, control characters are dropped, and the result is
+/// truncated on a character boundary. This keeps git's phrasing diagnosable
+/// while never disclosing the checkout layout, a username-bearing path, or a
+/// terminal-control escape.
+fn sanitize_git_cause(stderr: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let line = stderr
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let mut cleaned = String::new();
+    for (index, raw) in line.split_whitespace().enumerate() {
+        if index > 0 {
+            cleaned.push(' ');
+        }
+        if raw.contains('/') {
+            cleaned.push_str("<path>");
+        } else {
+            for character in raw.chars() {
+                cleaned.push(if character.is_control() {
+                    ' '
+                } else {
+                    character
+                });
+            }
+        }
+    }
+    let cleaned = cleaned.trim();
+    if cleaned.chars().count() > MAX_CHARS {
+        let truncated: String = cleaned.chars().take(MAX_CHARS).collect();
+        format!("{truncated}...")
+    } else {
+        cleaned.to_owned()
+    }
 }
 
 fn git_text(root: &Path, args: &[&str]) -> Result<String> {
@@ -834,6 +939,90 @@ pub(crate) mod tests {
         assert!(
             !message.contains("fatal:") && !message.to_ascii_lowercase().contains("not a git"),
             "the diagnostic must not echo raw git stderr: {message}"
+        );
+        assert!(
+            message.contains("reason: missing-object"),
+            "a missing object must surface a stable reason code: {message}"
+        );
+    }
+
+    #[test]
+    fn git_stderr_classes_map_to_stable_reason_codes() {
+        // Every recognized class collapses to a fixed, path-free reason code so
+        // the identical nonzero git exit status stays diagnosable without ever
+        // echoing the raw stderr.
+        let cases = [
+            (
+                "fatal: detected dubious ownership in repository at '/srv/checkout'",
+                GitFailureReason::UnsafeOwnership,
+                "unsafe-ownership",
+            ),
+            (
+                "fatal: not a git repository (or any of the parent directories): .git",
+                GitFailureReason::NotARepository,
+                "not-a-repository",
+            ),
+            (
+                "error: unable to read tree (deadbeef): Permission denied",
+                GitFailureReason::PermissionDenied,
+                "permission-denied",
+            ),
+            (
+                "error: object file .git/objects/ab/cd is corrupt",
+                GitFailureReason::CorruptRepository,
+                "corrupt-repository",
+            ),
+            (
+                "fatal: path 'no/such/file' does not exist in 'HEAD'",
+                GitFailureReason::MissingObject,
+                "missing-object",
+            ),
+        ];
+        for (stderr, reason, code) in cases {
+            assert_eq!(
+                classify_git_stderr(stderr),
+                reason,
+                "unexpected classification for {stderr:?}"
+            );
+            assert_eq!(reason.code(), code);
+        }
+    }
+
+    #[test]
+    fn an_unclassified_git_failure_emits_a_bounded_sanitized_cause() {
+        // A stderr line that matches no known class must still be diagnosable,
+        // but every path token, the checkout layout, and control characters are
+        // redacted before the cause reaches operator stderr.
+        let stderr =
+            "warning: unusual failure at /home/alice/projects/d2b/checkout\twith\x07control";
+        assert_eq!(classify_git_stderr(stderr), GitFailureReason::Unclassified);
+        let cause = sanitize_git_cause(stderr);
+        assert!(
+            !cause.contains("/home/alice"),
+            "the sanitized cause must not disclose the checkout path: {cause}"
+        );
+        assert!(
+            cause.contains("<path>"),
+            "the sanitized cause must mark the redacted path: {cause}"
+        );
+        assert!(
+            !cause.chars().any(|character| character.is_control()),
+            "the sanitized cause must drop control characters: {cause:?}"
+        );
+        assert!(
+            cause.contains("unusual failure"),
+            "the sanitized cause must keep the diagnosable phrasing: {cause}"
+        );
+    }
+
+    #[test]
+    fn a_sanitized_git_cause_is_bounded() {
+        let stderr = "x".repeat(4096);
+        let cause = sanitize_git_cause(&stderr);
+        assert!(
+            cause.chars().count() <= 163,
+            "the sanitized cause must stay bounded: {} chars",
+            cause.chars().count()
         );
     }
 
