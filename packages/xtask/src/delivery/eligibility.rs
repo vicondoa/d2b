@@ -100,9 +100,9 @@ use super::{
         SnapshotSha256, validate_bounded_string, validate_git_ref, validate_hash_for_format,
         validate_repository_id,
     },
-    panel::{ensure_artifact_kind, ensure_same_file, prepare_state, read_json_file},
+    panel::{ensure_artifact_kind, prepare_state, read_json_file},
     seal::SealRecord,
-    storage::{CandidateDir, HISTORY_PROOF_FILE, StateRoot},
+    storage::{CandidateDir, HISTORY_PROOF_FILE, SEAL_FILE, StateRoot},
 };
 
 pub const MERGE_TARGET_ARTIFACT_KIND: &str = "d2b-delivery/merge-target";
@@ -499,17 +499,19 @@ fn validate_oid(value: &str, format: GitObjectFormat, label: &str) -> Result<()>
 
 /// Opens the candidate directory a seal belongs to.
 ///
-/// The seal path must resolve to that candidate's own `seal.json` inside
-/// external delivery state, so an operator cannot point the gate at a seal
-/// carried in a checkout or a pull-request attachment.
+/// The candidate address is derived from the seal reference itself and the
+/// seal is read through the candidate's pinned directory descriptor (see
+/// [`StateRoot::open_candidate_artifact`]), so an operator cannot point the
+/// gate at a seal carried in a checkout or a pull-request attachment: a
+/// reference that does not resolve to a `<wave>/<candidate>/seal.json` inside
+/// external delivery state fails closed, and no supplied path is read.
 pub fn open_sealed_candidate(
     state: &StateRoot,
     seal_path: &Path,
 ) -> Result<(CandidateDir, SealRecord)> {
-    let seal: SealRecord = read_json_file(seal_path, "wave seal")?;
+    let (candidate, seal): (CandidateDir, SealRecord) =
+        state.open_candidate_artifact(seal_path, SEAL_FILE, "wave seal")?;
     seal.validate()?;
-    let candidate = state.existing_candidate(&seal.wave, &seal.candidate_id)?;
-    ensure_same_file(seal_path, &candidate.seal_path(), "wave seal")?;
     Ok((candidate, seal))
 }
 

@@ -51,7 +51,9 @@ use super::{
         SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes,
         validate_bounded_string, validate_identifier, validate_program_wave, validate_sha256,
     },
-    storage::{CandidateDir, MAX_JSON_BYTES, PANEL_DIR, PANEL_REQUEST_FILE, StateRoot},
+    storage::{
+        CandidateDir, MAX_JSON_BYTES, PANEL_DIR, PANEL_REQUEST_FILE, SNAPSHOT_FILE, StateRoot,
+    },
 };
 
 /// Upper bound on findings carried by one record. A record is a verdict, not a
@@ -499,23 +501,23 @@ pub fn stored_request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Resu
     Ok(request)
 }
 
-/// Opens the candidate directory named by a snapshot artifact.
+/// Opens the candidate directory named by a snapshot artifact reference.
 ///
-/// The snapshot path must resolve to the candidate's own `snapshot.json`
-/// inside external delivery state. That check is what keeps every later stage
-/// reading candidate-addressed state instead of an arbitrary operator path.
+/// The candidate address (wave and candidate id) is derived from the
+/// reference itself and the snapshot is read through the candidate's pinned
+/// directory descriptor (see [`StateRoot::open_candidate_artifact`]), so no
+/// supplied path is read and there is no separate canonicalize-and-compare. A
+/// reference that does not resolve to a `<wave>/<candidate>/snapshot.json`
+/// inside external delivery state fails closed. That is what keeps every later
+/// stage reading candidate-addressed state instead of an arbitrary operator
+/// path.
 pub fn open_candidate(
     state: &StateRoot,
     snapshot_path: &Path,
 ) -> Result<(CandidateDir, SnapshotView)> {
-    let snapshot: SnapshotView = read_json_file(snapshot_path, "candidate snapshot")?;
+    let (candidate, snapshot): (CandidateDir, SnapshotView) =
+        state.open_candidate_artifact(snapshot_path, SNAPSHOT_FILE, "candidate snapshot")?;
     snapshot.validate()?;
-    let candidate = state.existing_candidate(snapshot.wave(), &snapshot.candidate_id)?;
-    ensure_same_file(
-        snapshot_path,
-        &candidate.snapshot_path(),
-        "candidate snapshot",
-    )?;
     Ok((candidate, snapshot))
 }
 
@@ -708,23 +710,6 @@ fn read_file_limited(path: &Path, label: &str) -> Result<Vec<u8>> {
         )));
     }
     Ok(bytes)
-}
-
-/// Requires two paths to name the same file once resolved.
-pub(crate) fn ensure_same_file(supplied: &Path, expected: &Path, label: &str) -> Result<()> {
-    let supplied = fs::canonicalize(supplied)?;
-    let expected = fs::canonicalize(expected).map_err(|error| {
-        DeliveryError::new(format!(
-            "no {label} in candidate-addressed delivery state: {error}"
-        ))
-    })?;
-    if supplied != expected {
-        return Err(DeliveryError::new(format!(
-            "{label} must be the candidate's own artifact inside external delivery state, not \
-             the supplied path"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

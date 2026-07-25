@@ -201,12 +201,84 @@ impl StateRoot {
                 "candidate directory resolved outside the delivery state root",
             ));
         }
+        // Pin the candidate directory once by an anchored walk from `/` and
+        // retain the descriptor for the lifetime of the handle. Every later
+        // operation - snapshot and seal reads, evidence traversal, and the
+        // final write - resolves relative to this same descriptor, so a
+        // same-uid attacker cannot present a forged candidate subtree for the
+        // reads and restore the legitimate tree before the write.
+        let dir_fd = open_anchored_directory(&path)?;
         Ok(CandidateDir {
             root: self.path.clone(),
             wave: wave.to_owned(),
             candidate_id: candidate_id.clone(),
             path,
+            dir_fd,
         })
+    }
+
+    /// Resolves an operator-supplied artifact reference to the candidate that
+    /// owns it and reads that artifact through the candidate's pinned
+    /// directory descriptor.
+    ///
+    /// The candidate address (wave and candidate id) is derived from the
+    /// reference itself, never from the bytes at a supplied path: the
+    /// reference must resolve to `<wave>/<candidate>/<artifact>` inside this
+    /// state root, so there is no supplied-path read and no separate
+    /// canonicalize-and-compare. The artifact is then read through the very
+    /// descriptor that backs every other operation on the returned handle, so
+    /// a same-uid attacker can neither forge the tree for this read nor
+    /// redirect the candidate address to a directory it controls.
+    pub fn open_candidate_artifact<T: DeserializeOwned>(
+        &self,
+        reference: &Path,
+        artifact: &str,
+        label: &str,
+    ) -> Result<(CandidateDir, T)> {
+        let (wave, candidate_id) = self.candidate_address(reference, artifact, label)?;
+        let candidate = self.existing_candidate(&wave, &candidate_id)?;
+        let value: T = candidate.read_json(artifact)?;
+        Ok((candidate, value))
+    }
+
+    /// Derives the `(wave, candidate id)` address an artifact reference names,
+    /// requiring it to resolve to `<wave>/<candidate>/<artifact>` under this
+    /// state root.
+    ///
+    /// A reference outside the state root, one with the wrong depth, one whose
+    /// leaf is not the expected artifact, or one carrying a traversal or
+    /// non-UTF-8 component fails closed with the same redacted diagnostic, so
+    /// no supplied path is trusted to name the candidate.
+    fn candidate_address(
+        &self,
+        reference: &Path,
+        artifact: &str,
+        label: &str,
+    ) -> Result<(String, CandidateId)> {
+        let refuse = || {
+            DeliveryError::new(format!(
+                "the {label} must be the candidate's own artifact inside external delivery \
+                 state, not the supplied path"
+            ))
+        };
+        let relative = reference.strip_prefix(&self.path).map_err(|_| refuse())?;
+        let mut names = Vec::new();
+        for component in relative.components() {
+            match component {
+                Component::Normal(name) => {
+                    names.push(name.to_str().ok_or_else(refuse)?);
+                }
+                _ => return Err(refuse()),
+            }
+        }
+        match names.as_slice() {
+            [wave, candidate, leaf] if *leaf == artifact => {
+                validate_wave(wave)?;
+                let candidate_id = CandidateId::parse(*candidate)?;
+                Ok(((*wave).to_owned(), candidate_id))
+            }
+            _ => Err(refuse()),
+        }
     }
 
     /// Anchors a root without the external-path check, for hermetic tests that
@@ -225,22 +297,27 @@ impl StateRoot {
 /// Every accessor takes a relative path validated against traversal, so a
 /// caller cannot escape the state root.
 ///
-/// Reads, listings, and writes all resolve on the *same anchored inode chain*:
-/// each operation opens the candidate directory from `/` a component at a time
-/// with `O_NOFOLLOW`, verifies it is a real `0700` directory owned by us, and
-/// walks every component beneath it relative to a pinned parent descriptor
-/// rather than re-resolving a pathname per syscall. The read side therefore has
-/// the identical anchoring discipline as the write side: an attacker who
-/// controls a writable ancestor can no longer swap the candidate subtree for a
-/// forged tree during a path-based check-then-open read, restore the legitimate
-/// tree, and have forged evidence sealed - a symlinked ancestor fails the walk
-/// with `ELOOP` and a swapped inode fails the identity/mode/owner check.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Reads, listings, and writes all resolve on the *same* pinned inode chain:
+/// the candidate directory is opened once, from `/` a component at a time with
+/// `O_NOFOLLOW`, verified to be a real `0700` directory owned by us, and its
+/// descriptor is retained on the handle. Every operation walks the components
+/// beneath it relative to that pinned descriptor rather than re-resolving the
+/// candidate pathname per call. The read side therefore has the identical
+/// anchoring discipline as the write side, and the candidate directory itself
+/// is never reopened: an attacker who controls a writable ancestor can no
+/// longer swap the candidate subtree for a forged tree during a check-then-open
+/// read, restore the legitimate tree before the write, and have forged
+/// evidence sealed - a symlinked ancestor fails the initial walk with `ELOOP`,
+/// a swapped inode fails the identity/mode/owner check, and a swap after the
+/// pin has no effect because the pinned descriptor still names the original
+/// inode.
+#[derive(Debug)]
 pub struct CandidateDir {
     root: PathBuf,
     wave: String,
     candidate_id: CandidateId,
     path: PathBuf,
+    dir_fd: OwnedFd,
 }
 
 impl CandidateDir {
@@ -331,7 +408,7 @@ impl CandidateDir {
         }
         let relative = relative.as_ref();
         validate_anchored_relative(relative)?;
-        write_anchored(&self.path, relative, bytes)?;
+        write_anchored(self.dir_fd.as_fd(), relative, bytes)?;
         Ok(sha256_bytes(bytes))
     }
 
@@ -339,7 +416,7 @@ impl CandidateDir {
         let relative = relative.as_ref();
         validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
-        let bytes = read_limited_anchored(&self.path, relative, MAX_JSON_BYTES, &key)?;
+        let bytes = read_limited_anchored(self.dir_fd.as_fd(), relative, MAX_JSON_BYTES, &key)?;
         serde_json::from_slice(&bytes).map_err(|error| {
             DeliveryError::new(format!("invalid JSON in delivery artifact {key}: {error}"))
         })
@@ -349,20 +426,21 @@ impl CandidateDir {
         let relative = relative.as_ref();
         validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
-        read_limited_anchored(&self.path, relative, MAX_ARTIFACT_BYTES, &key)
+        read_limited_anchored(self.dir_fd.as_fd(), relative, MAX_ARTIFACT_BYTES, &key)
     }
 
     /// Lists the entry names of a directory under the candidate directory.
     ///
-    /// The directory is reached by an anchored fd-relative walk from `/` - the
-    /// same inode chain the anchored writer uses - and its entries are read
-    /// through the pinned descriptor, so the listing observes exactly the tree
-    /// the writer produced rather than one a check-then-open race could swap in.
+    /// The directory is reached by an fd-relative walk from the pinned
+    /// candidate descriptor - the same inode chain the anchored writer uses -
+    /// and its entries are read through the pinned descriptor, so the listing
+    /// observes exactly the tree the writer produced rather than one a
+    /// check-then-open race could swap in.
     pub fn list(&self, relative: impl AsRef<Path>) -> Result<Vec<OsString>> {
         let relative = relative.as_ref();
         validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
-        list_anchored(&self.path, relative, &key)
+        list_anchored(self.dir_fd.as_fd(), relative, &key)
     }
 }
 
@@ -586,18 +664,18 @@ fn verify_regular_file(
 /// Writes bytes beneath the candidate directory, anchored on verified
 /// directory descriptors the whole way down.
 ///
-/// The candidate directory is opened once as the anchor by walking its absolute
-/// path from `/` with `O_NOFOLLOW` on each hop; every intermediate directory is
-/// opened (or created and its parent fsynced) relative to its parent's
-/// descriptor and verified by `fstat` to be a real `0700` directory owned by
-/// us. The temp create, the rename, and the containing-directory fsync all run
-/// against the *same* pinned parent descriptor, so replacing a directory by
-/// name after the walk cannot redirect any of them. A per-syscall `O_NOFOLLOW`
-/// on each single-component open is equivalent to `RESOLVE_NO_SYMLINKS`, and
-/// opening each name relative to its parent descriptor is equivalent to
+/// `anchor` is the candidate directory descriptor the caller pinned once (see
+/// [`CandidateDir`]); every intermediate directory is opened (or created and
+/// its parent fsynced) relative to its parent's descriptor and verified by
+/// `fstat` to be a real `0700` directory owned by us. The temp create, the
+/// rename, and the containing-directory fsync all run against the *same*
+/// pinned parent descriptor, so replacing a directory by name after the walk
+/// cannot redirect any of them. A per-syscall `O_NOFOLLOW` on each
+/// single-component open is equivalent to `RESOLVE_NO_SYMLINKS`, and opening
+/// each name relative to its parent descriptor is equivalent to
 /// `RESOLVE_BENEATH`, so the walk cannot be diverted upward or through a
 /// symlink.
-fn write_anchored(candidate: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
+fn write_anchored(anchor: BorrowedFd<'_>, relative: &Path, bytes: &[u8]) -> Result<()> {
     let relative_key = relative
         .to_str()
         .ok_or_else(|| DeliveryError::new("delivery artifact key is not UTF-8"))?
@@ -617,23 +695,22 @@ fn write_anchored(candidate: &Path, relative: &Path, bytes: &[u8]) -> Result<()>
         .to_str()
         .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
 
-    let anchor = open_anchored_directory(candidate)?;
-
     // Retain every directory descriptor so each open is anchored on a pinned
-    // parent, never re-resolved by name.
+    // parent, never re-resolved by name. The candidate directory itself is the
+    // caller's already-pinned `anchor`, so it is never reopened here.
     let mut chain: Vec<OwnedFd> = Vec::new();
     for dir in dirs {
         let name = dir
             .to_str()
             .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
         let child = {
-            let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+            let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
             open_or_create_directory(parent, name)?
         };
         chain.push(child);
     }
 
-    let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+    let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
     write_leaf(parent, leaf, &relative_key, bytes)
 }
 
@@ -1097,20 +1174,20 @@ fn read_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>> {
 }
 
 /// Reads a bounded artifact beneath the candidate directory on the same
-/// anchored inode chain the writer uses - the read-side mirror of
+/// pinned inode chain the writer uses - the read-side mirror of
 /// [`write_anchored`]. This closes the check-then-open window a path-based read
-/// leaves: [`open_anchored_leaf`] opens the candidate from `/` a component at a
-/// time with `O_NOFOLLOW`, verifies it, walks every intermediate directory
-/// fd-relatively, and verifies the leaf is a regular file, so a symlink or
-/// directory swapped into any component after the walk is rejected rather than
-/// followed and the read observes exactly the tree the writer produced.
+/// leaves: `anchor` is the candidate directory descriptor the caller pinned
+/// once, [`open_anchored_leaf`] walks every intermediate directory relative to
+/// it and verifies the leaf is a regular file, so a symlink or directory
+/// swapped into any component after the pin is rejected rather than followed
+/// and the read observes exactly the tree the writer produced.
 fn read_limited_anchored(
-    candidate: &Path,
+    anchor: BorrowedFd<'_>,
     relative: &Path,
     limit: usize,
     label: &str,
 ) -> Result<Vec<u8>> {
-    let file = open_anchored_leaf(candidate, relative, label)?;
+    let file = open_anchored_leaf(anchor, relative, label)?;
     let mut buffer = Vec::new();
     file.take(limit as u64 + 1).read_to_end(&mut buffer)?;
     if buffer.len() > limit {
@@ -1122,13 +1199,13 @@ fn read_limited_anchored(
 }
 
 /// Opens a leaf file for reading beneath the candidate directory, anchored on
-/// verified directory descriptors the whole way down. The candidate directory
-/// is opened and verified from `/` (see [`open_anchored_directory`]), every
-/// intermediate directory is opened relative to its parent's descriptor and
-/// verified to be a real `0700` directory owned by us, and the leaf is opened
-/// relative to the final pinned parent with `O_RDONLY | O_NOFOLLOW` and
-/// verified to be a regular file.
-fn open_anchored_leaf(candidate: &Path, relative: &Path, label: &str) -> Result<File> {
+/// verified directory descriptors the whole way down. `anchor` is the
+/// candidate directory descriptor the caller pinned once (see
+/// [`CandidateDir`]); every intermediate directory is opened relative to its
+/// parent's descriptor and verified to be a real `0700` directory owned by us,
+/// and the leaf is opened relative to the final pinned parent with
+/// `O_RDONLY | O_NOFOLLOW` and verified to be a regular file.
+fn open_anchored_leaf(anchor: BorrowedFd<'_>, relative: &Path, label: &str) -> Result<File> {
     let components: Vec<&OsStr> = relative
         .components()
         .map(|component| component.as_os_str())
@@ -1140,17 +1217,16 @@ fn open_anchored_leaf(candidate: &Path, relative: &Path, label: &str) -> Result<
         .to_str()
         .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
 
-    let anchor = open_anchored_directory(candidate)?;
     let mut chain: Vec<OwnedFd> = Vec::new();
     for dir in dirs {
         let name = dir
             .to_str()
             .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
-        let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+        let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
         chain.push(open_existing_directory(parent, name, label)?);
     }
 
-    let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+    let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
     let leaf_fd = rustix::fs::openat(
         parent,
         leaf,
@@ -1166,19 +1242,18 @@ fn open_anchored_leaf(candidate: &Path, relative: &Path, label: &str) -> Result<
 }
 
 /// Lists the entry names of a directory beneath the candidate directory on the
-/// same anchored inode chain the writer uses. The candidate directory is opened
-/// and verified from `/`, the target directory is reached by an fd-relative
-/// walk, opened with `O_DIRECTORY | O_NOFOLLOW`, and verified to be a real
-/// `0700` directory owned by us before its entries are read through that pinned
-/// descriptor, so a swapped-in symlink or foreign directory is rejected rather
-/// than listed.
-fn list_anchored(candidate: &Path, relative: &Path, label: &str) -> Result<Vec<OsString>> {
+/// same pinned inode chain the writer uses. `anchor` is the candidate
+/// directory descriptor the caller pinned once, the target directory is
+/// reached by an fd-relative walk, opened with `O_DIRECTORY | O_NOFOLLOW`, and
+/// verified to be a real `0700` directory owned by us before its entries are
+/// read through that pinned descriptor, so a swapped-in symlink or foreign
+/// directory is rejected rather than listed.
+fn list_anchored(anchor: BorrowedFd<'_>, relative: &Path, label: &str) -> Result<Vec<OsString>> {
     let components: Vec<&OsStr> = relative
         .components()
         .map(|component| component.as_os_str())
         .collect();
 
-    let anchor = open_anchored_directory(candidate)?;
     // `validate_anchored_relative` guarantees at least one `Normal` component,
     // so the chain is never empty and the loop yields the target directory.
     let mut chain: Vec<OwnedFd> = Vec::new();
@@ -1186,7 +1261,7 @@ fn list_anchored(candidate: &Path, relative: &Path, label: &str) -> Result<Vec<O
         let name = dir
             .to_str()
             .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
-        let parent = chain.last().map_or(anchor.as_fd(), OwnedFd::as_fd);
+        let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
         chain.push(open_existing_directory(parent, name, label)?);
     }
     let dir_fd = chain
@@ -1447,6 +1522,77 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn open_candidate_artifact_derives_the_address_from_the_reference() {
+        let scratch = Scratch::new("open-artifact");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
+        candidate
+            .write_json(SNAPSHOT_FILE, &serde_json::json!({ "wave": "w0" }))
+            .expect("write snapshot");
+
+        // The reference resolves to `<wave>/<candidate>/snapshot.json`; the
+        // address is derived from it and the artifact is read through the
+        // pinned candidate descriptor, not from the supplied path.
+        let reference = root.resolve_artifact_ref(Path::new(&format!(
+            "W0/{}/snapshot.json",
+            candidate_id().as_str()
+        )));
+        let (opened, value): (CandidateDir, serde_json::Value) = root
+            .open_candidate_artifact(&reference, SNAPSHOT_FILE, "candidate snapshot")
+            .expect("open the candidate from its reference");
+        assert_eq!(opened.candidate_id(), &candidate_id());
+        assert_eq!(value["wave"], "w0");
+
+        // A reference whose leaf is not the expected artifact is refused.
+        let wrong_leaf = root.resolve_artifact_ref(Path::new(&format!(
+            "W0/{}/seal.json",
+            candidate_id().as_str()
+        )));
+        let error = root
+            .open_candidate_artifact::<serde_json::Value>(
+                &wrong_leaf,
+                SNAPSHOT_FILE,
+                "candidate snapshot",
+            )
+            .expect_err("a mismatched artifact leaf must be refused");
+        assert!(
+            error.message().contains("external delivery state"),
+            "{error}"
+        );
+
+        // A reference of the wrong depth is refused.
+        let wrong_depth =
+            root.resolve_artifact_ref(Path::new(&format!("W0/{}", candidate_id().as_str())));
+        assert!(
+            root.open_candidate_artifact::<serde_json::Value>(
+                &wrong_depth,
+                SNAPSHOT_FILE,
+                "candidate snapshot",
+            )
+            .is_err(),
+            "a reference of the wrong depth must be refused"
+        );
+
+        // A supplied path outside the state root is refused, and the diagnostic
+        // names only the semantic label.
+        let foreign = scratch.path.join("foreign").join("snapshot.json");
+        fs::create_dir_all(foreign.parent().expect("parent")).expect("foreign dir");
+        fs::write(&foreign, b"{}").expect("foreign snapshot");
+        let error = root
+            .open_candidate_artifact::<serde_json::Value>(
+                &foreign,
+                SNAPSHOT_FILE,
+                "candidate snapshot",
+            )
+            .expect_err("a supplied path outside the state root must be refused");
+        assert!(
+            error.message().contains("external delivery state"),
+            "{error}"
+        );
+        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
+    }
+
+    #[test]
     fn a_traversing_artifact_path_is_refused() {
         let scratch = Scratch::new("traversal");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
@@ -1653,38 +1799,79 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_symlinked_wave_component_is_refused_by_the_anchored_walk() {
-        use std::os::unix::fs::symlink;
-        let scratch = Scratch::new("symlink-wave");
+    fn an_ancestor_swapped_after_the_pin_cannot_redirect_operations() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let scratch = Scratch::new("pinned-candidate-swap");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
+        let cand = candidate_id();
+        let candidate = root.candidate("W0", &cand).expect("candidate");
         candidate
-            .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"{}")
+            .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"legit-content")
             .expect("seed evidence directory");
 
-        // Swap the intermediate wave component for a symlink that points at a
-        // real directory holding the same candidate subtree. The candidate
-        // handle still remembers the original `<state>/W0/<candidate>` path, so
-        // a walk that re-resolved `W0` by name would sail straight through the
-        // symlink and write into the attacker-chosen tree.
-        let real_wave = root.path().join("W0");
-        let decoy_wave = root.path().join("W0.decoy");
-        fs::rename(&real_wave, &decoy_wave).expect("move the real wave dir aside");
-        symlink(&decoy_wave, &real_wave).expect("plant the wave symlink");
+        // Build a fully valid-looking forged wave tree: same candidate id, same
+        // 0700 owner and mode a re-walk would accept, but forged bytes. This is
+        // exactly the tree the finding's attack presents.
+        let forged_wave = root.path().join("W0.forged");
+        let forged_candidate = forged_wave.join(cand.as_str());
+        let forged_evidence = forged_candidate.join(EVIDENCE_DIR);
+        fs::create_dir_all(&forged_evidence).expect("forged tree");
+        fs::write(forged_evidence.join("seed.json"), b"forged-content").expect("forged seed");
+        for dir in [&forged_wave, &forged_candidate, &forged_evidence] {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).expect("forged mode");
+        }
 
-        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
-        let error = candidate
-            .write_bytes(&relative, b"{}")
-            .expect_err("a symlinked wave component must be refused");
-        assert_eq!(error.kind(), DeliveryErrorKind::Environment);
-        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
+        // Move the real wave aside and swap `W0` for a symlink to the forged
+        // tree. The candidate handle still remembers `<state>/W0/<candidate>`,
+        // so an operation that re-resolved `W0` by name would follow the
+        // symlink into the attacker tree.
+        let real_wave = root.path().join("W0");
+        let relocated_wave = root.path().join("W0.real");
+        fs::rename(&real_wave, &relocated_wave).expect("move the real wave dir aside");
+        symlink(&forged_wave, &real_wave).expect("plant the wave symlink");
+
+        // The read goes through the descriptor pinned at candidate-open time, so
+        // it observes the legitimate bytes rather than the forged tree behind
+        // the swapped ancestor.
+        assert_eq!(
+            candidate
+                .read_bytes(Path::new(EVIDENCE_DIR).join("seed.json"))
+                .expect("read seed through the pinned candidate"),
+            b"legit-content",
+            "a read through the pinned candidate must ignore an ancestor swapped after the pin"
+        );
+
+        // A write lands in the legitimate (relocated) candidate inode, never
+        // the forged tree, so forged evidence can never be sealed into the real
+        // candidate by swapping an ancestor between reads and the write.
+        let layer1 = Path::new(EVIDENCE_DIR).join("layer1.json");
+        candidate
+            .write_bytes(&layer1, b"{}")
+            .expect("write lands in the pinned candidate");
         assert!(
-            candidate.read_bytes(&relative).is_err(),
-            "reading past a symlinked wave component must be refused"
+            relocated_wave
+                .join(cand.as_str())
+                .join(EVIDENCE_DIR)
+                .join("layer1.json")
+                .is_file(),
+            "the write must land in the pinned legitimate candidate"
         );
         assert!(
-            candidate.list(EVIDENCE_DIR).is_err(),
-            "listing past a symlinked wave component must be refused"
+            !forged_candidate
+                .join(EVIDENCE_DIR)
+                .join("layer1.json")
+                .exists(),
+            "the write must never reach the forged tree behind the symlinked ancestor"
+        );
+
+        // The listing likewise reflects the legitimate tree.
+        let names = candidate
+            .list(EVIDENCE_DIR)
+            .expect("list the pinned evidence dir");
+        assert!(
+            names.iter().any(|name| name == "seed.json")
+                && names.iter().any(|name| name == "layer1.json"),
+            "the listing must reflect the pinned legitimate tree, not the forged one"
         );
     }
 
