@@ -9,6 +9,8 @@
         test-lint test-rust test-proofs test-flake test-nix-unit \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
+        heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
+        heavy-lane-hardware heavy-lane-perf \
         heavy-gate-build heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
@@ -131,8 +133,16 @@ test-drift:
 test-policy:
 	bash tests/test-policy.sh
 
-## test-integration - L2 podman container integration tests.
-test-integration:
+## test-integration - L2 podman container integration tests. Public heavy lane:
+## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
+## can never oversubscribe a concurrent lane, even when invoked directly or via
+## `make test` / `check-ci` / `check-all`.
+test-integration: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-integration
+
+## heavy-lane-integration - the raw L2 container work. Internal: reachable only
+## from inside the gate (see heavy-lane-guard).
+heavy-lane-integration: heavy-lane-guard
 	bash tests/test-integration.sh
 
 ## layer1-workflow - regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
@@ -179,7 +189,11 @@ pr-checklist-gate:
 ## successor to the `D2B_LIVE`-against-the-real-host scripts. Needs KVM (a local
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
-test-host-integration:
+## Public heavy lane: acquires a slot, then runs the raw work behind the gate.
+test-host-integration: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-host-integration
+
+heavy-lane-host-integration: heavy-lane-guard
 	@set -eu; \
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
 	if [ "$$system" != "x86_64-linux" ]; then \
@@ -202,8 +216,29 @@ test-host-integration:
 	done
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
-test-hardware:    ; bash tests/tools/run-layer.sh test-hardware
-perf:             ; bash tests/tools/run-layer.sh perf
+## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
+test-hardware: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-hardware
+perf: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
+
+heavy-lane-hardware: heavy-lane-guard
+	bash tests/tools/run-layer.sh test-hardware
+heavy-lane-perf: heavy-lane-guard
+	bash tests/tools/run-layer.sh perf
+
+## heavy-lane-guard - fail closed when a heavy-lane internal target is invoked
+## outside the gate. The gate exports D2B_HEAVY_GATE across the re-exec, so a
+## missing marker means someone ran the raw target directly, which would
+## bypass the sole-use semaphore. This is a usability guard; the real
+## synchronisation is the gate's verified open file description lock.
+heavy-lane-guard:
+	@if [ -z "$${D2B_HEAVY_GATE:-}" ]; then \
+	  echo "heavy lane invoked outside the heavy-gate semaphore." >&2; \
+	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot," >&2; \
+	  echo "or 'cargo xtask heavy-gate -- make <lane>'; do not run the internal target directly." >&2; \
+	  exit 2; \
+	fi
 
 # ===========================================================================
 # Heavy lanes.
@@ -232,17 +267,13 @@ heavy-gate-build:
 heavy-check: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) check
 
-## heavy-test-integration - L2 podman container integration under the semaphore.
-heavy-test-integration: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) test-integration
-
-## heavy-test-host-integration - runNixOSTest VM checks under the semaphore.
-heavy-test-host-integration: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) test-host-integration
-
-## heavy-test-hardware - real GPU/YubiKey/TPM passthrough under the semaphore.
-heavy-test-hardware: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) test-hardware
+## heavy-test-integration / -host-integration / -hardware - explicit aliases for
+## the public heavy lanes, kept for muscle memory and scripts. The public lanes
+## now acquire the semaphore themselves; a redundant outer gate here is safe
+## because the inner invocation verifies and reuses the inherited slot.
+heavy-test-integration: test-integration
+heavy-test-host-integration: test-host-integration
+heavy-test-hardware: test-hardware
 
 ## heavy-cargo-test - the Rust workspace test suite under the semaphore.
 ##                    Override the selector with HEAVY_CARGO_TEST_ARGS.
