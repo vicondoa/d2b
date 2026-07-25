@@ -27,7 +27,16 @@
 
 ### Changed
 
+- Replaced the resource API spec's `## Limits` section, which asserted that
+  bounds were frozen but listed only the axes with no values, with the frozen
+  numeric tables and the derivation anchor for each value. Over-limit input now
+  has a defined rejection class, so admission control is implementable and the
+  section no longer claims a property it did not have.
+- Closed the resource API spec's `## Errors` class set at exactly 31 classes.
+  It previously read as an open list, which left the wire enum unbounded, and
+  gave the bounded error `reason` an explicit 512-byte ceiling and redaction
+  rule.
 - Regenerated the ADR 0046 spec-set, work-item, and implementation-graph
-  manifests for the decision-register update. The certified counts are
-  unchanged: 598 nodes, 1940 edges, 543 work items, 55 member specs, maximum
+  manifests for the decision-register and API spec updates. The certified counts
+  are unchanged: 598 nodes, 1940 edges, 543 work items, 55 member specs, maximum
   topological rank 22, and a 23-node critical path.
