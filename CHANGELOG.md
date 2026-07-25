@@ -12,8 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Proposed ADR 0046 and its complete, documentation-only normative
-  specification set for the d2b 3.0 Provider control plane, under user review.
+- Added ADR 0046 and its complete, documentation-only normative
+  specification set for the d2b 3.0 Provider control plane.
   The atomic set has 55 member specs (28 foundation, resource, cross-cutting,
   and closing specs plus a 27-Provider dossier catalog) indexed by
   `docs/specs/README.md` and `docs/specs/providers/README.md` and bound by the
@@ -42,6 +42,27 @@ deprecations ship one minor release before removal.
   (`ADR-046-validation-and-delivery` §12.3) to `gpt-5.6-sol` at reasoning
   effort `xhigh`, replacing the earlier model binding, and added
   `reasoning_effort` to the panel-receipt attestation record.
+- Retargeted every ADR 0046 slice branch at the protected `v3` integration
+  branch instead of `main`, which the v3 line never merges into. The delivery
+  contract now names `v3` once in its Git Town stack section and uses it for
+  slice base/target, the direct-push prohibition, and the auto-release
+  version-header trigger. References to main-branch ADR 0045 provenance are
+  unchanged.
+- Added a terminal `ADR046-W8` friction-closure wave to the ADR 0046 delivery
+  contract for the tooling and process friction (signoff, build, test, merge,
+  codegen, disk) accumulated across the earlier waves. It has no spec members
+  and is therefore excluded from the topological wave-derivation rule, but it
+  runs the identical per-wave entry/exit criteria, including exactly one
+  binding ten-role panel. The release/cutover gate now runs at that wave's
+  exit rather than the previous terminal wave's, so the destructive-cutover
+  removal proofs are re-required on the tree that actually ships.
+- Corrected the disk-hygiene contract in `AGENTS.md`: Rust worktrees each keep
+  their own `packages/target/` and deduplicate compiled output through
+  `sccache`, rather than sharing a cargo target directory. A shared target dir
+  is deliberately avoided because cargo's target-dir lock is workspace-wide.
+  The worktree-removal guidance, the disk-space preflight remediation text,
+  and the ADR 0046 worktree-cleanup rules that assumed a shared-cache symlink
+  are corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
 
