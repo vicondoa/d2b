@@ -41,8 +41,17 @@ files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
 |---|------|------------|----------|----------------|
 | 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - **local host/manual pre-PR; not the PR pipeline** |
 | 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - **local NixOS host w/ KVM, manual pre-PR; not the PR pipeline** |
-| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | `D2B_LIVE=1` / sudo - **manual, never CI** |
-| 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | **manual on a host with the devices** |
+| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the `cargo xtask heavy-gate` semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
+| 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | through the `cargo xtask heavy-gate` semaphore - **manual on a host with the devices** |
+
+Every Layer-2 tier (9-12) runs behind the `cargo xtask heavy-gate` sole-use
+semaphore, never as a raw script. Use the gated public lane target
+(`make test-integration`, `make test-host-integration`, `make test-hardware`;
+`make pre-tag` / `make smoke-lite` for the live-VM smoke gate), or wrap an
+ad-hoc live script as `cargo xtask heavy-gate -- env D2B_LIVE=1 bash
+tests/integration/live/<name>.sh`. Running `D2B_LIVE=1 bash
+tests/integration/live/<name>.sh` directly bypasses the semaphore and can
+oversubscribe the shared Nix store, cargo target directory, and KVM device.
 
 ## How to add a test (decision rule)
 
