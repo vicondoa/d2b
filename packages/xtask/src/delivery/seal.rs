@@ -49,7 +49,7 @@ use super::{
     evidence::{self, EvidenceLane, REQUIRED_EVIDENCE_LANES},
     model::{
         CandidateId, CandidateMaterial, ContentId, SEAL_ARTIFACT_KIND, SnapshotSha256,
-        sha256_bytes, validate_identifier, validate_sha256,
+        sha256_bytes, validate_identifier, validate_program_wave, validate_sha256,
     },
     panel::{
         self, PanelAttestation, SnapshotView, ensure_artifact_kind, parse_snapshot_invocation,
@@ -110,8 +110,7 @@ impl SealRecord {
                 self.schema_version
             )));
         }
-        validate_identifier(&self.program, "program")?;
-        validate_identifier(&self.wave, "wave")?;
+        validate_program_wave(&self.program, &self.wave)?;
         validate_sha256(&self.panel_request_sha256, "panel request digest")?;
         if self.program != self.material.program || self.wave != self.material.wave {
             return Err(DeliveryError::new(
@@ -138,7 +137,7 @@ impl SealRecord {
     }
 }
 
-/// `cargo xtask delivery wave seal`.
+/// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let (state, snapshot_path) = parse_snapshot_invocation(args)?;
     let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
@@ -297,7 +296,7 @@ pub(crate) mod tests {
         assert_eq!(output.operation, "seal");
         assert_eq!(
             output.artifact.as_deref(),
-            Some(format!("w0/{}/seal.json", snapshot.candidate_id.as_str()).as_str()),
+            Some(format!("W0/{}/seal.json", snapshot.candidate_id.as_str()).as_str()),
             "the artifact must be a state-root-relative reference, not an absolute path"
         );
 

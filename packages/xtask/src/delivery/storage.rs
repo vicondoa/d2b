@@ -66,11 +66,11 @@
 
 use std::{
     ffi::{OsStr, OsString},
-    fs::{self, DirBuilder, File},
+    fs::{self, File},
     io::{Read, Write},
     os::{
         fd::{AsFd, BorrowedFd, OwnedFd},
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -81,7 +81,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
     DeliveryError, DeliveryErrorKind, Result,
-    model::{CandidateId, sha256_bytes, validate_identifier},
+    model::{CandidateId, sha256_bytes, validate_wave},
 };
 
 /// Suffix appended to the XDG state directory when no root is requested.
@@ -124,10 +124,7 @@ impl StateRoot {
         ensure_external_path(&root, repository_roots)?;
         create_private_dir(&root)?;
         let root = fs::canonicalize(&root).map_err(|error| {
-            DeliveryError::environment(format!(
-                "cannot canonicalize delivery state root {}: {error}",
-                root.display()
-            ))
+            DeliveryError::environment(format!("cannot resolve the delivery state root: {error}"))
         })?;
         // Re-check after resolution so a symlinked component cannot move the
         // realized root back inside a checkout.
@@ -157,12 +154,18 @@ impl StateRoot {
     }
 
     /// Opens, creating if absent, the candidate directory for one wave.
+    ///
+    /// The wave and candidate directories are created fd-relatively beneath a
+    /// verified state-root anchor, and each directory's immediate parent is
+    /// fsynced right after it is created, so the wave link in the root and the
+    /// candidate link in the wave are durable before any artifact is written
+    /// into the candidate.
     pub fn candidate(&self, wave: &str, candidate_id: &CandidateId) -> Result<CandidateDir> {
-        validate_identifier(wave, "wave")?;
-        let wave_dir = self.path.join(wave);
-        create_private_dir(&wave_dir)?;
-        let path = wave_dir.join(candidate_id.as_str());
-        create_private_dir(&path)?;
+        validate_wave(wave)?;
+        let root = open_anchored_directory(&self.path)?;
+        let wave_fd = open_or_create_directory(root.as_fd(), wave)?;
+        open_or_create_directory(wave_fd.as_fd(), candidate_id.as_str())?;
+        let path = self.path.join(wave).join(candidate_id.as_str());
         self.anchor(wave, candidate_id, path)
     }
 
@@ -172,7 +175,7 @@ impl StateRoot {
         wave: &str,
         candidate_id: &CandidateId,
     ) -> Result<CandidateDir> {
-        validate_identifier(wave, "wave")?;
+        validate_wave(wave)?;
         let path = self.path.join(wave).join(candidate_id.as_str());
         if !path.is_dir() {
             return Err(DeliveryError::new(format!(
@@ -319,24 +322,41 @@ impl CandidateDir {
     }
 
     pub fn read_json<T: DeserializeOwned>(&self, relative: impl AsRef<Path>) -> Result<T> {
+        let relative = relative.as_ref();
+        let key = relative.to_string_lossy().into_owned();
         let path = self.resolve(relative)?;
-        let bytes = read_limited(&path, MAX_JSON_BYTES)?;
+        let bytes = read_limited(&path, MAX_JSON_BYTES, &key)?;
         serde_json::from_slice(&bytes).map_err(|error| {
-            DeliveryError::new(format!("invalid JSON in {}: {error}", path.display()))
+            DeliveryError::new(format!("invalid JSON in delivery artifact {key}: {error}"))
         })
     }
 
     pub fn read_bytes(&self, relative: impl AsRef<Path>) -> Result<Vec<u8>> {
-        read_limited(&self.resolve(relative)?, MAX_ARTIFACT_BYTES)
+        let relative = relative.as_ref();
+        let key = relative.to_string_lossy().into_owned();
+        read_limited(&self.resolve(relative)?, MAX_ARTIFACT_BYTES, &key)
     }
 
     /// Lists the entry names of a directory under the candidate directory.
     pub fn list(&self, relative: impl AsRef<Path>) -> Result<Vec<OsString>> {
+        let relative = relative.as_ref();
+        let key = relative.to_string_lossy().into_owned();
         let path = self.resolve(relative)?;
         reject_symlink_components(&path)?;
-        let mut names = fs::read_dir(&path)?
-            .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<std::io::Result<Vec<_>>>()?;
+        let mut names = fs::read_dir(&path)
+            .map_err(|error| {
+                DeliveryError::environment(format!(
+                    "cannot list delivery artifact directory {key}: {error}"
+                ))
+            })?
+            .map(|entry| {
+                entry.map(|entry| entry.file_name()).map_err(|error| {
+                    DeliveryError::environment(format!(
+                        "cannot read delivery artifact directory {key}: {error}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         names.sort();
         Ok(names)
     }
@@ -383,24 +403,19 @@ pub fn ensure_external_path(path: &Path, repository_roots: &[PathBuf]) -> Result
     for root in repository_roots {
         let root = fs::canonicalize(root).map_err(|error| {
             DeliveryError::environment(format!(
-                "cannot canonicalize repository root {}: {error}",
-                root.display()
+                "cannot resolve a declared repository checkout: {error}"
             ))
         })?;
         if absolute.starts_with(&root) {
-            return Err(DeliveryError::new(format!(
-                "delivery state must not live inside repository {}: {}",
-                root.display(),
-                absolute.display()
-            )));
+            return Err(DeliveryError::new(
+                "the delivery state root must not live inside a declared repository checkout",
+            ));
         }
     }
-    if let Some(worktree) = enclosing_git_worktree(&absolute) {
-        return Err(DeliveryError::new(format!(
-            "delivery state must not live inside the Git working tree at {}: {}",
-            worktree.display(),
-            absolute.display()
-        )));
+    if enclosing_git_worktree(&absolute).is_some() {
+        return Err(DeliveryError::new(
+            "the delivery state root must not live inside a Git working tree",
+        ));
     }
     reject_symlink_components(&absolute)
 }
@@ -432,10 +447,9 @@ pub fn absolute_path(path: &Path) -> Result<PathBuf> {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                return Err(DeliveryError::new(format!(
-                    "path contains parent traversal: {}",
-                    path.display()
-                )));
+                return Err(DeliveryError::new(
+                    "a delivery path contains parent traversal",
+                ));
             }
             Component::Normal(_) | Component::RootDir | Component::Prefix(_) => {
                 normalized.push(component.as_os_str());
@@ -460,17 +474,16 @@ pub fn reject_symlink_components(path: &Path) -> Result<()> {
                 current.push(name);
                 match fs::symlink_metadata(&current) {
                     Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(DeliveryError::new(format!(
-                            "path contains a symlink component: {}",
-                            current.display()
-                        )));
+                        return Err(DeliveryError::new(
+                            "a delivery state path traverses a symlink component",
+                        ));
                     }
                     Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
                     Err(error) => {
                         return Err(DeliveryError::of(
                             DeliveryErrorKind::Environment,
-                            format!("cannot inspect {}: {error}", current.display()),
+                            format!("cannot inspect a delivery state path: {error}"),
                         ));
                     }
                 }
@@ -480,38 +493,25 @@ pub fn reject_symlink_components(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Creates the delivery state root durably, walking its absolute path from the
+/// filesystem root and fsyncing each parent after a `mkdir` so every new link
+/// is persisted before the root is reported ready. See
+/// [`create_anchored_private_dir`] for the anchored-walk contract.
 fn create_private_dir(path: &Path) -> Result<()> {
-    reject_symlink_components(path)?;
-    if path.is_dir() {
-        return verify_private_directory(path);
-    }
-    DirBuilder::new()
-        .recursive(true)
-        .mode(STATE_DIR_MODE)
-        .create(path)
-        .map_err(|error| {
-            DeliveryError::environment(format!(
-                "cannot create delivery state directory {}: {error}",
-                path.display()
-            ))
-        })?;
-    fs::set_permissions(path, fs::Permissions::from_mode(STATE_DIR_MODE))?;
-    verify_private_directory(path)
+    create_anchored_private_dir(path).map(|_fd| ())
 }
 
 fn verify_private_directory(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(DeliveryError::new(format!(
-            "delivery state path is not a directory: {}",
-            path.display()
-        )));
+        return Err(DeliveryError::new(
+            "a delivery state path is not a directory",
+        ));
     }
     if metadata.permissions().mode() & 0o777 != STATE_DIR_MODE {
-        return Err(DeliveryError::new(format!(
-            "delivery state directory must have mode 0700: {}",
-            path.display()
-        )));
+        return Err(DeliveryError::new(
+            "a delivery state directory must have mode 0700",
+        ));
     }
     Ok(())
 }
@@ -525,10 +525,9 @@ fn validate_anchored_relative(path: &Path) -> Result<()> {
     if path.components().any(|component| {
         !matches!(component, Component::Normal(_)) || component.as_os_str() == OsStr::new(".git")
     }) {
-        return Err(DeliveryError::new(format!(
-            "delivery artifact path contains traversal or a Git component: {}",
-            path.display()
-        )));
+        return Err(DeliveryError::new(
+            "delivery artifact path contains traversal or a Git component",
+        ));
     }
     Ok(())
 }
@@ -613,7 +612,7 @@ fn write_anchored(candidate: &Path, relative: &Path, bytes: &[u8]) -> Result<()>
         .to_str()
         .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
 
-    let anchor = open_directory_anchor(candidate)?;
+    let anchor = open_anchored_directory(candidate)?;
 
     // Retain every directory descriptor so each open is anchored on a pinned
     // parent, never re-resolved by name.
@@ -633,78 +632,205 @@ fn write_anchored(candidate: &Path, relative: &Path, bytes: &[u8]) -> Result<()>
     write_leaf(parent, leaf, &relative_key, bytes)
 }
 
-/// Opens the candidate directory as the write anchor.
-fn open_directory_anchor(candidate: &Path) -> Result<OwnedFd> {
+/// Splits an absolute, already-normalized path into its `Normal` component
+/// names, rejecting a relative path or any non-`Normal` component (`.`, `..`,
+/// a repeated root). Callers pass paths that have been through
+/// [`absolute_path`], so this is a defense-in-depth decomposition rather than
+/// the primary traversal guard.
+fn absolute_components(path: &Path) -> Result<Vec<&OsStr>> {
+    if !path.is_absolute() {
+        return Err(DeliveryError::new(
+            "a delivery state path must be absolute to anchor",
+        ));
+    }
+    let mut names = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => names.push(name),
+            _ => {
+                return Err(DeliveryError::new(
+                    "a delivery state path contains a traversal component",
+                ));
+            }
+        }
+    }
+    if names.is_empty() {
+        return Err(DeliveryError::new(
+            "a delivery state path resolves to the filesystem root",
+        ));
+    }
+    Ok(names)
+}
+
+/// Converts a single path component to UTF-8, rejecting a non-UTF-8 name so it
+/// can never reach a diagnostic or be interpreted loosely.
+fn component_name(name: &OsStr) -> Result<&str> {
+    name.to_str()
+        .ok_or_else(|| DeliveryError::new("a delivery state path component is not UTF-8"))
+}
+
+/// Opens `/` as the trusted root fd from which every anchored walk begins.
+fn open_root_dir() -> Result<OwnedFd> {
     rustix::fs::open(
-        candidate,
+        "/",
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
     .map_err(|error| {
-        DeliveryError::environment(format!(
-            "cannot open the delivery candidate directory: {error}"
-        ))
+        DeliveryError::environment(format!("cannot open the filesystem root: {error}"))
     })
 }
 
-/// Opens a child directory relative to `parent`, creating it (and fsyncing
-/// `parent` so the new entry is durable) when it is absent, then verifies the
-/// opened descriptor is a real `0700` directory owned by us.
-fn open_or_create_directory(parent: BorrowedFd<'_>, name: &str) -> Result<OwnedFd> {
+/// Opens the delivery candidate directory as the write anchor by walking its
+/// absolute path from `/` one component at a time.
+///
+/// Each hop is an `openat` on the pinned parent fd with
+/// `O_DIRECTORY|O_NOFOLLOW`, so an attacker cannot swap an intermediate
+/// state-root or wave component for a symlink between the check and the write:
+/// a symlinked component makes `openat` fail with `ELOOP` rather than
+/// redirecting the walk. The final descriptor is verified to be a real `0700`
+/// directory owned by us, and its `fstat` dev/inode is cross-checked against a
+/// `statat(.., SYMLINK_NOFOLLOW)` of the same name in its parent so the pinned
+/// inode is provably the one named on the path. The returned fd is retained for
+/// the lifetime of the operation.
+fn open_anchored_directory(directory: &Path) -> Result<OwnedFd> {
+    let names = absolute_components(directory)?;
+    let mut current = open_root_dir()?;
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let fd = match rustix::fs::openat(parent, name, flags, Mode::empty()) {
-        Ok(fd) => fd,
+    for (index, raw) in names.iter().enumerate() {
+        let name = component_name(raw)?;
+        let child =
+            rustix::fs::openat(current.as_fd(), name, flags, Mode::empty()).map_err(|error| {
+                DeliveryError::environment(format!(
+                    "cannot open an anchored delivery state component: {error}"
+                ))
+            })?;
+        if index + 1 == names.len() {
+            verify_anchored_directory(child.as_fd(), "delivery candidate directory")?;
+            verify_anchor_identity(current.as_fd(), name, child.as_fd())?;
+        }
+        current = child;
+    }
+    Ok(current)
+}
+
+/// Creates a delivery state directory durably by walking its absolute path from
+/// `/`, creating each missing component fd-relatively and fsyncing its parent
+/// after the `mkdir` so the new link is persisted before success is reported.
+///
+/// Only the final component is verified to be a `0700` directory owned by us;
+/// ancestors (`/home`, `$HOME/.local`, ...) are opened loosely because they are
+/// outside the delivery contract and often carry non-`0700` modes. Concurrent
+/// creation is tolerated: see [`open_or_create_child`].
+fn create_anchored_private_dir(path: &Path) -> Result<OwnedFd> {
+    let names = absolute_components(path)?;
+    let mut current = open_root_dir()?;
+    let last = names.len() - 1;
+    for (index, raw) in names.iter().enumerate() {
+        let name = component_name(raw)?;
+        let child = open_or_create_child(current.as_fd(), name)?;
+        if index == last {
+            verify_anchored_directory(child.as_fd(), "the delivery state root")?;
+            verify_anchor_identity(current.as_fd(), name, child.as_fd())?;
+        }
+        current = child;
+    }
+    Ok(current)
+}
+
+/// Cross-checks that the descriptor pinned by an anchored walk is the very
+/// inode named in its parent, defeating a swap of the final component between
+/// its `openat` and first use.
+///
+/// `statat(parent, name, SYMLINK_NOFOLLOW)` describes the name as it resolves
+/// now (without following a leaf symlink); `fstat(anchor)` describes the pinned
+/// object. Matching device + inode proves they are the same file.
+fn verify_anchor_identity(
+    parent: BorrowedFd<'_>,
+    name: &str,
+    anchor: BorrowedFd<'_>,
+) -> Result<()> {
+    let by_name = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot re-stat an anchored delivery state component: {error}"
+        ))
+    })?;
+    let pinned = rustix::fs::fstat(anchor).map_err(|error| {
+        DeliveryError::environment(format!(
+            "cannot stat a pinned delivery state descriptor: {error}"
+        ))
+    })?;
+    if by_name.st_dev != pinned.st_dev || by_name.st_ino != pinned.st_ino {
+        return Err(DeliveryError::new(
+            "a delivery state component changed identity during the anchored walk",
+        ));
+    }
+    Ok(())
+}
+
+/// Opens a child directory relative to `parent`, creating it (and fsyncing
+/// `parent` so the new entry is durable) when it is absent. A concurrent writer
+/// that wins the `mkdirat` race (`EEXIST`) is treated as success: the parent is
+/// still fsynced and the directory reopened with the same no-follow flags. The
+/// opened descriptor is NOT verified here so ancestors outside the delivery
+/// contract can be walked; callers that own the leaf verify it.
+fn open_or_create_child(parent: BorrowedFd<'_>, name: &str) -> Result<OwnedFd> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    match rustix::fs::openat(parent, name, flags, Mode::empty()) {
+        Ok(fd) => Ok(fd),
         Err(rustix::io::Errno::NOENT) => {
-            rustix::fs::mkdirat(parent, name, Mode::from_bits_truncate(STATE_DIR_MODE)).map_err(
-                |error| {
-                    DeliveryError::environment(format!(
-                        "cannot create delivery state directory {name}: {error}"
-                    ))
-                },
-            )?;
+            match rustix::fs::mkdirat(parent, name, Mode::from_bits_truncate(STATE_DIR_MODE)) {
+                Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                Err(error) => {
+                    return Err(DeliveryError::environment(format!(
+                        "cannot create a delivery state directory: {error}"
+                    )));
+                }
+            }
             rustix::fs::fsync(parent).map_err(|error| {
                 DeliveryError::environment(format!(
-                    "cannot fsync delivery directory after creating {name}: {error}"
+                    "cannot fsync a delivery directory after creation: {error}"
                 ))
             })?;
             rustix::fs::openat(parent, name, flags, Mode::empty()).map_err(|error| {
                 DeliveryError::environment(format!(
-                    "cannot open delivery state directory {name}: {error}"
+                    "cannot open a delivery state directory: {error}"
                 ))
-            })?
+            })
         }
-        Err(error) => {
-            return Err(DeliveryError::environment(format!(
-                "cannot open delivery state directory {name}: {error}"
-            )));
-        }
-    };
+        Err(error) => Err(DeliveryError::environment(format!(
+            "cannot open a delivery state directory: {error}"
+        ))),
+    }
+}
+
+/// Opens a child directory relative to `parent`, creating it durably when
+/// absent (see [`open_or_create_child`]), then verifies the opened descriptor
+/// is a real `0700` directory owned by us. Used for the delivery-owned wave,
+/// candidate, and per-artifact subdirectories.
+fn open_or_create_directory(parent: BorrowedFd<'_>, name: &str) -> Result<OwnedFd> {
+    let fd = open_or_create_child(parent, name)?;
     verify_anchored_directory(fd.as_fd(), name)?;
     Ok(fd)
 }
 
 /// Confirms an opened directory descriptor is a real `0700` directory owned by
 /// the current effective user, using `fstat` on the descriptor rather than a
-/// path so it describes the object actually pinned.
-fn verify_anchored_directory(fd: BorrowedFd<'_>, name: &str) -> Result<()> {
-    let stat = rustix::fs::fstat(fd).map_err(|error| {
-        DeliveryError::environment(format!(
-            "cannot stat delivery state directory {name}: {error}"
-        ))
-    })?;
+/// path so it describes the object actually pinned. `label` is a fixed, safe
+/// string or a delivery-owned component name; never an operator path.
+fn verify_anchored_directory(fd: BorrowedFd<'_>, label: &str) -> Result<()> {
+    let stat = rustix::fs::fstat(fd)
+        .map_err(|error| DeliveryError::environment(format!("cannot stat {label}: {error}")))?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
-        return Err(DeliveryError::new(format!(
-            "delivery state path is not a directory: {name}"
-        )));
+        return Err(DeliveryError::new(format!("{label} is not a directory")));
     }
     if (stat.st_mode as u32) & 0o777 != STATE_DIR_MODE {
-        return Err(DeliveryError::new(format!(
-            "delivery state directory must have mode 0700: {name}"
-        )));
+        return Err(DeliveryError::new(format!("{label} must have mode 0700")));
     }
     if stat.st_uid != nix::unistd::geteuid().as_raw() {
         return Err(DeliveryError::new(format!(
-            "delivery state directory is not owned by the current user: {name}"
+            "{label} is not owned by the current user"
         )));
     }
     Ok(())
@@ -855,25 +981,21 @@ impl Drop for TempFile<'_> {
     }
 }
 
-fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>> {
+fn read_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>> {
     reject_symlink_components(path)?;
     let file = File::options()
         .read(true)
         .custom_flags(LEAF_OPEN_FLAGS)
         .open(path)
         .map_err(|error| {
-            DeliveryError::environment(format!(
-                "cannot open delivery artifact {}: {error}",
-                path.display()
-            ))
+            DeliveryError::environment(format!("cannot open delivery artifact {label}: {error}"))
         })?;
-    verify_regular_file(&file, &path.display().to_string(), None, false)?;
+    verify_regular_file(&file, label, None, false)?;
     let mut buffer = Vec::new();
     file.take(limit as u64 + 1).read_to_end(&mut buffer)?;
     if buffer.len() > limit {
         return Err(DeliveryError::new(format!(
-            "delivery artifact exceeds {limit} bytes: {}",
-            path.display()
+            "delivery artifact {label} exceeds {limit} bytes"
         )));
     }
     Ok(buffer)
@@ -881,7 +1003,11 @@ fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>> {
 
 /// SHA-256 of a delivery artifact on disk.
 pub fn sha256_file(path: &Path) -> Result<String> {
-    Ok(sha256_bytes(&read_limited(path, MAX_ARTIFACT_BYTES)?))
+    Ok(sha256_bytes(&read_limited(
+        path,
+        MAX_ARTIFACT_BYTES,
+        "delivery artifact",
+    )?))
 }
 
 #[cfg(test)]
@@ -1002,10 +1128,10 @@ pub(crate) mod tests {
     fn candidate_directories_are_addressed_by_candidate_id() {
         let scratch = Scratch::new("addressing");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
         assert_eq!(
             candidate.path(),
-            root.path().join("w0").join(candidate_id().as_str())
+            root.path().join("W0").join(candidate_id().as_str())
         );
         assert_eq!(candidate.candidate_id(), &candidate_id());
         assert_eq!(
@@ -1022,7 +1148,7 @@ pub(crate) mod tests {
     fn artifacts_round_trip_through_the_candidate_directory() {
         let scratch = Scratch::new("round-trip");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
 
         let digest = candidate
             .write_json(SNAPSHOT_FILE, &serde_json::json!({ "wave": "w0" }))
@@ -1052,7 +1178,7 @@ pub(crate) mod tests {
     fn an_artifact_reference_chains_under_the_state_root() {
         let scratch = Scratch::new("artifact-ref");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
         candidate
             .write_json(SNAPSHOT_FILE, &serde_json::json!({ "wave": "w0" }))
             .expect("write snapshot");
@@ -1062,7 +1188,7 @@ pub(crate) mod tests {
             .expect("state-relative reference");
         assert_eq!(
             reference,
-            format!("w0/{}/snapshot.json", candidate_id().as_str())
+            format!("W0/{}/snapshot.json", candidate_id().as_str())
         );
         assert!(
             !reference.starts_with('/'),
@@ -1088,7 +1214,7 @@ pub(crate) mod tests {
     fn a_traversing_artifact_path_is_refused() {
         let scratch = Scratch::new("traversal");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
         for relative in ["../escape.json", "/etc/escape.json", ".git/config", ""] {
             assert!(
                 candidate.write_bytes(relative, b"x").is_err(),
@@ -1101,8 +1227,8 @@ pub(crate) mod tests {
     fn an_absent_candidate_directory_is_not_created_by_existing_candidate() {
         let scratch = Scratch::new("absent");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        assert!(root.existing_candidate("w0", &candidate_id()).is_err());
-        assert!(!root.path().join("w0").exists());
+        assert!(root.existing_candidate("W0", &candidate_id()).is_err());
+        assert!(!root.path().join("W0").exists());
     }
 
     #[test]
@@ -1110,7 +1236,7 @@ pub(crate) mod tests {
         use std::os::unix::fs::symlink;
         let scratch = Scratch::new("symlink-leaf");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
 
         // A file outside delivery state that a hostile symlink aims at. Writing
         // through the symlink would truncate it, breaking the never-in-Git
@@ -1147,7 +1273,7 @@ pub(crate) mod tests {
         use std::os::unix::fs::symlink;
         let scratch = Scratch::new("symlink-dir");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
 
         // A real directory outside delivery state, then a symlink standing in
         // for the candidate's evidence directory that points at it.
@@ -1179,7 +1305,7 @@ pub(crate) mod tests {
     fn a_write_replaces_an_artifact_atomically() {
         let scratch = Scratch::new("atomic-replace");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
         let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
         candidate
             .write_bytes(&relative, b"first")
@@ -1199,7 +1325,7 @@ pub(crate) mod tests {
     fn a_failed_rename_leaves_no_temp_behind() {
         let scratch = Scratch::new("rename-failure");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
 
         // Seed the evidence directory, then plant a *directory* at the artifact
         // leaf so the final rename fails after the temp has been created.
@@ -1230,7 +1356,7 @@ pub(crate) mod tests {
     fn a_write_failure_diagnostic_carries_no_absolute_path() {
         let scratch = Scratch::new("leak-free-error");
         let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
-        let candidate = root.candidate("w0", &candidate_id()).expect("candidate");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
 
         candidate
             .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"{}")
@@ -1268,5 +1394,166 @@ pub(crate) mod tests {
             message.contains("evidence/layer1.json"),
             "a write failure must name the candidate-relative key: {message}"
         );
+    }
+
+    /// Asserts a public diagnostic carries no absolute path: not one of the
+    /// supplied roots, nor `HOME`, the build tree, or a temp name. Shared by
+    /// the per-error-class redaction tests so every class is held to the same
+    /// bar the write path already meets.
+    fn assert_no_absolute_path(message: &str, roots: &[&Path]) {
+        for root in roots {
+            let root = root.to_string_lossy();
+            assert!(
+                !message.contains(root.as_ref()),
+                "a diagnostic must not leak {root}: {message}"
+            );
+        }
+        assert!(
+            !message.contains(".tmp.")
+                && !message.contains("/home")
+                && !message.contains("/target/"),
+            "a diagnostic must not leak HOME, a build path, or a temp path: {message}"
+        );
+    }
+
+    #[test]
+    fn a_symlinked_wave_component_is_refused_by_the_anchored_walk() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("symlink-wave");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
+        candidate
+            .write_bytes(Path::new(EVIDENCE_DIR).join("seed.json"), b"{}")
+            .expect("seed evidence directory");
+
+        // Swap the intermediate wave component for a symlink that points at a
+        // real directory holding the same candidate subtree. The candidate
+        // handle still remembers the original `<state>/W0/<candidate>` path, so
+        // a walk that re-resolved `W0` by name would sail straight through the
+        // symlink and write into the attacker-chosen tree.
+        let real_wave = root.path().join("W0");
+        let decoy_wave = root.path().join("W0.decoy");
+        fs::rename(&real_wave, &decoy_wave).expect("move the real wave dir aside");
+        symlink(&decoy_wave, &real_wave).expect("plant the wave symlink");
+
+        let relative = Path::new(EVIDENCE_DIR).join("layer1.json");
+        let error = candidate
+            .write_bytes(&relative, b"{}")
+            .expect_err("a symlinked wave component must be refused");
+        assert_eq!(error.kind(), DeliveryErrorKind::Environment);
+        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
+        assert!(
+            candidate.read_bytes(&relative).is_err(),
+            "reading past a symlinked wave component must be refused"
+        );
+    }
+
+    #[test]
+    fn concurrent_creation_of_an_absent_candidate_directory_both_succeed() {
+        use std::sync::Barrier;
+
+        let scratch = Scratch::new("concurrent-create");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let id = candidate_id();
+
+        // Two writers race to create the same initially-absent
+        // `<state>/W0/<candidate>` nested directory. `mkdirat` can only win
+        // once; the loser must treat `EEXIST` as concurrent creation rather
+        // than failing an otherwise valid evidence import.
+        let barrier = Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let one = scope.spawn(|| {
+                barrier.wait();
+                root.candidate("W0", &id).map(|_| ())
+            });
+            let two = scope.spawn(|| {
+                barrier.wait();
+                root.candidate("W0", &id).map(|_| ())
+            });
+            (one.join().expect("thread a"), two.join().expect("thread b"))
+        });
+        assert!(a.is_ok(), "first concurrent writer failed: {a:?}");
+        assert!(b.is_ok(), "second concurrent writer failed: {b:?}");
+        assert!(root.path().join("W0").join(id.as_str()).is_dir());
+    }
+
+    #[test]
+    fn a_prepare_failure_diagnostic_carries_no_absolute_path() {
+        // Root-resolution / prepare class: an in-repository state root is
+        // refused, and the refusal must not echo the requested path.
+        let inside = repo_root().join("packages/target/prepare-leak-check/state");
+        let error = StateRoot::prepare(&[repo_root()], Some(&inside))
+            .expect_err("an in-repository state root must be refused");
+        assert!(error.message().contains("must not live inside"), "{error}");
+        assert_no_absolute_path(error.message(), &[&inside, &repo_root()]);
+        assert!(!inside.exists(), "a refusal must not create the directory");
+    }
+
+    #[test]
+    fn a_read_failure_diagnostic_carries_no_absolute_path() {
+        let scratch = Scratch::new("read-leak-free");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
+
+        // A missing artifact: the open failure names the candidate-relative key.
+        let missing = Path::new(EVIDENCE_DIR).join("missing.json");
+        let error = candidate
+            .read_bytes(&missing)
+            .expect_err("a missing artifact must fail");
+        assert!(
+            error.message().contains("evidence/missing.json"),
+            "a read failure must name the candidate-relative key: {error}"
+        );
+        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
+
+        // Malformed JSON: the parse failure names the key, never the path.
+        candidate
+            .write_bytes(SNAPSHOT_FILE, b"not json")
+            .expect("write malformed json");
+        let error = candidate
+            .read_json::<serde_json::Value>(SNAPSHOT_FILE)
+            .expect_err("malformed JSON must fail");
+        assert!(
+            error.message().contains("snapshot.json"),
+            "an invalid-JSON failure must name the key: {error}"
+        );
+        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
+    }
+
+    #[test]
+    fn a_list_failure_diagnostic_carries_no_absolute_path() {
+        let scratch = Scratch::new("list-leak-free");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
+
+        let error = candidate
+            .list("nonexistent-dir")
+            .expect_err("listing an absent directory must fail");
+        assert!(
+            error.message().contains("nonexistent-dir"),
+            "a list failure must name the candidate-relative key: {error}"
+        );
+        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
+    }
+
+    #[test]
+    fn a_root_verification_failure_diagnostic_carries_no_absolute_path() {
+        // Root-verification class: a wave directory with a too-permissive mode
+        // is refused by the descriptor `fstat` check, and the diagnostic names
+        // only the safe component label.
+        let scratch = Scratch::new("verify-leak-free");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("anchor root");
+        let wave = root.path().join("W0");
+        fs::create_dir(&wave).expect("create the wave dir");
+        fs::set_permissions(&wave, fs::Permissions::from_mode(0o755)).expect("loosen the mode");
+
+        let error = root
+            .candidate("W0", &candidate_id())
+            .expect_err("a non-0700 wave directory must be refused");
+        assert!(
+            error.message().contains("mode 0700"),
+            "a verification failure must state the required mode: {error}"
+        );
+        assert_no_absolute_path(error.message(), &[&scratch.path, root.path()]);
     }
 }

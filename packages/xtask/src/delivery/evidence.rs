@@ -1,7 +1,7 @@
 //! Validator evidence import (spec section 12.2, work item
 //! `ADR046-delivery-003`).
 //!
-//! `cargo xtask delivery wave validate-import` records that one validator lane
+//! `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import` records that one validator lane
 //! ran against one candidate and what it returned. Three lanes report into the
 //! same candidate: required GitHub CI, the heavy-gated local and host
 //! validators, and - through its own tooling - the ten-role panel.
@@ -55,7 +55,7 @@ use super::{
     command::{CliOptions, WaveCommand, WorkflowOutput},
     model::{
         CandidateId, ContentId, EVIDENCE_ARTIFACT_KIND, EvidenceResult, SnapshotSha256,
-        ensure_schema, validate_bounded_string, validate_identifier,
+        ensure_schema, validate_bounded_string, validate_identifier, validate_program_wave,
     },
     snapshot::{self, WaveSnapshot},
     storage::{CandidateDir, EVIDENCE_DIR, StateRoot},
@@ -176,8 +176,7 @@ impl EvidenceRecord {
             )));
         }
         ensure_schema(self.schema_version, "validation evidence")?;
-        validate_identifier(&self.program, "program")?;
-        validate_identifier(&self.wave, "wave")?;
+        validate_program_wave(&self.program, &self.wave)?;
         validate_identifier(&self.validation, "validation")?;
         if let Some(command) = &self.command {
             validate_single_line(command, "--command")?;
@@ -229,7 +228,7 @@ impl EvidenceRecord {
     }
 }
 
-/// Routes `cargo xtask delivery wave validate-import`.
+/// Routes `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut request = ImportRequest::parse(args)?;
     let checkouts = request.checkout_roots()?;
@@ -615,7 +614,7 @@ mod tests {
     fn import_args(fixture: &GitFixture, snapshot: &WaveSnapshot, extra: &[&str]) -> Vec<String> {
         let snapshot_path = fixture
             .state()
-            .join("w0")
+            .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("snapshot.json");
         let mut args = vec![
@@ -671,7 +670,7 @@ mod tests {
             output.artifact.as_deref(),
             Some(
                 format!(
-                    "w0/{}/evidence/local-host/test-integration.json",
+                    "W0/{}/evidence/local-host/test-integration.json",
                     snapshot.candidate_id.as_str()
                 )
                 .as_str()
@@ -680,7 +679,7 @@ mod tests {
         );
         let expected = fixture
             .state()
-            .join("w0")
+            .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("evidence/local-host/test-integration.json");
         assert!(expected.is_file());
@@ -721,7 +720,7 @@ mod tests {
             &std::fs::read(
                 fixture
                     .state()
-                    .join("w0")
+                    .join("W0")
                     .join(snapshot.candidate_id.as_str())
                     .join("evidence/local-host/test-integration.json"),
             )
@@ -835,12 +834,12 @@ mod tests {
         let snapshot = take(&fixture);
         let path = fixture
             .state()
-            .join("w0")
+            .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("snapshot.json");
         let forged = fixture.scratch().join("forged-snapshot.json");
         let mut tampered = snapshot.clone();
-        tampered.material.wave = "w9".to_owned();
+        tampered.material.wave = "W1".to_owned();
         std::fs::write(
             &forged,
             serde_json::to_vec(&tampered).expect("render forged snapshot"),
@@ -863,7 +862,7 @@ mod tests {
 
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let candidate = root
-            .existing_candidate("w0", &snapshot.candidate_id)
+            .existing_candidate("W0", &snapshot.candidate_id)
             .expect("candidate");
         let records = read_all(&candidate, &snapshot).expect("read records");
         assert_eq!(records.len(), 1);
@@ -885,7 +884,7 @@ mod tests {
         }
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let candidate = root
-            .existing_candidate("w0", &snapshot.candidate_id)
+            .existing_candidate("W0", &snapshot.candidate_id)
             .expect("candidate");
         let records = read_all(&candidate, &snapshot).expect("read records");
         assert_eq!(
@@ -910,7 +909,7 @@ mod tests {
         let snapshot = take(&fixture);
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let candidate = root
-            .existing_candidate("w0", &snapshot.candidate_id)
+            .existing_candidate("W0", &snapshot.candidate_id)
             .expect("candidate");
         let mut record = ImportRequest::parse(&import_args(&fixture, &snapshot, &[]))
             .expect("parse")
@@ -931,7 +930,7 @@ mod tests {
         let snapshot = take(&fixture);
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let other = CandidateId::parse("d".repeat(64)).expect("digest");
-        let candidate = root.candidate("w0", &other).expect("candidate");
+        let candidate = root.candidate("W0", &other).expect("candidate");
         let record = ImportRequest::parse(&import_args(&fixture, &snapshot, &[]))
             .expect("parse")
             .record(&snapshot)
@@ -1023,7 +1022,7 @@ mod tests {
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let snapshot_path = fixture
             .state()
-            .join("w0")
+            .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("snapshot.json");
         let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
@@ -1106,7 +1105,7 @@ mod tests {
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
         let snapshot_path = fixture
             .state()
-            .join("w0")
+            .join("W0")
             .join(snapshot.candidate_id.as_str())
             .join("snapshot.json");
         let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
