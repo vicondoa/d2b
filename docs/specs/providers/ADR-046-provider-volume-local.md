@@ -1668,7 +1668,7 @@ Volume status snapshot list:
 ```yaml
 snapshots:
   - id: snap-<opaque>
-    createdAt: 2026-07-22T00:00:00Z
+    createdAt: 2026-07-22T00:00:00.000Z
     schemaVersion: "1.0"
     sizeBytes: 12345678
     trigger: pre-migration
@@ -2013,7 +2013,7 @@ status:
       status: "True" | "False" | "Unknown"
       reason: layout-reconciled | layout-error | layout-pending
       observedGeneration: 1
-      lastTransitionAt: 2026-07-22T00:00:00Z
+      lastTransitionAt: 2026-07-22T00:00:00.000Z
     - type: AttachmentsReady
       status: "True"
       reason: all-attachments-ready

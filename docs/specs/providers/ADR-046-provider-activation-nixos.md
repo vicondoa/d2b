@@ -185,7 +185,7 @@ status:
   outcome:
     code: null                     # bounded outcome code on terminal phase
     message: null                  # bounded operator-visible message; no paths/digests
-  lastReconciledAt: "2026-07-22T12:00:00Z"
+  lastReconciledAt: "2026-07-22T12:00:00.000Z"
   observedGeneration: 1
   resource:
     activationDetail: planning     # typed NixosGeneration detail enum; see §4.3.1

@@ -114,8 +114,8 @@ metadata:
   finalizers:
     - core.provider-api-binding
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   artifactId: system-core
   config: {}
@@ -242,8 +242,8 @@ status:
   observedGeneration: 1
   phase: Ready            # Pending|Ready|Succeeded|Degraded|Failed|Unknown|Deleted
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   resource:
@@ -388,7 +388,7 @@ status:
   observedGeneration: 1
   phase: Ready          # Pending|Ready|Succeeded|Degraded|Failed|Unknown|Deleted
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
   resource:
     uid: null             # u32; discovered OS UID; diagnostic; not an authz input
     gid: null             # u32; discovered primary OS GID
@@ -1090,7 +1090,7 @@ Each system-core handler reports to the core-controller aggregate:
 ```yaml
 handler: system_core_host    # stable closed name
 phase: Ready
-lastReconciledAt: "2026-07-22T00:00:01Z"
+lastReconciledAt: "2026-07-22T00:00:01.000Z"
 queueDepth: 0
 runningCount: 0
 lastWatchRevision: 42
@@ -1099,7 +1099,7 @@ lastWatchRevision: 42
 ```yaml
 handler: system_core_user
 phase: Ready
-lastReconciledAt: "2026-07-22T00:00:01Z"
+lastReconciledAt: "2026-07-22T00:00:01.000Z"
 queueDepth: 0
 runningCount: 0
 lastWatchRevision: 38

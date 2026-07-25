@@ -842,8 +842,8 @@ status:
   observedGeneration: 1
   phase: Ready
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:10Z"
-  startedAt: "2026-07-22T00:00:01Z"
+  lastReconciledAt: "2026-07-22T00:00:10.000Z"
+  startedAt: "2026-07-22T00:00:01.000Z"
   completedAt: null
   outcome: null
   resource:
@@ -852,7 +852,7 @@ status:
     holderRefs:
       - Guest/corp-vm
     claims: []
-    provisionedAt: "2026-07-22T00:00:05Z"
+    provisionedAt: "2026-07-22T00:00:05.000Z"
     endpointRefs:
       tpmEndpointRef: "Endpoint/device-7f3a9e12b4c6-tpm" # EndpointRef; NOT a path
   provider:
@@ -867,7 +867,7 @@ status:
         markerStatus: "verified"         # verified|missing|replaced|unknown
         lastFlushRef: "EphemeralProcess/device-7f3a9e12b4c6-flush"
         lastFlushPhase: "Succeeded"
-        lastFlushAt: "2026-07-22T00:00:09Z"
+        lastFlushAt: "2026-07-22T00:00:09.000Z"
 ```
 
 ### 10.4 Typed TPM provider details fields
