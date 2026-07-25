@@ -28,8 +28,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec: {}
 status:
   observedGeneration: 0
@@ -39,6 +39,18 @@ status:
   startedAt: null
   completedAt: null
   outcome: null
+  resource: {}                     # Layer 2 ResourceType-common; {} when none declared (D107)
+  update:                          # universal currency object; present on every resource (D091)
+    state: Unknown
+    reasons: []
+    observedGeneration: 0
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `metadata`, `spec`, and `status` are always present. A type with no desired
@@ -204,8 +216,8 @@ status:
   observedGeneration: 4
   phase: Ready
   conditions: [ ... ]
-  lastReconciledAt: 2026-07-23T00:00:01Z
-  startedAt: 2026-07-23T00:00:00Z
+  lastReconciledAt: 2026-07-23T00:00:01.000Z
+  startedAt: 2026-07-23T00:00:00.000Z
   completedAt: null
   outcome: null
   update:                              # universal currency object (D091)
@@ -216,7 +228,7 @@ status:
     disruption: None
     preserveState: true
     operationId: null
-    lastAssessedAt: 2026-07-23T00:00:01Z
+    lastAssessedAt: 2026-07-23T00:00:01.000Z
     owned: { count: 0, refs: [] }
     dependencies: { count: 0, refs: [] }
   # Layer 2 - ResourceType-common, provider-neutral (required across all implementations)
@@ -284,7 +296,7 @@ status: "True" # True | False | Unknown
 reason: process-ready
 message: bounded redacted operator detail
 observedGeneration: 3
-lastTransitionAt: 2026-07-22T00:00:01Z
+lastTransitionAt: 2026-07-22T00:00:01.000Z
 ```
 
 Outcome:
@@ -294,8 +306,8 @@ code: process-exited
 exitCode: 1
 message: bounded redacted error detail
 retryable: true
-retryAfter: 5s
-occurredAt: 2026-07-22T00:00:01Z
+retryAfterMs: 5000
+occurredAt: 2026-07-22T00:00:01.000Z
 ```
 
 `code` and `reason` are stable lower-kebab-case machine values. `message` may

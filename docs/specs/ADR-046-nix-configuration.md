@@ -728,7 +728,7 @@ spec:
   providerRef:     Provider/system-core
   defaultDomain:   system
   allowedDomains:  [system, user]
-  defaultUserRef:  null
+  defaultUserRef:  User/alice
   budget:          { ... }
   networkAttachments: []
   deviceAttachments:  []
@@ -1669,7 +1669,7 @@ All ref validation runs at Nix eval time:
 Failed validation emits a structured eval error identifying the exact option
 path and rejected value.
 
-Vendor ResourceType names (e.g., `acme.io.Widget`) appearing in any Nix ref
+Vendor ResourceType names (e.g., `acme.d2bus.org.Widget`) appearing in any Nix ref
 field before the exporting Provider is installed reject at eval time and block
 config publication. There is no deferred-warning or allow-with-warning path.
 The compiler's closed ResourceType set is extended only when a Provider

@@ -430,7 +430,7 @@ spec:
   providerRef: Provider/system-core   # required; fixed value for Host
   defaultDomain: system               # system|user; default system
   allowedDomains: [system, user]      # [system|user]; 1..2 items, unique
-  defaultUserRef: null                # User/<name>; required if user in allowedDomains
+  defaultUserRef: User/alice          # User/<name>; required when user in allowedDomains
   budget: {}                          # BudgetSpec; aggregate for all Processes on this Host
   networkAttachments: []              # 0..64 NetworkAttachmentList entries
   deviceAttachments: []               # 0..64 DeviceAttachmentList entries
@@ -667,7 +667,7 @@ spec:
   providerRef: Provider/runtime-cloud-hypervisor   # required; one of four runtime Providers
   defaultDomain: system
   allowedDomains: [system, user]
-  defaultUserRef: null
+  defaultUserRef: User/alice
   systemArtifactId: null  # artifact ID for the NixOS system closure; see d2b.artifacts catalog
   budget: {}
   networkAttachments: []

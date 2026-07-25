@@ -33,7 +33,7 @@ add a build, script, or test - that requires the separate implementation
 request every other ADR 0046 work item requires per D024.
 
 **Scope boundary.** This spec's tooling is a meta-process artifact for
-authoring and delivering the ADR 0046 spec set and its future W0-W10
+authoring and delivering the ADR 0046 spec set and its future `ADR046-W0`-`ADR046-W8`
 implementation work items. It is unrelated to, and does not reintroduce, any
 v3 Zone/Provider runtime architecture excluded elsewhere in the set - in
 particular `ADR-046-zone-routing`'s explicit exclusion of "ADR45 delivery
@@ -71,7 +71,7 @@ This spec therefore splits its work items into two tranches, not one flat
   code - none of which exist yet, since D024 confirms ADR 0046 has delivered
   documentation only - are deferred. This tier is the actual "implementation
   wave after all product waves": it lands only after every ResourceType,
-  core-controller, and Provider dossier work item across the W0-W10
+  core-controller, and Provider dossier work item across the `ADR046-W0`-`ADR046-W8`
   implementation range reaches its own Validation-complete state (per each
   spec's own "Implementation work items" acceptance rows) and the
   `ADR-046-reset-and-cutover` cutover engine is integrated, immediately before
@@ -609,8 +609,8 @@ v3 source to extract from.
 | Observed friction evidence | F3: ProviderStateSet churned through multiple representations and the bootstrap-cycle exception was independently re-scoped three times (`5c287f51`, `7632ebec`, `24598e5c`) before D076/D086 froze it; D087 later removed the mandatory-state model in favor of a status-first, optional state Volume |
 | Desired behavior | A runtime-level checker that, given a Zone's actual resource/controller registration graph, verifies every Provider component's state Volumes are *declared* (a component with no declared namespace owns no state Volume and no empty identity-only Volume exists), no ResourceType or stored row named `ProviderStateSet` exists, and no bootstrap state Volume or bootstrap-storage mechanism exists (the fixed `volume-local`/`system-core`/`system-minijail` bootstrap set declares no state Volume and reaches Ready from `status`/the core Operation ledger per D087) |
 | Destination | `packages/d2b-resource-store-redb/tests/provider_state_graph.rs` (or the eventual crate implementing Zone resource storage) |
-| Owner/dependencies | The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
-| Dependency/owner | The Zone resource-store implementation work item (not yet filed; blocked on W0-W10 implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
+| Owner/dependencies | The Zone resource-store implementation work item (not yet filed; blocked on `ADR046-W0`-`ADR046-W8` implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
+| Dependency/owner | The Zone resource-store implementation work item (not yet filed; blocked on `ADR046-W0`-`ADR046-W8` implementation request per D024); ADR046-streamline-001 for the doc-level invariant source |
 | Current source | None - real Zone resource-store/controller-registration graph not implemented yet; doc-level invariant source is ADR046-streamline-005 |
 | Reuse action | create |
 | Implementation shape | A graph-walk over the real controller-registration/resource-ownership index (not Markdown) asserting the D076/D086/D087 invariants; the doc-level half of this check (dossier text describing the invariant correctly) is covered now by ADR046-streamline-005's `policy_spec_ownership` |
@@ -631,8 +631,8 @@ v3 source to extract from.
 | Observed friction evidence | F6: dossier text repeatedly drifted toward direct broker/syscall access before D077's EffectPort pattern was frozen and propagated |
 | Desired behavior | A source-level lint (the same shape as the existing `packages/d2b-contract-tests/tests/policy_broker_dispositions.rs`/`policy_broker_schema.rs`) scanning real Provider crate source for any direct broker import, raw socket/DTO use, or unmediated host path/device/systemd-socket open, and for any Worker binary reaching for a `ResourceClient`/d2b-bus/Credential/CLI/child-spawn capability D078 reserves to controllers/services |
 | Destination | `packages/d2b-contract-tests/tests/policy_effectport_boundary.rs`, `policy_worker_bus_boundary.rs` |
-| Owner/dependencies | The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the W0-W10 implementation request); ADR046-streamline-001 for the doc-level invariant source |
-| Dependency/owner | The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the W0-W10 implementation request); ADR046-streamline-001 for the doc-level invariant source |
+| Owner/dependencies | The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the `ADR046-W0`-`ADR046-W8` implementation request); ADR046-streamline-001 for the doc-level invariant source |
+| Dependency/owner | The Provider-toolkit/EffectPort implementation work item (not yet filed; blocked on the `ADR046-W0`-`ADR046-W8` implementation request); ADR046-streamline-001 for the doc-level invariant source |
 | Current source | Existing policy-broker lint pattern in packages/d2b-contract-tests/tests/policy_broker_dispositions.rs and policy_broker_schema.rs; no Provider crate source exists yet |
 | Reuse action | adapt |
 | Implementation shape | Static source scan (import-graph/symbol-use analysis) over compiled Provider crates, mirroring the existing `policy_broker_dispositions.rs` pattern already proven against `packages/d2bd`/`packages/d2b-priv-broker` |
@@ -728,7 +728,7 @@ v3 source to extract from.
 | Integration | Referenced from `AGENTS.md` "Worktrees for parallel agents" once graduated |
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | `handoff_manifest_rejects_incomplete_record` |
-| Adoption timing | Immediately, for any remaining ADR 0046 spec-set round and for the future W0-W10 implementation phase's parallel scopes |
+| Adoption timing | Immediately, for any remaining ADR 0046 spec-set round and for the future `ADR046-W0`-`ADR046-W8` implementation phase's parallel scopes |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
 
@@ -783,10 +783,10 @@ v3 source to extract from.
 | Work item ID | `ADR046-streamline-014` |
 | Tier | B |
 | Observed friction evidence | F11: corrective commits on already-diverged branches had no fast way to verify only their own scope was affected without running the full doc/Rust suite; this generalizes to the future implementation phase where per-Provider-crate test runs must not require every other Provider crate to build first |
-| Desired behavior | A bounded-parallelism test harness that can run one Provider crate's (or one dossier's) tests/lints against fake/stub dependencies for every other declared Provider, so a single scope's correction round does not require building or testing the entire W0-W10 implementation surface |
+| Desired behavior | A bounded-parallelism test harness that can run one Provider crate's (or one dossier's) tests/lints against fake/stub dependencies for every other declared Provider, so a single scope's correction round does not require building or testing the entire `ADR046-W0`-`ADR046-W8` implementation surface |
 | Destination | `tests/tools/run-layer.sh` extension (this repository already has `tests/tools/run-layer.sh` and `layer1-jobs.py` bounded-parallelism precedent) plus fake `EffectPort`/`ResourceClient` stub crates under `packages/d2b-provider-toolkit-fakes/` |
-| Owner/dependencies | The Provider-toolkit implementation work item (blocked on the W0-W10 implementation request) |
-| Dependency/owner | The Provider-toolkit implementation work item (blocked on the W0-W10 implementation request) |
+| Owner/dependencies | The Provider-toolkit implementation work item (blocked on the `ADR046-W0`-`ADR046-W8` implementation request) |
+| Dependency/owner | The Provider-toolkit implementation work item (blocked on the `ADR046-W0`-`ADR046-W8` implementation request) |
 | Current source | Existing bounded-parallel test-runner precedent in tests/tools/run-layer.sh and layer1-jobs.py; Provider toolkit fake crates are net-new |
 | Reuse action | adapt |
 | Implementation shape | Extend the existing `layer1-jobs.py` bounded-parallel-shard pattern with a per-Provider-crate shard definition; fake dependency crates implement the same `EffectPort`/`ResourceClient` trait surface with in-memory stand-ins |

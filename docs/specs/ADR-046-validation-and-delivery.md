@@ -50,10 +50,12 @@ following are true, per the parent ADR's "Review and acceptance" contract and
    exist and enumerate every spec above with matching content digests (§8).
    Every declared Markdown work-item heading is in exact bijection with the
    work-item manifest, its owner/path/prefix and mandatory fields match, and
-   its `reuseAction` is one closed scalar. The future generator and its
-   fail-closed policy tests are `ADR046-delivery-004` and
-   `ADR046-delivery-009`; no checked-in generator exists in this Proposed
-   documentation candidate.
+   its `reuseAction` is one closed scalar. The generator is checked in:
+   `spec-registry` (`packages/xtask/src/gen_spec_set.rs`) emits both manifests
+   and `implementation-graph` (`packages/xtask/src/implementation_graph.rs`)
+   emits the graph, both under the fail-closed `make test-drift` gate.
+   `ADR046-delivery-004` and `ADR046-delivery-009` own the follow-on hardening
+   of that generator and its fail-closed policy tests.
 4. The ADR/spec PR has both required human review gates from the parent ADR:
    approval before the immutable final panel snapshot, and approval after
    unanimous panel signoff (this is the spec-authoring panel, distinct from
@@ -213,15 +215,17 @@ re-derives launch order or parallelism from this prose. Per D095:
   `ADR-046-spec-set.json.members[].dependsOn`; waves derive from §3.1-§3.4;
   work-item mapping and `work-item-depends-on` derive from
   `ADR-046-work-items.json`; the W6 `file-overlap-order` edges derive from §3.3.
-- **Generation.** This Proposed documentation set has no implemented repository
-  generator yet. Until `ADR046-streamline-001` (and the duplicate-generator
-  reconciliation in `ADR046-streamline-024`) lands, the integrator regenerates
-  the artifacts deterministically from the exact Markdown bytes with a
-  disposable untracked script, validates the bytes, and removes that script.
-  The future `cargo run -p xtask -- implementation-graph` command will read the
-  two manifests plus this section, write sorted output with no timestamps or
-  host paths, and run under a drift gate. Regenerate the graph after any spec or
-  work-item edit, always **after** `ADR-046-spec-set.json` and
+- **Generation.** The repository generator is checked in. The
+  `cargo run -p xtask -- spec-registry` command
+  (`packages/xtask/src/gen_spec_set.rs`) writes `ADR-046-spec-set.json` and
+  `ADR-046-work-items.json` from the exact Markdown bytes, and
+  `cargo run -p xtask -- implementation-graph`
+  (`packages/xtask/src/implementation_graph.rs`) reads the two manifests plus
+  this section and writes sorted output with no timestamps or host paths. Both
+  run under the fail-closed `make test-drift` gate. `ADR046-streamline-001` and
+  the duplicate-generator reconciliation in `ADR046-streamline-024` own the
+  follow-on consolidation of that generator. Regenerate the graph after any spec
+  or work-item edit, always **after** `ADR-046-spec-set.json` and
   `ADR-046-work-items.json` are regenerated.
 - **Validation.** Every one of the 55 spec nodes and every work item appears
   exactly once; all edge endpoints resolve to a declared node; the graph is
@@ -1434,7 +1438,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-009` |
 | Dependency/owner | `ADR046-delivery-004`, `ADR046-delivery-008`; spec-set policy-test owner |
-| Current source | The fail-closed completeness, identity, and closed-action contract in `docs/specs/README.md`; the Proposed tree has no checked-in generator or policy test |
+| Current source | The fail-closed completeness, identity, and closed-action contract in `docs/specs/README.md`; the checked-in `packages/xtask/src/gen_spec_set.rs` generator and `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs` policy test, hardened by this item |
 | Reuse source | `ADR046-delivery-004` generator shape and the existing `d2b-contract-tests` fixture-driven policy-test pattern |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs`; generated spec-set, work-item, and implementation-graph drift checks |
