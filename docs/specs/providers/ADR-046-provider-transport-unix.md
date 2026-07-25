@@ -875,7 +875,7 @@ from OS-enforced SO_PEERCRED, not a peer-supplied long-term key.
 
 ### KK - enrolled peers over Unix transport
 
-`Noise_KK_25519_ChaChaPoly_SHA256` is used for all ZoneLink ComponentSessions:
+`Noise_KK_25519_ChaChaPoly_SHA256` is used for enrolled ZoneLink ComponentSessions (every steady-state session after the one-time IKpsk2 bootstrap enrollment):
 
 - Both static public keys are known before handshake.
 - The child Zone's enrolled static identity is pinned in sealed
@@ -886,9 +886,10 @@ from OS-enforced SO_PEERCRED, not a peer-supplied long-term key.
 - SO_PEERCRED is still verified by `PeerIdentityPolicy`; for KK sessions its
   role is supplemental provenance, not primary authentication.
 
-The child Zone's core ZoneLink controller enforces KK on its ZoneLink session;
-this Provider accepts whichever Noise profile the session engine negotiates on
-its FD.
+The child Zone's core ZoneLink controller enforces KK on its enrolled ZoneLink
+session (IKpsk2 only for the one-time bootstrap enrollment and after
+revocation); this Provider accepts whichever Noise profile the session engine
+negotiates on its FD.
 
 ### IKpsk2 - one-time bootstrap
 

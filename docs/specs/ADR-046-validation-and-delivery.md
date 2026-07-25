@@ -1144,16 +1144,65 @@ unanimous 10/10 signoff before its exit criteria (§4) are met. Building this
 tooling (if not already present) is work item `ADR046-delivery-004`/`-005`
 (§17), copy/adapted from the equivalent sibling-lineage tooling per D001/D041.
 
-### 12.4 Seal and merge eligibility
+### 12.4 Seal, merge target, and merge eligibility
 
 `cargo xtask delivery wave seal` requires all ten panel records
 present, unanimous, and bound to the same `candidate_id`/`content_id`/
 `snapshot_sha256`, plus every §12.2 validator lane reporting success on that
-exact snapshot. `cargo xtask delivery wave merge-eligibility` then confirms,
+exact snapshot.
+
+`cargo xtask delivery wave merge-target` then captures the wave's current
+pull-request stack into a canonical `merge-target.json` under the candidate.
+The step performs no network I/O: the integrator produces the input out of
+band from `gh pr view --json` or `gh api` in the same step that merges (the
+same freshness window a direct API call inside the process would have), then
+installs it:
+
+```bash
+cargo xtask delivery wave merge-target \
+    --seal   <state>/<wave>/<candidate>/seal.json \
+    --target ./merge-target.json \
+    --repo   <logical-id>=<checkout-root>
+```
+
+The `MergeTarget` document is a `d2b-delivery/merge-target` artifact:
+
+```json
+{
+  "artifact_kind": "d2b-delivery/merge-target",
+  "schema_version": 1,
+  "material": { "...": "the wave's re-derived integrated material" },
+  "pull_requests": [
+    {
+      "repository": "<logical repository id>",
+      "number": 0,
+      "base_ref": "<base branch>",
+      "base_oid": "<base commit object id>",
+      "head_ref": "<head branch>",
+      "head_oid": "<head commit object id>",
+      "required_checks": [ { "name": "<check>", "conclusion": "success" } ]
+    }
+  ]
+}
+```
+
+`material` has the same shape the snapshot recorded, re-derived after any
+rebase. `pull_requests` is bounded (at most 64 pull requests, each with at
+most 128 required checks). Only a `success` conclusion permits a merge; any
+pending, failure, neutral, skipped, cancelled, stale, timed-out,
+action-required, or startup-failure check, a pull request with no required
+checks, a sealed repository with no open pull request, or a base not reachable
+from the sealed base fails closed. The step validates the shape,
+canonicalizes `material`, and writes the canonical `merge-target.json` so the
+gate's input is produced by a supported command rather than dropped in by
+hand.
+
+`cargo xtask delivery wave merge-eligibility` then confirms,
 per PR in the wave's stack: the seal exists, the PR's current base/head
 still matches the sealed snapshot's recorded OIDs (or a history-only rebase
 has passed the byte-identical proof in §12.6), and every required GitHub
-check is green.
+check is green. It reads the captured `merge-target.json` when no `--target`
+path is given.
 
 ### 12.5 No raw evidence or AI metadata in Git/PR
 
@@ -1294,9 +1343,9 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Item | Treatment |
 | --- | --- |
 | Current anchor | This repository's `AGENTS.md` "Panel review" (8/N-role phase gate, no candidate snapshot/seal), "Stacked PR workflow for large waves," "Worktrees for parallel agents," `tests/AGENTS.md`/`tests/README.md` Layer-1/Layer-2 taxonomy, and `Makefile` targets (`make check-tier0`, `test-unit`, `test-lint`, `test-rust`, `test-proofs`, `test-flake`, `test-drift`, `test-policy`, `check`, `check-static`, `test`, `test-integration`, `test-host-integration`) |
-| Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool are `ADR-only` in this repository today - they exist as a proven, documented process on this codebase's sibling ADR-0045 lineage and are adopted here by explicit copy/adapt under D001/D041, not invented fresh |
+| Evidence class | The Layer-1/Layer-2 test taxonomy and Makefile targets are `production-reachable` (verified directly in `tests/AGENTS.md`, `tests/README.md`, and this repository's `Makefile` target list); the ten-role panel roster is `production-reachable` (verified verbatim in this repository's own `AGENTS.md`); the candidate-snapshot/`xtask delivery`/seal/attest machinery, `cargo xtask heavy-gate`, and the byte-identical history-proof tool have since landed in this repository under `packages/xtask` and are `production-reachable` (copy/adapted from this codebase's sibling ADR-0045 lineage under D001/D041, not invented fresh); their remaining work is hardening, not creation |
 | Behavior retained | Layer-1-first bias, closed drift/meta-gate set, hermetic mocking discipline, commit-before-build convention, no-AI-metadata-in-Git convention, worktree/branch hygiene, `KillMode=process` restart-continuation semantics |
-| Required delta | Candidate-snapshot immutability, ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), `xtask delivery` subcommands, `xtask heavy-gate` semaphore, attest/seal/eligibility/history-proof tooling, the exact `ADR046-W0`-`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
+| Required delta | The `xtask delivery` subcommands, the `xtask heavy-gate` semaphore, and the attest/seal/eligibility/history-proof tooling have landed; the remaining delta is process contract rather than net-new tooling: candidate-snapshot immutability hardening, the ten-role panel bound to one fixed model/provider and run exactly once per wave (not per round), and the exact `ADR046-W0`-`ADR046-W8` wave graph and its file-overlap/shared-prep contracts |
 | Reuse path | Copy/adapt the sibling-lineage `xtask delivery`/`xtask heavy-gate` implementations named in §11/§12; extend (never replace) the existing Layer-1/Layer-2 taxonomy and Makefile targets; extend the existing ten-role panel table unchanged |
 | Replacement/deletion | Nothing in this repository's current validation/delivery tooling is removed by this spec; `ADR046-delivery-00x` work items (§17) are additive tooling built alongside, not instead of, the existing `Makefile`/panel-review process, until `ADR046-W7` explicitly retires any tooling the migration map marks `DELETE`/`REPLACE` |
 | Feasibility proof | The sibling-lineage candidate-snapshot/panel/seal contract supplies the reuse design named in §11/§12; `ADR-046-feasibility-and-spikes` owns the ADR-0046-specific redb/reconciliation/session/package/state numeric proofs cited in §10.4 |
@@ -1310,7 +1359,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-001` |
 | Dependency/owner | `ADR046-W0`; delivery-tooling integrator |
-| Current source | none in this repository; `Makefile` heavy-lane targets do not yet exist |
+| Current source | `packages/xtask/src/heavy_gate.rs` and the `Makefile` heavy-lane targets have since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation |
 | Reuse source | sibling-lineage `cargo xtask heavy-gate` implementation (per D001/D041 unrestricted-reuse policy) |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check` |
@@ -1326,7 +1375,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-002` |
 | Dependency/owner | `ADR046-W0`; delivery-tooling integrator |
-| Current source | none in this repository |
+| Current source | `packages/xtask/src/delivery/snapshot.rs` has since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation |
 | Reuse source | sibling-lineage `cargo xtask delivery wave snapshot` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/snapshot.rs` |
@@ -1342,7 +1391,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-003` |
 | Dependency/owner | `ADR046-delivery-002`; delivery-tooling integrator |
-| Current source | none in this repository |
+| Current source | `packages/xtask/src/delivery/evidence.rs` (the `validate-import` step) has since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation |
 | Reuse source | sibling-lineage `cargo xtask delivery wave validate-import` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/validate_import.rs`; external candidate-ID-addressed evidence directory (never under Git) |
@@ -1358,7 +1407,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-004` |
 | Dependency/owner | `ADR046-delivery-002`; spec-set integrator |
-| Current source | `docs/specs/README.md`'s described-but-not-yet-generated `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract |
+| Current source | `packages/xtask/src/gen_spec_set.rs` (invoked as `cargo run -p xtask -- spec-registry`) has since landed and now generates the `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract described in `docs/specs/README.md`; remaining effort is hardening, not creation |
 | Reuse source | none required - this generator is specific to the `docs/specs/ADR-046-*` manifest shape |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/gen_spec_set.rs`; `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` |
@@ -1374,7 +1423,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-005` |
 | Dependency/owner | `ADR046-delivery-002`, `ADR046-delivery-003`; panel-tooling integrator |
-| Current source | none in this repository; this repository's existing `AGENTS.md` panel-review process is host-local script tooling (`/etc/nixos/scripts/panel-review.{md,sh}`), not a candidate-bound `xtask` subcommand |
+| Current source | `packages/xtask/src/delivery/panel.rs` (the `panel-request`/`panel-attest` subcommands) has since landed as the candidate-bound path (copy/adapted from the sibling-lineage source below); this repository's existing `AGENTS.md` panel-review process remains host-local script tooling (`/etc/nixos/scripts/panel-review.{md,sh}`). Remaining effort is hardening, not creation |
 | Reuse source | sibling-lineage `cargo xtask delivery wave panel-request`/`panel-attest` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/panel.rs` |
@@ -1390,7 +1439,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | --- | --- |
 | Work item ID | `ADR046-delivery-006` |
 | Dependency/owner | `ADR046-delivery-002`, `ADR046-delivery-004`, `ADR046-delivery-005`; delivery-tooling integrator |
-| Current source | none in this repository |
+| Current source | `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` (the `seal`, `merge-target`, `merge-eligibility`, and byte-identical history-proof steps) have since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation |
 | Reuse source | sibling-lineage `cargo xtask delivery wave seal`, `merge-eligibility`, and history/byte-identity proof implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` |

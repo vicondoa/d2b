@@ -1473,7 +1473,7 @@
       "workItemId" : "ADR046-decisions-001"
     },
     {
-      "currentSource" : "none in this repository; `Makefile` heavy-lane targets do not yet exist",
+      "currentSource" : "`packages/xtask/src/heavy_gate.rs` and the `Makefile` heavy-lane targets have since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation",
       "dataMigration" : "None - net-new tooling",
       "dependencyOwner" : "`ADR046-W0`; delivery-tooling integrator",
       "destination" : "`packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check`",
@@ -1488,7 +1488,7 @@
       "workItemId" : "ADR046-delivery-001"
     },
     {
-      "currentSource" : "none in this repository",
+      "currentSource" : "`packages/xtask/src/delivery/snapshot.rs` has since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation",
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-W0`; delivery-tooling integrator",
       "destination" : "`packages/xtask/src/delivery/snapshot.rs`",
@@ -1503,7 +1503,7 @@
       "workItemId" : "ADR046-delivery-002"
     },
     {
-      "currentSource" : "none in this repository",
+      "currentSource" : "`packages/xtask/src/delivery/evidence.rs` (the `validate-import` step) has since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation",
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-delivery-002`; delivery-tooling integrator",
       "destination" : "`packages/xtask/src/delivery/validate_import.rs`; external candidate-ID-addressed evidence directory (never under Git)",
@@ -1518,7 +1518,7 @@
       "workItemId" : "ADR046-delivery-003"
     },
     {
-      "currentSource" : "`docs/specs/README.md`'s described-but-not-yet-generated `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract",
+      "currentSource" : "`packages/xtask/src/gen_spec_set.rs` (invoked as `cargo run -p xtask -- spec-registry`) has since landed and now generates the `ADR-046-spec-set.json`/`ADR-046-work-items.json` contract described in `docs/specs/README.md`; remaining effort is hardening, not creation",
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-delivery-002`; spec-set integrator",
       "destination" : "`packages/xtask/src/gen_spec_set.rs`; `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json`",
@@ -1533,7 +1533,7 @@
       "workItemId" : "ADR046-delivery-004"
     },
     {
-      "currentSource" : "none in this repository; this repository's existing `AGENTS.md` panel-review process is host-local script tooling (`/etc/nixos/scripts/panel-review.{md,sh}`), not a candidate-bound `xtask` subcommand",
+      "currentSource" : "`packages/xtask/src/delivery/panel.rs` (the `panel-request`/`panel-attest` subcommands) has since landed as the candidate-bound path (copy/adapted from the sibling-lineage source below); this repository's existing `AGENTS.md` panel-review process remains host-local script tooling (`/etc/nixos/scripts/panel-review.{md,sh}`). Remaining effort is hardening, not creation",
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-delivery-002`, `ADR046-delivery-003`; panel-tooling integrator",
       "destination" : "`packages/xtask/src/delivery/panel.rs`",
@@ -1548,7 +1548,7 @@
       "workItemId" : "ADR046-delivery-005"
     },
     {
-      "currentSource" : "none in this repository",
+      "currentSource" : "`packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs` (the `seal`, `merge-target`, `merge-eligibility`, and byte-identical history-proof steps) have since landed in this repository (copy/adapted from the sibling-lineage source below); remaining effort is hardening, not creation",
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-delivery-002`, `ADR046-delivery-004`, `ADR046-delivery-005`; delivery-tooling integrator",
       "destination" : "`packages/xtask/src/delivery/{seal,eligibility,history_proof}.rs`",
@@ -5182,14 +5182,14 @@
       "dataMigration" : "None; v3 Zone service is new; no v2 realm-service compatibility",
       "dependencyOwner" : "ADR046-routing-007, ADR046-routing-002, ADR046-routing-004, ADR046-routing-012; Zone service owner",
       "destination" : "`packages/d2b-zone-routing/src/service.rs`",
-      "detailedDesign" : "Rename `RealmServiceServer` → `ZoneServiceServer`; service wire name `d2b.realm.v2.RealmService` → `d2b.zone.v3.ZoneService`; rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll, resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut, revoke_shortcut→revoke-zone-shortcut, report_shortcut_close→report-zone-shortcut-close, inspect→zone-inspect) and add list/watch topology-projection methods. The read-only projection starts from the sealed sorted `{ childZone, parentZone }` compiler input and joins only authenticated, admitted `ZoneRouteEngine` route/projection status. It exposes no ZoneLink resource name, UID, spec, status, Provider ref, fingerprint, transport setting, or handle. Replace `RealmSessionAuthority` with Zone principal + RBAC binding; replace `BootstrapBinding` with allocator-issued PSK binding associated with the child's local ZoneLink; replace `EnrollmentBinding` with the corresponding KK enrollment record; add independent target-verb plus canonical `relay` RBAC checks per forwarding hop; adapt shortcut model to ZonePath addressing; `RealmServiceLimits` defaults preserved; `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s` preserved; `CredentialCustody::GatewayGuest` excluded (all ZoneLink sessions are direct KK) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
+      "detailedDesign" : "Rename `RealmServiceServer` → `ZoneServiceServer`; service wire name `d2b.realm.v2.RealmService` → `d2b.zone.v3.ZoneService`; rename methods (bootstrap→zone-bootstrap, enroll→zone-enroll, resolve_route→resolve-zone-route, authorize_shortcut→authorize-zone-shortcut, revoke_shortcut→revoke-zone-shortcut, report_shortcut_close→report-zone-shortcut-close, inspect→zone-inspect) and add list/watch topology-projection methods. The read-only projection starts from the sealed sorted `{ childZone, parentZone }` compiler input and joins only authenticated, admitted `ZoneRouteEngine` route/projection status. It exposes no ZoneLink resource name, UID, spec, status, Provider ref, fingerprint, transport setting, or handle. Replace `RealmSessionAuthority` with Zone principal + RBAC binding; replace `BootstrapBinding` with allocator-issued PSK binding associated with the child's local ZoneLink; replace `EnrollmentBinding` with the corresponding KK enrollment record; add independent target-verb plus canonical `relay` RBAC checks per forwarding hop; adapt shortcut model to ZonePath addressing; `RealmServiceLimits` defaults preserved; `MAX_DISPATCH_IN_FLIGHT=64`, `SHUTDOWN_TIMEOUT=5s` preserved; `CredentialCustody::GatewayGuest` excluded (ZoneLink sessions are direct: a one-time IKpsk2 bootstrap consuming the allocator-issued single-use PSK, then enrolled KK) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt.",
       "integration" : "Zone runtime instantiates one `ZoneServiceServer` per Zone; d2b-bus routes `d2b.zone.v3.ZoneService` calls to this server; CLI uses `ZoneServiceClient` (from ADR046-routing-010) for topology list/inspect/watch, enrollment, and route resolution",
       "removalProof" : "`RealmServiceServer` on `d2b.realm.v2` retires after `ZoneServiceServer` handles all routing; display-session path migrates separately as part of Provider resource work",
       "reuseAction" : "adapt",
       "reuseSource" : null,
       "specId" : "ADR-046-zone-routing",
       "specPath" : "docs/specs/ADR-046-zone-routing.md",
-      "validation" : "Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-plus-target-verb RBAC tests; KK enrollment test; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight)",
+      "validation" : "Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-plus-target-verb RBAC tests; initial IKpsk2 bootstrap-enrollment test consuming the allocator-issued single-use PSK, follow-on KK enrollment test, KK reconnect test while enrollment remains valid, and fresh IKpsk2 bootstrap test after revocation; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight)",
       "workItemId" : "ADR046-routing-016"
     },
     {
@@ -6378,7 +6378,7 @@
       "workItemId" : "ADR046-streamline-007"
     },
     {
-      "currentSource" : "None - no existing work-item required-field or unique-ID validator",
+      "currentSource" : "None as a reuse source - net-new validator; `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs` has since landed and enforces this, so the remaining effort is hardening, not creation",
       "dataMigration" : "None - docs/tooling only; no runtime state",
       "dependencyOwner" : "ADR046-streamline-001",
       "destination" : "`packages/d2b-contract-tests/tests/policy_work_items.rs`",
@@ -6618,7 +6618,7 @@
       "workItemId" : "ADR046-streamline-023"
     },
     {
-      "currentSource" : "The graph is regenerated by hand today; `ADR-046-spec-set.json` and the test-runtime ledger (ADR046-delivery-007) each have their own emitter - duplicate-generator finding, retained here for reconciliation",
+      "currentSource" : "`xtask implementation-graph` now generates the graph deterministically and `xtask spec-registry` emits `ADR-046-spec-set.json`, so the graph is no longer regenerated by hand; the remaining reconciliation is folding the separate test-runtime ledger (ADR046-delivery-007) emitter into the single canonical `xtask` path - duplicate-generator finding, retained here for that reconciliation",
       "dataMigration" : "None - docs/tooling only; no runtime state",
       "dependencyOwner" : "ADR046-streamline-001",
       "destination" : "`packages/xtask/src/bin/implementation_graph.rs` (`cargo run -p xtask -- implementation-graph`); folds the spec-set and test-runtime emitters into the one `xtask` dispatch",
@@ -6869,7 +6869,7 @@
       "reuseSource" : null,
       "specId" : "ADR-046-provider-transport-azure-relay",
       "specPath" : "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
-      "validation" : "`tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; Noise KK binding; relay identity exclusion",
+      "validation" : "`tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; enrolled Noise KK binding (established after the one-time IKpsk2 bootstrap enrollment); relay identity exclusion",
       "workItemId" : "ADR046-transport-relay-001"
     },
     {

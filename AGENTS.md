@@ -120,9 +120,57 @@ make test-host-integration  # runNixOSTest VM checks; NixOS + KVM host
 
 `make test-host-integration` is x86_64-linux only and may fall back to
 slow TCG if `/dev/kvm` is absent. Hardware and live-host tests remain
-explicit manual tiers (`make test-hardware` or `D2B_LIVE=1 bash
-tests/integration/live/<name>.sh`) and require a host with the matching
-devices or deployed d2b state.
+explicit manual tiers and require a host with the matching devices or
+deployed d2b state.
+
+### Heavy lanes
+
+Every Layer-2, host-integration, hardware, live, and perf-heavy command
+runs through **one** semaphore: `cargo xtask heavy-gate`. It grants two
+slots per uid via open file description locks so concurrent heavy lanes
+cannot oversubscribe the shared Nix store, cargo target directory, or KVM
+device. Do not add a second lock file, sleep-and-retry loop, or per-crate
+guard.
+
+The structure is public-lane-plus-guarded-internal:
+
+- **Public lane targets** (`make test-integration`,
+  `make test-host-integration`, `make test-hardware`, `make perf`) acquire
+  a slot and then delegate to a guarded internal `heavy-lane-*` target.
+  Run these.
+- **Internal `heavy-lane-*` targets** hold the raw work and fail closed
+  through `heavy-lane-guard` if invoked outside the gate (the gate exports
+  `D2B_HEAVY_GATE` across its re-exec). Do not run them directly.
+- **Convenience wrappers** `make heavy-check`, `make heavy-cargo-test`,
+  `make heavy-flake-check`, and the `heavy-test-*` aliases run a Layer-1
+  gate, the Rust suite, the building flake check, or a public lane under
+  the same semaphore.
+
+Run a heavy lane through its public target (or, for an arbitrary command,
+`cargo xtask heavy-gate -- <command>`) whenever another heavy lane might
+be running; the bare internal targets stay available only for a serial
+console. Live-host and hardware tests obey the same rule: use the gated
+live-VM smoke entrypoints (`make pre-tag` for the full gate, `make
+smoke-lite` for the lite gate) or wrap a raw live script as `cargo xtask
+heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
+Never run `D2B_LIVE=1 bash tests/integration/live/<name>.sh` directly;
+that bypasses the sole-use semaphore.
+
+### Spec-literal lint allowlist marker
+
+The ADR 0046 spec-literal lints (`policy_adr046_spec_literals.rs`) enforce
+three frozen decisions across `docs/specs/**`: D103 (the single 24-byte
+`YYYY-MM-DDTHH:MM:SS.sssZ` datetime spelling), D104 (the single
+`.d2bus.org.` ResourceType qualifier infix), and D108 (the integer
+`retryAfterMs` retry-delay scalar superseding the old `retryAfter`
+duration string). A line that must legitimately quote a rejected form -
+for example a rejection illustration - is exempted only by the explicit
+end-of-line marker `d2b-lint-allow: D103` (or `D104` / `D108`), usually
+written as an HTML comment. The scope is deliberately narrow: the marker
+exempts exactly the one line it sits on for exactly the one named code,
+and the decision-register row that defines a rule is the only other
+exemption. Do not use it to silence genuine drift; correct the example
+instead.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](./tests/AGENTS.md).
