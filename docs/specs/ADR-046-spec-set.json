@@ -13,7 +13,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-cli-and-operations.md",
-      "sha256" : "e53f1025568042abc34a33a1a6fa37f5c4431dd0737c9f308086fe3f647402d0",
+      "sha256" : "35bc7cd1e98f027983263aa2815f5aad5ea3f8c39bb2455071df4178ac159ee9",
       "specId" : "ADR-046-cli-and-operations",
       "status" : "Accepted",
       "supersedes" : "Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline)",
@@ -620,7 +620,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-provider-state.md",
-      "sha256" : "9cf2e6df9f1c2d8fa26f02cbcffcbe634e1655bdba7b57cbd9f062f26953649b",
+      "sha256" : "27c289f713ea7b3a83ca8311db68037465d7ed90686a90de140bff37d231cda6",
       "specId" : "ADR-046-provider-state",
       "status" : "Accepted",
       "supersedes" : "`d2b-core/src/storage.rs` generated contract, ADR 0034 storage/sync/adoption model for v3",
@@ -832,7 +832,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-reset-and-cutover.md",
-      "sha256" : "d900e0ba10cc58f340b11656a0d0cfe7f3023eff4cd7b3ebae0cd1a6c12e4cb8",
+      "sha256" : "3f12de403d0e6b57c4852d7a354fb2c892b2cb0393e6ed50654bf796feef3954",
       "specId" : "ADR-046-reset-and-cutover",
       "status" : "Accepted",
       "supersedes" : "[ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) \"Migration decision\" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` \"v2 command surface removed at 3.0 clean break\": it served the one-time v1→v2 storage layout cutover only and has no v3 successor)",
@@ -914,7 +914,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-credential.md",
-      "sha256" : "36757832f85f88d27a1f484d0709c0a606af62c7cb6462a858b896078ce58c88",
+      "sha256" : "7007bc20e0592f3fe5c80ade6c9b825a60e9c3fda1ee1e5a4f45f7d6c6edbcd2",
       "specId" : "ADR-046-resources-credential",
       "status" : "Accepted",
       "supersedes" : "Current v3 `CredentialProvider` trait, `CredentialStatus`, `CredentialPlane` model in `d2b-realm-provider/src/credential.rs` and `provider.rs`",
@@ -933,7 +933,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-device.md",
-      "sha256" : "97ce73fce36b271e0f773ceb7394a6160825edb4e840bc741968bbe17de77a5c",
+      "sha256" : "194e83f1e9a23bcb6207d24f24bf669b7ad6c32e858000f6e9948890161ac6ae",
       "specId" : "ADR-046-resources-device",
       "status" : "Accepted",
       "supersedes" : "Current ProcessRole device sidecars (Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video) and their Nix components",
@@ -955,7 +955,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "672c8ef7366b497ac0e4addbe381968aa1b5e5f98a53b19baf04532dc08f40b0",
+      "sha256" : "ebb38d07880bc4f02d71e35cf293aed7dfad3020516b2ed287dcee1cd54e5f50",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Accepted",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "729c8b6186771d48391a3d3c0878132e71f02933dd63f6eadead41497afc80df",
+      "sha256" : "639fcbe7a10bf59171d4d83cbc57156fde75f227eff8a26254d89f5f0a555cda",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -992,7 +992,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-volume.md",
-      "sha256" : "fc71a51bcfbd2e6295a6317259200c6568c9957acd51758e02eda440c29ee130",
+      "sha256" : "800f2c7e557f04a26aa589a201c8f8b09f967def5712e98aaf9fd9aac0fc6cba",
       "specId" : "ADR-046-resources-volume",
       "status" : "Accepted",
       "supersedes" : "`storage.json` v2, `sync.json` v1, per-VM hardlink-farm and store-view emitters in `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "5045dcd8b75c9667ee1885dd467c2841d83e8dd4e2f6d4c949cad99194e5be48",
+      "sha256" : "9f116a794b19b507ab5ca814d8fb7be7f40426670182115bbb3411a6ac6c9417",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1122,7 +1122,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-telemetry-audit-and-support.md",
-      "sha256" : "d8635b8b2b1d4015ebd74c44486d6e6fd6b77a5c6d9157942f98a8d90bed2a19",
+      "sha256" : "a0b16874f3b0d94be312ab4b25d472e08e61643939dd57d06ec633d2b869be6d",
       "specId" : "ADR-046-telemetry-audit-and-support",
       "status" : "Accepted",
       "supersedes" : "Current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "3088ef8bcfaf7c18026c1ebf7d7f4ae074b0f9970edcacd9d40ce0119af68bc6",
+      "sha256" : "0f6fc4228c8eae0391c7c7d0fad1f0e9ab457d72850e3181c08127234ac8a1b8",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",
