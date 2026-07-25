@@ -9,6 +9,8 @@
         test-lint test-rust test-proofs test-flake test-nix-unit \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
+        heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
+        heavy-lane-hardware heavy-lane-perf \
         heavy-gate-build heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
@@ -131,8 +133,16 @@ test-drift:
 test-policy:
 	bash tests/test-policy.sh
 
-## test-integration - L2 podman container integration tests.
-test-integration:
+## test-integration - L2 podman container integration tests. Public heavy lane:
+## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
+## can never oversubscribe a concurrent lane, even when invoked directly or via
+## `make test` / `check-ci` / `check-all`.
+test-integration: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-integration
+
+## heavy-lane-integration - the raw L2 container work. Internal: reachable only
+## from inside the gate (see heavy-lane-guard).
+heavy-lane-integration: heavy-lane-guard
 	bash tests/test-integration.sh
 
 ## layer1-workflow - regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
@@ -179,7 +189,11 @@ pr-checklist-gate:
 ## successor to the `D2B_LIVE`-against-the-real-host scripts. Needs KVM (a local
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
-test-host-integration:
+## Public heavy lane: acquires a slot, then runs the raw work behind the gate.
+test-host-integration: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-host-integration
+
+heavy-lane-host-integration: heavy-lane-guard
 	@set -eu; \
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
 	if [ "$$system" != "x86_64-linux" ]; then \
@@ -202,8 +216,29 @@ test-host-integration:
 	done
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
-test-hardware:    ; bash tests/tools/run-layer.sh test-hardware
-perf:             ; bash tests/tools/run-layer.sh perf
+## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
+test-hardware: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-hardware
+perf: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
+
+heavy-lane-hardware: heavy-lane-guard
+	bash tests/tools/run-layer.sh test-hardware
+heavy-lane-perf: heavy-lane-guard
+	bash tests/tools/run-layer.sh perf
+
+## heavy-lane-guard - fail closed when a heavy-lane internal target is invoked
+## outside the gate. The gate exports D2B_HEAVY_GATE across the re-exec, so a
+## missing marker means someone ran the raw target directly, which would
+## bypass the sole-use semaphore. This is a usability guard; the real
+## synchronisation is the gate's verified open file description lock.
+heavy-lane-guard:
+	@if [ -z "$${D2B_HEAVY_GATE:-}" ]; then \
+	  echo "heavy lane invoked outside the heavy-gate semaphore." >&2; \
+	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot," >&2; \
+	  echo "or 'cargo xtask heavy-gate -- make <lane>'; do not run the internal target directly." >&2; \
+	  exit 2; \
+	fi
 
 # ===========================================================================
 # Heavy lanes.
@@ -232,17 +267,13 @@ heavy-gate-build:
 heavy-check: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) check
 
-## heavy-test-integration - L2 podman container integration under the semaphore.
-heavy-test-integration: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) test-integration
-
-## heavy-test-host-integration - runNixOSTest VM checks under the semaphore.
-heavy-test-host-integration: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) test-host-integration
-
-## heavy-test-hardware - real GPU/YubiKey/TPM passthrough under the semaphore.
-heavy-test-hardware: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) test-hardware
+## heavy-test-integration / -host-integration / -hardware - explicit aliases for
+## the public heavy lanes, kept for muscle memory and scripts. The public lanes
+## now acquire the semaphore themselves; a redundant outer gate here is safe
+## because the inner invocation verifies and reuses the inherited slot.
+heavy-test-integration: test-integration
+heavy-test-host-integration: test-host-integration
+heavy-test-hardware: test-hardware
 
 ## heavy-cargo-test - the Rust workspace test suite under the semaphore.
 ##                    Override the selector with HEAVY_CARGO_TEST_ARGS.
@@ -292,30 +323,59 @@ changelog-fold:
 
 .PHONY: test-runtime-ledger
 
-## test-runtime-ledger - hermetic execution-budget gate. Times the Layer-1
-##   shard targets named in D2B_RUNTIME_SHARDS by re-invoking them through
-##   make, records the samples into a deterministic ledger, then enforces the
-##   per-test / per-crate / per-shard budgets against it. Set
-##   D2B_RUNTIME_BASELINE to a previously recorded ledger to also enforce the
-##   historical regression threshold. The ledger carries an operator-supplied
-##   runner label instead of a hostname so it stays portable.
-D2B_RUNTIME_SHARDS   ?= test-rust
-D2B_RUNTIME_RUNNER   ?= local
-D2B_RUNTIME_LEDGER   ?= packages/target/test-runtime-ledger.json
-D2B_RUNTIME_BASELINE ?=
+## test-runtime-ledger - hermetic execution-budget gate. Warm-builds the
+##   workspace first so compilation never lands in the timings, then collects
+##   repeated *execution-only* samples at three granularities - per test (from a
+##   libtest JSON stream), per crate, and per Layer-1 shard - across
+##   D2B_RUNTIME_REPETITIONS runs. It records them into a deterministic,
+##   portable ledger carrying an operator-supplied runner label instead of a
+##   hostname, then enforces the per-test / per-crate / per-shard budgets, a
+##   complete-census audit (non-empty scopes, matching repetition counts), and,
+##   when D2B_RUNTIME_BASELINE names a previously recorded ledger, the
+##   historical regression threshold plus baseline-id-loss detection.
+##
+##   Both cargo invocations run from packages/ (not the repo root via
+##   --manifest-path) so packages/.cargo/config.toml - and its sccache
+##   rustc-wrapper - is discovered; the ledger and baseline paths are passed as
+##   root-absolute so the working-directory change cannot misplace them.
+D2B_RUNTIME_SHARDS      ?= test-rust
+D2B_RUNTIME_CRATES      ?= d2b-core xtask
+D2B_RUNTIME_RUNNER      ?= local
+D2B_RUNTIME_REPETITIONS ?= 3
+D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
+D2B_RUNTIME_BASELINE    ?=
 test-runtime-ledger:
 	@set -eu; \
+	ledger='$(abspath $(D2B_RUNTIME_LEDGER))'; \
+	work='$(abspath packages/target/test-runtime-ledger.work)'; \
+	reps='$(D2B_RUNTIME_REPETITIONS)'; \
+	rm -rf "$$work"; mkdir -p "$$work"; \
+	echo "test-runtime-ledger: warm-building the workspace so compilation is excluded from timings"; \
+	( cd packages && cargo test --workspace --all-targets --no-run --quiet ); \
 	args=""; \
-	for shard in $(D2B_RUNTIME_SHARDS); do \
-	  start="$$(date +%s%3N)"; \
-	  $(MAKE) --no-print-directory "$$shard"; \
-	  end="$$(date +%s%3N)"; \
-	  args="$$args --shard $$shard=$$((end - start))"; \
+	rep=0; \
+	while [ "$$rep" -lt "$$reps" ]; do \
+	  rep=$$((rep + 1)); \
+	  echo "test-runtime-ledger: repetition $$rep/$$reps"; \
+	  for shard in $(D2B_RUNTIME_SHARDS); do \
+	    start="$$(date +%s%3N)"; \
+	    $(MAKE) --no-print-directory "$$shard" >/dev/null; \
+	    end="$$(date +%s%3N)"; \
+	    args="$$args --shard $$shard=$$((end - start))"; \
+	  done; \
+	  for crate in $(D2B_RUNTIME_CRATES); do \
+	    json="$$work/$$crate-$$rep.json"; \
+	    cstart="$$(date +%s%3N)"; \
+	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --quiet -- \
+	        -Z unstable-options --format=json --report-time ) > "$$json"; \
+	    cend="$$(date +%s%3N)"; \
+	    args="$$args --crate $$crate=$$((cend - cstart)) --libtest-json $$json"; \
+	  done; \
 	done; \
-	cargo run --quiet --manifest-path packages/xtask/Cargo.toml -- \
-	  test-runtime-ledger record \
-	  --runner '$(D2B_RUNTIME_RUNNER)' --output '$(D2B_RUNTIME_LEDGER)' $$args; \
+	( cd packages && cargo run --quiet -p xtask -- test-runtime-ledger record \
+	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
+	    --output "$$ledger" $$args ); \
 	baseline=""; \
-	if [ -n '$(D2B_RUNTIME_BASELINE)' ]; then baseline="--baseline $(D2B_RUNTIME_BASELINE)"; fi; \
-	cargo run --quiet --manifest-path packages/xtask/Cargo.toml -- \
-	  test-runtime-ledger check --ledger '$(D2B_RUNTIME_LEDGER)' $$baseline
+	if [ -n '$(D2B_RUNTIME_BASELINE)' ]; then baseline="--baseline $(abspath $(D2B_RUNTIME_BASELINE))"; fi; \
+	( cd packages && cargo run --quiet -p xtask -- test-runtime-ledger check \
+	    --ledger "$$ledger" $$baseline )
