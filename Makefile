@@ -9,6 +9,8 @@
         test-lint test-rust test-proofs test-flake test-nix-unit \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
+        heavy-gate-build heavy-check heavy-cargo-test heavy-flake-check \
+        heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
 
@@ -30,6 +32,8 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
 #   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
 #   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough — NixOS host only.
+#   make heavy-<lane>      the same lane, serialized through the two-slot
+#                          per-uid heavy-gate semaphore (see "Heavy lanes").
 # ===========================================================================
 
 ## check — the Layer-1 PR-equivalent done-gate. The manifest runner executes
@@ -200,6 +204,56 @@ test-host-integration:
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 test-hardware:    ; bash tests/tools/run-layer.sh test-hardware
 perf:             ; bash tests/tools/run-layer.sh perf
+
+# ===========================================================================
+# Heavy lanes.
+#
+# Every Layer-2, host-integration, hardware, live, and perf-heavy command runs
+# through ONE semaphore: `cargo xtask heavy-gate`. It grants two slots per uid
+# via open file description locks, so concurrent lanes cannot oversubscribe the
+# shared Nix store, cargo target directory, or KVM device. Do not add a second
+# lock file, sleep-and-retry loop, or per-crate heavy-lane guard.
+#
+# Run the heavy-* target instead of the bare target whenever another heavy lane
+# might be running; the bare targets stay available for a serial console.
+# ===========================================================================
+
+# Honour an explicit CARGO_TARGET_DIR so the wrapper is found where cargo puts it.
+HEAVY_GATE_TARGET_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/packages/target)
+HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
+HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
+
+## heavy-gate-build — build the semaphore wrapper. Runs from packages/ so the
+## workspace cargo config (and its rustc wrapper) applies.
+heavy-gate-build:
+	@cd packages && cargo build --quiet -p xtask
+
+## heavy-check — the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
+heavy-check: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) check
+
+## heavy-test-integration — L2 podman container integration under the semaphore.
+heavy-test-integration: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) test-integration
+
+## heavy-test-host-integration — runNixOSTest VM checks under the semaphore.
+heavy-test-host-integration: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) test-host-integration
+
+## heavy-test-hardware — real GPU/YubiKey/TPM passthrough under the semaphore.
+heavy-test-hardware: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) test-hardware
+
+## heavy-cargo-test — the Rust workspace test suite under the semaphore.
+##                    Override the selector with HEAVY_CARGO_TEST_ARGS.
+HEAVY_CARGO_TEST_ARGS ?= --workspace --all-targets
+heavy-cargo-test: heavy-gate-build
+	cd packages && $(HEAVY_GATE) cargo test $(HEAVY_CARGO_TEST_ARGS)
+
+## heavy-flake-check — the building `nix flake check` under the semaphore.
+##                     `make test-flake` is the cheap --no-build sibling.
+heavy-flake-check: heavy-gate-build
+	$(HEAVY_GATE) $(NIX_FLAKE) flake check --print-build-logs
 
 # --- pre-existing maintainer targets ---------------------------------------
 
