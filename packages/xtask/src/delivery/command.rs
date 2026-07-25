@@ -294,29 +294,43 @@ impl Serialize for WaveCommand {
 ///
 /// A successful invocation always reports [`WorkflowStatus::Ok`]; every failure
 /// path returns [`DeliveryError`] and is rendered separately with a nonzero exit
-/// code, so `status` never widens implicitly. Keeping this a typed, single-member
-/// enum (rather than a free `String`) means adding an outcome is a deliberate wire
-/// change that the golden contract test forces to travel with a
+/// code, so `status` never widens implicitly. Keeping this a typed enum (rather
+/// than a free `String`) means adding an outcome is a deliberate wire change
+/// that the golden contract test forces to travel with a
 /// [`DELIVERY_SCHEMA_VERSION`](super::DELIVERY_SCHEMA_VERSION) bump.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorkflowStatus {
-    Ok,
+///
+/// The variants, their wire strings, and the [`ALL`](WorkflowStatus::ALL)
+/// domain are generated from the single [`workflow_status!`] declaration below,
+/// so the enum, its serialization, and the domain the golden contract test
+/// enumerates cannot drift from one another: adding a variant to the macro
+/// input updates all three at once, and forgetting the wire string is a compile
+/// error, not a silent domain gap.
+macro_rules! workflow_status {
+    ($( $(#[$meta:meta])* $variant:ident => $wire:literal ),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum WorkflowStatus {
+            $( $(#[$meta])* $variant, )+
+        }
+
+        impl WorkflowStatus {
+            /// Every status variant, in declaration order, generated from the
+            /// same macro input as the enum and its wire strings. The golden
+            /// contract fingerprint enumerates this array, so the outcome
+            /// domain cannot widen without moving the pinned golden and the
+            /// schema version together.
+            pub const ALL: &'static [WorkflowStatus] = &[ $( WorkflowStatus::$variant ),+ ];
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $wire, )+
+                }
+            }
+        }
+    };
 }
 
-impl WorkflowStatus {
-    /// Every status variant, in wire order.
-    ///
-    /// The golden contract fingerprint enumerates this array, and a
-    /// wildcard-free exhaustiveness guard in that module fails to compile if a
-    /// variant is added without extending `ALL`, so the outcome domain cannot
-    /// widen without moving the pinned golden and the schema version together.
-    pub const ALL: &'static [WorkflowStatus] = &[WorkflowStatus::Ok];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-        }
-    }
+workflow_status! {
+    Ok => "ok",
 }
 
 impl std::fmt::Display for WorkflowStatus {
@@ -1037,10 +1051,13 @@ mod tests {
 
         #[test]
         fn workflow_status_all_enumerates_every_variant() {
-            // Wildcard-free membership guard. Adding a `WorkflowStatus` variant
-            // makes this match non-exhaustive, failing compilation until the
-            // author adds an arm here; the arm's assertion then forces the new
-            // variant into `ALL`, and `ALL` feeds every status-domain golden.
+            // Belt-and-suspenders guard over the macro-generated domain. Both
+            // `WorkflowStatus::ALL` and the wire strings come from the single
+            // `workflow_status!` declaration, so they cannot drift; this
+            // wildcard-free match adds a second checkpoint that still fails to
+            // compile if a variant is ever introduced outside that macro,
+            // keeping every variant present in `ALL`, which feeds every
+            // status-domain golden.
             for status in WorkflowStatus::ALL {
                 let listed = match status {
                     WorkflowStatus::Ok => WorkflowStatus::ALL.contains(&WorkflowStatus::Ok),
