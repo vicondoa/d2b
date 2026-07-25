@@ -2018,7 +2018,10 @@ it is never edited directly.
 Integrity verification is computable from exactly these members; there is no
 file-list manifest and no `candidateId`/`contentId`:
 
-1. **Bundle `contentHash`** - `sha256:<hex>` over the canonical sorted
+1. **Bundle `contentHash`** - the D101 digest under the `d2b:v3:resource-bundle`
+   domain tag: `SHA-256(domain_tag || 0x00 || canonical_bytes)` rendered
+   `sha256:<hex>`, where `domain_tag` is `d2b:v3:resource-bundle` and
+   `canonical_bytes` is the `d2b-cjson/v1` serialization of the canonical sorted
    `resources` array (excluding the top-level `contentHash`,
    `artifactCatalogDigest`, and `generatedAt` fields). It is the generation
    identity; the Zone runtime and audit records refer to this value as
@@ -2057,6 +2060,21 @@ closures in the Nix store at build time). Store paths are excluded from all
 public ResourceSpecs, status fields, audit records, and OTEL telemetry
 (D070); the private `artifact-catalog.json` `storePath` fields are readable
 only by the Zone runtime and activation helper for staging.
+
+The generation identity and the generation ordinal are distinct values with
+distinct types. `generationId` (equal to `contentHash`) is the content-addressed
+`sha256:<hex>` identity defined above: deterministic across hosts and stable
+across a rollback that re-activates an identical `resources` array. The
+configuration generation ordinal is a host-local monotonic `u64` the Zone
+runtime assigns at each activation (strictly increasing even when a rollback
+re-activates a prior `contentHash`); it appears as `configurationGeneration` on
+each resource, as `generationIndex` on generation and audit records, and as the
+redb `store_meta` `active_configuration_revision` pointer to the currently
+active ordinal. `generation.json` records both the active and prior `contentHash`
+(identity) and the runtime-assigned ordinal. The D125 firewall fence
+`expected_generation_id` is the `contentHash` identity, never the ordinal; the
+D106 `PolicySnapshot.active_configuration_revision` equality recheck is the
+ordinal, never the digest.
 
 ### Activation path
 

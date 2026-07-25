@@ -9,6 +9,17 @@
   store-path hashes verified at apply. Removed the unpinned self-digest claim
   that could not detect tampering, and named the store-side
   `d2b:v3:resource-envelope` tag as explicitly outside the bundle chain.
+- Closed the D101/D119 digest-domain gap: added the `d2b:v3:resource-bundle`
+  domain tag to D101's frozen set and specified the bundle `contentHash`
+  (`generationId`) as the D101 digest under that tag over the canonical sorted
+  `resources` array, so the generation identity is domain-separated like every
+  other digest. Stated in the canonical bundle contract that the
+  content-addressed identity (`contentHash`/`generationId`, a `sha256:<hex>`
+  string used by the D125 firewall fence and the `generation.json` pointers) is
+  distinct from the host-local monotonic configuration-generation ordinal
+  (`configurationGeneration`/`generationIndex`, surfaced as the redb
+  `store_meta.active_configuration_revision` pointer used by the D106 policy
+  recheck).
 - Made provider-catalog identity decidable (D120): `spec.artifactId` must be
   unique across `d2b.providerCatalog` entries, enforced by an eval-time
   assertion (`provider-catalog-duplicate-artifact-id`), so "resolves exactly one
