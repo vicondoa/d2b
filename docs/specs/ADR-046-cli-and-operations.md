@@ -160,7 +160,7 @@ Short form rules:
 
 Validation:
 
-- `resource_name` matches `^[a-z][a-z0-9-]*$`.
+- `resource_name` matches `^[a-z][a-z0-9-]{0,62}$` (1 to 63 bytes, D113).
 - `ResourceType` is a known Zone-registered type or a qualified API name.
 - Validation failure yields exit code 2 with a `ref-invalid` error class.
 

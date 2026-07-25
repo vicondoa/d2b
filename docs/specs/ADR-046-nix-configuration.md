@@ -44,7 +44,7 @@ Specifically:
   self-resource, compiler-only `parentZone` topology sealed into allocator
   bootstrap state, and child-local ZoneLink transport/route state.
 - `RealmWorkloadsLauncherV2Json` / `realm-workloads-launcher-v2.json` →
-  target Process resource annotations in `zones/<z>/processes.json`.
+  target Process resource annotations in the Zone `resource-bundle.json`.
 - `Capability` enum → see capability disposition table below (mapping resolved;
   verb set owned by resource-api/authz foundation spec).
 
@@ -93,8 +93,11 @@ not deferred to runtime:
 
 1. Every `*Ref` field follows `<ResourceType>/<resource_name>`. No scheme,
    Zone prefix, query string, relative segment, or implicit type is accepted.
-2. `resource_name` matches `^[a-z][a-z0-9-]*$` - the same LABEL_PATTERN as
-   `RealmId`/`WorkloadId` in `d2b-realm-core/src/ids.rs`.
+2. `resource_name` matches `^[a-z][a-z0-9-]{0,62}$` - the `RealmId`/`WorkloadId`
+   LABEL_PATTERN grammar from `d2b-realm-core/src/ids.rs`, bounded to 1..63
+   bytes per D113 (deliberately tighter than the v2 128-byte identifier
+   ceiling, which is a different contract). Empty names and names of 64 bytes
+   or more reject at eval, so a name Nix accepts is always admissible to Rust.
 3. Every resource ref resolves to a declared resource of the stated type in
    the same Zone. Cross-Zone refs are always rejected; cross-Zone operations
    route through a same-Zone `ZoneLink` plus non-Ref routing metadata.
@@ -281,7 +284,9 @@ Evidence class per `ADR-046-terminology-and-identities.md`.
 
 Each Zone is declared under `d2b.zones.<name>`. The option path replaces
 `d2b.realms.<r>` (current: `nixos-modules/options-realms.nix`). The Zone
-`<name>` matches `^[a-z][a-z0-9-]*$` - the same LABEL_PATTERN as `RealmId`.
+`<name>` matches `^[a-z][a-z0-9-]{0,62}$` - the `RealmId` LABEL_PATTERN grammar
+bounded to 1..63 bytes per D113 (the `ZoneId` bound). Empty names and names of
+64 bytes or more reject at eval.
 
 ```nix
 d2b.zones.local-root = {
@@ -494,9 +499,9 @@ each built artifact:
 `storePath` is a private field read only by `d2b-activation-helper` and the
 Zone runtime for staging. It never appears in any public ResourceSpec, status
 field, audit record, or OTEL telemetry export. `d2b-activation-helper` verifies
-the artifact catalog digest against a `bundle.json`-sibling manifest entry
-before staging. The catalog is content-addressed: same derivation inputs →
-byte-identical output.
+the artifact catalog document digest (digest-chain member 4; see Bundle
+contract (canonical)) before staging. The catalog is content-addressed: same
+derivation inputs produce byte-identical output.
 
 ### Validation
 
@@ -1203,7 +1208,7 @@ d2b.zones.dev.resources.wayland-proxy = {
       class = "on-failure";
       backoffBase = "1s";
       backoffMax = "60s";
-      backoffMultiplier = 2.0;
+      backoffMultiplierMilli = 2000;   # integer fixed-point: multiplier x 1000 (2.0). Floats are rejected at eval (D101/D121).
       maxRestarts = 5;
       resetAfter = "300s";
     };
@@ -1693,7 +1698,7 @@ All ref validation runs at Nix eval time:
 
 | Rule | Assertion |
 | --- | --- |
-| ResourceRef format | `<Type>/<name>` where name matches `^[a-z][a-z0-9-]*$` |
+| ResourceRef format | `<Type>/<name>` where name matches `^[a-z][a-z0-9-]{0,62}$` (1..63 bytes, D113); the whole canonical ref string is at most 201 bytes (137-byte qualified type, separator, 63-byte name) |
 | Type exists in catalog | Type is in the closed standard catalog or an approved vendor type |
 | Intra-Zone resolution | The named resource is declared in `d2b.zones.<z>.resources` |
 | Cross-Zone ref rejection | Any ref containing a Zone component is rejected; no cross-Zone ResourceRef allowed |
@@ -1711,7 +1716,7 @@ All ref validation runs at Nix eval time:
 | `ResourceImport` local route/factory | `providerRef` and `zoneLinkRef` resolve locally; `exportKey` is bounded/not a Ref; expected Service type and projection/factory fingerprints match the signed export and local factory |
 | Qualified Binding refs | `serviceRef` resolves to the same-Zone matching Service; target ref resolves to a factory-allowed same-Zone Guest/User/Zone; Binding spec is intent-only, observations are status-only, and Binding is non-exportable |
 | `artifactId` / `systemArtifactId` format | Plain bounded string `^[a-z][a-z0-9-]*$`; not a `<Type>/<name>` ResourceRef; no `*Ref` suffix |
-| `catalogEntryId` check | The named entry exists in `d2b.providerCatalog`; resolved to its `artifactId` |
+| Provider `artifactId` catalog resolution | The Provider resource's `spec.artifactId` matches the `artifactId` of exactly one `d2b.providerCatalog` entry (trust validation) and one `d2b.artifacts` entry with `type = "provider"`. Provider catalog identity is `spec.artifactId`; there is no separate `catalogEntryId` field (D075 freezes Provider spec as `{ artifactId; config; }`) |
 
 Failed validation emits a structured eval error identifying the exact option
 path and rejected value.
@@ -1819,7 +1824,8 @@ succeeds. The drift gate `make test-drift` enforces `xtask gen-schemas` +
 | Every `spec` field type-checks against committed JSON Schema | Build |
 | All required fields present; no unknown top-level `spec` fields | Build |
 | `spec` must not contain `managedBy` (core-set runtime field) | Eval |
-| `resource_name` matches `^[a-z][a-z0-9-]*$` | Eval |
+| `spec` must not contain any floating-point number; every numeric field is a JSON integer (D101/D121). Fixed-point fields such as `backoffMultiplierMilli` carry the scaled integer | Eval |
+| `resource_name` matches `^[a-z][a-z0-9-]{0,62}$` (1..63 bytes, D113; empty and 64-byte-or-longer names rejected) | Eval |
 | All `*Ref` fields follow `<ResourceType>/<resource_name>` | Eval |
 | All refs resolve within the same Zone | Eval |
 | `ownerRef` acyclicity | Eval |
@@ -1889,79 +1895,190 @@ op, which is never invoked from Nix. An eval assertion rejects any string field
 matching known secret patterns (PEM `-----BEGIN` headers, JWT `eyJ...` prefix,
 hex strings ≥ 32 bytes in secret-typed spec fields).
 
-### Bundle integrity
+### Bundle contract (canonical)
 
-The Zone resource bundle and the artifact catalog emitted by each Nix derivation
-build are:
+This section is the single source of truth (D119) for the per-Zone generation
+layout, its installation paths, and its digest chain. Every other ADR 0046
+spec that references a Zone bundle, generation, retention setting, index, or
+artifact catalog defers to this section; where an older description elsewhere
+disagrees, this section governs.
 
-1. **Sorted**: every `*.json` file contains resources sorted by
-   `metadata.name`. `bundle.json` file entries are sorted by filename.
-   `artifact-catalog.json` entries are sorted by `artifactId`.
-2. **Content-addressed**: `candidateId` is the sha256 of the concatenation of
-   all per-file digests (Zone bundle files plus artifact catalog) in canonical
-   sort order. `contentId` is the sha256 of canonical sorted resource content,
-   stable across runtime-only metadata mutations (`uid`, `generation`,
-   `revision`) applied after activation.
-3. **Integrity-pinned**: `d2b-activation-helper` verifies every per-file digest
-   against `bundle.json` before staging, including `artifact-catalog.json`;
-   any mismatch fails activation closed.
-4. **Hermetic**: same Nix inputs → byte-identical derivation output. No
-   timestamps, randomness, or network access inside the derivation.
-5. **Offline**: all required Provider JSON Schemas are in Provider package
-   closures already in the Nix store at build time; no Provider dossier network
-   fetch occurs during derivation evaluation or build.
-6. **D070-compliant**: store paths are excluded from all public ResourceSpecs,
-   status fields, audit records, and OTEL telemetry. The private
-   `artifact-catalog.json` (root:d2bd 0640) contains `storePath` fields that
-   are readable only by the Zone runtime and activation helper for staging.
+#### One monolithic resource bundle per Zone
 
+Each Nix evaluation produces one immutable configuration generation. For each
+declared Zone the build derivation emits exactly one monolithic bundle
+document; there is no per-resource-type split (no `zone.json`,
+`providers.json`, `hosts.json`, `guests.json`, `processes.json`,
+`volumes.json`, `networks.json`, `devices.json`, or `roles.json` bundle
+files). Every authored resource for the Zone is one element of the bundle's
+single canonical `resources` array. This matches the current v2
+`nixos-modules/bundle.nix` monolithic bundle and the generic bundle contract
+in the resource-network spec.
 
+Where any work item, disposition table, or prose elsewhere in this spec refers
+to a per-resource-type file (`zone.json`, `providers.json`, `hosts.json`,
+`guests.json`, `processes.json`, `volumes.json`, `networks.json`,
+`devices.json`, `roles.json`) or to a per-Zone `bundle.json`, that reference
+denotes the corresponding resources inside this single `resource-bundle.json`;
+no per-type bundle file and no per-Zone `bundle.json` install file is emitted.
+The derived low-level views that remain separate files
+(`closures/<guest>.json`, `minijail-profiles/<id>.json`, `privileges.json`) are
+broker and sandbox inputs, not resource declarations, and are not part of the
+resource bundle.
 
-### Generation compilation
-
-Current source: `nixos-modules/bundle.nix` - monolithic bundle derivation,
-`SHA256SUMS`, integrity chain. Current `d2b._bundle` attrset in
-`bundle-artifacts.nix`. The v3 design replaces the monolithic bundle with
-one content-addressed derivation per Zone.
-
-Each Nix evaluation produces one immutable configuration generation: a closed
-set of Zone resource bundles plus the provider catalog. Each bundle is a
-content-addressed derivation:
+The store-derivation filename is `bundle.json`; the installed and
+runtime-read name is `resource-bundle.json`:
 
 ```
-/nix/store/<hash>-d2b-config-zone-dev/
-  zone.json             - Zone self-resource
-  providers.json        - Provider resources for this Zone
-  hosts.json            - Host resources
-  guests.json           - Guest resources
-  processes.json        - Process and EphemeralProcess resources
-  volumes.json          - Volume resources
-  networks.json         - Network resources
-  devices.json          - Device/User/Credential resources
-  roles.json            - Role and RoleBinding resources
-  index.json            - cross-resource index for this Zone
-  bundle.json           - manifest of all files + content digests
-
-/nix/store/<hash>-d2b-artifact-catalog/
-  artifact-catalog.json - private integrity-pinned catalog; storePath per entry for staging
+/nix/store/<hash>-d2b-zone-<zone>-bundle/bundle.json          (fixed-output; installed as resource-bundle.json)
+/nix/store/<hash>-d2b-artifact-catalog/artifact-catalog.json  (site-wide private catalog; storePath per entry for staging)
 ```
+
+The bundle is a fixed-output derivation: identical Nix inputs produce an
+identical store path and an identical `contentHash`; any resource-spec change
+produces a different store path and `contentHash`.
+
+```json
+{
+  "schemaVersion": 3,
+  "bundleVersion": 1,
+  "zone": "dev",
+  "contentHash": "sha256:<64 lowercase hex>",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "resources": [
+    { "apiVersion": "resources.d2bus.org/v3", "type": "<Type>",
+      "metadata": { "name": "<name>", "zone": "dev" }, "spec": {} }
+  ],
+  "providerSchemaDigests": {
+    "Provider/<name>": "sha256:<64 lowercase hex>"
+  }
+}
+```
+
+- `resources` is sorted canonically by `(type, name)`.
+- `managedBy`, `configurationGeneration`, `uid`, `generation`, `revision`,
+  timestamps, and `status` are absent from the Nix-emitted bundle; core
+  assigns the runtime-owned fields when it applies each resource.
+- `generatedAt` is the Unix epoch (`1970-01-01T00:00:00.000Z`) for
+  reproducibility; the Zone runtime records the actual activation time in its
+  own generation record, not in the bundle.
+
+#### Emitted at build time vs created at runtime
+
+| Artifact | Installed path | Owner/mode | Origin |
+| --- | --- | --- | --- |
+| Zone resource bundle | `/etc/d2b/zones/<zone>/resource-bundle.json` | `root:d2bd 0640` | Nix build (one per declared Zone) |
+| Site provider catalog | `/etc/d2b/provider-catalog.json` | `root:d2bd 0640` | Nix build (one, site-wide) |
+| Site artifact catalog | `/etc/d2b/artifact-catalog.json` | `root:d2bd 0640` | Nix build (one, site-wide, private) |
+| Cross-Zone index | `/etc/d2b/index.json` | `root:d2bd 0640` | Nix build (one, site-wide, derived) |
+| Per-Guest closure map | `/etc/d2b/closures/<guest>.json` | `root:d2bd 0640` | Nix build (derived low-level view) |
+| Minijail profiles | `/etc/d2b/minijail-profiles/<id>.json` | `root:d2b-priv-broker 0640` | Nix build (derived low-level view) |
+| Broker op catalog | `/etc/d2b/privileges.json` | `root:d2bd 0640` | Nix build (derived low-level view) |
+| `Zone/<name>` self-resource | Zone runtime store | n/a | Controller-created; never emitted in any bundle |
+| Prior generation bundles | `/var/lib/d2b/zones/<zone>/configuration/prior/<contentHash>.json` | `root:d2bd 0640` | Runtime (retention ring) |
+| Generation state | `/var/lib/d2b/zones/<zone>/configuration/generation.json` | `root:d2bd 0640` | Runtime (active/prior pointers + retention metadata) |
+
+The `d2b.artifacts.<id>` option and both catalogs are site-wide, not per-Zone;
+`d2b:v3:artifact-catalog` (D101) is a single document digest pinned once for
+the whole program. The cross-Zone `index.json` is derived, drift-gated
+(`xtask gen-index` + `git diff --exit-code`), and cross-checked at activation;
+it is never edited directly.
+
+#### Digest chain
+
+Integrity verification is computable from exactly these members; there is no
+file-list manifest and no `candidateId`/`contentId`:
+
+1. **Per-resource envelope digest** - each element of `resources` has a
+   canonical `sha256:<hex>` digest under the D101 `d2b:v3:resource-envelope`
+   domain tag.
+2. **Bundle `contentHash`** - `sha256:<hex>` over the canonical sorted
+   `resources` array (excluding `contentHash` and `generatedAt`). It is the
+   generation identity; the Zone runtime and audit records refer to this value
+   as `generationId` (the two names denote the same digest).
+3. **`providerSchemaDigests`** - one `sha256:<hex>` per `Provider/<name>` used
+   in the bundle, taken from the Provider's committed settings schema (D101
+   `d2b:v3:schema`); the runtime verifies these when applying the bundle.
+4. **Artifact catalog document digest** - the site-wide
+   `artifact-catalog.json` carries a `sha256:<hex>` under the D101
+   `d2b:v3:artifact-catalog` domain tag; `d2b-activation-helper` verifies it
+   before staging.
+5. **Per-artifact store-path hashes** - each artifact-catalog entry records its
+   Nix-computed `packageDigest`/`closureDigest`; each bundle resource's
+   `artifactId`/`systemArtifactId` resolves to a catalog entry and the runtime
+   verifies the resolved artifact's recorded digest at apply time.
+
+The cross-Zone `index.json` is not a digest-chain member; its correctness is
+enforced by the drift gate and the activation-time cross-check against the
+bundle. The bundle and catalog derivations are hermetic (same Nix inputs
+produce byte-identical output; no timestamps, randomness, or network access)
+and offline (all required Provider JSON Schemas are already in Provider package
+closures in the Nix store at build time). Store paths are excluded from all
+public ResourceSpecs, status fields, audit records, and OTEL telemetry
+(D070); the private `artifact-catalog.json` `storePath` fields are readable
+only by the Zone runtime and activation helper for staging.
 
 ### Activation path
 
+Activation is fail-closed and crash-safe. The active pointer, the prior
+pointer, and the retention metadata are persisted together, atomically, before
+any reconciliation is notified, so a crash can never leave a new generation
+active with no durably recorded rollback target.
+
 ```
 Nix eval
-  → derivation build (hermetic, offline)
-  → /nix/store/<hash>-d2b-config-zone-<name>/  (immutable)
-  → system activation (d2b-activation-helper)
-      1. verify bundle.json digest chain;
-      2. validate resource refs, owners, RBAC cross-checks;
-      3. stage new generation into Zone runtime (not yet active);
-      4. atomically swap active pointer;
-      5. trigger configuration-publication controller handler;
-      6. record prior generation pointer for rollback window.
+  -> derivation build (hermetic, offline)
+  -> /nix/store/<hash>-d2b-zone-<zone>-bundle/  (immutable)
+  -> system activation (d2b-activation-helper)
+      1. verify the digest chain (contentHash, providerSchemaDigests,
+         artifact-catalog document digest, resolved artifact digests);
+      2. validate resource refs, owners, RBAC cross-checks, and the
+         cross-Zone index cross-check;
+      3. stage the new generation into the Zone runtime (not yet active);
+      4. atomically persist generation.json = { activeContentHash,
+         priorContentHash, retainedGenerations, retention-ring metadata }
+         in one durable write (temp file in the same directory, write, fsync
+         the file, rename over the target, fsync the parent directory), per
+         the ADR 0034 storage contract; the new generation counts as active
+         only when this write returns success;
+      5. notify the configuration-publication controller.
 ```
 
-Steps 1-3 are fail-closed. Step 4 is atomic.
+Steps 1-3 are fail-closed. Step 4 is the single atomic commit point: the prior
+pointer is recorded in the same durable write that installs the new active
+pointer, never in a later step. The controller is notified only after step 4
+succeeds (step 5). There is no window in which the active pointer has advanced
+but the prior pointer has not been recorded.
+
+#### Restart recovery for an interrupted activation
+
+A normal daemon restart is a continuation event, not a teardown (ADR 0034). On
+startup the Zone runtime reads `generation.json`, adopts the recorded
+`activeContentHash` when its staged bundle is present and integrity-verifies,
+and otherwise quarantines the ambiguous generation and continues serving from
+the recorded `priorContentHash`. Recovery adopts or quarantines before any
+cleanup: no prior-generation bundle is pruned while a rollback target or an
+in-flight Delete from its generation could still be needed. Because step 4 is
+atomic, a crash before it leaves the previous generation active with its prior
+pointer intact, and a crash after it leaves the new generation active with the
+new prior pointer intact.
+
+### Retention
+
+Generation retention is a per-Zone Nix compiler setting, `retainedGenerations`
+(default 3, range 1..16), declared at the Zone option level outside the Zone
+ResourceSpec:
+
+```nix
+d2b.zones.dev.retainedGenerations = 3;   # default 3; range 1..16
+```
+
+An eval assertion enforces `1 <= retainedGenerations <= 16`. The minimum of 1
+guarantees at least one prior generation is available for rollback; values
+above 16 reject with a structured error. `retainedGenerations` is consumed
+only during build and runtime generation bookkeeping and is never emitted into
+any Zone ResourceSpec or bundle JSON. There is exactly one name for this
+setting; `retainedConfigurationMax` is not used.
 
 ### Rollback
 
@@ -1969,22 +2086,10 @@ Steps 1-3 are fail-closed. Step 4 is atomic.
 d2b zone rollback dev --generation <N>
 ```
 
-Re-stages the prior generation's bundle and swaps the active pointer. The
-configuration-publication controller reconciles affected resources.
-
-Generation retention is a per-Zone Nix compiler setting outside the Zone
-ResourceSpec. It is declared at the Zone option level:
-
-```nix
-d2b.zones.dev.retainedGenerations = 3;   # default 3; range 1..16
-```
-
-An eval assertion enforces `1 ≤ retainedGenerations ≤ 16`. The default is 3.
-The minimum of 1 ensures at least one prior generation is always available for
-rollback. The maximum of 16 is eval-enforced; values above 16 are rejected with
-a structured error. `retainedGenerations` is consumed only during build and
-runtime generation bookkeeping; it is never emitted into any Zone ResourceSpec
-or bundle JSON.
+Rollback re-stages a retained prior bundle and reapplies it as a new, higher
+generation; the atomic step-4 commit and the restart-recovery rules above
+apply unchanged. The configuration-publication controller reconciles affected
+resources.
 
 ### Cross-Zone generation ordering
 
@@ -2028,12 +2133,13 @@ absent from the new generation's bundle. All other resources are untouched.
 
 When a new configuration generation activates:
 
-1. The configuration-publication controller reads the new generation's bundle
-   `*.json` files to form the new configuration-owned name set.
+1. The configuration-publication controller reads the new generation's
+   `resource-bundle.json` `resources` array to form the new configuration-owned
+   name set.
 2. Resources carrying `managedBy=configuration` whose name+type is absent from
    the new set are enqueued for asynchronous `Delete`.
 3. **Activation does not block on cleanup.** Step 4 of the activation path
-   (atomic pointer swap) completes before cleanup begins.
+   (atomic generation-pointer commit) completes before cleanup begins.
 4. Each resource enqueued for Delete transitions to `status.phase: Pending`
    with a `PendingDeletion` condition (`reason: AbsentFromConfiguration`). The
    Zone's aggregate `status.phase` becomes `Degraded` until all pending deletes
@@ -2099,7 +2205,7 @@ structured audit event:
 
 | Test | Tier | Description |
 | --- | --- | --- |
-| Two-generation bundle diff | nix-unit | Generation 1 declares resource R; generation 2 omits R. Verify R absent from generation 2 bundle `*.json`; generation 1 bundle retains R. |
+| Two-generation bundle diff | nix-unit | Generation 1 declares resource R; generation 2 omits R. Verify R absent from generation 2 `resource-bundle.json` `resources` array; generation 1 bundle retains R. |
 | Async cleanup activation | Integration | Activate generation 1 (R present, `managedBy=configuration`, phase Ready). Activate generation 2 (R absent). Verify R enters Pending/PendingDeletion; Zone phase Degraded. Complete cleanup. Verify a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone phase Ready. |
 | Audit record | Integration | After async cleanup: verify structured `ResourceDelete` event with correct zone/type/name/generationIndex/configurationGeneration/reason fields. |
 | Finalizer-blocked deletion | Integration | R holds active finalizer. Activate generation 2 (R absent). Verify R enters DeletionBlocked condition. Remove finalizer. Verify deletion completes: a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone phase returns Ready. |
@@ -2157,8 +2263,10 @@ The v3 normalized index is a single cross-Zone artifact emitted to
 ```
 
 The index is derived; it is never edited directly. If it disagrees with the
-resource bundle files the activation tool rejects the generation. The drift
-gate enforces `xtask gen-index` + `git diff --exit-code`.
+Zone bundles the activation tool rejects the generation. It is not a
+digest-chain member (see Bundle contract (canonical)); its correctness is
+enforced by the drift gate (`xtask gen-index` + `git diff --exit-code`) and the
+activation-time cross-check.
 
 ## Bundle artifacts
 
@@ -2166,51 +2274,27 @@ gate enforces `xtask gen-index` + `git diff --exit-code`.
 
 | File | Owner | Description |
 | --- | --- | --- |
-| `provider-catalog.json` | `root:d2bd 0640` | Offline Provider catalog |
+| `provider-catalog.json` | `root:d2bd 0640` | Offline Provider catalog (site-wide) |
+| `artifact-catalog.json` | `root:d2bd 0640` | Artifact catalog (site-wide, private) |
 | `index.json` | `root:d2bd 0640` | Cross-Zone normalized index |
-| `zones/<name>/bundle.json` | `root:d2bd 0640` | Zone bundle manifest + digest chain |
-| `zones/<name>/zone.json` | `root:d2bd 0640` | Zone self-resource |
-| `zones/<name>/providers.json` | `root:d2bd 0640` | Provider resources |
-| `zones/<name>/hosts.json` | `root:d2bd 0640` | Host resources |
-| `zones/<name>/guests.json` | `root:d2bd 0640` | Guest resources |
-| `zones/<name>/processes.json` | `root:d2bd 0640` | Process/EphemeralProcess resources |
-| `zones/<name>/volumes.json` | `root:d2bd 0640` | Volume resources |
-| `zones/<name>/networks.json` | `root:d2bd 0640` | Network resources |
-| `zones/<name>/devices.json` | `root:d2bd 0640` | Device/User/Credential resources |
-| `zones/<name>/roles.json` | `root:d2bd 0640` | Role/RoleBinding resources |
+| `zones/<name>/resource-bundle.json` | `root:d2bd 0640` | Monolithic Zone bundle (canonical `resources` array + digest chain); see Bundle contract (canonical) |
 | `closures/<guest-name>.json` | `root:d2bd 0640` | Per-Guest closure map |
 | `minijail-profiles/<id>.json` | `root:d2b-priv-broker 0640` | Minijail sandbox profiles |
 | `privileges.json` | `root:d2bd 0640` | Broker op catalog (retained site-wide) |
 | `realm-controllers.json` | `root:d2bd 0640` | Retained during migration; see ADR046-nix-008 |
 | `realm-identity.json` | `root:d2bd 0640` | Retained during migration; see ADR046-nix-009 |
 
+There is no per-resource-type bundle file and no separate `zone.json`; the
+`Zone/<name>` self-resource is controller-created and never emitted (see Bundle
+contract (canonical)).
+
 ### Bundle manifest format
 
-`zones/<name>/bundle.json`:
-
-```json
-{
-  "schemaVersion":   "v1",
-  "candidateId":     "<sha256 of concatenated file digests in canonical order>",
-  "contentId":       "<sha256 of canonical resource content>",
-  "generationIndex": 1,
-  "files": [
-    { "name": "zone.json",      "digest": "sha256:..." },
-    { "name": "providers.json", "digest": "sha256:..." },
-    { "name": "hosts.json",     "digest": "sha256:..." },
-    { "name": "guests.json",    "digest": "sha256:..." },
-    { "name": "processes.json", "digest": "sha256:..." },
-    { "name": "volumes.json",   "digest": "sha256:..." },
-    { "name": "networks.json",  "digest": "sha256:..." },
-    { "name": "devices.json",   "digest": "sha256:..." },
-    { "name": "roles.json",     "digest": "sha256:..." }
-  ]
-}
-```
-
-`candidateId`/`contentId` serve the same binding role as the current
-`d2b._bundle` integrity chain (current source: `nixos-modules/bundle.nix`),
-scoped per Zone.
+The bundle envelope, its canonical `resources` array, and the full digest chain
+are specified once in Bundle contract (canonical) above. There is no separate
+file-list manifest and no `candidateId`/`contentId`: the generation identity is
+the bundle `contentHash`, and integrity is the five-member digest chain defined
+in that section.
 
 ## Conflict detection
 
@@ -2227,8 +2311,8 @@ The Nix compiler detects and rejects at eval time:
 | Guest name reserved prefix | A `Guest/<name>` starting with `sys-` |
 | Owner cycle | Any `ownerRef` chain that loops |
 | Type collision | Two `d2b.zones.<z>.resources` entries with the same attribute key (Nix prevents this by construction) or two entries with different keys but emitting the same `<Type>/<name>` pair (eval-checked for cross-type uniqueness) |
-| Provider already installed | Two `d2b.zones.<z>.resources` entries of `type = "Provider"` with the same `catalogEntryId` |
-| Catalog entry absent | A `catalogEntryId` not in `d2b.providerCatalog`, or an `artifactId`/`systemArtifactId` not in `d2b.artifacts` |
+| Provider already installed | Two `d2b.zones.<z>.resources` entries of `type = "Provider"` in the same Zone with the same `spec.artifactId` (duplicate install of one Provider artifact) |
+| Catalog entry absent | A Provider `spec.artifactId` that matches no `d2b.providerCatalog` entry, or an `artifactId`/`systemArtifactId` not in `d2b.artifacts` |
 | Artifact type mismatch | An artifact ID used in a field that expects a different `type` (e.g., `"nixos-system"` where `"provider"` is required) |
 | Duplicate artifact ID | Two `d2b.artifacts.<id>` entries with the same key |
 | Missing ref target | Any `*Ref` field whose target is not declared |
@@ -2254,19 +2338,19 @@ destination is integrated and tested.
 | `nixos-modules/index.nix` | `cfg._index.*` - `netMeta`/`enabledVms`/`realmRows` | Yes | `index.nix` (rewritten); emits `/etc/d2b/index.json` | ADR046-nix-004 |
 | `nixos-modules/bundle-artifacts.nix` | `d2b._bundle.*` internal artifact table | Yes | `bundle-zones.nix` (per-Zone) + `bundle-artifacts.nix` (helpers retained) | ADR046-nix-005 |
 | `nixos-modules/bundle.nix` | Bundle derivation + SHA256SUMS + integrity chain | Yes | Rewritten per-Zone; `bundle-zones.nix` | ADR046-nix-005 |
-| `nixos-modules/processes-json.nix` | `VmProcessDag`/`ProcessRole`/`binaryPath`/argv | Yes | `resources-zones-processes.nix`; emits `zones/<z>/processes.json` | ADR046-nix-006 |
+| `nixos-modules/processes-json.nix` | `VmProcessDag`/`ProcessRole`/`binaryPath`/argv | Yes | `resources-zones-processes.nix`; Process/EphemeralProcess resources in `zones/<z>/resource-bundle.json` | ADR046-nix-006 |
 | `nixos-modules/storage-json.nix` | `StorageJson`/`StoragePathSpec`/ownership/ACL contract rows | Yes | `resources-zones-volumes.nix`; rows migrate to Volume resources | ADR046-nix-007 |
 | `nixos-modules/sync-json.nix` | `SyncJson` OFD lock contract rows | Yes | Internal to `d2b-contracts`; removed from Nix artifacts | ADR046-nix-007 |
 | `nixos-modules/allocator-json.nix` | `AllocatorJson` - realm/env bridge assignments, socket paths | Yes | Privileged effects remain allocator-owned; parent edges come from compiler-only `parentZone`; Network/Host resources carry declarative intent | ADR046-nix-008 |
 | `nixos-modules/realm-controller-config-json.nix` | `RealmControllersJson`/`realm-controllers.json` | Yes (read by live d2bd `realm_access_resolver`) | Runtime-created Zone self-resource + sealed `parentZone` allocator topology + child-local ZoneLink | ADR046-nix-008 |
-| `nixos-modules/realm-workloads-launcher-v2-json.nix` | `RealmWorkloadsLauncherV2Json`/`realm-workloads-launcher-v2.json` | Yes | Provider/display-wayland + Provider/shell-terminal Process configs in `zones/<z>/processes.json` | ADR046-nix-009 |
+| `nixos-modules/realm-workloads-launcher-v2-json.nix` | `RealmWorkloadsLauncherV2Json`/`realm-workloads-launcher-v2.json` | Yes | Provider/display-wayland + Provider/shell-terminal Process configs in `zones/<z>/resource-bundle.json` | ADR046-nix-009 |
 | `nixos-modules/realm-identity-config-json.nix` | `RealmIdentityConfigJson`/`realm-identity.json` | Yes (read by live d2bd) | Credential resource specs; identity config inside Provider resources | ADR046-nix-009 |
 | `nixos-modules/unsafe-local-workloads-json.nix` | `unsafe-local-workloads.json` | Yes | User-only Host + Process resources | ADR046-nix-010 |
 | `nixos-modules/privileges-json.nix` | `privileges.json` broker op catalog | Yes | Retained at `/etc/d2b/privileges.json` | ADR046-nix-011 |
 | `nixos-modules/closures-json.nix` | `closures/<vm>.json` per-VM closure maps | Yes | Retained at `/etc/d2b/closures/<guest>.json`; emitter rewritten | ADR046-nix-012 |
 | `nixos-modules/minijail-profiles.nix` | `minijail-profiles/<id>.json` | Yes | Retained at same path; emitter adapted to Zone Guest refs | ADR046-nix-012 |
-| `nixos-modules/manifest.nix` | `manifest.json` `manifestVersion` contract | Yes | `zones/<z>/bundle.json`; `manifestVersion` → `schemaVersion` | ADR046-nix-013 |
-| `nixos-modules/host-json.nix` | `host.json` host-side config | Yes | Folded into Host resource in `zones/<z>/hosts.json` | ADR046-nix-013 |
+| `nixos-modules/manifest.nix` | `manifest.json` `manifestVersion` contract | Yes | `zones/<z>/resource-bundle.json` `schemaVersion`; `manifestVersion` -> `schemaVersion` | ADR046-nix-013 |
+| `nixos-modules/host-json.nix` | `host.json` host-side config | Yes | Folded into Host resource in `zones/<z>/resource-bundle.json` | ADR046-nix-013 |
 | `nixos-modules/assertions.nix` | Eval-time invariants (CIDR, platform, VM names) | Yes | Retained and extended | ADR046-nix-014 |
 | `nixos-modules/host.nix`, `host-daemon.nix`, `host-activation.nix`, `host-users.nix` | Host NixOS modules, `d2bd`/`d2b-priv-broker` units, activation helper, users/groups | Yes | Retained and adapted to Zone bundle activation | ADR046-nix-015 |
 | `nixos-modules/network.nix`, `net.nix` | Bridge/NAT/DHCP systemd-networkd units | Yes | Reconciled by `Provider/network-local`; retained until Provider successor | ADR046-nix-016 |
@@ -2281,7 +2365,7 @@ marked compile-only.
 
 | Current symbol | Current crate/file | Current live? | v3 destination | Work item |
 | --- | --- | --- | --- | --- |
-| `RealmId`, `RealmPath` | `d2b-realm-core/src/ids.rs`, `realm.rs` | Live in d2bd | `ZoneId` (`^[a-z][a-z0-9-]*$`), `ZonePath` in `d2b-contracts/src/v3/identity.rs` | ADR046-identities-001 |
+| `RealmId`, `RealmPath` | `d2b-realm-core/src/ids.rs`, `realm.rs` | Live in d2bd | `ZoneId` (`^[a-z][a-z0-9-]{0,62}$`, 1-63 bytes per D113), `ZonePath` in `d2b-contracts/src/v3/identity.rs` | ADR046-identities-001 |
 | `WorkloadId` | `d2b-realm-core/src/ids.rs` | Live | `ResourceName` + `ResourceRef` for `Guest/<name>` or `Process/<name>` | ADR046-identities-001 |
 | `NodeId`, `NodeSummary`, `NodeKind` | `d2b-realm-core/src/node.rs` | Live in metadata | `Host` / `Guest` ResourceType (see NodeKind table) | ADR046-identities-001 |
 | `ProviderId` | `d2b-realm-core/src/ids.rs` | Live | `ResourceName` for `Provider/<name>` | ADR046-identities-001 |
@@ -2294,7 +2378,7 @@ marked compile-only.
 | `StorageJson`, `StoragePathSpec`, `PrincipalRef { kind: "uid"|"user" }` | `d2b-core/src/storage.rs`, `nixos-modules/storage-json.nix` | Live (storage.json consumed by broker) | `Volume` layout/views; `PrincipalRef` uid-kind → `User/<name>` ref | ADR046-nix-007 |
 | `SyncJson`, OFD lock rows | `d2b-core/src/sync.rs`, `nixos-modules/sync-json.nix` | Live | Internal `d2b-contracts` implementation mechanism; removed from Nix artifacts | ADR046-nix-007 |
 | `RealmControllersJson`, `RealmControllerMetadataSummary` | `d2b-core/src/realm_controller_config.rs`; read live by d2bd `realm_access_resolver` | Live | Runtime Zone self-resource + compiler-only `parentZone` allocator topology + child-local ZoneLink transport/route state; `realm-controllers.json` retained during migration | ADR046-nix-008 |
-| `RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary` | `d2b-core/src/realm_workloads_launcher.rs` | Live | Process resource annotations in `zones/<z>/processes.json` | ADR046-nix-009 |
+| `RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary` | `d2b-core/src/realm_workloads_launcher.rs` | Live | Process resource annotations in `zones/<z>/resource-bundle.json` | ADR046-nix-009 |
 | `RealmIdentityConfigJson` | `d2b-realm-core/src/identity_config.rs`; loaded live by d2bd | Live | Credential resource `scope`/`audience`/`allowedOperations`/`spec.provider.settings` fields; `realm-identity.json` retained during migration | ADR046-nix-009 |
 | `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | `d2b-realm-core/src/workload.rs` | Live in launcher metadata | `LocalVm`/`QemuMedia`/`ProviderManaged` → `Guest.providerRef` per table; `UnsafeLocal` → user-only `Host` with `spec.isolationPosture: "none"` (never `Guest`; not a v3 Provider) | ADR046-nix-001 |
 | `Capability` enum, `CapabilitySet` | `d2b-realm-core/src/capability.rs` | Live in provider advertisement | Role verbs / Provider descriptor fields per Capability disposition table | ADR046-nix-001 |
@@ -2308,8 +2392,7 @@ No current unit is removed until the resource/Provider successor is integrated.
 
 | Current unit | Current role | v3 treatment |
 | --- | --- | --- |
-| `d2bd.service` | PID1 local-root controller | Retained; becomes fixed Zone core controller launcher |
-| `d2bd.socket` | Local-root public socket | Retained unchanged |
+| `d2bd.service` | PID1 local-root controller | Retained; becomes fixed Zone core controller launcher. `Type=notify`; `d2bd` binds, listens on, and owns `public.sock` itself and is not reported ready until that socket is bound. No separate framework socket unit is declared for it (AGENTS.md permits exactly three root-visible units: `d2bd.service`, `d2b-priv-broker.socket`, `d2b-priv-broker.service`). |
 | `d2b-priv-broker.service` | Privileged broker | Retained unchanged |
 | `d2b-priv-broker.socket` | Broker socket activation | Retained unchanged |
 | Per-env bridge units (`br-<e>-lan`, `br-<e>-up`) | Network bridge, systemd-networkd | Owned by `Provider/network-local` Process resources after migration |
@@ -2352,7 +2435,7 @@ Never accepted in any Nix-authored resource spec or generated artifact:
 | Unsafe-local Host | User-only `Host` with `spec.isolationPosture: "none"` reconciled by `Provider/system-core`; child Processes use normal Process Providers; `NoIsolation` condition present in Host status; `no_isolation=true` in `ProcessEffect` audit events; OTEL never labels isolation; CLI/UI warning non-suppressible; no `Guest` emitted |
 | ResourceTypeSchema validation | Every emitted `spec` validates against committed JSON Schema at build time; schema drift gate passes; unknown field in `spec.provider.settings` (where schema declares it) or Provider `config` fails build |
 | Credential ref enforcement | PEM header in spec field fails eval; `Credential/<name>` ref accepted; no secret bytes in any emitted artifact |
-| Bundle integrity | Byte-identical rebuild from identical inputs; `candidateId`/`contentId` match computed values; file digest mismatch fails activation |
+| Bundle integrity | Byte-identical rebuild from identical inputs; bundle `contentHash` matches the digest recomputed over the canonical `resources` array; any digest-chain member mismatch fails activation |
 | Absent-resource async Delete | Generation 1 has resource R (`managedBy=configuration`); generation 2 omits R; R enters Pending/PendingDeletion; Zone Degraded; a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery; Zone Ready |
 | Controller-managed preserved | Resource with `managedBy=controller` untouched by config-publication controller; never enqueued for deletion regardless of bundle absence |
 | Finalizer-safe deletion | Resource with active finalizer enters DeletionBlocked condition; stays Pending; deletion completes after finalizer removed: a single store transaction appends the `Deleted` revision and removes the resource row and its indexes; subsequent `Get` returns not-found; `ResourceDelete` audit event is appended afterward with dedup/exactly-once recovery |
@@ -2426,10 +2509,10 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | `nixos-modules/options-realms.nix` (`RealmId`/`RealmPath`/`RealmControllerPlacement`/`EntrypointMode` labels); `options-realms-workloads.nix` (`WorkloadId`/`WorkloadProviderKind`/`IsolationPosture`/`WorkloadExecutionPosture`); `options-realms-network.nix`; `d2b-realm-core/src/realm.rs`, `workload.rs`, `capability.rs`, `ids.rs` (symbols to adapt) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-zones.nix` (Zone-level options: `label`, `parentZone`, `retainedGenerations`, `trustedPublishers` - compiler settings, not Zone spec fields); `nixos-modules/options-zones-resources.nix` (unified `resources` attrset) |
-| Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` - single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]*$`; ref validation assertions; `WorkloadProviderKind` → Guest/Host mapping per disposition table above; `Capability` → Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `parentZone` is a required non-root/forbidden-root compiler-only plain Zone name compiled into sealed allocator topology; `retainedGenerations`/`trustedPublishers` are likewise Zone-level compiler settings not emitted in Zone spec |
+| Detailed design | `d2b.zones.<z>.resources.<name> = { type = "<ResourceType>"; spec = { ... }; }` - single attrset covering all ResourceTypes; `type` discriminates dispatch; `spec` fields mirror exact ResourceTypeSchema field names and nesting; Nix option types/defaults/docs generated from `docs/reference/schemas/v3/<ResourceType>.json`; no Nix-only fields inside resource declarations; `metadata.name` derives from attr key; `metadata.zone` derives from enclosing zone attr key; `apiVersion` defaulted; `uid`/`generation`/`revision`/`status`/`managedBy` never in Nix; `resource_name` regex `^[a-z][a-z0-9-]{0,62}$` (D113 1-63 byte bound enforced at eval); ref validation assertions; `WorkloadProviderKind` -> Guest/Host mapping per disposition table above; `Capability` -> Role verb mapping per resource-api/authz foundation spec; Zone self-resource spec is `{}`; `parentZone` is a required non-root/forbidden-root compiler-only plain Zone name compiled into sealed allocator topology; `retainedGenerations`/`trustedPublishers` are likewise Zone-level compiler settings not emitted in Zone spec |
 | Integration | `nixos-modules/default.nix` imports new options files; old realms options coexist until ADR046-nix-002 |
 | Data migration | Operator configs migrate `d2b.realms.*` → `d2b.zones.*`; `d2b.vms.*` → `d2b.zones.<z>.resources.*` with `type = "Guest"` |
-| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; resource/session verb closed-enum vectors accept `relay` only in `sessionVerbs`; relay wildcard/unbounded/Provider-self-asserted fixtures fail before activation while an exact core-generated ZoneLink fixture passes; Endpoint visibility accepts exactly `owner|provider|zone` and uses `consumerPolicy` for finer bounds; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.) |
+| Validation | nix-unit vectors for each ResourceType; ref-validation rejection vectors; malformed ref error shape; ZoneId/ResourceName length-bound boundary vectors (63-byte name accepted, 64-byte name rejected, empty name rejected) per D113; resource/session verb closed-enum vectors accept `relay` only in `sessionVerbs`; relay wildcard/unbounded/Provider-self-asserted fixtures fail before activation while an exact core-generated ZoneLink fixture passes; Endpoint visibility accepts exactly `owner|provider|zone` and uses `consumerPolicy` for finer bounds; `parentZone` is missing on non-root/forbidden on local-root/unknown/self/cyclic/over-depth rejection; scalar module conflicts prove one parent; child-local ZoneLink `childZoneName` must equal its enclosing Zone key; a second uplink resource (even disabled) and a local-root uplink fail eval; missing/local-unresolved `transportProviderRef` fails eval; `managedBy` in spec rejected at eval; Zone spec is `{}` (no `parentZone`, `parentRef`, `retainedGenerations`, etc.) |
 | Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix` |
 | Drift pin | `make nix-unit-pin` after adding cases |
 | Removal proof | `options-realms*.nix` removed after `options-zones*.nix` achieves parity and parity drift test passes |
@@ -2490,13 +2573,13 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, `installFileName`, `mode 0640` ownership); `nixos-modules/bundle.nix` (bundle derivation, SHA256SUMS, `d2b._bundle` integrity chain) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/bundle-zones.nix` (per-Zone bundle derivation); common helpers retained in `bundle-artifacts.nix` |
-| Detailed design | Per-Zone `bundle.json` with `candidateId`/`contentId` binding; SHA256 digest chain; `generationIndex`; atomic activation pointer; `manifestVersion` → `schemaVersion` rename Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and rewrite. |
-| Integration | `d2b-activation-helper` reads `bundle.json` per Zone; validates digest chain before staging |
+| Detailed design | Per-Zone monolithic `resource-bundle.json` (store-derivation filename `bundle.json`) whose `contentHash` is the generation identity, verified via the five-member digest chain (see Bundle contract (canonical)); `generationIndex` monotonic ordinal; atomic `generation.json` activation commit; `manifestVersion` -> `schemaVersion` rename Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and rewrite. |
+| Integration | `d2b-activation-helper` reads `resource-bundle.json` per Zone; validates the digest chain before staging |
 | Data migration | Per-Zone bundles are generated from v3 resource declarations; full d2b 3.0 reset; no v2 monolithic bundle state import. |
 | Validation | Artifact-shape contract tests in `packages/d2b-contract-tests/tests/`; determinism test (build twice, diff outputs) |
 | Tests | `tests/unit/nix/cases/bundle-zones.nix`; `tests/unit/gates/drift-check.sh` for schema drift |
 | Drift pin | `make test-drift` |
-| Removal proof | Monolithic `bundle.json` and `d2b._bundle` artifact table retired after all Zone bundle tests pass |
+| Removal proof | The v2 `d2b._bundle` artifact table is retired after all Zone bundle tests pass |
 
 ### ADR046-nix-006
 
@@ -2505,14 +2588,14 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Dependency/owner | ADR046-nix-005; Process Provider work items (ADR046-primitives-002) |
 | Current source | `nixos-modules/processes-json.nix` (`VmProcessDag`, `ProcessRole`, `binaryPath`, `argv`, `share.source == "/nix/store"` sentinel); `packages/d2b-core/src/processes.rs` (`ProcessRole` enum - all variants in disposition table above) |
 | Reuse action | adapt |
-| Destination | `nixos-modules/resources-zones-processes.nix`; emits `zones/<z>/processes.json` |
+| Destination | `nixos-modules/resources-zones-processes.nix`; serializes Process/EphemeralProcess resources into the monolithic `zones/<z>/resource-bundle.json` |
 | Detailed design | Process/EphemeralProcess resource serialization per disposition table and the frozen `ExecutionSpec`: exact `providerRef`/`executionRef`/domain/user/processClass/template/config/credential/mount/sandbox/budget/`networkUsage`/`deviceUsage`/telemetry names; semantic owner from `metadata.ownerRef` with template fallback through the Process Provider; no `packageRef`, free-form `binaryPath`, `argv`, renamed network/device fields, or inline endpoints; stable produced endpoints are separate owned `Endpoint` resources with `producerRef`; Process uses canonical `restartPolicy` fields; EphemeralProcess uses `runtimeDeadline` and has no restart policy; VsockRelay → `Process` under `Provider/transport-vsock`; GuestSshReadiness retired at v3 cutover; Usbip long-lived backend/proxy → `Process`, Usbip per-busid attach/detach → `EphemeralProcess`, all owned by `Provider/device-usbip` Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | `processes.json` replaces `cfg._bundle.processesJson`; Process Providers read the new format |
+| Integration | Process/EphemeralProcess resources in `resource-bundle.json` replace `cfg._bundle.processesJson`; Process Providers read the new format |
 | Data migration | Processes are emitted from v3 Process/EphemeralProcess resources; full d2b 3.0 reset; no v2 process artifact import. |
 | Validation | Process and EphemeralProcess exact-schema vectors; reject `packageRef`, `network`, `devices`, `endpoints`, `restart`, and `runDeadline`; accept canonical `networkUsage`, `deviceUsage`, `restartPolicy`, `runtimeDeadline`, and separately owned Endpoint with `producerRef`; no-raw-path assertion; ProcessRole parity test (every variant has a test case) |
 | Tests | `tests/unit/nix/cases/zones-processes.nix`; `tests/unit/nix/cases/zones-process-exact-mirror.nix`; `packages/d2b-contract-tests/tests/processes-schema.rs` |
 | Drift pin | `make test-drift` after schema changes |
-| Removal proof | `processes-json.nix` and current `processes.json` schema removed after all Process Providers consume `zones/<z>/processes.json` |
+| Removal proof | `processes-json.nix` and the current `processes.json` schema removed after all Process Providers consume the Process/EphemeralProcess resources from `zones/<z>/resource-bundle.json` |
 
 ### ADR046-nix-007
 
@@ -2521,9 +2604,9 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Dependency/owner | ADR046-nix-005; Volume Provider work items (ADR046-primitives-003) |
 | Current source | `nixos-modules/storage-json.nix` (all `mkPath` calls, `PrincipalRef` `uid`/`gid`/`user` kinds, `StorageRoot`/`StoragePathSpec`/`repairPolicy`/`cleanupPolicy`); `packages/d2b-core/src/storage.rs` (`StorageJson`, `StoragePathSpec`); `nixos-modules/sync-json.nix` (`SyncJson` OFD lock rows); `packages/d2b-core/src/sync.rs` |
 | Reuse action | adapt |
-| Destination | `nixos-modules/resources-zones-volumes.nix`; emits `zones/<z>/volumes.json`; OFD lock rows move to `d2b-contracts` internals |
+| Destination | `nixos-modules/resources-zones-volumes.nix`; serializes Volume resources into the monolithic `zones/<z>/resource-bundle.json`; OFD lock rows move to `d2b-contracts` internals |
 | Detailed design | Volume layout/views/ACL/no-follow/repair preserving current policy; `PrincipalRef { kind: "uid" }` → `User/<name>` typed ref only; OFD rows removed from Nix artifacts Primary reuse disposition: `adapt`. Preserved source-plan detail: extract storage policy → adapt; retire sync rows. |
-| Integration | Volume resources feed `zones/<z>/volumes.json`; the Volume Provider consumes it for path/view/ACL reconciliation; `d2b-contracts` internals own OFD lock rows. |
+| Integration | Volume resources feed the monolithic `zones/<z>/resource-bundle.json`; the Volume Provider consumes them for path/view/ACL reconciliation; `d2b-contracts` internals own OFD lock rows. |
 | Data migration | Volume resources are regenerated from v3 config; full d2b 3.0 reset; no v2 storage/sync state import. |
 | Validation | Volume schema vectors; ACL/no-follow/view policy tests |
 | Tests | `tests/unit/nix/cases/zones-volumes.nix`; `packages/d2b-contract-tests/tests/volumes-schema.rs` |
@@ -2553,7 +2636,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Dependency/owner | ADR046-nix-006; display/credential Provider work items |
 | Current source | `nixos-modules/realm-workloads-launcher-v2-json.nix` (`RealmWorkloadsLauncherV2Json`, `LauncherWorkloadSummary`; live); `nixos-modules/realm-identity-config-json.nix` (`RealmIdentityConfigJson`; live, read by d2bd from `/etc/d2b/realm-identity.json`); `packages/d2b-core/src/realm_workloads_launcher.rs`; `packages/d2b-realm-core/src/identity_config.rs` |
 | Reuse action | adapt |
-| Destination | Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/processes.json`; `Provider/credential-entra` Credential resource; `realm-identity.json` RETAINED during migration |
+| Destination | Provider/display-wayland and Provider/shell-terminal Process configs in `zones/<z>/resource-bundle.json`; `Provider/credential-entra` Credential resource; `realm-identity.json` RETAINED during migration |
 | Detailed design | Launcher metadata folded into Process resource annotations; identity config → Credential resource fields (`providerRef`, `identityGuestRef`, `loginEndpointRef`, `scope`, `audience`, `consumerRef`, `allowedOperations`, canonical `spec.provider` extension where Provider schema declares it; no secret bytes); `realm-identity.json` must remain until d2bd `RealmIdentityConfigJson` loading is replaced by Credential resource reader |
 | Integration | Provider/display-wayland, Provider/shell-terminal, and Provider/credential-entra consume Process/Credential resources; `d2bd` continues reading `realm-identity.json` until the Credential reader lands. |
 | Data migration | Launcher and identity config are re-emitted as v3 resources; full d2b 3.0 reset; no v2 launcher/identity state import. |
@@ -2569,7 +2652,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Dependency/owner | ADR046-nix-001; unsafe-local migration |
 | Current source | `nixos-modules/unsafe-local-workloads-json.nix` (`WorkloadProviderKind::UnsafeLocal`/`IsolationPosture::UnsafeLocal`; current `unsafe-local-workloads.json` artifact); `nixos-modules/unsafe-local-helper.nix` (user-domain process/helper definitions); `packages/d2b-core/src/unsafe_local_workloads.rs` |
 | Reuse action | adapt |
-| Destination | User-only `Host` resource in `zones/<z>/hosts.json` (`spec.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/processes.json` using normal Process Providers; shell session supervisor → `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
+| Destination | User-only `Host` resource in `zones/<z>/resource-bundle.json` (`spec.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/resource-bundle.json` using normal Process Providers; shell session supervisor -> `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
 | Detailed design | `isolationPosture: "none"` is a promoted Host base field declared at top-level `spec.isolationPosture` in the Host schema; enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; every `ProcessEffect` audit event under this Host carries `no_isolation=true`; OTEL telemetry never carries an isolation label; CLI/UI warning non-suppressible |
 | Integration | The unsafe-local Nix emitter produces a user-only Host plus Process resources; Provider/system-core and shell-terminal consume them; CLI/UI and audit/telemetry surfaces read resulting status/events. |
 | Data migration | unsafe-local declarations migrate to Host/Process resources in Nix; full d2b 3.0 reset; no helper runtime state import. |
@@ -2606,7 +2689,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Validation | Closure map round-trip; per-VM store hardlink integrity; `storePath` present in private catalog; `storePath` absent from all emitted public ResourceSpecs and status/audit/OTEL surfaces |
 | Tests | `tests/unit/nix/cases/closures-zones.nix`; `tests/unit/nix/cases/artifact-catalog-store-path-public-absent.nix` |
 | Drift pin | `make nix-unit-pin` |
-| Removal proof | Old `d2b.vms.*`-keyed closure entries removed after all Guests use `zones/<z>/guests.json` and artifact catalog |
+| Removal proof | Old `d2b.vms.*`-keyed closure entries removed after all Guests use `zones/<z>/resource-bundle.json` Guest resources and the artifact catalog |
 
 ### ADR046-nix-013
 
@@ -2615,9 +2698,9 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Dependency/owner | ADR046-nix-005; manifest contract |
 | Current source | `nixos-modules/manifest.nix` (`manifestVersion` pinned contract); `nixos-modules/host-json.nix` |
 | Reuse action | replace |
-| Destination | Per-Zone `zones/<z>/bundle.json` (`schemaVersion`); Host resource in `zones/<z>/hosts.json` |
+| Destination | Per-Zone `zones/<z>/resource-bundle.json` (`schemaVersion`); Host resource in `zones/<z>/resource-bundle.json` |
 | Detailed design | `manifestVersion` → `schemaVersion`; `host.json` host config folded into Host resource spec; CHANGELOG entry for rename required |
-| Integration | `bundle-zones.nix` writes `schemaVersion` into per-Zone `bundle.json`; activation-helper validates it and Host resource consumers replace `host.json` readers. |
+| Integration | `bundle-zones.nix` writes `schemaVersion` into the per-Zone `resource-bundle.json`; activation-helper validates it and Host resource consumers replace `host.json` readers. |
 | Data migration | Manifest/host artifacts are regenerated as Zone bundle/Host resources; full d2b 3.0 reset; no v2 manifest state import. |
 | Validation | Schema drift gate; CHANGELOG enforcement |
 | Tests | `tests/unit/gates/drift-check.sh` extended for `schemaVersion` |
@@ -2710,7 +2793,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Current source | `nixos-modules/bundle-artifacts.nix` (`artifactModule` submodule, mode/ownership); `nixos-modules/bundle.nix` (digest chain, SHA256SUMS); `packages/xtask/src/main.rs` (`gen-schemas`); no current per-ResourceType JSON Schema under `docs/reference/schemas/v3/` |
 | Reuse action | adapt |
 | Destination | `docs/reference/schemas/v3/<ResourceType>.json` for each ResourceType; `nixos-modules/resource-schema-validation.nix` (validates emitted spec against committed JSON Schema at build time); `nixos-modules/provider-settings-validation.nix` (validates `spec.provider.settings` where declared in schema, and Provider `config`, against Provider-embedded schema at build time); `nixos-modules/assertions.nix` (Credential ref enforcement, secret-pattern rejection) |
-| Detailed design | `cargo xtask gen-schemas` emits one JSON Schema per ResourceType under `docs/reference/schemas/v3/`; Nix derivation reads these schemas from `pkgs.d2b-resource-schemas` and validates every emitted `spec` JSON before producing the Zone bundle; Provider-settings validation reads `settingsSchemaDigest` from `provider-catalog.json` and resolves the schema from the Provider package closure; Credential ref enforcement: eval assertion rejects any `spec` string field matching `-----BEGIN`, `eyJ`, or a hex string ≥ 32 bytes in a secret-typed field; `managedBy` in any input spec rejected at eval (core-set runtime field, never in Nix input); bundle integrity: `candidateId`/`contentId` computed over canonical sorted output Primary reuse disposition: `adapt`. Preserved source-plan detail: extend xtask schema generation; new Nix eval/build validation hooks. |
+| Detailed design | `cargo xtask gen-schemas` emits one JSON Schema per ResourceType under `docs/reference/schemas/v3/`; Nix derivation reads these schemas from `pkgs.d2b-resource-schemas` and validates every emitted `spec` JSON before producing the Zone bundle; Provider-settings validation reads `settingsSchemaDigest` from `provider-catalog.json` and resolves the schema from the Provider package closure; Credential ref enforcement: eval assertion rejects any `spec` string field matching `-----BEGIN`, `eyJ`, or a hex string >= 32 bytes in a secret-typed field; `managedBy` in any input spec rejected at eval (core-set runtime field, never in Nix input); bundle integrity: `contentHash` computed over the canonical sorted `resources` array (see Bundle contract (canonical)) Primary reuse disposition: `adapt`. Preserved source-plan detail: extend xtask schema generation; new Nix eval/build validation hooks. |
 | Integration | Validation hooks wired into `bundle-zones.nix` derivation; `d2b-activation-helper` re-verifies digest chain at staging |
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Schema round-trip: emit spec, validate against schema, verify byte-identical re-emit; `spec.provider.settings` rejection test (unknown field, out-of-bounds value, raw store path, secret bytes) where schema declares the field; Provider `config` rejection test (unknown field); Credential ref enforcement: PEM-in-spec rejected; secret-pattern-in-spec rejected; valid `Credential/<name>` ref accepted; `managedBy` in spec input rejected at eval |
@@ -2757,8 +2840,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Dependency/owner | ADR046-nix-005 (bundle derivation); `d2b-contracts` schema generation (ADR046-nix-027) |
 | Current source | No current equivalent for a separate artifact catalog. Current `nixos-modules/bundle.nix` embeds package derivation references inline. Current `nixos-modules/closures-json.nix` uses `pkgs.closureInfo` keyed by `d2b.vms.<name>`. |
 | Reuse action | create |
-| Destination | `nixos-modules/artifact-catalog.nix` (new emitter); `nixos-modules/options-artifacts.nix` (new option: `d2b.artifacts.<id> = { package; type; }`); `/etc/d2b/artifact-catalog.json` (output artifact, `root:d2bd` 0640); `nixos-modules/bundle-zones.nix` (extend to include artifact catalog digest in `bundle.json`); `nixos-modules/options-zones-resources.nix` (replace `closureRef` / `nixosSystem` helpers with `systemArtifactId` validation) |
-| Detailed design | `d2b.artifacts.<id>` attrset option: `id` matches `^[a-z][a-z0-9-]*$`; `type ∈ { "provider", "nixos-system", "nixos-module-set", "config-bundle" }`; no other fields. Emitter computes `pkgs.closureInfo` for each entry and writes `artifact-catalog.json` with sorted entries (by `artifactId`) containing `artifactId`, `type`, `storePath` (private, for activation-helper staging), `packageDigest`, `closureDigest`, `closureSize`. `storePath` is a private field of the root:d2bd 0640 file; it is never emitted in public ResourceSpecs, status fields, audit records, or OTEL telemetry. The `bundle.json` manifest includes the artifact catalog file entry and its SHA256 digest. `d2b-activation-helper` reads `storePath` from the catalog to resolve and stage each artifact; verifies catalog digest before staging. Build-time validation: `artifactId` / `systemArtifactId` / `source.systemArtifactId` fields in resource specs resolve against `d2b.artifacts`; type-mismatch fails with a structured error. `d2b.providerCatalog.<name>.package` option is removed; replaced by `d2b.providerCatalog.<name>.artifactId`. `Guest.spec.systemArtifactId` replaces the former `nixosSystem` Nix-only helper. `Volume.source.systemArtifactId` replaces `source.closureRef`. |
+| Destination | `nixos-modules/artifact-catalog.nix` (new emitter); `nixos-modules/options-artifacts.nix` (new option: `d2b.artifacts.<id> = { package; type; }`); `/etc/d2b/artifact-catalog.json` (output artifact, `root:d2bd` 0640); `nixos-modules/bundle-zones.nix` (extend to include the artifact catalog document digest as a digest-chain member); `nixos-modules/options-zones-resources.nix` (replace `closureRef` / `nixosSystem` helpers with `systemArtifactId` validation) |
+| Detailed design | `d2b.artifacts.<id>` attrset option: `id` matches `^[a-z][a-z0-9-]*$`; `type ∈ { "provider", "nixos-system", "nixos-module-set", "config-bundle" }`; no other fields. Emitter computes `pkgs.closureInfo` for each entry and writes `artifact-catalog.json` with sorted entries (by `artifactId`) containing `artifactId`, `type`, `storePath` (private, for activation-helper staging), `packageDigest`, `closureDigest`, `closureSize`. `storePath` is a private field of the root:d2bd 0640 file; it is never emitted in public ResourceSpecs, status fields, audit records, or OTEL telemetry. The digest chain includes the artifact catalog document digest (member 4; see Bundle contract (canonical)). `d2b-activation-helper` reads `storePath` from the catalog to resolve and stage each artifact; verifies catalog digest before staging. Build-time validation: `artifactId` / `systemArtifactId` / `source.systemArtifactId` fields in resource specs resolve against `d2b.artifacts`; type-mismatch fails with a structured error. `d2b.providerCatalog.<name>.package` option is removed; replaced by `d2b.providerCatalog.<name>.artifactId`. `Guest.spec.systemArtifactId` replaces the former `nixosSystem` Nix-only helper. `Volume.source.systemArtifactId` replaces `source.closureRef`. |
 | Integration | `nixos-modules/closures-json.nix` rewritten (ADR046-nix-012) to key by artifact ID; `nixos-modules/bundle-zones.nix` includes artifact catalog in integrity chain |
 | Data migration | Artifact catalog entries are generated from new `d2b.artifacts` declarations; full d2b 3.0 reset; no v2 `closureRef`/`nixosSystem` metadata import. |
 | Validation | Artifact catalog round-trip: declare artifact, build, verify JSON entry present with correct type/digests/storePath; missing artifact ID fails build with structured error; wrong-type artifact fails build; `storePath` absent from all public ResourceSpecs and status/audit/OTEL surfaces |
@@ -2842,7 +2925,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests at main | `packages/d2b-session-unix/tests/unix_session.rs` - seqpacket pair, Unix stream, pidfd identity, FD attachment validation, credit pool exhaustion and recovery |
 | Selected behavior | Audited Unix seqpacket and stream transports implementing `OwnedTransport`; pidfd identity verification reads `/proc/<pid>/fdinfo/<pidfd>` for `st_dev`/`st_ino`; 6-scope credit pool with per-process and per-host limits (`MAX_PROCESS_ATTACHMENT_CREDITS=2048`, `MAX_HOST_ATTACHMENT_CREDITS=8192`); systemd `SD_LISTEN_FDS` seqpacket activation; vsock framing with length-prefixed records |
 | v3 destination | `packages/d2b-bus/src/transport/unix/` - adapt as the Unix transport backend for `d2b-bus` sessions; keep the `host-socket`/`native-vsock` feature gates intact; the transport code itself has no ADR45 realm bindings |
-| ADR45 exclusions | `ActivatedSeqpacketListeners` reads socket names from `SD_LISTEN_FDS`; socket names are bound to current `d2bd.socket` / `d2b-priv-broker.socket` unit names; v3 socket paths come from Zone bootstrap config - activation code is reusable, socket name strings are not. `PeerIdentityPolicy::accepted()` is transport-layer code and has no ADR45 binding |
+| ADR45 exclusions | `ActivatedSeqpacketListeners` reads socket names from `SD_LISTEN_FDS`; socket names are bound to the shipped `d2b-priv-broker.socket` unit and the daemon-owned `public.sock` (bound by `d2bd` itself, `Type=notify`; there is no `d2bd.socket` unit); v3 socket paths come from Zone bootstrap config - activation code is reusable, socket name strings are not. `PeerIdentityPolicy::accepted()` is transport-layer code and has no ADR45 binding |
 
 ### ADR046-nix-027
 
@@ -2951,7 +3034,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests at main | `packages/d2b-client/tests/client.rs` |
 | Selected behavior | Transport-neutral typed async client; `ComponentSessionConnector` abstracts connection setup; `SessionFailure` provides precise failure classification for retry policy; `MetadataInput` constructs signed request envelopes with clock-bounded lifetimes; `NamedStream` exposes named-stream channel as a client-side abstraction; `HostSocketConnector` is the reference Unix socket connection implementation |
 | v3 destination | `packages/d2b-client/src/` (adapt in place); client becomes the primary CLI and controller access path for Zone-local and cross-Zone ComponentSession services |
-| ADR45 exclusions | `TargetInput::Workload { realm: RealmId, workload: WorkloadId }` → v3 shape addresses resources as `ResourceRef` (e.g., `Zone/<z>`, `Guest/<name>`) per ADR-046-componentsession-and-bus owning spec; `TargetInput::Realm(RealmId)` → `TargetInput::Zone(ZoneId)`; `ServiceOwner::Workload { realm, workload }` → `ServiceOwner::Resource { zone: ZoneId, resource: ResourceName }`. `HostSocketConnector::local_daemon_endpoint_identity()` returns identity pinned to current `d2bd.socket` path - v3 socket path comes from Zone bootstrap config and must not be hard-coded. `DaemonClient`/`DaemonMethod` verb set per resource-api/authz foundation spec |
+| ADR45 exclusions | `TargetInput::Workload { realm: RealmId, workload: WorkloadId }` → v3 shape addresses resources as `ResourceRef` (e.g., `Zone/<z>`, `Guest/<name>`) per ADR-046-componentsession-and-bus owning spec; `TargetInput::Realm(RealmId)` → `TargetInput::Zone(ZoneId)`; `ServiceOwner::Workload { realm, workload }` → `ServiceOwner::Resource { zone: ZoneId, resource: ResourceName }`. `HostSocketConnector::local_daemon_endpoint_identity()` returns identity pinned to the current daemon-owned `public.sock` path (there is no `d2bd.socket` unit) - v3 socket path comes from Zone bootstrap config and must not be hard-coded. `DaemonClient`/`DaemonMethod` verb set per resource-api/authz foundation spec |
 
 ### ADR046-nix-033
 

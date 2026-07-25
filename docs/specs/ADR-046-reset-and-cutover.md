@@ -150,7 +150,7 @@ to individually clear.
    `phase >= 5` checkpoint recorded (this host has already cut over; direct
    the operator to `d2b host reset` or `d2b host cutover doctor` instead).
 2. Confirms baseline shape: `Realm`/`Workload` Nix option namespace present
-   (`d2b.realms.*`), `d2bd.socket`/`d2bd.service`/`d2b-priv-broker.socket`/
+   (`d2b.realms.*`), `d2bd.service`/`d2b-priv-broker.socket`/
    `d2b-priv-broker.service` units installed, no `d2b.zones.*` Zone runtime
    unit present yet.
 3. Runs the [disk-space guard](#disk-spacegc-safety) before touching anything
@@ -967,7 +967,7 @@ is no bulk Destroy:
 
 | Candidate | Gate that must clear before Destroy | Removal proof |
 | --- | --- | --- |
-| `d2bd.service`, `d2bd.socket`, `d2b-priv-broker.service`, `d2b-priv-broker.socket` unit files | New fixed Zone runtime units installed and `verify` check 1 passed at least once since the units were stopped | `tests/host-integration/cutover-unit-retirement.nix` boots with only new units present and passes `d2b host cutover verify` |
+| `d2bd.service`, `d2b-priv-broker.service`, `d2b-priv-broker.socket` unit files | New fixed Zone runtime units installed and `verify` check 1 passed at least once since the units were stopped | `tests/host-integration/cutover-unit-retirement.nix` boots with only new units present and passes `d2b host cutover verify` |
 | `/etc/d2b/realm-controllers.json`, `/etc/d2b/realm-identity.json` | Every Zone self-resource exists, the compiler-only `parentZone` topology is present only in sealed allocator bootstrap state, and every declared child-local `ZoneLink` reports `Ready`/accepted-`Degraded` with no reciprocal parent-store row per `verify` check 6 | `ADR046-nix-008`/`ADR046-nix-009` parity tests pass against the live Zone |
 | `nixos-modules/options-realms*.nix`, `nixos-modules/options-vms.nix` | Every VM/realm declaration has an equivalent `d2b.zones.<zone>.resources.*` declaration that produced a `Ready` Guest/Host in `verify` | `tests/unit/nix/cases/realm-to-zone-parity.nix` |
 | `/var/lib/d2b/vms/<vm>/swtpm/`, `/var/lib/d2b/swtpm-markers/<vm>` (source side of an Adopt) | `verify` check 4 (TPM digest match) passed **and** the destination TPM Volume has survived at least one full Guest restart cycle post-cutover, proving the adopted marker is load-bearing in practice, not merely digest-equal | `integration/swtpm_marker.rs` adapted; `tests/host-integration/tpm-adopt-retirement.nix` |
@@ -1502,7 +1502,7 @@ owns the destination.
 
 | Current artifact | Evidence (migration-map) | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
-| `d2bd.service`, `d2bd.socket` | §7, `production-reachable` | Preserve until Phase 10 gate clears (§ [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates)), then Destroy | Fixed Zone runtime unit | `ADR046-core-001` |
+| `d2bd.service` | §7, `production-reachable` | Preserve until Phase 10 gate clears (§ [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates)), then Destroy | Fixed Zone runtime unit | `ADR046-core-001` |
 | `d2b-priv-broker.service`, `d2b-priv-broker.socket` | §7, `production-reachable` | Preserve until Phase 10 gate clears, then Destroy | Zone-local privileged broker (`ADR046-provider-003`) | `ADR046-provider-003` |
 | `/run/d2b/d2bd.sock`, `/run/d2b/broker.sock` | §7 | Destroy (Phase 3, boot-scoped) | `/run/d2b/z-<zone-id>/...` fresh sockets | `ADR046-core-controllers` "Process model" |
 | `/run/d2b/allocator.sock` | §7, config-ref/schema-only, engine not live | Destroy (Phase 3; never adopted - no live allocator process to quiesce) | No successor socket; provisioning integrates into fixed core controllers | `ADR046-core-001` |

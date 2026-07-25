@@ -367,9 +367,11 @@ Unrelated ADR 0045 assumptions excluded from all reuse:
   realm-spawn pidfd protocols, `d2b-contracts/src/generated_v2_services/realm.rs`
   realm-controller child-spawn wire).
 - ADR45 delivery seals (xtask delivery wave / panel / seal process).
-- ADR45 fixed 4-unit PID1 endpoint inventory (`d2bd.socket`, `d2bd.service`,
-  `d2b-priv-broker.socket`, `d2b-priv-broker.service` as invariants); v3
-  Zone runtime sockets are allocator-issued, not PID1-owned.
+- The shipped fixed 3-unit PID1 endpoint inventory (`d2bd.service` binding
+  the daemon-owned `public.sock` itself with `Type=notify`,
+  `d2b-priv-broker.socket`, and `d2b-priv-broker.service` as invariants;
+  there is no `d2bd.socket` unit); v3 Zone runtime sockets are
+  allocator-issued, not PID1-owned.
 - ADR45 `d2b-contracts/src/generated_v2_services/realm.rs` protobuf field
   assignments; v3 re-freezes independently.
 - ADR45 controller static key credential path
@@ -769,7 +771,7 @@ let
 in {
   d2b.zones.<zone>.parentZone = mkOption {
     # No default. Required for non-root Zones and forbidden on local-root.
-    type = types.strMatching "^[a-z][a-z0-9-]*$";
+    type = types.strMatching "^[a-z][a-z0-9-]{0,62}$";
     description = ''
       Compiler-only parent Zone name. This is not a ResourceRef and is emitted
       only into sealed allocator bootstrap topology, never Zone.spec.
@@ -841,12 +843,12 @@ at `nix eval` time via the generated option type, not by explicit assertions.
 {
   d2b.zones.<zone>.resources.<name>.spec = {
     childZoneName = mkOption {
-      type = types.strMatching "^[a-z][a-z0-9-]*$";
+      type = types.strMatching "^[a-z][a-z0-9-]{0,62}$";
       description = "Self-reported name of the child Zone.  Verified during KK enrollment.";
     };
     transportProviderRef = mkOption {
       # Required; no default.  Must always be explicitly declared.
-      type = types.strMatching "^Provider/[a-z][a-z0-9-]*$";
+      type = types.strMatching "^Provider/[a-z][a-z0-9-]{0,62}$";
       description = "Provider/<name> resource that owns the transport session for this link.  Always explicit; no default or inference.";
     };
     transportSettings = mkOption {
@@ -857,7 +859,7 @@ at `nix eval` time via the generated option type, not by explicit assertions.
       default = {};
     };
     transportCredentials = mkOption {
-      type = types.listOf (types.strMatching "^Credential/[a-z][a-z0-9-]*$");
+      type = types.listOf (types.strMatching "^Credential/[a-z][a-z0-9-]{0,62}$");
       default = [];
       description = "Same-Zone Credential refs resolved for ComponentSession establishment.";
     };
@@ -900,12 +902,12 @@ option types from `xtask gen-zone-nix-options` and are not repeated here.
 
 | Assertion | Error message |
 | --- | --- |
-| `<zone>` key matches `^[a-z][a-z0-9-]*$` | `zones: zone key must match ^[a-z][a-z0-9-]*$` |
+| `<zone>` key matches `^[a-z][a-z0-9-]{0,62}$` (1 to 63 bytes, D113) | `zones: zone key must match ^[a-z][a-z0-9-]{0,62}$` |
 | `<zone>` key not `sys-*` or `launcher` | `zones: zone key uses reserved prefix or exact name` |
 | `parentZone` omitted on `local-root` and defined once on every other Zone | `zones.<zone>: parentZone is required for non-root Zones and forbidden on local-root` |
 | `parentZone` resolves to a declared Zone and does not equal `<zone>` | `zones.<zone>.parentZone: parent must exist and differ from child` |
 | Complete `parentZone` graph is acyclic and each ancestry path contains at most 16 Zone names | `zones: parentZone topology has a cycle or exceeds depth 16` |
-| `<name>` key matches `^[a-z][a-z0-9-]*$` | `zones.<zone>.resources: resource key must match ^[a-z][a-z0-9-]*$` |
+| `<name>` key matches `^[a-z][a-z0-9-]{0,62}$` (1 to 63 bytes, D113) | `zones.<zone>.resources: resource key must match ^[a-z][a-z0-9-]{0,62}$` |
 | No operator-authored `type = "Zone"` under `resources` | `zones.<zone>.resources.<name>: Zone self-resource is runtime-created` |
 | For `type = "ZoneLink"`: `spec.childZoneName` equals `<zone>`; at most one uplink resource exists in a non-root Zone; local root has none | `zones.<zone>: ZoneLink must be the sole child-local uplink and childZoneName must equal its Zone` |
 | For `type = "ZoneLink"`: `spec.transportProviderRef` resolves to a declared `Provider` resource in the same `<zone>` | `zones.<zone>.resources.<name>: transportProviderRef does not resolve to a declared Provider resource` |
@@ -1113,30 +1115,34 @@ controller-created Zone self-resource is not emitted:
 
 ```json
 {
-  "schemaVersion": 1,
-  "generationId": "<sha256-hex-of-canonical-sorted-resources>",
-  "resourceCount": 2,
+  "schemaVersion": 3,
+  "bundleVersion": 1,
+  "zone": "k1",
+  "contentHash": "sha256:<64 lowercase hex over canonical sorted resources>",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
   "resources": [
     { "type": "Provider", "metadata": { "name": "transport-unix", "zone": "k1" }, "...": "..." },
     { "type": "ZoneLink", "metadata": { "name": "k1-uplink",      "zone": "k1" }, "...": "..." }
   ],
-  "integrity": "sha256-<base64url>"
+  "providerSchemaDigests": { "Provider/transport-unix": "sha256:<64 lowercase hex>" }
 }
 ```
 
 Bundle rules:
 
-- `generationId` is the SHA-256 (lower hex) of the UTF-8 bytes of the
-  canonical sorted `resources` array JSON (not the envelope fields).
-  Two identical Nix configurations always produce the same `generationId`
-  regardless of host name or wall-clock time.
-- `integrity` is computed by serializing the bundle with `integrity` set
-  to the all-zeros placeholder `"sha256-"`, computing SHA-256 of the
-  result, encoding as base64url without padding, then replacing the
-  placeholder with the final value.
+- `contentHash` is the D101 digest `sha256:<64 lowercase hex>` taken over the
+  canonical sorted `resources` array (not the envelope fields). Two identical
+  Nix configurations always produce the same `contentHash` regardless of host
+  name or wall-clock time. The Zone runtime and audit records refer to this
+  value as `generationId`; the two names denote the same digest.
+- The bundle carries no base64url `integrity` field and no `resourceCount`.
+  Integrity is the five-member digest chain frozen in
+  `ADR-046-nix-configuration.md` section "Bundle contract (canonical)" (D119),
+  of which `contentHash` is the generation-identity member. All digests use the
+  D101 `sha256:<hex>` spelling; base64url is not used.
 - The bundle is the single source of truth for what Nix owns. The Zone
-  runtime detects changes by comparing `generationId` on startup and on
-  SIGHUP.
+  runtime detects changes by comparing `contentHash` (`generationId`) on
+  startup and on SIGHUP.
 - Transport Provider binding schemas referenced in build validation are
   committed separately under `docs/reference/schemas/v3/providers/` and
   are not inlined in the bundle.
@@ -1284,16 +1290,16 @@ under `/var/lib/d2b/zones/<zone>/configuration/prior/`:
 /etc/d2b/zones/<zone>/resource-bundle.json                              ← active input bundle
 /var/lib/d2b/zones/<zone>/configuration/prior/<gen-id-1>.json
 /var/lib/d2b/zones/<zone>/configuration/prior/<gen-id-2>.json
-/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id-3>.json           ← up to retentionCount
+/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id-3>.json           ← up to retainedGenerations
 ```
 
 | Parameter | Default | Range |
 | --- | --- | --- |
-| `retentionCount` | 3 | 1..16 |
+| `retainedGenerations` | 3 | 1..16 |
 | TTL | none | - |
 
 Retention is count-only: the oldest bundle is pruned when a new generation
-is added and the count would exceed `retentionCount`. No time-based expiry.
+is added and the count would exceed `retainedGenerations`. No time-based expiry.
 
 - **Rollback**: writing a retained bundle back to
   `/etc/d2b/zones/<zone>/resource-bundle.json` (e.g. via `nixos-rebuild switch`
@@ -2675,7 +2681,7 @@ The following transitions are NOT simple textual renames:
 | Reuse source | `realm-controller-config-json.nix` structural template; `xtask gen-schemas` extension point (main `a1cc0b2d` unchanged in this area) |
 | Reuse action | adapt |
 | Destination | `nixos-modules/zone-resources-json.nix` (new), private local-root allocator bootstrap compiler/sealer input (not a ResourceSpec or public bundle), `nixos-modules/bundle-artifacts.nix` (new row for per-Zone `resource-bundle.json`), `packages/xtask/src/main.rs` (`gen-zone-schemas` subcommand emitting `docs/reference/schemas/v3/<Type>.schema.json` for Zone and ZoneLink; `gen-zone-nix-options` subcommand emitting `nixos-modules/generated/options-zones-<Type>.nix`) |
-| Detailed design | `zone-resources-json.nix` iterates `d2b.zones.<zone>.resources.*` to produce the canonical sorted resource list: for each entry, render `{ apiVersion, type, metadata: { name, zone, ownerRef: <if-authored>, labels: <if-authored>, annotations: <if-authored> }, spec: <spec-attrs-canonical> }`. Separately canonicalize sorted `{ childZone, parentZone }` rows from the compiler-only topology and seal them into the private allocator bootstrap input; `parentZone` never enters a resource bundle or `Zone.spec`, and a topology digest change releases/reallocates affected edges independently of resource `generationId`. Per-Zone generation is strict: local root's generated bundle contains no ZoneLink; a non-root Zone's enabled uplink and referenced transport Provider appear together only in that child's bundle; no emitter copies either resource into the selected parent's bundle. The bundle JSON omits `managedBy` and `configurationGeneration`; the configuration service/core sets those fields when activating the validated bundle. Sort all resources by `(type, zone, name)`. Compute `generationId` as SHA-256 (lower hex) of the UTF-8 bytes of the sorted `resources` array JSON. Compute `integrity` as SHA-256 (base64url, no padding) of the full bundle JSON with integrity field zeroed. Install at `/etc/d2b/zones/<zone>/resource-bundle.json` root:d2bd 0640. Canonical form: all object keys sorted lexicographically; order-significant arrays preserved; schema-declared set-like arrays sorted lexicographically; all optional fields emitted with defaults; no field renaming or restructuring. Build-time validation runs in a Nix derivation: (1) validate the complete parent map (non-root required, local-root forbidden, declared target, one scalar parent, not self, acyclic, max 16 names); (2) validate each resource against the committed JSON Schema, including the exact six-field ZoneLink schema from ADR046-zone-control-002; (3) validate `transportSettings` for each child-local ZoneLink against its same-Zone Provider's `transportSettingsSchema` - `transportProviderRef` is always explicit, never inferred or defaulted; (4) resolve every same-Zone `transportCredentials` ref; (5) verify `childZoneName == metadata.zone`, at most one uplink resource per non-root Zone, and no local-root uplink; (6) check for duplicate `(type, zone, name)` tuples. Private route capability policy is sealed in allocator bootstrap state and is not a ZoneLink ResourceSpec field. Providers MUST commit their `transportSettingsSchema` before any ZoneLink can reference them. Drift gates: `xtask gen-zone-schemas && git diff --exit-code` and `xtask gen-zone-nix-options && git diff --exit-code` both wired into `make test-drift`. Add `checks.${system}.zone-schema-drift` to `flake.nix`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and adapt. |
+| Detailed design | `zone-resources-json.nix` iterates `d2b.zones.<zone>.resources.*` to produce the canonical sorted resource list: for each entry, render `{ apiVersion, type, metadata: { name, zone, ownerRef: <if-authored>, labels: <if-authored>, annotations: <if-authored> }, spec: <spec-attrs-canonical> }`. Separately canonicalize sorted `{ childZone, parentZone }` rows from the compiler-only topology and seal them into the private allocator bootstrap input; `parentZone` never enters a resource bundle or `Zone.spec`, and a topology digest change releases/reallocates affected edges independently of resource `generationId`. Per-Zone generation is strict: local root's generated bundle contains no ZoneLink; a non-root Zone's enabled uplink and referenced transport Provider appear together only in that child's bundle; no emitter copies either resource into the selected parent's bundle. The bundle JSON omits `managedBy` and `configurationGeneration`; the configuration service/core sets those fields when activating the validated bundle. Sort all resources by `(type, zone, name)`. Compute `contentHash` as the D101 digest `sha256:<64 lowercase hex>` over the canonical sorted `resources` array (this value is the generation identity, also referred to as `generationId`). The bundle carries no base64url `integrity` field; integrity is the five-member digest chain frozen in `ADR-046-nix-configuration.md` section "Bundle contract (canonical)" (D119). Install at `/etc/d2b/zones/<zone>/resource-bundle.json` root:d2bd 0640. Canonical form: all object keys sorted lexicographically; order-significant arrays preserved; schema-declared set-like arrays sorted lexicographically; all optional fields emitted with defaults; no field renaming or restructuring. Build-time validation runs in a Nix derivation: (1) validate the complete parent map (non-root required, local-root forbidden, declared target, one scalar parent, not self, acyclic, max 16 names); (2) validate each resource against the committed JSON Schema, including the exact six-field ZoneLink schema from ADR046-zone-control-002; (3) validate `transportSettings` for each child-local ZoneLink against its same-Zone Provider's `transportSettingsSchema` - `transportProviderRef` is always explicit, never inferred or defaulted; (4) resolve every same-Zone `transportCredentials` ref; (5) verify `childZoneName == metadata.zone`, at most one uplink resource per non-root Zone, and no local-root uplink; (6) check for duplicate `(type, zone, name)` tuples. Private route capability policy is sealed in allocator bootstrap state and is not a ZoneLink ResourceSpec field. Providers MUST commit their `transportSettingsSchema` before any ZoneLink can reference them. Drift gates: `xtask gen-zone-schemas && git diff --exit-code` and `xtask gen-zone-nix-options && git diff --exit-code` both wired into `make test-drift`. Add `checks.${system}.zone-schema-drift` to `flake.nix`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend and adapt. |
 | Integration | The local-root allocator consumes sealed parent topology independently of resource bundles; `nixos-modules/bundle-artifacts.nix` installs each per-Zone `resource-bundle.json`; ADR046-routing-013 Zone runtime reads it on startup |
 | Data migration | None; new artifact file |
 | Validation | `drift: zone-resource-schema`, `drift: zone-nix-options`, `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle` (K0 has no ZoneLink; K1 contains its self-matching ZoneLink and same-Zone transport Provider; neither is copied to K0), `build: zone-link-exact-six-fields`, `build: transport-settings-unknown-field`, `build: transport-credential-ref`, `build: missing-transport-provider`; run `make flake-matrix-pin` after adding flake checks |
@@ -2691,7 +2697,7 @@ The following transitions are NOT simple textual renames:
 | Main reuse source | `packages/d2b-state/src/` (main `a1cc0b2d`): atomic state, audit segment primitives adapted for generation tracking |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/configuration.rs` (defined by ADR-046-core-controllers); shared bundle DTOs may live in `packages/d2b-core/` |
-| Detailed design | Implement the configuration ownership and cleanup contract from the "Configuration ownership and cleanup contract" section. `configuration.rs` owns: (1) reading and integrity-verifying `/etc/d2b/zones/<zone>/resource-bundle.json` on startup and SIGHUP; (2) diffing against active generation by `generationId` (no-op if unchanged); (3) queuing Create/UpdateSpec/Delete intents - core sets `configurationGeneration` and `managedBy` when applying Create/UpdateSpec; Delete targets only resources where BOTH `managedBy` equals the configuration service's value AND `configurationGeneration` matches the prior bundle - resources with `managedBy=controller` or `managedBy=api` are never seized; (4) setting `deletionRequestedAt` on pending-delete resources immediately and adding a Pending condition; (5) writing the prior bundle into the capped ring at `/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id>.json` (default retentionCount=3, range 1..16, no TTL; prune oldest when count would exceed limit); (6) enforcing boundary invariants (no diff-delete for absent `configurationGeneration`, `managedBy` collision guard, live controller-child teardown guard); (7) driving finalizer drain + controller-child cascade before completing a Delete; (8) on successful deletion: one store transaction writes the `Deleted` revision/change event and removes the resource row and all index entries; the authoritative audit record (`zone-resource-cleanup`) is appended from the committed revision with dedup/exactly-once recovery and is NOT part of the store transaction; (9) tracking `deletionRequestedAt`/`cleanupConfigGeneration`/`cleanupError`/`cleanupAttempt` per resource; (10) on rollback: clearing `deletionRequestedAt` and Pending condition for revived resources; (11) never pruning a prior bundle while a Delete intent from its `configurationGeneration` is in flight. OFD lock on the bundle file prevents concurrent activation races. Generation state persisted atomically at `/var/lib/d2b/zones/<zone>/configuration/generation.json` (root:d2bd 0640). The `spec` object comparison for UpdateSpec detection uses the canonical JSON form so two identical specs always compare equal regardless of Nix rendering order. Resource phase transitions: Pending while Create/UpdateSpec in-flight; Degraded while cleanup pending; Ready when clean; Failed on permanent error. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Implement the configuration ownership and cleanup contract from the "Configuration ownership and cleanup contract" section. `configuration.rs` owns: (1) reading and integrity-verifying `/etc/d2b/zones/<zone>/resource-bundle.json` on startup and SIGHUP; (2) diffing against active generation by `generationId` (no-op if unchanged); (3) queuing Create/UpdateSpec/Delete intents - core sets `configurationGeneration` and `managedBy` when applying Create/UpdateSpec; Delete targets only resources where BOTH `managedBy` equals the configuration service's value AND `configurationGeneration` matches the prior bundle - resources with `managedBy=controller` or `managedBy=api` are never seized; (4) setting `deletionRequestedAt` on pending-delete resources immediately and adding a Pending condition; (5) writing the prior bundle into the capped ring at `/var/lib/d2b/zones/<zone>/configuration/prior/<gen-id>.json` (default retainedGenerations=3, range 1..16, no TTL; prune oldest when count would exceed limit); (6) enforcing boundary invariants (no diff-delete for absent `configurationGeneration`, `managedBy` collision guard, live controller-child teardown guard); (7) driving finalizer drain + controller-child cascade before completing a Delete; (8) on successful deletion: one store transaction writes the `Deleted` revision/change event and removes the resource row and all index entries; the authoritative audit record (`zone-resource-cleanup`) is appended from the committed revision with dedup/exactly-once recovery and is NOT part of the store transaction; (9) tracking `deletionRequestedAt`/`cleanupConfigGeneration`/`cleanupError`/`cleanupAttempt` per resource; (10) on rollback: clearing `deletionRequestedAt` and Pending condition for revived resources; (11) never pruning a prior bundle while a Delete intent from its `configurationGeneration` is in flight. OFD lock on the bundle file prevents concurrent activation races. Generation state persisted atomically at `/var/lib/d2b/zones/<zone>/configuration/generation.json` (root:d2bd 0640). The `spec` object comparison for UpdateSpec detection uses the canonical JSON form so two identical specs always compare equal regardless of Nix rendering order. Resource phase transitions: Pending while Create/UpdateSpec in-flight; Degraded while cleanup pending; Ready when clean; Failed on permanent error. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b-core-controller` configuration service activates on bundle install and SIGHUP; zone-controller reconcile loops in `d2b-core-controller` consume the queued intents; d2b-bus resource API exposes `status.phase` and `pendingCleanup` via Get/Watch on the active generation resource |
 | Data migration | None; new runtime component |
 | Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup |
