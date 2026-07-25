@@ -114,7 +114,7 @@ impl WaveCommand {
 
     /// Whether this stage's implementation has landed.
     pub fn implemented(self) -> bool {
-        matches!(self, Self::Help)
+        matches!(self, Self::Help | Self::PanelRequest | Self::PanelAttest)
     }
 }
 
@@ -225,6 +225,8 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
                 .collect();
             Ok(output)
         }
+        WaveCommand::PanelRequest => super::panel::run_request(rest),
+        WaveCommand::PanelAttest => super::panel::run_attest(rest),
         other => Err(DeliveryError::unimplemented(
             other.as_str(),
             other.work_item(),
