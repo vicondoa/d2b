@@ -255,15 +255,30 @@ heavy-lane-guard: heavy-gate-build
 # might be running; the bare targets stay available for a serial console.
 # ===========================================================================
 
-# Honour an explicit CARGO_TARGET_DIR so the wrapper is found where cargo puts it.
-HEAVY_GATE_TARGET_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/packages/target)
+# Normalize CARGO_TARGET_DIR to an absolute path so the wrapper is built and
+# executed at the same location. cargo runs the build from packages/, so a
+# *relative* CARGO_TARGET_DIR is interpreted relative to packages/ - but
+# HEAVY_GATE is invoked from the repo root, so a bare relative path is looked up
+# in the wrong place (packages/relative/debug/xtask built, relative/debug/xtask
+# executed). Resolve a relative value against packages/ and pass the resolved
+# absolute path back to cargo, so both the build and the execution agree
+# regardless of the caller's value.
+ifeq ($(CARGO_TARGET_DIR),)
+HEAVY_GATE_TARGET_DIR := $(CURDIR)/packages/target
+else ifeq ($(filter /%,$(CARGO_TARGET_DIR)),)
+HEAVY_GATE_TARGET_DIR := $(abspath $(CURDIR)/packages/$(CARGO_TARGET_DIR))
+else
+HEAVY_GATE_TARGET_DIR := $(CARGO_TARGET_DIR)
+endif
 HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
 ## heavy-gate-build - build the semaphore wrapper. Runs from packages/ so the
-## workspace cargo config (and its rustc wrapper) applies.
+## workspace cargo config (and its rustc wrapper) applies. The build target dir
+## is forced to the same absolute HEAVY_GATE_TARGET_DIR the wrapper is executed
+## from, so a relative CARGO_TARGET_DIR cannot split the two.
 heavy-gate-build:
-	@cd packages && cargo build --quiet -p xtask
+	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
 
 ## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
 heavy-check: heavy-gate-build
