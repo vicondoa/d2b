@@ -21,6 +21,15 @@
   rebase reuse a wave's validation and panel evidence without re-running it,
   consumed by `merge-eligibility`.
 
+### Changed
+
+- A history-only rebase now preserves a wave's panel but never its validator
+  evidence. Panel requests and records are matched on content identity, which
+  a rebase reproduces exactly, so a rebase no longer forces a fresh ten-role
+  panel. Validator evidence stays bound to the snapshot digest, which a rebase
+  does move, so every lane re-runs and re-imports before the wave can seal
+  again.
+
 ### Security
 
 - Panel requests, panel records, attestations, seals, and eligibility verdicts
