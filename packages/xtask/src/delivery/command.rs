@@ -4,13 +4,17 @@
 //! stage owns its own module; this file only routes to it and fails closed for
 //! any stage that has not landed.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     model::{CandidateDigests, validate_repository_id},
+    storage::CandidateDir,
 };
 
 /// One stage of the wave delivery workflow.
@@ -183,14 +187,17 @@ impl WorkflowOutput {
         self
     }
 
-    /// Records the artifact this invocation produced. Only the external state
-    /// path is reported; artifact content never reaches stdout.
-    pub fn with_artifact(mut self, path: &std::path::Path) -> Result<Self> {
-        self.artifact = Some(
-            path.to_str()
-                .ok_or_else(|| DeliveryError::new("delivery artifact path is not UTF-8"))?
-                .to_owned(),
-        );
+    /// Records the artifact this invocation produced, as a bounded
+    /// candidate-relative key.
+    ///
+    /// Only the logical key (for example `evidence/local-host/layer1.json`) is
+    /// reported, never the absolute state path: structured stdout must never
+    /// carry `HOME`, the local username, or a checkout or store path into a CI
+    /// or operator log. The absolute path stays internal to storage. The
+    /// `candidate_id` field already addresses which candidate the key belongs
+    /// to, so the pair stays machine-readable.
+    pub fn with_artifact(mut self, candidate: &CandidateDir, path: &Path) -> Result<Self> {
+        self.artifact = Some(candidate.artifact_key(path)?);
         Ok(self)
     }
 }

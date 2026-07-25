@@ -244,6 +244,22 @@ impl CandidateDir {
         Ok(self.path.join(relative))
     }
 
+    /// The bounded, candidate-relative key for an artifact path under this
+    /// candidate directory.
+    ///
+    /// Structured output reports this logical key, never the absolute state
+    /// path, so no CI or operator log carries `HOME`, the local username, or a
+    /// checkout or store path.
+    pub fn artifact_key(&self, path: &Path) -> Result<String> {
+        let relative = path.strip_prefix(&self.path).map_err(|_| {
+            DeliveryError::new("delivery artifact is not under its candidate directory")
+        })?;
+        relative
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| DeliveryError::new("delivery artifact key is not UTF-8"))
+    }
+
     /// Writes a JSON artifact and returns its SHA-256 digest.
     pub fn write_json<T: Serialize>(
         &self,

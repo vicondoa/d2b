@@ -182,7 +182,7 @@ pub fn evaluate(
     let digests = material.digests()?;
     WorkflowOutput::ok(WaveCommand::MergeEligibility)
         .with_digests(&digests)
-        .with_artifact(&candidate.resolve(MERGE_ELIGIBILITY_FILE)?)
+        .with_artifact(candidate, &candidate.resolve(MERGE_ELIGIBILITY_FILE)?)
 }
 
 impl MergeTarget {

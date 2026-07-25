@@ -280,7 +280,7 @@ fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOu
     let path = import(&candidate, &record)?;
     WorkflowOutput::ok(WaveCommand::ValidateImport)
         .with_digests(&sealed.digests())
-        .with_artifact(&path)
+        .with_artifact(&candidate, &path)
 }
 
 /// Writes one evidence record into the candidate directory.
@@ -617,15 +617,16 @@ mod tests {
             output.candidate_id.as_deref(),
             Some(snapshot.candidate_id.as_str())
         );
+        assert_eq!(
+            output.artifact.as_deref(),
+            Some("evidence/local-host/test-integration.json"),
+            "the artifact must be a candidate-relative key, not an absolute path"
+        );
         let expected = fixture
             .state()
             .join("w0")
             .join(snapshot.candidate_id.as_str())
             .join("evidence/local-host/test-integration.json");
-        assert_eq!(
-            output.artifact.as_deref(),
-            Some(&*expected.to_string_lossy())
-        );
         assert!(expected.is_file());
     }
 
@@ -1023,5 +1024,77 @@ mod tests {
         let attestation = crate::delivery::panel::attested_records(&candidate, &request)
             .expect("the panel records survive a history-only rebase");
         assert!(attestation.unanimous);
+    }
+
+    #[test]
+    fn structured_stdout_never_leaks_absolute_state_or_host_paths() {
+        let fixture = GitFixture::new("delivery-no-path-leak");
+        let snapshot = take(&fixture);
+
+        let mut outputs = Vec::new();
+        outputs.push(
+            import_into(
+                &fixture,
+                &import_args(&fixture, &snapshot, &["--lane", "github-ci"]),
+            )
+            .expect("import the github-ci lane"),
+        );
+        outputs.push(
+            import_into(
+                &fixture,
+                &import_args(&fixture, &snapshot, &["--lane", "local-host"]),
+            )
+            .expect("import the local-host lane"),
+        );
+
+        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+        let snapshot_path = fixture
+            .state()
+            .join("w0")
+            .join(snapshot.candidate_id.as_str())
+            .join("snapshot.json");
+        let (candidate, view) = crate::delivery::panel::open_candidate(&root, &snapshot_path)
+            .expect("open the candidate the snapshot names");
+
+        outputs.push(crate::delivery::panel::request(&candidate, &view).expect("panel request"));
+
+        let files = crate::delivery::panel::tests::record_files(&view);
+        let records_dir = fixture.scratch().join("panel-records");
+        std::fs::create_dir_all(&records_dir).expect("panel records directory");
+        for (record_name, bytes) in &files {
+            std::fs::write(records_dir.join(record_name), bytes).expect("write panel record");
+        }
+        outputs.push(
+            crate::delivery::panel::attest(&candidate, &view, &records_dir).expect("panel attest"),
+        );
+        outputs.push(crate::delivery::seal::seal(&candidate, &view).expect("seal the wave"));
+
+        let state = fixture.state();
+        let state_str = state.to_string_lossy();
+        for output in &outputs {
+            let json = serde_json::to_string(output).expect("serialize the workflow output");
+            assert!(
+                !json.contains(state_str.as_ref()),
+                "{} leaked the absolute state path into structured stdout: {json}",
+                output.operation
+            );
+            assert!(
+                !json.contains("/home/"),
+                "{} leaked a HOME or checkout path into structured stdout: {json}",
+                output.operation
+            );
+            assert!(
+                !json.contains("/nix/store/"),
+                "{} leaked a store path into structured stdout: {json}",
+                output.operation
+            );
+            if let Some(artifact) = output.artifact.as_deref() {
+                assert!(
+                    !artifact.starts_with('/'),
+                    "{} reported an absolute artifact key: {artifact}",
+                    output.operation
+                );
+            }
+        }
     }
 }

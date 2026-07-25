@@ -151,7 +151,7 @@ pub fn seal(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Workflo
 
     WorkflowOutput::ok(WaveCommand::Seal)
         .with_digests(&snapshot.digests())
-        .with_artifact(&candidate.seal_path())
+        .with_artifact(candidate, &candidate.seal_path())
 }
 
 /// Reads every imported evidence record through the one shared reader and
@@ -274,7 +274,11 @@ pub(crate) mod tests {
 
         let output = seal(&candidate, &snapshot).expect("seal");
         assert_eq!(output.operation, "seal");
-        assert_eq!(output.artifact.as_deref(), candidate.seal_path().to_str());
+        assert_eq!(
+            output.artifact.as_deref(),
+            Some("seal.json"),
+            "the artifact must be a candidate-relative key, not an absolute path"
+        );
 
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         record.validate().expect("sealed record is valid");
