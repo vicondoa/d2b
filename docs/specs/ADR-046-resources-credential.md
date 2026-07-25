@@ -1474,8 +1474,8 @@ status:
   pendingCleanupResourceRefs:       # bounded list (max 64 entries; truncated with note)
     - "Credential/old-keyring"
     - "Credential/deprecated-entra"
-  retainedConfigurationCount: 3     # current number of retained prior bundles
-  retainedConfigurationMax: 3       # configured maximum (default 3, range 1..16)
+  retainedGenerationsCount: 3     # current number of retained prior bundles
+  retainedGenerationsMax: 3          # configured maximum (default 3, range 1..16)
 ```
 
 #### Errors
@@ -1497,7 +1497,7 @@ status:
 | Configuration-managed resource removed (async delete issued) | Zone, Credential ResourceRef, `activationGeneration`, `deletionRequestedAt`, reason `nix-generation-removed` |
 | Cleanup complete | Zone, Credential ResourceRef, final `phase=Deleted`, `activationGeneration`, `cleanupLatencyMs` |
 | Cleanup stalled | Zone, Credential ResourceRef, stall duration, last error code |
-| Rollback initiated | Zone, from/to `activationGeneration`, `retainedConfigurationCount` |
+| Rollback initiated | Zone, from/to `activationGeneration`, `retainedGenerationsCount` |
 
 All audit records exclude: token bytes, key material, prior-generation spec
 contents, provider diagnostics, and user-identifying path components.

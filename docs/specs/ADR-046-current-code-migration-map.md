@@ -629,7 +629,7 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 | `realm-controller-config-json.nix` | nix-emitted | Emits `realm-controllers.json` for each enabled realm; includes allocator socket ref | ADAPT | Emit `zones.json` Zone resource entries; rename artifact | `ADR046-identities-002` |
 | `allocator-json.nix` | nix-emitted | Emits `/etc/d2b/allocator.json` (`rootSocket`, `configPath`) | DELETE | No separate allocator service; remove artifact; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-001` |
 | `host-broker.nix` | nix-emitted | Declares local-root broker socket+service units; per-realm socket units (`d2b-r-<realm>-broker.socket`) as socket-activated PID1 units at `b5ddbed6` | ADAPT | Per-Zone socket units → parent-spawned Zone broker `Process`; per ADR 0046 D006 remove per-realm PID1 socket units; keep local-root `d2b-priv-broker.socket` only | `ADR046-core-001` |
-| `host-controller.nix` | nix-emitted | Declares `d2bd.socket`, `d2bd.service` (local-root controller) | RETAIN/ADAPT | Keep local-root `d2bd.service`; update to Zone runtime entrypoint | `ADR046-core-001` |
+| `host-controller.nix` | nix-emitted | Declares `d2bd.service` (local-root controller; `Type=notify`, binds `public.sock` itself - there is no `d2bd.socket` unit) | RETAIN/ADAPT | Keep local-root `d2bd.service`; update to Zone runtime entrypoint | `ADR046-core-001` |
 | `host-activation.nix` | nix-emitted | Activation helper setup; key generation; polkit rules | RETAIN/ADAPT | Keep activation; update to Zone resource model | `ADR046-primitives-003` |
 | `host-users.nix` | nix-emitted | `d2b` group; per-VM users (`d2b-<vm>-*`); polkit surface | RETAIN/ADAPT | Keep `d2b` group authz surface; per-Guest principal generation | `ADR046-primitives-002` |
 | `host-keys.nix` | nix-emitted | Framework-owned SSH keys `${keysDir}/<vm>_ed25519` | RETAIN/ADAPT | Per-Guest key in Zone key store | - |
@@ -675,7 +675,7 @@ These four units remain PID1-owned through ADR 0046.
 
 | Unit | Current Function | Disposition |
 |------|-----------------|-------------|
-| `d2bd.socket` | Local-root public socket activation | RETAIN (rename if Zone runtime renames daemon binary) |
+| `d2bd.socket` | Does not exist. `d2bd.service` is `Type=notify` and binds `public.sock` itself | N/A - never declared, so there is nothing to retain |
 | `d2bd.service` | Local-root Zone runtime controller | RETAIN/ADAPT |
 | `d2b-priv-broker.socket` | Local-root broker socket activation | RETAIN |
 | `d2b-priv-broker.service` | Local-root privileged broker | RETAIN/ADAPT |
@@ -744,7 +744,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `/var/lib/d2b/vms/<vm>/store/` | `d2b-priv-broker` (hardlink farm) | ADAPT | `Volume` resource (store-view) per Guest | Keep same-filesystem requirement |
 | `/var/lib/d2b/vms/<vm>/swtpm/` | `d2b-priv-broker` swtpm_dir | ADAPT | `Volume` resource (swtpm state) per Guest | Keep marker + fail-closed semantics |
 | `/var/lib/d2b/swtpm-markers/<vm>` | broker provisioning | ADAPT | Per-Guest Volume marker | Keep previously-provisioned fail-closed |
-| `/run/d2b/d2bd.sock` | `d2bd.socket` | RETAIN | Zone runtime public socket | |
+| `/run/d2b/d2bd.sock` | `d2bd.service` (daemon-bound; no socket unit) | RETAIN | Zone runtime public socket | |
 | `/run/d2b/broker.sock` | `d2b-priv-broker.socket` | RETAIN | Local-root broker socket | |
 | `/run/d2b/allocator.sock` | config ref; engine not live at `b5ddbed6` | DELETE | No separate allocator socket; provisioning integrates into fixed core controllers and Zone runtime resource contracts | `ADR046-core-001` |
 | `/run/d2b/r-<realm>/` | per-realm runtime directory | ADAPT | `/run/d2b/z-<zone-id>/` - rename | |
