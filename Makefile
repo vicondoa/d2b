@@ -288,3 +288,34 @@ test-changelog:
 ##                  Run at merge time; see changelog.d/README.md.
 changelog-fold:
 	cd packages && cargo run -q -p xtask -- changelog-fold
+# --- hermetic execution-budget gate ----------------------------------------
+
+.PHONY: test-runtime-ledger
+
+## test-runtime-ledger — hermetic execution-budget gate. Times the Layer-1
+##   shard targets named in D2B_RUNTIME_SHARDS by re-invoking them through
+##   make, records the samples into a deterministic ledger, then enforces the
+##   per-test / per-crate / per-shard budgets against it. Set
+##   D2B_RUNTIME_BASELINE to a previously recorded ledger to also enforce the
+##   historical regression threshold. The ledger carries an operator-supplied
+##   runner label instead of a hostname so it stays portable.
+D2B_RUNTIME_SHARDS   ?= test-rust
+D2B_RUNTIME_RUNNER   ?= local
+D2B_RUNTIME_LEDGER   ?= packages/target/test-runtime-ledger.json
+D2B_RUNTIME_BASELINE ?=
+test-runtime-ledger:
+	@set -eu; \
+	args=""; \
+	for shard in $(D2B_RUNTIME_SHARDS); do \
+	  start="$$(date +%s%3N)"; \
+	  $(MAKE) --no-print-directory "$$shard"; \
+	  end="$$(date +%s%3N)"; \
+	  args="$$args --shard $$shard=$$((end - start))"; \
+	done; \
+	cargo run --quiet --manifest-path packages/xtask/Cargo.toml -- \
+	  test-runtime-ledger record \
+	  --runner '$(D2B_RUNTIME_RUNNER)' --output '$(D2B_RUNTIME_LEDGER)' $$args; \
+	baseline=""; \
+	if [ -n '$(D2B_RUNTIME_BASELINE)' ]; then baseline="--baseline $(D2B_RUNTIME_BASELINE)"; fi; \
+	cargo run --quiet --manifest-path packages/xtask/Cargo.toml -- \
+	  test-runtime-ledger check --ledger '$(D2B_RUNTIME_LEDGER)' $$baseline
