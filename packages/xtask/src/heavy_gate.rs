@@ -2919,13 +2919,163 @@ mod tests {
         None
     }
 
-    /// Recursively collect every heavy-entrypoint candidate under `dir`: a
-    /// shell script (`.sh`) or any executable regular file. A data file that is
-    /// neither is ignored, so a non-`.sh` executable entrypoint cannot slip in
-    /// unguarded. A sourced shell library (`lib.sh`) is NOT an entrypoint - it
-    /// is loaded by an entrypoint that already holds a slot - so it is excluded
-    /// and never required to self-guard. Returns an empty vec when `dir` is
-    /// absent (optional lanes).
+    /// True when a shell line is a `source`/`.` directive whose target basename
+    /// is `name` (for example `. "$HERE/lib.sh"` or `source ./lib.sh`).
+    fn line_sources_basename(line: &str, name: &str) -> bool {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix(". ")
+            .or_else(|| trimmed.strip_prefix("source "))
+        else {
+            return false;
+        };
+        let Some(tok) = rest.split_whitespace().next() else {
+            return false;
+        };
+        let tok = tok.trim_matches(|c| c == '"' || c == '\'');
+        Path::new(tok).file_name().and_then(|n| n.to_str()) == Some(name)
+    }
+
+    /// Whether `candidate` (a non-executable `.sh`) is a genuine shell
+    /// *library*: a sibling file in the same directory pulls it in with a
+    /// `source`/`.` directive, so it only ever runs inside a caller that
+    /// already holds a slot. Matching a same-directory sibling - the
+    /// `. "$HERE/lib.sh"` shape every d2b lane uses - is what makes this a
+    /// per-file *classification* rather than the old `basename == "lib.sh"`
+    /// skip: a stray, unsourced `lib.sh` no longer counts as a library (it is
+    /// treated as an ungated entrypoint and flagged), and a real library under
+    /// any other name is still recognised. It also avoids the basename
+    /// collision with the repo-wide `tests/lib.sh`, because only a sibling in
+    /// the candidate's own directory is consulted.
+    fn is_sibling_sourced_library(candidate: &Path) -> bool {
+        let Some(dir) = candidate.parent() else {
+            return false;
+        };
+        let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in entries {
+            let sibling = entry.expect("a readable dir entry").path();
+            if sibling == candidate {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&sibling) else {
+                continue;
+            };
+            if text.lines().any(|line| line_sources_basename(line, name)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Classify a single regular file. Returns `Some(path)` when it is a heavy
+    /// *entrypoint* (an executable regular file, or a non-executable `.sh` that
+    /// no sibling sources), and `None` when it is inert data or a
+    /// sibling-sourced shell library.
+    ///
+    /// This is the explicit per-file entrypoint-versus-library rule that
+    /// replaces the old `basename == "lib.sh"` heuristic. Executability is the
+    /// primary signal - an executable file is runnable as `./file` and is
+    /// always an entrypoint, even if named `lib.sh` - and a non-executable
+    /// `.sh` is a library only when a sibling actually sources it (otherwise it
+    /// is still runnable as `bash file`, so it must be gated). A file that is
+    /// neither `.sh` nor executable (a `.nix`, `.md`, `.txt`, ...) is inert
+    /// data.
+    fn heavy_entrypoint(path: &Path, meta: &fs::Metadata) -> Option<PathBuf> {
+        if !meta.file_type().is_file() {
+            return None;
+        }
+        let is_sh = path.extension() == Some(OsStr::new("sh"));
+        let is_exec = meta.permissions().mode() & 0o111 != 0;
+        if !is_sh && !is_exec {
+            return None;
+        }
+        if !is_exec && is_sh && is_sibling_sourced_library(path) {
+            return None;
+        }
+        Some(path.to_path_buf())
+    }
+
+    /// Markers of genuinely heavy work: build, container, VM, sudo, or device
+    /// activity. A lane cannot be exempted from the gate (declared
+    /// OUT_OF_SCOPE) while any file in it performs one of these; the exemption
+    /// must be justified by this *checked property*, not by a free-text
+    /// comment. This is what makes the census closed - an exemption the census
+    /// cannot verify is refused - and it is exactly the gap that let the
+    /// genuinely-heavy distro-matrix lane sit exempt behind a comment.
+    const HEAVY_WORK_MARKERS: &[(&str, &str)] = &[
+        ("cargo build", "build"),
+        ("cargo test", "build"),
+        ("cargo run", "build"),
+        ("cargo clippy", "build"),
+        ("nix build", "build"),
+        ("nixos-rebuild", "build"),
+        ("podman", "container"),
+        ("docker", "container"),
+        ("buildah", "container"),
+        ("nerdctl", "container"),
+        ("cloud-hypervisor", "VM"),
+        ("qemu", "VM"),
+        ("virtiofsd", "VM"),
+        ("swtpm", "VM"),
+        ("runNixOSTest", "VM"),
+        ("d2b vm start", "VM"),
+        ("sudo ", "sudo"),
+        ("doas ", "sudo"),
+        ("/dev/kvm", "device"),
+        ("/dev/dri", "device"),
+        ("/dev/vfio", "device"),
+        ("/dev/nvidia", "device"),
+        ("modprobe", "device"),
+        ("usbip", "device"),
+    ];
+
+    /// Scan every regular file under `dir` for a [`HEAVY_WORK_MARKERS`] token,
+    /// returning the first offending `(file, kind)`. Used to verify that a lane
+    /// claimed OUT_OF_SCOPE really performs no heavy work, so the census refuses
+    /// an exemption it cannot check.
+    fn lane_heavy_work_marker(dir: &Path) -> Option<(PathBuf, &'static str)> {
+        let mut stack = vec![dir.to_path_buf()];
+        let mut hits: Vec<(PathBuf, &'static str)> = Vec::new();
+        while let Some(current) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.expect("a readable dir entry").path();
+                let meta = fs::symlink_metadata(&path)
+                    .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
+                if meta.file_type().is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !meta.file_type().is_file() {
+                    continue;
+                }
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                if let Some((_, kind)) = HEAVY_WORK_MARKERS
+                    .iter()
+                    .find(|(marker, _)| text.contains(marker))
+                {
+                    hits.push((path, kind));
+                }
+            }
+        }
+        hits.sort();
+        hits.into_iter().next()
+    }
+
+    /// Recursively collect every heavy-entrypoint candidate under `dir`. A
+    /// sourced shell library is not an entrypoint - it is loaded by an
+    /// entrypoint that already holds a slot - so it is excluded via
+    /// [`heavy_entrypoint`]'s explicit classification and never required to
+    /// self-guard. Returns an empty vec when `dir` is absent (optional lanes).
     fn collect_heavy_entrypoints(dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let Ok(entries) = fs::read_dir(dir) else {
@@ -2939,16 +3089,8 @@ mod tests {
                 out.extend(collect_heavy_entrypoints(&path));
                 continue;
             }
-            if !meta.file_type().is_file() {
-                continue;
-            }
-            if path.file_name() == Some(OsStr::new("lib.sh")) {
-                continue;
-            }
-            let is_sh = path.extension() == Some(OsStr::new("sh"));
-            let is_exec = meta.permissions().mode() & 0o111 != 0;
-            if is_sh || is_exec {
-                out.push(path);
+            if let Some(entrypoint) = heavy_entrypoint(&path, &meta) {
+                out.push(entrypoint);
             }
         }
         out.sort();
@@ -2982,27 +3124,45 @@ mod tests {
         // for four rounds, so every lane directory on disk must be explicitly
         // classified. GATED lanes route through the heavy-gate and every
         // runnable entrypoint they contain must self-guard. OUT_OF_SCOPE lanes
-        // are non-heavy (the Layer-3 distro-pin matrix self-classifies per
-        // script and is owned by another slice) and are named with the reason
-        // they hold no slot. GATED names may sit under different parents
-        // (benchmark lives directly under tests/), so the walked set is spelled
-        // out and the census cross-checks that every GATED directory on disk is
-        // actually walked.
-        const GATED_LANE_DIRS: &[&str] = &["live", "containers", "cloud", "hardware", "benchmark"];
-        const OUT_OF_SCOPE_LANE_DIRS: &[(&str, &str)] = &[(
+        // must additionally prove they hold no slot by a *checked property* -
+        // no file in them performs build, container, VM, sudo, or device work
+        // (see HEAVY_WORK_MARKERS / lane_heavy_work_marker) - rather than by a
+        // free-text comment, which is what let the genuinely-heavy distro-matrix
+        // lane (sudo + /dev/kvm + cargo build --release --workspace) sit exempt.
+        // GATED names may sit under different parents (benchmark lives directly
+        // under tests/), so the walked set is spelled out and the census
+        // cross-checks that every GATED directory on disk is actually walked.
+        const GATED_LANE_DIRS: &[&str] = &[
+            "live",
+            "containers",
+            "cloud",
+            "hardware",
+            "benchmark",
             "distro-matrix",
-            "Layer-3 nightly distro-pin matrix; scripts self-classify and are owned elsewhere",
-        )];
+        ];
+        // Every OUT_OF_SCOPE entry is verified against HEAVY_WORK_MARKERS below,
+        // so an entry that performs heavy work is refused regardless of the
+        // reason string. Empty today: the previously-exempt distro-matrix lane
+        // is now GATED.
+        const OUT_OF_SCOPE_LANE_DIRS: &[(&str, &str)] = &[];
         let walked_heavy_dirs = [
             "tests/integration/live",
             "tests/integration/containers",
             "tests/integration/cloud",
             "tests/host-integration/hardware",
             "tests/benchmark",
+            "tests/integration/distro-matrix",
         ];
 
-        // Census: every subdirectory of the lane parents must be classified
-        // exactly once, and every GATED directory that exists must be walked.
+        // Census: every entry under the lane parents must be classified.
+        // Subdirectories are classified as GATED (walked; every entrypoint must
+        // self-guard) or OUT_OF_SCOPE (verified free of heavy work). Regular
+        // files *directly* under a lane parent are classified too - an earlier
+        // form only descended into subdirectories, so a heavy `.sh` dropped
+        // straight into tests/integration/ escaped the census entirely. A loose
+        // entrypoint is folded into the guarded set; loose data and
+        // sibling-sourced libraries contribute nothing.
+        let mut loose_entrypoints: Vec<PathBuf> = Vec::new();
         for parent_rel in ["tests/integration", "tests/host-integration"] {
             let parent = root.join(parent_rel);
             let Ok(entries) = fs::read_dir(&parent) else {
@@ -3013,6 +3173,12 @@ mod tests {
                 let meta = fs::symlink_metadata(&path)
                     .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
                 if !meta.file_type().is_dir() {
+                    // A file directly under the lane parent. Classify it with
+                    // the same entrypoint-vs-library rule the lane walk uses; a
+                    // heavy entrypoint here must still self-guard.
+                    if let Some(entrypoint) = heavy_entrypoint(&path, &meta) {
+                        loose_entrypoints.push(entrypoint);
+                    }
                     continue;
                 }
                 let name = path
@@ -3027,8 +3193,8 @@ mod tests {
                     "lane directory {parent_rel}/{name} is not classified exactly once: classify \
                      it as GATED (add it to GATED_LANE_DIRS and to the walked heavy set so its \
                      entrypoints self-guard) or OUT_OF_SCOPE (add it to OUT_OF_SCOPE_LANE_DIRS \
-                     with the reason it holds no slot). A new heavy lane must not appear silently \
-                     unguarded."
+                     and ensure it performs no build/container/VM/sudo/device work). A new heavy \
+                     lane must not appear silently unguarded."
                 );
                 if gated {
                     let walked = walked_heavy_dirs.iter().any(|w| root.join(w) == path);
@@ -3037,6 +3203,21 @@ mod tests {
                         "GATED lane directory {parent_rel}/{name} is classified but not in the \
                          walked heavy set; add it so its entrypoints are required to self-guard"
                     );
+                }
+                if out_of_scope {
+                    // The exemption is only honoured if it is *checked*: a lane
+                    // declared out of scope must actually perform no heavy work.
+                    // A comment string is not enough - that is precisely how the
+                    // heavy distro-matrix lane stayed exempt for a round.
+                    if let Some((file, kind)) = lane_heavy_work_marker(&path) {
+                        panic!(
+                            "OUT_OF_SCOPE lane {parent_rel}/{name} is not actually out of scope: \
+                             {} performs {kind} work. An exemption must be justified by a checked \
+                             property, not a comment; gate the lane (move it to GATED_LANE_DIRS \
+                             and the walked set) instead of exempting it.",
+                            file.display()
+                        );
+                    }
                 }
             }
         }
@@ -3050,6 +3231,9 @@ mod tests {
         for dir in walked_heavy_dirs {
             entrypoints.extend(collect_heavy_entrypoints(&root.join(dir)));
         }
+        // Loose entrypoints discovered directly under the lane parents (none
+        // today) must be gated exactly like lane entrypoints.
+        entrypoints.extend(loose_entrypoints);
         let perf = root.join("tests/unit/gates/performance-budgets.sh");
         assert!(
             perf.is_file(),
@@ -3079,6 +3263,19 @@ mod tests {
             container_count >= 1,
             "expected the type-9 container lane entrypoints to be discovered and gated; found \
              {container_count}"
+        );
+
+        // The distro-matrix Tier-1 lane is genuinely heavy (sudo + /dev/kvm +
+        // cargo build --release --workspace). It was exempt by comment for a
+        // round; it must now be discovered and gated like any other lane.
+        let distro_count = entrypoints
+            .iter()
+            .filter(|p| p.starts_with(root.join("tests/integration/distro-matrix")))
+            .count();
+        assert!(
+            distro_count >= 1,
+            "expected the distro-matrix Tier-1 entrypoint to be discovered and gated; found \
+             {distro_count}"
         );
         assert!(
             !entrypoints
@@ -3198,6 +3395,101 @@ mod tests {
             entrypoints.contains(&perf),
             "the performance-budgets entrypoint must be in the guarded set so static.sh's direct \
              invocation cannot bypass the semaphore"
+        );
+    }
+
+    /// The OUT_OF_SCOPE escape hatch must be backed by a *checked property*, not
+    /// a comment. Prove it has teeth: the census's heavy-work scanner would
+    /// refuse to exempt the distro-matrix lane, because that lane genuinely
+    /// performs sudo, device, and build work. If someone re-added distro-matrix
+    /// to OUT_OF_SCOPE_LANE_DIRS, the census's out_of_scope branch would panic
+    /// with exactly this detection.
+    #[test]
+    fn out_of_scope_exemption_is_refused_for_a_lane_that_does_heavy_work() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("packages/xtask resolves to a repo root");
+        let distro = root.join("tests/integration/distro-matrix");
+        let hit = lane_heavy_work_marker(&distro);
+        assert!(
+            hit.is_some(),
+            "the distro-matrix lane must be detected as performing heavy work so it can never be \
+             exempted by comment"
+        );
+        // A genuinely inert lane must scan clean, so the mechanism does not
+        // reject every exemption outright - it rejects only lanes that actually
+        // perform heavy work.
+        let inert = Scratch::new("inert-lane");
+        fs::write(inert.path().join("notes.md"), "just documentation\n").unwrap();
+        fs::write(inert.path().join("data.txt"), "1 2 3\n").unwrap();
+        assert!(
+            lane_heavy_work_marker(inert.path()).is_none(),
+            "an inert lane performs no heavy work and must scan clean"
+        );
+    }
+
+    /// The entrypoint-vs-library classification is per-file and content-based,
+    /// not a `basename == "lib.sh"` skip. A sibling-sourced non-executable
+    /// `lib.sh` is a library; an executable file is always an entrypoint even
+    /// when named `lib.sh`; and a non-executable `.sh` that nobody sources is
+    /// treated as an ungated entrypoint so it cannot bypass the census by name.
+    #[test]
+    fn entrypoint_and_library_are_classified_by_property_not_by_basename() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("packages/xtask resolves to a repo root");
+
+        // The real container lib.sh: non-executable and sourced by a sibling.
+        let container_lib = root.join("tests/integration/containers/lib.sh");
+        let container_meta =
+            fs::symlink_metadata(&container_lib).expect("the container lib.sh exists");
+        assert!(
+            heavy_entrypoint(&container_lib, &container_meta).is_none(),
+            "a sibling-sourced, non-executable lib.sh must classify as a library, not an \
+             entrypoint"
+        );
+        assert!(is_sibling_sourced_library(&container_lib));
+
+        // The line-level source matcher recognises the `. \"$HERE/lib.sh\"`
+        // shape and ignores unrelated lines and mere mentions.
+        assert!(line_sources_basename("  . \"$HERE/lib.sh\"", "lib.sh"));
+        assert!(line_sources_basename("source ./helpers.sh", "helpers.sh"));
+        assert!(!line_sources_basename(
+            "# mentions lib.sh in a comment",
+            "lib.sh"
+        ));
+        assert!(!line_sources_basename("echo lib.sh", "lib.sh"));
+
+        // A scratch tree lets us assert the executable-name and unsourced cases
+        // without depending on fixtures that must not exist in the repo.
+        let scratch = Scratch::new("classify-file");
+        let exec_lib = scratch.path().join("lib.sh");
+        fs::write(&exec_lib, "#!/usr/bin/env bash\n").unwrap();
+        fs::set_permissions(&exec_lib, fs::Permissions::from_mode(0o755)).unwrap();
+        let exec_meta = fs::symlink_metadata(&exec_lib).unwrap();
+        assert!(
+            heavy_entrypoint(&exec_lib, &exec_meta).is_some(),
+            "an executable file named lib.sh is still an entrypoint and must be gated"
+        );
+
+        let orphan = scratch.path().join("orphan.sh");
+        fs::write(&orphan, "#!/usr/bin/env bash\n").unwrap();
+        fs::set_permissions(&orphan, fs::Permissions::from_mode(0o644)).unwrap();
+        let orphan_meta = fs::symlink_metadata(&orphan).unwrap();
+        assert!(
+            heavy_entrypoint(&orphan, &orphan_meta).is_some(),
+            "a non-executable .sh that no sibling sources is not a library; it must be treated as \
+             an ungated entrypoint and flagged"
+        );
+
+        let data = scratch.path().join("fixture.txt");
+        fs::write(&data, "inert\n").unwrap();
+        let data_meta = fs::symlink_metadata(&data).unwrap();
+        assert!(
+            heavy_entrypoint(&data, &data_meta).is_none(),
+            "an inert data file is neither an entrypoint nor a library"
         );
     }
 }
