@@ -638,7 +638,7 @@ spec:
 | `externalAttachment.mode` | `macvtap` | `external-attachment-mode-invalid` |
 | `externalAttachment.parentInterface` | Linux IfName syntax; resolves through trusted Host inventory to one physical NIC | `external-parent-interface-invalid`, `external-parent-interface-not-found` |
 | `externalAttachment.macvtapMode` | `bridge\|private\|vepa\|passthru` | `external-macvtap-mode-invalid` |
-| `externalAttachment.sharingPolicy` | defaults `exclusive`; `multiplexed` must be explicitly authored, requires `macvtapMode=bridge`, and is bounded by the signed Provider quota | `external-sharing-policy-invalid`, `external-physical-nic-conflict` |
+| `externalAttachment.sharingPolicy` | defaults `exclusive`; `multiplexed` must be explicitly authored, requires `macvtapMode=bridge`, requires every multiplexing holder to be in the same Zone, and is bounded by the signed Provider quota | `external-sharing-policy-invalid`, `external-physical-nic-conflict`, `external-physical-nic-cross-zone-l2` |
 | `externalAttachment.egress.allowedCidrs` | No overlap with any Network CIDR | `network-cidr-conflict` |
 | IfName collision | All derived IfNames unique across Hosts | `ifname-collision` |
 
@@ -650,7 +650,8 @@ Core resolves `parentInterface` to a non-reversible
 index before any Provider or broker effect. A second same- or cross-Zone
 exclusive claim, a mixed exclusive/multiplexed claim, or any multiplexed
 non-bridge claim fails with `external-physical-nic-conflict` and no macvtap or
-VMM spawn.
+VMM spawn; a `bridge` multiplex whose holders span two Zones fails with
+`external-physical-nic-cross-zone-l2` (INV-NET-011) with no host effect.
 
 ### 6.3 Network status schema
 
@@ -716,7 +717,7 @@ never stored in or read from the public resource store.
 | `FirewallReady` (guest) | Guest-agent reports `nft-applied` readiness predicate | `nft-not-applied` |
 | `DnsReady` | Guest-agent reports `routes-applied` and dnsmasq DNS socket bound | `dns-not-ready` |
 | `CidrConflict` | No CIDR overlap detected | `network-cidr-conflict` |
-| `ExternalNicAuthorityReady` | Core admitted/adopted the Host-global physical-NIC claim, or no external attachment is configured | `external-physical-nic-claimed`, `external-physical-nic-conflict`, `external-nic-owner-ambiguous`, `not-required` |
+| `ExternalNicAuthorityReady` | Core admitted/adopted the Host-global physical-NIC claim, or no external attachment is configured | `external-physical-nic-claimed`, `external-physical-nic-conflict`, `external-physical-nic-cross-zone-l2`, `external-nic-owner-ambiguous`, `not-required` |
 | `ExternalAttachmentReady` | macvtap interface in net VM Ready (if externalAttachment≠null) | `macvtap-not-ready` |
 | `MdnsReady` | mDNS Process(es) in Ready phase (if mdns.enable) | `mdns-process-not-ready` |
 
@@ -1582,7 +1583,7 @@ The signed Provider descriptor classifies every non-null
 authorityScope: physical-device            # Host-global index scope
 authorityKey: external-physical-nic/v1     # Core-derived opaque key class
 cardinality: zero-or-one
-arbitration: exclusive                     # multiplexed only for explicit bridge policy
+arbitration: exclusive                     # multiplexed only for explicit same-Zone bridge policy
 authorityRef: Network/work-net
 duplicateConflict: external-physical-nic-conflict
 ownerProof: network-resource-and-vmm-process-identity
@@ -1596,11 +1597,17 @@ quota:
 The selector name is not the authority key. Core resolves it to trusted
 physical-NIC identity, derives the opaque digest, and indexes
 `(Host, external-physical-nic, opaqueKeyDigest)` across all Zones on that Host.
+The authority binds an isolation domain equal to the claimant's Zone UID.
 `passthru`, `private`, and `vepa` are always exclusive. `bridge` defaults
 exclusive and may be multiplexed only when every holder explicitly declares
-`sharingPolicy: multiplexed` and the signed quota admits it. Core retains one
-authority owner and treats additional admitted Networks as bounded holders; no
-holder opens the backing a second time.
+`sharingPolicy: multiplexed`, every holder belongs to the same Zone (the same
+isolation domain), and the signed quota admits it. A `bridge` multiplex whose
+holders span two Zones is categorically rejected fail closed with
+`external-physical-nic-cross-zone-l2`, because those macvtap endpoints would
+share one L2 broadcast domain and work and personal Zones never share an L2
+bridge. Core retains one authority owner and treats additional admitted
+same-Zone Networks as bounded holders; no holder opens the backing a second
+time.
 
 Changing `parentInterface`, `macvtapMode`, or `sharingPolicy` reports
 `UpgradeRequired` with disruptive recycle. The planner drains dependent
@@ -2037,6 +2044,7 @@ the network-local controller is authorized to resolve and call this service
 | `external-parent-interface-not-found` | Failed | Trusted Host inventory cannot resolve parentInterface |
 | `external-sharing-policy-invalid` | Failed | Multiplexing requested for a non-bridge mode or policy is incomplete |
 | `external-physical-nic-conflict` | Failed | Same Host physical NIC has an incompatible same- or cross-Zone authority claim |
+| `external-physical-nic-cross-zone-l2` | Failed | A `bridge`-mode macvtap multiplex of one physical NIC spans two Zones, which would share an L2 broadcast domain (INV-NET-011) |
 | `external-nic-owner-ambiguous` | Degraded | Restart could not prove the prior physical-NIC authority owner |
 | `mdns-process-not-ready` | Degraded | mDNS reflector or bridge not Ready |
 | `net-vm-artifact-missing` | Failed | netVmSystemArtifactId absent from artifact catalog |
@@ -2376,14 +2384,21 @@ outliving a USB claim or bypassing per-Network/per-busid authorization.
 ### INV-NET-011: Host-global external physical-NIC authority
 
 **Invariant**: Core admits `(Host, external-physical-nic,
-opaqueKeyDigest)` before any macvtap/VMM effect. `passthru`, `private`, and
-`vepa` are exclusive; `bridge` is exclusive unless all holders explicitly
-request compatible multiplexing. The rule spans Zones on a Host. Update/delete
-closes the VMM/macvtap before releasing the claim; restart requires exact owner
-proof.
+opaqueKeyDigest)` before any macvtap/VMM effect and binds an isolation domain
+equal to the claimant's Zone UID. `passthru`, `private`, and `vepa` are
+exclusive; `bridge` is exclusive unless all holders explicitly request
+compatible multiplexing AND share one isolation domain (one Zone). The rule
+spans Zones on a Host: a `bridge` multiplex whose holders span two Zones is
+categorically rejected fail closed with `external-physical-nic-cross-zone-l2`,
+independent of `sharingPolicy`. Update/delete closes the VMM/macvtap before
+releasing the claim; restart requires exact owner proof.
 
 **Rationale**: a Zone-local interface-name check cannot prevent two Zones from
-opening the same physical NIC or silently weakening exclusive modes.
+opening the same physical NIC or silently weakening exclusive modes. macvtap
+endpoints on one NIC in `bridge` mode share a single L2 broadcast domain, so
+admitting a cross-Zone multiplex would place two Zones on one L2 segment; the
+binding invariant that work and personal Zones never share an L2 bridge makes
+that combination categorically inadmissible at authority admission time.
 
 ---
 
@@ -2717,10 +2732,10 @@ On controller binary upgrade:
 | Current source | Current macvtap spawn resolves a raw parent interface but has no Host-global duplicate admission, sharing policy, authority status, or owner-proof lifecycle. |
 | Reuse action | adapt |
 | Destination | Network schema/Provider descriptor, Core authority index, Network reconcile/update/finalizer, runtime LaunchTicket resolver, and authority tests |
-| Detailed design | Register the external physical-NIC `AuthorityDescriptor`: Host-global `external-physical-nic/v1` Core-derived identity, `zero-or-one` authority, exclusive `passthru`/`private`/`vepa`, exclusive-by-default `bridge`, explicitly compatible bounded multiplexing only for bridge, `external-physical-nic-conflict`, exact owner proof, drain-release-reacquire update, forbidden export, and bounded FIFO holder policy. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the existing broker-internal macvtap-FD creation path behind mandatory Core authority admission. |
+| Detailed design | Register the external physical-NIC `AuthorityDescriptor`: Host-global `external-physical-nic/v1` Core-derived identity, `zero-or-one` authority, an isolation domain equal to the claimant's Zone UID, exclusive `passthru`/`private`/`vepa`, exclusive-by-default `bridge`, explicitly compatible bounded multiplexing only for `bridge` and only among holders in one Zone, categorical cross-Zone `bridge` multiplex rejection with `external-physical-nic-cross-zone-l2` (INV-NET-011), `external-physical-nic-conflict` for same-Zone incompatible claims, exact owner proof, drain-release-reacquire update, forbidden export, and bounded FIFO holder policy. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the existing broker-internal macvtap-FD creation path behind mandatory Core authority admission. |
 | Integration | Core preflight gates every runtime LaunchTicket/`SpawnRunner`; status reports bounded authority state and conditions; D091 update and finalizer close macvtap ownership before release. |
 | Data migration | Full d2b 3.0 reset; no legacy authority import. |
-| Validation | `external_nic_authority.rs` covers Core-derived identity, same-/cross-Zone conflicts, explicit bridge multiplexing, incompatible policy, non-bridge multiplex denial, no-effect rejection, adoption ambiguity, owner transfer, disruptive update, release ordering, and redaction; Nix eval and host integration cover declared configuration and lifecycle. |
+| Validation | `external_nic_authority.rs` covers Core-derived identity, same-/cross-Zone conflicts, explicit same-Zone bridge multiplexing, categorical cross-Zone bridge multiplex rejection with `external-physical-nic-cross-zone-l2` and no host effect (INV-NET-011), incompatible policy, non-bridge multiplex denial, no-effect rejection, adoption ambiguity, owner transfer, disruptive update, release ordering, and redaction; Nix eval and host integration cover declared configuration and lifecycle. |
 | Removal proof | The old direct macvtap spawn path is unreachable unless Core supplies an admitted authority claim in the LaunchTicket. |
 
 ---
@@ -2768,7 +2783,7 @@ budget.
 | `ifname_derive.rs` | IfName derivation determinism; collision detection; 15-byte constraint; all role prefixes |
 | `cidr_overlap.rs` | CIDR overlap matrix: same Network, cross-Network, external CIDR; all boundaries; no-false-positive at adjacent CIDRs |
 | `controller_state.rs` | Full reconcile state machine: Normal path; CIDR conflict; User not Ready; Volume error; Guest timeout; agent reload failure; attachment removal and finalizer issue generation-fenced `DeletePersistentTap` only after Guest/VMM FD closure, retain handles across transient retry, refresh on stale generation, block on foreign marker, and accept validated absence; all remaining child ordering; external authority release after VMM/macvtap close; adoption on restart; Network-owned drift detection |
-| `external_nic_authority.rs` | Core-derived Host-global identity; same-/cross-Zone exclusive collision; non-bridge multiplex denial; explicit compatible bridge multiplex; mixed-policy conflict; no effect before admission; owner-proof adoption/ambiguity; owner transfer; update/release ordering; no raw identity in status |
+| `external_nic_authority.rs` | Core-derived Host-global identity; same-/cross-Zone exclusive collision; non-bridge multiplex denial; explicit same-Zone compatible bridge multiplex; categorical cross-Zone bridge multiplex rejection (`external-physical-nic-cross-zone-l2`, no effect); mixed-policy conflict; no effect before admission; owner-proof adoption/ambiguity; owner transfer; update/release ordering; no raw identity in status |
 | `firewall_ownership.rs` | Host and net-VM intents contain no TCP/3240/USBIP rule; device-usbip marker/rule churn does not alter Network digest or `FirewallReady` |
 | `conformance.rs` | Provider toolkit black-box conformance suite; descriptor validation; ResourceType schema fingerprint |
 | `fault_injection.rs` | `NetworkEffectPort` returns each `EffectError` variant; `DeletePersistentTap` transient/generation/ownership errors have exact retry/terminal classification; each step fails independently; reconcile context has no broker socket; provider crate has no broker import |
@@ -2783,7 +2798,7 @@ budget.
 | `agent_reload.rs` | Agent service Reload() call; nft-applied + routes-applied predicates; config digest match | `make test-host-integration` |
 | `mdns_reflector.rs` | mDNS reflector Process lifecycle; create when mdns.enable; delete on Network delete | `make test-integration` (container) |
 | `delete_sequence.rs` | Full finalizer ordering: workload Guest/VMM FD closure, generation-fenced `DeletePersistentTap` confirmation, Process Deleted events, Volume attachment removal, net-VM Guest Deleted, Volume Deleted, fabric cleanup; transient delete retry retains the handle | `make test-host-integration` |
-| `external_nic_lifecycle.rs` | Fake physical NIC: Host-global claim before SpawnRunner; cross-Zone conflict has no effect; explicit bridge multiplex; update drain/reacquire; delete closes macvtap before claim release | `make test-host-integration` |
+| `external_nic_lifecycle.rs` | Fake physical NIC: Host-global claim before SpawnRunner; cross-Zone conflict has no effect; explicit same-Zone bridge multiplex; cross-Zone bridge multiplex rejected (`external-physical-nic-cross-zone-l2`) with no macvtap effect; update drain/reacquire; delete closes macvtap before claim release | `make test-host-integration` |
 
 ### 26.4 Eval tests (Layer-1, `tests/unit/nix/cases/`)
 
@@ -2795,7 +2810,7 @@ budget.
 | `net-vm-artifact-id-eval.nix` | `net-vm-base` artifact ID format; `nixos-system` type; no path separator |
 | `user-no-managed-by-eval.nix` | `User/net-local-controller` spec contains no `managedBy`; `ownerRef` is in metadata |
 | `provider-state-volume-eval.nix` | ProviderStateSet query-time membership returns empty for `Provider/network-local`; per-Network config Volumes (ownerRef: `Network/<name>`) are excluded and remain runtime/config operational Volumes |
-| `network-external-nic-authority-eval.nix` | parent/mode/sharing schema; non-bridge multiplex rejection; declared same-/cross-Zone conflicts; explicit compatible bridge multiplex policy |
+| `network-external-nic-authority-eval.nix` | parent/mode/sharing schema; non-bridge multiplex rejection; declared same-/cross-Zone conflicts; explicit same-Zone compatible bridge multiplex policy; declared cross-Zone bridge multiplex rejected with `external-physical-nic-cross-zone-l2` |
 
 ### 26.5 Drift gates (Layer-1)
 

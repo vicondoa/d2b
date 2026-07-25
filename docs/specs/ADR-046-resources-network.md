@@ -269,14 +269,20 @@ index key is Host-global:
 `(Host, external-physical-nic, opaqueKeyDigest)`. The digest is never supplied
 by a caller or exposed in spec, status, audit, or telemetry.
 
-`passthru`, `private`, and `vepa` always require exclusive arbitration.
-`bridge` is also exclusive by default. It becomes multiplexed only when every
-claimant explicitly authors `sharingPolicy: multiplexed` and the signed
+The Host-global authority binds an isolation domain equal to the claimant's
+Zone UID. `passthru`, `private`, and `vepa` always require exclusive
+arbitration. `bridge` is also exclusive by default. It becomes multiplexed only
+when every claimant explicitly authors `sharingPolicy: multiplexed`, every
+claimant belongs to the same Zone (the same isolation domain), and the signed
 Provider quota admits another holder. An absent policy defaults exclusive; a
 mixed exclusive/multiplexed set, a non-bridge multiplexed claim, or quota excess
-fails closed with
-`external-physical-nic-conflict` before macvtap creation or VMM spawn. Because
-the index is Host-global, this rule applies across Zones on the same Host.
+fails closed with `external-physical-nic-conflict` before macvtap creation or
+VMM spawn. Because the index is Host-global, these checks span every Zone on the
+Host: two claimants in different Zones that would multiplex one physical NIC in
+`bridge` mode share a single L2 broadcast domain, so that combination is
+categorically rejected fail closed with `external-physical-nic-cross-zone-l2`
+regardless of `sharingPolicy`. Bridge multiplexing is admitted only within a
+single Zone; work and personal Zones never share an L2 bridge (INV-NET-010).
 
 ### PortForwardSpec (inline in ExternalAttachmentSpec)
 
@@ -993,10 +999,13 @@ Before step 1, Core resolves `parentInterface` against trusted Host inventory
 and admits the Host-global `external-physical-nic/v1` authority claim. No
 macvtap or VMM effect is permitted until `ExternalNicAuthorityReady=True`.
 `passthru`, `private`, and `vepa` claims are exclusive. `bridge` is exclusive
-unless every concurrent claimant explicitly requests compatible multiplexing.
-A same- or cross-Zone conflict sets
-`ExternalNicAuthorityReady=False/external-physical-nic-conflict` and performs no
-host effect.
+unless every concurrent claimant explicitly requests compatible multiplexing and
+all such claimants share one isolation domain (one Zone UID). A same-Zone
+exclusive collision or mixed policy sets
+`ExternalNicAuthorityReady=False/external-physical-nic-conflict`; a cross-Zone
+`bridge` multiplex attempt sets
+`ExternalNicAuthorityReady=False/external-physical-nic-cross-zone-l2`
+(INV-NET-010). Either fails closed and performs no host effect.
 
 `parentInterface`, `macvtapMode`, or sharing-policy changes require a disruptive
 drain/recycle. Core drains the net VM and dependent attachments, releases the
@@ -1766,6 +1775,35 @@ bits are set on any process not already carrying them before the agent started.
 Host-integration counterpart: `tests/host-integration/guest-agent-cap-confinement.nix` -
 runNixOSTest asserts zero capability leakage to the host network namespace after
 guest-agent start.
+
+### INV-NET-010: external physical NIC bridge multiplexing never crosses a Zone L2 boundary
+
+**Invariant**: the Host-global `external-physical-nic/v1` authority binds an
+isolation domain equal to the claimant's Zone UID. A `bridge`-mode macvtap
+multiplex of one physical NIC MUST admit only claimants that share a single
+isolation domain (one Zone). Two `externalAttachment` claims from different
+Zones that resolve to the same `(Host, external-physical-nic, opaqueKeyDigest)`
+in `bridge` mode MUST be rejected fail closed with
+`external-physical-nic-cross-zone-l2`, regardless of `sharingPolicy`; no macvtap
+or VMM effect is performed for the rejected claim.
+
+**Rationale**: macvtap endpoints on one physical NIC in `bridge` mode share a
+single L2 broadcast domain. Admitting a cross-Zone multiplex would place two
+Zones on one L2 segment, defeating Zone network isolation. This repository's
+binding invariant is that work and personal realms never share a gateway guest
+or an L2 bridge; the isolation-domain check makes that categorical at authority
+admission time rather than relying on operator discipline. Same-Zone bridge
+multiplexing remains permitted because those endpoints are already inside one
+isolation domain.
+
+**Test**: `packages/d2b-provider-network-local/tests/external_nic_cross_zone_l2.rs` -
+two Networks in different Zones authoring `sharingPolicy: multiplexed`,
+`macvtapMode: bridge` against one fake physical NIC are rejected with
+`external-physical-nic-cross-zone-l2` and produce no host effect; a same-Zone
+multiplexed pair against the same NIC is admitted; a cross-Zone pair that would
+have collided in `passthru`/`private`/`vepa` still reports
+`external-physical-nic-conflict`. Nix eval covers a declared cross-Zone bridge
+multiplex rejected at build time.
 
 ## Azure/ACA scope boundary
 
@@ -2675,7 +2713,7 @@ firewall projection aligns onto the same projection-scoped contract).
 | Current source | `tests/unit/nix/cases/net-vm-network.nix`; `tests/golden/pinned/net-vm-bundle-gate.txt`; `tests/golden/pinned/net-canaries.txt`; `tests/golden/pinned/host-prepare-network.txt`; `tests/host-integration/bridge-isolation.nix`; `tests/integration/live/network-isolation.sh` |
 | Reuse action | adapt |
 | Destination | `tests/unit/nix/cases/net-vm-network.nix` (adapted to v3 resource API); updated golden pins; `tests/host-integration/bridge-isolation.nix` (adapted); `packages/d2b-priv-broker/tests/{bridge_lifecycle,persistent_tap_lifecycle}.rs` (new hermetic broker tests). Provider crate test directories: `packages/d2b-provider-network-local/tests/` - hermetic Cargo integration tests (conformance suite, controller state machine, CIDR validation vectors, IfName determinism, invariant tests INV-NET-001-007, reconcile/observe/finalize with deterministic clock, fault injection); `packages/d2b-provider-network-local/integration/` - container/Host/Guest lifecycle fixtures invoked by `make test-integration` (bridge isolation, east-west double opt-in, nftables drift detection, persistent-tap and macvtap lifecycle). Both directories required by package policy. |
-| Detailed design | Rust integration tests: NetworkSpec CIDR validation golden vectors; AttachmentSpec index uniqueness; ExternalAttachmentSpec mutual-exclusion validation; IfName derivation determinism; CIDR overlap arithmetic; INV-NET-001 through INV-NET-009 invariant tests; reconcile/observe/finalize state machine (deterministic clock). Broker tests: `create_bridge_applies_ipv6_sysctl` (INV-NET-002 layer 1); `delete_bridge_is_idempotent`; `delete_bridge_never_cascades_attached_tap`; `create_bridge_parameters_match_spec` (MTU, STP disabled, multicast snooping disabled); `delete_persistent_tap_pairs_with_create`; `delete_persistent_tap_absent_is_idempotent_after_ownership_validation`; `delete_persistent_tap_rejects_stale_network_generation`; `delete_persistent_tap_rejects_stale_attachment_generation`; `delete_persistent_tap_foreign_marker_fails_closed`; `delete_persistent_tap_request_and_audit_have_no_ifname_or_path`; `apply_nftables_projection_apply_mutates_only_owned_marker`; `apply_nftables_projection_apply_preserves_sibling_network_and_usbip_markers`; `apply_nftables_projection_remove_deletes_only_owned_marker_never_whole_table`; `apply_nftables_projection_concurrent_apply_different_projections_commute`; `apply_nftables_projection_same_projection_generation_fence_rejects_stale`; `apply_nftables_projection_validated_absence_is_idempotent`; `apply_nftables_projection_foreign_marker_fails_closed`; `apply_nftables_projection_digest_is_projection_scoped`; `apply_nftables_projection_request_and_audit_have_no_rule_text_ifname_or_path`. Controller tests: `reconcile_applies_sysctl_defense_in_depth` (INV-NET-002 layer 2); `volume_created_before_guest`; `guest_not_created_until_volume_ready`; `agent_process_created_after_guest`; `removed_attachment_waits_for_vmm_then_delete_persistent_tap`; `finalizer_order_vmm_then_taps_then_agent_then_guest_then_volume_then_bridges`; `delete_persistent_tap_transient_retry_retains_handle`; `delete_persistent_tap_generation_mismatch_refreshes`; `delete_persistent_tap_foreign_marker_blocks_finalizer`; `config_only_spec_change_updates_volume_no_guest_restart` (INV-NET-008); `finalizer_calls_delete_bridge`; `mdns_process_created_on_enable`; `mdns_process_deleted_on_disable`; `host_capability_leakage` (INV-NET-009). nix-unit: INV-NET-001 lib.mkForce assertion; net-VM artifact has no inline mDNS service and no per-Network dnsmasq/nftables data (INV-NET-008); Network emitter CIDR constraint assertions; no `systemd.network.netdevs` bridge entries emitted. Host integration: bridge isolation with east-west opt-in; nftables drift detection; persistent-tap and macvtap create/delete lifecycle; config Volume update propagates to guest-agent without Guest restart; `tests/host-integration/guest-agent-cap-confinement.nix` (INV-NET-009 zero leakage to host netns). |
+| Detailed design | Rust integration tests: NetworkSpec CIDR validation golden vectors; AttachmentSpec index uniqueness; ExternalAttachmentSpec mutual-exclusion validation; IfName derivation determinism; CIDR overlap arithmetic; INV-NET-001 through INV-NET-010 invariant tests; reconcile/observe/finalize state machine (deterministic clock). Broker tests: `create_bridge_applies_ipv6_sysctl` (INV-NET-002 layer 1); `delete_bridge_is_idempotent`; `delete_bridge_never_cascades_attached_tap`; `create_bridge_parameters_match_spec` (MTU, STP disabled, multicast snooping disabled); `delete_persistent_tap_pairs_with_create`; `delete_persistent_tap_absent_is_idempotent_after_ownership_validation`; `delete_persistent_tap_rejects_stale_network_generation`; `delete_persistent_tap_rejects_stale_attachment_generation`; `delete_persistent_tap_foreign_marker_fails_closed`; `delete_persistent_tap_request_and_audit_have_no_ifname_or_path`; `apply_nftables_projection_apply_mutates_only_owned_marker`; `apply_nftables_projection_apply_preserves_sibling_network_and_usbip_markers`; `apply_nftables_projection_remove_deletes_only_owned_marker_never_whole_table`; `apply_nftables_projection_concurrent_apply_different_projections_commute`; `apply_nftables_projection_same_projection_generation_fence_rejects_stale`; `apply_nftables_projection_validated_absence_is_idempotent`; `apply_nftables_projection_foreign_marker_fails_closed`; `apply_nftables_projection_digest_is_projection_scoped`; `apply_nftables_projection_request_and_audit_have_no_rule_text_ifname_or_path`. Controller tests: `reconcile_applies_sysctl_defense_in_depth` (INV-NET-002 layer 2); `volume_created_before_guest`; `guest_not_created_until_volume_ready`; `agent_process_created_after_guest`; `removed_attachment_waits_for_vmm_then_delete_persistent_tap`; `finalizer_order_vmm_then_taps_then_agent_then_guest_then_volume_then_bridges`; `delete_persistent_tap_transient_retry_retains_handle`; `delete_persistent_tap_generation_mismatch_refreshes`; `delete_persistent_tap_foreign_marker_blocks_finalizer`; `config_only_spec_change_updates_volume_no_guest_restart` (INV-NET-008); `finalizer_calls_delete_bridge`; `mdns_process_created_on_enable`; `mdns_process_deleted_on_disable`; `host_capability_leakage` (INV-NET-009). nix-unit: INV-NET-001 lib.mkForce assertion; net-VM artifact has no inline mDNS service and no per-Network dnsmasq/nftables data (INV-NET-008); Network emitter CIDR constraint assertions; no `systemd.network.netdevs` bridge entries emitted. Host integration: bridge isolation with east-west opt-in; nftables drift detection; persistent-tap and macvtap create/delete lifecycle; config Volume update propagates to guest-agent without Guest restart; `tests/host-integration/guest-agent-cap-confinement.nix` (INV-NET-009 zero leakage to host netns). |
 | QEMU TAP tests | Add `qemu_tap_launch_order`, `qemu_tap_owned_fd_lifetime`, `qemu_tap_failed_launch_cleanup`, and `qemu_tap_no_bus_serialization` to the network-local/provider-supervisor integration fixture. Assert the exact `CreatePersistentTap → SetBridgePortFlags → LaunchTicket` chain, direct `OwnedFd` handoff, CLOEXEC discipline, close-before-generation-fenced-delete on every failed launch, no operation-scoped `CreateTapFd`, and no fd/broker DTO at the qemu controller or bus boundary. |
 | Integration | Pinned tests registered in `tests/golden/pinned/`; nix-unit cases in `tests/unit/nix/cases/`; host integration in `tests/host-integration/` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2721,8 +2759,8 @@ firewall projection aligns onto the same projection-scoped contract).
 | Current source | Existing macvtap spawn path resolves `parentInterface` but has no cross-Zone authority admission or compatible-sharing contract |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/network.rs` external-attachment sharing schema/status; `packages/d2b-core-controller/src/authority.rs` Core-derived physical-NIC identity and Host-global claim; Provider/network-local descriptor/reconcile/finalizer |
-| Detailed design | Resolve operator-declared `parentInterface` against trusted Host inventory and derive an opaque `external-physical-nic/v1` digest; index `(Host, external-physical-nic, opaqueKeyDigest)` before any macvtap/VMM effect. `passthru`, `private`, and `vepa` are exclusive. `bridge` defaults exclusive and is multiplexed only under explicitly authored compatible policy. Use typed `external-physical-nic-conflict`; expose only bounded authority availability/holder-count/queue/arbitration/update-currency and conditions; keep digest, interface identity, and owner proof private. Parent/mode/policy update drains and releases the old claim before replacement; deletion closes macvtap/VMM ownership before releasing the claim; restart adopts exact owner proof and quarantines ambiguity. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the existing private macvtap-FD spawn path; add authority admission before it. |
+| Detailed design | Resolve operator-declared `parentInterface` against trusted Host inventory and derive an opaque `external-physical-nic/v1` digest; index `(Host, external-physical-nic, opaqueKeyDigest)` before any macvtap/VMM effect. The authority binds an isolation domain equal to the claimant's Zone UID. `passthru`, `private`, and `vepa` are exclusive. `bridge` defaults exclusive and is multiplexed only under explicitly authored compatible policy shared by claimants in one isolation domain (one Zone); a cross-Zone `bridge` multiplex of the same physical NIC is categorically rejected fail closed with `external-physical-nic-cross-zone-l2` because it would place two Zones on one L2 broadcast domain (INV-NET-010; work and personal Zones never share an L2 bridge). Use typed `external-physical-nic-conflict` for same-Zone exclusive/mixed-policy/quota conflicts and `external-physical-nic-cross-zone-l2` for the cross-Zone L2 rejection; expose only bounded authority availability/holder-count/queue/arbitration/update-currency and conditions; keep digest, interface identity, and owner proof private. Parent/mode/policy update drains and releases the old claim before replacement; deletion closes macvtap/VMM ownership before releasing the claim; restart adopts exact owner proof and quarantines ambiguity. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt the existing private macvtap-FD spawn path; add authority admission before it. |
 | Integration | Network validation and Core authority preflight gate runtime-cloud-hypervisor LaunchTicket/`SpawnRunner`; the finalizer and D091 update planner release in dependency order |
 | Data migration | Full d2b 3.0 reset; no authority ledger import |
-| Validation | Hermetic authority tests cover same-Zone and cross-Zone exclusive collisions, mixed-policy conflicts, non-bridge multiplex rejection, explicit compatible bridge multiplex admission, Core-derived key equality for two selectors resolving to one fake NIC, caller-supplied digest rejection, no-effect conflict, owner-proof adoption/ambiguity, disruptive update, and release-after-close ordering. Nix eval covers schema and declared cross-Zone conflicts; host integration covers create/update/delete with a fake macvtap parent and status/condition transitions without raw identity exposure. |
+| Validation | Hermetic authority tests cover same-Zone and cross-Zone exclusive collisions, mixed-policy conflicts, non-bridge multiplex rejection, explicit compatible bridge multiplex admission within one Zone, categorical cross-Zone `bridge` multiplex rejection with `external-physical-nic-cross-zone-l2` and no host effect (INV-NET-010), Core-derived key equality for two selectors resolving to one fake NIC, caller-supplied digest rejection, no-effect conflict, owner-proof adoption/ambiguity, disruptive update, and release-after-close ordering. Nix eval covers schema, declared cross-Zone conflicts, and a declared cross-Zone bridge multiplex rejected at build time; host integration covers create/update/delete with a fake macvtap parent and status/condition transitions without raw identity exposure. |
 | Removal proof | None - authority admission is new; existing direct macvtap spawn becomes unreachable without a claim. |
