@@ -25,10 +25,14 @@
 #
 # Trust model. This helper derives the canonical checkout - and therefore the
 # xtask it builds and runs - from its OWN on-disk location (BASH_SOURCE), never
-# from the caller-supplied ROOT or from CARGO_TARGET_DIR. A caller that exports
-# a bogus ROOT or a relative CARGO_TARGET_DIR pointing at a planted xtask can no
-# longer make verify-slot succeed without a slot: the guard always rebuilds and
-# runs the xtask that belongs to this checkout.
+# from the caller-supplied ROOT or from CARGO_TARGET_DIR. The build target is
+# likewise pinned to this checkout's packages/target: the caller's
+# CARGO_TARGET_DIR is deliberately ignored, so an absolute or relative value
+# pointing at a planted xtask cannot make verify-slot succeed without a slot.
+# The build also runs with the caller's build-affecting Cargo/Rust environment
+# stripped, so a hostile rustc, rustc-wrapper, cargo config override, or
+# RUSTFLAGS cannot substitute the binary; only the in-checkout, trusted
+# packages/.cargo/config.toml governs the real toolchain wrapper.
 #
 # Usage, from a heavy entrypoint after computing ROOT:
 #
@@ -68,35 +72,44 @@ d2b_heavy_gate_reexec() {
     '' | *[!0-9]*) depth=0 ;;
   esac
 
-  # Normalise the target dir to an absolute path anchored at the canonical
-  # packages dir, so a relative CARGO_TARGET_DIR resolves against the checkout
-  # rather than the caller's cwd.
-  local target
-  if [ -n "${CARGO_TARGET_DIR:-}" ]; then
-    case "$CARGO_TARGET_DIR" in
-      /*) target="$CARGO_TARGET_DIR" ;;
-      *) target="$packages/$CARGO_TARGET_DIR" ;;
-    esac
-  else
-    target="$packages/target"
-  fi
+  # Canonical, checkout-anchored build target. The caller's CARGO_TARGET_DIR is
+  # NOT consulted (see the trust model): honouring it - even when absolute -
+  # would let a hostile environment point the target at a planted xtask whose
+  # verify-slot returns success. The wrapper is always built into, and executed
+  # from, the target directory that belongs to THIS checkout.
+  local target="$packages/target"
+  local xtask="$target/debug/xtask"
 
   # Ensure freshness: ALWAYS rebuild from the canonical packages dir. Rebuilding
   # only when the binary is absent would run a stale pre-verify-slot xtask as-is;
   # it lacks the subcommand, fails, and the script re-execs through that same
   # stale gate whose child repeats - the unbounded loop this guard must avoid.
-  if ! (cd -- "$packages" && CARGO_TARGET_DIR="$target" cargo build --quiet -p xtask) >&2; then
-    echo "heavy-gate self-guard: cannot build xtask from $packages; failing closed" >&2
-    return 70
-  fi
-
-  local xtask="$target/debug/xtask"
-  if [ ! -x "$xtask" ]; then
-    echo "heavy-gate self-guard: xtask binary missing at $xtask after build; failing closed" >&2
-    return 70
-  fi
-
+  #
+  # The build runs in a subshell with the caller's build-affecting Cargo/Rust
+  # environment stripped so a planted toolchain cannot inject a substitute
+  # binary, and cargo's own stdout/stderr are discarded rather than forwarded:
+  # on failure we emit only a bounded, path-free label and the exit status, so
+  # the checkout location and any username-bearing path never leak.
   local rc=0
+  (
+    cd -- "$packages" 2>/dev/null \
+      && unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
+               RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER \
+               CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \
+               RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS \
+      && CARGO_TARGET_DIR="$target" cargo build --quiet -p xtask
+  ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "heavy-gate self-guard: xtask build failed under the pinned toolchain (exit $rc); failing closed" >&2
+    return 70
+  fi
+
+  if [ ! -x "$xtask" ]; then
+    echo "heavy-gate self-guard: the freshly built xtask is unavailable; failing closed" >&2
+    return 70
+  fi
+
+  rc=0
   "$xtask" heavy-gate verify-slot || rc=$?
   if [ "$rc" -eq 0 ]; then
     # Genuinely holds a slot. Drop the depth counter so it cannot leak into a

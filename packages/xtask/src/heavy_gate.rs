@@ -3492,4 +3492,111 @@ mod tests {
             "an inert data file is neither an entrypoint nor a library"
         );
     }
+
+    /// Drives the shell re-exec self-guard (`tests/tools/heavy-gate-reexec.sh`)
+    /// through bash with a stubbed `cargo` first on PATH, so its fail-closed
+    /// build and missing-binary paths can be exercised hermetically without a
+    /// real toolchain. `cargo_stub` is the body of an executable placed first
+    /// on PATH - exactly the hostile-cargo surface the guard must survive.
+    fn run_reexec_guard_with_stub_cargo(cargo_stub: &str) -> std::process::Output {
+        let _guard = exclusive();
+        let scratch = Scratch::new("reexec-guard");
+        let base = scratch.path();
+
+        // Reproduce the minimal checkout layout the guard resolves from
+        // BASH_SOURCE: <base>/tests/tools/heavy-gate-reexec.sh and
+        // <base>/packages/. The guard derives root/packages from the helper's
+        // own location, never from a supplied variable.
+        let tools = base.join("tests/tools");
+        fs::create_dir_all(&tools).unwrap();
+        fs::create_dir_all(base.join("packages")).unwrap();
+        let helper_src = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/tools/heavy-gate-reexec.sh"
+        ))
+        .expect("the shipped re-exec helper is readable");
+        let helper = tools.join("heavy-gate-reexec.sh");
+        fs::write(&helper, helper_src).unwrap();
+
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let cargo = bin.join("cargo");
+        fs::write(&cargo, cargo_stub).unwrap();
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path = match std::env::var("PATH") {
+            Ok(existing) => format!("{}:{}", bin.display(), existing),
+            Err(_) => bin.display().to_string(),
+        };
+
+        // The entrypoint argument is read only on the acquire (exec) path,
+        // which these fail-closed cases never reach, so a nonexistent path is
+        // fine. Paths carry no shell metacharacters, but quote defensively.
+        let script = format!(
+            ". '{helper}'\nd2b_heavy_gate_reexec '{base}' '{base}/tests/tools/entry.sh'\n",
+            helper = helper.display(),
+            base = base.display(),
+        );
+
+        Command::new("bash")
+            .arg("-c")
+            .arg(script)
+            .env("PATH", path)
+            .env_remove("D2B_HEAVY_GATE_REEXEC_DEPTH")
+            .stdin(Stdio::null())
+            .output()
+            .expect("bash runs the sourced self-guard")
+    }
+
+    #[test]
+    fn reexec_self_guard_fails_closed_and_redacts_when_the_build_fails() {
+        // A stub cargo that fails and prints a checkout-bearing diagnostic to
+        // stderr, standing in for a real build error whose verbatim text would
+        // otherwise disclose the checkout and a username-bearing path.
+        let secret = "/home/someone/leaky-checkout";
+        let stub = format!("#!/bin/sh\necho 'error[E0999]: {secret} build exploded' >&2\nexit 1\n");
+        let out = run_reexec_guard_with_stub_cargo(&stub);
+        assert_eq!(
+            out.status.code(),
+            Some(70),
+            "a failed xtask build must fail closed with exit 70"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("build failed"),
+            "the guard must emit a bounded build-failure label: {stderr}"
+        );
+        assert!(
+            !stderr.contains(secret),
+            "cargo's verbatim stderr - and the path it names - must never be forwarded: {stderr}"
+        );
+        assert!(
+            !stderr.contains("E0999"),
+            "no raw cargo diagnostic may leak into the guard's output: {stderr}"
+        );
+    }
+
+    #[test]
+    fn reexec_self_guard_fails_closed_when_the_built_binary_is_absent() {
+        // A stub cargo that "succeeds" without producing target/debug/xtask -
+        // exactly the fake success a hostile PATH could supply alongside no
+        // planted binary. With the target dir pinned to this checkout the guard
+        // cannot be pointed at a planted xtask, so a missing binary must fail
+        // closed rather than proceed unverified.
+        let out = run_reexec_guard_with_stub_cargo("#!/bin/sh\nexit 0\n");
+        assert_eq!(
+            out.status.code(),
+            Some(70),
+            "a successful build that yields no binary must fail closed with exit 70"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("unavailable"),
+            "the guard must emit a bounded missing-binary label: {stderr}"
+        );
+        assert!(
+            !stderr.contains("/debug/xtask"),
+            "the binary path (username-bearing) must not be disclosed: {stderr}"
+        );
+    }
 }
