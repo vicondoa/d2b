@@ -1,3 +1,15 @@
+### Added
+
+- Three ADR 0046 spec-literal drift lints run as fixture-independent
+  contract-test policy binaries in the mandatory policy gate: datetimes under
+  `docs/specs/**` must be exactly millisecond-precision RFC 3339
+  (`YYYY-MM-DDTHH:MM:SS.sssZ`), qualified ResourceType tokens must use the
+  `.d2bus.org.` infix, and the retry delay must be the integer `retryAfterMs`
+  scalar rather than a superseded duration-string form. Each rule enforces a
+  frozen decision that a hand enumeration had previously miscounted, and each
+  exempts only an explicitly marked line or the decision-register row that
+  defines the rule.
+
 ### Changed
 
 - The policy meta-gate now executes the fixture-independent contract-test

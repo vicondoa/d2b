@@ -131,13 +131,15 @@ run_policy_gate "pr-checklist-gate"         tests/unit/meta/pr-checklist-gate.sh
 run_policy_gate "ci-coverage"               tests/unit/meta/ci-coverage.sh
 
 # Fixture-independent contract-test policy binaries. These prove the dash ban,
-# the ADR 0046 manifest-drift bijection, and the changelog gate actually work.
-# They are excluded from `make test-rust`'s `cargo test --workspace` run and
-# skipped there under D2B_SKIP_FIXTURE_BUILD, so this mandatory target is their
-# only guaranteed execution point.
+# the ADR 0046 manifest-drift bijection, the changelog gate, and the ADR 0046
+# spec-literal drift lints (datetime precision, ResourceType grammar, retry
+# scalar shape) actually work. They are excluded from `make test-rust`'s
+# `cargo test --workspace` run and skipped there under D2B_SKIP_FIXTURE_BUILD,
+# so this mandatory target is their only guaranteed execution point.
 run_policy_cargo_binary "policy-dash-gate"        policy_dash_gate
 run_policy_cargo_binary "policy-adr046-work-items" policy_adr046_work_items
 run_policy_cargo_binary "policy-changelog-gate"   policy_changelog_gate
+run_policy_cargo_binary "policy-adr046-spec-literals" policy_adr046_spec_literals
 
 [ "$rc" -eq 0 ] || exit 1
 log "test-policy OK"
