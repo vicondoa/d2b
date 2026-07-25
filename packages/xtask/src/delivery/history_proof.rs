@@ -199,12 +199,15 @@ pub fn prove(sealed: &CandidateMaterial, current: &CandidateMaterial) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delivery::model::{DependencyEdge, GitObjectFormat, RepositoryRecord, fixtures};
+    use crate::delivery::model::{
+        DependencyEdge, ExpectedPullRequest, GitObjectFormat, RepositoryRecord, fixtures,
+    };
 
     fn rebased() -> CandidateMaterial {
         let mut material = fixtures::material();
         material.repository_set[0].base_oid = fixtures::oid(5);
         material.repository_set[0].head_oid = fixtures::oid(6);
+        material.repository_set[0].expected_pull_requests[0].head_oid = fixtures::oid(6);
         material
     }
 
@@ -288,6 +291,10 @@ mod tests {
             base_oid: fixtures::oid(7),
             head_oid: fixtures::oid(8),
             integration_tree_oid: fixtures::oid(9),
+            expected_pull_requests: vec![ExpectedPullRequest {
+                number: 1,
+                head_oid: fixtures::oid(8),
+            }],
         });
         let error = prove(&fixtures::material(), &changed).expect_err("content change");
         assert!(error.message().contains("repository set"), "{error}");

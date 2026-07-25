@@ -50,8 +50,12 @@ A merge-target document (the --target input) is:
 Every required check must read \"success\"; pending, failure, neutral, skipped, \
 cancelled, stale, timed_out, action_required, and startup_failure all fail \
 closed, as does a pull request with no required checks or a sealed repository \
-with no pull request. Every \"number\" is a positive integer identifying the \
-pull request (42 above is an example); 0 is rejected.
+with no pull request. The pull_requests array must name exactly the pull-request \
+set the snapshot bound - every sealed slice at its sealed head, and no \
+unexpected pull request - so a wave of parallel same-repository pull requests \
+cannot be declared eligible with a slice silently missing. Every \"number\" is a \
+positive integer identifying the pull request (42 above is an example); 0 is \
+rejected.
 
 Offline recipe (no network I/O happens inside this stage):
 
@@ -64,7 +68,7 @@ Offline recipe (no network I/O happens inside this stage):
       artifact_kind: \"d2b-delivery/merge-target\",
       schema_version: $s[0].schema_version,
       material: $s[0].material,
-      pull_requests: [ /* one object per repository, shaped as above */ ]
+      pull_requests: [ /* one object per pull request, shaped as above */ ]
     }' > merge-target.json
   cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target \
       --seal \"$SEAL\" --target merge-target.json --repo <logical-id>=<checkout-root>
@@ -171,7 +175,8 @@ impl WaveCommand {
             Self::Snapshot => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot --program NAME --wave ID \
                  --repo LOGICAL_ID=CHECKOUT_ROOT --base LOGICAL_ID=REVISION \
-                 [--head LOGICAL_ID=REVISION] [--edge FROM=TO] \
+                 --pull-request LOGICAL_ID=NUMBER:HEAD_REF [--head LOGICAL_ID=REVISION] \
+                 [--edge FROM=TO] \
                  [--generated NAME=LOGICAL_ID:PATH] [--dependency NAME=LOGICAL_ID:PATH] \
                  [--contract NAME=LOGICAL_ID:PATH] [--state-dir DIR]"
             }
@@ -207,7 +212,7 @@ impl WaveCommand {
     pub fn required_options(self) -> &'static [&'static str] {
         match self {
             Self::Help => &[],
-            Self::Snapshot => &["--program", "--wave", "--repo", "--base"],
+            Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
             Self::PanelRequest => &["--snapshot", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
@@ -910,7 +915,7 @@ mod tests {
         /// to the production constant by [`schema_version_moves_with_the_golden`]
         /// so a version bump without a golden update, or a golden update without
         /// a version bump, fails the build.
-        const GOLDEN_SCHEMA_VERSION: u32 = 1;
+        const GOLDEN_SCHEMA_VERSION: u32 = 2;
 
         fn sorted_keys(value: &Value) -> Vec<String> {
             value
@@ -1285,8 +1290,8 @@ mod tests {
         /// `live_fingerprint()` and pin it against the new version.
         fn golden_fingerprint(version: u32) -> Value {
             match version {
-                1 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V1)
-                    .expect("the pinned v1 fingerprint is valid JSON"),
+                2 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V2)
+                    .expect("the pinned v2 fingerprint is valid JSON"),
                 other => panic!(
                     "no pinned delivery wire fingerprint golden for schema version {other}; \
                      capture live_fingerprint() and add a matching arm to golden_fingerprint in \
@@ -1295,8 +1300,8 @@ mod tests {
             }
         }
 
-        const GOLDEN_FINGERPRINT_V1: &str = r#"{
-  "schema_version": 1,
+        const GOLDEN_FINGERPRINT_V2: &str = r#"{
+  "schema_version": 2,
   "status_domain": ["ok"],
   "operation_domain": [
     "snapshot",

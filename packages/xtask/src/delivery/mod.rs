@@ -42,7 +42,13 @@ pub use model::{
 pub use storage::{CandidateDir, StateRoot};
 
 /// Schema version stamped into every delivery artifact and workflow result.
-pub const DELIVERY_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 when the snapshot began binding the complete expected
+/// pull-request set per repository (`expected_pull_requests`): that added a
+/// required field to every persisted candidate material, so a version-1
+/// artifact can no longer be read, and every downstream consumer must notice
+/// the contract moved.
+pub const DELIVERY_SCHEMA_VERSION: u32 = 2;
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;
 

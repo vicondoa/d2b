@@ -64,7 +64,7 @@
 //!     artifact_kind: "d2b-delivery/merge-target",
 //!     schema_version: $s[0].schema_version,
 //!     material: $s[0].material,
-//!     pull_requests: [ /* one object per repository */ ]
+//!     pull_requests: [ /* one object per pull request */ ]
 //!   }' > merge-target.json
 //! cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target \
 //!     --seal   "$SEAL" \
@@ -81,7 +81,11 @@
 //! Anything short of green fails closed: a pending, failed, neutral, skipped,
 //! cancelled, or duplicated required check, a pull request with no required
 //! checks at all, a repository in the sealed set with no open pull request, or
-//! a pull request whose base is not reachable from the sealed base commit.
+//! a pull request whose base is not reachable from the sealed base commit. The
+//! merge target must also name exactly the pull-request set the snapshot bound,
+//! each at its sealed head: a wave of parallel same-repository pull requests
+//! can never be declared eligible while a slice (and its required checks) is
+//! silently omitted, and no unexpected pull request may ride along.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -96,9 +100,9 @@ use super::{
     evidence,
     history_proof::{self, HistoryVerdict},
     model::{
-        CandidateId, CandidateMaterial, ContentId, GitObjectFormat, RepositoryRecord,
-        SnapshotSha256, validate_bounded_string, validate_git_ref, validate_hash_for_format,
-        validate_repository_id,
+        CandidateId, CandidateMaterial, ContentId, GitObjectFormat, MAX_PULL_REQUESTS,
+        RepositoryRecord, SnapshotSha256, validate_bounded_string, validate_git_ref,
+        validate_hash_for_format, validate_repository_id,
     },
     panel::{ensure_artifact_kind, prepare_state, read_json_file},
     seal::SealRecord,
@@ -110,8 +114,9 @@ pub const MERGE_ELIGIBILITY_ARTIFACT_KIND: &str = "d2b-delivery/merge-eligibilit
 pub const MERGE_ELIGIBILITY_FILE: &str = "merge-eligibility.json";
 pub const MERGE_TARGET_FILE: &str = "merge-target.json";
 
-/// Upper bound on pull requests and required checks a target may declare.
-const MAX_PULL_REQUESTS: usize = 64;
+/// Upper bound on the required checks a pull request may declare. The
+/// pull-request count is bounded by [`MAX_PULL_REQUESTS`] from the model, so a
+/// target and the snapshot's expected set are held to the same ceiling.
 const MAX_REQUIRED_CHECKS: usize = 128;
 
 /// Conclusion of one required GitHub check. Only [`Success`](Self::Success)
@@ -380,8 +385,9 @@ fn check_stack(
 }
 
 /// Requires every pull request to sit on the sealed base, directly or through
-/// another pull request in the same stack, and the sealed head to be one of
-/// the stack's heads.
+/// another pull request in the same stack, and the merge target's pull-request
+/// set to be exactly the set the snapshot bound: every sealed slice present at
+/// its sealed head, and no unexpected pull request smuggled in.
 fn check_repository_stack(
     repository: &RepositoryRecord,
     stack: &[&TargetPullRequest],
@@ -392,6 +398,47 @@ fn check_repository_stack(
             return Err(DeliveryError::new(format!(
                 "two pull requests in {} share head commit {}",
                 repository.id, pull_request.head_oid
+            )));
+        }
+    }
+
+    // The snapshot binds the complete expected pull-request set, so the merge
+    // target must name exactly it: an omitted slice (and its required checks)
+    // can never pass unnoticed, and an extra pull request cannot ride along.
+    let expected = repository
+        .expected_pull_requests
+        .iter()
+        .map(|pull_request| (pull_request.number, pull_request.head_oid.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let present = stack
+        .iter()
+        .map(|pull_request| (pull_request.number, pull_request.head_oid.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for (number, expected_head) in &expected {
+        match present.get(number) {
+            None => {
+                return Err(DeliveryError::new(format!(
+                    "the merge target omits pull request {number} for {}, which the sealed \
+                     snapshot binds; every sealed slice must appear",
+                    repository.id
+                )));
+            }
+            Some(head) if head != expected_head => {
+                return Err(DeliveryError::new(format!(
+                    "pull request {number} for {} is at a head the sealed snapshot does not \
+                     bind; re-snapshot the wave",
+                    repository.id
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+    for number in present.keys() {
+        if !expected.contains_key(number) {
+            return Err(DeliveryError::new(format!(
+                "the merge target names pull request {number} for {}, which the sealed snapshot \
+                 does not bind",
+                repository.id
             )));
         }
     }
@@ -421,13 +468,6 @@ fn check_repository_stack(
             "pull request {} in {} is based on {}, which is not the sealed base commit and not \
              another pull request in the wave's stack",
             orphan.number, repository.id, orphan.base_ref
-        )));
-    }
-    if !heads.contains(repository.head_oid.as_str()) {
-        return Err(DeliveryError::new(format!(
-            "the sealed head commit for {} is not the head of any pull request in the merge \
-             target; re-snapshot the wave",
-            repository.id
         )));
     }
 
@@ -520,14 +560,29 @@ mod tests {
     use super::*;
     use crate::delivery::{
         DeliveryErrorKind,
-        model::fixtures,
+        model::{ExpectedPullRequest, fixtures},
         panel::SnapshotView,
-        seal::{seal, tests::sealable},
+        seal::{
+            seal,
+            tests::{sealable, sealable_from},
+        },
         storage::{SEAL_FILE, tests::Scratch},
     };
 
     fn sealed(scratch: &Scratch) -> (CandidateDir, SealRecord, SnapshotView) {
         let (candidate, snapshot) = sealable(scratch);
+        seal(&candidate, &snapshot).expect("seal");
+        let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
+        (candidate, record, snapshot)
+    }
+
+    /// Seals a wave over a caller-supplied material, so a test can bind an
+    /// expected pull-request set richer than the single-slice fixture default.
+    fn sealed_from(
+        scratch: &Scratch,
+        material: CandidateMaterial,
+    ) -> (CandidateDir, SealRecord, SnapshotView) {
+        let (candidate, snapshot) = sealable_from(scratch, material);
         seal(&candidate, &snapshot).expect("seal");
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         (candidate, record, snapshot)
@@ -569,6 +624,7 @@ mod tests {
         let mut material = fixtures::material();
         material.repository_set[0].base_oid = fixtures::oid(5);
         material.repository_set[0].head_oid = fixtures::oid(6);
+        material.repository_set[0].expected_pull_requests[0].head_oid = fixtures::oid(6);
         material
     }
 
@@ -713,11 +769,29 @@ mod tests {
         );
     }
 
+    fn stacked_material() -> CandidateMaterial {
+        let mut material = fixtures::material();
+        // A two-slice same-repository stack: the lower pull request (1) sits on
+        // the sealed base at oid(7), the topmost (2) sits on it at the sealed
+        // head oid(2).
+        material.repository_set[0].expected_pull_requests = vec![
+            ExpectedPullRequest {
+                number: 1,
+                head_oid: fixtures::oid(7),
+            },
+            ExpectedPullRequest {
+                number: 2,
+                head_oid: fixtures::oid(2),
+            },
+        ];
+        material
+    }
+
     #[test]
     fn a_stacked_pull_request_chain_is_accepted() {
         let scratch = Scratch::new("eligibility-stack");
-        let (candidate, seal, _snapshot) = sealed(&scratch);
-        let mut target = target(fixtures::material());
+        let (candidate, seal, _snapshot) = sealed_from(&scratch, stacked_material());
+        let mut target = target(stacked_material());
         let top = target.pull_requests[0].clone();
         target.pull_requests[0] = TargetPullRequest {
             number: 1,
@@ -735,13 +809,54 @@ mod tests {
     }
 
     #[test]
+    fn an_omitted_slice_is_ineligible() {
+        let scratch = Scratch::new("eligibility-omitted-slice");
+        let (candidate, seal, _snapshot) = sealed_from(&scratch, stacked_material());
+        // Name only the topmost slice, silently dropping the lower pull request
+        // (and its required checks). The snapshot binds both, so this fails.
+        let mut target = target(stacked_material());
+        target.pull_requests[0] = TargetPullRequest {
+            number: 2,
+            head_oid: fixtures::oid(2),
+            base_oid: fixtures::oid(7),
+            base_ref: "adr046-w0-lower".to_owned(),
+            ..target.pull_requests[0].clone()
+        };
+        let error = evaluate(&candidate, &seal, &target).expect_err("omitted slice");
+        assert!(error.message().contains("omits pull request 1"), "{error}");
+    }
+
+    #[test]
+    fn an_unexpected_pull_request_is_ineligible() {
+        let scratch = Scratch::new("eligibility-unexpected-pr");
+        let (candidate, seal, _snapshot) = sealed(&scratch);
+        // The snapshot binds exactly one pull request; a second, unbound one
+        // may not ride along even with green checks.
+        let mut target = target(fixtures::material());
+        target.pull_requests.push(TargetPullRequest {
+            number: 2,
+            base_oid: fixtures::oid(1),
+            head_oid: fixtures::oid(8),
+            head_ref: "adr046-w0-extra".to_owned(),
+            ..target.pull_requests[0].clone()
+        });
+        let error = evaluate(&candidate, &seal, &target).expect_err("unexpected pull request");
+        assert!(error.message().contains("does not bind"), "{error}");
+    }
+
+    #[test]
     fn a_sealed_head_missing_from_the_stack_is_ineligible() {
         let scratch = Scratch::new("eligibility-missing-head");
         let (candidate, seal, _snapshot) = sealed(&scratch);
         let mut target = target(fixtures::material());
         target.pull_requests[0].head_oid = fixtures::oid(7);
         let error = evaluate(&candidate, &seal, &target).expect_err("missing head");
-        assert!(error.message().contains("sealed head commit"), "{error}");
+        assert!(
+            error
+                .message()
+                .contains("the sealed snapshot does not bind"),
+            "{error}"
+        );
     }
 
     #[test]

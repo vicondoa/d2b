@@ -725,7 +725,13 @@ pub(crate) mod tests {
     };
 
     pub(crate) fn snapshot() -> SnapshotView {
-        let material = fixtures::material();
+        snapshot_from(fixtures::material())
+    }
+
+    /// A snapshot view over a caller-supplied material, so tests can seal a
+    /// wave whose expected pull-request set is not the single-slice fixture
+    /// default (for example a stacked same-repository chain).
+    pub(crate) fn snapshot_from(material: CandidateMaterial) -> SnapshotView {
         let digests = material.digests().expect("digests");
         SnapshotView {
             artifact_kind: SNAPSHOT_ARTIFACT_KIND.to_owned(),
@@ -742,8 +748,16 @@ pub(crate) mod tests {
     pub(crate) fn candidate_with_snapshot(
         scratch: &Scratch,
     ) -> (StateRoot, CandidateDir, SnapshotView) {
+        candidate_with_snapshot_from(scratch, fixtures::material())
+    }
+
+    /// Like [`candidate_with_snapshot`], but binds a caller-supplied material.
+    pub(crate) fn candidate_with_snapshot_from(
+        scratch: &Scratch,
+        material: CandidateMaterial,
+    ) -> (StateRoot, CandidateDir, SnapshotView) {
         let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
-        let snapshot = snapshot();
+        let snapshot = snapshot_from(material);
         let candidate = state
             .candidate(snapshot.wave(), &snapshot.candidate_id)
             .expect("candidate");
@@ -895,6 +909,7 @@ pub(crate) mod tests {
         let mut rebased = snapshot.clone();
         rebased.material.repository_set[0].base_oid = fixtures::oid(5);
         rebased.material.repository_set[0].head_oid = fixtures::oid(6);
+        rebased.material.repository_set[0].expected_pull_requests[0].head_oid = fixtures::oid(6);
         let digests = rebased.material.digests().expect("digests");
         assert_eq!(digests.candidate_id, snapshot.candidate_id);
         assert_eq!(digests.content_id, snapshot.content_id);

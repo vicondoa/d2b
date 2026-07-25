@@ -41,10 +41,11 @@ use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{CliOptions, WaveCommand, WorkflowOutput},
     model::{
-        CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge, Fingerprint,
-        GitObjectFormat, RepositoryRecord, SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema,
-        sha256_bytes, validate_git_ref, validate_identifier, validate_program_wave,
-        validate_repo_relative_path, validate_repository_id,
+        CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge,
+        ExpectedPullRequest, Fingerprint, GitObjectFormat, RepositoryRecord,
+        SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes, validate_git_ref,
+        validate_identifier, validate_program_wave, validate_repo_relative_path,
+        validate_repository_id,
     },
     storage::{CandidateDir, MAX_ARTIFACT_BYTES, MAX_JSON_BYTES, SNAPSHOT_FILE, StateRoot},
 };
@@ -208,9 +209,22 @@ pub fn rederive(
         })?;
         let root = toplevel(root)?;
         ensure_committed(&root, &repository.id)?;
+        let old_head = repository.head_oid.clone();
         let head = resolve(&root, DEFAULT_HEAD_REF, "^{commit}")?;
         repository.integration_tree_oid = resolve(&root, &head, "^{tree}")?;
         repository.head_oid = head.clone();
+        // The sealed topmost pull request now points at the current head, so
+        // move its expected-set entry with it. Lower pull requests in a stack
+        // are not visible from this checkout and stay as sealed; the moved head
+        // alone re-derives a fresh snapshot digest, which is all rederivation
+        // needs to detect a rebase.
+        if let Some(pull_request) = repository
+            .expected_pull_requests
+            .iter_mut()
+            .find(|pull_request| pull_request.head_oid == old_head)
+        {
+            pull_request.head_oid = head.clone();
+        }
         heads.insert(repository.id.clone(), (root, head));
     }
     for list in [
@@ -237,6 +251,14 @@ struct RepositoryInput {
     id: String,
     checkout: PathBuf,
     base_ref: String,
+    head_ref: String,
+    pull_requests: Vec<PullRequestInput>,
+}
+
+/// One expected pull request as named on the command line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PullRequestInput {
+    number: u64,
     head_ref: String,
 }
 
@@ -269,6 +291,7 @@ impl SnapshotRequest {
         let checkouts = options.repository_roots()?;
         let mut bases = pairs(options.repeated_strings("--base"), "--base")?;
         let mut heads = pairs(options.repeated_strings("--head"), "--head")?;
+        let mut pull_requests = pull_request_inputs(options.repeated_strings("--pull-request"))?;
         let dependency_graph = edges(options.repeated_strings("--edge"))?;
         let generated_artifacts = fingerprints(options.repeated_strings("--generated"))?;
         let dependency_fingerprints = fingerprints(options.repeated_strings("--dependency"))?;
@@ -286,6 +309,14 @@ impl SnapshotRequest {
             let head_ref = heads
                 .remove(&id)
                 .unwrap_or_else(|| DEFAULT_HEAD_REF.to_owned());
+            let requests = pull_requests.remove(&id).unwrap_or_default();
+            if requests.is_empty() {
+                return Err(DeliveryError::usage(format!(
+                    "repository {id} needs at least one --pull-request {id}=NUMBER:HEAD_REF \
+                     mapping; the snapshot binds the complete expected pull-request set so a \
+                     merge target cannot silently omit a slice"
+                )));
+            }
             validate_git_ref(&base_ref, "base revision")?;
             validate_git_ref(&head_ref, "head revision")?;
             repositories.push(RepositoryInput {
@@ -293,6 +324,7 @@ impl SnapshotRequest {
                 checkout,
                 base_ref,
                 head_ref,
+                pull_requests: requests,
             });
         }
         for (option, leftover) in [("--base", bases), ("--head", heads)] {
@@ -301,6 +333,11 @@ impl SnapshotRequest {
                     "{option} names repository {id}, which has no --repo mapping"
                 )));
             }
+        }
+        if let Some(id) = pull_requests.into_keys().next() {
+            return Err(DeliveryError::usage(format!(
+                "--pull-request names repository {id}, which has no --repo mapping"
+            )));
         }
         let request = Self {
             program,
@@ -358,6 +395,25 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
         let base_oid = resolve(&root, &input.base_ref, "^{commit}")?;
         let head_oid = resolve(&root, &input.head_ref, "^{commit}")?;
         let integration_tree_oid = resolve(&root, &head_oid, "^{tree}")?;
+        let mut expected_pull_requests = Vec::with_capacity(input.pull_requests.len());
+        for pull_request in &input.pull_requests {
+            let pr_head = resolve(&root, &pull_request.head_ref, "^{commit}")?;
+            expected_pull_requests.push(ExpectedPullRequest {
+                number: pull_request.number,
+                head_oid: pr_head,
+            });
+        }
+        if !expected_pull_requests
+            .iter()
+            .any(|pull_request| pull_request.head_oid == head_oid)
+        {
+            return Err(DeliveryError::usage(format!(
+                "repository {}: the --head revision resolves to a commit that is not the head of \
+                 any --pull-request entry; the topmost pull request must appear in the expected \
+                 set",
+                input.id
+            )));
+        }
         heads.insert(input.id.clone(), (root, head_oid.clone()));
         repository_set.push(RepositoryRecord {
             id: input.id.clone(),
@@ -365,6 +421,7 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
             base_oid,
             head_oid,
             integration_tree_oid,
+            expected_pull_requests,
         });
     }
     let resolve_all = |inputs: &[FingerprintInput]| -> Result<Vec<Fingerprint>> {
@@ -392,6 +449,36 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
         dependency_fingerprints: resolve_all(&request.dependency_fingerprints)?,
         contract_fingerprints: resolve_all(&request.contract_fingerprints)?,
     })
+}
+
+fn pull_request_inputs(values: Vec<String>) -> Result<BTreeMap<String, Vec<PullRequestInput>>> {
+    let mut mapped: BTreeMap<String, Vec<PullRequestInput>> = BTreeMap::new();
+    for value in values {
+        let (id, rest) = value.split_once('=').ok_or_else(|| {
+            DeliveryError::usage("--pull-request must use LOGICAL_ID=NUMBER:HEAD_REF")
+        })?;
+        validate_repository_id(id)?;
+        let (number, head_ref) = rest.split_once(':').ok_or_else(|| {
+            DeliveryError::usage("--pull-request must use LOGICAL_ID=NUMBER:HEAD_REF")
+        })?;
+        let number: u64 = number.parse().map_err(|_| {
+            DeliveryError::usage("--pull-request number must be a positive integer")
+        })?;
+        if number == 0 {
+            return Err(DeliveryError::usage(
+                "--pull-request number must be a positive integer",
+            ));
+        }
+        validate_git_ref(head_ref, "pull request head revision")?;
+        mapped
+            .entry(id.to_owned())
+            .or_default()
+            .push(PullRequestInput {
+                number,
+                head_ref: head_ref.to_owned(),
+            });
+    }
+    Ok(mapped)
 }
 
 fn pairs(values: Vec<String>, option: &str) -> Result<BTreeMap<String, String>> {
@@ -684,6 +771,8 @@ pub(crate) mod tests {
                 &format!("github.com/example/d2b={}", self.repo().display()),
                 "--base",
                 "github.com/example/d2b=HEAD",
+                "--pull-request",
+                "github.com/example/d2b=1:HEAD",
                 "--edge",
                 "adr046-w0=adr046-w1",
                 "--generated",
@@ -1031,6 +1120,67 @@ pub(crate) mod tests {
             baseline,
             "an untracked file is not integrated content"
         );
+    }
+
+    #[test]
+    fn a_repository_without_a_pull_request_is_a_usage_error() {
+        let fixture = GitFixture::new("snapshot-no-pr");
+        let args = fixture
+            .snapshot_args()
+            .into_iter()
+            .filter(|value| value != "--pull-request" && !value.ends_with("d2b=1:HEAD"))
+            .collect::<Vec<_>>();
+        let error = SnapshotRequest::parse(&args)
+            .expect_err("a repository with no pull request is refused");
+        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
+        assert!(error.message().contains("--pull-request"), "{error}");
+    }
+
+    #[test]
+    fn a_head_outside_the_expected_pull_requests_is_refused() {
+        let fixture = GitFixture::new("snapshot-head-outside");
+        fixture.write("docs/spec.json", "{\"wave\":\"W0-2\"}\n");
+        fixture.commit("second slice");
+        // Drop the default `--pull-request` flag and its value together, then
+        // bind the expected set to the parent commit only while pointing
+        // --head at the tip: the topmost pull request is not in the set.
+        let mut args = Vec::new();
+        let mut base = fixture.snapshot_args().into_iter();
+        while let Some(value) = base.next() {
+            if value == "--pull-request" {
+                base.next();
+                continue;
+            }
+            args.push(value);
+        }
+        args.push("--pull-request".to_owned());
+        args.push("github.com/example/d2b=1:HEAD~1".to_owned());
+        args.push("--head".to_owned());
+        args.push("github.com/example/d2b=HEAD".to_owned());
+        let request = SnapshotRequest::parse(&args).expect("parse");
+        let error = discover(&request).expect_err("a head outside the expected set is refused");
+        assert!(
+            error.message().contains("topmost pull request must appear"),
+            "unexpected message: {error}"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_binds_every_expected_pull_request() {
+        let fixture = GitFixture::new("snapshot-multi-pr");
+        fixture.write("docs/spec.json", "{\"wave\":\"W0-2\"}\n");
+        fixture.commit("second slice");
+        let mut args = fixture.snapshot_args();
+        // The tip is the topmost pull request; the parent commit is a second
+        // parallel slice. Both must be bound in the expected set.
+        args.push("--pull-request".to_owned());
+        args.push("github.com/example/d2b=2:HEAD~1".to_owned());
+        let request = SnapshotRequest::parse(&args).expect("parse");
+        let material = discover(&request).expect("discover");
+        let expected = &material.repository_set[0].expected_pull_requests;
+        assert_eq!(expected.len(), 2, "both slices must be bound");
+        let numbers = expected.iter().map(|pr| pr.number).collect::<Vec<_>>();
+        assert!(numbers.contains(&1) && numbers.contains(&2));
     }
 
     #[test]

@@ -232,8 +232,10 @@ pub(crate) mod tests {
     use super::*;
     use crate::delivery::{
         evidence::EvidenceRecord,
-        model::{EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_ROLES},
-        panel::tests::{candidate_with_snapshot, record_files, write_record_dir},
+        model::{CandidateMaterial, EVIDENCE_ARTIFACT_KIND, EvidenceResult, PANEL_ROLES},
+        panel::tests::{
+            candidate_with_snapshot, candidate_with_snapshot_from, record_files, write_record_dir,
+        },
         storage::tests::Scratch,
     };
     use std::path::Path;
@@ -272,6 +274,25 @@ pub(crate) mod tests {
     /// lanes imported.
     pub(crate) fn sealable(scratch: &Scratch) -> (CandidateDir, SnapshotView) {
         let (_state, candidate, snapshot) = candidate_with_snapshot(scratch);
+        finish_sealable(scratch, candidate, snapshot)
+    }
+
+    /// Like [`sealable`], but over a caller-supplied material, so a test can
+    /// seal a wave whose expected pull-request set is not the single-slice
+    /// fixture default.
+    pub(crate) fn sealable_from(
+        scratch: &Scratch,
+        material: CandidateMaterial,
+    ) -> (CandidateDir, SnapshotView) {
+        let (_state, candidate, snapshot) = candidate_with_snapshot_from(scratch, material);
+        finish_sealable(scratch, candidate, snapshot)
+    }
+
+    fn finish_sealable(
+        scratch: &Scratch,
+        candidate: CandidateDir,
+        snapshot: SnapshotView,
+    ) -> (CandidateDir, SnapshotView) {
         panel::request(&candidate, &snapshot).expect("panel request");
         let files = record_files(&snapshot);
         let dir = write_record_dir(scratch, &files);
