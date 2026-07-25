@@ -12,7 +12,7 @@
 > by the ADR 0046 work-item policy gate.
 
 The graph maps every member spec and every work item exactly once to a
-dependency-ordered launch wave (`W0`–`W7`) and a file-disjoint parallel group.
+dependency-ordered launch wave (`W0`-`W7`) and a file-disjoint parallel group.
 It includes every resolved security-key work-item dependency; no lexical
 tie-break or omitted dependency is used.
 Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
@@ -29,7 +29,7 @@ Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
 | Edges | 1940 |
 | Max topological rank | 22 |
 
-## Waves (W0–W7)
+## Waves (W0-W7)
 
 | Wave | Specs | #Specs | #Work items | Parallel groups |
 | --- | --- | --- | --- | --- |
@@ -281,7 +281,7 @@ file; all other destinations retain their existing parallelism.
 22. `ADR046-qemu-media-018`
 23. `ADR046-qemu-media-019`
 
-## Regeneration findings (D095–D098)
+## Regeneration findings (D095-D098)
 
 - Regenerated from 55 member specs and 543 current work items; every declared heading is represented exactly once.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
