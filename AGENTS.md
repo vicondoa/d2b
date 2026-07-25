@@ -882,8 +882,18 @@ fields that request panel, agent, or model metadata.
   required so volatile files can't race
   `builtins.getFlake (toString $ROOT)` source-capture during
   flake-eval gates (W2fu4 H8/H9).
-- Rust worktrees share `/home/paydro/.cache/d2b-cargo-target/`
-  through the repo-local `.cargo/config.toml` files.
+- Rust worktrees do NOT share a cargo target directory. Each worktree
+  keeps its own `packages/target/`; compiled-output dedup across
+  worktrees comes from `sccache` (`$SCCACHE_DIR`, default
+  `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
+  `packages/.cargo/config.toml` and the sibling-workspace configs under
+  `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
+  `packages/d2b-core/fuzz/`. A shared target dir is deliberately
+  avoided: cargo's target-dir lock is workspace-wide, so two worktrees
+  building concurrently at different SHAs would serialize pessimistically
+  and stomp each other's incremental caches. To bypass sccache locally
+  (e.g. when bisecting a compiler issue), set `RUSTC_WRAPPER=` or
+  `CARGO_BUILD_RUSTC_WRAPPER=` explicitly.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the
@@ -925,9 +935,11 @@ fields that request panel, agent, or model metadata.
   carve-out used only after the retry also fails. Added with the W3
   integration merge; re-evaluate once the entra-id input bumps past
   the affected revision.
-- Before `git worktree remove`, confirm the worktree's
-  `packages/target/` is the shared-cache symlink (or absent), not a
-  real per-worktree directory.
+- Before `git worktree remove`, delete the worktree's real
+  `packages/target/` (every worktree has one; there is no shared-cache
+  symlink) so the removal reclaims its multi-GiB build artifacts.
+  Rebuilds in a fresh worktree stay cheap because sccache retains the
+  compiled outputs.
 - `tests/tools/preflight-disk-space.sh` fails the wave when free disk under
   `$ROOT` drops below 10 GiB. Runs after the orphan reapers but BEFORE
   the rust toolchain bootstrap so the fail-closed guard cannot be

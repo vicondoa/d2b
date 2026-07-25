@@ -362,8 +362,7 @@ codebase's sibling ADR-0045 lineage):
    they do not re-run tests/builds/evals unless the integrator explicitly
    asks, per this repository's existing `AGENTS.md` panel-prompt rule.
 7. Slice worktrees are removed only after their commits are integrated and
-   their real `packages/target/` (if any, distinct from the shared-cache
-   symlink) is cleaned, per §14.
+   their per-worktree `packages/target/` is cleaned, per §14.
 
 ## 6. Speculative readiness and the anti-serialization file-overlap graph
 
@@ -1228,8 +1227,9 @@ merge (§13.3).
 After each wave's every PR merges (§13.3), the integrator:
 
 1. Deletes the merged remote feature branches for that wave's slices.
-2. Cleans any slice worktree's real `packages/target/` (if it is not the
-   shared-cache symlink) before removing the worktree.
+2. Cleans the slice worktree's per-worktree `packages/target/` before
+   removing the worktree; sccache retains the compiled outputs, so the
+   next worktree's build stays cheap.
 3. Removes the finished local worktrees and deletes their local branches.
 4. Runs `nix-collect-garbage` and verifies `git worktree list` contains only
    active work for the next wave.

@@ -871,7 +871,7 @@ v3 source to extract from.
 | Work item ID | `ADR046-streamline-018` |
 | Tier | A |
 | Observed friction evidence | Generalizes this repository's existing disk-hygiene posture (already required for code waves) to the documentation-authoring worktrees this ADR's dossier-branch-per-scope workflow creates (F1 shows 30+ `adr0046-*` branches/worktrees existed concurrently) |
-| Desired behavior | A report enumerating every `adr0046-*` worktree, its `packages/target/` size (or confirmation it is the shared-cache symlink), and its branch's merge/staleness state, with **no automatic destructive deletion**; cleanup remains an explicit human/integrator-approved action |
+| Desired behavior | A report enumerating every `adr0046-*` worktree, its per-worktree `packages/target/` size, and its branch's merge/staleness state, with **no automatic destructive deletion**; cleanup remains an explicit human/integrator-approved action |
 | Destination | `tests/tools/worktree-disk-report.sh` |
 | Owner/dependencies | ADR046-streamline-010 (shares branch-staleness detection) |
 | Dependency/owner | ADR046-streamline-010 (shares branch-staleness detection) |
