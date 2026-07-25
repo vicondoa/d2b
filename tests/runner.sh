@@ -60,19 +60,15 @@ HERE=$(dirname "$(readlink -f "$0")")
 
 # --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
 # This aggregating runner drives the live store/audio/security lanes, which
-# mutate real host and daemon state. It must never bypass the heavy-gate
-# semaphore that serialises every heavy lane. When invoked outside the gate,
-# re-exec through it exactly once; the gate exports D2B_HEAVY_GATE across the
-# re-exec so the next pass runs the real work and the child lanes inherit the
-# already-held slot instead of re-gating.
-if [ -z "${D2B_HEAVY_GATE:-}" ]; then
-  _hg_root=$(cd "$HERE/.." && pwd)
-  _hg_xtask="${CARGO_TARGET_DIR:-$_hg_root/packages/target}/debug/xtask"
-  if [ ! -x "$_hg_xtask" ]; then
-    ( cd "$_hg_root/packages" && cargo build --quiet -p xtask )
-  fi
-  exec "$_hg_xtask" heavy-gate -- bash "$0" "$@"
-fi
+# mutate real host and daemon state. It must never bypass the sole-use
+# heavy-gate semaphore. The mere presence of D2B_HEAVY_GATE is not trusted:
+# the shared helper verifies this process genuinely holds a slot before
+# proceeding, and re-execs through the gate exactly once when it does not so
+# the child lanes inherit the already-held slot instead of re-gating.
+_hg_root=$(cd "$HERE/.." && pwd)
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$_hg_root/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$_hg_root" "$0" "$@"
 # Fixed-order layers. static.sh has no --quick flag and is cheap, so it
 # always runs as-is. The live store and audio gates both speak the
 # --quick / --only / --list dispatcher contract.
