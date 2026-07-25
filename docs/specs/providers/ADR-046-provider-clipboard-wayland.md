@@ -5,7 +5,7 @@
 | Spec ID | `ADR-046-provider-clipboard-wayland` |
 | Version | 2 |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `Provider/clipboard-wayland` controller |

@@ -5,8 +5,8 @@ control plane. Each dossier is a member of the atomic ADR 0046 specification set
 indexed by [`../README.md`](../README.md); the parent decision is
 [`docs/adr/0046-d2b-3-provider-control-plane.md`](../../adr/0046-d2b-3-provider-control-plane.md).
 
-This is a proposed, documentation-only set under user review. All dossiers are
-`Proposed`; nothing here creates crates, packages, controllers, services, or
+This is an accepted, documentation-only set. All dossiers are
+`Accepted`; nothing here creates crates, packages, controllers, services, or
 Provider resources.
 
 ## What a Provider is

@@ -12,8 +12,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Proposed ADR 0046 and its complete, documentation-only normative
-  specification set for the d2b 3.0 Provider control plane, under user review.
+- Added the shared `cargo xtask delivery wave` dispatch skeleton for the
+  ADR 0046 delivery contract: the `snapshot`, `validate-import`,
+  `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
+  subcommand surface, the `content_id`/`candidate_id`/`snapshot_sha256`
+  digest contract, and the external candidate-ID-addressed evidence
+  directory. Evidence state is refused inside any repository checkout or Git
+  working tree, and every stage whose implementation has not landed fails
+  closed with a nonzero exit instead of reporting an unearned success.
+- Added ADR 0046 and its complete, documentation-only normative
+  specification set for the d2b 3.0 Provider control plane.
   The atomic set has 55 member specs (28 foundation, resource, cross-cutting,
   and closing specs plus a 27-Provider dossier catalog) indexed by
   `docs/specs/README.md` and `docs/specs/providers/README.md` and bound by the
@@ -28,11 +36,41 @@ deprecations ship one minor release before removal.
   tests with integration-only slow coverage, and Noise-protected
   ComponentSession/d2b-bus channels on the `d2bus.org` public namespace,
   together with the security/threat-model, reset/cutover, feasibility,
-  validation and delivery, and streamline contracts. Everything remains
-  Proposed; no crates, services, controllers, or Providers are created.
+  validation and delivery, and streamline contracts. No crates, services,
+  controllers, or Providers are created.
 
 ### Changed
 
+- Accepted ADR 0046 and all 55 members of its specification set (28 top-level
+  specs plus 27 Provider dossiers), flipping each metadata `Status` from
+  `Proposed` to `Accepted`. This satisfies the manifest-acceptance portion of
+  the ADR 0046 delivery contract's Gate 0 precondition for implementation
+  work. No crates, services, controllers, or Providers are created.
+- Bound the ADR 0046 delivery contract's binding ten-role wave panel
+  (`ADR-046-validation-and-delivery` §12.3) to `gpt-5.6-sol` at reasoning
+  effort `xhigh`, replacing the earlier model binding, and added
+  `reasoning_effort` to the panel-receipt attestation record.
+- Retargeted every ADR 0046 slice branch at the protected `v3` integration
+  branch instead of `main`, which the v3 line never merges into. The delivery
+  contract now names `v3` once in its Git Town stack section and uses it for
+  slice base/target, the direct-push prohibition, and the auto-release
+  version-header trigger. References to main-branch ADR 0045 provenance are
+  unchanged.
+- Added a terminal `ADR046-W8` friction-closure wave to the ADR 0046 delivery
+  contract for the tooling and process friction (signoff, build, test, merge,
+  codegen, disk) accumulated across the earlier waves. It has no spec members
+  and is therefore excluded from the topological wave-derivation rule, but it
+  runs the identical per-wave entry/exit criteria, including exactly one
+  binding ten-role panel. The release/cutover gate now runs at that wave's
+  exit rather than the previous terminal wave's, so the destructive-cutover
+  removal proofs are re-required on the tree that actually ships.
+- Corrected the disk-hygiene contract in `AGENTS.md`: Rust worktrees each keep
+  their own `packages/target/` and deduplicate compiled output through
+  `sccache`, rather than sharing a cargo target directory. A shared target dir
+  is deliberately avoided because cargo's target-dir lock is workspace-wide.
+  The worktree-removal guidance, the disk-space preflight remediation text,
+  and the ADR 0046 worktree-cleanup rules that assumed a shared-cache symlink
+  are corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
 
