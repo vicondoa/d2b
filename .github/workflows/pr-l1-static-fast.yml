@@ -156,6 +156,23 @@ jobs:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust
 
+  test-fixture-contracts:
+    name: "Advisory - non-enforcing - Fixture-dependent Rust contract tests"
+    needs: [test-rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Fixture-dependent Rust contract tests
+        run: make test-fixture-contracts
+
   test-proofs:
     needs: [tier0]
     runs-on: ubuntu-latest
@@ -476,7 +493,7 @@ jobs:
         run: make test-runtime-ledger
 
   check:
-    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
+    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -520,6 +537,7 @@ jobs:
           require_success test-lint '${{ needs.test-lint.result }}'
           allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'
           require_success test-rust '${{ needs.test-rust.result }}'
+          require_advisory_success test-fixture-contracts '${{ needs.test-fixture-contracts.result }}'
           require_success test-proofs '${{ needs.test-proofs.result }}'
           require_success test-nix-unit '${{ needs.test-nix-unit.result }}'
           require_success test-flake-x86 '${{ needs.test-flake-x86.result }}'
@@ -531,4 +549,4 @@ jobs:
             exit 1
           fi
           echo "All generated enforcing Layer-1 jobs passed."
-          echo "Required advisory jobs completed (not enforcing passes): test-performance-budgets"
+          echo "Required advisory jobs completed (not enforcing passes): test-performance-budgets, test-fixture-contracts"
