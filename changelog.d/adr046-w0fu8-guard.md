@@ -6,3 +6,5 @@
 - Host inspection and CLI subprocesses now use a fixed root-owned executable
   search path, while the privileged broker invokes udevadm through an absolute
   NixOS system path.
+- Process-marker ratchet failures now identify the gate and exact allow-list
+  controls contributors must shrink, while explicitly rejecting budget raises.
