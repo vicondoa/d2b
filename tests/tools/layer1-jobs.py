@@ -334,6 +334,11 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
     rollup = ci["rollupJob"]
     needs = ci["rollupNeeds"]
     allowed_skipped = set(ci.get("allowedSkippedRollupJobs", []))
+    advisory_needs = {
+        need
+        for need in needs
+        if manifest["jobs"][need].get("enforcement") == "advisory"
+    }
     lines = [
         f"  {rollup}:",
         f"    needs: {yaml_list(needs)}",
@@ -365,10 +370,22 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
         "              failed=1",
         "            fi",
         "          }",
+        "          require_advisory_success() {",
+        "            name=\"$1\"",
+        "            result=\"$2\"",
+        "            echo \"advisory:$name=$result (not an enforcing pass)\"",
+        "            if [ \"$result\" != success ]; then",
+        "              echo \"::error::required advisory $name did not complete successfully "
+        "(result=$result)\"",
+        "              failed=1",
+        "            fi",
+        "          }",
     ]
     for need in needs:
         expr = "${{ needs." + need + ".result }}"
-        if need in allowed_skipped:
+        if need in advisory_needs:
+            lines.append(f"          require_advisory_success {need} '{expr}'")
+        elif need in allowed_skipped:
             lines.append(f"          allow_success_or_skipped {need} '{expr}'")
         else:
             lines.append(f"          require_success {need} '{expr}'")
@@ -377,9 +394,15 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
             "          if [ \"$failed\" -ne 0 ]; then",
             "            exit 1",
             "          fi",
-            "          echo \"All generated Layer-1 jobs passed.\"",
+            "          echo \"All generated enforcing Layer-1 jobs passed.\"",
         ]
     )
+    if advisory_needs:
+        advisory_names = ", ".join(need for need in needs if need in advisory_needs)
+        lines.append(
+            "          echo \"Required advisory jobs completed "
+            f"(not enforcing passes): {advisory_names}\""
+        )
     return "\n".join(lines)
 
 
@@ -406,7 +429,18 @@ def render_workflow(manifest: dict[str, Any]) -> str:
         renderer = RENDERERS.get(kind)
         if renderer is None:
             raise SystemExit(f"{MANIFEST}: no renderer for ciKind {kind!r}")
-        rendered_jobs.append(renderer(job))
+        rendered = renderer(job)
+        if job.get("enforcement") == "advisory":
+            header = f"  {job['ciJobId']}:\n"
+            advisory_name = json.dumps(
+                f"Advisory - non-enforcing - {job['displayName']}"
+            )
+            if not rendered.startswith(header):
+                raise SystemExit(
+                    f"{MANIFEST}: renderer for {job_id!r} emitted an unexpected job header"
+                )
+            rendered = rendered.replace(header, f"{header}    name: {advisory_name}\n", 1)
+        rendered_jobs.append(rendered)
     rendered_jobs.append(check_rollup_job(manifest))
     template = TEMPLATE.read_text(encoding="utf-8")
     workflow = template.replace("{{ workflow_name }}", manifest["ci"]["workflowName"])

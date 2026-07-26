@@ -42,6 +42,7 @@ jobs:
         run: make check-inventory
 
   test-performance-budgets:
+    name: "Advisory - non-enforcing - Performance budget gate"
     needs: [tier0]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -504,9 +505,18 @@ jobs:
               failed=1
             fi
           }
+          require_advisory_success() {
+            name="$1"
+            result="$2"
+            echo "advisory:$name=$result (not an enforcing pass)"
+            if [ "$result" != success ]; then
+              echo "::error::required advisory $name did not complete successfully (result=$result)"
+              failed=1
+            fi
+          }
           require_success tier0 '${{ needs.tier0.result }}'
           require_success check-inventory '${{ needs.check-inventory.result }}'
-          require_success test-performance-budgets '${{ needs.test-performance-budgets.result }}'
+          require_advisory_success test-performance-budgets '${{ needs.test-performance-budgets.result }}'
           require_success test-lint '${{ needs.test-lint.result }}'
           allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'
           require_success test-rust '${{ needs.test-rust.result }}'
@@ -520,4 +530,5 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             exit 1
           fi
-          echo "All generated Layer-1 jobs passed."
+          echo "All generated enforcing Layer-1 jobs passed."
+          echo "Required advisory jobs completed (not enforcing passes): test-performance-budgets"

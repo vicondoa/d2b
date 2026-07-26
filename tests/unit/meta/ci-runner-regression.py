@@ -166,6 +166,32 @@ set -euo pipefail
         self.assertIn("<home>/private/output", diagnostic)
         self.assertIn("<path>", diagnostic)
 
+    def test_workflow_keeps_advisory_jobs_required_but_non_enforcing(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+
+        self.assertIn(
+            'name: "Advisory - non-enforcing - Performance budget gate"',
+            workflow,
+        )
+        self.assertIn(
+            "require_advisory_success test-performance-budgets "
+            "'${{ needs.test-performance-budgets.result }}'",
+            workflow,
+        )
+        self.assertNotIn(
+            "require_success test-performance-budgets "
+            "'${{ needs.test-performance-budgets.result }}'",
+            workflow,
+        )
+        self.assertIn("All generated enforcing Layer-1 jobs passed.", workflow)
+        self.assertIn(
+            "Required advisory jobs completed (not enforcing passes): "
+            "test-performance-budgets",
+            workflow,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
