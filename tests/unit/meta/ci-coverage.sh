@@ -25,7 +25,7 @@ for required in "$MANIFEST" "$MAKEFILE"; do
   fi
 done
 
-expected_workflow_shell='shell: ./tests/tools/scrub-shell-environment -c '\''exec bash "$@"'\'' d2b-ci {0}'
+expected_workflow_shell='shell: bash tests/tools/ci-shell {0}'
 workflow_shell_errors=()
 while IFS= read -r workflow; do
   found=0

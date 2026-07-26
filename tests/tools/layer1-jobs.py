@@ -105,17 +105,17 @@ def simple_job(job: dict[str, Any]) -> str:
 
 
 def tier0_job(job: dict[str, Any]) -> str:
+    extra = "".join(
+        f"\n      - name: {step['displayName']}\n        run: make {step['makeTarget']}"
+        for step in job.get("extraMakeTargets", [])
+    )
     return f"""  {job["ciJobId"]}:
     runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
       - name: {job["displayName"]}
-        run: make {job["makeTarget"]}
-      - name: ADR index coverage guard
-        run: make test-adr-index-coverage
-      - name: CI coverage structural guard
-        run: make test-ci-coverage"""
+        run: make {job["makeTarget"]}{extra}"""
 
 
 def changelog_job(job: dict[str, Any]) -> str:
@@ -423,13 +423,21 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
     target = job.get("makeTarget")
     if not target:
         raise RuntimeError(f"local job {job_id!r} has no makeTarget")
+    # Every target the continuous-integration job runs must also run locally,
+    # or `make check` is not the pull-request-equivalent gate it claims to be.
+    targets = [target, *(step["makeTarget"] for step in job.get("extraMakeTargets", []))]
     env = os.environ.copy()
     env.update(job.get("localEnv", {}))
     log_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"d2b-{job_id}."))
     log_path = log_dir / "output.log"
     print(f"==> {target} ({job.get('displayName', job_id)})", flush=True)
     with log_path.open("wb") as log:
-        proc = subprocess.run(["make", target], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        for one in targets:
+            proc = subprocess.run(
+                ["make", one], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT
+            )
+            if proc.returncode != 0:
+                break
     if proc.returncode == 0:
         print(f"ok: {target}", flush=True)
         if os.environ.get("D2B_CHECK_KEEP_LOGS") != "1":
