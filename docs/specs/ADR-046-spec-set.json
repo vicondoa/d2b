@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "1f9500df454a224acd38700050d64408cc556790673be59cf283551058981c06",
+      "sha256" : "adeb01e443cae35344262ef2029b88a9e51603d545d261af5871487ce9769ee9",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Accepted",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -620,7 +620,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-provider-state.md",
-      "sha256" : "d8e32c65da49416bec2184fa85992c4a00f69f04db273ce60572400e61502fee",
+      "sha256" : "749f66d31d72d8f72ac6a71fcd9c560de4bff5488d27c228cb5a47cc1ef32e6a",
       "specId" : "ADR-046-provider-state",
       "status" : "Accepted",
       "supersedes" : "`d2b-core/src/storage.rs` generated contract, ADR 0034 storage/sync/adoption model for v3",
