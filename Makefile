@@ -3,6 +3,11 @@
 # Maintainer-facing targets only; CI converges on this stable make-target
 # interface incrementally during the test rearchitecture.
 
+# Recipe shells must not inherit exported Bash functions from their caller.
+# Function resolution precedes PATH lookup, so an inherited cargo/nix/jq
+# function could silently redirect a gate that intends to execute a binary.
+SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
+
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \

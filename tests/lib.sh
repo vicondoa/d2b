@@ -20,6 +20,16 @@
 # All output goes to stderr so test functions can `echo` their actual
 # return value to stdout if they're producing data.
 
+# An exported Bash function is imported before this file is sourced and wins
+# over a same-named binary on PATH. Clear the inherited function table before
+# defining any trusted helper, and prevent BASH_ENV from rebuilding it in a
+# nested non-interactive shell.
+while read -r _ _ inherited_function; do
+  unset -f -- "$inherited_function"
+done < <(declare -F)
+unset inherited_function
+unset -v BASH_ENV
+
 set -u
 
 # Derive FLAKE from lib.sh's own location (tests/lib.sh → ../).
