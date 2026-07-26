@@ -6,7 +6,7 @@
       {
         "id": "preflight",
         "mode": "serial",
-        "jobs": ["tier0"]
+        "jobs": ["tier0", "check-inventory"]
       },
       {
         "id": "parallel",
@@ -16,7 +16,7 @@
       {
         "id": "serial-after-parallel",
         "mode": "serial",
-        "jobs": ["test-drift", "test-runtime-ledger"]
+        "jobs": ["test-drift", "test-runtime-ledger", "test-performance-budgets"]
       }
     ]
   },
@@ -24,6 +24,8 @@
     "workflowName": "pr-l1-static-fast",
     "jobs": [
       "tier0",
+      "check-inventory",
+      "test-performance-budgets",
       "test-lint",
       "test-changelog",
       "test-rust",
@@ -41,6 +43,8 @@
     "rollupJob": "check",
     "rollupNeeds": [
       "tier0",
+      "check-inventory",
+      "test-performance-budgets",
       "test-lint",
       "test-changelog",
       "test-rust",
@@ -60,6 +64,24 @@
       "makeTarget": "check-tier0",
       "ciKind": "tier0",
       "ciJobId": "tier0",
+      "timeoutMinutes": 5,
+      "runsOn": "ubuntu-latest"
+    },
+    "check-inventory": {
+      "displayName": "Migration ledger drift gate",
+      "makeTarget": "check-inventory",
+      "ciKind": "simple",
+      "ciJobId": "check-inventory",
+      "needs": ["tier0"],
+      "timeoutMinutes": 5,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-performance-budgets": {
+      "displayName": "Performance budget gate",
+      "makeTarget": "test-performance-budgets",
+      "ciKind": "simple",
+      "ciJobId": "test-performance-budgets",
+      "needs": ["tier0"],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },

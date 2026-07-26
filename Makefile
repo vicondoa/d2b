@@ -12,6 +12,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
         test-lint test-rust test-proofs test-flake test-nix-unit \
+        test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
@@ -139,6 +140,18 @@ test-drift:
 ## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
 test-policy:
 	bash tests/test-policy.sh
+
+## test-performance-budgets - execute the self-gating performance canary.
+## Hosted runners take the cheap skip path; pinned stable runners enforce it.
+test-performance-budgets:
+	bash tests/unit/gates/performance-budgets.sh
+
+## Focused policy entrypoints used by the early CI preflight.
+test-adr-index-coverage:
+	bash tests/unit/meta/adr-index-coverage.sh
+
+test-ci-coverage:
+	bash tests/unit/meta/ci-coverage.sh
 
 ## test-integration - L2 podman container integration tests. Public heavy lane:
 ## it acquires a heavy-gate slot, then runs the raw work behind the gate so it

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: ./tests/tools/scrub-shell-environment -c 'exec bash "$@"' d2b-ci {0}
+
 jobs:
   tier0:
     runs-on: ubuntu-latest
@@ -20,11 +24,27 @@ jobs:
       - name: Tier 0 first-pass gate
         run: make check-tier0
       - name: ADR index coverage guard
-        run: bash tests/unit/meta/adr-index-coverage.sh
+        run: make test-adr-index-coverage
       - name: CI coverage structural guard
-        run: bash tests/unit/meta/ci-coverage.sh
-      - name: Test rearchitecture fail-closed gates
-        run: bash tests/tools/gen-migration-ledger.sh --check
+        run: make test-ci-coverage
+
+  check-inventory:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Migration ledger drift gate
+        run: make check-inventory
+
+  test-performance-budgets:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Performance budget gate
+        run: make test-performance-budgets
 
   test-lint:
     needs: [tier0]
@@ -50,7 +70,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Changelog policy gate
-        run: bash scripts/changelog-check.sh
+        run: make test-changelog
 
   test-rust:
     needs: [tier0]
@@ -235,6 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Require all x86 flake jobs to pass
         run: |
           discover='${{ needs.flake-eval-discover.result }}'
@@ -426,11 +447,12 @@ jobs:
         run: make test-runtime-ledger
 
   check:
-    needs: [tier0, test-lint, test-changelog, test-rust, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
+    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Require generated Layer-1 gate graph to pass
         run: |
           failed=0
@@ -453,6 +475,8 @@ jobs:
             fi
           }
           require_success tier0 '${{ needs.tier0.result }}'
+          require_success check-inventory '${{ needs.check-inventory.result }}'
+          require_success test-performance-budgets '${{ needs.test-performance-budgets.result }}'
           require_success test-lint '${{ needs.test-lint.result }}'
           allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'
           require_success test-rust '${{ needs.test-rust.result }}'

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: ./tests/tools/scrub-shell-environment -c 'exec bash "$@"' d2b-ci {0}
+
 jobs:
   eval:
     runs-on: ubuntu-latest
