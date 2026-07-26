@@ -17,10 +17,10 @@
   `--target PATH` stays supported as an explicit override. The eligibility gate
   is unchanged: it still re-derives every clause from the seal and the captured
   target.
-- Delivery structured stdout now reports a bounded candidate-relative artifact
-  key (for example `evidence/local-host/layer1.json`) instead of the absolute
-  delivery-state path, so a successful run no longer prints `HOME`, the local
-  username, or a checkout or store path into a CI or operator log.
+- Delivery structured stdout now reports a bounded non-absolute artifact
+  reference instead of the absolute delivery-state path, so a successful run
+  no longer prints `HOME`, the local username, or a checkout or store path into
+  a CI or operator log.
 - The delivery error classes map to four distinct sysexits-flavoured exit codes
   (usage 64, invalid input 65, unimplemented 69, environment 72) instead of
   collapsing several classes onto exit code 1.

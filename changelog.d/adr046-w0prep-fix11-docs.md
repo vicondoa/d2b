@@ -9,3 +9,5 @@
   umbrella.
 - Reconciled heavy-gate provisioning, inherited-slot verification, and runtime
   ledger guidance with their current fail-closed implementations.
+- Removed superseded delivery-reference and policy-lint mechanism descriptions
+  from earlier changelog fragments.
