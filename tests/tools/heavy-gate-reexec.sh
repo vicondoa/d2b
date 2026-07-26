@@ -45,10 +45,10 @@
 # stale or broken binary can never loop forever.
 d2b_heavy_gate_reexec() {
   # Bash imports exported functions before this helper runs, and function
-  # resolution precedes PATH lookup. Remove inherited toolchain wrappers, then
-  # also use `command cargo` below so even a surviving/redefined function cannot
-  # intercept the one build that establishes the verifier.
-  unset -f cargo rustc 2>/dev/null || true
+  # resolution precedes PATH lookup. Developers commonly export toolchain
+  # wrapper functions, so explicitly invoke Bash's cleanup builtin rather than
+  # another function that happens to be named `unset`.
+  builtin unset -f cargo rustc 2>/dev/null || true
 
   # $1 is the caller-supplied ROOT; it is deliberately ignored for locating
   # xtask (see the trust model above). $2 is the entrypoint to re-run.
@@ -109,11 +109,11 @@ d2b_heavy_gate_reexec() {
   build_err="$build_diag_dir/cargo.stderr"
   (
     cd -- "$packages" 2>/dev/null \
-      && unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
+      && builtin unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
                RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER \
                CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \
                RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS \
-      && CARGO_TARGET_DIR="$target" command cargo build --quiet -p xtask
+      && CARGO_TARGET_DIR="$target" builtin command cargo build --quiet -p xtask
   ) >/dev/null 2>"$build_err" || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "heavy-gate self-guard: xtask build failed under the pinned toolchain (exit $rc); failing closed" >&2
