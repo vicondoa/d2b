@@ -43,6 +43,12 @@ if [ "$fixture_contracts_only" = 1 ] && [ "${D2B_ENABLE_FIXTURE_BUILD:-0}" != 1 
   exit 1
 fi
 
+if [ "$fixture_contracts_only" = 1 ]; then
+  # shellcheck source=tests/tools/heavy-gate-reexec.sh
+  . "$ROOT/tests/tools/heavy-gate-reexec.sh"
+  d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
+fi
+
 manifest="$ROOT/packages/Cargo.toml"
 lock_file="$ROOT/packages/Cargo.lock"
 deny_config="$ROOT/packages/deny.toml"
