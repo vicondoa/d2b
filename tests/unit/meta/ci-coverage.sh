@@ -201,9 +201,10 @@ done < <(
 # A gate that can exit 0 without doing its work must say so in the manifest.
 #
 # Reachability alone is not coverage: a gate wired to a manifest target still
-# contributes a green result while skipping. Every gate guarded by an opt-in
-# environment variable must therefore belong to a job declared
-# "enforcement": "advisory", so no caller can count it as an enforcing pass.
+# contributes a green result while skipping. A wholly skippable gate is
+# advisory. When one subset of a larger enforcing job is skipped, a separate
+# advisory job must name that exact gap with `advisoryForSkip`; demoting the
+# larger job would understate the checks that really execute.
 # ---------------------------------------------------------------------------
 undeclared_skippable=()
 while IFS= read -r gate; do
@@ -230,14 +231,55 @@ done < <(
     | LC_ALL=C sort
 )
 
-if [ ${#undeclared_skippable[@]} -ne 0 ]; then
+undeclared_manifest_skips=()
+for job_id in "${local_job_ids[@]}"; do
+  mapfile -t skip_guards < <(awk -v job_id="$job_id" '
+    $0 ~ "^[[:space:]]*\"" job_id "\":[[:space:]]*\\{" { in_job = 1; next }
+    in_job && /"D2B_SKIP_[A-Z0-9_]+":[[:space:]]*"1"/ {
+      line = $0
+      sub(/^[^"]*"/, "", line)
+      sub(/".*$/, "", line)
+      print line
+    }
+    in_job && /^    },/ { exit }
+  ' "$MANIFEST")
+  for guard in "${skip_guards[@]}"; do
+    declaration="$job_id:$guard"
+    if ! awk -v declaration="$declaration" '
+      /^[[:space:]]*"[^"]+":[[:space:]]*\{/ {
+        if ($0 ~ /^    "/) {
+          in_job = 1
+          linked = 0
+          advisory = 0
+        }
+      }
+      in_job && index($0, "\"advisoryForSkip\": \"" declaration "\"") { linked = 1 }
+      in_job && /"enforcement":[[:space:]]*"advisory"/ { advisory = 1 }
+      in_job && /^    },/ {
+        if (linked && advisory) {
+          found = 1
+          exit
+        }
+        in_job = 0
+      }
+      END { exit found ? 0 : 1 }
+    ' "$MANIFEST"; then
+      undeclared_manifest_skips+=("$declaration")
+    fi
+  done
+done
+
+if [ ${#undeclared_skippable[@]} -ne 0 ] || [ ${#undeclared_manifest_skips[@]} -ne 0 ]; then
   echo "FAIL: gates that can skip are not declared advisory in the manifest:" >&2
   for g in "${undeclared_skippable[@]}"; do
     echo "  $g" >&2
   done
+  for declaration in "${undeclared_manifest_skips[@]}"; do
+    echo "  manifest skip $declaration has no exact advisory item" >&2
+  done
   echo "" >&2
-  echo "Remediation: give the owning job \"enforcement\": \"advisory\" so a skipped" >&2
-  echo "run is not reported as an enforcing pass, or remove the skip guard." >&2
+  echo "Remediation: declare a separate advisory job with advisoryForSkip naming" >&2
+  echo "the exact job:guard gap, or remove the skip guard." >&2
   exit 1
 fi
 

@@ -71,7 +71,7 @@ fn section_rank(title: &str) -> Option<usize> {
 }
 
 fn is_bullet(line: &str) -> bool {
-    line.starts_with("- ") || line.starts_with("* ")
+    line.starts_with("- ")
 }
 
 /// One or more reasons a fold cannot proceed. Every reason is reported, so a
@@ -1154,6 +1154,16 @@ mod tests {
     fn rejects_non_bullet_section_body() {
         let err = parse_fragment("a.md", "### Added\n\nprose, not a bullet\n")
             .expect_err("non-bullet body fails");
+        assert!(
+            err.reasons()[0].contains("must start with a '- ' bullet"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_star_bullet_section_body() {
+        let err = parse_fragment("a.md", "### Added\n\n* non-canonical bullet\n")
+            .expect_err("star bullet fails");
         assert!(
             err.reasons()[0].contains("must start with a '- ' bullet"),
             "{err}"

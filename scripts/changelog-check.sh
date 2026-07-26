@@ -292,7 +292,7 @@ for my $path (@fragments) {
             push @errors, "$path:$seen{$title}: section '### $title' has no entries";
             next;
         }
-        if ($body[0] !~ /^[-*] /) {
+        if ($body[0] !~ /^- /) {
             push @errors, "$path:$seen{$title}: section '### $title' must start with a '- ' bullet";
         }
     }

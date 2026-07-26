@@ -11,7 +11,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-proofs test-flake test-nix-unit \
+        test-lint test-rust test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
@@ -107,6 +107,11 @@ test-lint:
 ## stub-no-socket, assert-pinned-tests).
 test-rust:
 	bash tests/test-rust.sh
+
+## test-fixture-contracts - advisory fixture-backed contract layer. It skips
+## unless D2B_ENABLE_FIXTURE_BUILD=1 because sandbox fixture delivery is pending.
+test-fixture-contracts:
+	bash tests/test-rust.sh fixture-contracts
 
 ## test-proofs - standalone proof crates under proofs/ (not members of packages/).
 test-proofs:
