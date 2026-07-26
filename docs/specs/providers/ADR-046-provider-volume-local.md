@@ -1157,7 +1157,7 @@ spec:
     class: on-failure
     backoffBase: "5s"
     backoffMax: "300s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:

@@ -622,7 +622,7 @@ spec:
     class: always
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "1h"
 
@@ -1612,7 +1612,7 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | Minijail sandbox semantic class patterns from current v3 broker; Process resource schema from ADR-046-resources-host-guest-process-user |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service`; Provider component descriptor JSON committed at `packages/d2b-provider-transport-unix/descriptor/unix-transport-service.json`; Nix package derivation at `packages/d2b-provider-transport-unix/` |
-| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt; no direct symbol copy. |
+| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplierMilli:2000,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt; no direct symbol copy. |
 | Integration | Provider resource installed → core ProviderDeployment reads component descriptor → creates child `Process/transport-unix-service` (no state-Volume prerequisite) → ProviderSupervisor spawns binary with portal FD in inherited FD table. On delete: Process terminal first → ProviderDeployment finalizer cleared last; the service `status` disappears with the resource row |
 | Data migration | None (fresh Provider resource) |
 | Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_is_empty`; `tests/conformance.rs::no_state_volume_mount`; sandbox policy tests against minijail conformance kit |

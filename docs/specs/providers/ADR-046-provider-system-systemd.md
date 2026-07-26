@@ -287,7 +287,7 @@ d2b.zones.<zone>.resources."system-systemd-controller-<target>" = {
       class             = "on-failure";
       backoffBase       = "1s";
       backoffMax        = "60s";
-      backoffMultiplier = 2.0;
+      backoffMultiplierMilli = 2000;
       maxRestarts       = null;
       resetAfter        = "300s";
     };
@@ -363,7 +363,7 @@ Canonical rendered JSON (schema mirror):
       "class": "on-failure",
       "backoffBase": "1s",
       "backoffMax": "60s",
-      "backoffMultiplier": 2.0,
+      "backoffMultiplierMilli": 2000,
       "maxRestarts": null,
       "resetAfter": "300s"
     },
@@ -598,7 +598,7 @@ After a Process exits while `desiredLifecycle=running`:
    - `on-crash`: restart only if classified `crash`.
 3. Increment `restartCount`; if `restartCount >= maxRestarts`: write `Failed`.
 4. Apply exponential backoff:
-   `delay = min(backoffBase * backoffMultiplier^(restartCount-1), backoffMax)`.
+   `delay = min(backoffBase * (backoffMultiplierMilli / 1000)^(restartCount-1), backoffMax)`.
 5. After `resetAfter` duration of continuous `Ready` state, reset
    `restartCount = 0`.
 6. Dispatch next launch at the end of backoff delay. Backoff does not hold the
@@ -1193,7 +1193,7 @@ Canonical rendered JSON:
       "class": "on-failure",
       "backoffBase": "1s",
       "backoffMax": "60s",
-      "backoffMultiplier": 2.0,
+      "backoffMultiplierMilli": 2000,
       "maxRestarts": null,
       "resetAfter": "300s"
     },

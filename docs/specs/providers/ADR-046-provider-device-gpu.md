@@ -132,7 +132,7 @@ spec:
     class: on-failure
     backoffBase: "5s"
     backoffMax: "5m"
-    backoffMultiplier: 2
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "1h"
 ```
@@ -447,7 +447,7 @@ spec:
     class: on-failure
     backoffBase: "5s"
     backoffMax: "5m"
-    backoffMultiplier: 2
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "1h"
 ```
@@ -660,7 +660,7 @@ spec:
     class: on-failure
     backoffBase: "5s"
     backoffMax: "5m"
-    backoffMultiplier: 2
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "1h"
 ```
@@ -758,7 +758,7 @@ spec:
     class: on-failure
     backoffBase: "5s"
     backoffMax: "5m"
-    backoffMultiplier: 2
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "1h"
 ```
@@ -1716,7 +1716,7 @@ disposition contract test passes.
 | Reuse source | `packages/d2b-host/src/gpu_argv.rs` (baseline `b5ddbed`): `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig`; `packages/d2b-core/src/bundle_resolver.rs` device token constant comment |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-gpu/src/worker_gpu.rs` |
-| Detailed design | Build and commit `Process` resource record with `template: gpu-worker` or `template: render-node-worker`; set `sandbox.seccompClass` (`w1-gpu` or `w1-gpu-render-node`), `sandbox.userNamespace: {mappingClass: process-principal-root}` (uid/gid resolved privately by core from signed worker template - controller does NOT write numeric values), `sandbox.namespaceClasses`, `sandbox.capabilityClasses=[]`, `sandbox.startRoot=false`; set `deviceUsage[{deviceRef,access,purpose}]`, `networkUsage: null`, `endpoints[{name,transport,purpose}]`, `budget` (including `pids` and `fds` bounded limits), `readiness` (with `class`, `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`), and `restartPolicy` (with `class`, `backoffBase`, `backoffMax`, `backoffMultiplier`, `maxRestarts`, `resetAfter`). Provider/system-minijail validates and resolves the LaunchTicket and sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the **privileged broker** which performs `SpawnRunner`, `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and fd transfer - the device-gpu controller does not have execution authority or fd access. `crossDomainTrusted` gating: the signed descriptor is static; `crossDomainTrusted` is projected from the Device setting into the LaunchTicket by Provider/system-minijail, which omits `GpuContextType::CrossDomain` from runtime argv when false. Primary reuse disposition: `adapt`. Preserved source-plan detail: `extract` argv builder logic into `argv.rs` as re-export from `d2b-host` (used by Provider/system-minijail at LaunchTicket resolution time; the signed component descriptor is static and is not rewritten per Device); `adapt` device allowlist token set from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` constant for `deviceUsage` population. |
+| Detailed design | Build and commit `Process` resource record with `template: gpu-worker` or `template: render-node-worker`; set `sandbox.seccompClass` (`w1-gpu` or `w1-gpu-render-node`), `sandbox.userNamespace: {mappingClass: process-principal-root}` (uid/gid resolved privately by core from signed worker template - controller does NOT write numeric values), `sandbox.namespaceClasses`, `sandbox.capabilityClasses=[]`, `sandbox.startRoot=false`; set `deviceUsage[{deviceRef,access,purpose}]`, `networkUsage: null`, `endpoints[{name,transport,purpose}]`, `budget` (including `pids` and `fds` bounded limits), `readiness` (with `class`, `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`), and `restartPolicy` (with `class`, `backoffBase`, `backoffMax`, `backoffMultiplierMilli`, `maxRestarts`, `resetAfter`). Provider/system-minijail validates and resolves the LaunchTicket and sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the **privileged broker** which performs `SpawnRunner`, `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and fd transfer - the device-gpu controller does not have execution authority or fd access. `crossDomainTrusted` gating: the signed descriptor is static; `crossDomainTrusted` is projected from the Device setting into the LaunchTicket by Provider/system-minijail, which omits `GpuContextType::CrossDomain` from runtime argv when false. Primary reuse disposition: `adapt`. Preserved source-plan detail: `extract` argv builder logic into `argv.rs` as re-export from `d2b-host` (used by Provider/system-minijail at LaunchTicket resolution time; the signed component descriptor is static and is not rewritten per Device); `adapt` device allowlist token set from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` constant for `deviceUsage` population. |
 | Integration | `integration/gpu_worker_start/`; `integration/render_node_shared/`; `packages/d2b-contract-tests/tests/minijail_gpu.rs` (reused existing test) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu`; `cargo test -p d2b-contract-tests --test minijail_gpu` continues to pass |

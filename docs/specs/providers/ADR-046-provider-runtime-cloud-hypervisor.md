@@ -649,7 +649,7 @@ restartPolicy:
   class: on-failure
   backoffBase: "1s"
   backoffMax: "60s"
-  backoffMultiplier: 2.0
+  backoffMultiplierMilli: 2000
   maxRestarts: null
   resetAfter: "300s"
 ```
@@ -991,7 +991,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null                # unlimited; ProviderDeployment manages Provider phase
     resetAfter: "600s"
   desiredLifecycle: running
@@ -1061,7 +1061,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   desiredLifecycle: running

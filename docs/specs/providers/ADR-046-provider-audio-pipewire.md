@@ -849,7 +849,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
     resetAfter: "300s"
   readiness:
@@ -904,9 +904,10 @@ spec:
 - `budget` uses the canonical nested `cpu`/`memory`/`pids`/`fds` shape.
   `pids` and `fds` use the `{limit: N}` object form (not a bare scalar).
 - `restartPolicy.class: on-failure` - canonical class name.
-  `backoffBase`/`backoffMax` are duration strings; `backoffMultiplier` is the
-  exponential factor; `maxRestarts` is the per-launch-cycle ceiling; `resetAfter`
-  resets the counter if the process stays Running for this duration.
+  `backoffBase`/`backoffMax` are duration strings; `backoffMultiplierMilli` is
+  the exponential factor multiplied by 1000; `maxRestarts` is the
+  per-launch-cycle ceiling; `resetAfter` resets the counter if the process stays
+  Running for this duration.
 - `readiness.class: provider-defined` - the `vhost-user-sound-worker` template
   declares a provider-defined readiness mechanism (vhost-user socket ready).
   Fields: `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`.
@@ -1000,7 +1001,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1270,7 +1271,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:

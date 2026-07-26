@@ -196,7 +196,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1039,7 +1039,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1229,7 +1229,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1303,7 +1303,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1363,7 +1363,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
