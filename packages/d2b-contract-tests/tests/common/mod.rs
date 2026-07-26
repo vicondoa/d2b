@@ -81,8 +81,18 @@ pub struct Entry {
 }
 
 /// A direct child of a mapping, by normalized key.
+///
+/// The structural parsers preserve duplicate entries so policy checks can
+/// diagnose them. Refuse to choose one here: first-wins lookup would make the
+/// result depend on author order and hide a conflicting later value.
 pub fn direct_child<'a>(map: &'a [Entry], key: &str) -> Option<&'a Entry> {
-    map.iter().find(|e| e.key == key)
+    let mut matches = map.iter().filter(|entry| entry.key == key);
+    let child = matches.next();
+    assert!(
+        matches.next().is_none(),
+        "mapping contains duplicate direct child key `{key}`"
+    );
+    child
 }
 
 /// Collect every mapping in the document tree (the node and every descendant).
@@ -1158,4 +1168,42 @@ fn insert_path(entries: &mut Vec<Entry>, segments: &[String], value: Node) {
         val: Node::Map(inner),
         line: 0,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_child_rejects_duplicates_from_every_structural_parser() {
+        let cases = [
+            (
+                "json",
+                vec!["{", r#""status": "first","#, r#""status": "second""#, "}"],
+            ),
+            ("yaml", vec!["status: first", "status: second"]),
+            (
+                "nix",
+                vec!["{", r#"status = "first";"#, r#"status = "second";"#, "}"],
+            ),
+        ];
+
+        for (language, lines) in cases {
+            let documents = parse_block_docs(language, &lines)
+                .unwrap_or_else(|error| panic!("{language} fixture must parse: {error}"));
+            let Node::Map(entries) = &documents[0] else {
+                panic!("{language} fixture must produce a mapping");
+            };
+            assert_eq!(
+                entries.iter().filter(|entry| entry.key == "status").count(),
+                2,
+                "{language} must preserve duplicate entries for deterministic rejection"
+            );
+            let lookup = std::panic::catch_unwind(|| direct_child(entries, "status"));
+            assert!(
+                lookup.is_err(),
+                "{language} duplicate lookup must fail rather than choose a value"
+            );
+        }
+    }
 }
