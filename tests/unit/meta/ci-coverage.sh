@@ -204,6 +204,8 @@ done < <(
 # contributes a green result while skipping. Every gate guarded by an opt-in
 # environment variable must therefore belong to a job declared
 # "enforcement": "advisory", so no caller can count it as an enforcing pass.
+# A manifest-provided D2B_SKIP_*=1 is an explicit skip activation rather than
+# an opt-in guard in the gate source, so it is checked independently below.
 # ---------------------------------------------------------------------------
 undeclared_skippable=()
 while IFS= read -r gate; do
@@ -230,10 +232,33 @@ done < <(
     | LC_ALL=C sort
 )
 
-if [ ${#undeclared_skippable[@]} -ne 0 ]; then
+manifest_skip_jobs=()
+for job_id in "${local_job_ids[@]}"; do
+  if ! awk -v job_id="$job_id" '
+    $0 ~ "^[[:space:]]*\"" job_id "\":[[:space:]]*\\{" { in_job = 1; next }
+    in_job && /"D2B_SKIP_[A-Z0-9_]+":[[:space:]]*"1"/ { found = 1 }
+    in_job && /^    },/ { exit }
+    END { exit found ? 0 : 1 }
+  ' "$MANIFEST"; then
+    continue
+  fi
+  if ! awk -v job_id="$job_id" '
+    $0 ~ "^[[:space:]]*\"" job_id "\":[[:space:]]*\\{" { in_job = 1; next }
+    in_job && /"enforcement":[[:space:]]*"advisory"/ { ok = 1 }
+    in_job && /^    },/ { exit }
+    END { exit ok ? 0 : 1 }
+  ' "$MANIFEST"; then
+    manifest_skip_jobs+=("$job_id")
+  fi
+done
+
+if [ ${#undeclared_skippable[@]} -ne 0 ] || [ ${#manifest_skip_jobs[@]} -ne 0 ]; then
   echo "FAIL: gates that can skip are not declared advisory in the manifest:" >&2
   for g in "${undeclared_skippable[@]}"; do
     echo "  $g" >&2
+  done
+  for job_id in "${manifest_skip_jobs[@]}"; do
+    echo "  manifest job $job_id enables a D2B_SKIP_* guard" >&2
   done
   echo "" >&2
   echo "Remediation: give the owning job \"enforcement\": \"advisory\" so a skipped" >&2

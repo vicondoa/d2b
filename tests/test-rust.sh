@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tests/test-rust.sh - `make test-rust`: the comprehensive Rust gate.
 #   fmt + clippy + `cargo test --workspace` (excluding the fixture-dependent
-#   d2b-contract-tests), the contract crate against D2B_FIXTURES, the
-#   CLI-contract layer, no-bash-ast-walker, the privileged broker workspace
+#   d2b-contract-tests), an optional contract-crate run against D2B_FIXTURES,
+#   the CLI-contract layer, no-bash-ast-walker, the privileged broker workspace
 #   (3 feature passes, concurrent), schema-gen reproducibility, and cargo-deny.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
@@ -56,7 +56,7 @@ broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
 guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
-# Full D2B_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
+# Full D2B_FIXTURES delivery to the sandbox/CI is tracked separately.
 workspace_test_excludes=(--exclude d2b-contract-tests)
 
 d2b_activate_rust_toolchain_path || true
@@ -266,14 +266,14 @@ workspace_test_started=$SECONDS
 CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 ok "cargo test (duration: $((SECONDS - workspace_test_started))s)"
 
-# W3 fixture-contract layer: the d2b-contract-tests crate is EXCLUDED
-# from the workspace test above because it reads the Nix-rendered bundle via
-# $D2B_FIXTURES. Build the fixture-smoke artifact and run the contract crate
-# against it - this is what gates the fixture -> d2b-core DTO contract
-# layer (e.g. the privileges Rust-vs-Nix matrix parity). Without this step
-# the contract crate never runs in the gate.
+# The d2b-contract-tests crate is excluded from the workspace test above because
+# its fixture-dependent tests read the Nix-rendered bundle via $D2B_FIXTURES.
+# When enabled, this step builds fixture-smoke and runs the contract crate
+# against it, gating the fixture -> d2b-core DTO layer (including privileges
+# Rust-vs-Nix matrix parity). When skipped, no flake shard substitutes for these
+# fixture-dependent tests.
 if [ "${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then
-  log "  SKIP: d2b-contract-tests (D2B_SKIP_FIXTURE_BUILD=1; fixtures validated by flake-eval shards)"
+  log "  SKIP: fixture-dependent d2b-contract-tests (D2B_SKIP_FIXTURE_BUILD=1; not executed in this lane and not covered by flake shards)"
 elif command -v nix >/dev/null 2>&1; then
   log "--> cargo test -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
   contract_system=$(nix eval --extra-experimental-features 'nix-command flakes' \
@@ -292,7 +292,7 @@ elif command -v nix >/dev/null 2>&1; then
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo test --manifest-path "$manifest" -p d2b-contract-tests
-  ok "cargo test -p d2b-contract-tests (W3 fixture-contract layer)"
+  ok "cargo test -p d2b-contract-tests (fixture-contract layer)"
 
   # CLI-contract layer: spawn the real `d2b` binary against the rendered
   # fixture bundle (D2B_FIXTURES) + a synthetic system-state and validate the
@@ -317,7 +317,7 @@ elif command -v nix >/dev/null 2>&1; then
     cargo test --manifest-path "$manifest" -p d2b --tests
   ok "cargo test -p d2b --tests (CLI-contract layer)"
 else
-  log "  SKIP: d2b-contract-tests (nix unavailable to build fixture-smoke)"
+  log "  SKIP: fixture-dependent d2b-contract-tests (nix unavailable to build fixture-smoke; not covered by flake shards)"
 fi
 
 # no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan

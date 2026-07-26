@@ -112,6 +112,8 @@
     "test-rust": {
       "displayName": "Rust workspace gate",
       "makeTarget": "test-rust",
+      "enforcement": "advisory",
+      "advisoryReason": "The workspace tests run, but D2B_SKIP_FIXTURE_BUILD=1 leaves fixture-dependent d2b-contract-tests unexecuted, and flake shards do not substitute for them.",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
