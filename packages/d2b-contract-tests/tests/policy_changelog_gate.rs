@@ -122,7 +122,9 @@ impl FixtureRepo {
     /// Run the real gate against this fixture. Returns (passed, combined output).
     fn run_gate(&self) -> (bool, String) {
         let script = repo_root().join("scripts/changelog-check.sh");
-        let output = Command::new("bash")
+        let scrubber = repo_root().join("tests/tools/scrub-shell-environment");
+        let output = Command::new(scrubber)
+            .args(["-c", "exec bash \"$@\"", "policy-changelog-gate"])
             .arg(&script)
             .current_dir(&self.root)
             .env("ROOT", &self.root)
