@@ -48,9 +48,12 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + nix-unit + drift + policy + runtime-ledger | local + CI (parallel jobs) |
+| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`: test-lint + test-changelog + test-rust + test-proofs + test-flake + test-nix-unit + test-policy + test-drift + test-runtime-ledger + test-performance-budgets; `make check` also runs check-tier0 + check-inventory | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
+| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
+| `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
+| `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
@@ -59,9 +62,9 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets over the exact pinned census and reports per-test wall-clock p95s against advisory diagnostic thresholds (holds no baseline; makes no historical-regression claim) | local + CI |
+| `make test-performance-budgets` | self-gating performance canary; hosted runners skip and pinned stable runners enforce | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
-| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | PR-equivalent Layer-1 gate from `tests/layer1-jobs.json` with bounded local parallelism | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
@@ -89,10 +92,11 @@ entrypoints, or wrap a raw live script as `cargo run --manifest-path
 packages/Cargo.toml -p xtask -- heavy-gate -- env
 D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
 tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
-each live/hardware/perf entrypoint re-executes itself through the gate
-exactly once when `D2B_HEAVY_GATE` is unset, so the shared Nix store,
-cargo target directory, and KVM device cannot be oversubscribed. The gated
-targets remain the documented path. The `cargo run --manifest-path
+each live/hardware/perf entrypoint verifies its inherited slot and re-executes
+itself through the gate exactly once when no genuine slot is held. A bare
+`D2B_HEAVY_GATE` value is not trusted, so the shared Nix store, cargo target
+directory, and KVM device cannot be oversubscribed. The gated targets remain
+the documented path. The `cargo run --manifest-path
 packages/Cargo.toml` spelling is required because there is no root cargo
 workspace, so the bare `cargo xtask` alias resolves only when run from
 `packages/`; see AGENTS.md for the `sccache` tradeoff and the `cd packages
@@ -120,12 +124,16 @@ a `d2bd` restart. The USBIP script requires
 `D2B_USBIP_VM=<vm>` and `D2B_USBIP_BUSID=<busid>` and uses only `d2b usb`
 verbs for USB state changes.
 
-`tests/layer1-jobs.json` is the central Layer-1 job graph. `make check` and
-`make test-unit` consume it directly; `.github/workflows/pr-l1-static-fast.yml`
-is generated from it by `make layer1-workflow` and checked by
+`tests/layer1-jobs.json` is the central Layer-1 job graph. In its local phase
+order, `make check` runs `check-tier0`, `check-inventory`, `test-lint`,
+`test-changelog`, `test-rust`, `test-proofs`, `test-flake`, `test-nix-unit`,
+`test-policy`, `test-drift`, `test-runtime-ledger`, and
+`test-performance-budgets`. `make test-unit` consumes the same manifest but
+skips its two-job preflight phase. `.github/workflows/pr-l1-static-fast.yml`
+is generated from the manifest by `make layer1-workflow` and checked by
 `make layer1-workflow-check` during `make test-drift`. CI runs the individual
-Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel and exposes a
-stable final `check` rollup job intended for branch protection.
+Layer-1 jobs in parallel and exposes a stable final `check` rollup job intended
+for branch protection.
 
 The `test-runtime-ledger` job is part of that graph. It warm-builds the pinned
 census, records per-test wall-clock p95s as advisory diagnostics, and enforces
