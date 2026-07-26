@@ -1707,6 +1707,31 @@ mod tests {
     // ---- pure contract -------------------------------------------------
 
     #[test]
+    fn gate_leaf_operations_remain_fd_relative_and_procfs_independent() {
+        let source = include_str!("heavy_gate.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("the production portion precedes the test module");
+        let proc_fd_leaf = ["/proc/self", "/fd/"].concat();
+        let old_helper = ["anchored", "_path("].concat();
+
+        assert!(
+            !production.contains(&proc_fd_leaf),
+            "production gate operations must not reconstruct paths through procfs"
+        );
+        assert!(
+            !production.contains(&old_helper),
+            "the pathname reconstruction helper must not return"
+        );
+        assert!(
+            production.contains("rustix::fs::openat(")
+                && production.contains("rustix::fs::mkdirat("),
+            "slot opens and test-only fixture creation must stay fd-relative"
+        );
+    }
+
+    #[test]
     fn gate_root_is_a_fixed_constant_independent_of_the_uid_and_runtime_dir() {
         // Production (no injected override) is always the single fixed root,
         // never a function of the uid and never a function of whether
