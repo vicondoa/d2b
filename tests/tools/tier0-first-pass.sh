@@ -154,7 +154,8 @@ scan_dashes() {
   local -a files=() patterns=()
   local dash hits toplevel enum_status grep_status
 
-  root=$(cd "$root" && pwd -P)
+  root=$(cd "$root" 2>/dev/null && pwd -P) \
+    || fail "dash scan cannot resolve its scan root"
   toplevel=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)
 
   # Enumerate through a pipe (not process substitution) so PIPESTATUS carries
@@ -178,8 +179,8 @@ scan_dashes() {
   [ "$lastpipe_was_set" -eq 1 ] || shopt -u lastpipe
 
   [ "$enum_status" -eq 0 ] \
-    || fail "dash scan could not enumerate files under $root (enumerator exited $enum_status)"
-  [ "${#files[@]}" -gt 0 ] || fail "dash scan found no files under $root"
+    || fail "dash scan could not enumerate files (enumerator exited $enum_status)"
+  [ "${#files[@]}" -gt 0 ] || fail "dash scan found no files in its scan root"
 
   for dash in "${DASHES[@]}"; do
     patterns+=(-e "$dash")
@@ -201,11 +202,11 @@ scan_dashes() {
   fi
   if [ "$grep_status" -gt 1 ]; then
     [ -n "$hits" ] && printf '%s\n' "$hits" >&2
-    fail "dash scan aborted: grep exited $grep_status (unreadable/vanished file or bad pattern) under $root"
+    fail "dash scan aborted: grep exited $grep_status (unreadable/vanished file or bad pattern)"
   fi
   if [ "$grep_status" -eq 0 ]; then
     printf '%s\n' "$hits" >&2
-    fail "only the ASCII hyphen '-' may spell a dash; a banned dash codepoint matched under $root (see grep output above)"
+    fail "only the ASCII hyphen '-' may spell a dash; a banned dash codepoint matched (see grep output above)"
   fi
   ok "no non-ASCII dash in ${#files[@]} files"
 }
@@ -234,7 +235,8 @@ scan_process_markers() {
   local f hit path hits context_hits toplevel enum_status grep_status awk_status
   local is_repo_root=0 filename_hits=
 
-  root=$(cd "$root" && pwd -P)
+  root=$(cd "$root" 2>/dev/null && pwd -P) \
+    || fail "process-marker scan cannot resolve its scan root"
   toplevel=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)
 
   local lastpipe_was_set=1
@@ -254,8 +256,8 @@ scan_process_markers() {
   [ "$lastpipe_was_set" -eq 1 ] || shopt -u lastpipe
 
   [ "$enum_status" -eq 0 ] \
-    || fail "process-marker scan could not enumerate files under $root (enumerator exited $enum_status)"
-  [ "${#files[@]}" -gt 0 ] || fail "process-marker scan found no files under $root"
+    || fail "process-marker scan could not enumerate files (enumerator exited $enum_status)"
+  [ "${#files[@]}" -gt 0 ] || fail "process-marker scan found no files in its scan root"
 
   if [ "$is_repo_root" -eq 1 ]; then
     [ "${#LEGACY_PROCESS_MARKER_PATHS[@]}" -eq "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ] \
@@ -305,7 +307,7 @@ scan_process_markers() {
   done
 
   [ "$is_repo_root" -eq 0 ] || [ "${#full_files[@]}" -gt 0 ] \
-    || fail "process-marker scan could not classify any governed files under $root"
+    || fail "process-marker scan could not classify any governed files"
 
   for f in "${full_files[@]}" "${source_files[@]}" "${workflow_files[@]}" "${filename_files[@]}"; do
     [ -r "$root/$f" ] \
@@ -325,7 +327,7 @@ scan_process_markers() {
     fi
     if [ "$grep_status" -gt 1 ]; then
       [ -n "$hits" ] && printf '%s\n' "$hits" >&2
-      fail "process-marker scan aborted: grep exited $grep_status (unreadable/vanished file or bad pattern) under $root"
+      fail "process-marker scan aborted: grep exited $grep_status (unreadable/vanished file or bad pattern)"
     fi
   else
     hits=
@@ -427,7 +429,7 @@ scan_process_markers() {
     hits+="${hits:+$'\n'}$filename_hits"
   fi
   if [ "$grep_status" -eq 0 ] && [ -z "$hits" ]; then
-    fail "process-marker scan matched but produced no classifiable diagnostic under $root"
+    fail "process-marker scan matched but produced no classifiable diagnostic"
   fi
 
   while IFS= read -r hit; do
