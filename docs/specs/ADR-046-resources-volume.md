@@ -212,7 +212,7 @@ status:
 | --- | --- | --- | --- | --- |
 | `providerRef` | ResourceRef | Yes | - | Must resolve to a Ready Provider in the same Zone implementing Volume |
 | `source.executionRef` | ResourceRef | Yes | - | Must resolve to a Host or Guest in the same Zone |
-| `source.settings` | object | Yes | - | Validated against Provider-specific source schema |
+| `source.settings` | object | Yes | - | Volume base source object; validated by the exact Volume base schema implemented by the selected Provider |
 | `source.settings.kind` | SourceKind enum | Yes | - | `local-path`, `block-image`, `tmpfs` |
 | `source.settings.sourcePolicyId` | string | conditional | - | Opaque bounded ID for `local-path`/`block-image`; references an entry in volume-local's private allowlisted root policy. Never a raw host path; never exposed in public status or audit. |
 | `kind` | VolumeKind enum | Yes | - | `durable`, `ephemeral`, `state`, `tmp`, `cache` |
@@ -1387,7 +1387,7 @@ Validation steps in order:
 1. **providerRef resolution**: `Provider/<name>` must appear as a resource of type `Provider` in `d2b.zones.<zone>.resources`.
 2. **executionRef resolution**: `Host/<name>` or `Guest/<name>` must appear in `d2b.zones.<zone>.resources.*`.
 3. **Provider artifact resolution**: the Provider resource's `spec.artifactId` must appear in `d2b.artifacts` with `type = "provider"`. A missing or wrong-type `artifactId` aborts the build; the error names the Provider resource and the missing/mismatched catalog ID.
-4. **Provider source-kind schema**: `source.settings` is validated against the volume-local Provider's signed `root-config.schema.json`. The schema is read from the private artifact catalog entry for the Provider's `artifactId`; no store path appears in the resource spec. Provider-specific settings that fail the schema abort the build; the error includes the schema version and violated constraint, not the field value.
+4. **Volume source base schema**: `source.settings` is validated as part of the exact Volume base spec schema version and fingerprint implemented by the selected Provider's `ResourceApiBinding`. These source fields are ResourceType-common base fields, not Provider-specific settings. A constraint failure aborts the build; the error includes the base schema version and violated constraint, not the field value.
 5. **Layout bounds**: ≤ 1024 entries; path uniqueness (no duplicates or overlaps); each path is relative, contains no `..` components, no leading `/`, no null bytes, no Unicode path-separator homoglyphs.
 6. **Layout entry ownerRef/groupRef**: each `User/<name>` must appear as a resource of type `User` in `d2b.zones.<zone>.resources`.
 7. **symlink target validation**: every entry with `type = "symlink"` must declare `target`; target is validated as a relative path with no `..` and no leading `/`; target path must resolve to a path under the Volume root.
@@ -1396,7 +1396,7 @@ Validation steps in order:
 10. **Attachment bounds**: ≤ 64 attachments; each attachment `executionRef` resolves; each `view` name exists in the Volume's `views`; at most one `read-write` attachment; `shared-write` only if Provider declares `supportsSharedWrite: true`.
 11. **block-image quota**: `source.settings.kind == "block-image"` requires `quota.maxBytes != null`.
 12. **tmpfs quota**: `source.settings.kind == "tmpfs"` requires `quota.maxBytes != null` and `quota.maxInodes != null`.
-13. **Attachment provider-settings schema**: virtiofs attachment `settings` is validated against volume-virtiofs's signed `attachment.schema.json`; `virtio-blk` attachment settings against volume-local's `block-attachment.schema.json`. Both schemas are read from the private artifact catalog entries for the respective Provider `artifactId`s; no store paths in the spec.
+13. **Attachment base schema**: every attachment `settings` object is validated by the Volume base spec schema. The typed virtiofs and virtio-blk mount options are ResourceType-common base fields; genuinely implementation-only desired settings belong only in the canonical `spec.provider.settings` envelope.
 14. **Credential refs**: no secret values (raw keys, passwords, tokens) appear in Volume spec. If a future layout entry requires a secret (e.g., an encrypted-at-rest key), it must use `credentialRef: Credential/<name>`.
 15. **Conflict detection**: two `local-path`/`block-image` Volumes bound to the
     same `sourcePolicyId` root may not declare overlapping resolved subtrees.
@@ -1422,9 +1422,11 @@ NixOS generation:
   "generatedAt": "1970-01-01T00:00:00.000Z",
   "resources": [
     { "apiVersion": "resources.d2bus.org/v3", "type": "Provider",
-      "metadata": { "name": "volume-local", "zone": "dev" }, "spec": { } },
+      "metadata": { "name": "volume-local", "zone": "dev" },
+      "spec": { "artifactId": "volume-local-provider", "config": {} } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "Provider",
-      "metadata": { "name": "volume-virtiofs", "zone": "dev" }, "spec": { } },
+      "metadata": { "name": "volume-virtiofs", "zone": "dev" },
+      "spec": { "artifactId": "volume-virtiofs-provider", "config": {} } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "User",
       "metadata": { "name": "d2b-work-vm-runner", "zone": "dev" }, "spec": { } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "Volume",

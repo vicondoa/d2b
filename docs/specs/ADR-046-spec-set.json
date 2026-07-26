@@ -992,7 +992,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-volume.md",
-      "sha256" : "04bd8468471a793b1f0a7391a34380698def1443d1becccfab9ebfb5b32a5003",
+      "sha256" : "936d5c7ec870370eac8f08239aba6d675118237cfcfd2e7d0b791781b53abb82",
       "specId" : "ADR-046-resources-volume",
       "status" : "Accepted",
       "supersedes" : "`storage.json` v2, `sync.json` v1, per-VM hardlink-farm and store-view emitters in `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "bc4014fd3b63c91c95fc470f2f76507cd349d3999fa62404a18ef6e132d3d99c",
+      "sha256" : "424933c6ce39d3b03cad2ac87c85349a91410fa283d3e3037a9fab2f91fb051a",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "6aeb15618a0746be84d0895a3f696c446e19288e90395923853a1935237b9f14",
+      "sha256" : "b8e7272a83fdf93023141f53ffe6568d94a43fa2eca63b6dad349736e0f42082",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",

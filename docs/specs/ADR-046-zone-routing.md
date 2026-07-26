@@ -931,8 +931,8 @@ d2b.zones.k1.parentZone = "local-root";
 d2b.zones.k1.resources.transport-unix = {
   type = "Provider";
   spec = {
-    kind        = "transport-unix";
-    description = "Allocator-issued Unix socket transport for local child zones";
+    artifactId = "provider-transport-unix";
+    config = {};
   };
 };
 
@@ -967,8 +967,8 @@ d2b.zones.k2.parentZone = "k1";
 d2b.zones.k2.resources.transport-azure-relay = {
   type = "Provider";
   spec = {
-    kind        = "transport-azure-relay";
-    description = "Azure Relay transport for K1→K2 link";
+    artifactId = "provider-transport-azure-relay";
+    config = {};
   };
 };
 
