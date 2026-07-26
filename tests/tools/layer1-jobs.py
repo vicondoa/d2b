@@ -22,6 +22,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "pr-l1-static-fast.yml"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
+SCRUBBED_BASH = "./tests/tools/scrub-shell-environment -c 'exec bash \"$@\"' d2b-ci {0}"
 
 
 def load_manifest() -> dict[str, Any]:
@@ -88,6 +89,16 @@ def simple_nix_job(job: dict[str, Any]) -> str:
         run: make {job["makeTarget"]}"""
 
 
+def simple_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    steps:
+      - uses: {CHECKOUT}
+      - name: {job["displayName"]}
+        run: make {job["makeTarget"]}"""
+
+
 def tier0_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
     runs-on: {job["runsOn"]}
@@ -97,11 +108,9 @@ def tier0_job(job: dict[str, Any]) -> str:
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}
       - name: ADR index coverage guard
-        run: bash tests/unit/meta/adr-index-coverage.sh
+        run: make test-adr-index-coverage
       - name: CI coverage structural guard
-        run: bash tests/unit/meta/ci-coverage.sh
-      - name: Test rearchitecture fail-closed gates
-        run: bash tests/tools/gen-migration-ledger.sh --check"""
+        run: make test-ci-coverage"""
 
 
 def changelog_job(job: dict[str, Any]) -> str:
@@ -114,7 +123,7 @@ def changelog_job(job: dict[str, Any]) -> str:
         with:
           fetch-depth: 0
       - name: {job["displayName"]}
-        run: bash scripts/changelog-check.sh"""
+        run: make {job["makeTarget"]}"""
 
 
 def rust_job(job: dict[str, Any]) -> str:
@@ -261,6 +270,7 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
     runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
+      - uses: {CHECKOUT}
       - name: {job["displayName"]}
         run: |
           discover='${{{{ needs.flake-eval-discover.result }}}}'
@@ -301,6 +311,7 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
         "    runs-on: ubuntu-latest",
         "    timeout-minutes: 5",
         "    steps:",
+        f"      - uses: {CHECKOUT}",
         "      - name: Require generated Layer-1 gate graph to pass",
         "        run: |",
         "          failed=0",
@@ -342,6 +353,7 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
 
 RENDERERS = {
     "tier0": tier0_job,
+    "simple": simple_job,
     "simple-nix": simple_nix_job,
     "changelog": changelog_job,
     "rust": rust_job,
@@ -367,6 +379,13 @@ def render_workflow(manifest: dict[str, Any]) -> str:
     template = TEMPLATE.read_text(encoding="utf-8")
     workflow = template.replace("{{ workflow_name }}", manifest["ci"]["workflowName"])
     workflow = workflow.replace("{{ jobs }}", "\n\n".join(rendered_jobs))
+    permissions = "permissions:\n  contents: read\n"
+    if workflow.count(permissions) != 1:
+        raise SystemExit(f"{TEMPLATE}: expected one workflow permissions block")
+    workflow = workflow.replace(
+        permissions,
+        permissions + f"\ndefaults:\n  run:\n    shell: {SCRUBBED_BASH}\n",
+    )
     return workflow.rstrip() + "\n"
 
 
