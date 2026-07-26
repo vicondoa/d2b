@@ -927,6 +927,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-core-controller"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+]
+
+[[package]]
 name = "d2b-daemon-access"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1153,6 +1160,27 @@ dependencies = [
  "d2b-realm-core",
  "d2b-realm-provider",
  "tokio",
+]
+
+[[package]]
+name = "d2b-resource-api"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-core-controller",
+ "d2b-resource-store",
+ "protobuf",
+ "sha2",
+ "tokio",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2b-resource-store"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
 ]
 
 [[package]]

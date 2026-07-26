@@ -352,6 +352,12 @@ fn main() -> std::process::ExitCode {
         }
         [command] if command == "gen-guest-proto" => run_task("gen-guest-proto", gen_guest_proto),
         [command] if command == "gen-guest-ttrpc" => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
+        [command] if command == "gen-resource-proto" => {
+            run_task("gen-resource-proto", gen_resource_proto)
+        }
+        [command] if command == "gen-resource-ttrpc" => {
+            run_task("gen-resource-ttrpc", gen_resource_ttrpc)
+        }
         [command] if command == "gen-daemon-api" => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
@@ -381,7 +387,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -420,6 +426,29 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     Ok(vec![out_file])
 }
 
+fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto = proto_dir.join("d2b-resource-v3.proto");
+    let out_dir = repo_root.join("packages/d2b-resource-api/src/generated");
+    fs::create_dir_all(&out_dir)?;
+
+    ttrpc_codegen::Codegen::new()
+        .out_dir(&out_dir)
+        .input(&proto)
+        .include(&proto_dir)
+        .customize(ttrpc_codegen::Customize {
+            async_client: true,
+            async_server: true,
+            ..Default::default()
+        })
+        .run()?;
+
+    let out_file = out_dir.join("d2b_resource_v3_ttrpc.rs");
+    sanitize_generated_rust(&out_file)?;
+    Ok(vec![out_file])
+}
+
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let proto_dir = repo_root.join("packages/d2b-contracts/proto");
@@ -431,7 +460,7 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let temp_proto = temp_proto_dir.join("guest_control.proto");
     fs::write(
         &temp_proto,
-        message_only_proto(&fs::read_to_string(&proto)?)?,
+        message_only_proto(&fs::read_to_string(&proto)?, "GuestControl")?,
     )?;
 
     protobuf_codegen::Codegen::new()
@@ -442,17 +471,56 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .run()?;
 
     sanitize_generated_rust(&out_file)?;
+    write_contract_generated_mod(&out_dir)?;
     let _ = fs::remove_dir_all(&temp_proto_dir);
     Ok(vec![out_file])
 }
 
-fn message_only_proto(proto: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto = proto_dir.join("d2b-resource-v3.proto");
+    let out_dir = repo_root.join("packages/d2b-contracts/src/generated");
+    fs::create_dir_all(&out_dir)?;
+    let out_file = out_dir.join("d2b_resource_v3.rs");
+    let temp_proto_dir = create_exclusive_temp_dir("d2b-resource-proto")?;
+    let temp_proto = temp_proto_dir.join("d2b-resource-v3.proto");
+    fs::write(
+        &temp_proto,
+        message_only_proto(&fs::read_to_string(&proto)?, "ResourceService")?,
+    )?;
+
+    protobuf_codegen::Codegen::new()
+        .pure()
+        .include(&temp_proto_dir)
+        .input(&temp_proto)
+        .out_dir(&out_dir)
+        .run()?;
+
+    sanitize_generated_rust(&out_file)?;
+    write_contract_generated_mod(&out_dir)?;
+    let _ = fs::remove_dir_all(&temp_proto_dir);
+    Ok(vec![out_file])
+}
+
+fn write_contract_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::write(
+        out_dir.join("mod.rs"),
+        "// @generated\n\npub mod d2b_resource_v3;\npub mod guest_control;\n",
+    )?;
+    Ok(())
+}
+
+fn message_only_proto(
+    proto: &str,
+    service_name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     let mut out = String::new();
     let mut skipping_service = false;
     let mut depth = 0_i32;
     for line in proto.lines() {
         let trimmed = line.trim_start();
-        if !skipping_service && trimmed.starts_with("service GuestControl ") {
+        if !skipping_service && trimmed.starts_with(&format!("service {service_name} ")) {
             skipping_service = true;
         }
         if skipping_service {
@@ -468,7 +536,7 @@ fn message_only_proto(proto: &str) -> Result<String, Box<dyn std::error::Error>>
         out.push('\n');
     }
     if skipping_service || depth != 0 {
-        Err("guest_control.proto service block was not closed".into())
+        Err(format!("{service_name} service block was not closed").into())
     } else {
         Ok(out)
     }

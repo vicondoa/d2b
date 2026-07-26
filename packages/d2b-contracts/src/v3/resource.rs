@@ -26,7 +26,7 @@ pub const MAX_FINALIZER_ID_BYTES: usize = 128;
 /// Maximum labels or annotations on one resource.
 pub const MAX_PRESENTATION_METADATA_ENTRIES: usize = 32;
 /// Maximum bytes in one metadata key.
-pub const MAX_METADATA_KEY_BYTES: usize = 128;
+pub const MAX_METADATA_KEY_BYTES: usize = 64;
 /// Maximum bytes in one label value.
 pub const MAX_LABEL_VALUE_BYTES: usize = 256;
 /// Maximum bytes in one annotation value.

@@ -10,6 +10,9 @@ pub mod guest_auth;
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
 }
+pub mod resource_proto {
+    pub use crate::generated::d2b_resource_v3::*;
+}
 pub mod guest_wire;
 pub mod public_wire;
 pub mod security_key;
