@@ -509,6 +509,9 @@ test-runtime-ledger:
 	    fi; \
 	    if grep -q '"event": "failed"' "$$json"; then \
 	      echo "test-runtime-ledger: a hermetic test reported failure while timing census crate $$crate" >&2; exit 1; fi; \
+	    timed_events="$$(awk '/"type": "test"/ && /"exec_time"/ { count++ } END { print count + 0 }' "$$json")"; \
+	    if [ "$$timed_events" -lt 1 ]; then \
+	      echo "test-runtime-ledger: census crate $$crate emitted no timed test events; refusing to record an empty measurement set" >&2; exit 1; fi; \
 	    started=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "started"' || true); \
 	    passed=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "ok"' || true); \
 	    if [ "$$started" -lt 1 ] || [ "$$started" -ne "$$passed" ]; then \

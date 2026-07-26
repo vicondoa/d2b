@@ -14,6 +14,10 @@
   treats path metacharacters literally, respects path-component boundaries,
   redacts other absolute paths, and suppresses raw output explicitly if safe
   filtering is unavailable.
+- The runtime ledger now refuses a crate stream with no timed test events and
+  pins the exact expected test identifiers as well as crate names. A vanished
+  test can no longer turn into a zero-duration crate measurement or silently
+  shrink the measured census.
 - Delivery snapshot Git failures now classify only anchored Git diagnostic
   phrases after removing quoted caller-controlled values. A keyword in a path,
   revision, or URL can no longer misreport a healthy repository as corrupt or

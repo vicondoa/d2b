@@ -372,6 +372,7 @@ pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedCensus {
     pub crates: Vec<String>,
+    pub tests: Vec<String>,
 }
 
 impl ExpectedCensus {
@@ -388,12 +389,21 @@ impl ExpectedCensus {
         for id in &self.crates {
             validate_id("crate", id)?;
         }
+        if self.tests.is_empty() {
+            return Err(
+                "the expected census pins no tests; a crate name alone cannot prove any test ran"
+                    .to_string(),
+            );
+        }
+        for id in &self.tests {
+            validate_id("test", id)?;
+        }
         Ok(())
     }
 }
 
-/// Enforce that the ledger's crate census reproduces the pinned closed set
-/// *exactly* - no missing pinned id, and no unpinned extra.
+/// Enforce that the ledger's crate and test censuses reproduce the pinned
+/// closed sets *exactly* - no missing pinned id, and no unpinned extra.
 ///
 /// `audit_census` proves the run is complete and repeated; this proves it is
 /// measuring the pinned set and only the pinned set. Together they close the
@@ -402,8 +412,10 @@ impl ExpectedCensus {
 /// the committed census.
 pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Violation> {
     let mut violations = Vec::new();
-    let compared: [(&str, &Vec<String>, &Vec<Sample>); 1] =
-        [("crate", &expected.crates, &ledger.crates)];
+    let compared: [(&str, &Vec<String>, &Vec<Sample>); 2] = [
+        ("crate", &expected.crates, &ledger.crates),
+        ("test", &expected.tests, &ledger.tests),
+    ];
     for (scope, expected_ids, samples) in compared {
         let want: BTreeSet<&str> = expected_ids.iter().map(String::as_str).collect();
         let have: BTreeSet<&str> = samples.iter().map(|s| s.id.as_str()).collect();
@@ -654,7 +666,15 @@ fn run_record(args: &[String]) -> Result<(), String> {
             "--libtest-json" => {
                 let stream = fs::read_to_string(value)
                     .map_err(|error| format!("cannot read the libtest stream: {error}"))?;
-                for (id, millis) in parse_libtest_json(&stream)? {
+                let measurements = parse_libtest_json(&stream)?;
+                if measurements.is_empty() {
+                    return Err(
+                        "the libtest stream contains no timed test events; refusing to record an \
+                         empty measurement set"
+                            .to_string(),
+                    );
+                }
+                for (id, millis) in measurements {
                     collector.tests.entry(id).or_default().push(millis);
                 }
             }
@@ -666,7 +686,14 @@ fn run_record(args: &[String]) -> Result<(), String> {
                 let stream = fs::read_to_string(path).map_err(|error| {
                     format!("cannot read the libtest stream for crate `{crate_id}`: {error}")
                 })?;
-                for (name, millis) in parse_libtest_json(&stream)? {
+                let measurements = parse_libtest_json(&stream)?;
+                if measurements.is_empty() {
+                    return Err(format!(
+                        "the libtest stream for crate `{crate_id}` contains no timed test events; \
+                         refusing to record an empty measurement set"
+                    ));
+                }
+                for (name, millis) in measurements {
                     // Crate-qualify the libtest name so `d2b-core::foo::bar`
                     // cannot collide with an identically-named test in another
                     // crate's suite.
@@ -1015,6 +1042,7 @@ mod tests {
     fn expected_census() -> ExpectedCensus {
         ExpectedCensus {
             crates: vec!["d2b-core".to_string()],
+            tests: vec!["a::b".to_string()],
         }
     }
 
@@ -1037,6 +1065,19 @@ mod tests {
                 .iter()
                 .any(|v| v.scope == "crate" && v.id == "d2b-core" && v.detail.contains("missing")),
             "dropping a pinned crate is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn closed_census_rejects_a_disappeared_test() {
+        let mut shrunk = full_ledger(MIN_REPETITIONS);
+        shrunk.tests.clear();
+        let violations = audit_closed_census(&shrunk, &expected_census());
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.scope == "test" && v.id == "a::b" && v.detail.contains("missing")),
+            "dropping a pinned test is rejected: {violations:?}"
         );
     }
 
@@ -1080,10 +1121,25 @@ mod tests {
 
     #[test]
     fn an_empty_census_pin_is_rejected() {
-        let empty = ExpectedCensus { crates: Vec::new() };
+        let empty = ExpectedCensus {
+            crates: Vec::new(),
+            tests: Vec::new(),
+        };
         assert!(
             empty.validate().is_err(),
             "a census with no crates is refused"
+        );
+    }
+
+    #[test]
+    fn a_census_pin_with_no_tests_is_rejected() {
+        let empty = ExpectedCensus {
+            crates: vec!["d2b-core".to_string()],
+            tests: Vec::new(),
+        };
+        assert!(
+            empty.validate().is_err(),
+            "a census with no tests cannot attest that the crate executed tests"
         );
     }
 
