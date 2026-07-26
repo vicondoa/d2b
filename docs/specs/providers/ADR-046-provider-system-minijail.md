@@ -1783,23 +1783,14 @@ process termination.
     remains owned by core/ProviderSupervisor and is the sole path to privileged
     broker operations.
 
-12. **Volume ownership and reconciliation: core ProviderDeployment creates;
-    volume-local reconciles; minijail controller only consumes.** Core
-    ProviderDeployment creates the component state Volume (`kind: state`,
-    `persistenceClass: persistent`, `migrationPolicy: none`, minimal nonzero
-    quota) before the component Process starts and deletes it after the
-    component Process is gone. `Provider/volume-local` is the sole Volume
-    reconciler. The minijail controller does not create, own, add Volume to its
-    exported ResourceTypes, or reconcile Volume resources; it only consumes the
-    required `dirfd` view delivered by core. `ProviderStateSet(zone,
-    "system-minijail")` is a query-time set - not a ResourceType. Each
-    component Volume is `kind: state`, `persistenceClass: persistent`,
-    `migrationPolicy: none`; never ephemeral, never zero-quota; identity marker
-    always provisioned; no migration EphemeralProcess or worker ever created.
-    Layout principals are Nix-preprovisioned `User/<name>` (no
-    `ComponentPrincipal` ResourceRefs); no Volume is shared across components.
-    Live pidfds and FDs are process-local and non-persistent; they must not be
-    serialized, stored, or re-used across controller restarts without full
+12. **The minijail controller has no Provider state Volume.** Its signed
+    component descriptor declares no state namespace, ProviderDeployment
+    creates no state Volume, and the controller Process has no state-view
+    mount or dedicated state-layout principal. Bounded non-secret observations
+    remain in Process/EphemeralProcess status and the core Operation ledger.
+    Running processes are re-observed from declared cgroup leaves and fresh
+    pidfds; live pidfds and FDs are process-local and non-persistent and must
+    never be serialized or reused across controller restarts without full
     re-verification.
 
 13. **The `clone3` broker parent alone waits and reaps.** The broker retains

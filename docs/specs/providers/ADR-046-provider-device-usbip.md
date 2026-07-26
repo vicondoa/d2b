@@ -420,13 +420,11 @@ degrades the same-type local Service projection and Binding.
 
 ## Controller Process resource
 
-The framework creates the controller state Volume **before** starting the
-controller Process. This is done by core **ProviderDeployment**, not by the
-semantic `device-usbip` controller. The `device-usbip` controller does not own
-Volumes, does not add Volume to its exported ResourceTypes, and does not create
-its own prerequisite. The controller Process spec carries a mandatory `mounts`
-entry that references that Volume; the runtime rejects the Process launch if
-the Volume is not Ready.
+Core **ProviderDeployment** starts the controller Process without a Provider
+state Volume. The controller's bounded non-secret state remains in the
+Device/Service/Binding status subresources and the core Operation ledger, so
+the signed component descriptor declares no state namespace and the Process
+has no `/state` mount.
 
 ```yaml
 apiVersion: resources.d2bus.org/v3
@@ -475,12 +473,7 @@ spec:
     resetAfter: "300s"
   adoptionPolicy: adopt-on-restart
   drainTimeout: "10s"
-  mounts:
-    - volumeRef: Volume/device-usbip--controller--state--host-system
-      view:      state
-      mountPath: /state
-      access:    read-write
-      required:  true
+  mounts: []
 ```
 
 The `template: controller-main` field binds to the signed component descriptor
@@ -1827,11 +1820,10 @@ Create the crate with the layout in § Crate layout. Implement `lib.rs`, `valida
 (`make test-policy`). Confirm `d2b-priv-broker` does NOT appear in `Cargo.toml`.
 
 The Nix module declares the `d2b-device-usbip-ctrl` system user and its
-`User/d2b-device-usbip-ctrl` resource at NixOS activation time. The
-controller component state Volume (`device-usbip--controller--state--host-system`)
-is created by core ProviderDeployment - not by the device-usbip controller -
-before the controller Process is started. Volume is not an exported ResourceType
-of this Provider.
+`User/d2b-device-usbip-ctrl` resource at NixOS activation time. This is an
+execution identity, not a state-layout principal: the component descriptor
+declares no state namespace, ProviderDeployment creates no Provider state
+Volume, and the controller Process has no `/state` mount.
 
 ---
 

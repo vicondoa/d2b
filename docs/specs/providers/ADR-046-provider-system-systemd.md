@@ -293,14 +293,7 @@ d2b.zones.<zone>.resources."system-systemd-controller-<target>" = {
       maxRestarts       = null;
       resetAfter        = "300s";
     };
-    mounts = [
-      # Volume created by core ProviderDeployment; view name matches descriptor
-      { volumeRef = "Volume/system-systemd--controller--main-state--<target>";
-        view      = "controller-rw";
-        mountPath = "/state";
-        access    = "read-write";
-        required  = true; }
-    ];
+    mounts = [];
     adoptionPolicy = "adopt-on-restart";
     drainTimeout   = "30s";
   };
@@ -326,15 +319,7 @@ Canonical rendered JSON (schema mirror):
     "template": "system-systemd-controller-main",
     "configRef": null,
     "credentialRefs": [],
-    "mounts": [
-      {
-        "volumeRef": "Volume/system-systemd--controller--main-state--<target>",
-        "view": "controller-rw",
-        "mountPath": "/state",
-        "access": "read-write",
-        "required": true
-      }
-    ],
+    "mounts": [],
     "sandbox": {
       "namespaceClasses": ["mount", "ipc", "network"],
       "capabilityClasses": [],
@@ -1307,7 +1292,7 @@ assumptions. Copied behavior is independently re-tested against v3
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor |
 | Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Core ProviderDeployment creates controller Process via Provider/system-minijail and creates/deletes one private Volume per component per execution target before/after component Processes (naming: `system-systemd--controller--main-state--<target>`; ownerRef: Provider/system-systemd; kind=state; persistenceClass=persistent; minimal nonzero quota; identity marker; migrationPolicy=none; layout principal: Nix-preprovisioned `User/<controller-system-user>` or bounded principal pool; no ComponentPrincipal ResourceRef); Provider/volume-local is sole Volume reconciler; system-systemd controller does NOT create, own, or reconcile its Volume; controller consumes only the `controller-rw` view dirfd via its Process mounts; controller watches Process/EphemeralProcess; ProviderSupervisor calls LaunchProcess; effect port implementation injected by core supervisor spec |
+| Integration | Core ProviderDeployment creates the controller Process via Provider/system-minijail with no state Volume or `/state` mount; the controller issues no Volume CRUD operations, watches Process/EphemeralProcess, and persists bounded non-secret observations only in owning-resource status and the core Operation ledger; ProviderSupervisor calls LaunchProcess; effect port implementation is injected by the core supervisor spec |
 | Data migration | No state migration; controller relists and adopts on restart |
 | Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
 | Removal proof | `VmProcessDag` supervisor roles removed per role disposition table after each succeeds in conformance |

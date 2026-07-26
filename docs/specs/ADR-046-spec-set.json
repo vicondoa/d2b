@@ -367,7 +367,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-usbip.md",
-      "sha256" : "e202cfed0e1590bacd808285ed6c9fa4a6bb039d4e41e87c1f4d6c2eb88b8a87",
+      "sha256" : "79d75a370875c0b192cc844ecac1c2d6c21103bf87758cb15ac5c03720d050d1",
       "specId" : "ADR-046-provider-device-usbip",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline",
@@ -666,7 +666,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-minijail.md",
-      "sha256" : "ea91002b09aa1f174018fdd44110292564dce0ef406d3743669700a4d9d1756c",
+      "sha256" : "e3d9551e4d39923562254d634ce52db889ebde3f4228f44564eb46418c650f10",
       "specId" : "ADR-046-provider-system-minijail",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
@@ -686,7 +686,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-systemd.md",
-      "sha256" : "e84688d2dfc0dd30999767989295629431245cab5c74f24bacfb165fbe8c222b",
+      "sha256" : "e640491314caf3f3b99dc78430ec77d5d3ca0ee61868441b1ccd1a7d49d50abf",
       "specId" : "ADR-046-provider-system-systemd",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-unsafe-local-helper` systemd scope runtime; current `d2bd` `supervisor/` VM process management; broker `SpawnRunner` (systemd-owned roles)",
