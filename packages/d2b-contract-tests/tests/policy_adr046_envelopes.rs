@@ -318,7 +318,12 @@ fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
         if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
-        if !mentions_key(&block.lines, "apiVersion") {
+        // A Nix `inherit apiVersion;` or dynamic attribute has no
+        // `apiVersion =` token for the cheap textual prefilter, but the
+        // structural parser can still expose or reject the semantic key.
+        let names_api_version = mentions_key(&block.lines, "apiVersion")
+            || (block.lang == "nix" && block.lines.iter().any(|line| line.contains("apiVersion")));
+        if !names_api_version {
             continue;
         }
         let intends_envelope =
@@ -1122,6 +1127,127 @@ fn parser_backed_scanners_reject_structural_bypasses() {
     let v = scan_universal_status("f.md", rec_nix);
     assert_eq!(v.len(), 1, "{}", report("rec-nix", &v));
     assert!(v[0].text.contains("universal status base"));
+
+    // Nix expressions that legally wrap or contain an attrset must never hide a
+    // violating envelope from the scanner. These fixtures cover the supported
+    // wrapper class, not just the two forms that originally exposed the gap.
+    let incomplete = r#"{
+  apiVersion = "resources.d2bus.org/v3";
+  type = "Widget";
+  status = { phase = "Ready"; };
+}"#;
+    let nix_wrappers = [
+        ("with", format!("with {{}}; {incomplete}")),
+        (
+            "with-bound-result",
+            format!("with {{ resource = {incomplete}; }}; resource"),
+        ),
+        (
+            "nested-let",
+            format!("let a = 1; in let b = 2; in {incomplete}"),
+        ),
+        (
+            "let-bound-result",
+            format!("let resource = {incomplete}; in resource"),
+        ),
+        ("rec", incomplete.replacen('{', "rec {", 1)),
+        ("parenthesized", format!("({incomplete})")),
+        (
+            "if-then-branch",
+            format!("if true then {incomplete} else {{}}"),
+        ),
+        (
+            "if-else-branch",
+            format!("if false then {{}} else {incomplete}"),
+        ),
+        ("list-item", format!("[ {incomplete} ]")),
+        ("assert-body", format!("assert true; {incomplete}")),
+        ("lambda-body", format!("argument: {incomplete}")),
+        ("binary-operand", format!("{{}} // {incomplete}")),
+        (
+            "selected-attribute",
+            format!("({{ selected = {incomplete}; }}).selected"),
+        ),
+        (
+            "select-default",
+            format!("missing.resource or {incomplete}"),
+        ),
+        ("legacy-let-body", format!("let {{ body = {incomplete}; }}")),
+        (
+            "inherited-attributes",
+            r#"{
+  inherit (source) apiVersion type status;
+}"#
+            .to_string(),
+        ),
+        (
+            "string-interpolation",
+            r#"{
+  apiVersion = "resources.d2bus.org/v3";
+  type = "Widget-${variant}";
+  status = { phase = "Ready"; };
+}"#
+            .to_string(),
+        ),
+    ];
+    for (shape, expr) in nix_wrappers {
+        let fixture = format!("```nix\n{expr}\n```");
+        let v = scan_universal_status("f.md", &fixture);
+        assert_eq!(
+            v.len(),
+            1,
+            "{shape} must expose its violating resource: {}",
+            report(shape, &v)
+        );
+        assert!(
+            v[0].text.contains("universal status base"),
+            "{shape} must reach the resource rather than a parser-gap fallback: {}",
+            v[0].text
+        );
+    }
+
+    // Function application may return an attrset. The structural model does
+    // not evaluate the function, but it exposes every literal argument map as a
+    // candidate rather than collapsing the application to an unchecked opaque
+    // node.
+    let application = format!("```nix\nidentity {incomplete}\n```");
+    let v = scan_universal_status("f.md", &application);
+    assert_eq!(
+        v.len(),
+        1,
+        "application must fail closed: {}",
+        report("application", &v)
+    );
+    assert!(
+        v[0].text.contains("universal status base"),
+        "application must expose the literal resource argument: {}",
+        v[0].text
+    );
+
+    // Dynamic attribute names cannot be resolved without evaluation. They take
+    // the scanner's explicit parser-gap path instead of becoming a synthetic
+    // key that could hide a D116 violation.
+    let dynamic_attribute = r#"```nix
+{
+  type = "Host";
+  spec = {
+    allowedDomains = [ "system" "user" ];
+    ${"defaultUserRef"} = "User/alice";
+  };
+}
+```"#;
+    let v = scan_d116("f.md", dynamic_attribute);
+    assert_eq!(
+        v.len(),
+        1,
+        "dynamic attribute must fail closed: {}",
+        report("dynamic-attribute", &v)
+    );
+    assert!(
+        v[0].text.contains("structural parser could not model"),
+        "dynamic attribute must take the explicit parser-gap path: {}",
+        v[0].text
+    );
 
     // 3. A YAML anchor + `<<` merge is folded. A status assembled from a merge
     //    that supplies only `phase` is still missing update/resource (flagged);

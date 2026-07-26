@@ -20,7 +20,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-gate-build heavy-gate-provision heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
-        ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
+        ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
+        runtime-ledger-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -402,7 +403,7 @@ changelog-fold:
 	cd packages && cargo run -q -p xtask -- changelog-fold
 # --- hermetic execution-budget gate ----------------------------------------
 
-.PHONY: test-runtime-ledger
+.PHONY: test-runtime-ledger runtime-ledger-pin
 
 ## test-runtime-ledger - hermetic execution-budget gate. Reads the pinned
 ##   closed census (D2B_RUNTIME_CENSUS) of crates, warm-builds those census
@@ -420,8 +421,12 @@ changelog-fold:
 ##
 ##   This is an absolute aggregate CPU budget gate. It holds no baseline and
 ##   makes no historical regression claim. Per-test wall-clock values never fail
-##   it; they remain visible only to identify likely contributors to a crate CPU
-##   increase.
+##   it; every per-test threshold breach is emitted to stderr as a non-failing
+##   advisory so CI and operators can enumerate likely contributors to a crate
+##   CPU increase. Libtest exposes per-test wall time, not per-test CPU time.
+##   Measuring the latter would require a custom harness or one timed process per
+##   test per repetition, whose startup cost and census-sized process fan-out
+##   would materially change this gate.
 ##
 ##   Deferred follow-up (tracked as runtime-ledger-full-census-and-real-shards):
 ##   grow the census beyond the single pinned crate to a real multi-crate shard
@@ -438,13 +443,15 @@ D2B_RUNTIME_RUNNER      ?= local
 D2B_RUNTIME_REPETITIONS ?= 3
 D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
 D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
+D2B_RUNTIME_CRATES      ?=
+D2B_RUNTIME_UPDATE_CENSUS ?= 0
 D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
 
 ## Classified hermetic tests that legitimately exceed the normal 50 ms
 ## per-test wall-clock diagnostic threshold. Per-test wall-clock data is
 ## advisory because machine contention makes it unsuitable for enforcement;
-## these overrides keep the slow-test report useful without changing the
-## enforced aggregate process-CPU crate budget:
+## these overrides keep the complete advisory-breach report useful without
+## changing the enforced aggregate process-CPU crate budget:
 ##   * the *_bounded_byte_inputs_do_not_panic property harnesses each replay a
 ##     committed corpus and drive RUNS=10000 generated inputs through a parser,
 ##     so hundreds of milliseconds of pure execution is the intended workload;
@@ -459,6 +466,12 @@ D2B_RUNTIME_ADVISORY_THRESHOLDS = \
 	--advisory-threshold d2b-core::rejects_tampered_unsafe_local_workloads_artifact=300
 
 
+## runtime-ledger-pin - measure the pinned crates and regenerate the exact
+##   runtime test census after adding or removing a test. To add or remove a
+##   whole crate, pass the complete intended set as D2B_RUNTIME_CRATES.
+runtime-ledger-pin:
+	@$(MAKE) --no-print-directory test-runtime-ledger D2B_RUNTIME_UPDATE_CENSUS=1
+
 ## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
@@ -468,7 +481,11 @@ test-runtime-ledger:
 	work='$(abspath packages/target/test-runtime-ledger.work)'; \
 	reps='$(D2B_RUNTIME_REPETITIONS)'; \
 	rm -rf "$$work"; mkdir -p "$$work"; \
-	crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	if [ -n '$(strip $(D2B_RUNTIME_CRATES))' ]; then \
+	  crates='$(strip $(D2B_RUNTIME_CRATES))'; \
+	else \
+	  crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	fi; \
 	if [ -z "$$crates" ]; then \
 	  echo "test-runtime-ledger: the pinned census names no crates" >&2; exit 1; fi; \
 	echo "test-runtime-ledger: linting hermetic placement across the census crates' integration tests"; \
@@ -558,6 +575,9 @@ test-runtime-ledger:
 	( cd packages && $(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
 	    --output "$$ledger" $(D2B_RUNTIME_ADVISORY_THRESHOLDS) $$args ); \
+	if [ '$(D2B_RUNTIME_UPDATE_CENSUS)' = 1 ]; then \
+	  ( cd packages && $(D2B_LEDGER_XTASK) pin --ledger "$$ledger" --output "$$census" ); \
+	fi; \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
 	    --ledger "$$ledger" --expected-census "$$census" ); \
 	finished_at="$$(date +%s)"; \
