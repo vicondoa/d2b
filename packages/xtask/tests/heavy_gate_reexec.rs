@@ -299,7 +299,7 @@ fn inherited_gate_state_and_descriptor_do_not_authorise_the_child() {
         sentinel.display()
     );
     let fd = planted.as_raw_fd().to_string();
-    let out = run_reexec_guard(
+    let (out, _redacted) = run_reexec_guard(
         &stub,
         &[
             ("D2B_HEAVY_GATE", "1"),
@@ -310,6 +310,7 @@ fn inherited_gate_state_and_descriptor_do_not_authorise_the_child() {
             ("BASH_XTRACEFD", "9"),
             ("SHELLOPTS", "xtrace"),
         ],
+        false,
     );
 
     assert_eq!(
