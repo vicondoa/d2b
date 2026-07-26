@@ -318,11 +318,12 @@ fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
         if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
-        // A Nix `inherit apiVersion;` has no `apiVersion =` token for the cheap
-        // textual prefilter, but the structural parser can still expose the
-        // semantic key. Parse every Nix fence; retain the prefilter for the
-        // other syntaxes.
-        if block.lang != "nix" && !mentions_key(&block.lines, "apiVersion") {
+        // A Nix `inherit apiVersion;` or dynamic attribute has no
+        // `apiVersion =` token for the cheap textual prefilter, but the
+        // structural parser can still expose or reject the semantic key.
+        let names_api_version = mentions_key(&block.lines, "apiVersion")
+            || (block.lang == "nix" && block.lines.iter().any(|line| line.contains("apiVersion")));
+        if !names_api_version {
             continue;
         }
         let intends_envelope =
