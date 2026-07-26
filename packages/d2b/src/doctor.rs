@@ -1661,7 +1661,7 @@ fn check_bridge_ipv6_sysctl(daemon_state_dir: &Path, report: &mut DoctorReport) 
 
 /// Run `sysctl -n <key>` and return trimmed stdout, or an error string.
 fn run_sysctl_n(key: &str) -> Result<String, String> {
-    let out = std::process::Command::new("sysctl")
+    let out = crate::system_tool_command("sysctl")
         .args(["-n", key])
         .output()
         .map_err(|e| format!("exec sysctl: {e}"))?;
@@ -2395,8 +2395,9 @@ mod tests {
     fn broker_reap_health_fail_on_zombie() {
         // Spawn a child that exits immediately, then check its state
         // before waitpid - it should be in Z state.
-        use std::process::Command;
-        let mut child = Command::new("true").spawn().expect("spawn true");
+        let mut child = crate::system_tool_command("true")
+            .spawn()
+            .expect("spawn true");
         let pid = child.id() as i32;
         // Give the child time to exit without being reaped.
         std::thread::sleep(std::time::Duration::from_millis(50));
