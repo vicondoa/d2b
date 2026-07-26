@@ -48,14 +48,14 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + drift + policy + runtime-ledger | local + CI (parallel jobs) |
+| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + nix-unit + drift + policy + runtime-ledger | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
-| `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
+| `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets over the exact pinned census and reports per-test wall-clock p95s against advisory diagnostic thresholds (holds no baseline; makes no historical-regression claim) | local + CI |

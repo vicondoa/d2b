@@ -233,7 +233,7 @@ scan_process_markers() {
   local -a workflow_files=() changelog_files=()
   local -a new_violation_lines=() stale_legacy_paths=()
   local -A legacy_paths=() violation_paths=()
-  local f hit path hits context_hits toplevel enum_status grep_status awk_status
+  local f hit path hits context_hits toplevel enum_status grep_status awk_status legacy_count
   local is_repo_root=0 filename_hits=
 
   root=$(cd "$root" 2>/dev/null && pwd -P) \
@@ -261,8 +261,19 @@ scan_process_markers() {
   [ "${#files[@]}" -gt 0 ] || fail "process-marker scan found no files in its scan root"
 
   if [ "$is_repo_root" -eq 1 ]; then
-    [ "${#LEGACY_PROCESS_MARKER_PATHS[@]}" -eq "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ] \
-      || fail "process-marker legacy path count (${#LEGACY_PROCESS_MARKER_PATHS[@]}) does not match shrink-only budget $LEGACY_PROCESS_MARKER_PATH_BUDGET"
+    legacy_count=${#LEGACY_PROCESS_MARKER_PATHS[@]}
+    if [ "$legacy_count" -gt "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ]; then
+      fail \
+        "process-marker legacy path count ($legacy_count) exceeds shrink-only budget $LEGACY_PROCESS_MARKER_PATH_BUDGET;" \
+        "edit tests/tools/tier0-first-pass.sh and remove unintended additions from LEGACY_PROCESS_MARKER_PATHS until the count matches;" \
+        "never raise LEGACY_PROCESS_MARKER_PATH_BUDGET"
+    fi
+    if [ "$legacy_count" -lt "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ]; then
+      fail \
+        "process-marker legacy path count ($legacy_count) is below shrink-only budget $LEGACY_PROCESS_MARKER_PATH_BUDGET;" \
+        "after verifying the removed LEGACY_PROCESS_MARKER_PATHS entries were cleaned, edit tests/tools/tier0-first-pass.sh and lower" \
+        "LEGACY_PROCESS_MARKER_PATH_BUDGET to $legacy_count; never restore an entry or raise the budget"
+    fi
     for f in "${LEGACY_PROCESS_MARKER_PATHS[@]}"; do
       [ -z "${legacy_paths[$f]+present}" ] \
         || fail "duplicate process-marker legacy path: $f"
@@ -454,13 +465,17 @@ scan_process_markers() {
 
   if [ "${#new_violation_lines[@]}" -gt 0 ]; then
     printf '%s\n' "${new_violation_lines[@]}" >&2
-    fail "new process-marker violation outside the legacy path allow-list"
+    fail \
+      "new process-marker violation outside the legacy path allow-list; remove the marker from the listed files in this change -" \
+      "do not add them to LEGACY_PROCESS_MARKER_PATHS or raise LEGACY_PROCESS_MARKER_PATH_BUDGET in tests/tools/tier0-first-pass.sh"
   fi
   if [ "${#stale_legacy_paths[@]}" -gt 0 ]; then
     for f in "${stale_legacy_paths[@]}"; do
       log "  STALE: $f"
     done
-    fail "legacy process-marker paths no longer violate; delete their entries and lower the budget"
+    fail \
+      "legacy process-marker paths no longer violate; edit tests/tools/tier0-first-pass.sh: remove every STALE entry above from" \
+      "LEGACY_PROCESS_MARKER_PATHS and lower LEGACY_PROCESS_MARKER_PATH_BUDGET by the same count; never restore the marker or raise the budget"
   fi
   if [ "$is_repo_root" -eq 1 ]; then
     ok "process-marker ratchet clean; ${#LEGACY_PROCESS_MARKER_PATHS[@]} legacy paths remain"

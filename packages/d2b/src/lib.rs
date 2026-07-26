@@ -78,6 +78,14 @@ const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/d2b/runtime/host-runtime.json"
 const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const RUNTIME_UNKNOWN: &str = "unknown";
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
+const SYSTEM_TOOL_PATH: &str = "/run/current-system/sw/bin:/usr/bin:/usr/sbin:/bin:/sbin";
+
+fn system_tool_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env("PATH", SYSTEM_TOOL_PATH);
+    command
+}
+
 /// Location of daemon-persisted state files (`pidfd-table.json`,
 /// `kernel-module-report.json`, `autostart-report.json`,
 /// `storage-lifecycle-report.json`) that
@@ -3472,7 +3480,7 @@ fn cmd_config_diff(args: &ConfigDiffArgs) -> Result<i32, CliFailure> {
         ));
     }
     // `diff -u <live> <staged>`: exit 0 = identical, 1 = differ, >1 = error.
-    let output = Command::new("diff")
+    let output = system_tool_command("diff")
         .arg("-u")
         .arg(&args.against)
         .arg(&staging)
@@ -10423,7 +10431,7 @@ fn bridge_health_row(
     }
 
     let probe_bridge = resolve_bridge_probe_name(bundle, bridge);
-    let output = Command::new("ip")
+    let output = system_tool_command("ip")
         .args(["-j", "link", "show", "dev", probe_bridge.as_str()])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -10476,7 +10484,7 @@ fn systemctl_state(context: &Context, unit: &str) -> String {
     {
         return state.clone();
     }
-    let output = Command::new("systemctl")
+    let output = system_tool_command("systemctl")
         .args(["--no-pager", "is-active", unit])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
