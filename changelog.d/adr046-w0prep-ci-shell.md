@@ -4,16 +4,22 @@
   shell by a repository-relative path. The Actions runner resolves the shell
   program against `PATH` rather than the workspace, so every job failed
   during startup before running any step. Steps now run through
-  `tests/tools/ci-shell`, invoked as `bash tests/tools/ci-shell`, which keeps
-  the runner's lookup on `PATH` and defers resolving the wrapper to run time.
-  The scrub is unchanged: exported shell functions and `BASH_ENV` are still
-  removed before any step runs.
+  `tests/tools/ci-shell`, invoked as `sh tests/tools/ci-shell`, which keeps the
+  runner's lookup on `PATH` and defers resolving the wrapper to run time. The
+  dash bootstrap uses only shell builtins until the scrubber execs, so exported
+  Bash functions and `BASH_ENV` are removed before any Bash process or step can
+  run.
 - `make check` described itself as the pull-request-equivalent Layer-1 gate
   but ran only each job's primary make target, while the continuous
   integration `tier0` job also ran the ADR index and CI coverage guards. Those
   extra targets are now declared in `tests/layer1-jobs.json` and consumed by
   both the workflow renderer and the local runner, so a job cannot run more
   in continuous integration than it runs locally.
+- Layer-1 failure diagnostics now identify the exact primary or extra make
+  target that failed, name retained output by its semantic job identifier, and
+  redact repository, home, and other absolute paths from the printed tail. The
+  in-process filter mirrors the xtask redactor because the early runner cannot
+  assume that the Rust helper has already been built.
 - The runtime ledger's per-crate process-CPU budget was calibrated against the
   reference development host and was red on every GitHub-hosted runner, where
   the same suite measures roughly a third more process CPU. The budget is an
