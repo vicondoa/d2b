@@ -14064,7 +14064,7 @@
       "destinations" : [
         "`packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check`"
       ],
-      "detailedDesign" : "Two-slot per-UID OFD-locked semaphore, 250 ms nonblocking retry up to 30 minutes, fail-closed on unsupported locking, duplicated locked-FD handoff to child, wrapper-owned group-signal/reap, as specified in §11 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout.",
+      "detailedDesign" : "Two-slot per-UID OFD-locked semaphore in the fixed `/run/d2b-heavy-gates/uid-<uid>/` namespace: root-owned non-writable root and per-uid directories, two pre-created target-uid-owned mode-`0600` slot files, no fallback, and a provisioning error naming `make heavy-gate-provision` when the namespace is absent or malformed. The NixOS module provisions the root through systemd-tmpfiles and the configured lifecycle-user slots after numeric UIDs exist; the Make target provisions hosts that do not consume the module. Acquisition uses a 250 ms nonblocking retry up to 30 minutes, fails closed on unsupported locking, duplicates the locked FD into the child, and retains wrapper-owned group-signal/reap semantics, as specified in §11. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout.",
       "entryContracts" : [
         "ADR-046-validation-and-delivery"
       ],
@@ -14086,7 +14086,7 @@
       "destinations" : [
         "`packages/xtask/src/delivery/snapshot.rs`"
       ],
-      "detailedDesign" : "Binds base/head OIDs, dependency graph, repository set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt.",
+      "detailedDesign" : "Binds base/head OIDs, dependency graph, repository set, and the complete expected pull-request number/head set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1. Every repository requires at least one `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the selected head must be one of those mapped heads. Persisted delivery artifacts and workflow results use `DELIVERY_SCHEMA_VERSION` 2 because `expected_pull_requests` is required candidate material. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt.",
       "entryContracts" : [
         "ADR-046-validation-and-delivery"
       ],
@@ -14203,7 +14203,7 @@
       "destinations" : [
         "`packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 crate targets"
       ],
-      "detailedDesign" : "Measures execution-only time (after build, warm cache) per test/crate against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, and emits a machine-readable CI artifact against absolute per-test/crate budgets with no baseline, no shard dimension, and no historical-regression claim (the full census across a real multi-crate shard inventory with a per-shard budget and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`); the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/`",
+      "detailedDesign" : "After a warm build, records advisory per-test libtest wall-clock p95s and enforced aggregate per-crate process-CPU p95s. Process CPU excludes time descheduled behind unrelated machine load. The gate enforces each crate CPU budget and the exact closed census, presently one crate and 190 test IDs, so a vanished or extra test fails; a per-test diagnostic-threshold breach does not. It emits a machine-readable artifact with no baseline, shard dimension, or historical-regression claim, and its own check output is authoritative for exact advisory-report formatting and selection. The full census across a real multi-crate shard inventory with a per-shard budget and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`; the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/`.",
       "entryContracts" : [
         "ADR-046-validation-and-delivery"
       ],
@@ -14217,7 +14217,7 @@
       ],
       "specId" : "ADR-046-validation-and-delivery",
       "topologicalRank" : 13,
-      "validation" : "Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; an over-budget test or crate fails the gate; an incomplete or shrunk census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards",
+      "validation" : "Policy self-tests: intentional sleep/process/network behavior in a hermetic test is rejected; a per-test wall-clock threshold breach remains advisory; an over-budget aggregate crate process-CPU p95 fails; an incomplete, expanded, or shrunk exact census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards",
       "wave" : "W7"
     },
     {
@@ -15667,7 +15667,7 @@
       "destinations" : [
         "`proofs/test-runtime-budget-spike/`; a one-off measurement-reference proof for the §10.16 budgets consumed by `ADR046-delivery-007` (no committed baseline ledger ships)"
       ],
-      "detailedDesign" : "Establishes the D094 measurement reference: records the reference runner class, repetition count, and per-test/crate p95 for a representative hermetic crate; proves the §10.16 per-test and per-crate budgets (individual normal test p95 <=50 ms, per-crate `--lib --tests` <=2 s) are met on the reference runner and that an injected slow/sleeping test is detected as a budget violation (a real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`)",
+      "detailedDesign" : "Establishes the D094 measurement reference: records the reference runner class, repetition count, advisory per-test wall-clock p95, and enforced aggregate per-crate process-CPU p95 for a representative hermetic crate. It proves the crate's `--lib --tests` aggregate process CPU is <=2 s, reports a normal test's <=50 ms wall-clock threshold only as a diagnostic, and detects an injected sleeping test through the placement policy rather than a timing-budget failure. A real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`.",
       "entryContracts" : [
         "ADR-046-feasibility-and-spikes"
       ],
@@ -15682,7 +15682,7 @@
       ],
       "specId" : "ADR-046-feasibility-and-spikes",
       "topologicalRank" : 14,
-      "validation" : "The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets",
+      "validation" : "The representative crate meets its aggregate process-CPU budget; a per-test wall-clock threshold breach remains advisory; a synthetic sleep/process/network test is flagged by placement policy; cold compile time is excluded from measurements",
       "wave" : "W7"
     },
     {
@@ -22076,7 +22076,7 @@
       "destinations" : [
         "`packages/d2b-contract-tests/tests/policy_test_determinism.rs`"
       ],
-      "detailedDesign" : "Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property exceptions are allow-listed by explicit name with a declared per-test budget Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint layered on ADR046-streamline-020.",
+      "detailedDesign" : "Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property timing exceptions are allow-listed by explicit name with a capped case count and a declared higher advisory threshold, but no sleep exemption. Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint layered on ADR046-streamline-020.",
       "entryContracts" : [
         "ADR-046-streamline"
       ],
@@ -22099,7 +22099,7 @@
       "destinations" : [
         "`packages/xtask/src/test_runtime_ledger.rs` (shared with `ADR046-delivery-007`)"
       ],
-      "detailedDesign" : "Parses per-test JSON timings, aggregates per test/crate, compares each recorded p95 against its pinned absolute budget, and fails any measurement over budget (no baseline, no previous-ledger comparison, no regression threshold) Primary reuse disposition: `adapt`. Preserved source-plan detail: share/adapt ADR046-delivery-007 timing-ledger implementation for this gate.",
+      "detailedDesign" : "Parses per-test libtest JSON into advisory wall-clock p95s, ingests aggregate process CPU for each complete crate invocation, enforces only the crate CPU budget, and fails on any mismatch with the exact closed crate/test census. A per-test diagnostic-threshold breach never fails the gate; the tool's own check output is authoritative for exact advisory-report formatting and selection. It holds no baseline and performs no previous-ledger comparison. Primary reuse disposition: `adapt`. Preserved source-plan detail: share/adapt ADR046-delivery-007 timing-ledger implementation for this gate.",
       "entryContracts" : [
         "ADR-046-streamline"
       ],
@@ -22114,7 +22114,7 @@
       ],
       "specId" : "ADR-046-streamline",
       "topologicalRank" : 14,
-      "validation" : "An over-budget per-test or per-crate p95, or a census listing a crate with no measurements, fails the gate; ledger output is deterministic and machine-readable",
+      "validation" : "An over-budget aggregate crate process-CPU p95 or any incomplete, expanded, or shrunk exact census fails the gate; a per-test wall-clock threshold breach stays advisory; ledger output is deterministic and machine-readable",
       "wave" : "W7"
     },
     {
