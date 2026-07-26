@@ -396,3 +396,20 @@ fn parity_a_structurally_invalid_fragment_is_rejected() {
         "expected a structural diagnostic:\n{out}"
     );
 }
+
+#[test]
+fn parity_a_star_bullet_fragment_is_rejected() {
+    let repo = FixtureRepo::new("parity-star-bullet");
+    repo.seed();
+    repo.write(
+        "changelog.d/branch.md",
+        "### Added\n\n* non-canonical bullet\n",
+    );
+    repo.commit("add star-bullet fragment");
+    let (passed, out) = repo.run_gate();
+    assert_gate(passed, &out, false, "star-bullet fragment");
+    assert!(
+        out.contains("must start with a '- ' bullet"),
+        "expected a canonical-bullet diagnostic:\n{out}"
+    );
+}
