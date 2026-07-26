@@ -323,8 +323,11 @@ heavy-gate-build:
 	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
-## current uid. This is the explicit developer setup path on hosts that do not
-## consume the NixOS module; it never creates a fallback under a user-owned root.
+## current numeric uid without resolving a user name through NSS. This is the
+## explicit post-login path for network-backed users and the developer setup
+## path on hosts that do not consume the NixOS module. Because /run is a tmpfs,
+## run it once per boot when the gate reports missing provisioning. It never
+## creates a fallback under a user-owned root.
 heavy-gate-provision:
 	@target_uid="$$(id -u)"; \
 	sudo -- sh -eu -c '\
@@ -340,7 +343,7 @@ heavy-gate-provision:
 	    if [ -L "$$slot" ] || { [ -e "$$slot" ] && [ ! -f "$$slot" ]; }; then echo "heavy-gate provisioning: refusing an unsafe slot file" >&2; exit 1; fi; \
 	    if [ ! -e "$$slot" ]; then install -m 0600 -o "$$target_uid" -g root /dev/null "$$slot"; else chown "$$target_uid":root "$$slot"; chmod 0600 "$$slot"; fi; \
 	  done; \
-	  echo "heavy-gate provisioning: protected slots are ready"' \
+	  echo "heavy-gate provisioning: protected slots are ready for this boot"' \
 	  sh "$$target_uid"
 
 ## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
