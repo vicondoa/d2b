@@ -103,10 +103,16 @@ eval.
 | `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `d2b.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | `tests/legacy-unit-denylist-eval.sh` + `tests/static.sh` green. |
 | `p7`     | Docs blast-radius + v1.0 cut shipped.                                                                                                                                 | `tests/static.sh` + per-example flake-check green.                                                             |
 
-> **Drift gate.** `tests/wave-evidence-schema-eval.sh` asserts every
-> wave declared in `readinessWaveSpecs` has a matching `| \`<wave>\` |`
-> row in the table above. Add a new wave to `readinessWaveSpecs` →
-> add a row here in the same commit, or the gate fails.
+The script names in this table record the historical evidence vocabulary for
+the original readiness rollout. Several have since been retired and are not
+runnable paths in the current tree. The current `d2b host validate` catalog
+still names many of them and consequently reports those validators as missing.
+
+> **Drift policy.**
+> `packages/d2b-contract-tests/tests/policy_observability.rs` asserts every wave
+> declared in `readinessWaveSpecs` has a matching table row. Add a new wave to
+> `readinessWaveSpecs` and add a row here in the same commit. This policy is
+> advisory until the fixture-contract lane is enabled and promoted.
 
 Cross-dependencies enforced by additional assertions in
 `options-daemon.nix`:

@@ -17,7 +17,9 @@ than literal byte-for-byte goldens unless the corresponding
 
 > There is no bash fallback. The Rust CLI never executes bash, and
 > the no-bash invariant is enforced by
-> `tests/no-bash-exec-eval.sh`. Verbs that used to degrade to bash on
+> `tests/tools/no-bash-ast-walker` in `test-rust`. The companion source policy
+> in `packages/d2b-contract-tests/tests/policy_source.rs` is advisory until the
+> fixture-contract lane is enabled. Verbs that used to degrade to bash on
 > `not-yet-implemented` or `daemon-down` now surface typed
 > envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) -
 > see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)

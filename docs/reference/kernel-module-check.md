@@ -120,10 +120,11 @@ on the next SIGHUP / reconnect) to pick up the change.
 
 ## Matrix gate
 
-`tests/kernel-module-matrix-eval.sh` asserts that the
+`packages/d2b-contract-tests/tests/policy_docs.rs` asserts that the
 `REQUIRED_*` / `OPTIONAL_*` constants in
-`packages/d2bd/src/kernel_module_check.rs` stay in sync with
-the table above. Run it after editing either side.
+`packages/d2bd/src/kernel_module_check.rs` stay in sync with the table above.
+Run the enabled fixture-contract lane after editing either side. This policy is
+advisory pull-request coverage until that lane is promoted.
 
 ## Related
 

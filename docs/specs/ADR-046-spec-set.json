@@ -130,7 +130,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-nix-configuration.md",
-      "sha256" : "c8f3254e03b02b02218fd294c213ece83d18077e6f653d11ceb0f54fc2ba8a50",
+      "sha256" : "6dae8fb6d47b65c34bdcdb918816c5ced12994d1f70f92855c8f9c012b4d402e",
       "specId" : "ADR-046-nix-configuration",
       "status" : "Accepted",
       "supersedes" : "Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json`",
@@ -429,7 +429,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-network-local.md",
-      "sha256" : "121d3169c902d5363843415843cd97efe2d60f9e02f5b256930d1db7f0a90070",
+      "sha256" : "403fe811b3ceb7073cadf9fdac58b1adb3b7ce8b796c407a4c1cdebe69051f8b",
       "specId" : "ADR-046-provider-network-local",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",
@@ -572,7 +572,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-qemu-media.md",
-      "sha256" : "35aa65fb00a5e0200ebfb28f379857d025419b3fcc2fe77555f856085006bf0d",
+      "sha256" : "567bc86552b8b79ab9eeb61c002bec19f3f43e609df37e52fe41be348835cd04",
       "specId" : "ADR-046-provider-runtime-qemu-media",
       "status" : "Accepted",
       "supersedes" : "`docs/adr/0036-qemu-media-runtime.md`",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "c3bb193162ac014555ce80b6cabe0c1ab67d74c21b8f8b511eb3754345958df7",
+      "sha256" : "f67cf8b873baa6df115704eb863ffd4fb666bdec4257b82333d26ce08aa18521",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "65fc72df49c4a76f19dc00526a45135639c124e66422f827460e66a7dcbd4922",
+      "sha256" : "3f95756ec664903aed5d71b407e45a999269712c1225069f064d1c49f2206e03",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,

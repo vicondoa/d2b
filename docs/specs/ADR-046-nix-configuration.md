@@ -770,7 +770,7 @@ spec:
   budget:          { ... }
   networkAttachments: []
   deviceAttachments:  []
-  volumeDefaults:     {}
+  volumeAttachmentDefaults: []
 ```
 
 The following authored shape is **rejected at Nix eval time** by the D116

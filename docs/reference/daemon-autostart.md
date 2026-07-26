@@ -141,14 +141,10 @@ workloads grouped by env.
   (`cargo test --lib autostart`). They cover ordering,
   concurrency-cap enforcement, degraded-mode propagation,
   idempotent re-entry, and the `parallelism = 0` clamp.
-- `tests/daemon-autostart-eval.sh` is a static + small nixpkgs
-  eval gate that asserts the public Rust surface, the NixOS
-  option default + override, the daemon-side wiring, and the
-  documentation cross-references.
-- The full Layer-2 smoke (`tests/daemon-autostart-smoke.sh`) is
-  out of scope for this page - it brings up a real 2-env × 2-workload
-  fixture and asserts the net-VM-first envelope on hardware-like
-  state.
+- `tests/unit/nix/cases/daemon-autostart.nix` asserts the public Rust surface,
+  the NixOS option default and override, daemon-side wiring, and documentation
+  cross-references through `test-nix-unit`.
+- No current full Layer-2 autostart smoke is registered.
 
 ## Cross-references
 

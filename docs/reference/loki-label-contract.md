@@ -6,9 +6,11 @@ Current d2b observability no longer emits a Loki backend or
 `loki.source.*` Alloy pipeline. Logs flow through OpenTelemetry
 Collector pipelines into the SigNoz OTel Collector and ClickHouse.
 
-The live contract enforced by
-[`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh)
-is the OTel resource-attribute contract for the native SigNoz path:
+The live contract is codified by
+[`packages/d2b-contract-tests/tests/policy_observability.rs`](../../packages/d2b-contract-tests/tests/policy_observability.rs).
+That policy is advisory until the fixture-contract lane is enabled and
+promoted. It covers the OTel resource-attribute contract for the native SigNoz
+path:
 
 - Resource attribute keys in d2b-managed collector configs are
   allowlisted to:

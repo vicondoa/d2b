@@ -182,7 +182,7 @@ spec:
   deviceAttachments:
     - deviceRef: Device/host-kvm            # KVM acceleration; explicit required dependency
       exclusive: false
-  volumeDefaults: {}
+  volumeAttachmentDefaults: []
   provider:                                  # see §5
     schemaId: runtime-qemu-media.d2bus.org/Guest/spec
     schemaVersion: 1.0.0

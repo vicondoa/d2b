@@ -5,7 +5,9 @@
 > implementation modules cited below are the source of truth; this
 > doc exists to pin the operator-observable shape so drift between
 > code and doc is detectable by
-> [`tests/tap-dag-contract-doc-eval.sh`](../../tests/tap-dag-contract-doc-eval.sh).
+> [`packages/d2b-contract-tests/tests/policy_contracts.rs`](../../packages/d2b-contract-tests/tests/policy_contracts.rs).
+> That policy is advisory until the fixture-contract lane is enabled and
+> promoted.
 
 The host-prep DAG ([host-prep-dag.md](./host-prep-dag.md))
 contains a single tap-creation step per VM:
@@ -275,7 +277,7 @@ ownership marker so `ApplyNmUnmanaged` can succeed), the next
 - **Derived ifname emitter**: [`packages/d2b-host/src/ifname.rs`](../../packages/d2b-host/src/ifname.rs).
 - **Host config DTO**: [`packages/d2b-core/src/host.rs`](../../packages/d2b-core/src/host.rs) - `ChNetHandoffMode`, `IfNameMapping`, `HostChConfig`.
 - **Failure envelope**: [`packages/d2b-host/src/host_prep_dag.rs`](../../packages/d2b-host/src/host_prep_dag.rs) - `HostPrepStepFailed`.
-- **Drift gate**: [`tests/tap-dag-contract-doc-eval.sh`](../../tests/tap-dag-contract-doc-eval.sh) - fails if any of the above implementation symbols diverge from this document.
+- **Drift policy**: [`packages/d2b-contract-tests/tests/policy_contracts.rs`](../../packages/d2b-contract-tests/tests/policy_contracts.rs) - `tap_dag_contract_doc_matches_implementation` fails if any of the above implementation symbols diverge from this document; it is advisory until the fixture-contract lane is enabled.
 - **Related references**:
   - [host-prep-dag.md](./host-prep-dag.md) - parent host-prep DAG scaffold.
   - [stop-dag-reconcile.md](./stop-dag-reconcile.md) - reverse-order teardown contract.
