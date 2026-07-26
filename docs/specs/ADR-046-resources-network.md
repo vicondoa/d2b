@@ -938,11 +938,14 @@ op is introduced instead. The `inet d2b` table:
   (Coexist/Refuse/RequireUnmanaged matrix preserved from
   `packages/d2b-host/src/nftables.rs`).
 
-Because the op is projection-scoped and generation-fenced, independent Network
-reconciles commute, concurrent mutation of the same projection is serialized
-(the stale writer requeues rather than overwriting), and one Network's
-projection never erases another's or device-usbip's markers. Network-local emits
-no TCP/3240 or other USBIP allow rule. Its
+Because the op is projection-scoped, independent Network reconciles commute and
+one Network's projection never erases another's or device-usbip's markers. The
+ordered OFD lock on the `inet d2b` table serializes concurrent mutations. The
+generation fence does not serialize and has no compare-and-advance behavior; it
+only rejects and requeues an intent whose `expected_generation_id` names a
+superseded installed configuration generation. Same-generation mutations
+converge idempotently under the lock. Network-local emits no TCP/3240 or other
+USBIP allow rule. Its
 `status.provider.details.firewallDigest` is the SHA-256 of the canonical
 projection containing only rules owned by that Network UID. USBIP-owned chains,
 rules, and ownership markers are excluded, so USBIP attach/detach cannot create

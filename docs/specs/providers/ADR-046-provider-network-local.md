@@ -1494,10 +1494,13 @@ shared `inet d2b` table and byte-preserves every other marker (see §5.4). The
 Because the op is projection-scoped, independent Network reconciles never
 overwrite one another and never delete the whole table: a mutation to one
 Network's marker leaves every sibling Network and every device-usbip marker
-byte-preserved, and the generation fence serializes concurrent mutation of the
-same projection instead of allowing last-writer-wins. Network-local emits no
-USBIP rule and no TCP/3240 match. The returned `FirewallDigest` covers only this
-Network UID's ownership projection and is stored in
+byte-preserved. The ordered OFD lock on the `inet d2b` table serializes
+concurrent mutations. The generation fence does not serialize and has no
+compare-and-advance behavior; it only rejects and requeues an intent whose
+`expected_generation_id` names a superseded installed configuration generation.
+Same-generation mutations converge idempotently under the lock. Network-local
+emits no USBIP rule and no TCP/3240 match. The returned `FirewallDigest` covers
+only this Network UID's ownership projection and is stored in
 `status.provider.details.firewallDigest` for drift detection.
 Device-usbip-owned rules and markers are excluded. No rule text appears in
 status, audit, or telemetry.
