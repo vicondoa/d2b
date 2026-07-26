@@ -97,6 +97,7 @@ mod gen_spec_set;
 mod heavy_gate;
 mod implementation_graph;
 mod inventory;
+mod process_marker_pin;
 mod test_runtime_ledger;
 
 const SCHEMA_VERSION: &str = "v2";
@@ -376,13 +377,27 @@ fn main() -> std::process::ExitCode {
         [command] if command == "implementation-graph" => run_task("implementation-graph", || {
             implementation_graph::generate(repo_root()?)
         }),
+        [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command, rest @ ..] if command == "test-runtime-ledger" => {
             test_runtime_ledger::run_cli(rest)
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_process_marker_pin() -> std::process::ExitCode {
+    let result = repo_root()
+        .map_err(|error| error.to_string())
+        .and_then(process_marker_pin::check);
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("process-marker-pin failed: {error}");
             std::process::ExitCode::FAILURE
         }
     }
