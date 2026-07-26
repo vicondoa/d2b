@@ -137,9 +137,10 @@ tests; a vanished or extra test, an incomplete or under-repeated run, or an
 aggregate crate CPU p95 over budget fails the gate. A per-test diagnostic
 threshold breach does not.
 
-The gate holds no baseline and makes no historical-regression claim, and
-there is no regeneration workflow to run when you change a census test
-(edit the census pin directly). The `test-runtime-ledger check` output is
+The gate holds no baseline and makes no historical-regression claim. When you
+legitimately add, remove or rename a census test, regenerate the pin with
+`make runtime-ledger-pin` and commit the result; the pin is a closed set, so
+the gate fails until it matches. The `test-runtime-ledger check` output is
 authoritative for the exact advisory-report formatting and selection.
 Growing the census to a real multi-crate shard inventory (with a per-shard
 budget) and adding a cross-machine reference baseline for a true

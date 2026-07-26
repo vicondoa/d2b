@@ -69,6 +69,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
 | `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
+| `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
 All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, invoked

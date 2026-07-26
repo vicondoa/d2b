@@ -17,8 +17,9 @@
   the ADR-046 validation-and-delivery, streamline, and feasibility-and-spikes
   specs, and the preparatory changelog fragments, so no surface advertises the
   removed per-test enforcement, baseline, historical-regression, shard, or
-  regeneration-workflow capabilities (there is no
-  `make runtime-ledger-regen` target and no committed baseline file).
+  regeneration-workflow capabilities (there is no committed baseline file).
+  Regenerating the census pin after a legitimate test change is a separate,
+  supported step: `make runtime-ledger-pin`.
 - Documented the envelope policy lint's D116 negative-example marker in
   `AGENTS.md` beside the existing lint guidance: the `policy_adr046_envelopes`
   lint exempts an intentional teaching block that demonstrates the D116
