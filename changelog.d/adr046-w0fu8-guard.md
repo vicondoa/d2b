@@ -10,3 +10,5 @@
   controls contributors must shrink, while explicitly rejecting budget raises.
 - Rust tests that launch Bash or POSIX shell fixtures now route through the
   inherited-function scrubber, including direct Cargo test invocation.
+- The manifest-driven Layer-1 local and CI graphs now run the dedicated
+  nix-unit corpus target and require it in the CI rollup.

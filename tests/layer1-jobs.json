@@ -11,7 +11,7 @@
       {
         "id": "parallel",
         "mode": "parallel",
-        "jobs": ["test-lint", "test-changelog", "test-rust", "test-proofs", "test-flake", "test-policy"]
+        "jobs": ["test-lint", "test-changelog", "test-rust", "test-proofs", "test-flake", "test-nix-unit", "test-policy"]
       },
       {
         "id": "serial-after-parallel",
@@ -28,6 +28,7 @@
       "test-changelog",
       "test-rust",
       "test-proofs",
+      "test-nix-unit",
       "flake-eval-discover",
       "flake-eval-x86",
       "flake-eval-x86-outputs",
@@ -44,6 +45,7 @@
       "test-changelog",
       "test-rust",
       "test-proofs",
+      "test-nix-unit",
       "test-flake-x86",
       "test-flake-aarch64",
       "test-drift",
@@ -106,6 +108,15 @@
       "localEnv": {
         "D2B_FLAKE_LOCAL_SHARDS": "1"
       }
+    },
+    "test-nix-unit": {
+      "displayName": "Nix unit corpus gate",
+      "makeTarget": "test-nix-unit",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-nix-unit",
+      "needs": ["tier0"],
+      "timeoutMinutes": 30,
+      "runsOn": "ubuntu-latest"
     },
     "flake-eval-discover": {
       "displayName": "Enumerate flake checks (x86_64-linux)",
