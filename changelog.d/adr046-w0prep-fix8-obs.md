@@ -5,3 +5,5 @@
   context when reporting paths.
 - Reported every per-test runtime threshold breach as a visible, non-failing
   advisory while retaining aggregate process-CPU budget enforcement.
+- Closed Nix policy-parser gaps for structural wrappers so nested resource
+  envelopes cannot silently bypass status and execution-policy checks.

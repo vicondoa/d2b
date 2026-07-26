@@ -1123,6 +1123,91 @@ fn parser_backed_scanners_reject_structural_bypasses() {
     assert_eq!(v.len(), 1, "{}", report("rec-nix", &v));
     assert!(v[0].text.contains("universal status base"));
 
+    // Nix expressions that legally wrap or contain an attrset must never hide a
+    // violating envelope from the scanner. These fixtures cover the supported
+    // wrapper class, not just the two forms that originally exposed the gap.
+    let incomplete = r#"{
+  apiVersion = "resources.d2bus.org/v3";
+  type = "Widget";
+  status = { phase = "Ready"; };
+}"#;
+    let nix_wrappers = [
+        ("with", format!("with {{}}; {incomplete}")),
+        (
+            "with-bound-result",
+            format!("with {{ resource = {incomplete}; }}; resource"),
+        ),
+        (
+            "nested-let",
+            format!("let a = 1; in let b = 2; in {incomplete}"),
+        ),
+        (
+            "let-bound-result",
+            format!("let resource = {incomplete}; in resource"),
+        ),
+        ("rec", incomplete.replacen('{', "rec {", 1)),
+        ("parenthesized", format!("({incomplete})")),
+        (
+            "if-then-branch",
+            format!("if true then {incomplete} else {{}}"),
+        ),
+        (
+            "if-else-branch",
+            format!("if false then {{}} else {incomplete}"),
+        ),
+        ("list-item", format!("[ {incomplete} ]")),
+        ("assert-body", format!("assert true; {incomplete}")),
+        ("lambda-body", format!("argument: {incomplete}")),
+        ("binary-operand", format!("{{}} // {incomplete}")),
+        (
+            "selected-attribute",
+            format!("({{ selected = {incomplete}; }}).selected"),
+        ),
+        ("legacy-let-body", format!("let {{ body = {incomplete}; }}")),
+        (
+            "string-interpolation",
+            r#"{
+  apiVersion = "resources.d2bus.org/v3";
+  type = "Widget-${variant}";
+  status = { phase = "Ready"; };
+}"#
+            .to_string(),
+        ),
+    ];
+    for (shape, expr) in nix_wrappers {
+        let fixture = format!("```nix\n{expr}\n```");
+        let v = scan_universal_status("f.md", &fixture);
+        assert_eq!(
+            v.len(),
+            1,
+            "{shape} must expose its violating resource: {}",
+            report(shape, &v)
+        );
+        assert!(
+            v[0].text.contains("universal status base"),
+            "{shape} must reach the resource rather than a parser-gap fallback: {}",
+            v[0].text
+        );
+    }
+
+    // Function application may return an attrset. The structural model does
+    // not evaluate the function, but it exposes every literal argument map as a
+    // candidate rather than collapsing the application to an unchecked opaque
+    // node.
+    let application = format!("```nix\nidentity {incomplete}\n```");
+    let v = scan_universal_status("f.md", &application);
+    assert_eq!(
+        v.len(),
+        1,
+        "application must fail closed: {}",
+        report("application", &v)
+    );
+    assert!(
+        v[0].text.contains("universal status base"),
+        "application must expose the literal resource argument: {}",
+        v[0].text
+    );
+
     // 3. A YAML anchor + `<<` merge is folded. A status assembled from a merge
     //    that supplies only `phase` is still missing update/resource (flagged);
     //    a merge that supplies the whole base is clean (proving the merge is

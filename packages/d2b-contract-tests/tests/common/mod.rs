@@ -24,9 +24,11 @@
 //!   [`Node::Elision`].
 //! * `<placeholder>` - an authored schema placeholder such as `<name>` or
 //!   `<ResourceType>` - parses to [`Node::Placeholder`].
-//! * Nix string interpolation and non-literal expressions (a bare variable, a
-//!   function application) parse to [`Node::Opaque`]: present, but not a
-//!   concrete literal a value-position check can inspect.
+//! * Nix string interpolation and non-literal scalar expressions parse to
+//!   [`Node::Opaque`]: present, but not a concrete literal a value-position
+//!   check can inspect. Structural expressions that may hide an attribute set
+//!   either expose their body to the walker or return [`ParseError`]; they never
+//!   silently collapse a whole document to `Opaque`.
 //!
 //! Semantic keys are normalized: a JSON `"ty\u0070e"` key and a bare YAML
 //! `type:` key both resolve to the key `type`, because the real parsers decode
@@ -64,9 +66,9 @@ pub enum Node {
     Elision,
     /// An authored `<placeholder>` such as `<name>` or `<ResourceType>`.
     Placeholder,
-    /// A non-literal value: Nix string interpolation, a bare variable
-    /// reference, a function application, or any expression that is present but
-    /// is not a concrete literal a value-position check can inspect.
+    /// A non-literal scalar value, such as Nix string interpolation or a bare
+    /// variable reference, that is present but not concrete enough for a
+    /// value-position check to inspect.
     Opaque,
 }
 
@@ -673,12 +675,32 @@ fn json_to_node(v: &serde_json::Value) -> Node {
 }
 
 // ---------------------------------------------------------------------------
-// Nix: rnix. `rec { ... }` and `{ ... }` are both `NODE_ATTR_SET`, so `rec` is
-// handled transparently; `let ... in <body>` resolves to its body; string
-// interpolation and bare variable references become `Node::Opaque`. Angle-
-// bracket placeholders (`<name>`) would otherwise tokenize as Nix lookup-path
-// syntax, so they are rewritten to a sentinel identifier before parsing, and
-// single-line prose elision (`{ ...fields... }`) collapses to an empty set.
+// Nix: rnix. Every expression SyntaxKind that can wrap or produce an attribute
+// set in the documented subset has an explicit disposition:
+//
+// * NODE_ATTR_SET covers both `{ ... }` and `rec { ... }`.
+// * NODE_WITH and NODE_LET_IN expose their namespace/bindings as well as their
+//   result body. This deliberately over-approximates evaluation so a body that
+//   returns a literal bound attribute set cannot hide it.
+// * NODE_PAREN exposes its expression.
+// * NODE_IF_ELSE exposes both possible result branches, so either branch can
+//   contribute a violation candidate.
+// * NODE_LIST recursively exposes each item.
+// * NODE_APPLY, NODE_BIN_OP, NODE_LAMBDA, NODE_LEGACY_LET, and NODE_SELECT
+//   over-approximate their structural result by exposing every descendant
+//   expression or binding. That finds every literal attribute-set candidate
+//   without pretending to evaluate Nix.
+// * NODE_ASSERT exposes its body; the condition cannot be its result.
+// * NODE_STRING, including interpolation, is a scalar value. Interpolation
+//   becomes Opaque while the containing attribute set remains traversable.
+// * identifiers, literals, paths, unary operations, attribute-existence tests,
+//   and __curPos are scalar-only here and become concrete or opaque values.
+//
+// Any future or misplaced structural SyntaxKind also fails closed through the
+// wildcard arm. Angle-bracket placeholders (`<name>`) would otherwise tokenize
+// as Nix lookup-path syntax, so they are rewritten to a sentinel identifier
+// before parsing, and single-line prose elision (`{ ...fields... }`) collapses
+// to an empty set.
 // ---------------------------------------------------------------------------
 
 fn normalize_nix(text: &str) -> String {
@@ -729,7 +751,7 @@ fn parse_nix(lines: &[&str]) -> Result<Node, ParseError> {
         if errs.is_empty() {
             let root = parse.syntax();
             if let Some(expr) = root.first_child() {
-                return Ok(nix_node_to_node(&expr));
+                return nix_node_to_node(&expr);
             }
             return Ok(Node::Null);
         }
@@ -742,34 +764,126 @@ fn parse_nix(lines: &[&str]) -> Result<Node, ParseError> {
     Err(ParseError(last_err))
 }
 
-fn nix_node_to_node(node: &SyntaxNode) -> Node {
+fn nix_node_to_node(node: &SyntaxNode) -> Result<Node, ParseError> {
     match node.kind() {
-        SyntaxKind::NODE_ATTR_SET => Node::Map(nix_attrset_entries(node)),
-        SyntaxKind::NODE_LIST => Node::Seq(node.children().map(|c| nix_node_to_node(&c)).collect()),
-        SyntaxKind::NODE_STRING => nix_string_node(node),
-        SyntaxKind::NODE_LITERAL => Node::Scalar(node.text().to_string().trim().to_string()),
-        SyntaxKind::NODE_IDENT => nix_ident_node(node),
+        SyntaxKind::NODE_ATTR_SET => Ok(Node::Map(nix_attrset_entries(node)?)),
+        SyntaxKind::NODE_LIST => node
+            .children()
+            .map(|child| nix_node_to_node(&child))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Node::Seq),
+        SyntaxKind::NODE_STRING => Ok(nix_string_node(node)),
+        SyntaxKind::NODE_LITERAL => Ok(Node::Scalar(node.text().to_string().trim().to_string())),
+        SyntaxKind::NODE_IDENT => Ok(nix_ident_node(node)),
+        SyntaxKind::NODE_WITH => node
+            .children()
+            .map(|child| nix_node_to_node(&child))
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|parts| {
+                if parts.len() < 2 {
+                    Err(ParseError(
+                        "NODE_WITH has no namespace or result body; refusing to skip a structural \
+                         Nix wrapper"
+                            .to_string(),
+                    ))
+                } else {
+                    Ok(Node::Seq(parts))
+                }
+            }),
         SyntaxKind::NODE_LET_IN => {
-            let body = node
+            let parts = node
                 .children()
-                .filter(|c| {
-                    matches!(
-                        c.kind(),
-                        SyntaxKind::NODE_ATTR_SET
-                            | SyntaxKind::NODE_LIST
-                            | SyntaxKind::NODE_STRING
-                            | SyntaxKind::NODE_LITERAL
-                            | SyntaxKind::NODE_IDENT
-                    )
+                .map(|child| {
+                    if child.kind() == SyntaxKind::NODE_ATTRPATH_VALUE {
+                        nix_attrpath_value(&child)
+                    } else {
+                        nix_node_to_node(&child)
+                    }
                 })
-                .last();
-            body.map(|c| nix_node_to_node(&c)).unwrap_or(Node::Opaque)
+                .collect::<Result<Vec<_>, _>>()?;
+            if parts.is_empty() {
+                return Err(ParseError(
+                    "NODE_LET_IN has no bindings or result body; refusing to skip a structural \
+                     Nix wrapper"
+                        .to_string(),
+                ));
+            }
+            Ok(Node::Seq(parts))
         }
-        SyntaxKind::NODE_PAREN => node
+        SyntaxKind::NODE_PAREN | SyntaxKind::NODE_ROOT => node
             .first_child()
-            .map(|c| nix_node_to_node(&c))
-            .unwrap_or(Node::Opaque),
-        _ => Node::Opaque,
+            .ok_or_else(|| {
+                ParseError(format!(
+                    "{:?} has no body; refusing to skip a structural Nix wrapper",
+                    node.kind()
+                ))
+            })
+            .and_then(|body| nix_node_to_node(&body)),
+        SyntaxKind::NODE_IF_ELSE => {
+            let branches = node
+                .children()
+                .skip(1)
+                .map(|branch| nix_node_to_node(&branch))
+                .collect::<Result<Vec<_>, _>>()?;
+            if branches.len() != 2 {
+                return Err(ParseError(
+                    "NODE_IF_ELSE does not have exactly two result branches".to_string(),
+                ));
+            }
+            Ok(Node::Seq(branches))
+        }
+        SyntaxKind::NODE_APPLY | SyntaxKind::NODE_BIN_OP => node
+            .children()
+            .map(|child| nix_node_to_node(&child))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Node::Seq),
+        SyntaxKind::NODE_ASSERT | SyntaxKind::NODE_LAMBDA => node
+            .children()
+            .last()
+            .ok_or_else(|| {
+                ParseError(format!(
+                    "{:?} has no body; refusing to skip a structural Nix expression",
+                    node.kind()
+                ))
+            })
+            .and_then(|body| nix_node_to_node(&body)),
+        SyntaxKind::NODE_LEGACY_LET => Ok(Node::Map(nix_attrset_entries(node)?)),
+        SyntaxKind::NODE_SELECT => node
+            .first_child()
+            .ok_or_else(|| {
+                ParseError(
+                    "NODE_SELECT has no source; refusing to skip a structural Nix expression"
+                        .to_string(),
+                )
+            })
+            .and_then(|source| nix_node_to_node(&source)),
+        SyntaxKind::NODE_CUR_POS
+        | SyntaxKind::NODE_HAS_ATTR
+        | SyntaxKind::NODE_PATH_ABS
+        | SyntaxKind::NODE_PATH_HOME
+        | SyntaxKind::NODE_PATH_REL
+        | SyntaxKind::NODE_PATH_SEARCH
+        | SyntaxKind::NODE_UNARY_OP => Ok(Node::Opaque),
+        SyntaxKind::NODE_ERROR => Err(ParseError(
+            "rnix produced an error node in a parsed Nix expression".to_string(),
+        )),
+        SyntaxKind::NODE_ATTRPATH
+        | SyntaxKind::NODE_ATTRPATH_VALUE
+        | SyntaxKind::NODE_DYNAMIC
+        | SyntaxKind::NODE_IDENT_PARAM
+        | SyntaxKind::NODE_INHERIT
+        | SyntaxKind::NODE_INHERIT_FROM
+        | SyntaxKind::NODE_INTERPOL
+        | SyntaxKind::NODE_PAT_BIND
+        | SyntaxKind::NODE_PAT_ENTRY
+        | SyntaxKind::NODE_PATTERN => Err(ParseError(format!(
+            "unexpected structural {:?} in Nix expression position",
+            node.kind()
+        ))),
+        _ => Err(ParseError(format!(
+            "unsupported Nix syntax {:?}; refusing to skip a possible structural wrapper",
+            node.kind()
+        ))),
     }
 }
 
@@ -828,7 +942,7 @@ fn unescape_nix(s: &str) -> String {
 /// Walk a `NODE_ATTR_SET`'s `NODE_ATTRPATH_VALUE` children, expanding dotted
 /// attrpaths (`metadata.name = x`) into nested maps and merging paths that
 /// share a prefix.
-fn nix_attrset_entries(node: &SyntaxNode) -> Vec<Entry> {
+fn nix_attrset_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
     let mut entries: Vec<Entry> = Vec::new();
     for child in node.children() {
         if child.kind() != SyntaxKind::NODE_ATTRPATH_VALUE {
@@ -844,12 +958,7 @@ fn nix_attrset_entries(node: &SyntaxNode) -> Vec<Entry> {
         if segments.is_empty() {
             continue;
         }
-        let value_node = child
-            .children()
-            .find(|c| c.kind() != SyntaxKind::NODE_ATTRPATH);
-        let value = value_node
-            .map(|v| nix_node_to_node(&v))
-            .unwrap_or(Node::Opaque);
+        let value = nix_attrpath_value(&child)?;
         insert_path(&mut entries, &segments, value);
     }
     // Surface any `d2b-lint: <token>` comment that is a direct child of this
@@ -868,7 +977,15 @@ fn nix_attrset_entries(node: &SyntaxNode) -> Vec<Entry> {
             });
         }
     }
-    entries
+    Ok(entries)
+}
+
+fn nix_attrpath_value(node: &SyntaxNode) -> Result<Node, ParseError> {
+    node.children()
+        .find(|child| child.kind() != SyntaxKind::NODE_ATTRPATH)
+        .map(|value| nix_node_to_node(&value))
+        .transpose()
+        .map(|value| value.unwrap_or(Node::Opaque))
 }
 
 fn nix_attrpath_segments(path: &SyntaxNode) -> Vec<String> {
