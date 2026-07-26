@@ -3,6 +3,9 @@
 - Major test suites now report their wall-clock duration, including the Rust
   workspace test pass and the runtime-ledger gate, so a non-failing performance
   regression is visible without imposing a flaky time budget.
+- The manifest-driven local Layer-1 gate now includes the changelog policy job,
+  and manifest loading rejects any CI job with a local Make target that is
+  absent from all local phases.
 
 ### Fixed
 

@@ -32,13 +32,23 @@ def load_manifest() -> dict[str, Any]:
     jobs = manifest.get("jobs")
     if not isinstance(jobs, dict):
         raise SystemExit(f"{MANIFEST}: jobs must be an object")
+    local_job_ids: list[str] = []
     for phase in manifest.get("local", {}).get("phases", []):
         for job_id in phase.get("jobs", []):
             if job_id not in jobs:
                 raise SystemExit(f"{MANIFEST}: local phase references unknown job {job_id!r}")
+            local_job_ids.append(job_id)
+    local_jobs = set(local_job_ids)
+    if len(local_jobs) != len(local_job_ids):
+        raise SystemExit(f"{MANIFEST}: a job appears in more than one local phase")
     for job_id in manifest.get("ci", {}).get("jobs", []):
         if job_id not in jobs:
             raise SystemExit(f"{MANIFEST}: ci.jobs references unknown job {job_id!r}")
+        if jobs[job_id].get("makeTarget") and job_id not in local_jobs:
+            raise SystemExit(
+                f"{MANIFEST}: CI job {job_id!r} has a local make target but is absent "
+                "from local.phases"
+            )
     for job_id in manifest.get("ci", {}).get("rollupNeeds", []):
         if job_id not in jobs:
             raise SystemExit(f"{MANIFEST}: ci.rollupNeeds references unknown job {job_id!r}")
