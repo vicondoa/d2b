@@ -14,3 +14,10 @@
   extra targets are now declared in `tests/layer1-jobs.json` and consumed by
   both the workflow renderer and the local runner, so a job cannot run more
   in continuous integration than it runs locally.
+- The runtime ledger's per-crate process-CPU budget was calibrated against the
+  reference development host and was red on every GitHub-hosted runner, where
+  the same suite measures roughly a third more process CPU. The budget is an
+  absolute ceiling rather than a regression anchor, so it now clears the
+  highest observed continuous-integration sample with headroom, and the test
+  that exercises it derives its sample and expected message from the constant
+  instead of restating the number.

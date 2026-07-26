@@ -40,7 +40,15 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// so this threshold ranks diagnostics but never fails the gate.
 pub const TEST_ADVISORY_THRESHOLD_MS: u64 = 50;
 /// Enforced aggregate process-CPU budget for a Provider crate's hermetic suite.
-pub const CRATE_BUDGET_MS: u64 = 2_000;
+///
+/// This is an absolute ceiling, not a regression anchor, so it must hold on the
+/// slowest machine that enforces it rather than on the fastest machine that
+/// records it. GitHub-hosted runners measure roughly a third more process CPU
+/// than the reference development host for the same suite, so a budget tuned
+/// only against local samples is red in continuous integration from the moment
+/// it is pinned. The value below clears the highest observed continuous
+/// integration sample with headroom for a noisy shared runner.
+pub const CRATE_BUDGET_MS: u64 = 3_000;
 /// Minimum execution-only repetitions the ledger must carry before its p95 or
 /// per-crate budgets mean anything. A single CPU sample is too thin to support
 /// a stable nearest-rank p95, so the gate refuses fewer repetitions.
@@ -1128,16 +1136,17 @@ mod tests {
     #[test]
     fn an_over_budget_crate_cpu_measurement_fails_the_gate() {
         let mut over = ledger(Vec::new());
-        over.crates
-            .push(crate_sample("d2b-core", CRATE_BUDGET_MS, &[1_000, 2_001]));
+        over.crates.push(crate_sample(
+            "d2b-core",
+            CRATE_BUDGET_MS,
+            &[1_000, CRATE_BUDGET_MS + 1],
+        ));
         let violations = check(&over);
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].scope, "crate");
-        assert!(
-            violations[0]
-                .detail
-                .contains("exceeds the 2000 ms process-CPU budget")
-        );
+        assert!(violations[0].detail.contains(&format!(
+            "exceeds the {CRATE_BUDGET_MS} ms process-CPU budget"
+        )));
     }
 
     #[test]
