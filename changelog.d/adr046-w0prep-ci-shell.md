@@ -15,6 +15,11 @@
   extra targets are now declared in `tests/layer1-jobs.json` and consumed by
   both the workflow renderer and the local runner, so a job cannot run more
   in continuous integration than it runs locally.
+- Layer-1 failure diagnostics now identify the exact primary or extra make
+  target that failed, name retained output by its semantic job identifier, and
+  redact repository, home, and other absolute paths from the printed tail. The
+  in-process filter mirrors the xtask redactor because the early runner cannot
+  assume that the Rust helper has already been built.
 - The runtime ledger's per-crate process-CPU budget was calibrated against the
   reference development host and was red on every GitHub-hosted runner, where
   the same suite measures roughly a third more process CPU. The budget is an

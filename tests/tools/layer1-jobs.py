@@ -8,6 +8,7 @@ import difflib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,11 @@ RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # on PATH; hosted runners provide dash, which does not process Bash startup
 # hooks before the wrapper can scrub them.
 SCRUBBED_BASH = "sh tests/tools/ci-shell {0}"
+PATH_START = r"(?P<prefix>^|[\s'\"(\[{: =])"
+ROOT_END = r"(?=$|[/\s'\"),\]};:])"
+ABSOLUTE_PATH = re.compile(
+    PATH_START + r"/[^ \t\r\n'\"),\]}>;,|]*"
+)
 
 
 def load_manifest() -> dict[str, Any]:
@@ -424,6 +430,34 @@ def command_self_test(args: argparse.Namespace) -> int:
     return subprocess.run([sys.executable, str(SELF_TEST), *args.tests], cwd=ROOT).returncode
 
 
+def redact_diagnostic_line(line: str) -> str:
+    # The Rust redactor may not be built when this earliest Layer-1 phase fails.
+    # Apply its repo/home placeholders and absolute-path fallback in-process
+    # rather than making failure reporting depend on Cargo.
+    sensitive_roots = [
+        (str(ROOT.resolve()), "<repo>"),
+        (str(ROOT), "<repo>"),
+    ]
+    home = os.environ.get("HOME")
+    if home:
+        sensitive_roots.append((str(pathlib.Path(home).resolve()), "<home>"))
+        sensitive_roots.append((home.rstrip("/") or "/", "<home>"))
+    for root, replacement in sorted(set(sensitive_roots), key=lambda item: -len(item[0])):
+        pattern = re.compile(PATH_START + re.escape(root) + ROOT_END)
+        line = pattern.sub(
+            lambda match: f"{match.group('prefix')}{replacement}",
+            line,
+        )
+    line = "".join(
+        character if character == "\t" or character.isprintable() else " "
+        for character in line
+    )
+    return ABSOLUTE_PATH.sub(
+        lambda match: f"{match.group('prefix')}<path>",
+        line,
+    )
+
+
 def run_job(job_id: str, job: dict[str, Any]) -> int:
     target = job.get("makeTarget")
     if not target:
@@ -436,14 +470,18 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
     log_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"d2b-{job_id}."))
     log_path = log_dir / "output.log"
     print(f"==> {target} ({job.get('displayName', job_id)})", flush=True)
+    failed_target = None
+    returncode = 0
     with log_path.open("wb") as log:
         for one in targets:
             proc = subprocess.run(
                 ["make", one], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT
             )
-            if proc.returncode != 0:
+            returncode = proc.returncode
+            if returncode != 0:
+                failed_target = one
                 break
-    if proc.returncode == 0:
+    if returncode == 0:
         # An advisory job may legitimately no-op, so reporting it as `ok`
         # would let a gate that did nothing count towards a green run.
         if job.get("enforcement") == "advisory":
@@ -457,14 +495,24 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
             except OSError:
                 pass
         return 0
-    print(f"FAIL: {target} (exit {proc.returncode}); tail of {log_path}:", file=sys.stderr, flush=True)
+    assert failed_target is not None
+    print(
+        f"FAIL: {failed_target} for Layer-1 job {job_id} "
+        f"(exit {returncode}); redacted retained tail:",
+        file=sys.stderr,
+        flush=True,
+    )
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
         for line in lines[-200:]:
-            print(line, file=sys.stderr)
+            print(redact_diagnostic_line(line), file=sys.stderr)
     except OSError as exc:
-        print(f"could not read {log_path}: {exc}", file=sys.stderr)
-    return proc.returncode
+        detail = exc.strerror or "I/O error"
+        print(
+            f"could not read retained output for Layer-1 job {job_id}: {detail}",
+            file=sys.stderr,
+        )
+    return returncode
 
 
 def selected_phases(manifest: dict[str, Any], include_preflight: bool) -> list[dict[str, Any]]:

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import shlex
@@ -12,6 +14,7 @@ import subprocess
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -102,6 +105,67 @@ set -euo pipefail
             [],
             msg="\n".join(failures),
         )
+
+    def test_extra_target_failure_is_identified_and_redacted(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        log_dir = self.scratch / "retained-log"
+        calls: list[str] = []
+
+        def make_log_dir(*_args: object, **_kwargs: object) -> str:
+            log_dir.mkdir()
+            return str(log_dir)
+
+        def run_make(
+            argv: list[str],
+            **kwargs: object,
+        ) -> types.SimpleNamespace:
+            target = argv[1]
+            calls.append(target)
+            output = kwargs["stdout"]
+            if target == "check-tier0":
+                return types.SimpleNamespace(returncode=0)
+            output.write(
+                (
+                    f"repo failure: {ROOT}/private/output\n"
+                    f"home failure: {pathlib.Path.home()}/private/output\n"
+                    "system failure: /nix/store/private-output\n"
+                ).encode()
+            )
+            return types.SimpleNamespace(returncode=37)
+
+        job = {
+            "displayName": "Tier 0 first-pass gate",
+            "makeTarget": "check-tier0",
+            "extraMakeTargets": [
+                {
+                    "makeTarget": "test-ci-coverage",
+                    "displayName": "CI coverage structural guard",
+                }
+            ],
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(layer1_jobs.tempfile, "mkdtemp", make_log_dir),
+            mock.patch.object(layer1_jobs.subprocess, "run", run_make),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            returncode = layer1_jobs.run_job("tier0", job)
+
+        diagnostic = stderr.getvalue()
+        self.assertEqual(returncode, 37)
+        self.assertEqual(calls, ["check-tier0", "test-ci-coverage"])
+        self.assertIn("FAIL: test-ci-coverage", diagnostic)
+        self.assertIn("Layer-1 job tier0", diagnostic)
+        self.assertNotIn(str(log_dir), diagnostic)
+        self.assertNotIn(str(ROOT), diagnostic)
+        self.assertNotIn(str(pathlib.Path.home()), diagnostic)
+        self.assertNotIn("/nix/store", diagnostic)
+        self.assertIn("<repo>/private/output", diagnostic)
+        self.assertIn("<home>/private/output", diagnostic)
+        self.assertIn("<path>", diagnostic)
+
 
 if __name__ == "__main__":
     unittest.main()
