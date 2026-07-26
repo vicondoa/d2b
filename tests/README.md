@@ -90,12 +90,24 @@ D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
 tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
 each live/hardware/perf entrypoint re-executes itself through the gate
 exactly once when `D2B_HEAVY_GATE` is unset, so the shared Nix store,
-cargo target directory, and KVM device cannot be oversubscribed. The
-gated targets remain the documented path. The `cargo run --manifest-path
+cargo target directory, and KVM device cannot be oversubscribed. The gated
+targets remain the documented path. The `cargo run --manifest-path
 packages/Cargo.toml` spelling is required because there is no root cargo
 workspace, so the bare `cargo xtask` alias resolves only when run from
 `packages/`; see AGENTS.md for the `sccache` tradeoff and the `cd packages
 && cargo xtask <command>` alternative.
+
+The semaphore uses a protected, system-provisioned namespace under
+`/run/d2b-heavy-gates`; it never falls back to a user-writable runtime or
+temporary directory. The NixOS module provisions the fixed root at boot and
+creates two private slots for every configured `d2b.site.launcherUsers` member
+after numeric UIDs are available. On a development machine that does not use
+the module, run `make heavy-gate-provision` once after each boot. That target
+uses `sudo` only to create the root-owned namespace and the current user's two
+mode-`0600` slot files. A missing or malformed namespace fails closed with
+stable code `heavy-gate-provisioning-required` and names that Make target as
+the remediation; do not work around it by moving the gate into `/tmp` or
+another user-owned location.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across

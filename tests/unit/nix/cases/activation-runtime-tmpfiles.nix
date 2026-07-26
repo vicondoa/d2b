@@ -71,6 +71,7 @@ let
   tmpfiles = cfg.systemd.tmpfiles.rules;
   qemuMediaTmpfiles = qemuMediaCfg.systemd.tmpfiles.rules;
   roleAclText = cfg.system.activationScripts.d2bRoleUidAcls.text or "";
+  heavyGateProvisionText = cfg.system.activationScripts.d2bHeavyGateProvision.text or "";
   qemuMediaRoleAclText = qemuMediaCfg.system.activationScripts.d2bRoleUidAcls.text or "";
   runtimePostureText = cfg.system.activationScripts.d2bRuntimeDirPosture.text or "";
   stateDirAclText = cfg.system.activationScripts.d2bStateDirAcl.text or "";
@@ -143,6 +144,29 @@ in
       "a+ /run/d2b/vms - - - - u:d2b-corp-vm-gpu:--x"
     ]);
     expected = true;
+  };
+
+  "activation-runtime-tmpfiles/heavy-gate-provisioning" = {
+    expr = {
+      rootCreate = builtins.elem "d /run/d2b-heavy-gates 0755 root root -" tmpfiles;
+      rootPosture = builtins.elem "z /run/d2b-heavy-gates 0755 root root -" tmpfiles;
+      configuredUser = lib.hasInfix "for user in alice; do" heavyGateProvisionText;
+      uidDirectory =
+        lib.hasInfix ''install -d -m 0755 -o root -g root "$uid_dir"'' heavyGateProvisionText;
+      slotCreate =
+        lib.hasInfix ''install -m 0600 -o "$uid" -g root /dev/null "$slot"'' heavyGateProvisionText;
+      slotOwner = lib.hasInfix ''chown "$uid":root "$slot"'' heavyGateProvisionText;
+      slotMode = lib.hasInfix ''chmod 0600 "$slot"'' heavyGateProvisionText;
+    };
+    expected = {
+      rootCreate = true;
+      rootPosture = true;
+      configuredUser = true;
+      uidDirectory = true;
+      slotCreate = true;
+      slotOwner = true;
+      slotMode = true;
+    };
   };
 
   "activation-runtime-tmpfiles/run-parent-mask-after-traversal-acls" = {

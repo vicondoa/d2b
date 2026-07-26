@@ -9,6 +9,7 @@
 //! be tested through bash.
 
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -133,37 +134,40 @@ fn run_reexec_guard(
     // these fail-closed cases never reach, so a nonexistent path is fine. Paths
     // carry no shell metacharacters, but quote defensively.
     //
-    // Clear the child's function table before sourcing the helper. A parent
-    // gate runner may `export -f cargo` / `export -f rustc` (the pinned
-    // toolchain wrappers), and shell function resolution precedes PATH, so an
-    // inherited `cargo` function would shadow the stub binary this harness
-    // plants on PATH and silently defeat the hostile-cargo premise. `unset -f`
-    // is version-independent and complements the env-level strip below.
+    // Close every inherited descriptor above stderr before sourcing the helper.
+    // The suite itself may run under heavy-gate, whose slot descriptor
+    // deliberately survives exec. Clearing only its environment advertisement
+    // would leave a planted marker able to rediscover that descriptor. Bash's
+    // `{var}>&-` form closes the numeric descriptor without eval.
+    //
+    // Clear the function table too. This is defense in depth after `env_clear`:
+    // an explicitly planted BASH_FUNC entry in `extra_env` must not shadow the
+    // PATH stub.
     let script = format!(
-        "unset -f cargo rustc 2>/dev/null || true\n. '{helper}'\nd2b_heavy_gate_reexec '{base}' '{base}/tests/tools/entry.sh'\n",
+        "for inherited_fd_path in /proc/self/fd/*; do\n\
+           inherited_fd=${{inherited_fd_path##*/}}\n\
+           case \"$inherited_fd\" in 0|1|2|*[!0-9]*) ;; *) exec {{inherited_fd}}>&- || true ;; esac\n\
+         done\n\
+         unset inherited_fd inherited_fd_path\n\
+         unset -f cargo rustc 2>/dev/null || true\n\
+         . '{helper}'\n\
+         d2b_heavy_gate_reexec '{base}' '{base}/tests/tools/entry.sh'\n",
         helper = helper.display(),
         base = base.display(),
     );
 
-    // Exported bash functions cross the process boundary as environment entries
-    // named `BASH_FUNC_<name>%%` (the suffix spelling varies by bash release,
-    // but the `BASH_FUNC_` prefix is stable), so strip every such entry - and
-    // `BASH_ENV`, which would let a sourced file rebuild them - to control the
-    // child's function table rather than trusting whatever the suite exported.
-    // The child then resolves `cargo` purely through PATH, exercising the stub
-    // as intended.
+    // Start from an empty environment. In addition to heavy-gate state and
+    // exported functions, this excludes every bash startup/control channel
+    // (`BASH_ENV`, `ENV`, `BASH_XTRACEFD`, `SHELLOPTS`) without relying on an
+    // ever-growing denylist. PATH is the only inherited value the harness
+    // genuinely needs, and points at the test's cargo stub first.
     let mut command = Command::new("bash");
     command
         .arg("-c")
         .arg(script)
+        .env_clear()
         .env("PATH", path)
-        .env_remove("D2B_HEAVY_GATE_REEXEC_DEPTH")
-        .env_remove("BASH_ENV");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("BASH_FUNC_") {
-            command.env_remove(&key);
-        }
-    }
+        .env_remove("D2B_HEAVY_GATE_REEXEC_DEPTH");
     // Applied last so a test can plant an entry the parent-env strip above would
     // otherwise remove, isolating the in-script `unset -f` defence.
     for (key, value) in extra_env {
@@ -260,5 +264,62 @@ fn an_inherited_cargo_function_does_not_shadow_the_path_stub() {
     assert_eq!(
         who, "stub",
         "the PATH stub must run, not the inherited cargo function (ran: {who:?})"
+    );
+}
+
+#[test]
+fn inherited_gate_state_and_descriptor_do_not_authorise_the_child() {
+    let planted_scratch = Scratch::new("reexec-planted-fd");
+    let planted = fs::File::create(planted_scratch.path().join("slot")).unwrap();
+    nix::fcntl::fcntl(
+        planted.as_raw_fd(),
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )
+    .expect("the planted descriptor is inheritable");
+    let sentinel = planted_scratch.path().join("acquired");
+
+    // The fake verifier succeeds only if the advertised descriptor survived
+    // into it. A clean child sees the planted environment but no descriptor,
+    // returns the real verifier's "unheld" status, and reaches the acquisition
+    // branch, where the sentinel is written.
+    let stub = format!(
+        "#!/bin/sh\n\
+         mkdir -p \"$CARGO_TARGET_DIR/debug\"\n\
+         cat > \"$CARGO_TARGET_DIR/debug/xtask\" <<'EOF'\n\
+         #!/bin/sh\n\
+         if [ \"$2\" = verify-slot ]; then\n\
+           test -n \"$D2B_HEAVY_GATE_SLOT_FD\" && \
+             test -e \"/proc/self/fd/$D2B_HEAVY_GATE_SLOT_FD\" && exit 0\n\
+           exit 3\n\
+         fi\n\
+         printf acquired > '{}'\n\
+         exit 66\n\
+         EOF\n\
+         chmod 755 \"$CARGO_TARGET_DIR/debug/xtask\"\n",
+        sentinel.display()
+    );
+    let fd = planted.as_raw_fd().to_string();
+    let out = run_reexec_guard(
+        &stub,
+        &[
+            ("D2B_HEAVY_GATE", "1"),
+            ("D2B_HEAVY_GATE_SLOT", "0"),
+            ("D2B_HEAVY_GATE_SLOT_FD", fd.as_str()),
+            ("ENV", "/does/not/exist"),
+            ("BASH_ENV", "/does/not/exist"),
+            ("BASH_XTRACEFD", "9"),
+            ("SHELLOPTS", "xtrace"),
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(66),
+        "the clean child must reject inherited gate state and try to acquire"
+    );
+    assert_eq!(
+        fs::read_to_string(&sentinel).unwrap_or_default(),
+        "acquired",
+        "the planted descriptor must not let verify-slot report a held slot"
     );
 }
