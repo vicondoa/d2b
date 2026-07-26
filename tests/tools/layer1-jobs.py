@@ -30,10 +30,10 @@ RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # on PATH; hosted runners provide dash, which does not process Bash startup
 # hooks before the wrapper can scrub them.
 SCRUBBED_BASH = "sh tests/tools/ci-shell {0}"
-PATH_START = r"(?P<prefix>^|[\s'\"(\[{: =])"
-ROOT_END = r"(?=$|[/\s'\"),\]};:])"
+PATH_START = r"(?P<prefix>^|[\s'\"`(\[{: =])"
+ROOT_END = r"(?=$|[/\s'\"`),\]};:])"
 ABSOLUTE_PATH = re.compile(
-    PATH_START + r"/[^ \t\r\n'\"),\]}>;,|]*"
+    PATH_START + r"/[^ \t\r\n'\"`),\]}>;,|]*"
 )
 
 
@@ -334,6 +334,11 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
     rollup = ci["rollupJob"]
     needs = ci["rollupNeeds"]
     allowed_skipped = set(ci.get("allowedSkippedRollupJobs", []))
+    advisory_needs = {
+        need
+        for need in needs
+        if manifest["jobs"][need].get("enforcement") == "advisory"
+    }
     lines = [
         f"  {rollup}:",
         f"    needs: {yaml_list(needs)}",
@@ -365,10 +370,22 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
         "              failed=1",
         "            fi",
         "          }",
+        "          require_advisory_success() {",
+        "            name=\"$1\"",
+        "            result=\"$2\"",
+        "            echo \"advisory:$name=$result (not an enforcing pass)\"",
+        "            if [ \"$result\" != success ]; then",
+        "              echo \"::error::required advisory $name did not complete successfully "
+        "(result=$result)\"",
+        "              failed=1",
+        "            fi",
+        "          }",
     ]
     for need in needs:
         expr = "${{ needs." + need + ".result }}"
-        if need in allowed_skipped:
+        if need in advisory_needs:
+            lines.append(f"          require_advisory_success {need} '{expr}'")
+        elif need in allowed_skipped:
             lines.append(f"          allow_success_or_skipped {need} '{expr}'")
         else:
             lines.append(f"          require_success {need} '{expr}'")
@@ -377,9 +394,15 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
             "          if [ \"$failed\" -ne 0 ]; then",
             "            exit 1",
             "          fi",
-            "          echo \"All generated Layer-1 jobs passed.\"",
+            "          echo \"All generated enforcing Layer-1 jobs passed.\"",
         ]
     )
+    if advisory_needs:
+        advisory_names = ", ".join(need for need in needs if need in advisory_needs)
+        lines.append(
+            "          echo \"Required advisory jobs completed "
+            f"(not enforcing passes): {advisory_names}\""
+        )
     return "\n".join(lines)
 
 
@@ -406,7 +429,18 @@ def render_workflow(manifest: dict[str, Any]) -> str:
         renderer = RENDERERS.get(kind)
         if renderer is None:
             raise SystemExit(f"{MANIFEST}: no renderer for ciKind {kind!r}")
-        rendered_jobs.append(renderer(job))
+        rendered = renderer(job)
+        if job.get("enforcement") == "advisory":
+            header = f"  {job['ciJobId']}:\n"
+            advisory_name = json.dumps(
+                f"Advisory - non-enforcing - {job['displayName']}"
+            )
+            if not rendered.startswith(header):
+                raise SystemExit(
+                    f"{MANIFEST}: renderer for {job_id!r} emitted an unexpected job header"
+                )
+            rendered = rendered.replace(header, f"{header}    name: {advisory_name}\n", 1)
+        rendered_jobs.append(rendered)
     rendered_jobs.append(check_rollup_job(manifest))
     template = TEMPLATE.read_text(encoding="utf-8")
     workflow = template.replace("{{ workflow_name }}", manifest["ci"]["workflowName"])
@@ -450,10 +484,55 @@ def command_self_test(args: argparse.Namespace) -> int:
     return subprocess.run([sys.executable, str(SELF_TEST), *args.tests], cwd=ROOT).returncode
 
 
+def normalize_ansi_escape_sequences(line: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(line):
+        if line[index] != "\x1b":
+            output.append(line[index])
+            index += 1
+            continue
+
+        output.append(" ")
+        index += 1
+        if index >= len(line):
+            continue
+        introducer = line[index]
+        if introducer == "[":
+            index += 1
+            while index < len(line):
+                final = ord(line[index])
+                index += 1
+                if 0x40 <= final <= 0x7E:
+                    break
+        elif introducer in "]PX^_":
+            index += 1
+            while index < len(line):
+                if line[index] == "\x07":
+                    index += 1
+                    break
+                if (
+                    line[index] == "\x1b"
+                    and index + 1 < len(line)
+                    and line[index + 1] == "\\"
+                ):
+                    index += 2
+                    break
+                index += 1
+        elif 0x40 <= ord(introducer) <= 0x5F:
+            index += 1
+    return "".join(output)
+
+
 def redact_diagnostic_line(line: str) -> str:
     # The Rust redactor may not be built when this earliest Layer-1 phase fails.
     # Apply its repo/home placeholders and absolute-path fallback in-process
     # rather than making failure reporting depend on Cargo.
+    line = normalize_ansi_escape_sequences(line)
+    line = "".join(
+        character if character == "\t" or character.isprintable() else " "
+        for character in line
+    )
     sensitive_roots = [
         (str(ROOT.resolve()), "<repo>"),
         (str(ROOT), "<repo>"),
@@ -468,10 +547,6 @@ def redact_diagnostic_line(line: str) -> str:
             lambda match: f"{match.group('prefix')}{replacement}",
             line,
         )
-    line = "".join(
-        character if character == "\t" or character.isprintable() else " "
-        for character in line
-    )
     return ABSOLUTE_PATH.sub(
         lambda match: f"{match.group('prefix')}<path>",
         line,

@@ -166,6 +166,52 @@ set -euo pipefail
         self.assertIn("<home>/private/output", diagnostic)
         self.assertIn("<path>", diagnostic)
 
+    def test_workflow_keeps_advisory_jobs_required_but_non_enforcing(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+
+        self.assertIn(
+            'name: "Advisory - non-enforcing - Performance budget gate"',
+            workflow,
+        )
+        self.assertIn(
+            "require_advisory_success test-performance-budgets "
+            "'${{ needs.test-performance-budgets.result }}'",
+            workflow,
+        )
+        self.assertNotIn(
+            "require_success test-performance-budgets "
+            "'${{ needs.test-performance-budgets.result }}'",
+            workflow,
+        )
+        self.assertIn("All generated enforcing Layer-1 jobs passed.", workflow)
+        self.assertIn(
+            "Required advisory jobs completed (not enforcing passes): "
+            "test-performance-budgets",
+            workflow,
+        )
+
+    def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        diagnostic = f"error:\x1b[31m{ROOT}/private/output\x1b[0m"
+
+        redacted = layer1_jobs.redact_diagnostic_line(diagnostic)
+
+        self.assertIn("<repo>/private/output", redacted)
+        self.assertNotIn(str(ROOT), redacted)
+        self.assertNotIn("\x1b", redacted)
+        self.assertNotIn("[31m", redacted)
+
+    def test_diagnostic_redaction_recognizes_backtick_boundaries(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        diagnostic = f"failed to read `{ROOT}/private/output`"
+
+        redacted = layer1_jobs.redact_diagnostic_line(diagnostic)
+
+        self.assertEqual(redacted, "failed to read `<repo>/private/output`")
+        self.assertNotIn(str(ROOT), redacted)
+
 
 if __name__ == "__main__":
     unittest.main()
