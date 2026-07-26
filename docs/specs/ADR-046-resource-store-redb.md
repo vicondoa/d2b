@@ -418,7 +418,7 @@ types, or the storage-row source contract.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Resource-object contracts; store integrator. Contract-only scope may proceed, but production redb backend completion depends on successful SPIKE-01 evidence from `ADR046-feasibility-001` |
+| Dependency/owner | Resource-object contracts; store integrator. Contract-only scope may proceed, but production redb backend completion depends on successful SPIKE-01 evidence |
 | Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs` |
@@ -432,7 +432,7 @@ types, or the storage-row source contract.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-store-001 contract scope plus successful SPIKE-01 and SPIKE-02 evidence from `ADR046-feasibility-001`; watch/reconciliation integrator |
+| Dependency/owner | ADR046-store-001 contract scope plus successful SPIKE-01 and SPIKE-02 evidence; watch/reconciliation integrator |
 | Current source | `packages/d2b-realm-core/src/mux.rs`, `d2b-realm-router/src/mux_session.rs`, `route_engine.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs` |
@@ -446,7 +446,7 @@ types, or the storage-row source contract.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-store-001 contract scope; storage-row source contract may proceed, but redb backup/migration completion depends on successful SPIKE-01 evidence from `ADR046-feasibility-001`; storage/broker integrator |
+| Dependency/owner | ADR046-store-001 contract scope; storage-row source contract may proceed, but redb backup/migration completion depends on successful SPIKE-01 evidence; storage/broker integrator |
 | Current source | `nixos-modules/storage-json.nix`, `packages/d2b-priv-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`. The generated schema and rendered-contract parity test are integrator-owned outputs named by D115, not implementation-slice destinations |

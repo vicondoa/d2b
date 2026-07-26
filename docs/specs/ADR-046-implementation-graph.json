@@ -12072,7 +12072,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs`"
+        "`packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs`, `error.rs`"
       ],
       "detailedDesign" : "Async methods, contexts, preconditions, limits, errors, status/finalizer separation, batch API Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
@@ -15444,7 +15444,7 @@
       "destinations" : [
         "`proofs/redb-resource-store-spike/`"
       ],
-      "detailedDesign" : "Implements SPIKE-01 and SPIKE-02: the eight-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified).",
+      "detailedDesign" : "Implements SPIKE-01 and SPIKE-02: the ten-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified).",
       "entryContracts" : [
         "ADR-046-feasibility-and-spikes"
       ],
@@ -21544,23 +21544,23 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-resource-store/src/lib.rs`, `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs`"
+        "`packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs`"
       ],
-      "detailedDesign" : "redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Before SPIKE-01: closed errors, store-neutral types, exact table/discriminant codecs and golden vectors, and hermetic small-scale transaction semantics. After SPIKE-01 passes: fd-backed redb backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and production benchmarks. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-001",
       "kind" : "work-item",
-      "owner" : "W0; store integrator",
+      "owner" : "Resource-object contracts; store integrator. Contract-only scope may proceed, but production redb backend completion depends on successful SPIKE-01 evidence",
       "parallelGroup" : "wi:ADR-046-resource-store-redb",
       "prerequisites" : [
         "ADR-046-resource-store-redb"
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 4,
-      "validation" : "Unit/property/fault tests and hard benchmark",
+      "validation" : "Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence, unit/property/fault tests, and the hard benchmark",
       "wave" : "W0"
     },
     {
@@ -21575,7 +21575,7 @@
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-002",
       "kind" : "work-item",
-      "owner" : "ADR046-store-001; watch/reconciliation integrator",
+      "owner" : "ADR046-store-001 contract scope plus successful SPIKE-01 and SPIKE-02 evidence; watch/reconciliation integrator",
       "parallelGroup" : "wi:ADR-046-resource-store-redb",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
@@ -21583,22 +21583,22 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "deterministic watch/compaction/disconnect/fan-in tests",
+      "validation" : "SPIKE-01 correctness and SPIKE-02 latency evidence before implementation; deterministic watch/compaction/disconnect/fan-in tests afterward",
       "wave" : "W0"
     },
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; generated v3 storage row"
+        "`packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`. The generated schema and rendered-contract parity test are integrator-owned outputs named by D115, not implementation-slice destinations"
       ],
-      "detailedDesign" : "fd-backed provision/open, marker identity, logical backup, staged restore/upgrade, corruption quarantine",
+      "detailedDesign" : "Before SPIKE-01: generated-storage-row source contract. After SPIKE-01 passes: fd-backed provision/open, marker identity, logical backup, staged restore/upgrade, and corruption quarantine. The integrator generates the schema and owns the contract-test addition after the source slice merges",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-003",
       "kind" : "work-item",
-      "owner" : "ADR046-store-001; storage/broker integrator",
+      "owner" : "ADR046-store-001 contract scope; storage-row source contract may proceed, but redb backup/migration completion depends on successful SPIKE-01 evidence; storage/broker integrator",
       "parallelGroup" : "wi:ADR-046-resource-store-redb",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
@@ -21606,7 +21606,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "marker replacement, crash publication, backup/restore/upgrade tests",
+      "validation" : "Storage-row source validation may proceed; marker replacement, crash publication, backup/restore/upgrade tests require SPIKE-01 evidence first",
       "wave" : "W0"
     },
     {
