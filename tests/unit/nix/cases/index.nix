@@ -2,6 +2,7 @@
 
 let
   x86 = system == "x86_64-linux";
+  resourceContracts = import ../../../../nixos-modules/resources.nix { inherit lib; };
 
   fixture = { lib, ... }: {
     boot.loader.grub.enable = false;
@@ -129,6 +130,280 @@ let
   cfgYubikeyDisabled = (mkEval [ fixture ({ lib, ... }: {
     d2b.site.yubikey.enable = lib.mkForce false;
   }) ]).config;
+  maxIdentity = "a${lib.concatStrings (lib.replicate 62 "b")}";
+  tooLongIdentity = "${maxIdentity}c";
+  resourceFixture = {
+    d2b.zones = {
+      "${maxIdentity}".resources.${maxIdentity}.type = "Provider";
+      work = {
+        resources = {
+          alice.type = "User";
+          app = {
+            type = "Host";
+            metadata.ownerRef = "User/alice";
+            spec = {
+              providerRef = "Provider/local";
+              defaultDomain = "user";
+              allowedDomains = [ "system" "user" ];
+              defaultUserRef = "User/alice";
+              budget = {
+                cpu.limit = "1024000m";
+                memory.limit = "4TiB";
+              };
+              networkAttachments = [{
+                networkRef = "Network/main";
+                default = true;
+              }];
+              deviceAttachments = [{
+                deviceRef = "Device/gpu";
+                exclusive = true;
+              }];
+              volumeAttachmentDefaults = [{ volumeRef = "Volume/state"; }];
+            };
+          };
+          gpu.type = "Device";
+          local = {
+            type = "Provider";
+            spec.artifactId = "local-host";
+          };
+          main.type = "Network";
+          state.type = "Volume";
+          widget = {
+            type = "acme.d2bus.org.Widget";
+            spec.allowedDomains = [ ];
+          };
+        };
+      };
+    };
+  };
+  resourceCfg = (mkEval [ fixture resourceFixture ]).config;
+  resourceIndex = resourceCfg.d2b._index.zones;
+  failureMessages = module:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: lib.hasPrefix "d2b.zones." assertion.message)
+        (lib.filter (assertion: !assertion.assertion)
+          (mkEval [ fixture module ]).config.assertions));
+  resourceContractEvidence = {
+    zoneNames = resourceIndex.names;
+    work = resourceIndex.byName.work;
+    maximumNameAccepted =
+      builtins.hasAttr maxIdentity resourceIndex.byName
+      && builtins.elem
+        {
+          zoneName = maxIdentity;
+          type = "Provider";
+          name = maxIdentity;
+          ref = "Provider/${maxIdentity}";
+          ownerRef = null;
+        }
+        resourceIndex.byName.${maxIdentity}.resources;
+    invalidNames = {
+      zone = failureMessages {
+        d2b.zones.${tooLongIdentity}.resources.provider.type = "Provider";
+      };
+      resource = failureMessages {
+        d2b.zones.work.resources.${tooLongIdentity}.type = "Provider";
+      };
+      emptyZone = failureMessages {
+        d2b.zones."".resources.provider.type = "Provider";
+      };
+      emptyResource = failureMessages {
+        d2b.zones.work.resources."".type = "Provider";
+      };
+    };
+    invalidReferences = {
+      missingDefaultUser = failureMessages {
+        d2b.zones.work.resources = {
+          local.type = "Provider";
+          app = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/local";
+              allowedDomains = [ "user" ];
+              defaultDomain = "user";
+              defaultUserRef = "User/missing";
+            };
+          };
+        };
+      };
+      missingProvider = failureMessages {
+        d2b.zones.work.resources.app = {
+          type = "Host";
+          spec.providerRef = "Provider/missing";
+        };
+      };
+      wrongProviderType = failureMessages {
+        d2b.zones.work.resources = {
+          target.type = "User";
+          app = {
+            type = "Host";
+            spec.providerRef = "Provider/target";
+          };
+        };
+      };
+      missingOwner = failureMessages {
+        d2b.zones.work.resources = {
+          local.type = "Provider";
+          app = {
+            type = "Host";
+            metadata.ownerRef = "User/missing";
+            spec.providerRef = "Provider/local";
+          };
+        };
+      };
+    };
+    invalidPolicies = {
+      missingDefaultUser = failureMessages {
+        d2b.zones.work.resources = {
+          local.type = "Provider";
+          app = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/local";
+              allowedDomains = [ "system" "user" ];
+            };
+          };
+        };
+      };
+      duplicateDomains = failureMessages {
+        d2b.zones.work.resources = {
+          local.type = "Provider";
+          app = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/local";
+              allowedDomains = [ "system" "system" ];
+            };
+          };
+        };
+      };
+    };
+    malformed = {
+      badType = (builtins.tryEval ((mkEval [ fixture {
+        d2b.zones.work.resources.app.type = "Unknown";
+      } ]).config.system.build.toplevel)).success;
+      badRef = (builtins.tryEval ((mkEval [ fixture {
+        d2b.zones.work.resources.app = {
+          type = "Provider";
+          metadata.ownerRef = "user/alice";
+        };
+      } ]).config.system.build.toplevel)).success;
+      excessiveCpu = (builtins.tryEval ((mkEval [ fixture {
+        d2b.zones.work.resources.app = {
+          type = "Provider";
+          spec.budget.cpu.limit = "1024001m";
+        };
+      } ]).config.system.build.toplevel)).success;
+      excessiveMemory = (builtins.tryEval ((mkEval [ fixture {
+        d2b.zones.work.resources.app = {
+          type = "Provider";
+          spec.budget.memory.limit = "4097GiB";
+        };
+      } ]).config.system.build.toplevel)).success;
+    };
+    vectors = {
+      types = map resourceContracts.validResourceType [
+        "Zone"
+        "ZoneLink"
+        "Provider"
+        "Role"
+        "RoleBinding"
+        "Quota"
+        "EmergencyPolicy"
+        "Host"
+        "Guest"
+        "Process"
+        "EphemeralProcess"
+        "Volume"
+        "Network"
+        "Device"
+        "User"
+        "Credential"
+        "Endpoint"
+        "ResourceExport"
+        "ResourceImport"
+        "acme.d2bus.org.Widget"
+        "Widget"
+        "acme.io.Widget"
+      ];
+      refs = map resourceContracts.validResourceRef [
+        "Zone/dev"
+        "Provider/system-core"
+        "Host/host-system"
+        "Process/wayland-proxy"
+        "User/alice"
+        "Volume/work-state"
+        "acme.d2bus.org.Widget/widget-1"
+        "Host"
+        "Host/dev/child"
+        "host/dev"
+        "Widget/dev"
+        "acme.io.Widget/dev"
+      ];
+    };
+  };
+  expectedResourceContractEvidence = {
+    zoneNames = [ maxIdentity "work" ];
+    work = {
+      name = "work";
+      resources = [
+        { zoneName = "work"; type = "Device"; name = "gpu"; ref = "Device/gpu"; ownerRef = null; }
+        { zoneName = "work"; type = "Host"; name = "app"; ref = "Host/app"; ownerRef = "User/alice"; }
+        { zoneName = "work"; type = "Network"; name = "main"; ref = "Network/main"; ownerRef = null; }
+        { zoneName = "work"; type = "Provider"; name = "local"; ref = "Provider/local"; ownerRef = null; }
+        { zoneName = "work"; type = "User"; name = "alice"; ref = "User/alice"; ownerRef = null; }
+        { zoneName = "work"; type = "Volume"; name = "state"; ref = "Volume/state"; ownerRef = null; }
+        { zoneName = "work"; type = "acme.d2bus.org.Widget"; name = "widget"; ref = "acme.d2bus.org.Widget/widget"; ownerRef = null; }
+      ];
+    };
+    maximumNameAccepted = true;
+    invalidNames = {
+      zone = [
+        "d2b.zones.${tooLongIdentity}: Zone name must match ^[a-z][a-z0-9-]{0,62}$."
+      ];
+      resource = [
+        "d2b.zones.work.resources.${tooLongIdentity}: resource name must match ^[a-z][a-z0-9-]{0,62}$."
+      ];
+      emptyZone = [
+        "d2b.zones.: Zone name must match ^[a-z][a-z0-9-]{0,62}$."
+      ];
+      emptyResource = [
+        "d2b.zones.work.resources.: resource name must match ^[a-z][a-z0-9-]{0,62}$."
+      ];
+    };
+    invalidReferences = {
+      missingDefaultUser = [
+        "d2b.zones.work.resources.app.spec.defaultUserRef must resolve to a User in Zone work."
+      ];
+      missingProvider = [
+        "d2b.zones.work.resources.app.spec.providerRef must resolve to a Provider in Zone work."
+      ];
+      wrongProviderType = [
+        "d2b.zones.work.resources.app.spec.providerRef must resolve to a Provider in Zone work."
+      ];
+      missingOwner = [
+        "d2b.zones.work.resources.app.metadata.ownerRef must resolve in Zone work."
+      ];
+    };
+    invalidPolicies = {
+      missingDefaultUser = [
+        "d2b.zones.work.resources.app.spec.defaultUserRef is required when allowedDomains contains user."
+      ];
+      duplicateDomains = [
+        "d2b.zones.work.resources.app.spec.allowedDomains must contain one or two unique domains."
+      ];
+    };
+    malformed = {
+      badType = false;
+      badRef = false;
+      excessiveCpu = false;
+      excessiveMemory = false;
+    };
+    vectors = {
+      types = (lib.replicate 20 true) ++ [ false false ];
+      refs = (lib.replicate 7 true) ++ (lib.replicate 5 false);
+    };
+  };
   index = cfg.d2b._index;
   expectedVmNames = [
     "app"
@@ -150,6 +425,7 @@ in
       qemuMediaVmNames = index.qemuMediaVmNames;
       netVmNames = index.netVmNames;
       workloadNamesByEnv = index.workloadNamesByEnv;
+      resourceContract = resourceContractEvidence;
     };
     expected = {
       enabledEnvNames = [ "alpha" "empty" "obs" "zeta" ];
@@ -171,6 +447,7 @@ in
         obs = [ "sys-obs" ];
         zeta = [ "zed" ];
       };
+      resourceContract = expectedResourceContractEvidence;
     };
   };
 
