@@ -425,11 +425,13 @@ core-controller process boundary at bootstrap, but they use **distinct
 authenticated subjects and closed RBAC grants**; after bootstrap, both are
 ordinary RBAC subjects like any other component (RZC lines 1564-1627).
 Bootstrap authorization is a compiled, non-extensible narrow policy: only
-these two exact subjects receive the closed initial recovery/config
-publication verbs, it cannot be widened by operator config, and
-`bootstrap-supersession-atomic` guarantees no window where both bootstrap
-policy and stored RBAC are simultaneously active once
-`IndexBuilt=True` (D052; RZC lines 1564-1627, line 3030).
+these two exact subjects receive the D105 frozen method/type rows under exact
+local evidence, purpose, service, and generation binding; it cannot be widened
+by operator config. `bootstrap-supersession-atomic` advances
+`store_meta.policy_revision` from 0 to 1 in the same redb transaction that
+installs the initial Role/RoleBinding set, so there is no window where bootstrap
+and stored RBAC are simultaneously active. `IndexBuilt` is ordinary Role
+readiness status and is not the bootstrap phase authority.
 
 Controllers own their watch/coalescing queues and retry decisions
 independently; workers have **no** `ResourceClient`, no d2b-bus/dependency

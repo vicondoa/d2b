@@ -505,7 +505,6 @@ pub struct InventoryObservation {
     pub fido_confirmed: bool,  // true iff FIDO usage page 0xF1D0 confirmed
 }
 
-#[async_trait]
 pub trait SecurityKeyEffectPort: Send + Sync {
     /// Observe whether a FIDO hidraw node matching this device identity is
     /// currently present. Core resolves inventory; the Provider only sees the
@@ -521,10 +520,12 @@ pub trait SecurityKeyEffectPort: Send + Sync {
 
 The Core/broker adapter is the sole concrete implementation. It is the only
 location where sysfs matching, `device_id`-to-sysfs resolution, and any related
-audit occur. The Provider controller is injected with a `Box<dyn SecurityKeyEffectPort>`
-plus a `DeviceId` and `ObservationPolicyId` per Device at startup; Core resolves
-the Zone + label context to these opaque values before injecting. The Provider
-passes them back to the port without inspecting their contents.
+audit occur. The Provider controller is generic over `P:
+SecurityKeyEffectPort` and receives that concrete implementation plus a
+`DeviceId` and `ObservationPolicyId` per Device at startup; there is no trait
+object or `async-trait` dependency. Core resolves the Zone + label context to
+these opaque values before injecting. The Provider passes them back to the port
+without inspecting their contents.
 
 The Provider crate's `src/effect_port.rs` re-exports `SecurityKeyEffectPort`,
 `DeviceId`, `ObservationPolicyId`, and `InventoryObservation` from `d2b-contracts`.

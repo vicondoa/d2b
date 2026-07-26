@@ -123,9 +123,11 @@ closed on missing capabilities rather than silently degrading.
 The controller does not open ambient system or user DBus manager connections
 and does not invoke `systemctl` or any raw DBus call. All transient unit
 operations - `StartTransientUnit`, active-state observation, stop, kill, and
-user-manager availability checks - are dispatched through an injected
-`SystemdProcessEffectPort` trait object. The effect port implementation is
-owned by the core supervisor and process specs, not by this Provider crate.
+user-manager availability checks - are dispatched through a concrete
+`SystemdProcessEffectPort` implementation injected into a controller generic
+over the port type. The native async trait uses no trait object or
+`async-trait` dependency. The effect port implementation is owned by the core
+supervisor and process specs, not by this Provider crate.
 
 The effect port:
 

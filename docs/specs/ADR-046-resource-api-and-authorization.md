@@ -256,16 +256,35 @@ requires ordinary `get`/`list` verbs on the owning ResourceType.
 Before a reset/empty store has Role/RoleBinding resources, the Zone runtime has
 one compiled, non-configurable bootstrap policy:
 
-- exact subjects: Provider/system-core and Provider/system-minijail;
-- exact local ComponentSession purposes/services;
-- only store recovery, schema/config publication, initial Host/User/Provider/
-  Role/RoleBinding creation, and first Process-controller launch verbs;
-- no wildcard Provider/resource/runtime authority;
-- no config field can widen it;
-- normal stored RBAC governs all non-bootstrap work after publication.
+- the table is a `&'static` array in `packages/d2b-resource-api/src/authz.rs`
+  and accepts no configuration, Nix, environment, or API input;
+- its two phases are derived only from `store_meta.policy_revision` and the
+  presence of the bootstrap Provider rows in `type_index`;
+- exact subjects, local evidence, purpose, service, generations, and transport
+  binding must match the compiled tuple;
+- the exact method/type rows are those frozen by D105, with Provider creation
+  narrowed to `system-core`/`system-minijail` and Zone creation to the compiled
+  Zone name;
+- UpdateSpec, UpdateMetadata, UpdateFinalizers, Delete, CommitBatch, Upgrade,
+  and expedited waitForReconcile are always denied during bootstrap.
 
-Every bootstrap action remains structurally validated/audited. A different
-subject, remote route, Provider generation, or method fails closed.
+The first policy publication advances `policy_revision` from 0 to 1 in the same
+redb transaction that installs the initial Role/RoleBinding set. The transition
+is one-way; the table is never consulted at revision 1 or later, and reset
+creates a new store identity rather than clearing the marker. Every bootstrap
+action remains structurally validated/audited. A different subject, remote
+route, Provider generation, or method fails closed.
+
+### Admitted mutation boundary
+
+The native evaluator is the only constructor of `AllowDecision`. It captures
+the admitted mutation, exact authorization attributes, revisions, controller
+generation, request identity, and deadline into `AdmittedMutation`, whose
+fields are private. `ResourceStore::commit` accepts only that type. Inside the
+write transaction the store compares the captured policy, API-catalog, active
+configuration, and controller revisions against live `store_meta`; any mismatch
+aborts without mutation as `authorization-denied`. The store never evaluates
+RBAC and never auto-retries. The client must reissue through the evaluator.
 
 ### Role
 
@@ -665,11 +684,11 @@ process data, and terminal bytes.
 | Dependency/owner | W0; resource API integrator |
 | Current source | `packages/d2b-contracts/src/public_wire.rs`, `broker_wire.rs`; `d2b-daemon-access/src/lib.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs` |
-| Detailed design | Async methods, contexts, preconditions, limits, errors, status/finalizer separation, batch API Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`; `packages/xtask/src/main.rs` codegen commands |
+| Detailed design | Freeze the service as `d2b.resource.v3.ResourceService` and the D100 typed message set with one canonical-JSON bytes carrier. `xtask gen-resource-proto` emits message-only pure-Rust bindings into `d2b-contracts` from a service-stripped proto; `xtask gen-resource-ttrpc` emits async service/client bindings into `d2b-resource-api`. No `build.rs`, `google.protobuf.Any`, dynamically typed `oneof`, or domain error in transport status. Implement async methods, contexts, admitted-mutation preconditions, D112 contract constants, typed resource errors, status/finalizer separation, and batch API. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus exact service → Zone auth → redb actor |
 | Data migration | None; v3 clean break |
-| Validation | Protocol vectors; malformed/oversize/conflict/status-owner tests |
+| Validation | Golden encoding/field-number vectors; generated-file drift tests for both outputs and byte-identical existing guest-proto output; no-build-script/Any/dynamic-oneof/transport-domain-error policy tests; D112 constant assertions; malformed/oversize/conflict/status-owner tests |
 | Removal proof | Old command/resource-equivalent paths removed only per integration wave |
 
 ### ADR046-api-002
@@ -680,8 +699,8 @@ process data, and terminal bytes.
 | Current source | `d2bd` public admission; `d2b-daemon-access` policy evidence; `d2b-realm-core/src/access.rs`, `audit.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-api/src/authz.rs`, `packages/d2b-core-controller/src/rbac.rs` |
-| Detailed design | Role/RoleBinding schemas/evaluator/cache/revision invalidation, canonical resource/session verb enums including ZoneLink-scoped `relay`, ComponentSession subject mapping, parent Zone access, and independent per-hop relay plus target-verb admission |
+| Detailed design | `packages/d2b-resource-api/src/authz.rs` defines ComponentSession subject mapping, parent-Zone access, canonical resource/session verb admission including ZoneLink-scoped `relay`, and independent per-hop relay plus target-verb checks. The W0 `packages/d2b-core-controller/src/rbac.rs` surface is limited to the stored-policy evaluator skeleton, cache keying, and revision invalidation; it defines no concrete Role or RoleBinding schema, which lands with the Zone-control work items in W5. |
 | Integration | Every resource/runtime method invokes one native evaluator before structural checks |
 | Data migration | Generate initial Roles/Bindings from Nix v3 config |
-| Validation | Decision matrix/property tests; closed-enum and relay-origin/scope rejection; relay-missing and target-verb-missing fail-closed vectors; revocation/cache/outage/parent-child tests |
+| Validation | W0 evaluator-skeleton, cache-key, revision-invalidation, subject-mapping, relay-origin/scope, relay-missing, and target-verb-missing fail-closed tests; concrete Role/RoleBinding schema and revocation vectors land with the W5 Zone-control work items |
 | Removal proof | Legacy auth remains until every v3 route is covered |

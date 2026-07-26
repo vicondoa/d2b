@@ -2096,13 +2096,14 @@ Nix eval
          /etc/d2b/zones/<zone>/resource-bundle.json (immutable input, not
          yet active) and notify the daemon (SIGHUP).
   -> daemon config controller (ADR046-routing-013, the sole durable writer)
-      4. atomically persist generation.json = { activeContentHash,
-         activeArtifactCatalogDigest, priorContentHash, retainedGenerations,
-         retention-ring metadata } in one durable write (temp file in the same
-         directory, write, fsync the file, rename over the target, fsync the
-         parent directory), per the ADR 0034 storage contract, and stage the
-         outgoing bundle into the retention ring in that same commit; the new
-         generation counts as active only when this write returns success;
+      4. durably stage the outgoing bundle in the retention ring, then atomically
+         persist generation.json = { activeContentHash,
+         activeConfigurationGeneration, activeArtifactCatalogDigest,
+         priorContentHash, retainedGenerations, retention-ring metadata } in one
+         durable write (temp file in the same directory, write, fsync the file,
+         rename over the target, fsync the parent directory), per the ADR 0034
+         storage contract; the new generation counts as active only when this
+         generation.json write returns success;
       5. queue the diff intents and notify reconcile loops only after step 4
          returns.
 ```

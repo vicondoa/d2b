@@ -637,7 +637,8 @@ No EphemeralProcess resource is created for any of these operations.
 
 The `UsbipEffectPort` trait is defined in `d2b-contracts` (or
 `d2b-provider-toolkit`). The Provider controller receives an
-`Arc<dyn UsbipEffectPort>` through its reconcile context at construction time.
+implementation through a reconcile context generic over `P: UsbipEffectPort`
+at construction time, with no trait object or `async-trait` dependency.
 The controller calls semantic methods with validated opaque IDs only.
 
 ```rust
@@ -722,7 +723,6 @@ pub struct TransientDetail(Box<str>);  // bounded; no raw paths
 impl fmt::Debug   for TransientDetail { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "<redacted>") } }
 impl fmt::Display for TransientDetail { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "<redacted>") } }
 
-#[async_trait]
 pub trait UsbipEffectPort: Send + Sync {
     /// Ensure `usbip-host` kernel module is loaded.
     async fn ensure_kernel_module(
@@ -823,7 +823,6 @@ pub trait UsbipEffectPort: Send + Sync {
 /// is associated with a specific Guest. The controller calls semantic
 /// methods; the adapter issues commands through the Guest supervisor's
 /// privileged guest-control channel.
-#[async_trait]
 pub trait UsbipGuestEffectPort: Send + Sync {
     /// Resolve the private Endpoint and trigger `usbip attach` in the Binding's Guest.
     async fn attach(&self, binding_uid: &UsbBindingUid) -> Result<(), UsbipEffectError>;
@@ -1765,7 +1764,7 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | Detailed design | Define UsbipEffectPort and UsbipGuestEffectPort in d2b-contracts with DeviceUid, NetworkUid, UsbBindingUid, LeaseToken, FirewallToken, FirewallGenerationFence, FirewallObservation, KernelModuleClass, DeviceProbeResult, and UsbipEffectError; export traits/types only with no implementation. `apply_firewall` and `release_firewall` both accept expected Network/Service generations; release also accepts NetworkUid and borrows the token so the controller can retain it until confirmed effect. Keep firewall apply/observe/release Network/busid-scoped, attach/detach Binding-addressed, and all fd/path/busid values private. `TransientDetail` derives `Clone, PartialEq, Eq` while retaining manual redacted Debug/Display so `UsbipEffectError`'s derives compile without disclosure. Primary reuse disposition: `create`. Preserved source-plan detail: net-new trait definition. |
 | Integration | Provider/device-usbip controller depends on this trait for injected semantic effects; the framework core adapter implements it in ADR046-usbip-002. |
 | Data migration | None - docs/tooling only; no runtime state |
-| Validation | d2b-contracts tests for trait object safety, generation-fenced firewall apply/observe/release signatures (release requires NetworkUid and token), `FirewallGenerationMismatch`, `UsbipEffectError: Clone + PartialEq + Eq`, `TransientDetail` clone/equality, redacted Debug/Display behavior, and no implementation leakage. |
+| Validation | d2b-contracts compile tests for native async trait method signatures and generic fake injection, generation-fenced firewall apply/observe/release signatures (release requires NetworkUid and token), `FirewallGenerationMismatch`, `UsbipEffectError: Clone + PartialEq + Eq`, `TransientDetail` clone/equality, redacted Debug/Display behavior, and no implementation leakage. |
 | Removal proof | None - net-new; no prior owner to remove |
 
 Define the `UsbipEffectPort` async trait with the method set in § UsbipEffectPort.
@@ -2014,7 +2013,7 @@ with a capped case count and declared higher per-test advisory threshold.
 | `controller_state_machine.rs` | Authority and Binding sequences with fake ports; shared Host backend/Network relay; Binding-owned proxy/private Endpoint; declared/explicit attach; restart and reverse teardown; apply maps to `ApplyNftablesProjection` action `Apply`, release maps to action `Remove`, and teardown retains firewall token/status/relay authority until confirmation |
 | `authority_conflict.rs` | USBIP, fake direct-local USB, and security-key Providers resolve one fake token to a byte-identical Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple; private-class/digest bypass fails; the second claim returns `physical-usb-backing-conflict` before effects; one Host USBIP module/backend; one Core-derived TCP 3240 relay Endpoint/firewall authority per Network; multiplex reuse and deterministic conflicts |
 | `export_import.rs` | ResourceExport targets authority `usb.d2bus.org.UsbService` only; ResourceImport preserves that exact type and creates an ownerRef projection with no `spec.provider`; semantic factory fingerprint is stable under Provider/adapter identity changes while signed descriptor authentication remains exact; encrypted bounded fake control/data streams; generation/fingerprint/revocation; no fd/path/busid; sessions/transfers remain internal |
-| `effect_port_contract.rs` | `UsbipEffectPort` and `UsbipGuestEffectPort` trait object safety; firewall apply/observe/release signatures callable from Provider crate; release requires NetworkUid, borrowed FirewallToken, and FirewallGenerationFence; `FirewallGenerationMismatch`; no import of broker types or `d2b-priv-broker`; compile-time `UsbipEffectError: Clone + PartialEq + Eq`; `TransientDetail` clone/equality and manual Debug/Display both produce `<redacted>` |
+| `effect_port_contract.rs` | `UsbipEffectPort` and `UsbipGuestEffectPort` native async method signatures and generic fake injection; firewall apply/observe/release signatures callable from Provider crate; release requires NetworkUid, borrowed FirewallToken, and FirewallGenerationFence; `FirewallGenerationMismatch`; no import of broker types or `d2b-priv-broker`; compile-time `UsbipEffectError: Clone + PartialEq + Eq`; `TransientDetail` clone/equality and manual Debug/Display both produce `<redacted>` |
 | `firewall_ownership.rs` | Exact per-Network/per-busid intent; the closed `ApplyNftablesProjection` op (no USBIP-specific projection op); exact `Apply|Remove` decode with unknown-action rejection; apply/release same projection-op mapping; `expected_generation_id` fence binding (installed configuration generation); one relay listener/base hook with independent busid entries; idempotent validated-absence `Remove`; foreign marker fail-closed without mutation; ownership-scoped drift and strict Service provider status; transient retry retains token/status/authority; release one busid preserves another; a network-local marker and every sibling device-usbip marker are byte-preserved across apply and release; Network digest/status unaffected; no network-local generic rule dependency; concurrent same-projection apply serialized by the ordered `inet d2b` OFD lock (idempotent convergence) with no whole-table replace |
 | `relay_endpoint_authority.rs` | Exactly one D097 relay Endpoint authority per Network; Core-derived key; multiplexed Service holders; duplicate conflict before listen/firewall effect; adapter/exact-active-Binding-only resolution; LaunchTicket connected stream; generic Network readers denied |
 | `conformance.rs` | Device/`UsbService`/`UsbBinding` ResourceTypeSchema round-trip, signed USBIP extension fingerprints, deny_unknown_fields, and Provider capability advertisement |

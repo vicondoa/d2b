@@ -233,11 +233,12 @@ required for the network controller; `kvm` belongs to
 
 The reconcile context (RECONCILE §Reconcile context) contains no database handle,
 direct broker socket, reusable credential, or raw route table.  The network-local
-controller drives all host-kernel mutations through an injected async
-`NetworkEffectPort` trait object declared in `d2b-contracts`.  The core adapter
-(in `d2b-core`, not the provider crate) implements this trait, maps opaque resource
-UIDs and semantic intent structs to closed broker wire operations, and emits
-broker-level audit records.
+controller is generic over `P: NetworkEffectPort` and drives all host-kernel
+mutations through the concrete implementation injected at startup.  The native
+async trait is declared in `d2b-contracts` and uses no trait object or
+`async-trait` dependency.  The core adapter (in `d2b-core`, not the provider
+crate) implements this trait, maps opaque resource UIDs and semantic intent
+structs to closed broker wire operations, and emits broker-level audit records.
 
 The provider crate sees the declared `NetworkSpec` in full - including `lanCidr`,
 `uplinkCidr`, and other operator-declared IP policy fields - because those are the
@@ -257,7 +258,6 @@ printable string; they implement custom redacted `Debug` and are not `Clone` or
 /// All methods are async and must not hold a redb transaction across any await.
 /// Blocking kernel effects use explicit bounded adapters inside the core impl.
 /// EffectError is a closed typed enum; no String-payload error variant exists.
-#[async_trait]
 pub trait NetworkEffectPort: Send + Sync {
     // ── Fabric (bridges) ─────────────────────────────────────────────────────
     /// Create or ensure a host kernel bridge fabric for a Network.
