@@ -12,7 +12,7 @@
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
         heavy-lane-hardware heavy-lane-perf \
         heavy-lane-pre-tag heavy-lane-smoke-lite \
-        heavy-gate-build heavy-check heavy-cargo-test heavy-flake-check \
+        heavy-gate-build heavy-gate-provision heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
@@ -303,6 +303,27 @@ HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 heavy-gate-build:
 	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
 
+## heavy-gate-provision - create or repair the protected slot namespace for the
+## current uid. This is the explicit developer setup path on hosts that do not
+## consume the NixOS module; it never creates a fallback under a user-owned root.
+heavy-gate-provision:
+	@target_uid="$$(id -u)"; \
+	sudo -- sh -eu -c '\
+	  target_uid="$$1"; root=/run/d2b-heavy-gates; \
+	  case "$$target_uid" in ""|*[!0-9]*) echo "heavy-gate provisioning: invalid target uid" >&2; exit 1;; esac; \
+	  if [ -L "$$root" ] || { [ -e "$$root" ] && [ ! -d "$$root" ]; }; then echo "heavy-gate provisioning: refusing an unsafe runtime root" >&2; exit 1; fi; \
+	  install -d -m 0755 -o root -g root "$$root"; \
+	  uid_dir="$$root/uid-$$target_uid"; \
+	  if [ -L "$$uid_dir" ] || { [ -e "$$uid_dir" ] && [ ! -d "$$uid_dir" ]; }; then echo "heavy-gate provisioning: refusing an unsafe per-user directory" >&2; exit 1; fi; \
+	  install -d -m 0755 -o root -g root "$$uid_dir"; \
+	  for index in 0 1; do \
+	    slot="$$uid_dir/slot-$$index"; \
+	    if [ -L "$$slot" ] || { [ -e "$$slot" ] && [ ! -f "$$slot" ]; }; then echo "heavy-gate provisioning: refusing an unsafe slot file" >&2; exit 1; fi; \
+	    if [ ! -e "$$slot" ]; then install -m 0600 -o "$$target_uid" -g root /dev/null "$$slot"; else chown "$$target_uid":root "$$slot"; chmod 0600 "$$slot"; fi; \
+	  done; \
+	  echo "heavy-gate provisioning: protected slots are ready"' \
+	  sh "$$target_uid"
+
 ## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
 heavy-check: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) check
@@ -507,4 +528,3 @@ test-runtime-ledger:
 	    --output "$$ledger" $(D2B_RUNTIME_EXCEPTIONS) $$args ); \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
 	    --ledger "$$ledger" --expected-census "$$census" )
-

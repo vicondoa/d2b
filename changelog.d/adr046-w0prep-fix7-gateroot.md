@@ -10,3 +10,7 @@
 - The heavy-entrypoint census now accepts source relationships only from
   executable regular shell entrypoints. Inert sibling text can no longer claim
   to source a heavy script and hide that script from the self-guard check.
+- The NixOS module now provisions the protected heavy-gate root and private
+  slots for configured lifecycle users, while a named Make target provides the
+  same setup for other development hosts. Missing provisioning reports a
+  stable observed-state diagnostic with the exact remediation.
