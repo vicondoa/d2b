@@ -490,8 +490,9 @@ pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Vi
                 scope: scope.to_string(),
                 id: (*id).to_string(),
                 detail: "pinned in the closed census but missing from this run; the census \
-                         cannot shrink to evade a budget; if the removal is intentional, run \
-                         `make runtime-ledger-pin` and commit the regenerated pin"
+                         cannot shrink to evade a budget; an intentional removal must be \
+                         hand-edited from the committed census and reviewed as an explicit \
+                         identifier deletion before regenerating"
                     .to_string(),
             });
         }
@@ -647,14 +648,47 @@ fn pair(value: &str, flag: &str) -> Result<(String, u64), String> {
 }
 
 /// Load and validate the pinned closed census from a committed JSON pin.
-fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
-    let bytes =
-        fs::read(path).map_err(|error| format!("cannot read the expected census pin: {error}"))?;
-    let census: ExpectedCensus = serde_json::from_slice(&bytes).map_err(|error| {
+fn parse_expected_census(bytes: &[u8]) -> Result<ExpectedCensus, String> {
+    let census: ExpectedCensus = serde_json::from_slice(bytes).map_err(|error| {
         format!("the expected census pin is not a valid expected census: {error}")
     })?;
     census.validate()?;
     Ok(census)
+}
+
+fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read the expected census pin: {error}"))?;
+    parse_expected_census(&bytes)
+}
+
+fn load_existing_expected_census(path: &str) -> Result<Option<ExpectedCensus>, String> {
+    match fs::read(path) {
+        Ok(bytes) => parse_expected_census(&bytes).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read the existing census pin: {error}")),
+    }
+}
+
+fn ensure_pin_preserves_existing(
+    existing: &ExpectedCensus,
+    candidate: &ExpectedCensus,
+) -> Result<(), String> {
+    let existing_crates: BTreeSet<&str> = existing.crates.iter().map(String::as_str).collect();
+    let candidate_crates: BTreeSet<&str> = candidate.crates.iter().map(String::as_str).collect();
+    let existing_tests: BTreeSet<&str> = existing.tests.iter().map(String::as_str).collect();
+    let candidate_tests: BTreeSet<&str> = candidate.tests.iter().map(String::as_str).collect();
+    let removed_crates = existing_crates.difference(&candidate_crates).count();
+    let removed_tests = existing_tests.difference(&candidate_tests).count();
+    if removed_crates == 0 && removed_tests == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to overwrite the closed census because the new ledger omits \
+         {removed_crates} existing crate identifier(s) and {removed_tests} existing test \
+         identifier(s); deliberate removals must be expressed by hand-editing the committed \
+         census first, reviewing that exact identifier deletion, and then regenerating"
+    ))
 }
 
 fn run_census(args: &[String]) -> Result<(), String> {
@@ -847,6 +881,9 @@ fn run_pin(args: &[String]) -> Result<(), String> {
     }
     let census = ExpectedCensus::from_ledger(&ledger);
     census.validate()?;
+    if let Some(existing) = load_existing_expected_census(&output)? {
+        ensure_pin_preserves_existing(&existing, &census)?;
+    }
     let rendered = render_expected_census(&census)?;
     if let Some(parent) = Path::new(&output).parent()
         && !parent.as_os_str().is_empty()
@@ -1276,10 +1313,8 @@ mod tests {
             "dropping a pinned crate is rejected: {violations:?}"
         );
         assert!(
-            violations
-                .iter()
-                .all(|v| v.detail.contains("make runtime-ledger-pin")),
-            "every intentional census change names the real regeneration route: {violations:?}"
+            violations.iter().all(|v| v.detail.contains("hand-edited")),
+            "every intentional removal names the explicit reviewable route: {violations:?}"
         );
     }
 
@@ -1293,6 +1328,79 @@ mod tests {
                 .iter()
                 .any(|v| v.scope == "test" && v.id == "a::b" && v.detail.contains("missing")),
             "dropping a pinned test is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn pin_refuses_a_vanished_identifier_until_the_census_is_explicitly_edited() {
+        use std::{
+            path::PathBuf,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+
+        static SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
+
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let id = SCRATCH_ID.fetch_add(1, Ordering::Relaxed);
+        let scratch = Scratch(
+            crate::repo_root()
+                .expect("repository root")
+                .join(".scratch")
+                .join(format!("runtime-ledger-pin-{}-{id}", std::process::id())),
+        );
+        let _ = fs::remove_dir_all(&scratch.0);
+        fs::create_dir_all(&scratch.0).expect("create pin fixture");
+        let ledger_path = scratch.0.join("ledger.json");
+        let census_path = scratch.0.join("census.json");
+        let measured = full_ledger(MIN_REPETITIONS);
+        fs::write(
+            &ledger_path,
+            render_json(&measured).expect("render measured ledger"),
+        )
+        .expect("write measured ledger");
+        let existing = ExpectedCensus {
+            crates: vec!["d2b-core".to_string(), "retired-crate".to_string()],
+            tests: vec!["a::b".to_string(), "retired-crate::old_test".to_string()],
+        };
+        let existing_bytes = render_expected_census(&existing).expect("render existing census");
+        fs::write(&census_path, &existing_bytes).expect("write existing census");
+        let args = vec![
+            "--ledger".to_string(),
+            ledger_path.display().to_string(),
+            "--output".to_string(),
+            census_path.display().to_string(),
+        ];
+
+        let error = run_pin(&args).expect_err("an observed disappearance must not rewrite the pin");
+        assert!(
+            error
+                .contains("omits 1 existing crate identifier(s) and 1 existing test identifier(s)")
+                && error.contains("hand-editing the committed census first"),
+            "the refusal must describe the explicit removal path: {error}"
+        );
+        assert_eq!(
+            fs::read(&census_path).expect("read preserved census"),
+            existing_bytes.as_bytes(),
+            "a refused pin must leave the existing closed census byte-identical"
+        );
+
+        let reviewed = ExpectedCensus::from_ledger(&measured);
+        fs::write(
+            &census_path,
+            render_expected_census(&reviewed).expect("render reviewed census"),
+        )
+        .expect("express deliberate removals in the committed census");
+        run_pin(&args).expect("pin succeeds after the explicit census edit");
+        assert_eq!(
+            load_expected_census(census_path.to_str().expect("utf-8 census path"))
+                .expect("load regenerated census"),
+            reviewed
         );
     }
 
