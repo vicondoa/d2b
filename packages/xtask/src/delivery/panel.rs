@@ -113,7 +113,7 @@ impl SnapshotView {
     /// Rejects a snapshot whose recorded digests do not re-derive from its own
     /// material, so a hand-edited candidate address cannot be laundered into
     /// the panel or seal lanes.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self, candidate: &CandidateDir) -> Result<()> {
         ensure_artifact_kind(&self.artifact_kind, SNAPSHOT_ARTIFACT_KIND, "snapshot")?;
         ensure_schema(self.schema_version, "snapshot")?;
         let derived = self.material.digests()?;
@@ -123,6 +123,7 @@ impl SnapshotView {
                  snapshot is not self-consistent",
             ));
         }
+        candidate.validate_artifact_address(self.wave(), &self.candidate_id, "snapshot")?;
         Ok(())
     }
 }
@@ -345,10 +346,16 @@ pub(crate) type RecordFile = (String, Vec<u8>);
 /// This is the full rejection matrix. Every branch below is a distinct way a
 /// record set fails; there is no path that returns a partial pass.
 pub fn validate_record_set(
+    candidate: &CandidateDir,
     request: &PanelRequest,
     files: &[RecordFile],
 ) -> Result<PanelAttestation> {
     request.validate()?;
+    candidate.validate_artifact_address(
+        &request.wave,
+        &request.candidate_id,
+        "panel request and record set",
+    )?;
     if files.len() != PANEL_ROLES.len() {
         return Err(DeliveryError::new(format!(
             "panel needs exactly {} records, one per role, found {}",
@@ -469,7 +476,7 @@ pub fn attested_records(
         let bytes = candidate.read_bytes(Path::new(PANEL_DIR).join(&name))?;
         files.push((name, bytes));
     }
-    validate_record_set(request, &files)
+    validate_record_set(candidate, request, &files)
 }
 
 /// Reads and validates the panel request stored for a candidate.
@@ -492,6 +499,11 @@ pub fn stored_request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Resu
         ))
     })?;
     request.validate()?;
+    candidate.validate_artifact_address(
+        &request.wave,
+        &request.candidate_id,
+        "stored panel request",
+    )?;
     if request.content_identity() != snapshot.content_identity() {
         return Err(DeliveryError::new(
             "the stored panel request reviewed different content than this snapshot; a content \
@@ -517,7 +529,7 @@ pub fn open_candidate(
 ) -> Result<(CandidateDir, SnapshotView)> {
     let (candidate, snapshot): (CandidateDir, SnapshotView) =
         state.open_candidate_artifact(snapshot_path, SNAPSHOT_FILE, "candidate snapshot")?;
-    snapshot.validate()?;
+    snapshot.validate(&candidate)?;
     Ok((candidate, snapshot))
 }
 
@@ -532,6 +544,7 @@ pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
 pub fn request(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<WorkflowOutput> {
     let request = PanelRequest::for_snapshot(snapshot);
     request.validate()?;
+    candidate.validate_artifact_address(&request.wave, &request.candidate_id, "panel request")?;
     candidate.write_json(PANEL_REQUEST_FILE, &request)?;
     WorkflowOutput::ok(WaveCommand::PanelRequest)
         .with_digests(&snapshot.digests())
@@ -553,7 +566,7 @@ pub fn attest(
 ) -> Result<WorkflowOutput> {
     let request = stored_request(candidate, snapshot)?;
     let files = read_record_dir(records_dir)?;
-    let attestation = validate_record_set(&request, &files)?;
+    let attestation = validate_record_set(candidate, &request, &files)?;
 
     for (name, bytes) in &files {
         candidate.write_bytes(Path::new(PANEL_DIR).join(name), bytes)?;
@@ -915,9 +928,11 @@ pub(crate) mod tests {
         assert_eq!(digests.content_id, snapshot.content_id);
         assert_ne!(digests.snapshot_sha256, snapshot.snapshot_sha256);
         rebased.snapshot_sha256 = digests.snapshot_sha256;
-        rebased
-            .validate()
-            .expect("self-consistent rebased snapshot");
+        assert_eq!(
+            rebased.material.digests().expect("rebased digests"),
+            rebased.digests(),
+            "rebased snapshot remains self-consistent"
+        );
         rebased
     }
 
@@ -955,11 +970,12 @@ pub(crate) mod tests {
     }
 
     fn reject(mutate: impl FnOnce(&mut Vec<RecordFile>, &SnapshotView)) -> DeliveryError {
-        let snapshot = snapshot();
+        let scratch = Scratch::new("panel-reject");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let request = PanelRequest::for_snapshot(&snapshot);
         let mut files = record_files(&snapshot);
         mutate(&mut files, &snapshot);
-        validate_record_set(&request, &files).expect_err("record set must be rejected")
+        validate_record_set(&candidate, &request, &files).expect_err("record set must be rejected")
     }
 
     fn rewrite(files: &mut [RecordFile], role: PanelRole, mutate: impl FnOnce(&mut PanelRecord)) {
@@ -975,10 +991,11 @@ pub(crate) mod tests {
 
     #[test]
     fn a_complete_unanimous_set_is_accepted() {
-        let snapshot = snapshot();
+        let scratch = Scratch::new("panel-complete-set");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         let request = PanelRequest::for_snapshot(&snapshot);
-        let attestation =
-            validate_record_set(&request, &record_files(&snapshot)).expect("unanimous set");
+        let attestation = validate_record_set(&candidate, &request, &record_files(&snapshot))
+            .expect("unanimous set");
         assert_eq!(attestation.roles, PANEL_ROLES.to_vec());
         assert!(attestation.unanimous);
     }
@@ -1178,7 +1195,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_request_that_weakens_the_roster_or_binding_is_rejected() {
-        let snapshot = snapshot();
+        let scratch = Scratch::new("panel-weakened-request");
+        let (_state, candidate, snapshot) = candidate_with_snapshot(&scratch);
         for mutate in [
             (|request: &mut PanelRequest| {
                 request.roles.retain(|role| *role != PanelRole::Kernel);
@@ -1192,7 +1210,7 @@ pub(crate) mod tests {
             let mut request = PanelRequest::for_snapshot(&snapshot);
             mutate(&mut request);
             assert!(
-                validate_record_set(&request, &record_files(&snapshot)).is_err(),
+                validate_record_set(&candidate, &request, &record_files(&snapshot)).is_err(),
                 "a weakened request must be refused"
             );
         }
@@ -1215,10 +1233,85 @@ pub(crate) mod tests {
 
     #[test]
     fn a_snapshot_with_forged_digests_is_rejected() {
-        let mut snapshot = snapshot();
+        let scratch = Scratch::new("panel-forged-snapshot");
+        let (_state, candidate, mut snapshot) = candidate_with_snapshot(&scratch);
         snapshot.candidate_id = CandidateId::parse("e".repeat(64)).expect("digest");
-        let error = snapshot.validate().expect_err("forged digests");
+        let error = snapshot.validate(&candidate).expect_err("forged digests");
         assert!(error.message().contains("self-consistent"), "{error}");
+    }
+
+    #[test]
+    fn a_snapshot_copied_to_another_candidate_address_is_rejected() {
+        let scratch = Scratch::new("panel-copied-snapshot");
+        let (state, _candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let other_id = CandidateId::parse("e".repeat(64)).expect("candidate id");
+        let other = state
+            .candidate(snapshot.wave(), &other_id)
+            .expect("second candidate");
+        other
+            .write_json(SNAPSHOT_FILE, &snapshot)
+            .expect("copy snapshot");
+
+        let error = open_candidate(&state, &other.snapshot_path())
+            .expect_err("copied snapshot must not change candidate identity");
+        assert_eq!(error.kind(), DeliveryErrorKind::Invalid);
+        assert!(
+            error.message().contains("delivery-state address"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_copied_to_another_wave_address_is_rejected() {
+        let scratch = Scratch::new("panel-copied-snapshot-wave");
+        let (state, _candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let other = state
+            .candidate("W1", &snapshot.candidate_id)
+            .expect("second wave");
+        other
+            .write_json(SNAPSHOT_FILE, &snapshot)
+            .expect("copy snapshot");
+
+        let error = open_candidate(&state, &other.snapshot_path())
+            .expect_err("copied snapshot must not change wave identity");
+        assert_eq!(error.kind(), DeliveryErrorKind::Invalid);
+        assert!(
+            error.message().contains("delivery-state address"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn panel_records_copied_to_another_candidate_address_are_rejected() {
+        let scratch = Scratch::new("panel-copied-records");
+        let (state, candidate, snapshot) = candidate_with_snapshot(&scratch);
+        let request = requested(&candidate, &snapshot);
+        let dir = write_record_dir(&scratch, &record_files(&snapshot));
+        attest(&candidate, &snapshot, &dir).expect("attest original records");
+
+        let other_id = CandidateId::parse("e".repeat(64)).expect("candidate id");
+        let other = state
+            .candidate(snapshot.wave(), &other_id)
+            .expect("second candidate");
+        other
+            .write_json(PANEL_REQUEST_FILE, &request)
+            .expect("copy panel request");
+        for record in candidate.list(PANEL_DIR).expect("panel records") {
+            let bytes = candidate
+                .read_bytes(Path::new(PANEL_DIR).join(&record))
+                .expect("read record");
+            other
+                .write_bytes(Path::new(PANEL_DIR).join(&record), &bytes)
+                .expect("copy record");
+        }
+
+        let error = attested_records(&other, &request)
+            .expect_err("copied records must not change candidate identity");
+        assert_eq!(error.kind(), DeliveryErrorKind::Invalid);
+        assert!(
+            error.message().contains("delivery-state address"),
+            "{error}"
+        );
     }
 
     #[test]
