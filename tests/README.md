@@ -57,7 +57,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | Rust gate (fmt, clippy, workspace tests, broker x3, deny/audit); explicitly excludes the fixture-dependent `d2b-contract-tests` crate | local + CI |
-| `make test-fixture-contracts` | advisory fixture-backed `d2b-contract-tests` lane; skips unless `D2B_ENABLE_FIXTURE_BUILD=1` | local + CI |
+| `make test-fixture-contracts` | enforcing fixture-backed lane: builds `D2B_FIXTURES`, runs `d2b-contract-tests` and the CLI-contract cases, and acquires the heavy-gate semaphore first; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
@@ -132,8 +132,9 @@ verbs for USB state changes.
 `tests/layer1-jobs.json` is the central Layer-1 job graph. In its local phase
 order, the enforcing jobs are `check-tier0`, `check-inventory`, `test-lint`,
 `test-changelog`, `test-rust`, `test-proofs`, `test-flake`, `test-nix-unit`,
-`test-policy`, `test-drift`, and `test-runtime-ledger`. The advisory jobs are
-`test-performance-budgets` and `test-fixture-contracts`. `make test-unit`
+`test-policy`, `test-drift`, `test-runtime-ledger`, and
+`test-fixture-contracts`. The only advisory job is
+`test-performance-budgets`. `make test-unit`
 consumes the same manifest but skips its preflight phase. Re-read the manifest
 rather than assuming this split is fixed.
 

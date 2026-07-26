@@ -37,11 +37,12 @@ files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
 
 Fixture-backed type 4 tests and fixture-dependent type 5 tests in
 `d2b-contract-tests` are routed through the manifest's
-`test-fixture-contracts` job. That job is advisory and skips unless
-`D2B_ENABLE_FIXTURE_BUILD=1` with `D2B_FIXTURES` delivered to its sandbox.
-`test-rust` excludes this fixture-dependent crate. These tests therefore
-describe where coverage belongs, but their advisory result is not execution or
-validation evidence on every pull request. Selected hermetic policy files may
+`test-fixture-contracts` job. That job is enforcing: both the local and
+pull-request lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, it builds `D2B_FIXTURES`
+and runs the crate together with the CLI-contract cases, and invoking it
+without that variable fails rather than skipping. `test-rust` excludes this
+fixture-dependent crate, so cite the fixture lane rather than `test-rust` when
+claiming this coverage ran. Selected hermetic policy files may
 also have explicit enforcing entrypoints under `test-policy`; check its driver
 before citing one.
 

@@ -124,9 +124,9 @@ validation evidence for a change.
 
 The manifest currently classifies `check-tier0`, `check-inventory`,
 `test-lint`, `test-changelog`, `test-rust`, `test-proofs`, `test-flake`,
-`test-nix-unit`, `test-policy`, `test-drift`, and `test-runtime-ledger` as
-enforcing. It classifies `test-performance-budgets` and
-`test-fixture-contracts` as advisory. Always re-read the manifest rather than
+`test-nix-unit`, `test-policy`, `test-drift`, `test-runtime-ledger`, and
+`test-fixture-contracts` as enforcing. It classifies
+`test-performance-budgets` as advisory. Always re-read the manifest rather than
 assuming this split is fixed.
 
 The performance canary prints `SKIP` and enforces no latency budget unless
@@ -134,11 +134,13 @@ The performance canary prints `SKIP` and enforces no latency budget unless
 that variable on the runner, and then removing the advisory classification and
 reason from the manifest. The project does not currently have such a runner.
 
-The fixture-contract lane prints `SKIP` unless
-`D2B_ENABLE_FIXTURE_BUILD=1`. Promotion requires enabling that variable for the
-lane and delivering `D2B_FIXTURES` into its sandbox, then removing the advisory
-classification and reason from the manifest. That sandbox delivery remains
-tracked follow-up work. `test-rust` explicitly excludes the fixture-dependent
+The fixture-contract lane runs the fixture-dependent `d2b-contract-tests`
+crate and the CLI-contract cases against a built `D2B_FIXTURES` bundle. Both
+the local and continuous-integration lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, so
+it executes and enforces; invoking it without that variable is a hard failure
+rather than a silent skip. It acquires the heavy-gate semaphore before doing
+Nix or Cargo work, and `packages/xtask/src/heavy_gate.rs` fails closed if that
+guard is ever removed. `test-rust` explicitly excludes the fixture-dependent
 `d2b-contract-tests` crate, so a green `test-rust` does not validate that
 fixture-dependent contract and policy layer. Selected hermetic policy files
 may still have separate enforcing entrypoints such as `test-policy`; inspect
@@ -854,7 +856,7 @@ At a glance:
 | `tests/unit/nix/cases/` | Auto-discovered nix-unit eval cases. After adding/removing one, run `make nix-unit-pin`. |
 | `tests/unit/nix/eval-cases/`, `tests/unit/smoke/` | Flake-check and smoke-eval definitions. After adding/removing a flake check, run `make flake-matrix-pin`. |
 | `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
-| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. The fixture-dependent crate is excluded from `test-rust`; its fixture-backed tests require the advisory fixture-contract lane, while selected hermetic policy files have separate enforcing entrypoints. |
+| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. The fixture-dependent crate is excluded from `test-rust`; its fixture-backed tests run in the enforcing `test-fixture-contracts` lane, while selected hermetic policy files have separate enforcing entrypoints. |
 | `tests/unit/gates/`, `tests/unit/meta/` | Drift and meta gates; closed set. Regenerate affected artifacts with the matching `xtask gen-*` command instead of adding another gate. |
 | `tests/integration/containers/` | Container integration tests run by `make test-integration`; host/manual pre-PR tier. |
 | `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; local NixOS/KVM pre-PR tier, not the PR pipeline. |
