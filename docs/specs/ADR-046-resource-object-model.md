@@ -88,7 +88,9 @@ generation cleanup.
 Labels/annotations are optional bounded presentation metadata. They never
 select authorization, provider/controller ownership, path, process identity,
 or implicit relationships. A ResourceType may declare a closed set of indexed
-exact-match metadata fields.
+exact-match metadata fields. Each label or annotation key is printable ASCII
+and at most 64 bytes total, including any optional `<namespace>/` prefix, so
+every admitted metadata object also satisfies D101 canonical JSON.
 
 ## Spec
 

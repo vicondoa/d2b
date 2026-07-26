@@ -160,8 +160,20 @@ database built against the exact `ADR-046-resource-store-redb` schema (§
 ≤2 ms p95 read, ≤10 ms p95 write, ≤5 ms p95 commit-to-handler, or ≤20 ms p95
 ready-Process-to-launch-attempt targets in that spec's "Performance contract"
 table. Those targets are `unknown-requires-spike` and are covered by
-SPIKE-01 and SPIKE-02 below. Pinned version for every redb-touching spike in
-this document:
+SPIKE-01 and SPIKE-02 below.
+
+D117's exact redb version and initial runtime capacities are therefore
+provisional. The dependency already present in `packages/Cargo.toml` is an
+input to the disposable proof and to engine-neutral contract compilation, not
+evidence that redb has been adopted. Before the spikes run, implementation is
+limited to the ten-table layout, D099 codecs and discriminants, closed errors,
+store-neutral traits/transaction types, golden vectors, the D115 storage-row
+source contract, and hermetic small-scale semantic tests. Production
+`ADR046-store-001` backend work and redb backup/migration in
+`ADR046-store-003` wait for SPIKE-01. Production `ADR046-store-002`
+watch/dispatcher work waits for both SPIKE-01 and SPIKE-02.
+
+Pinned version for every redb-touching spike in this document:
 
 ```toml
 redb = { version = "=4.1.0", default-features = false }
@@ -250,12 +262,12 @@ in any of them and remain `ADR-only`.
 
 ## Evidence classification matrix
 
-| Subsystem / claim | Evidence class today | Spike required before its work item starts |
+| Subsystem / claim | Evidence class today | Implementation gate |
 | --- | --- | --- |
 | kcp unsuitable at recursive Host/Guest/Zone scale | completed evidence (E1) | No - see anti-claim rule 4 |
-| redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | Yes - SPIKE-01 |
-| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `unknown-requires-spike` | Yes - SPIKE-01 |
-| p95 durable commit → controller handler start ≤5 ms | `unknown-requires-spike` | Yes - SPIKE-02 |
+| redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | SPIKE-01 before production backend adoption or redb backup/migration; engine-neutral store contracts may precede it |
+| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `unknown-requires-spike` | SPIKE-01 before `ADR046-store-001` completion, production `ADR046-store-002`, or the redb portion of `ADR046-store-003` |
+| p95 durable commit → controller handler start ≤5 ms | `unknown-requires-spike` | SPIKE-02 before production `ADR046-store-002`; it does not gate codecs, errors, table definitions, or storage-row sources |
 | p95 ready-Process commit → launch-attempt start ≤20 ms under concurrent dispatch | `unknown-requires-spike` | Yes - SPIKE-03 |
 | Async EffectPort adapters never block the executor | `unknown-requires-spike` | Yes - SPIKE-04 |
 | Noise NN/KK/IKpsk2 handshake, records, fair scheduling, Unix/vsock transport (main shape) | `implemented-but-unwired` for v3, proven at main `a1cc0b2d` (E3) | Only the v3 integration delta - SPIKE-06/07/08 |
@@ -294,17 +306,17 @@ performed by this documentation-only spec.
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | An embedded redb 4.1.0 database, built against the `ADR-046-resource-store-redb` physical schema (`store_meta`, `api_schemas`, `resources`, `type_index`, `owner_index`, `controller_index`, `revision_log`, `operations`, `zone_link_cursors`), sustains 10,000 resources with 100 live watches, correct revision/index maintenance, bounded group commit, and forced-crash recovery, inside the aggregate ≤64 MiB idle-RSS budget shared with the fixed system-core/system-minijail controllers. |
-| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a standalone crate implementing exactly the eight tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker - a fake in-process caller drives the API directly. |
+| Hypothesis | An embedded redb 4.1.0 database, built against the `ADR-046-resource-store-redb` physical schema (`store_meta`, `api_schemas`, `resources`, `type_index`, `owner_index`, `producer_index`, `controller_index`, `revision_log`, `operations`, `zone_link_cursors`), sustains 10,000 resources with 100 live watches, correct revision/index maintenance, bounded group commit, and forced-crash recovery, inside the aggregate ≤64 MiB idle-RSS budget shared with the fixed system-core/system-minijail controllers. |
+| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a standalone crate implementing exactly the ten tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker - a fake in-process caller drives the API directly. |
 | Inputs | (a) empty store; (b) 10,000 pre-seeded resources across 6 synthetic ResourceTypes with realistic key/value sizes (JSON spec/status ≤4 KiB each, matching `ADR-046-resource-object-model` bounded-message expectations); (c) 100 concurrently registered watches with mixed ResourceType filters; (d) an expected-revision conflict storm of 500 concurrent writers targeting 50 shared resources; (e) an owner-trigger fan-in tree 4 levels deep, 8 children per level; (f) `SIGKILL` injected at each of the 13 commit-transaction boundaries listed in the write-transaction algorithm. |
 | Command/harness | `cargo test --manifest-path proofs/redb-resource-store-spike/Cargo.toml -- --test-threads=1` for functional/index/revision/watch/conflict/owner-trigger/compaction cases; `cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin crash-fixture -- --kill-at-txn <n>` (13 invocations, one per boundary, each in a fresh subprocess) for crash recovery; `/usr/bin/time -v cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture -- --resources 10000 --watches 100` for RSS, read three times and take the median "Maximum resident set size (kbytes)". |
 | Metrics | (1) resource/index/revision correctness - exact match of 10k resources against a parallel `BTreeMap` oracle after every mutation; (2) watch replay/live no-gap - every one of 100 watchers receives every committed ChangeBatch entry after its `afterRevision`, verified by a monotonic per-watcher received-revision set with no gap; (3) group-commit batch size distribution under the conflict storm; (4) crash-recovery: process re-open succeeds or fails closed (never silently creates an empty replacement) at all 13 boundaries; (5) median RSS in KiB. |
 | Pass/fail threshold | (1) zero divergence from oracle across 10k resources / 5 repeated runs; (2) zero missed/duplicated ChangeBatch deliveries across 100 watchers; (3) non-conflicting writes in the storm achieve group commit (batch size > 1) at least 50% of the time; (4) 13/13 boundaries either recover to the last fully-committed state or refuse to open (never a silent empty store); (5) median RSS for the store+actor alone ≤ 24 MiB (leaving ≥40 MiB of the 64 MiB aggregate budget in `ADR-046-resource-store-redb` for the fixed system-core/system-minijail controllers measured separately in SPIKE-11/SPIKE-15). |
 | Expected resource budget | Single-threaded build+run ≤5 minutes on a 4-vCPU/8 GiB CI runner; peak build RSS ≤1 GiB; on-disk database file ≤200 MiB for the 10k-resource fixture. |
-| Failure interpretation | RSS miss → the schema/serialization plan in `ADR-046-resource-store-redb` §"Physical tables" changes (e.g., narrower key encoding, smaller in-memory index shape) before `ADR046-store-001` starts; a correctness miss on watch/crash-recovery → the async storage adapter or write-transaction algorithm in that same spec is revised, never the tolerance; group-commit batch-size miss → the "bounded group commit" admission window is retuned, but per anti-claim rule 3 not by weakening per-mutation validation. |
-| Affected decisions/work items | D003, D004, D005, D006, D008, D053; `ADR046-store-001`, `ADR046-store-002`, `ADR046-store-003`. |
+| Failure interpretation | RSS miss → the schema/serialization plan in `ADR-046-resource-store-redb` §"Physical tables" changes before the production backend portion of `ADR046-store-001` starts; a correctness miss on watch/crash-recovery → the async storage adapter or write-transaction algorithm in that same spec is revised, never the tolerance; group-commit batch-size miss → the "bounded group commit" admission window is retuned, but per anti-claim rule 3 not by weakening per-mutation validation. Already-landed engine-neutral codecs and vectors change only through the D099 schema-version and migration rule. |
+| Affected decisions/work items | D003, D004, D005, D006, D008, D053, D117, D128; production backend/completion portions of `ADR046-store-001`, all production `ADR046-store-002`, and redb backup/migration portions of `ADR046-store-003`. |
 | Cleanup | `proofs/redb-resource-store-spike/` is deleted, and its entry removed from `tests/test-proofs.sh`, once `packages/d2b-resource-store-redb` (the real `ADR046-store-001` destination) has an in-tree benchmark reproducing metrics (1)-(5) at equal or stricter thresholds. |
-| Status | Specified - not yet executed (D024: documentation-only task; execution is separate future implementation work). |
+| Status | Specified - not yet executed (D024: documentation-only task; execution is separate future implementation work). The provisional redb pin is not adoption evidence. |
 
 ### SPIKE-02 - durable commit → controller handler start, p95 ≤5 ms
 
@@ -318,9 +330,9 @@ performed by this documentation-only spec.
 | Pass/fail threshold | p95 ≤5,000 µs (5 ms) in all 3 profiles; p99 ≤10,000 µs recorded and reported (not gating, but any p99 >20 ms is a documented finding attached to the result). |
 | Expected resource budget | ≤3 minutes wall time per profile; single CI runner core pinned via `taskset`/`cset` where available, otherwise best-effort with reported CPU count and load. |
 | Failure interpretation | A miss under profile (a) is a dispatcher-design failure - the post-commit swap/push path in `ADR-046-resource-store-redb` §"Async storage adapter" changes. A miss only under profiles (b)/(c) is an admission-fairness failure - the "per-principal/controller fair admission" rule in the same section is retuned (e.g., smaller max group-commit batch, dedicated hint-delivery task priority) before `ADR046-store-002` starts. |
-| Affected decisions/work items | D030; `ADR046-store-001`, `ADR046-store-002`, `ADR046-reconcile-002`. |
+| Affected decisions/work items | D030, D117, D128; the post-commit integration portion of `ADR046-store-001`, production `ADR046-store-002`, and `ADR046-reconcile-002`. |
 | Cleanup | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` (the real `ADR046-reconcile-003` destination named in `ADR-046-resource-reconciliation`) reproduces the same 3-profile p95/p99 gate against the real store. |
-| Status | Specified - not yet executed. |
+| Status | Specified - not yet executed. Production watch/dispatcher integration remains gated; codec, physical-schema, error, and storage-row source work does not. |
 
 ### SPIKE-03 - ready Process commit → launch-attempt start, p95 ≤20 ms, concurrent reading and dispatch
 
@@ -701,7 +713,7 @@ decisions/work items" row.
 | Reuse source | None (redb is a new external dependency; no main or v3 code implements it) |
 | Reuse action | adapt |
 | Destination | `proofs/redb-resource-store-spike/` |
-| Detailed design | Implements SPIKE-01 and SPIKE-02: the eight-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified). |
+| Detailed design | Implements SPIKE-01 and SPIKE-02: the ten-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified). |
 | Integration | None (standalone; no d2b-bus/ComponentSession/broker dependency) |
 | Data migration | None (disposable fixture data only) |
 | Validation | SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds |
