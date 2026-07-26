@@ -33,6 +33,7 @@ const EXPECTED_WORK_ITEMS: usize = 543;
 const EXPECTED_NODES: u64 = 598;
 const EXPECTED_EDGES: u64 = 1940;
 const EXPECTED_MAX_RANK: u64 = 22;
+const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
 
 const REUSE_ACTIONS: &[&str] = &[
@@ -806,6 +807,11 @@ fn the_implementation_graph_is_closed_acyclic_and_wave_monotonic() {
         Some(EXPECTED_MAX_RANK)
     );
     assert_eq!(
+        counts["waves"].as_u64(),
+        Some(EXPECTED_WAVES),
+        "the certified graph has {EXPECTED_WAVES} waves"
+    );
+    assert_eq!(
         graph["criticalPath"].as_array().map(Vec::len),
         Some(EXPECTED_CRITICAL_PATH)
     );
@@ -818,6 +824,11 @@ fn the_implementation_graph_is_closed_acyclic_and_wave_monotonic() {
         counts["edges"].as_u64(),
         graph["edges"].as_array().map(|edges| edges.len() as u64),
         "counts.edges must equal the emitted edge count"
+    );
+    assert_eq!(
+        graph["waves"].as_array().map(|waves| waves.len() as u64),
+        Some(EXPECTED_WAVES),
+        "the emitted graph must contain {EXPECTED_WAVES} waves"
     );
     assert_eq!(
         counts["waves"].as_u64(),
