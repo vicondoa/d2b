@@ -83,9 +83,9 @@ fn run_reexec_guard_with_redactor(cargo_stub: &str) -> (std::process::Output, St
     run_reexec_guard(cargo_stub, &[], true)
 }
 
-/// As above, but injects `extra_env` onto the child bash after the
-/// inherited-function strip, so a test can plant a hostile `BASH_FUNC_*` entry
-/// and prove the child's function table is still controlled.
+/// As above, but injects `extra_env` onto the child bash so a test can plant a
+/// hostile `BASH_FUNC_*` entry and prove the production guard controls the
+/// function table itself.
 fn run_reexec_guard(
     cargo_stub: &str,
     extra_env: &[(&str, &str)],
@@ -140,16 +140,12 @@ fn run_reexec_guard(
     // would leave a planted marker able to rediscover that descriptor. Bash's
     // `{var}>&-` form closes the numeric descriptor without eval.
     //
-    // Clear the function table too. This is defense in depth after `env_clear`:
-    // an explicitly planted BASH_FUNC entry in `extra_env` must not shadow the
-    // PATH stub.
     let script = format!(
         "for inherited_fd_path in /proc/self/fd/*; do\n\
            inherited_fd=${{inherited_fd_path##*/}}\n\
            case \"$inherited_fd\" in 0|1|2|*[!0-9]*) ;; *) exec {{inherited_fd}}>&- || true ;; esac\n\
          done\n\
          unset inherited_fd inherited_fd_path\n\
-         unset -f cargo rustc 2>/dev/null || true\n\
          . '{helper}'\n\
          d2b_heavy_gate_reexec '{base}' '{base}/tests/tools/entry.sh'\n",
         helper = helper.display(),
@@ -168,8 +164,8 @@ fn run_reexec_guard(
         .env_clear()
         .env("PATH", path)
         .env_remove("D2B_HEAVY_GATE_REEXEC_DEPTH");
-    // Applied last so a test can plant an entry the parent-env strip above would
-    // otherwise remove, isolating the in-script `unset -f` defence.
+    // Applied last so the hostile function is present when the production
+    // helper runs.
     for (key, value) in extra_env {
         command.env(key, value);
     }
