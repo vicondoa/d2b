@@ -123,8 +123,7 @@ an existing path → fail-closed.
   [`d2bd::ssh_host_key_preflight::tests`](../../packages/d2bd/src/ssh_host_key_preflight.rs)
   exhaustively covers each drift class against a tempdir-built
   fixture.
-- Integration: [`tests/ssh-host-key-preflight-eval.sh`](../../tests/ssh-host-key-preflight-eval.sh)
-  drives those unit tests under the static gate alongside the
+- The `test-rust` workspace run executes those unit tests alongside the
   `TypedError::SshdHostKeyDrift` envelope-shape assertion.
 
 ## Spec correction

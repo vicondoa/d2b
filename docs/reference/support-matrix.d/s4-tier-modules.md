@@ -28,7 +28,9 @@ module + device-node activation contract.
 
 Glibc 2.39, cgroup v2 unified, NetworkManager 1.46, nftables 1.0.9,
 Cloud Hypervisor v40+, Nix-built minijail v17 (see
-`tests/minijail-version-check.sh`).
+`packages/d2b-contract-tests/tests/policy_misc.rs`). That version policy is
+fixture-lane coverage and is advisory until `test-fixture-contracts` is
+enabled.
 
 | Device class    | Required path        | Required mode | Required group |
 | --------------- | -------------------- | ------------- | -------------- |

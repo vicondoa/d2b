@@ -140,10 +140,7 @@ the typed envelope remains `daemon.bundle-dnsmasq-drift` (exit code
   typed_error::tests::bundle_dnsmasq_drift_envelope_shape` pins
   exit code `63`, kind `bundle-dnsmasq-drift`, and remediation
   string.
-* Integration:
-  [`tests/net-vm-bundle-gate-eval.sh`](../../tests/net-vm-bundle-gate-eval.sh)
-  wraps the cargo tests in the canonical static-gate shape used by
-  the other preflight gates.
+* The `test-rust` workspace run executes both the gate and typed-error tests.
 
 ## Cross-references
 

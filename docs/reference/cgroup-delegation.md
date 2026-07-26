@@ -194,8 +194,9 @@ path-safety contract:
 - the broker re-derives every operating path from the trusted bundle,
   never from caller input.
 
-The L1c canary matrix in `tests/cgroup-delegation-oracle.sh` exercises
-every refusal path.
+The canary matrices in `packages/d2b-host/src/cgroup.rs` and
+`packages/d2b-priv-broker/src/ops/cgroup.rs` exercise the refusal paths. Both
+are included in `test-rust`.
 
 ## Audit records
 

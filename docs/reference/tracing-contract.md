@@ -1,8 +1,9 @@
 # Tracing contract (bounded-cardinality span attributes)
 
-> **Status**: codified and enforced by the static gate
-> `tests/tracing-contract-lint.sh`. Tracked on the
-> observability roadmap.
+> **Status**: codified in
+> `packages/d2b-contract-tests/tests/policy_contracts.rs`. The policy test is
+> advisory pull-request coverage until the fixture-contract lane is enabled
+> and promoted.
 
 The d2b daemon (`d2bd`) and the privileged broker
 (`d2b-priv-broker`) both emit OpenTelemetry spans and structured
@@ -59,7 +60,7 @@ path or operator-supplied path. New tracing sites SHOULD prefer
 adding a bounded enum attr (`target_kind = "sshd-host-keys"`) rather
 than emitting the path itself.
 
-## Forbidden patterns (gated by `tests/tracing-contract-lint.sh`)
+## Forbidden patterns
 
 | Pattern                                                | Why forbidden                                                | Gated since |
 | ------------------------------------------------------ | ------------------------------------------------------------ | ----------- |
@@ -76,10 +77,11 @@ than emitting the path itself.
 
 ## How the contract is enforced
 
-1. **`tests/tracing-contract-lint.sh`** - the static gate. It greps
-   workspace Rust source for the forbidden patterns above and fails
-   closed if any match. Runs in `tests/static-fast.sh` order alongside
-   other drift gates.
+1. **`packages/d2b-contract-tests/tests/policy_contracts.rs`** - the
+   `tracing_contract_lint` policy scans workspace Rust source for the forbidden
+   patterns above and fails if any match. It runs only when the advisory
+   fixture-contract lane is enabled, so it is not enforcing pull-request
+   evidence yet.
 2. **Audit-record fallback** - every operator-recoverable detail
    (paths, drift reasons, child stderr) lives in
    `OpAuditRecord.{typed_envelope,tracing_span_id}` (see
@@ -152,6 +154,7 @@ for the per-VM key drift event. The `drift_kind` is a typed
    route it through the typed error envelope
    (`packages/d2b-core/src/error.rs`) and the broker audit log,
    not the span.
-3. Run `bash tests/tracing-contract-lint.sh` locally before pushing.
+3. Run `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` locally before
+   pushing a tracing-contract change.
 4. If you genuinely need a new bounded attr name, add a row to the
    table above and a corresponding allow in the lint script.

@@ -26,23 +26,10 @@ all snapshots add one test-only module:
 })
 ```
 
-Generation commands:
-
-```bash
-# Sanity: root flake minimal eval gate.
-nix --no-warn-dirty eval --raw \
-  .#checks.x86_64-linux.eval-minimal.drvPath
-
-# Build the Cloud Hypervisor declaredRunner used by this audit.
-nix --no-warn-dirty build --impure --no-link --print-out-paths --expr \
-  "$(tests/runner-shape-snapshot.sh runner_expr)"
-
-# Regenerate committed fixtures.
-bash tests/runner-shape-snapshot.sh declared-runner \
-  > tests/golden/runner-shape/examples-minimal-declaredRunner.txt
-bash tests/runner-shape-snapshot.sh cloud-hypervisor-argv \
-  > tests/golden/runner-shape/cloud-hypervisor-argv-minimal.txt
-```
+The retired shell snapshot generator has no current command-line successor.
+Current expectations live in
+`packages/d2b-contract-tests/tests/runner_shape_contract.rs` and are checked
+against the full rendered fixture when the fixture-contract lane is enabled.
 
 The inspected runner path was:
 
@@ -213,15 +200,14 @@ parity oracle during the transition.
   cloud-hypervisor ...` line extracted from that runner's
   `bin/microvm-run`.
 
-`tests/runner-shape-snapshot.sh` regenerates both fixtures by evaluating
-and building the same expression, then diffs committed goldens. A changed
-runner store path or CH argv is a failure, not a skip. The test skips
-only when the example flake cannot be evaluated or built at all in the
-current environment, and logs that as a TODO-style skip.
+`packages/d2b-contract-tests/tests/runner_shape_contract.rs` compares rendered
+fixture data with the committed snapshots. That contract is advisory until the
+fixture-contract lane is enabled and promoted; it is not executed by
+`test-rust` or the flake shards.
 
 A future microvm.nix, nixpkgs, component, or d2b option change that
 alters runner shape must update this audit, explain the intended drift,
-and refresh the fixtures in the same commit. The CH argv fixture will be
+and refresh the Rust expectations in the same commit. The CH argv fixture will be
 lifted into a hard build-time parity gate by comparing daemon-generated
 argv against declaredRunner argv for headless VMs before allowing the
 new supervisor path to replace the shell runner.

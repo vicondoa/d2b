@@ -11,8 +11,9 @@ that is the binding contract; this file is the human quick-start.
   container. Runs on every PR and locally via `make check`. This is where the
   overwhelming majority of tests live (Nix eval cases, Rust unit/integration/
   contract/policy-lint tests, flake checks, and a small closed set of drift +
-  meta gates). The current manifest has eleven enforcing jobs plus one advisory
-  job; an advisory success may be a guarded skip and is not validation evidence.
+  meta gates). The manifest records which jobs are enforcing and which are
+  advisory; an advisory success may be a guarded skip and is not validation
+  evidence.
 - **Layer 2 - integration tiers.** Real systemd / kernel / userland: podman
   containers, runNixOSTest VMs, live-host scripts, and hardware tests. Used only
   when Layer 1 *provably* cannot cover the behaviour.
@@ -49,13 +50,14 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`: nine enforcing jobs (test-lint + test-changelog + test-rust + test-proofs + test-flake + test-nix-unit + test-policy + test-drift + test-runtime-ledger) plus the advisory test-performance-budgets job; `make check` also runs the two enforcing preflight jobs, check-tier0 + check-inventory | local + CI (parallel jobs) |
+| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`; `make check` also runs the manifest's preflight jobs | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
-| `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
+| `make test-rust` | Rust gate (fmt, clippy, workspace tests, broker x3, deny/audit); explicitly excludes the fixture-dependent `d2b-contract-tests` crate | local + CI |
+| `make test-fixture-contracts` | advisory fixture-backed `d2b-contract-tests` lane; skips unless `D2B_ENABLE_FIXTURE_BUILD=1` | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
@@ -67,7 +69,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | PR-equivalent manifest target set with bounded local parallelism: eleven enforcing jobs plus one advisory job | local |
+| `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
 | `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
@@ -130,9 +132,10 @@ verbs for USB state changes.
 `tests/layer1-jobs.json` is the central Layer-1 job graph. In its local phase
 order, the enforcing jobs are `check-tier0`, `check-inventory`, `test-lint`,
 `test-changelog`, `test-rust`, `test-proofs`, `test-flake`, `test-nix-unit`,
-`test-policy`, `test-drift`, and `test-runtime-ledger`. The twelfth local job,
-`test-performance-budgets`, is advisory. `make test-unit` consumes the same
-manifest but skips its two enforcing preflight jobs.
+`test-policy`, `test-drift`, and `test-runtime-ledger`. The advisory jobs are
+`test-performance-budgets` and `test-fixture-contracts`. `make test-unit`
+consumes the same manifest but skips its preflight phase. Re-read the manifest
+rather than assuming this split is fixed.
 
 Jobs are enforcing by default. The manifest's optional `"enforcement":
 "advisory"` field classifies a job whose successful exit might not represent
@@ -142,12 +145,20 @@ skip is not a failure. The runner labels such a result `advisory:` rather than
 `ok:` and reports enforcing and advisory counts separately. Do not cite an
 advisory job result as validation evidence for a change.
 
-The current advisory reason is that latency budgets require a pinned
+The performance advisory exists because latency budgets require a pinned
 self-hosted runner. `test-performance-budgets` exits successfully with `SKIP`
 unless `D2B_PERF_STABLE=1`; no current project runner provides that stable
-environment. Promotion to enforcing therefore requires provisioning a pinned
-self-hosted runner, setting `D2B_PERF_STABLE=1` there, and removing the
-`enforcement` and `advisoryReason` fields from the job after that wiring lands.
+environment. Promotion to enforcing requires provisioning a pinned self-hosted
+runner, setting `D2B_PERF_STABLE=1` there, and removing the `enforcement` and
+`advisoryReason` fields from the job after that wiring lands.
+
+The fixture advisory exists because `test-fixture-contracts` exits successfully
+with `SKIP` unless `D2B_ENABLE_FIXTURE_BUILD=1`, and the sandbox does not yet
+receive `D2B_FIXTURES`. Promotion requires enabling that variable for the lane,
+delivering the fixture output to its sandbox, and then removing the
+`enforcement` and `advisoryReason` fields from the manifest. That delivery is
+tracked follow-up work. `test-rust` excludes `d2b-contract-tests`, so a green
+Rust job does not validate this contract and policy layer.
 
 `.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
 `make layer1-workflow` and checked by `make layer1-workflow-check` during
@@ -182,9 +193,10 @@ leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
 drift gate keeps the matrix and smoke wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
 sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
-`D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job because
-the fixture checks run in the flake shard set; tune `D2B_CHECK_JOBS` and
-`D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
+`D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
+flake shards do not execute `d2b-contract-tests`; only the separate advisory
+fixture lane can do so, and it currently skips unless explicitly enabled. Tune
+`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
 `make test-integration` and `make test-host-integration` on the host before the
 PR is opened; those manual integration tiers are not replaced by PR pipeline
 jobs.

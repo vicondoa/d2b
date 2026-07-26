@@ -2,7 +2,8 @@
 
 **Status:** stable.
 **Owner:** the legacy `nixos-modules/cli.nix` (`vmLaunchScript` + `vmLaunchContract`) was retired in v1.0 per ADR 0015; the v1.0 launcher is the Rust CLI at `packages/d2b/src/lib.rs`, dispatched through `d2bd` → broker.
-**Test gate:** [`tests/desktop-wrapper-contract-eval.sh`](../../tests/desktop-wrapper-contract-eval.sh).
+**Test coverage:** no dedicated current gate covers this document; the retired
+shell gate has no registered successor.
 **Schema version:** `1`.
 
 Every graphics-enabled VM (`d2b.vms.<vm>.graphics.enable = true`)
@@ -121,6 +122,6 @@ Any change to the table above must:
 
 1. Bump `desktopWrapperContractVersion` in `nixos-modules/cli.nix`.
 2. Update this doc in the same commit.
-3. Update `tests/desktop-wrapper-contract-eval.sh` to assert the
-   new shape.
+3. Add or update current automated coverage for the new shape; no dedicated
+   successor to the retired shell gate exists today.
 4. Add a CHANGELOG entry under `## Unreleased`.
