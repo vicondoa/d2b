@@ -25,7 +25,7 @@ for required in "$MANIFEST" "$MAKEFILE"; do
   fi
 done
 
-expected_workflow_shell='shell: bash tests/tools/ci-shell {0}'
+expected_workflow_shell='shell: sh tests/tools/ci-shell {0}'
 workflow_shell_errors=()
 while IFS= read -r workflow; do
   found=0
@@ -46,6 +46,8 @@ if [ "${#workflow_shell_errors[@]}" -gt 0 ]; then
   printf '  %s\n' "${workflow_shell_errors[@]}" >&2
   exit 1
 fi
+
+bash "$ROOT/tests/tools/layer1-jobs" self-test
 
 mapfile -t local_job_ids < <(
   awk '

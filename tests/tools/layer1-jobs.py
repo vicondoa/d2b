@@ -19,15 +19,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "tests" / "layer1-jobs.json"
 TEMPLATE = ROOT / "tests" / "ci" / "layer1-workflow.template.yml"
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-l1-static-fast.yml"
+SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # The shell program must be resolvable by the Actions runner itself, which
 # looks the first token up on PATH rather than against the workspace, and whose
-# argument splitter does not preserve nested quoting. Naming `bash` keeps the
-# lookup on PATH, and naming the wrapper as a plain relative argument defers
-# resolving it to run time, where the working directory is the workspace.
-SCRUBBED_BASH = "bash tests/tools/ci-shell {0}"
+# argument splitter does not preserve nested quoting. The runner resolves `sh`
+# on PATH; hosted runners provide dash, which does not process Bash startup
+# hooks before the wrapper can scrub them.
+SCRUBBED_BASH = "sh tests/tools/ci-shell {0}"
 
 
 def load_manifest() -> dict[str, Any]:
@@ -419,6 +420,10 @@ def command_check_workflow(_: argparse.Namespace) -> int:
     return 1
 
 
+def command_self_test(args: argparse.Namespace) -> int:
+    return subprocess.run([sys.executable, str(SELF_TEST), *args.tests], cwd=ROOT).returncode
+
+
 def run_job(job_id: str, job: dict[str, Any]) -> int:
     target = job.get("makeTarget")
     if not target:
@@ -533,6 +538,10 @@ def main() -> int:
 
     check = subparsers.add_parser("check-workflow", help="fail if the rendered workflow is stale")
     check.set_defaults(func=command_check_workflow)
+
+    self_test = subparsers.add_parser("self-test", help="run Layer-1 runner regressions")
+    self_test.add_argument("tests", nargs="*", help=argparse.SUPPRESS)
+    self_test.set_defaults(func=command_self_test)
 
     run = subparsers.add_parser("run-local", help="run local Layer-1 phases from the manifest")
     run.add_argument("--skip-preflight", action="store_true", help="skip the preflight phase")
