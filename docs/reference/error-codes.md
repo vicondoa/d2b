@@ -134,21 +134,24 @@ docs anchors when intercepting them before reaching the broker.
 
 ## Host-check diagnostic codes
 
-`d2b host check` runs a battery of host-posture probes. A probe that reports
-a required failure or an advisory warning emits the same host-verb refusal
-envelope described above, with a kebab-case `code` that resolves to a stable
-anchor so the CLI, the goldens, and cross-references share one target. Probe
-codes that originate as a broker audit decision (for example the `cgroup-*`,
-`ifname-*`, and `nm-managed-foreign-conflict` codes) reuse their anchor in
-the [Audit decision code catalog](#audit-decision-code-catalog) below, and
-the shared `daemon-down` connectivity refusal is anchored with the other
-host-verb refusal codes above; the rows here anchor the remaining
-`host check` probe codes. The authoritative field-by-field
-spec for each code is its golden pair under
-`tests/golden/cli-output/host-check-<code>.{json,txt}`; the rows below carry
-the anchor and a one-line summary of what the probe checks.
+`d2b host check` runs a battery of host-posture probes. The current runtime
+emits finding-based output with `mode`, `strict`, `summary`, `exitCode`, and
+`findings`; each finding has an id and remediation but no documentation-anchor
+field. Its implemented cgroup check reports the `cgroup-v2` finding and does
+not emit the code-specific cgroup refusal envelopes listed below.
 
-| docs anchor | code | exit code | probe |
+The rows and golden pairs under
+`tests/golden/cli-output/host-check-<code>.{json,txt}` are static fixtures for
+an intended host-verb refusal contract, not output derived from the current
+implementation. They pin the target `docs_anchor`, remediation, and other
+fields while runtime convergence remains outstanding. Fixture codes that
+originate as broker audit decisions (for example the `cgroup-*`, `ifname-*`,
+and `nm-managed-foreign-conflict` codes) reuse their anchor in the
+[Audit decision code catalog](#audit-decision-code-catalog) below, and the
+shared `daemon-down` connectivity refusal is anchored with the other host-verb
+refusal codes above. The rows here anchor the remaining fixture codes.
+
+| docs anchor | code | exit code | intended probe |
 | --- | --- | --- | --- |
 | <a id="no-kvm"></a>`#no-kvm` | `no-kvm` | `1` | Whether `/dev/kvm` is present and accessible. |
 | <a id="no-cgroup-v2"></a>`#no-cgroup-v2` | `no-cgroup-v2` | `1` | Whether the host runs the unified cgroup v2 hierarchy. |
@@ -166,9 +169,9 @@ the anchor and a one-line summary of what the probe checks.
 | <a id="profile-rejects-root"></a>`#profile-rejects-root` | `profile-rejects-root` | `1` | Whether the minijail profile refuses uid 0 inside the sandbox. |
 | <a id="seccomp-denial"></a>`#seccomp-denial` | `seccomp-denial` | `1` | Whether the seccomp policy denies undeclared syscalls. |
 
-Every row's exit `1` is an advisory `#host-check-warning`; `host check` still
-returns exit `2` (`#host-check-failure`) whenever its summary carries a
-required failure.
+Each displayed fixture specifies advisory exit `1`. Independently, the current
+finding-based runtime returns exit `2` (`#host-check-failure`) whenever its
+summary carries a required failure.
 
 ## Host-prepare and host-destroy apply codes
 
