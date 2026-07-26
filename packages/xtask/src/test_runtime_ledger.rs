@@ -1134,6 +1134,33 @@ mod tests {
     }
 
     #[test]
+    fn crate_budget_matches_the_decision_register() {
+        assert_eq!(
+            CRATE_BUDGET_MS, 3_000,
+            "the crate budget and decision register must change together"
+        );
+    }
+
+    #[test]
+    fn crate_cpu_measurements_at_and_under_budget_pass_the_gate() {
+        let mut within_budget = ledger(Vec::new());
+        within_budget.crates.extend([
+            crate_sample(
+                "exactly-at-budget",
+                CRATE_BUDGET_MS,
+                &[CRATE_BUDGET_MS; MIN_REPETITIONS],
+            ),
+            crate_sample(
+                "one-ms-under-budget",
+                CRATE_BUDGET_MS,
+                &[CRATE_BUDGET_MS - 1; MIN_REPETITIONS],
+            ),
+        ]);
+
+        assert!(check(&within_budget).is_empty());
+    }
+
+    #[test]
     fn an_over_budget_crate_cpu_measurement_fails_the_gate() {
         let mut over = ledger(Vec::new());
         over.crates.push(crate_sample(
