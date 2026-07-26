@@ -6,3 +6,6 @@
 - Corrected ResourceName and ZoneId documentation to enforce the canonical
   1-to-63-byte bound across resource envelopes, Nix validation, and Provider
   examples.
+- Made the drift driver invoke regular gate files through Bash regardless of
+  their executable bit, preventing a referenced gate from being silently
+  skipped after a mode change.
