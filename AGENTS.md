@@ -83,6 +83,7 @@ you to run one directly.
 
 ```bash
 # Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
+# The first eleven are enforcing; the performance-budget job is advisory.
 make check-tier0
 make check-inventory
 make test-lint
@@ -96,12 +97,13 @@ make test-drift
 make test-runtime-ledger
 make test-performance-budgets
 
-# Post-preflight Layer-1 development umbrella. This runs the ten test-*
-# jobs above; `make check` also runs check-tier0 and check-inventory.
+# Post-preflight Layer-1 development umbrella. This runs nine enforcing
+# test-* jobs plus the advisory performance-budget job; `make check` also
+# runs the two enforcing preflight jobs.
 make test-unit
 
 # PR-equivalent Layer-1 gate. Uses tests/layer1-jobs.json to run
-# all twelve jobs locally with bounded parallelism.
+# eleven enforcing jobs plus one advisory job with bounded parallelism.
 make check
 
 # Legacy/full-static monolithic gate retained for explicit use.
@@ -111,6 +113,20 @@ make check-static
 # host/manual pre-PR targets below before opening an agent-owned PR.
 make test
 ```
+
+`tests/layer1-jobs.json` is authoritative for both the job list and its
+classification. A job is enforcing unless it carries `"enforcement":
+"advisory"`; an advisory entry pairs that field with `advisoryReason` explaining
+why its successful result is not enforcing evidence. Advisory means the
+command is still launched and a nonzero result still fails the run, but a
+guarded skip is permitted. Therefore an advisory result must not be cited as
+validation evidence for a change.
+
+The sole advisory job is currently `test-performance-budgets`. Its target
+prints `SKIP` and enforces no latency budget unless `D2B_PERF_STABLE=1`.
+Promoting it requires a pinned self-hosted runner, setting that variable on
+the runner, and then removing the advisory classification and reason from
+the manifest. The project does not currently have such a runner.
 
 Before opening an agent-owned PR, run the host/manual integration
 targets on the development host; do not rely on the PR pipeline for

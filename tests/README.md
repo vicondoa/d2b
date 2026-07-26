@@ -11,7 +11,8 @@ that is the binding contract; this file is the human quick-start.
   container. Runs on every PR and locally via `make check`. This is where the
   overwhelming majority of tests live (Nix eval cases, Rust unit/integration/
   contract/policy-lint tests, flake checks, and a small closed set of drift +
-  meta gates).
+  meta gates). The current manifest has eleven enforcing jobs plus one advisory
+  job; an advisory success may be a guarded skip and is not validation evidence.
 - **Layer 2 - integration tiers.** Real systemd / kernel / userland: podman
   containers, runNixOSTest VMs, live-host scripts, and hardware tests. Used only
   when Layer 1 *provably* cannot cover the behaviour.
@@ -48,7 +49,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`: test-lint + test-changelog + test-rust + test-proofs + test-flake + test-nix-unit + test-policy + test-drift + test-runtime-ledger + test-performance-budgets; `make check` also runs check-tier0 + check-inventory | local + CI (parallel jobs) |
+| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`: nine enforcing jobs (test-lint + test-changelog + test-rust + test-proofs + test-flake + test-nix-unit + test-policy + test-drift + test-runtime-ledger) plus the advisory test-performance-budgets job; `make check` also runs the two enforcing preflight jobs, check-tier0 + check-inventory | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
@@ -62,11 +63,11 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets over the exact pinned census and reports per-test wall-clock p95s against advisory diagnostic thresholds (holds no baseline; makes no historical-regression claim) | local + CI |
-| `make test-performance-budgets` | self-gating performance canary; hosted runners skip and pinned stable runners enforce | local + CI |
+| `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | PR-equivalent Layer-1 gate from `tests/layer1-jobs.json` with bounded local parallelism | local |
+| `make check` | PR-equivalent manifest target set with bounded local parallelism: eleven enforcing jobs plus one advisory job | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
 | `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
@@ -92,11 +93,13 @@ entrypoints, or wrap a raw live script as `cargo run --manifest-path
 packages/Cargo.toml -p xtask -- heavy-gate -- env
 D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
 tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
-each live/hardware/perf entrypoint verifies its inherited slot and re-executes
-itself through the gate exactly once when no genuine slot is held. A bare
-`D2B_HEAVY_GATE` value is not trusted, so the shared Nix store, cargo target
-directory, and KVM device cannot be oversubscribed. The gated targets remain
-the documented path. The `cargo run --manifest-path
+each live and hardware entrypoint, plus the enforcing path of each performance
+entrypoint, verifies its inherited slot and re-executes itself through the gate
+exactly once when no genuine slot is held. The advisory performance skip exits
+before acquiring a slot because it does no heavy work. A bare `D2B_HEAVY_GATE`
+value is not trusted, so the shared Nix store, cargo target directory, and KVM
+device cannot be oversubscribed. The gated targets remain the documented path.
+The `cargo run --manifest-path
 packages/Cargo.toml` spelling is required because there is no root cargo
 workspace, so the bare `cargo xtask` alias resolves only when run from
 `packages/`; see AGENTS.md for the `sccache` tradeoff and the `cd packages
@@ -125,15 +128,34 @@ a `d2bd` restart. The USBIP script requires
 verbs for USB state changes.
 
 `tests/layer1-jobs.json` is the central Layer-1 job graph. In its local phase
-order, `make check` runs `check-tier0`, `check-inventory`, `test-lint`,
+order, the enforcing jobs are `check-tier0`, `check-inventory`, `test-lint`,
 `test-changelog`, `test-rust`, `test-proofs`, `test-flake`, `test-nix-unit`,
-`test-policy`, `test-drift`, `test-runtime-ledger`, and
-`test-performance-budgets`. `make test-unit` consumes the same manifest but
-skips its two-job preflight phase. `.github/workflows/pr-l1-static-fast.yml`
-is generated from the manifest by `make layer1-workflow` and checked by
-`make layer1-workflow-check` during `make test-drift`. CI runs the individual
-Layer-1 jobs in parallel and exposes a stable final `check` rollup job intended
-for branch protection.
+`test-policy`, `test-drift`, and `test-runtime-ledger`. The twelfth local job,
+`test-performance-budgets`, is advisory. `make test-unit` consumes the same
+manifest but skips its two enforcing preflight jobs.
+
+Jobs are enforcing by default. The manifest's optional `"enforcement":
+"advisory"` field classifies a job whose successful exit might not represent
+executed checks, and the accompanying `advisoryReason` records why. An advisory
+command still runs, and a nonzero exit still fails the graph, but a guarded
+skip is not a failure. The runner labels such a result `advisory:` rather than
+`ok:` and reports enforcing and advisory counts separately. Do not cite an
+advisory job result as validation evidence for a change.
+
+The current advisory reason is that latency budgets require a pinned
+self-hosted runner. `test-performance-budgets` exits successfully with `SKIP`
+unless `D2B_PERF_STABLE=1`; no current project runner provides that stable
+environment. Promotion to enforcing therefore requires provisioning a pinned
+self-hosted runner, setting `D2B_PERF_STABLE=1` there, and removing the
+`enforcement` and `advisoryReason` fields from the job after that wiring lands.
+
+`.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
+`make layer1-workflow` and checked by `make layer1-workflow-check` during
+`make test-drift`. CI runs the individual Layer-1 jobs in parallel and exposes
+a stable final `check` rollup job intended for branch protection. Locally,
+`make check` runs each manifest job's `makeTarget` and every
+`extraMakeTargets` entry, so the manifest-declared target set matches the
+pull-request graph. The performance job remains advisory in both places.
 
 The `test-runtime-ledger` job is part of that graph. It warm-builds the pinned
 census, records per-test wall-clock p95s as advisory diagnostics, and enforces

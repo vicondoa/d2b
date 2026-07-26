@@ -19,11 +19,13 @@
 
 ### Changed
 
-- Every live, hardware, and performance test entrypoint now routes through the
-  heavy-gate semaphore. The release smoke lanes and the aggregating and
-  per-layer runners re-exec through the gate exactly once when invoked directly,
-  and an inventory guard fails closed if a new live entrypoint or bare heavy
-  make target is added without gating.
+- Every live and hardware test entrypoint, plus the enforcing path of every
+  performance entrypoint, now routes through the heavy-gate semaphore. The
+  performance advisory skip exits before acquiring a slot because it does no
+  heavy work. The release smoke lanes and the aggregating and per-layer runners
+  re-exec through the gate exactly once when invoked directly, and an inventory
+  guard fails closed if a new live entrypoint or bare heavy make target is added
+  without gating.
 - The runtime execution-budget ledger now enforces a pinned closed census: it
   requires a census, records advisory per-test wall clock from warmed,
   crate-qualified libtest streams, records enforced aggregate process CPU for
