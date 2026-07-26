@@ -147,15 +147,26 @@ in
   };
 
   "activation-runtime-tmpfiles/heavy-gate-provisioning" = {
-    expr =
-      builtins.elem "d /run/d2b-heavy-gates 0755 root root -" tmpfiles
-      && builtins.elem "z /run/d2b-heavy-gates 0755 root root -" tmpfiles
-      && lib.hasInfix ''for user in 'alice'; do'' heavyGateProvisionText
-      && lib.hasInfix ''install -d -m 0755 -o root -g root "$uid_dir"'' heavyGateProvisionText
-      && lib.hasInfix ''install -m 0600 -o "$uid" -g root /dev/null "$slot"'' heavyGateProvisionText
-      && lib.hasInfix ''chown "$uid":root "$slot"'' heavyGateProvisionText
-      && lib.hasInfix ''chmod 0600 "$slot"'' heavyGateProvisionText;
-    expected = true;
+    expr = {
+      rootCreate = builtins.elem "d /run/d2b-heavy-gates 0755 root root -" tmpfiles;
+      rootPosture = builtins.elem "z /run/d2b-heavy-gates 0755 root root -" tmpfiles;
+      configuredUser = lib.hasInfix "for user in alice; do" heavyGateProvisionText;
+      uidDirectory =
+        lib.hasInfix ''install -d -m 0755 -o root -g root "$uid_dir"'' heavyGateProvisionText;
+      slotCreate =
+        lib.hasInfix ''install -m 0600 -o "$uid" -g root /dev/null "$slot"'' heavyGateProvisionText;
+      slotOwner = lib.hasInfix ''chown "$uid":root "$slot"'' heavyGateProvisionText;
+      slotMode = lib.hasInfix ''chmod 0600 "$slot"'' heavyGateProvisionText;
+    };
+    expected = {
+      rootCreate = true;
+      rootPosture = true;
+      configuredUser = true;
+      uidDirectory = true;
+      slotCreate = true;
+      slotOwner = true;
+      slotMode = true;
+    };
   };
 
   "activation-runtime-tmpfiles/run-parent-mask-after-traversal-acls" = {
