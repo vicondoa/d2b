@@ -420,8 +420,12 @@ changelog-fold:
 ##
 ##   This is an absolute aggregate CPU budget gate. It holds no baseline and
 ##   makes no historical regression claim. Per-test wall-clock values never fail
-##   it; they remain visible only to identify likely contributors to a crate CPU
-##   increase.
+##   it; every per-test threshold breach is emitted to stderr as a non-failing
+##   advisory so CI and operators can enumerate likely contributors to a crate
+##   CPU increase. Libtest exposes per-test wall time, not per-test CPU time.
+##   Measuring the latter would require a custom harness or one timed process per
+##   test per repetition, whose startup cost and census-sized process fan-out
+##   would materially change this gate.
 ##
 ##   Deferred follow-up (tracked as runtime-ledger-full-census-and-real-shards):
 ##   grow the census beyond the single pinned crate to a real multi-crate shard
@@ -443,8 +447,8 @@ D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
 ## Classified hermetic tests that legitimately exceed the normal 50 ms
 ## per-test wall-clock diagnostic threshold. Per-test wall-clock data is
 ## advisory because machine contention makes it unsuitable for enforcement;
-## these overrides keep the slow-test report useful without changing the
-## enforced aggregate process-CPU crate budget:
+## these overrides keep the complete advisory-breach report useful without
+## changing the enforced aggregate process-CPU crate budget:
 ##   * the *_bounded_byte_inputs_do_not_panic property harnesses each replay a
 ##     committed corpus and drive RUNS=10000 generated inputs through a parser,
 ##     so hundreds of milliseconds of pure execution is the intended workload;

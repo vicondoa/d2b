@@ -483,10 +483,14 @@ pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Vi
     violations
 }
 
-pub fn top_slow_tests(ledger: &Ledger, limit: usize) -> Vec<&Sample> {
-    let mut tests: Vec<&Sample> = ledger.tests.iter().collect();
+pub fn advisory_breaches(ledger: &Ledger) -> Vec<&Sample> {
+    let mut tests: Vec<&Sample> = ledger
+        .tests
+        .iter()
+        .filter(|sample| sample.p95_ms > sample.threshold_ms)
+        .collect();
     tests.sort_by(|a, b| b.p95_ms.cmp(&a.p95_ms).then_with(|| a.id.cmp(&b.id)));
-    tests.into_iter().take(limit).collect()
+    tests
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +579,7 @@ const USAGE: &str = "usage: cargo xtask test-runtime-ledger <command>\n\
               [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
               [--libtest-json <path>]... [--crate-libtest-json <crate>=<path>]...\n\
               [--advisory-threshold <test-id>=<ms>]...\n\
-       check  --ledger <path> --expected-census <path> [--top <n>]\n\
+       check  --ledger <path> --expected-census <path>\n\
        census --expected-census <path> --field crates\n\
        lint   <path>...\n\
        help";
@@ -782,7 +786,6 @@ fn load_ledger(path: &str) -> Result<Ledger, String> {
 fn run_check(args: &[String]) -> Result<(), String> {
     let mut ledger_path = String::new();
     let mut census_path: Option<String> = None;
-    let mut top = 10usize;
     let mut index = 0usize;
     while index < args.len() {
         let flag = args[index].as_str();
@@ -792,11 +795,6 @@ fn run_check(args: &[String]) -> Result<(), String> {
         match flag {
             "--ledger" => ledger_path = value.clone(),
             "--expected-census" => census_path = Some(value.clone()),
-            "--top" => {
-                top = value
-                    .parse()
-                    .map_err(|_| format!("--top expects an integer, got `{value}`"))?
-            }
             other => return Err(format!("unknown check flag `{other}`\n{USAGE}")),
         }
         index += 2;
@@ -813,10 +811,12 @@ fn run_check(args: &[String]) -> Result<(), String> {
     })?;
     let ledger = load_ledger(&ledger_path)?;
     let expected = load_expected_census(&census_path)?;
-    for sample in top_slow_tests(&ledger, top) {
-        println!(
-            "advisory wall-clock: {} p95 {} ms (diagnostic threshold {} ms)",
-            sample.id, sample.p95_ms, sample.threshold_ms
+    let advisory_breaches = advisory_breaches(&ledger);
+    for sample in &advisory_breaches {
+        eprintln!(
+            "test-runtime-ledger advisory: test `{}` wall-clock p95 {} ms exceeds the {} ms \
+             diagnostic threshold (non-failing; aggregate process CPU remains enforced)",
+            sample.id, sample.p95_ms, sample.threshold_ms,
         );
     }
     for sample in &ledger.crates {
@@ -833,10 +833,12 @@ fn run_check(args: &[String]) -> Result<(), String> {
     if violations.is_empty() {
         println!(
             "runtime CPU budgets hold for {} crate measurement(s) on `{}`; \
-             captured {} advisory per-test wall-clock measurement(s)",
+             captured {} per-test wall-clock measurement(s), with {} non-failing advisory \
+             breach(es) reported",
             ledger.crates.len(),
             ledger.runner,
             ledger.tests.len(),
+            advisory_breaches.len(),
         );
         return Ok(());
     }
@@ -1039,14 +1041,19 @@ mod tests {
     }
 
     #[test]
-    fn top_slow_tests_report_the_worst_offenders_first() {
-        let recorded = ledger(vec![
-            test_sample("a::fast", TEST_ADVISORY_THRESHOLD_MS, &[1]),
-            test_sample("b::slow", TEST_ADVISORY_THRESHOLD_MS, &[40]),
-        ]);
-        let top = top_slow_tests(&recorded, 1);
-        assert_eq!(top.len(), 1);
-        assert_eq!(top[0].id, "b::slow");
+    fn advisory_breaches_include_one_outside_the_previous_slowest_ten() {
+        let mut tests = (0..10)
+            .map(|index| test_sample(&format!("slow::{index:02}"), 200, &[100]))
+            .collect::<Vec<_>>();
+        tests.push(test_sample(
+            "breach::outside_previous_window",
+            TEST_ADVISORY_THRESHOLD_MS,
+            &[60],
+        ));
+        let recorded = ledger(tests);
+        let breaches = advisory_breaches(&recorded);
+        assert_eq!(breaches.len(), 1);
+        assert_eq!(breaches[0].id, "breach::outside_previous_window");
     }
 
     /// A complete, three-repetition census across every granularity.
