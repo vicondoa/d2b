@@ -620,7 +620,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-provider-state.md",
-      "sha256" : "749f66d31d72d8f72ac6a71fcd9c560de4bff5488d27c228cb5a47cc1ef32e6a",
+      "sha256" : "0399218b8bf1b5b50fa3dffcc9cfcc827deee65688b6b266e3efea7ad7722161",
       "specId" : "ADR-046-provider-state",
       "status" : "Accepted",
       "supersedes" : "`d2b-core/src/storage.rs` generated contract, ADR 0034 storage/sync/adoption model for v3",
@@ -772,7 +772,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-local.md",
-      "sha256" : "1d1a28e46e25ee4cc0e9f539e0e44194dc792ae42c7d41de834997dfd6b8aa0b",
+      "sha256" : "8aaec269828fdf36529e36c5d6ab52f8ba8857e6f09ad0e6be559abb3e421de4",
       "specId" : "ADR-046-provider-volume-local",
       "status" : "Accepted",
       "supersedes" : "`d2b-priv-broker/src/ops/{state_dir,store_sync,store_sync_audit,store_sync_export,store_view_farm,store_view_posture,swtpm_dir}.rs`; `d2b-core/src/{storage,sync,storage_lifecycle}.rs` StorageJson/SyncJson contract; `nixos-modules/store.nix` per-VM hardlink farm activation",
@@ -795,7 +795,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-virtiofs.md",
-      "sha256" : "4603c0c6a797269cbd367837c7c6bbf694dd6c8c4d3cc10d14323aeda5f01b9b",
+      "sha256" : "11189d46df7d3207c09473d4c38aa7c8d6916f3546026e70d5610f93e013c9df",
       "specId" : "ADR-046-provider-volume-virtiofs",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/supervisor/dag.rs`",
@@ -955,7 +955,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "1be81b58f02dafc85258bc4c98fd40d7a142464024b5c5f039bc4c56bb1b3333",
+      "sha256" : "25936927992e031e553044c4276029d2c1eab9082de5d306a5c8ec9ebbecf6e7",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Accepted",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
@@ -992,7 +992,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-volume.md",
-      "sha256" : "d368141fda4864b84f1b46bb7591efb75273ce6127ad09ce9c9bfa11045cb85b",
+      "sha256" : "04bd8468471a793b1f0a7391a34380698def1443d1becccfab9ebfb5b32a5003",
       "specId" : "ADR-046-resources-volume",
       "status" : "Accepted",
       "supersedes" : "`storage.json` v2, `sync.json` v1, per-VM hardlink-farm and store-view emitters in `nixos-modules/storage-json.nix`, `nixos-modules/store.nix`",

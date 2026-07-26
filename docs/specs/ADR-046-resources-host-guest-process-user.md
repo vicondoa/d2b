@@ -1807,7 +1807,7 @@ is integrated and all tests pass.
 | `StoreVirtiofsPreflight` | Controller observation, not a Process | - | `volume-virtiofs` or `volume-local` Volume controller | Delete after Volume Provider parity (ADR046-primitives-003) |
 | `SwtpmPreStartFlush` | `EphemeralProcess` | EphemeralProcess | `device-tpm` Provider | Delete after device-tpm EphemeralProcess integration |
 | `Swtpm` | `Process` | Process | `device-tpm` Provider; owned by Guest | Delete after device-tpm Process integration |
-| `Virtiofsd` | `Process` | Process | `volume-virtiofs` Provider; owned by Volume attachment | Delete after volume-virtiofs Process integration |
+| `Virtiofsd` | `Process` | Process | `volume-virtiofs` Provider; owned by `virtiofs.d2bus.org.Export` | Delete after volume-virtiofs Process integration |
 | `Video` | `Process` | Process | `device-gpu` Provider; owned by Guest | Delete after device-gpu Process integration |
 | `Gpu` | `Process` | Process | `device-gpu` Provider; owned by Guest | Delete after device-gpu Process integration |
 | `GpuRenderNode` | `Process` | Process | `device-gpu` Provider; owned by Guest | Delete after device-gpu Process integration |

@@ -585,7 +585,7 @@ State relocation moves a Volume's backing store from one Host or execution targe
 4. On successful copy: controller mounts the destination Volume in place of the source; removes the source finalizer; deletes the source Volume.
 5. On failed copy: source Volume and its finalizer remain; operator resolves.
 
-Cross-Host relocation is a prerequisite for Guest migration (moving the source Volume that backs a Guest's virtiofs attachment from one host to another). The `virtiofs.d2bus.org.Export` child resources (owned by volume-virtiofs) are reconciled by volume-virtiofs to point to the new source after the copy completes; the exact protocol is governed by `ADR-046-primitive-resource-composition` Volume attachment spec.
+Cross-Host relocation is a prerequisite for Guest migration (moving the source Volume that backs a Guest's virtiofs attachment from one host to another). The `virtiofs.d2bus.org.Export` child resources are owned by the Volume, created by volume-local, and reconciled by volume-virtiofs after the copy completes; the exact protocol is governed by `ADR-046-primitive-resource-composition` Volume attachment spec.
 
 ## Incident hold
 

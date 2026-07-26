@@ -1832,8 +1832,9 @@ Volume reconciliation follows `ADR-046-resource-reconciliation`:
    injected `VolumeEffectPort`; concurrently dispatches per-resource effect calls
    while the watch loop remains responsive to new events.
 5. Writes status batch with expected revision; conflict → re-read/retry.
-6. On attachment create, volume-virtiofs receives `owned-resource-changed` from
-   the Volume.
+6. Translate each virtiofs attachment into one
+   `virtiofs.d2bus.org.Export` owned by the Volume; diff the desired Export set
+   and let volume-virtiofs reconcile each Export independently.
 
 Credential watches join the same per-Volume single-flight. An observed sealing
 generation advance first commits the `rotation-pending` status transition, then
