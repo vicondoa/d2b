@@ -943,14 +943,15 @@ The workspace policy check (`packages/d2b-contract-tests/tests/policy_provider_c
 implemented in work item ADR046-pkg-001) walks every `packages/d2b-provider-*`
 crate directory in the workspace and asserts all four paths exist. A missing
 `src/`, `tests/`, `integration/`, or `README.md` in any Provider crate is a
-**hard policy failure** that blocks `make test-policy` (and therefore
-`make check`) on the same basis as a workspace member sort violation or a
-`Command::new("bash")` site.
+policy failure in the fixture-dependent contract layer.
 
-The check is gated by the same `D2B_FIXTURES` step in
-`tests/tools/rust-workspace-checks.sh` as the existing crate-naming and
-member-sort checks. It does not require building the crate; it inspects
-the filesystem only.
+The check is routed through the `test-fixture-contracts` entry in
+`tests/layer1-jobs.json` and the corresponding `make test-fixture-contracts`
+target. That manifest job is advisory and skips unless
+`D2B_ENABLE_FIXTURE_BUILD=1` with `D2B_FIXTURES` delivered to its sandbox, so
+this check is not enforcing pull-request evidence until that delivery is wired
+and the manifest classification is promoted. It does not require compiling the
+Provider crate; it inspects the filesystem only.
 
 #### 4.8.3 README minimum sections
 
@@ -3851,10 +3852,10 @@ Rollback atomically:
 | `provider-wildcard-permission-restricted` | Non-bootstrap Provider with wildcard permission claim is rejected |
 | `provider-upgrade-drain-then-replace` | `upgradePolicy=drain-then-replace` completes old component drain before new launch |
 | `provider-component-bound-limits` | Provider with 9 controllers fails admission; 8 is the maximum |
-| `provider-crate-layout-src-required` | A `d2b-provider-*` workspace crate without `src/` fails `make test-policy` with message naming the crate and missing path |
-| `provider-crate-layout-tests-required` | A `d2b-provider-*` workspace crate without `tests/` fails `make test-policy` |
-| `provider-crate-layout-integration-required` | A `d2b-provider-*` workspace crate without `integration/` fails `make test-policy` |
-| `provider-crate-layout-readme-required` | A `d2b-provider-*` workspace crate without `README.md` fails `make test-policy` |
+| `provider-crate-layout-src-required` | A `d2b-provider-*` workspace crate without `src/` fails the enabled fixture-contract lane with a message naming the crate and missing path |
+| `provider-crate-layout-tests-required` | A `d2b-provider-*` workspace crate without `tests/` fails the enabled fixture-contract lane |
+| `provider-crate-layout-integration-required` | A `d2b-provider-*` workspace crate without `integration/` fails the enabled fixture-contract lane |
+| `provider-crate-layout-readme-required` | A `d2b-provider-*` workspace crate without `README.md` fails the enabled fixture-contract lane |
 | `provider-readme-sections-all-present` | A Provider `README.md` missing any of the nine required headings (§4.8.3) fails policy with the exact missing heading name |
 | `provider-readme-sections-partial-missing` | A Provider `README.md` with 8 of 9 sections fails policy; message names the one missing section |
 | `provider-integration-target-declared` | An `integration/*.rs` file without an `integration-target:` declaration in the first 20 lines fails policy |
@@ -4584,12 +4585,12 @@ Evidence class for all: `main-reuse-source`.
 | --- | --- |
 | Work item ID | `ADR046-pkg-001` |
 | Dependency/owner | ADR046-zone-control-003; workspace policy owner |
-| Current source | `packages/d2b-contract-tests/tests/policy_contracts.rs` lines 5-6 (D2B_FIXTURES gate / workspace-checks integration pattern - `implemented-and-reachable`, baseline `b5ddbed6`); `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure - `implemented-and-reachable`); `tests/tools/rust-workspace-checks.sh` (D2B_FIXTURES step shell harness - `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules - `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation - `implemented-and-reachable`) |
+| Current source | `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure - `implemented-and-reachable`); `tests/layer1-jobs.json` (`test-fixture-contracts` manifest entry - `implemented-and-reachable`); `tests/test-rust.sh` (`fixture-contracts` lane and D2B_FIXTURES delivery - `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules - `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation - `implemented-and-reachable`) |
 | Reuse source | None |
 | Reuse action | create |
-| Destination | `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; gated under D2B_FIXTURES in existing `tests/tools/rust-workspace-checks.sh`) |
-| Detailed design | Implement `policy_provider_crate_layout.rs` with the following test functions: (1) `every_provider_crate_has_src` - walk `packages/d2b-provider-*/` directories in the workspace, assert each contains `src/`; failure names crate and missing path; (2) `every_provider_crate_has_tests` - assert `tests/` present; (3) `every_provider_crate_has_integration` - assert `integration/` present; (4) `every_provider_crate_has_readme` - assert `README.md` present; (5) `every_provider_readme_has_required_sections` - read `README.md`, check for all nine section headings from §4.8.3 (case-insensitive, after stripping `#` and whitespace); failure names the missing heading(s); (6) `every_integration_file_has_target_declaration` - for each `integration/*.rs` file, scan first 20 lines for exactly one `//! integration-target: (container|host-integration)` declaration; failure names the file and the violation (missing/multiple/invalid value); (7) `non_provider_crates_exempt` - verify the check does not run on non-`d2b-provider-*` crates. All checks are filesystem-only (no compilation). Workspace member list is discovered by parsing `packages/Cargo.toml` `[workspace].members`. Gate: add the new test file to `tests/tools/rust-workspace-checks.sh` D2B_FIXTURES list alongside existing policy tests |
-| Integration | `make test-policy` and `make check` both fail if any provider crate violates §4.8; consistent with existing `no-bash-ast-walker` and workspace-sort gates; ADR046-zone-control-003 references §4.8 for Provider package conventions |
+| Destination | `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; executed by the fixture-dependent Rust contract lane when enabled) |
+| Detailed design | Implement `policy_provider_crate_layout.rs` with the following test functions: (1) `every_provider_crate_has_src` - walk `packages/d2b-provider-*/` directories in the workspace, assert each contains `src/`; failure names crate and missing path; (2) `every_provider_crate_has_tests` - assert `tests/` present; (3) `every_provider_crate_has_integration` - assert `integration/` present; (4) `every_provider_crate_has_readme` - assert `README.md` present; (5) `every_provider_readme_has_required_sections` - read `README.md`, check for all nine section headings from §4.8.3 (case-insensitive, after stripping `#` and whitespace); failure names the missing heading(s); (6) `every_integration_file_has_target_declaration` - for each `integration/*.rs` file, scan first 20 lines for exactly one `//! integration-target: (container|host-integration)` declaration; failure names the file and the violation (missing/multiple/invalid value); (7) `non_provider_crates_exempt` - verify the check does not run on non-`d2b-provider-*` crates. All checks are filesystem-only (no compilation). Workspace member list is discovered by parsing `packages/Cargo.toml` `[workspace].members`. Gate: add the new test file to the `d2b-contract-tests` crate covered by the manifest's `test-fixture-contracts` entry |
+| Integration | `make test-fixture-contracts` fails on a §4.8 violation when `D2B_ENABLE_FIXTURE_BUILD=1` and `D2B_FIXTURES` is available. The manifest lane remains advisory until sandbox fixture delivery is wired and its classification is promoted; ADR046-zone-control-003 references §4.8 for Provider package conventions |
 | Data migration | Additive; no existing `d2b-provider-*` crates in the pre-ADR45 baseline; first Provider crate created must comply from inception |
 | Validation | §15.3 layout conformance tests: `provider-crate-layout-src-required`, `provider-crate-layout-tests-required`, `provider-crate-layout-integration-required`, `provider-crate-layout-readme-required`, `provider-readme-sections-all-present`, `provider-readme-sections-partial-missing`, `provider-integration-target-declared`, `provider-integration-target-unique`, `provider-integration-target-valid-values`, `provider-crate-naming-convention`, `provider-crate-layout-non-provider-exempt` |
 | Removal proof | No existing code removed; additive policy test only |

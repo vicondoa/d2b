@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "65fc72df49c4a76f19dc00526a45135639c124e66422f827460e66a7dcbd4922",
+      "sha256" : "3f95756ec664903aed5d71b407e45a999269712c1225069f064d1c49f2206e03",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
