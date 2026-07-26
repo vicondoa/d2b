@@ -16,7 +16,7 @@
       {
         "id": "serial-after-parallel",
         "mode": "serial",
-        "jobs": ["test-drift", "test-runtime-ledger", "test-performance-budgets"]
+        "jobs": ["test-drift", "test-runtime-ledger", "test-performance-budgets", "test-fixture-contracts"]
       }
     ]
   },
@@ -29,6 +29,7 @@
       "test-lint",
       "test-changelog",
       "test-rust",
+      "test-fixture-contracts",
       "test-proofs",
       "test-nix-unit",
       "flake-eval-discover",
@@ -48,6 +49,7 @@
       "test-lint",
       "test-changelog",
       "test-rust",
+      "test-fixture-contracts",
       "test-proofs",
       "test-nix-unit",
       "test-flake-x86",
@@ -112,14 +114,24 @@
     "test-rust": {
       "displayName": "Rust workspace gate",
       "makeTarget": "test-rust",
-      "enforcement": "advisory",
-      "advisoryReason": "The workspace tests run, but D2B_SKIP_FIXTURE_BUILD=1 leaves fixture-dependent d2b-contract-tests unexecuted, and flake shards do not substitute for them.",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
       "ciKind": "rust",
       "ciJobId": "test-rust",
       "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-fixture-contracts": {
+      "displayName": "Fixture-dependent Rust contract tests",
+      "makeTarget": "test-fixture-contracts",
+      "enforcement": "advisory",
+      "advisoryReason": "Skipped unless D2B_ENABLE_FIXTURE_BUILD=1. flake.nix also excludes d2b-contract-tests from sandboxed rust-tests; sandbox D2B_FIXTURES delivery is tracked W1 work.",
+      "advisoryForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-fixture-contracts",
+      "needs": ["test-rust"],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },

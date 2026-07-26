@@ -17,6 +17,32 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 
 cd "$ROOT"
 
+fixture_contracts_only=0
+case "${1:-}" in
+  "")
+    [ "$#" -eq 0 ] || {
+      fail "usage: tests/test-rust.sh [fixture-contracts]"
+      exit 2
+    }
+    ;;
+  fixture-contracts)
+    [ "$#" -eq 1 ] || {
+      fail "usage: tests/test-rust.sh [fixture-contracts]"
+      exit 2
+    }
+    fixture_contracts_only=1
+    ;;
+  *)
+    fail "usage: tests/test-rust.sh [fixture-contracts]"
+    exit 2
+    ;;
+esac
+
+if [ "$fixture_contracts_only" = 1 ] && [ "${D2B_ENABLE_FIXTURE_BUILD:-0}" != 1 ]; then
+  log "  SKIP: fixture-dependent d2b-contract-tests (set D2B_ENABLE_FIXTURE_BUILD=1 to build D2B_FIXTURES; not covered by flake shards)"
+  exit 0
+fi
+
 manifest="$ROOT/packages/Cargo.toml"
 lock_file="$ROOT/packages/Cargo.lock"
 deny_config="$ROOT/packages/deny.toml"
@@ -253,6 +279,37 @@ guest_shell_runner_gate() {
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo test --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
 }
 
+run_fixture_contract_tests() {
+  contract_system=$(nix eval --extra-experimental-features 'nix-command flakes' \
+    --raw --impure --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
+  contract_fixtures=$(nix build --extra-experimental-features 'nix-command flakes' \
+    --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke")
+  # Feature-rich fixture (graphics+video+audio+tpm+usbip+observability) for the
+  # per-role minijail-validator contract tests - x86_64-linux only (graphics
+  # platform gate). On other systems D2B_FIXTURES_FULL stays unset and those
+  # tests skip.
+  contract_fixtures_full=""
+  if [ "$contract_system" = "x86_64-linux" ]; then
+    contract_fixtures_full=$(nix build --extra-experimental-features 'nix-command flakes' \
+      --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke-full")
+  fi
+  log "--> cargo test -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
+  D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo test --manifest-path "$manifest" -p d2b-contract-tests
+  ok "cargo test -p d2b-contract-tests (fixture-contract layer)"
+}
+
+if [ "$fixture_contracts_only" = 1 ]; then
+  if ! command -v nix >/dev/null 2>&1; then
+    fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to build D2B_FIXTURES"
+    exit 1
+  fi
+  run_fixture_contract_tests
+  log "test-fixture-contracts OK (duration: $((SECONDS - suite_started))s)"
+  exit 0
+fi
+
 log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
 ok "cargo fmt --check"
@@ -275,24 +332,7 @@ ok "cargo test (duration: $((SECONDS - workspace_test_started))s)"
 if [ "${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then
   log "  SKIP: fixture-dependent d2b-contract-tests (D2B_SKIP_FIXTURE_BUILD=1; not executed in this lane and not covered by flake shards)"
 elif command -v nix >/dev/null 2>&1; then
-  log "--> cargo test -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
-  contract_system=$(nix eval --extra-experimental-features 'nix-command flakes' \
-    --raw --impure --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
-  contract_fixtures=$(nix build --extra-experimental-features 'nix-command flakes' \
-    --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke")
-  # Feature-rich fixture (graphics+video+audio+tpm+usbip+observability) for the
-  # per-role minijail-validator contract tests - x86_64-linux only (graphics
-  # platform gate). On other systems D2B_FIXTURES_FULL stays unset and those
-  # tests skip.
-  contract_fixtures_full=""
-  if [ "$contract_system" = "x86_64-linux" ]; then
-    contract_fixtures_full=$(nix build --extra-experimental-features 'nix-command flakes' \
-      --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke-full")
-  fi
-  D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --manifest-path "$manifest" -p d2b-contract-tests
-  ok "cargo test -p d2b-contract-tests (fixture-contract layer)"
+  run_fixture_contract_tests
 
   # CLI-contract layer: spawn the real `d2b` binary against the rendered
   # fixture bundle (D2B_FIXTURES) + a synthetic system-state and validate the
