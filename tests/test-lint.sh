@@ -22,9 +22,12 @@ export ROOT D2B_LOG
 cd "$ROOT"
 
 # --- preflight ------------------------------------------------------------
-if [ -x "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
+if [ -f "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
   log "--> preflight-disk-space"
   bash "$ROOT/tests/tools/preflight-disk-space.sh"
+else
+  fail "required preflight gate is missing: tests/tools/preflight-disk-space.sh"
+  exit 1
 fi
 
 # --- nix-instantiate --parse ---------------------------------------------
