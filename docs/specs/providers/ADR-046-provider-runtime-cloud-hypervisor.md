@@ -1700,7 +1700,7 @@ per-test advisory threshold.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` |
 | Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt. |
-| Integration | Zone ResourceClient + system-minijail Process Provider + fake broker effect |
+| Integration | Zone ResourceClient + system-minijail Process Provider + fake MinijailProcessEffectPort |
 | Data migration | None (spike) |
 | Validation | Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: end-to-end VMM boot with real KVM and guest-control session (requires `make test-host-integration`) |
 | Removal proof | Not applicable (new crate) |

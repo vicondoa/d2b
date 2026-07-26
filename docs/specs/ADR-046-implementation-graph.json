@@ -14292,7 +14292,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-device-tpm/src/` (controller, swtpm runner, state-dir logic); `packages/d2b-provider-device-tpm/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-tpm/integration/` (container/Host scenarios); `packages/d2b-provider-device-tpm/README.md`"
+        "`packages/d2b-provider-device-tpm/src/` (controller, swtpm runner, opaque state-dir intent validation); `packages/d2b-provider-device-tpm/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-tpm/integration/` (container/Host scenarios); `packages/d2b-provider-device-tpm/README.md`"
       ],
       "detailedDesign" : "Device spec/status; flush EphemeralProcess → swtpm Process sequencing; state-dir hardening; tamper-marker; finalizer non-deletion of Volume; Nix emitter; all four required crate paths present (see \"Provider crate layout\") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
@@ -14340,7 +14340,7 @@
       "destinations" : [
         "`packages/d2b-provider-device-security-key/src/` (controller, relay Process, guest frontend Process, lease/session ring); `packages/d2b-provider-device-security-key/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-security-key/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-security-key/README.md`"
       ],
-      "detailedDesign" : "Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see \"Provider crate layout\") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); opaque hidraw effect request through DeviceEffectPort, with the core adapter placing the broker-returned fd only in the relay LaunchTicket; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see \"Provider crate layout\") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resources-device"
       ],
@@ -14361,9 +14361,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-device-gpu/src/` (controller, GPU/render-node/video worker Processes, broker token set); `packages/d2b-provider-device-gpu/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-gpu/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-gpu/README.md`"
+        "`packages/d2b-provider-device-gpu/src/` (controller, GPU/render-node/video worker Processes, opaque effect-token set); `packages/d2b-provider-device-gpu/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-gpu/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-gpu/README.md`"
       ],
-      "detailedDesign" : "Combined Device spec/status; GPU worker Process (`device-<uid-short>-gpu`, exclusive); render-node Process (`device-<uid-short>-render-node`, exclusive default, shared when explicit); video-decoder Process (`device-<uid-short>-video`); broker token set; wire-contract constants; shared render-node arbitration enforcement; Nix emitter; all four required crate paths present (see \"Provider crate layout\") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Combined Device spec/status; GPU worker Process (`device-<uid-short>-gpu`, exclusive); render-node Process (`device-<uid-short>-render-node`, exclusive default, shared when explicit); video-decoder Process (`device-<uid-short>-video`); opaque effect-token set resolved only by the core DeviceEffectPort adapter; wire-contract constants; shared render-node arbitration enforcement; Nix emitter; all four required crate paths present (see \"Provider crate layout\") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resources-device"
       ],
@@ -14483,9 +14483,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "packages/d2b-provider-device-tpm/src/{effect_port.rs,effect_impl.rs}; packages/d2b-provider-device-tpm/tests/effect_fake.rs"
+        "packages/d2b-provider-device-tpm/src/effect_port.rs; packages/d2b-provider-device-tpm/tests/effect_fake.rs; production implementation in the framework-internal core Device effect adapter"
       ],
-      "detailedDesign" : "TpmEffectPort and FakeTpmEffectPort: implement the effect trait, typed TPM EndpointRef handoff, and fake test port. Prove non-test files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind `volume-local` and `system-minijail`.",
+      "detailedDesign" : "TpmEffectPort and FakeTpmEffectPort: define the effect trait, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters.",
       "entryContracts" : [
         "ADR-046-provider-device-tpm"
       ],
@@ -15014,9 +15014,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-system-systemd/src/`: launch.rs, adoption.rs, pidfd.rs, wait.rs, user_supervisor.rs; `packages/d2b-provider-system-systemd/tests/`: hermetic lifecycle/conformance/fault tests; `packages/d2b-provider-system-systemd/integration/`: transient-unit and user-supervisor integration scenarios; `packages/d2b-provider-system-systemd/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout - see §Provider crate standard layout)"
+        "`packages/d2b-provider-system-systemd/src/`: launch.rs (opaque EffectPort requests), adoption.rs (typed outcomes), effect_port.rs (trait and fake), sandbox.rs (semantic validation); core/ProviderSupervisor owns DBus, unit-name, systemd-property, pidfd, wait, and user-supervisor adapters; `packages/d2b-provider-system-systemd/tests/`: hermetic lifecycle/conformance/fault tests with fake EffectPorts; framework integration covers transient-unit and user-supervisor scenarios through the core adapter; `packages/d2b-provider-system-systemd/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture, telemetry labels, build/test commands (provider crate standard layout - see §Provider crate standard layout)"
       ],
-      "detailedDesign" : "system-systemd Process/EphemeralProcess provider conformance per this spec's system-systemd conformance section; transient system unit (Type=exec); InvocationID+cgroup+MainPID+start-time binding before pidfd_open; systemd-owned wait/reap; user domain via fixed user supervisor; adoption re-verification; sandboxSpec compilation to systemd hardening directives; runtimeDeadline enforcement; drainTimeout SIGTERM/SIGKILL sequence Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "system-systemd Process/EphemeralProcess provider conformance per this spec's system-systemd conformance section; Provider validates semantic SandboxSpec and requests start/adopt/stop through SystemdProcessEffectPort using opaque IDs and handles. Core maps signed policy to a transient `Type=exec` unit, binds InvocationID+cgroup+MainPID+start-time before pidfd_open, owns systemd wait/reap observation and user-manager access, re-verifies adoption, and enforces the runtimeDeadline/drainTimeout stop sequence. No DBus connection, systemd property fragment, PID, pidfd, unit name, cgroup path, or user-manager handle enters the Provider. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resources-host-guest-process-user"
       ],
@@ -15038,7 +15038,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-system-minijail/src/`: sandbox_compiler.rs, launch.rs, adoption.rs, pidfd.rs, wait.rs, user_ns.rs; `packages/d2b-provider-system-minijail/tests/`: hermetic sandbox-compilation/lifecycle/conformance/fault tests; `packages/d2b-provider-system-minijail/integration/`: clone3/user-namespace and broker-spawn integration scenarios; `packages/d2b-provider-system-minijail/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture (capabilities, namespaces, seccomp), telemetry labels, build/test commands (provider crate standard layout - see §Provider crate standard layout)"
+        "`packages/d2b-provider-system-minijail/src/`: sandbox_compiler.rs, launch.rs, adoption.rs, effect_result.rs, user_ns.rs (semantic validation only); core/ProviderSupervisor owns LaunchTicket, pidfd, wait, `/proc`, cgroup, user-namespace, and broker adapters; `packages/d2b-provider-system-minijail/tests/`: hermetic sandbox-compilation/lifecycle/conformance/fault tests with fake EffectPorts; framework integration scenarios cover clone3/user-namespace and broker spawn through the core adapter; `packages/d2b-provider-system-minijail/README.md`: Provider identity, `spec.provider.settings` schema, ResourceTypes, placement, RBAC, security posture (capabilities, namespaces, seccomp), telemetry labels, build/test commands (provider crate standard layout - see §Provider crate standard layout)"
       ],
       "detailedDesign" : "system-minijail Process/EphemeralProcess provider conformance per this spec's system-minijail conformance section; SandboxSpec-to-minijail plan compilation; Linux ≥5.14/cgroup.kill placement gate; broker clone3(CLONE_PIDFD|CLONE_INTO_CGROUP) parent retains sole waitid(P_PIDFD)/reap/exit-status ownership and relays a typed terminal result; ProviderSupervisor polls a verified duplicate and retains exact-main pidfd_send_signal semantics but never waits/reaps; adoption verifies original broker parent; runtimeDeadline/drainTimeout use graceful main signal then anchored leaf cgroup.kill, broker wait/reap, and empty-leaf proof; no PID/PGID fallback; EphemeralProcess one-shot launch Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
@@ -16011,9 +16011,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-system-minijail/src/launch.rs`"
+        "Provider-side opaque request builder in `packages/d2b-provider-system-minijail/src/launch.rs`; LaunchTicket construction and verification in core/ProviderSupervisor"
       ],
-      "detailedDesign" : "LaunchTicket construction with compiled sandbox/budget/mount digests; ticket verification on ProviderSupervisor receipt; `d2b.supervisor.v3/IssueLaunchTicket` service call; expired/revoked/malformed ticket rejection",
+      "detailedDesign" : "Provider submits opaque Process/profile/budget/mount digest IDs through MinijailProcessEffectPort. Core constructs the LaunchTicket, verifies it on ProviderSupervisor receipt, performs the `d2b.supervisor.v3/IssueLaunchTicket` service call, and rejects expired/revoked/malformed tickets without exposing ticket internals or broker DTOs to the Provider.",
       "entryContracts" : [
         "ADR-046-provider-system-minijail"
       ],
@@ -16034,7 +16034,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "Broker-side: `d2b-priv-broker` retains `SpawnRunner` op, invoked by the `MinijailProcessEffectPort` implementation owned by core/ProviderSupervisor; Provider-side: `packages/d2b-provider-system-minijail/src/launch.rs` calls `MinijailProcessEffectPort` with opaque Process/LaunchTicket/profile IDs; `user_ns.rs` implements the user namespace pre-establishment protocol"
+        "Broker-side: `d2b-priv-broker` retains `SpawnRunner` and user-namespace pre-establishment; core/ProviderSupervisor owns the `MinijailProcessEffectPort` implementation; Provider-side `packages/d2b-provider-system-minijail/src/launch.rs` calls the trait with opaque Process/profile/policy IDs and `user_ns.rs` validates only semantic request constraints"
       ],
       "detailedDesign" : "Linux ≥5.14 and delegated-leaf `cgroup.kill` platform gate; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `MinijailProcessEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO",
       "entryContracts" : [
@@ -16057,7 +16057,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "Broker-side parent wait/reap and typed terminal relay in `packages/d2b-priv-broker/src/`; non-parent observation/status consumption in `packages/d2b-provider-system-minijail/src/{pidfd,wait}.rs`"
+        "Broker-side parent wait/reap and typed terminal relay in `packages/d2b-priv-broker/src/`; pidfd observation and signaling in core/ProviderSupervisor; typed outcome consumption in `packages/d2b-provider-system-minijail/src/effect_result.rs`"
       ],
       "detailedDesign" : "Broker that called `clone3` alone calls `waitid(P_PIDFD)`, collects exit status, and reaps exactly once; ProviderSupervisor `AsyncFd` readability is a hint only and never a wait/status source; controller consumes the identity-bound broker relay and holds no raw pidfd; ProviderSupervisor duplicate reacquisition is dispatched through a bounded blocking adapter with explicit timeout; pidfd never serialized; verified broker/ProviderSupervisor holder retains exact-main `pidfd_send_signal`; no PID/PGID fallback; graceful deadline followed by mandatory anchored leaf `cgroup.kill`; empty-leaf proof before rmdir; exit class classification (clean-exit/crash/signal/timeout/unknown) Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT.",
       "entryContracts" : [
@@ -16082,7 +16082,7 @@
       "destinations" : [
         "`packages/d2b-provider-system-minijail/src/` - controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize"
       ],
-      "detailedDesign" : "Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `MinijailProcessEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) with `/proc` reads, cgroup enumeration, and original-broker-parent verification via bounded blocking adapters; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no signal or cgroup.kill write to quarantined/ambiguous identity; restart/backoff driven only by broker-relayed terminal status; finalize (§8.6) with exact-main SIGTERM, bounded grace, mandatory cgroup.kill, broker wait/reap, empty-leaf proof, and no PGID ownership; EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; the controller declares no Provider state Volume and mounts none - its bounded non-secret operational state lives in `status`/the core Operation ledger (§5.1, D087) and running units are re-adopted from cgroup leaves + fresh pidfds on restart",
+      "detailedDesign" : "Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `MinijailProcessEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) consumes typed core-adapter observations after core performs `/proc` reads, cgroup enumeration, and original-broker-parent verification; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no stop request for quarantined/ambiguous identity; restart/backoff driven only by identity-bound typed terminal status; finalize (§8.6) requests graceful exact-main stop, bounded grace, mandatory subtree stop, broker wait/reap, and empty-leaf proof through the EffectPort, with no pidfd, PID, PGID, cgroup path, or kernel handle entering the Provider; EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; the controller declares no Provider state Volume and mounts none - its bounded non-secret operational state lives in `status`/the core Operation ledger (§5.1, D087) and running units are re-adopted from core-reported observations on restart",
       "entryContracts" : [
         "ADR-046-provider-system-minijail"
       ],
@@ -16272,9 +16272,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`Provider/device-usbip` owns one relay Process/Endpoint authority per Network plus the typed EffectPort adapter for the shared closed `ApplyNftablesProjection` request with closed action enum `Apply|Remove` (D124; the shipped `UsbipBindFirewallRule`/`bind_firewall_rule` op has no release path, so its `Remove` is net-new privileged surface). The controller watches only the `networkRef` resource's identity/readiness/generation; Core privately resolves Network UID to relay attachment and firewall intent. Network spec/status is not mutated with USBIP fields. Full crate layout required for `packages/d2b-provider-device-usbip/` (see [Package and crate boundary](#package-and-crate-boundary)): `src/` (controller and usbip runner + unit tests), `tests/` (hermetic conformance, dependency-watch state machine, `ApplyNftablesProjection` `Apply|Remove` round-trip), `integration/` (Host/Guest USBIP attach/detach lifecycle fixtures), `README.md` (Provider identity, provider-neutral USB Service/Binding types, USBIP Processes/Endpoints, Network least-privilege dependency contract, RBAC, security invariants, standalone-repo path)."
+        "`Provider/device-usbip` owns one relay Process/Endpoint authority per Network and calls the typed UsbipEffectPort for the shared closed `ApplyNftablesProjection` request with closed action enum `Apply|Remove`; Core owns the corresponding effect adapter (D124; the shipped `UsbipBindFirewallRule`/`bind_firewall_rule` op has no release path, so its `Remove` is net-new privileged surface). The controller watches only the `networkRef` resource's identity/readiness/generation; Core privately resolves Network UID to relay attachment and firewall intent. Network spec/status is not mutated with USBIP fields. Full crate layout required for `packages/d2b-provider-device-usbip/` (see [Package and crate boundary](#package-and-crate-boundary)): `src/` (controller and usbip runner + unit tests), `tests/` (hermetic conformance, dependency-watch state machine, `ApplyNftablesProjection` `Apply|Remove` round-trip), `integration/` (Host/Guest USBIP attach/detach lifecycle fixtures), `README.md` (Provider identity, provider-neutral USB Service/Binding types, USBIP Processes/Endpoints, Network least-privilege dependency contract, RBAC, security invariants, standalone-repo path)."
       ],
-      "detailedDesign" : "Device-usbip's typed EffectPort is the sole semantic owner of every USBIP TCP/3240 rule. Its Core adapter resolves the opaque per-Network/per-busid intent and issues the shared `ApplyNftablesProjection` request with action `Apply` for apply and `Remove` for release (D124); the shipped `UsbipBindFirewallRule`/`bind_firewall_rule` op exposes only bind and no release, so this release path is net-new privileged surface delivered by `ApplyNftablesProjection { action: Remove }`. `Remove` is generation-bound, ownership-scoped, idempotent after validated absence, and foreign-marker fail-closed. The controller retains firewall token/status and the relay authority reference until the broker confirms `Remove`; its strict provider status owns firewall digest/drift. Network-local emits no generic host or net-VM TCP/3240 allow and ignores device-usbip ownership markers in Network drift. The device Provider owns exactly one multiplexed relay Endpoint authority per Network and supplies Binding proxies only authorized connected streams through LaunchTickets. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "The device-usbip controller is the sole semantic owner of every USBIP TCP/3240 rule and requests changes only through its injected UsbipEffectPort. The Core adapter resolves the opaque per-Network/per-busid intent and issues the shared `ApplyNftablesProjection` request with action `Apply` for apply and `Remove` for release (D124); the shipped `UsbipBindFirewallRule`/`bind_firewall_rule` op exposes only bind and no release, so this release path is net-new privileged surface delivered by `ApplyNftablesProjection { action: Remove }`. `Remove` is generation-bound, ownership-scoped, idempotent after validated absence, and foreign-marker fail-closed. The controller retains firewall token/status and the relay authority reference until the core adapter reports broker confirmation of `Remove`; its strict provider status owns firewall digest/drift. Network-local emits no generic host or net-VM TCP/3240 allow and ignores device-usbip ownership markers in Network drift. The device Provider owns exactly one multiplexed relay Endpoint authority per Network and supplies Binding proxies only authorized connected streams through LaunchTickets. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resources-network"
       ],
@@ -22196,7 +22196,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (launch algorithm via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + test double), `src/adoption.rs` (adoption algorithm), `src/sandbox.rs` (SandboxSpec → unit property compiler)"
+        "`packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor"
       ],
       "detailedDesign" : "Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [

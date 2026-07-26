@@ -297,7 +297,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-gpu.md",
-      "sha256" : "3b1678c8c5b49cd800d35ae1af504054fb6852e6b0b0e785c0c585710ba84ae9",
+      "sha256" : "977329fe5f99595aa62030e3fc05472a34d541cd1bbf437acab4cdc60c0592b7",
       "specId" : "ADR-046-provider-device-gpu",
       "status" : "Accepted",
       "supersedes" : "`ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` in `packages/d2b-core/src/processes.rs`; Nix `nixos-modules/components/graphics.nix`; Nix `nixos-modules/components/video/guest.nix`; `d2b.vms.<vm>.graphics.*` options",
@@ -342,7 +342,7 @@
         "ADR-046-resources-volume"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-device-tpm.md",
-      "sha256" : "1d10253519f4895362f615cbcf23f5cff669bab0a6630b256fa213786cb4ee52",
+      "sha256" : "d4bf65a8177bbce0551ad3c1ebb9fc943afa9d5b32d367707816387e56a86cb3",
       "specId" : "ADR-046-provider-device-tpm",
       "status" : "Accepted",
       "supersedes" : "Current `nixos-modules/components/tpm.nix` swtpm provisioning and `d2b-priv-broker` swtpm-dir hardening path",
@@ -429,7 +429,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-network-local.md",
-      "sha256" : "b30e559333b51b2d3a1610f9a7273b73064389ef1b603d1c60912e4cc43aa620",
+      "sha256" : "955e02bfbce74385176213b20d5e7f4bc44ab6a70c81290fb8031d735a8fa71d",
       "specId" : "ADR-046-provider-network-local",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",
@@ -548,7 +548,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
-      "sha256" : "bbce68632838b690475da4c99d73c71eca9bb1ca5f418e44b84488ba8e8f01b0",
+      "sha256" : "8e1ca642566faa35bc5771a3f4ff783b4dee70b0a3f3e429109e7d9b4e564e46",
       "specId" : "ADR-046-provider-runtime-cloud-hypervisor",
       "status" : "Accepted",
       "supersedes" : "`packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op",
@@ -666,7 +666,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-minijail.md",
-      "sha256" : "c6d5684a84dbc3d33eedaa641021bd63c7c4e4e4cc6c57d1d8271b63bfce84a4",
+      "sha256" : "ea91002b09aa1f174018fdd44110292564dce0ef406d3743669700a4d9d1756c",
       "specId" : "ADR-046-provider-system-minijail",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-priv-broker` SpawnRunner, `d2b-core` minijail profile, and `d2bd` supervisor pidfd/wait paths for minijail-spawned processes",
@@ -686,7 +686,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-system-systemd.md",
-      "sha256" : "d7daa1c021a15d4ffa57e1367b6bc5cbca86568b9d95862cc496e2b817bf78ca",
+      "sha256" : "e84688d2dfc0dd30999767989295629431245cab5c74f24bacfb165fbe8c222b",
       "specId" : "ADR-046-provider-system-systemd",
       "status" : "Accepted",
       "supersedes" : "Current `d2b-unsafe-local-helper` systemd scope runtime; current `d2bd` `supervisor/` VM process management; broker `SpawnRunner` (systemd-owned roles)",
@@ -795,7 +795,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-virtiofs.md",
-      "sha256" : "af97b5fc868900d98c28a811cd290e88012d81e0b4e6f140516524be4b7a7b0f",
+      "sha256" : "4603c0c6a797269cbd367837c7c6bbf694dd6c8c4d3cc10d14323aeda5f01b9b",
       "specId" : "ADR-046-provider-volume-virtiofs",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/supervisor/dag.rs`",
@@ -933,7 +933,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-resources-device.md",
-      "sha256" : "57e41ac28984e4a7a45fc79a9b677cbda2ebc0b39a93c5edb4c7675341906bb4",
+      "sha256" : "b41ab26582ea0eea1ec9d37d9a3e25cd3940046427689e120faeac31ebbf2412",
       "specId" : "ADR-046-resources-device",
       "status" : "Accepted",
       "supersedes" : "Current ProcessRole device sidecars (Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video) and their Nix components",
@@ -955,7 +955,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-host-guest-process-user.md",
-      "sha256" : "350b7bed80bbcf14bc1afd32f0505716ff529b24b4bdf8561831bd051e60f797",
+      "sha256" : "1be81b58f02dafc85258bc4c98fd40d7a142464024b5c5f039bc4c56bb1b3333",
       "specId" : "ADR-046-resources-host-guest-process-user",
       "status" : "Accepted",
       "supersedes" : "Current `ProcessRole`/`VmProcessDag` as the public process model; current Realm workload/unsafe-local/execution DTOs; `WorkloadProviderKind`/`IsolationPosture` posture enums",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "c6b9b933167a90fc2559eace807d12cfda52beaa5570a55d952947222815837e",
+      "sha256" : "5120ee38ebf514b93c257102b3c46410b50984438084bbe0a0a6d54177026d25",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -1080,7 +1080,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-security-and-threat-model.md",
-      "sha256" : "a6a3ded1a448b1fe7e8863b46c3d03f5cee353bf83123a50de722a0810f5f69c",
+      "sha256" : "676bb12e4d7207cad359b5e592ab0a5a261bdb246bfc75e6811c451cf7a0602a",
       "specId" : "ADR-046-security-and-threat-model",
       "status" : "Accepted",
       "supersedes" : null,

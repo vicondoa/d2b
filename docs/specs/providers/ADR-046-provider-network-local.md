@@ -1563,10 +1563,11 @@ When `spec.externalAttachment` is non-null:
 2. Core resolves the Network→Guest owner relationship and supplies the admitted
    attachment through the private dependency resolver and LaunchTicket. The
    controller does not copy `parentInterface` or an authority key into Guest
-   spec. `Provider/runtime-cloud-hypervisor` calls the broker's `SpawnRunner`
-   path, and the broker creates the macvtap FD internally
-   (`live_create_macvtap_fd` in `d2b-priv-broker/src/runtime.rs`) as part of VMM
-   spawn dispatch.
+   spec. `Provider/runtime-cloud-hypervisor` requests the opaque VMM launch
+   through its injected ProcessEffectPort. The core effect adapter privately
+   dispatches the broker's `SpawnRunner` operation, and the broker creates the
+   macvtap FD internally (`live_create_macvtap_fd` in
+   `d2b-priv-broker/src/runtime.rs`) before core supplies it in the LaunchTicket.
 3. Port-forward DNAT rules are written to `nftables.rules` by the controller and
    applied by the net-agent inside the net VM.
 

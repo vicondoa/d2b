@@ -425,12 +425,13 @@ After three consecutive failures the full consequence chain fires:
 
 ## Security model
 
-### Broker effect limits
+### DeviceEffectPort and broker effect limits
 
-The Device Provider is a Process under a Host. It interacts with the Zone
-privileged broker for operations that require root:
+The Device Provider is a Process under a Host. It requests operations that
+require root only through an injected DeviceEffectPort. Core adapters map those
+opaque requests to the Zone privileged broker:
 
-| Provider | Broker operation | Effect | Audit |
+| Provider semantic owner | Core-adapter broker operation | Effect | Audit |
 | --- | --- | --- | --- |
 | `device-tpm` | `PrepareStateDir` (via `PrepareRuntimeDir`/`PrepareSwtpmDir` broker hook) | Provision/harden swtpm state dir, verify tamper marker | Yes |
 | `device-tpm` | `SpawnRunner` (swtpm role) | Spawn swtpm Process in user namespace | Yes |
@@ -441,8 +442,9 @@ privileged broker for operations that require root:
 | `device-gpu` | `SpawnRunner` (gpu/gpu-render-node/video role) | Spawn crosvm GPU or video-decoder Process | Yes |
 | `device-gpu` | `OpenDevice` (kvm/dri/udmabuf/nvidia*) | Open GPU device fds in user namespace pre-spawn | Yes |
 
-No Device Provider receives a blanket device-path grant, raw socket address, or
-ambient host capability. Broker operations are point-specific and audit-logged.
+No Device Provider receives a broker connection, blanket device-path grant, raw
+socket address, or ambient host capability. Core-adapter broker operations are
+point-specific and audit-logged.
 
 ### Security key specific invariants
 
@@ -937,9 +939,11 @@ spec:
 ```
 
 The relay process:
-- Runs unprivileged; receives the hidraw fd from the broker via SCM_RIGHTS.
+- Runs unprivileged; receives the hidraw fd only in its LaunchTicket after the
+  controller requests the opaque operation through DeviceEffectPort and the
+  core effect adapter obtains the fd from the broker.
 - Proxies raw CTAP HID packets to the Guest frontend over AF_VSOCK.
-- Has no further broker access.
+- Has no broker access.
 - Restarts on disconnect; clears its lease on clean exit.
 
 **Current implementation note:** In the v3 baseline the relay is NOT a separate
@@ -1125,10 +1129,12 @@ Provider dossier. Current v3 OS-level process principal names (`d2b-{vm}-gpu`,
 the process identity at the OS layer; they are distinct from the Process resource
 name. VM or Guest human names never appear in Process resource names.
 
-### Device claims and broker tokens
+### Device claims and core-resolved broker tokens
 
-The GPU Device broker token set (from `bundle_resolver.rs` ProcessRole::Gpu
-exact comment):
+The Device Provider declares only semantic `deviceUsage` classes. Core resolves
+them to the following private GPU broker token set (from
+`bundle_resolver.rs` ProcessRole::Gpu exact comment); the set never enters the
+Provider process:
 
 - `kvm`, `dri`, `nvidia-ctl`, `nvidia-uvm`, `nvidia-render`, `udmabuf`.
 - `nvidia-ctl`, `nvidia-uvm`, `nvidia-render` are included only when
@@ -1232,13 +1238,18 @@ No Role grants wildcard `*` over all Device resources. Provider controllers
 have bounded RoleBinding scopes that cover only the Device types and names
 matching their provisioned resource set.
 
-## Broker effect limits
+## Core effect-adapter and broker limits
 
-All Device Provider broker operations are subject to:
+Device Providers request opaque operations through injected DeviceEffectPort
+traits. Core effect adapters privately map those requests to the broker
+operations below; no Provider process imports broker DTOs, connects to the
+broker, or receives its socket. The adapter and broker path is subject to:
 
 - Audit-logged (no broker op without an audit record).
-- Point-specific: no device Provider receives a blanket device-path grant.
-- One broker connection per Provider process; FDs returned over SCM_RIGHTS.
+- Point-specific: no Device Provider receives a device path or blanket
+  device-path grant.
+- Broker connections are core-owned; an fd returned over SCM_RIGHTS is placed
+  only in the exact worker's LaunchTicket.
 - Broker validates all inputs against the trusted bundle before any effect.
 - No inline path, raw device node string, or capability byte crosses the
   public or broker wire.
@@ -1928,7 +1939,7 @@ Each Provider crate's `tests/` directory; run with `cargo test -p d2b-provider-d
 
 | Crate | Tests |
 | --- | --- |
-| `d2b-provider-device-tpm/tests/` | `controller_state_machine.rs` - flush→swtpm→Ready cycle with fake broker; `conformance.rs` - spec/status serde vs ResourceTypeSchema; `fault_swtpm_missing.rs` - swtpm absent → phase Degraded |
+| `d2b-provider-device-tpm/tests/` | `controller_state_machine.rs` - flush→swtpm→Ready cycle with fake TpmEffectPort; `conformance.rs` - spec/status serde vs ResourceTypeSchema; `fault_swtpm_missing.rs` - swtpm absent → phase Degraded |
 | `d2b-provider-device-usbip/tests/` | `arbitration_conflict.rs` - second-claim rejects; `conformance.rs` - spec/settings serde; `firewall_marker.rs` - ownership marker preserved in rule; `explicit_attach_split.rs` - EphemeralProcess bind vs declared Process |
 | `d2b-provider-device-security-key/tests/` | `lease_state_machine.rs` - full acquire/cancel/expire cycle; `session_ring.rs` - ring wrap and eviction; `mutual_exclusion.rs` - USBIP+SK resolve the same token to an identical Core-derived physical backing tuple and the second claimant fails before effects; `conformance.rs` - spec/status serde; `guest_frontend_process.rs` - frontend Process resource fields |
 | `d2b-provider-device-gpu/tests/` | `combined_reconcile.rs` - gpu+video combined state machine; `render_node_enforcement.rs` - shared+renderNodeOnly=false rejected; `wire_constant_snapshot.rs` - byte-stable wire-contract constants; `conformance.rs` - spec/settings serde |
@@ -1969,14 +1980,14 @@ Provider they test:
 | `d2b-provider-device-tpm/integration/` | `provision_and_reboot/` - full TPM provision → Guest boot → reboot cycle; `tamper_marker_survives/` - marker present after Provider restart; `finalizer_no_delete/` - Volume not deleted on Device finalizer |
 | `d2b-provider-device-usbip/integration/` | `arbitration_conflict/` - second Host claim rejected at runtime; `busid_bind_cycle/` - full modprobe→lock→withhold→firewall→bind→proxy bringup; `network_firewall_coexistence/` - Provider firewall rule does not clobber Network rules |
 | `d2b-provider-device-security-key/integration/` | `lease_acquire_cancel/` - full acquire → cancel → re-acquire cycle; `session_ring_capacity/` - ring wraps correctly under real vsock load; `guest_frontend_connect/` - Guest frontend Process connects and authenticates over AF_VSOCK |
-| `d2b-provider-device-gpu/integration/` | `gpu_worker_start/` - GPU worker Process obtains broker tokens and becomes Ready; `render_node_shared/` - two Guests share render-node Device simultaneously; `video_dependency/` - video-decoder Process starts only after gpu worker Process is Ready |
+| `d2b-provider-device-gpu/integration/` | `gpu_worker_start/` - GPU worker Process receives only its LaunchTicket device grants and becomes Ready; `render_node_shared/` - two Guests share render-node Device simultaneously; `video_dependency/` - video-decoder Process starts only after gpu worker Process is Ready |
 
 ### Feasibility proofs
 
-- Device reconcile state machine with fake supervisor and broker.
+- Device reconcile state machine with fake supervisor and injected EffectPort.
 - Security-key relay process with fake hidraw fd and fake vsock Guest.
-- swtpm flush → start EphemeralProcess ordering with fake broker.
-- GPU worker process broker token set verification.
+- swtpm flush → start EphemeralProcess ordering with a fake EffectPort.
+- GPU worker LaunchTicket device-grant verification.
 - Generation cleanup: fake Zone runtime with two Devices; remove one from
   config; assert only the `managedBy=configuration` stale resource receives DeleteRequest;
   assert controller-created child is not touched; assert Zone stays operational.
@@ -2002,7 +2013,7 @@ integration is live and all current tests pass against the new resource model.
 | --- | --- |
 | Current anchor | **Process/DAG**: `packages/d2b-core/src/processes.rs` (ProcessRole enum: Swtpm, SwtpmPreStartFlush, Usbip, SecurityKeyFrontend, Gpu, GpuRenderNode, Video; VmProcessDag/VmProcessInvariants structs - old Workload DAG names); `packages/d2b-core/src/bundle_resolver.rs` (process exec names, device token sets, USBIP intents); `packages/d2b-host/src/swtpm_argv.rs`, `gpu_argv.rs`, `video_argv.rs`; **swtpm state**: `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`; **Contracts/broker ops**: `packages/d2b-contracts/src/security_key.rs`, `usbip.rs`, `broker_wire.rs`; `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation enum: SecurityKeyOpenDevice, SecurityKeyApplyUdevRules, UsbipBindFirewallRule); **Security-key relay (daemon-internal)**: `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED auth, hidraw async fd, accept loop, lease; lives inside d2bd, NOT a separate spawned process); `packages/d2bd/src/lib.rs:10456` (`start_sk_accept_loop` - ProcessRole::SecurityKeyFrontend is handled as a daemon-internal coroutine: broker fetches hidraw fd, daemon binds vsock-proxy socket, spawns async accept loop); **Guest binary**: `packages/d2b-sk-frontend/src/` (static binary for in-guest UHID virtual HID device; connects over AF_VSOCK to the daemon accept loop; NOT related to the ProcessRole name); **USBIP state machine**: `packages/d2bd/src/usbip_state_machine.rs` (typed per-busid bring-up plan and executor; canonical step order: modprobe→lock→withhold→firewall→backend→bind→proxy); `packages/d2bd/src/usbip_reconcile_state.rs` (restart-safe reconciler state model; internal to daemon, not yet wired to reconciler); `packages/d2bd/src/usbipd_perenv_autostart.rs` (per-env usbipd daemon autostart via broker SpawnRunner, retiring legacy systemd units in `nixos-modules/network.nix`); **Workload/Realm capability surface (old names)**: `packages/d2b-realm-core/src/capability.rs` (old Realm Capability enum: GpuAccel, Usb, Hid, Hotplug - current inter-Realm device capability assertion, target maps to Device ResourceType claims); `packages/d2b-realm-core/src/stream.rs` (StreamKind::DeviceHid → Capability::Hid, StreamKind::DeviceUsb → Capability::Usb); `packages/d2bd/src/realm_access_resolver.rs` (maps old Workload ops: `ops.media.usb_hotplug` → Capability::Usb + Capability::Hotplug, `ops.display.graphics` → Capability::GpuAccel); **Workload manifest (old name)**: `packages/d2b-core/src/manifest_v04.rs` VmEntry fields: `tpm: bool`, `usbip_yubikey: bool`, `security_key: bool`, `graphics: bool`, `gpu_socket: Option<String>` (per-Workload device-enable flags in the v04 manifest; these are the current per-VM device declarations); **Runtime capability surface**: `packages/d2b-core/src/runtime.rs` (RuntimeServiceRole enum maps ProcessRoles to public roles: Tpm←Swtpm/SwtpmPreStartFlush, Display←Gpu/GpuRenderNode, Video←Video, Usb←Usbip+SecurityKeyFrontend; RuntimeMediaCapabilities: `usb_hotplug`; RuntimeDisplayCapabilities: `graphics`/`video`); **Nix options (old Workload namespace)**: `nixos-modules/options-realms-workloads.nix` (`d2b.vms.<vm>.tpm.enable`, `d2b.vms.<vm>.graphics.enable` - current Nix Workload device options; v3 target is `d2b.zones.<zone>.resources.<name> = { type = "Device"; ... }`); `nixos-modules/components/tpm.nix`, `usbip.nix`, `security-key-guest.nix`, `video/guest.nix`, `graphics.nix` |
 | Evidence class | ProcessRole enum (ProcessRole, VmProcessDag): **implemented-and-reachable**. swtpm/gpu/video argv generators: **implemented-and-reachable**. swtpm_dir hardening and tamper marker: **implemented-and-reachable**. Security-key broker ops DTOs (`security_key.rs`, `broker_wire.rs` W3BrokerOperation): **implemented-and-reachable** (NOT unwired stubs - the full CTAPHID relay runs in `packages/d2bd/src/security_key.rs` and `packages/d2bd/src/lib.rs:start_sk_accept_loop`). USBIP state machine (`usbip_state_machine.rs`): **implemented-and-reachable**. USBIP reconcile state model (`usbip_reconcile_state.rs`): **implemented-but-unwired** (future restart-safe reconciler, internal state model). USBIP per-env autostart (`usbipd_perenv_autostart.rs`): **implemented-and-reachable**. Realm Capability enum (GpuAccel/Usb/Hid/Hotplug): **implemented-and-reachable** (old Workload/Realm names; in-process capability assertion). StreamKind::DeviceHid/DeviceUsb: **implemented-and-reachable**. realm_access_resolver.rs (Workload ops → Capabilities): **implemented-and-reachable**. manifest_v04.rs VmEntry device fields: **generated-or-eval-contract** (bundle/manifest-driven per-Workload flags). runtime.rs RuntimeServiceRole/RuntimeCapabilities: **implemented-and-reachable** (current public service role and capability surface). d2b-sk-frontend guest binary: **implemented-and-reachable** (guest static binary, not a Zone Process). Nix options-realms-workloads.nix device options: **generated-or-eval-contract**. Device ResourceType schema: **ADR-only**. Provider crates (d2b-provider-device-*): **ADR-only**. |
-| Behavior retained | Swtpm user-namespace/zero-host-caps (ADR 0021), tamper-marker/fail-closed, umask=7 socket ACL; GPU broker token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; USBIP bus ID validation; security-key hidraw-only broker access; eval-time mutual-exclusion assertions |
+| Behavior retained | Swtpm user-namespace/zero-host-caps (ADR 0021), tamper-marker/fail-closed, umask=7 socket ACL; core-resolved GPU broker token set (kvm/dri/udmabuf/nvidia*); video wire-contract constants frozen; USBIP bus ID validation; broker-opened security-key hidraw fd supplied only through the relay LaunchTicket; eval-time mutual-exclusion assertions |
 | Required delta | Device ResourceType schema, four Provider crates, controller reconcile loops, RBAC roles, hot-plug observe interval, Guest frontend Process resolution, consolidated process name templates |
 | Reuse path | Extract swtpm_argv.rs, swtpm_dir.rs, gpu_argv.rs, video_argv.rs unmodified into device-tpm/device-gpu crates. Adapt security_key.rs DTOs with Zone ResourceRef identifiers. Adapt usbip.rs with v3 enum changes. Copy ProcessRole disposition table verbatim into Provider dossiers. |
 | Replacement/deletion | ProcessRole enum variants are retained until Provider successor crates reach integration parity; Nix components retained until v3 Guest Nix emitters replace them |
@@ -2086,9 +2097,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | Dependency/owner | ADR046-device-001; device-tpm provider owner |
 | Current source | `packages/d2b-host/src/swtpm_argv.rs`; `packages/d2b-priv-broker/src/ops/swtpm_dir.rs`; `nixos-modules/components/tpm.nix` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-device-tpm/src/` (controller, swtpm runner, state-dir logic); `packages/d2b-provider-device-tpm/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-tpm/integration/` (container/Host scenarios); `packages/d2b-provider-device-tpm/README.md` |
+| Destination | `packages/d2b-provider-device-tpm/src/` (controller, swtpm runner, opaque state-dir intent validation); `packages/d2b-provider-device-tpm/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-tpm/integration/` (container/Host scenarios); `packages/d2b-provider-device-tpm/README.md` |
 | Detailed design | Device spec/status; flush EphemeralProcess → swtpm Process sequencing; state-dir hardening; tamper-marker; finalizer non-deletion of Volume; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Zone resource store; Process controller; Volume lifecycle |
+| Integration | Zone resource store; Process controller; Volume lifecycle; injected DeviceEffectPort mapped by the core adapter to broker-owned state-directory hardening and runner launch |
 | Data migration | State dir and tamper markers preserved across reset |
 | Validation | `src/`: swtpm argv golden, state-dir, flush sequencing, finalizer no-delete; `tests/`: `controller_state_machine.rs`, `conformance.rs`, `fault_swtpm_missing.rs`; `integration/`: `provision_and_reboot/`, `tamper_marker_survives/`, `finalizer_no_delete/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Swtpm and SwtpmPreStartFlush removed after parity |
@@ -2102,7 +2113,7 @@ error listing the missing paths. There is no opt-out mechanism.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-usbip/src/` (controller, daemon Process, bind/unbind EphemeralProcess, firewall); `packages/d2b-provider-device-usbip/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-usbip/integration/` (container/Host scenarios); `packages/d2b-provider-device-usbip/README.md` |
 | Detailed design | Device spec/status; bus ID validation; firewall rule ownership-marker; bind/unbind EphemeralProcess; per-Device daemon Process (owned by device-usbip; Network supplies dependency/firewall interface); Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Zone resource store; broker `ApplyNftablesProjection { action: Apply \| Remove }` (D-NETWORK-004); nftables marker |
+| Integration | Zone resource store; injected DeviceEffectPort mapped by the core adapter to broker `ApplyNftablesProjection { action: Apply \| Remove }` (D-NETWORK-004); nftables marker |
 | Data migration | None; full reset |
 | Validation | `src/`: bus ID corpus, firewall marker format, EphemeralProcess creation; `tests/`: `arbitration_conflict.rs`, `conformance.rs`, `firewall_marker.rs` (covering the `ApplyNftablesProjection` `Apply|Remove` projection contract, concurrent same-projection apply serialized by the ordered `inet d2b` OFD lock with idempotent convergence, concurrent independent release, and byte-preservation of sibling network-local and device-usbip markers with no whole-table replace), `explicit_attach_split.rs`; `integration/`: `arbitration_conflict/`, `busid_bind_cycle/`, `network_firewall_coexistence/` (asserting a network-local marker survives USBIP apply and release); workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Usbip removed after parity |
@@ -2115,8 +2126,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Current source | `packages/d2b-contracts/src/security_key.rs` (DTOs - implemented-and-reachable); `packages/d2b-core/src/privileges_w3.rs` (W3BrokerOperation - implemented-and-reachable); **KEY: relay is in d2bd** - `packages/d2bd/src/security_key.rs` (CTAPHID relay: CID translation, SO_PEERCRED, hidraw async fd, accept loop - implemented-and-reachable) and `packages/d2bd/src/lib.rs:start_sk_accept_loop` (ProcessRole::SecurityKeyFrontend dispatch - implemented-and-reachable); **guest binary**: `packages/d2b-sk-frontend/src/` (static UHID frontend - implemented-and-reachable); old Workload Nix option: `nixos-modules/options-realms-workloads.nix` `d2b.vms.<vm>.security_key.*`; `nixos-modules/components/security-key-guest.nix` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-security-key/src/` (controller, relay Process, guest frontend Process, lease/session ring); `packages/d2b-provider-device-security-key/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-security-key/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-security-key/README.md` |
-| Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); broker hidraw-only access; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Zone resource store; broker `SecurityKeyOpenDevice`/`SecurityKeyApplyUdevRules`; Guest frontend module |
+| Detailed design | Device spec/status; unprivileged relay Process (`device-<uid-short>-sk-relay`); guest frontend Process (`device-<uid-short>-sk-frontend`, `executionRef: Guest/<vm>`); ceremony/CID/lease/session ring (max 1 session per Device); opaque hidraw effect request through DeviceEffectPort, with the core adapter placing the broker-returned fd only in the relay LaunchTicket; mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared with every USB Provider before effects; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Integration | Zone resource store; injected DeviceEffectPort mapped by the core adapter to broker `SecurityKeyOpenDevice`/`SecurityKeyApplyUdevRules`; Guest frontend module |
 | Data migration | None; full reset |
 | Validation | `src/`: lease transitions, session ring eviction, broker op path-free, CID round-trip; `tests/`: `lease_state_machine.rs`, `session_ring.rs`, `mutual_exclusion.rs` proves security-key and USB implementations resolve one token to a byte-identical physical backing key and the loser receives `physical-usb-backing-conflict` before any effect, `conformance.rs`, `guest_frontend_process.rs`; `integration/`: `lease_acquire_cancel/`, `session_ring_capacity/`, `guest_frontend_connect/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::SecurityKeyFrontend removed after parity |
@@ -2128,9 +2139,9 @@ error listing the missing paths. There is no opt-out mechanism.
 | Dependency/owner | ADR046-device-001; device-gpu provider owner |
 | Current source | `packages/d2b-host/src/gpu_argv.rs`, `video_argv.rs`; `packages/d2b-core/src/bundle_resolver.rs` Gpu/GpuRenderNode/Video; `nixos-modules/components/graphics.nix`, `video/guest.nix` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-device-gpu/src/` (controller, GPU/render-node/video worker Processes, broker token set); `packages/d2b-provider-device-gpu/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-gpu/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-gpu/README.md` |
-| Detailed design | Combined Device spec/status; GPU worker Process (`device-<uid-short>-gpu`, exclusive); render-node Process (`device-<uid-short>-render-node`, exclusive default, shared when explicit); video-decoder Process (`device-<uid-short>-video`); broker token set; wire-contract constants; shared render-node arbitration enforcement; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Zone resource store; broker `SpawnRunner`/`OpenDevice`; Display Provider device consumption |
+| Destination | `packages/d2b-provider-device-gpu/src/` (controller, GPU/render-node/video worker Processes, opaque effect-token set); `packages/d2b-provider-device-gpu/tests/` (hermetic Cargo integration); `packages/d2b-provider-device-gpu/integration/` (container/Host/Guest scenarios); `packages/d2b-provider-device-gpu/README.md` |
+| Detailed design | Combined Device spec/status; GPU worker Process (`device-<uid-short>-gpu`, exclusive); render-node Process (`device-<uid-short>-render-node`, exclusive default, shared when explicit); video-decoder Process (`device-<uid-short>-video`); opaque effect-token set resolved only by the core DeviceEffectPort adapter; wire-contract constants; shared render-node arbitration enforcement; Nix emitter; all four required crate paths present (see "Provider crate layout") Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Integration | Zone resource store; injected DeviceEffectPort mapped by the core adapter to broker `SpawnRunner`/`OpenDevice`; Display Provider device consumption |
 | Data migration | None; full reset |
 | Validation | `src/`: process role selection, wire-constant snapshot, render-node vs full-GPU branching; `tests/`: `combined_reconcile.rs`, `render_node_enforcement.rs`, `wire_constant_snapshot.rs`, `conformance.rs`; `integration/`: `gpu_worker_start/`, `render_node_shared/`, `video_dependency/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Gpu, GpuRenderNode, Video removed after parity |
