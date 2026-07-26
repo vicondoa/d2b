@@ -1,6 +1,7 @@
 //! Path-safe filtering for diagnostics that must reach operator stderr.
 
 use std::{
+    collections::VecDeque,
     env, fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -8,7 +9,7 @@ use std::{
 };
 
 const DEFAULT_TAIL_LINES: usize = 20;
-const MAX_DIAGNOSTIC_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RedactionError(&'static str);
@@ -200,6 +201,49 @@ fn tail_lines(input: &str, count: usize) -> String {
     tail
 }
 
+fn read_diagnostic_tail(mut input: impl Read) -> Result<(Vec<u8>, u64), RedactionError> {
+    let mut tail = VecDeque::with_capacity(MAX_DIAGNOSTIC_BYTES);
+    let mut buffer = [0u8; 8192];
+    let mut total_bytes = 0u64;
+    let mut last_dropped = None;
+
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|_| RedactionError("cannot read the diagnostic input"))?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes.saturating_add(read as u64);
+        let overflow = tail
+            .len()
+            .saturating_add(read)
+            .saturating_sub(MAX_DIAGNOSTIC_BYTES);
+        for _ in 0..overflow {
+            last_dropped = tail.pop_front();
+        }
+        tail.extend(&buffer[..read]);
+    }
+
+    let mut tail: Vec<u8> = tail.into();
+    if let Some(last_dropped) = last_dropped
+        && !is_start_boundary(&[last_dropped], 1)
+    {
+        let boundary = tail
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| is_start_boundary(&tail, index + 1).then_some(index + 1));
+        match boundary {
+            Some(boundary) => {
+                tail.drain(..boundary);
+            }
+            None => tail.clear(),
+        };
+    }
+    let dropped_bytes = total_bytes.saturating_sub(tail.len() as u64);
+    Ok((tail, dropped_bytes))
+}
+
 fn parse_args(args: &[String]) -> Result<(PathBuf, Option<PathBuf>, usize), RedactionError> {
     let mut repo_root = None;
     let mut home = None;
@@ -249,20 +293,18 @@ fn filter(
 ) -> Result<(), RedactionError> {
     let (repo_root, home, tail) = parse_args(args)?;
     let redactor = DiagnosticRedactor::new(&repo_root, home.as_deref())?;
-    let mut bytes = Vec::new();
-    input
-        .by_ref()
-        .take(MAX_DIAGNOSTIC_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| RedactionError("cannot read the diagnostic input"))?;
-    if bytes.len() as u64 > MAX_DIAGNOSTIC_BYTES {
-        return Err(RedactionError(
-            "diagnostic input exceeds the safe size limit",
-        ));
-    }
+    let (bytes, dropped_bytes) = read_diagnostic_tail(input.by_ref())?;
     let diagnostic =
         std::str::from_utf8(&bytes).map_err(|_| RedactionError("diagnostic input is not UTF-8"))?;
     let redacted = tail_lines(&redactor.redact(diagnostic), tail);
+    if dropped_bytes > 0 {
+        writeln!(
+            output,
+            "diagnostic truncated: dropped {dropped_bytes} byte(s) from the beginning; \
+             showing the redacted tail"
+        )
+        .map_err(|_| RedactionError("cannot write the redacted diagnostic"))?;
+    }
     output
         .write_all(redacted.as_bytes())
         .map_err(|_| RedactionError("cannot write the redacted diagnostic"))
@@ -364,5 +406,38 @@ mod tests {
         let mut output = Vec::new();
         assert!(filter(&args, &b"/home/alice/private"[..], &mut output).is_err());
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn oversized_input_emits_a_redacted_tail_and_truncation_notice() {
+        let scratch = Scratch::new("oversized");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let args = vec![
+            "--repo-root".to_owned(),
+            repo.display().to_string(),
+            "--tail-lines".to_owned(),
+            "2".to_owned(),
+        ];
+        let mut input = vec![b'x'; MAX_DIAGNOSTIC_BYTES + 128];
+        input.push(b'\n');
+        input.extend(format!("error: {}/src/tail.rs\n", repo.display()).bytes());
+        let expected_dropped = MAX_DIAGNOSTIC_BYTES + 129;
+        let mut output = Vec::new();
+
+        filter(&args, input.as_slice(), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(&format!(
+                "diagnostic truncated: dropped {expected_dropped} byte(s)"
+            )),
+            "the truncation notice must quantify the discarded prefix: {output}"
+        );
+        assert!(
+            output.contains("error: <repo>/src/tail.rs"),
+            "the retained tail must remain useful and redacted: {output}"
+        );
+        assert!(!output.contains(repo.to_str().unwrap()));
     }
 }
