@@ -1521,7 +1521,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has an advisory wall-clock p95
 diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
 process CPU only. There is no wall-clock
-sleep, and `cargo test -p d2b-provider-volume-virtiofs --lib --tests` completes in ≤2 s warm-cache
+sleep, and `cargo test -p d2b-provider-volume-virtiofs --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
 and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM

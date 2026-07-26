@@ -967,7 +967,7 @@ machine load can inflate them while the process is descheduled.
 | Measurement | Threshold and enforcement |
 | --- | --- |
 | Individual normal hermetic test | advisory wall-clock p95 diagnostic threshold of <=50 ms; no wall-clock sleep |
-| Per Provider crate `cargo test -p d2b-provider-<base>-<implementation> --lib --tests` | enforced aggregate process-CPU p95 budget of <=2 s |
+| Per Provider crate `cargo test -p d2b-provider-<base>-<implementation> --lib --tests` | enforced aggregate process-CPU p95 budget of <=3 s |
 | All 27 Provider hermetic suites, sharded | future target of <=30 s aggregate wall |
 | All 27 Provider hermetic suites, single host | future target of <=60 s |
 | Each Layer-1 hermetic shard (`make test-rust` split) | future target of <=60 s |

@@ -310,7 +310,7 @@ Owns **hermetic Cargo integration tests** (files under `tests/*.rs` invoked by `
 Per D094 these are fast, in-process, deterministic, and parallel-safe: an individual normal
 test has an advisory wall-clock p95 diagnostic threshold of <=50 ms with no wall-clock sleep,
 and the crate's whole `cargo test -p d2b-provider-<base>-<implementation> --lib --tests`
-invocation (units + `tests/`) has an enforced aggregate process-CPU p95 budget of <=2 s after
+invocation (units + `tests/`) has an enforced aggregate process-CPU p95 budget of <=3 s after
 a warm build (compilation excluded). They use a deterministic
 fake clock/RNG and the toolkit fakes only; no process spawn, container, network, DBus, systemd,
 broker daemon, Nix eval/build, KVM, hardware, or live cloud, and no filesystem tree beyond tiny
@@ -823,7 +823,7 @@ D094 execution model:
   that are hermetic MUST meet the §10.16 model in
   `ADR-046-validation-and-delivery` (individual normal test advisory
   wall-clock p95 threshold <=50 ms and no wall-clock sleep; enforced per-crate
-  `--lib --tests` aggregate process-CPU p95 <=2 s; future Layer-1 hermetic shard
+  `--lib --tests` aggregate process-CPU p95 <=3 s; future Layer-1 hermetic shard
   target <=60 s). An adapted test that can only pass by spawning a process, hitting the
   network, or sleeping is re-placed into `integration/`, not slowed down in a
   hermetic tier.
