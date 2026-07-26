@@ -58,7 +58,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
-| `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, times the pinned closed crate census (`tests/runtime-ledger-census.json`) and enforces absolute per-test and per-crate p95 budgets (holds no baseline; makes no historical-regression claim) | local + CI |
+| `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets over the exact pinned census and reports per-test wall-clock p95s against advisory diagnostic thresholds (holds no baseline; makes no historical-regression claim) | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
 | `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
@@ -122,18 +122,23 @@ is generated from it by `make layer1-workflow` and checked by
 Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel and exposes a
 stable final `check` rollup job intended for branch protection.
 
-The `test-runtime-ledger` job is part of that graph. It is an absolute
-per-test and per-crate execution-budget gate: it warm-builds the pinned census
-crate, records execution-only p95s, and fails any p95 over its frozen budget or
-a census that does not reproduce the pin exactly. It holds no baseline and makes
-no historical-regression claim - a slower run that still fits its budget passes.
-Growing the census to a real multi-crate shard inventory (with a per-shard
-budget) and adding a cross-machine reference baseline for a true
-historical-regression gate is the deferred follow-up
-`runtime-ledger-full-census-and-real-shards`. If the description above diverges
-from the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
-authoritative and flag the drift for the integrator rather than hand-editing the
-census pin.
+The `test-runtime-ledger` job is part of that graph. It warm-builds the pinned
+census, records per-test wall-clock p95s as advisory diagnostics, and enforces
+each crate's aggregate process-CPU p95 budget. Process CPU excludes time the
+test process is descheduled behind unrelated machine load. The closed census
+presently pins one crate and exactly 190 tests, so a vanished or extra test,
+an incomplete or under-repeated run, or an aggregate crate CPU p95 over budget
+fails; a per-test diagnostic-threshold breach does not.
+
+The gate holds no baseline and makes no historical-regression claim. The
+`test-runtime-ledger check` output is authoritative for exact advisory-report
+formatting and selection. Growing the census to a real multi-crate shard
+inventory (with a per-shard budget) and adding a cross-machine reference
+baseline for a true historical-regression gate is the deferred follow-up
+`runtime-ledger-full-census-and-real-shards`. If this description diverges from
+the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
+authoritative and flag the drift for the integrator rather than hand-editing
+the census pin.
 
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a

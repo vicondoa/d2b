@@ -297,8 +297,9 @@ seal, and merge eligibility - applies to it unchanged.
 
 1. Every spec's work items assigned to this wave show `Validation` evidence
    satisfying §10's applicable matrix rows, imported per §12.2, including the
-   §10.16 runtime-ledger artifact showing every absolute hermetic budget met
-   (or a classified crypto/property exception).
+   §10.16 runtime-ledger artifact showing every enforced aggregate crate
+   process-CPU budget met, with the pinned test census complete and per-test
+   wall-clock diagnostics reported.
 2. The immutable candidate snapshot (§12.1) for this wave's integrated tree
    has all required CI, local, and host validator lanes reporting (pending is
    acceptable only while the PR is open, per §13; not at wave close).
@@ -958,26 +959,28 @@ or even to exist yet.
 
 The fast hermetic suite (`src/` `#[cfg(test)]` units and crate `tests/*.rs`)
 is the default inner loop, required on every change; all slower coverage
-lives only in `integration/`. Budgets below are **execution-only**, measured
-after build with a warm cache (compilation excluded) against the recorded
-reference runner, and enforced by the runtime ledger + timing gate - not by a
-new test framework.
+lives only in `integration/`. Measurements below exclude compilation. The
+runtime ledger enforces aggregate per-crate process CPU after a warm build;
+per-test libtest wall-clock p95s are advisory diagnostics because unrelated
+machine load can inflate them while the process is descheduled.
 
-| Budget | Threshold (warm cache, execution only) |
+| Measurement | Threshold and enforcement |
 | --- | --- |
-| Individual normal hermetic test | p95 ≤50 ms, no wall-clock sleep |
-| Per Provider crate `cargo test -p d2b-provider-<base>-<implementation> --lib --tests` | ≤2 s |
-| All 27 Provider hermetic suites, sharded | ≤30 s aggregate wall |
-| All 27 Provider hermetic suites, single host | ≤60 s |
-| Each Layer-1 hermetic shard (`make test-rust` split) | ≤60 s |
-| Classified bounded crypto/property exception | named per test; capped case count; declared higher per-test budget |
+| Individual normal hermetic test | advisory wall-clock p95 diagnostic threshold of <=50 ms; no wall-clock sleep |
+| Per Provider crate `cargo test -p d2b-provider-<base>-<implementation> --lib --tests` | enforced aggregate process-CPU p95 budget of <=2 s |
+| All 27 Provider hermetic suites, sharded | future target of <=30 s aggregate wall |
+| All 27 Provider hermetic suites, single host | future target of <=60 s |
+| Each Layer-1 hermetic shard (`make test-rust` split) | future target of <=60 s |
+| Classified bounded crypto/property exception | named per test; capped case count; declared higher advisory threshold |
 
-The runtime-ledger gate today enforces only the individual-test and
-per-crate rows above over its pinned closed census (presently a single
-crate). The multi-suite aggregate and per-shard rows are target budgets for
-the deferred follow-up `runtime-ledger-full-census-and-real-shards`, which
-grows the census to a real multi-crate shard inventory; the gate has no shard
-dimension until that lands.
+The runtime-ledger gate today enforces only the per-crate process-CPU row over
+its pinned closed census, presently `d2b-core` and exactly 190 test IDs. The
+per-test wall-clock row is advisory only. The exact pin makes a vanished or
+extra test fail rather than silently shrinking the measured set. The
+multi-suite aggregate and per-shard rows are targets for the deferred
+follow-up `runtime-ledger-full-census-and-real-shards`, which grows the census
+to a real multi-crate shard inventory; the gate has no shard dimension until
+that lands.
 
 **Placement rules (a violation must move, never gain a sleep/timeout/`#[ignore]`):**
 
@@ -997,12 +1000,14 @@ dimension until that lands.
 **Runtime ledger + timing gate.** A machine-readable test-runtime ledger and
 a timing gate reuse the existing `xtask`/Make tooling (no new top-level
 `tests/*.sh` gate): they record the reference runner, repetition count, and
-per-test/crate p95, enforce the absolute per-test and per-crate budgets above,
-report the top slow tests, and emit a CI artifact. The gate holds no baseline
-and makes no historical-regression claim - a slower run that still fits its
-budget passes - and there is no shard dimension today: growing the census to a
-real multi-crate shard inventory (with a per-shard budget) plus a genuine
-cross-machine reference baseline is the deferred follow-up
+per-test wall-clock and per-crate process-CPU p95s. Only aggregate crate
+process CPU is budget-enforced. Per-test wall-clock measurements are compared
+with diagnostic thresholds and remain advisory; the tool's own check output
+is authoritative for their exact report formatting and selection. The gate
+holds no baseline and makes no historical-regression claim, and there is no
+shard dimension today. Growing the census to a real multi-crate shard
+inventory with a per-shard budget plus a genuine cross-machine reference
+baseline is the deferred follow-up
 `runtime-ledger-full-census-and-real-shards`.
 `make test-rust` and the Layer-1 hermetic shards run concurrently; expensive
 integration lanes take the sole heavy-gate slot (§11). CI caches compile
@@ -1018,8 +1023,9 @@ migration/replacement work item names the exact old test selectors/files with
 a keep/adapt/move/delete disposition and a removal gate, and updates
 `tests/layer1-jobs.json`, closed gate manifests, flake/matrix/Nix-unit pins,
 generated ledgers, and CI workflow shards. Policy self-tests assert that an
-intentional slow/sleep/process/network test in a hermetic tier is rejected, an
-over-budget test or crate fails the gate, an incomplete or shrunk census fails
+intentional sleep/process/network test in a hermetic tier is rejected, an
+over-budget aggregate crate CPU measurement fails the gate, a per-test
+threshold breach remains advisory, an incomplete or shrunk census fails
 closed, parallel isolation holds, and a retired legacy selector is absent.
 
 ## 11. Heavy-gate: sole use
@@ -1048,14 +1054,29 @@ arguments relative to `packages/`.
 
 This is adopted by copy/adapt (per D001/D041) from the equivalent tooling
 already proven on this codebase's sibling ADR-0045 lineage: a two-slot
-per-UID OFD-locked semaphore under
-`${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/d2b-heavy-gates`, nonblocking
-acquisition retried every 250 ms for up to 30 minutes, fail-closed (no
-`flock` fallback) on unsupported locking or timeout, with the child process
-receiving a duplicated locked-FD handle and the wrapper retaining
-group-signal/reap ownership exactly as documented. Building this tool (if
-not already present at ADR 0046 implementation time) is work item
-`ADR046-delivery-001` (§17); every wave's `make heavy-check`,
+per-UID OFD-locked semaphore in the fixed, system-provisioned
+`/run/d2b-heavy-gates/uid-<uid>/` namespace. The root and per-uid directory
+are root-owned and non-writable by unprivileged users; the two `slot-*`
+files are pre-created, owned by the target uid, and mode `0600`. Acquisition
+is nonblocking, retried every 250 ms for up to 30 minutes, and fail-closed
+(with no `flock` fallback) on unsupported locking or timeout. The child
+receives a duplicated locked-FD handle and the wrapper retains
+group-signal/reap ownership exactly as documented.
+
+There is no fallback namespace. An absent or malformed root is an
+environment error whose diagnostic names `make heavy-gate-provision` as the
+remediation. The NixOS module uses a systemd-tmpfiles rule for the fixed root
+and provisions configured lifecycle users' root-owned per-uid directories
+and two private slots after numeric UIDs are available; hosts not consuming
+the module use the Make target. A user-owned temporary root was vulnerable
+in two independent ways: a foreign uid could squat it and force the
+foreign-owner check to deny service, while the owning uid could rename it
+and obtain a fresh two-slot pool that defeated the semaphore. A conditional
+`/run/user/<uid>` location is also rejected: it is not always present and
+its uid-owned namespace permits the same rename and split-pool attack.
+
+Building this tool (if not already present at ADR 0046 implementation time)
+is work item `ADR046-delivery-001` (§17); every wave's `make heavy-check`,
 `make heavy-test-integration`, `make heavy-test-host-integration`, and
 `make heavy-test-hardware` targets route through it. "Sole use" means: no
 wave, no Provider crate, and no panel/validator role may create a second
@@ -1087,6 +1108,24 @@ metadata, contract fingerprints, or repository-set membership - invalidates
 both validator and panel evidence; the wave re-snapshots and both lanes
 rerun. A history-only rebase or retarget may reuse panel evidence only when
 the canonical proof tool (§12.6) verifies byte-identical integrated content.
+
+Each repository requires at least one
+`--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the repeated mappings
+must name the complete expected pull-request set. The repository's `--head`
+(or its default) must resolve to one of those mapped heads. This binding is
+what prevents a later merge target from silently omitting a parallel slice:
+
+```bash
+cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot \
+    --program <name> --wave <id> \
+    --repo <logical-id>=<checkout-root> \
+    --base <logical-id>=<base-revision> \
+    --pull-request <logical-id>=<positive-number>:<head-ref>
+```
+
+Every persisted delivery artifact and workflow result uses
+`DELIVERY_SCHEMA_VERSION` 2, introduced when
+`expected_pull_requests` became required candidate material.
 
 ### 12.2 CI/local/host validator evidence
 
@@ -1146,7 +1185,7 @@ ADR-0045-lineage panel-receipt artifact:
 ```json
 {
   "artifact_kind": "d2b-delivery/panel-receipt",
-  "schema_version": 1,
+  "schema_version": 2,
   "role": "software",
   "candidate_id": "<sha256>",
   "content_id": "<sha256>",
@@ -1196,7 +1235,7 @@ The `MergeTarget` document is a `d2b-delivery/merge-target` artifact:
 ```json
 {
   "artifact_kind": "d2b-delivery/merge-target",
-  "schema_version": 1,
+  "schema_version": 2,
   "material": { "...": "the wave's re-derived integrated material" },
   "pull_requests": [
     {
@@ -1390,7 +1429,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask heavy-gate` implementation (per D001/D041 unrestricted-reuse policy) |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check` |
-| Detailed design | Two-slot per-UID OFD-locked semaphore, 250 ms nonblocking retry up to 30 minutes, fail-closed on unsupported locking, duplicated locked-FD handoff to child, wrapper-owned group-signal/reap, as specified in §11 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout. |
+| Detailed design | Two-slot per-UID OFD-locked semaphore in the fixed `/run/d2b-heavy-gates/uid-<uid>/` namespace: root-owned non-writable root and per-uid directories, two pre-created target-uid-owned mode-`0600` slot files, no fallback, and a provisioning error naming `make heavy-gate-provision` when the namespace is absent or malformed. The NixOS module provisions the root through systemd-tmpfiles and the configured lifecycle-user slots after numeric UIDs exist; the Make target provisions hosts that do not consume the module. Acquisition uses a 250 ms nonblocking retry up to 30 minutes, fails closed on unsupported locking, duplicates the locked FD into the child, and retains wrapper-owned group-signal/reap semantics, as specified in §11. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout. |
 | Integration | Every heavy lane in §10.4/§10.10/§10.11 routes through this one binary; no wave adds a second lock mechanism |
 | Data migration | None - net-new tooling |
 | Validation | Unit tests for slot acquisition/timeout/fail-closed paths; integration test spawning two concurrent heavy-gate invocations and asserting the second blocks until the first releases |
@@ -1406,7 +1445,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask delivery wave snapshot` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/snapshot.rs` |
-| Detailed design | Binds base/head OIDs, dependency graph, repository set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
+| Detailed design | Binds base/head OIDs, dependency graph, repository set, and the complete expected pull-request number/head set into `candidate_id`/`content_id`/`snapshot_sha256` per §12.1. Every repository requires at least one `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the selected head must be one of those mapped heads. Persisted delivery artifacts and workflow results use `DELIVERY_SCHEMA_VERSION` 2 because `expected_pull_requests` is required candidate material. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt. |
 | Integration | Called by the integrator immediately after PR opening (§13.1), before any validator/panel lane starts |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests asserting identical inputs produce identical digests and any single-byte content change produces a different `content_id` |
@@ -1486,10 +1525,10 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | existing `xtask`/`libtest --format=json` timing output; no new test framework |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/test_runtime_ledger.rs`; a `make`-invokable timing gate reusing `make test-rust`/Layer-1 crate targets |
-| Detailed design | Measures execution-only time (after build, warm cache) per test/crate against §10.16 budgets, records the reference runner/repetitions/p95, reports the top slow tests, and emits a machine-readable CI artifact against absolute per-test/crate budgets with no baseline, no shard dimension, and no historical-regression claim (the full census across a real multi-crate shard inventory with a per-shard budget and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`); the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/` |
+| Detailed design | After a warm build, records advisory per-test libtest wall-clock p95s and enforced aggregate per-crate process-CPU p95s. Process CPU excludes time descheduled behind unrelated machine load. The gate enforces each crate CPU budget and the exact closed census, presently one crate and 190 test IDs, so a vanished or extra test fails; a per-test diagnostic-threshold breach does not. It emits a machine-readable artifact with no baseline, shard dimension, or historical-regression claim, and its own check output is authoritative for exact advisory-report formatting and selection. The full census across a real multi-crate shard inventory with a per-shard budget and a cross-machine reference baseline are the deferred follow-up `runtime-ledger-full-census-and-real-shards`; the placement lint rejects a hermetic-tier test that sleeps, spawns a process, or touches network/containers/DBus/systemd/broker/Nix/KVM/hardware/live cloud, and the deterministic-clock/sleep lint rejects wall-clock sleep/retry in `src/`/`tests/`. |
 | Integration | Every wave's entry/exit criteria (§4) consume the ledger artifact; `make test-rust` and Layer-1 shards run concurrently; no new top-level `tests/*.sh` gate is added |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Policy self-tests: an intentional slow/sleep/process/network hermetic test is rejected; an over-budget test or crate fails the gate; an incomplete or shrunk census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
+| Validation | Policy self-tests: intentional sleep/process/network behavior in a hermetic test is rejected; a per-test wall-clock threshold breach remains advisory; an over-budget aggregate crate process-CPU p95 fails; an incomplete, expanded, or shrunk exact census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |
 
 ### ADR046-delivery-008

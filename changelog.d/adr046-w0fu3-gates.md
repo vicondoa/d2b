@@ -37,13 +37,14 @@
   and a uniquely parsed decision-register row, rather than a filename suffix
   plus a row prefix, so it can no longer be satisfied by a lookalike file or a
   non-canonical row.
-- The runtime execution-budget ledger is now an honest absolute budget gate. It
-  records genuine repeated execution-only samples, recomputes p95 from those
-  samples, audits that every scope is measured on every repetition, requires the
-  crate census to reproduce a pinned closed set exactly, and runs the
-  hermetic placement lint over the census crates' integration tests. It no
-  longer holds a synthetic baseline or claims historical-regression detection;
-  the gate now runs as part of the local pre-merge check as well as in CI.
+- The runtime execution-budget ledger now honestly enforces aggregate
+  per-crate process-CPU p95 while keeping per-test wall-clock p95 advisory. It
+  records genuine repeated samples, recomputes p95 from those samples, audits
+  that every scope is measured on every repetition, requires the crate and test
+  census to reproduce a pinned closed set exactly, and runs the hermetic
+  placement lint over the census crates' integration tests. It no longer holds
+  a synthetic baseline or claims historical-regression detection; the gate now
+  runs as part of the local pre-merge check as well as in CI.
   Growing the census to a real multi-crate shard inventory and adding a genuine
   cross-machine reference baseline for a true historical-regression gate is
   tracked as the deferred follow-up

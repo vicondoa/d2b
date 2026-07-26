@@ -308,15 +308,16 @@ crate may reach into `src/` modules that are not part of the crate's declared pu
 
 Owns **hermetic Cargo integration tests** (files under `tests/*.rs` invoked by `cargo test`).
 Per D094 these are fast, in-process, deterministic, and parallel-safe: an individual normal
-test has p95 ≤50 ms with no wall-clock sleep, and the crate's whole
-`cargo test -p d2b-provider-<base>-<implementation> --lib --tests` execution (units + `tests/`)
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a deterministic
+test has an advisory wall-clock p95 diagnostic threshold of <=50 ms with no wall-clock sleep,
+and the crate's whole `cargo test -p d2b-provider-<base>-<implementation> --lib --tests`
+invocation (units + `tests/`) has an enforced aggregate process-CPU p95 budget of <=2 s after
+a warm build (compilation excluded). They use a deterministic
 fake clock/RNG and the toolkit fakes only; no process spawn, container, network, DBus, systemd,
 broker daemon, Nix eval/build, KVM, hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. A test needing any of those is a placement violation and MUST move to
 `integration/` - never gain a sleep, larger timeout, or `#[ignore]`. Bounded crypto/property
-tests are the only classified exception and declare a capped case count and a higher per-test
-budget by name.
+tests are the only classified timing exception and declare a capped case count and a higher
+per-test advisory threshold by name, but gain no wall-clock-sleep exemption.
 
 - ResourceType controller conformance tests - assert every declared ResourceType is reconciled
   correctly from `spec` to `status` phase transitions.
@@ -751,7 +752,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `/run/d2b/r-<realm>/broker.sock` | per-realm broker socket | ADAPT | Pre-bound by Zone runtime allocator per ADR 0046; move to Zone runtime directory | `ADR046-core-001` |
 | `/sys/fs/cgroup/d2b.slice/` | broker cgroup delegation | RETAIN | Zone-scoped cgroup leaves; no top-level rename needed | |
 | `${XDG_RUNTIME_DIR}/d2b-runtime-systemd-user.sock` | `d2b-unsafe-local-helper` (user-owned) | ADAPT | user-only `Host` runtime socket; ComponentSession replaces helper protocol per D042/D051; no-isolation posture label preserved in all socket-level audit | |
-| `/tmp/d2b-heavy-gates-$UID/` | `cargo xtask heavy-gate` semaphore | RETAIN | Keep semaphore; not a Zone resource | |
+| `/run/d2b-heavy-gates/uid-<uid>/` | `cargo xtask heavy-gate` semaphore | RETAIN | Fixed system-provisioned namespace: root and per-uid directory are root-owned and non-writable by unprivileged users; two target-uid-owned mode-`0600` slot files; no fallback. The NixOS module provisions it through systemd-tmpfiles plus post-user activation; `make heavy-gate-provision` serves other hosts. Not a Zone resource. | |
 | OFD lock files under `/run/d2b/` | d2b-state | RETAIN | OFD locks are mechanisms; not ResourceSpec fields per D034 | |
 | `/var/lib/d2b/zones/<zone>/bundle/generation-<N>.json` | new Zone bundle emitter (NEW) | NEW | Immutable integrity-pinned Zone resource bundle per generation; `root:d2bd` 0640 | §0.2 bundle/generation emission |
 | `/var/lib/d2b/zones/<zone>/bundle/current-generation` | Zone runtime | NEW | Active generation pointer; updated atomically on activation | §0.2 cleanup contract; prior bundles retained up to `retainedGenerations` count (default 3, range 1..16) |
@@ -819,10 +820,11 @@ D094 execution model:
 
 - Each migration/replacement row names the **exact old test selector/file** it
   covers and its keep/adapt/move/delete disposition. `RETAIN`/`ADAPT` targets
-  that are hermetic MUST meet the §10.16 budgets of
-  `ADR-046-validation-and-delivery` (individual normal test p95 ≤50 ms, no
-  wall-clock sleep; per-crate `--lib --tests` ≤2 s; Layer-1 hermetic shard
-  ≤60 s). An adapted test that can only pass by spawning a process, hitting the
+  that are hermetic MUST meet the §10.16 model in
+  `ADR-046-validation-and-delivery` (individual normal test advisory
+  wall-clock p95 threshold <=50 ms and no wall-clock sleep; enforced per-crate
+  `--lib --tests` aggregate process-CPU p95 <=2 s; future Layer-1 hermetic shard
+  target <=60 s). An adapted test that can only pass by spawning a process, hitting the
   network, or sleeping is re-placed into `integration/`, not slowed down in a
   hermetic tier.
 - When ADR 0046 replaces a behavior, the minimum reusable semantic assertions

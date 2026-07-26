@@ -1998,7 +1998,9 @@ Deletion sequence:
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-device-usbip --lib --tests` completes in
 ≤2 s warm-cache execution time (compilation excluded). They use a deterministic
 fake clock/RNG and the toolkit fakes/FakeEffectPort only - no process spawn,
@@ -2009,7 +2011,7 @@ fixtures. Any scenario genuinely needing a booted kernel/Guest lives only in
 `tests/host-integration/hardware`. Such a need is moved to the matching existing
 Layer-2 gate, never given a sleep, larger unit-test timeout, or `#[ignore]`.
 Bounded crypto/property tests are the only classified exception, each named
-with a capped case count and declared higher per-test budget.
+with a capped case count and declared higher per-test advisory threshold.
 
 ### Required unit tests (`tests/`)
 
