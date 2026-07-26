@@ -1,0 +1,33 @@
+//! Frozen resource API admission limits.
+
+pub const MAX_REQUEST_CANONICAL_BYTES: usize = 512 * 1024;
+pub const MAX_RESPONSE_CANONICAL_BYTES: usize = 512 * 1024;
+pub const MAX_RESOURCE_ENVELOPE_BYTES: usize = 256 * 1024;
+pub const MAX_BATCH_MUTATIONS: usize = 32;
+pub const MAX_BATCH_RESOURCES: usize = 32;
+pub const MAX_LIST_RESOURCE_TYPES: usize = 16;
+pub const MAX_LIST_PAGE_SIZE: u32 = 500;
+pub const DEFAULT_LIST_PAGE_SIZE: u32 = 100;
+pub const MAX_LIST_FILTERS: usize = 8;
+pub const MAX_FILTER_VALUES: usize = 64;
+pub const MAX_PAGE_CURSOR_BYTES: usize = 256;
+pub const MAX_WATCHES_PER_SESSION: usize = 32;
+pub const MAX_WATCHES_PER_ZONE: usize = 256;
+pub const MAX_WATCH_RESOURCE_TYPES: usize = 16;
+pub const MAX_WATCH_FILTERS: usize = 8;
+pub const MAX_WATCH_CREDITS: u32 = 1024;
+pub const DEFAULT_WATCH_CREDITS: u32 = 128;
+pub const MAX_WATCH_QUEUED_BYTES: usize = 256 * 1024;
+pub const MAX_ZONE_WATCH_QUEUED_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_REQUEST_DEADLINE_MS: u64 = 900_000;
+pub const DEFAULT_REQUEST_DEADLINE_MS: u64 = 30_000;
+pub const MAX_EXPEDITED_DEADLINE_MS: u64 = 10_000;
+pub const MAX_EXPEDITED_IN_FLIGHT_PER_ZONE: usize = 8;
+pub const MAX_CONCURRENT_READS_PER_PRINCIPAL: usize = 8;
+pub const MAX_CONCURRENT_WRITES_PER_PRINCIPAL: usize = 4;
+pub const MAX_ROLE_RULES: usize = 32;
+pub const MAX_ROLE_RULE_RESOURCE_TYPES: usize = 16;
+pub const MAX_ROLE_RULE_VERBS: usize = 16;
+pub const MAX_ROLE_RULE_RESOURCE_NAMES: usize = 64;
+pub const MAX_ROLE_RULE_EXECUTION_REFS: usize = 32;
+pub const MAX_ROLE_BINDING_SUBJECTS: usize = 128;
