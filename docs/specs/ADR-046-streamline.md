@@ -465,7 +465,7 @@ Rust, not NixOS module evaluation.
 | `policy_spec_finalizer_phase` | Every ResourceType/Provider spec's status section uses only the common phase enum `Pending|Ready|Succeeded|Degraded|Failed|Deleted|Unknown` (D037) and the fixed finalizer/deletion ordering (D084); no spec invents a parallel phase or deletion-ordering scheme |
 | `policy_no_leaked_decision_prefix` | No file under `docs/specs/**` contains a "decision-required" marker using any ID prefix other than the canonical `ADR-046-decision-register` `D0xx` numbering (F8 regression guard) |
 | `policy_test_placement` | Every `src/` `#[cfg(test)]` module and crate `tests/*.rs` file is hermetic (D094): no process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build, KVM, hardware, live cloud, or non-tiny filesystem tree, and no `#[ignore]`; such needs must move to `integration/` |
-| `policy_test_determinism` | No hermetic-tier test uses wall-clock sleep/retry (D094); a deterministic fake clock/RNG is used instead, except for explicitly allow-listed crypto/property tests with a declared per-test budget and capped case count |
+| `policy_test_determinism` | No hermetic-tier test uses wall-clock sleep/retry (D094); a deterministic fake clock/RNG is used instead. Classified crypto/property tests may have a higher advisory timing threshold and capped case count, but no wall-clock-sleep exemption. |
 
 ### Type 6 - flake checks (`tests/unit/smoke/`)
 
@@ -936,15 +936,15 @@ v3 source to extract from.
 | --- | --- |
 | Work item ID | `ADR046-streamline-021` |
 | Tier | A |
-| Observed friction evidence | D094: wall-clock `sleep`/retry in a hermetic test both breaks the p95 ≤50 ms budget and makes the test flaky/non-parallel-safe |
+| Observed friction evidence | D094: wall-clock `sleep`/retry in a hermetic test breaches the <=50 ms advisory diagnostic threshold and makes the test flaky/non-parallel-safe even though per-test wall clock is not budget-enforced |
 | Desired behavior | A lint rejecting wall-clock sleep/retry (`std::thread::sleep`, `tokio::time::sleep` without a paused test clock, real `Instant::now` polling loops) in `src/`/`tests/` hermetic tiers, requiring a deterministic fake clock/RNG instead |
 | Destination | `packages/d2b-contract-tests/tests/policy_test_determinism.rs` |
 | Owner/dependencies | ADR046-streamline-020 |
 | Dependency/owner | ADR046-streamline-020 |
 | Current source | D094 deterministic-clock requirement; no existing wall-clock sleep/retry policy lint |
 | Reuse action | create |
-| Implementation shape | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property exceptions are allow-listed by explicit name with a declared per-test budget |
-| Detailed design | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property exceptions are allow-listed by explicit name with a declared per-test budget Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint layered on ADR046-streamline-020. |
+| Implementation shape | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property timing exceptions are allow-listed by explicit name with a capped case count and a declared higher advisory threshold, but no sleep exemption |
+| Detailed design | Scans hermetic sources for banned time/sleep APIs and asserts the deterministic fake-clock/RNG fixtures from the toolkit are used; classified crypto/property timing exceptions are allow-listed by explicit name with a capped case count and a declared higher advisory threshold, but no sleep exemption. Primary reuse disposition: `create`. Preserved source-plan detail: net-new policy lint layered on ADR046-streamline-020. |
 | Integration | `make test-policy` row |
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Fixture hermetic test using `thread::sleep` is rejected; a classified crypto test on the allow-list passes |
@@ -959,17 +959,17 @@ v3 source to extract from.
 | Work item ID | `ADR046-streamline-022` |
 | Tier | A |
 | Observed friction evidence | D094: no machine-readable record of execution-only test time exists, so budget regressions are invisible until the inner loop is already slow |
-| Desired behavior | A test-runtime ledger + timing gate (reusing existing `xtask`/`libtest --format=json` output, no new framework) measuring execution-only time after build against the §10.16 budgets, recording reference runner/repetitions/p95, reporting top slow tests, and emitting a CI artifact against absolute per-test/crate budgets with no baseline and no historical-regression claim (a genuine cross-machine reference baseline and a real multi-crate shard inventory are the deferred follow-up `runtime-ledger-full-census-and-real-shards`) |
+| Desired behavior | A test-runtime ledger + timing gate reusing existing `xtask`/`libtest --format=json` output, with no new framework. After a warm build it records advisory per-test wall-clock p95s and enforced aggregate per-crate process-CPU p95s, pins the exact closed test census, and emits a machine-readable artifact. It holds no baseline and makes no historical-regression claim; a genuine cross-machine reference baseline and a real multi-crate shard inventory are the deferred follow-up `runtime-ledger-full-census-and-real-shards`. |
 | Destination | `packages/xtask/src/test_runtime_ledger.rs` (shared with `ADR046-delivery-007`) |
 | Owner/dependencies | ADR046-delivery-007 |
 | Dependency/owner | ADR046-delivery-007 |
 | Current source | The test-runtime ledger has since landed as `packages/xtask/src/test_runtime_ledger.rs` (shared with `ADR046-delivery-007`), invoked by `make test-runtime-ledger` against the pinned `tests/runtime-ledger-census.json`, and run as the `test-runtime-ledger` Layer-1 job; remaining effort is the deferred follow-up `runtime-ledger-full-census-and-real-shards` (grow the census to a real multi-crate shard inventory and add a cross-machine reference baseline), not creation and not a historical-regression gate |
 | Reuse action | adapt |
-| Implementation shape | Parses per-test JSON timings, aggregates per test/crate, compares each recorded p95 against its pinned absolute budget, and fails any measurement over budget (no baseline, no previous-ledger comparison, no regression threshold) |
-| Detailed design | Parses per-test JSON timings, aggregates per test/crate, compares each recorded p95 against its pinned absolute budget, and fails any measurement over budget (no baseline, no previous-ledger comparison, no regression threshold) Primary reuse disposition: `adapt`. Preserved source-plan detail: share/adapt ADR046-delivery-007 timing-ledger implementation for this gate. |
+| Implementation shape | Parses per-test libtest JSON into advisory wall-clock p95s, ingests aggregate process CPU for each complete crate invocation, enforces only the crate CPU budget, and fails on any mismatch with the exact closed crate/test census. It holds no baseline and performs no previous-ledger comparison. |
+| Detailed design | Parses per-test libtest JSON into advisory wall-clock p95s, ingests aggregate process CPU for each complete crate invocation, enforces only the crate CPU budget, and fails on any mismatch with the exact closed crate/test census. A per-test diagnostic-threshold breach never fails the gate; the tool's own check output is authoritative for exact advisory-report formatting and selection. It holds no baseline and performs no previous-ledger comparison. Primary reuse disposition: `adapt`. Preserved source-plan detail: share/adapt ADR046-delivery-007 timing-ledger implementation for this gate. |
 | Integration | Consumed by wave entry/exit (`ADR-046-validation-and-delivery` §4/§10.16); `make test-rust` and Layer-1 shards run concurrently |
 | Data migration | None - docs/tooling only; no runtime state |
-| Validation | An over-budget per-test or per-crate p95, or a census listing a crate with no measurements, fails the gate; ledger output is deterministic and machine-readable |
+| Validation | An over-budget aggregate crate process-CPU p95 or any incomplete, expanded, or shrunk exact census fails the gate; a per-test wall-clock threshold breach stays advisory; ledger output is deterministic and machine-readable |
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |

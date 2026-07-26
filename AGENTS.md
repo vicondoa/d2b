@@ -128,17 +128,22 @@ deployed d2b state.
 `make test-runtime-ledger` is the hermetic execution-budget Layer-1 job
 (also run by `make test-unit` / `make check` through
 `tests/layer1-jobs.json`). After a warm build (so compilation is excluded
-from the timings), it records execution-only p95s for the pinned closed
-crate census (`tests/runtime-ledger-census.json`, presently a single crate)
-and enforces absolute per-test and per-crate budgets: it fails any p95 over
-its frozen budget, an incomplete or under-repeated run, or a census that does
-not reproduce the pin exactly. It is a pure absolute-budget gate - it holds
-no baseline and makes no historical-regression claim, so a slower run that
-still fits its budget passes, and there is no regeneration workflow to run
-when you change a census test (edit the census pin directly). Growing the
-census to a real multi-crate shard inventory (with a per-shard budget) and
-adding a cross-machine reference baseline for a true historical-regression
-gate is the named deferred follow-up
+from measurement), it records per-test wall-clock p95s as advisory
+diagnostics and enforces an aggregate process-CPU p95 budget for each pinned
+crate. Process CPU excludes time descheduled behind unrelated machine load,
+which is why it is the enforced timing basis. The closed census in
+`tests/runtime-ledger-census.json` presently pins one crate and exactly 190
+tests; a vanished or extra test, an incomplete or under-repeated run, or an
+aggregate crate CPU p95 over budget fails the gate. A per-test diagnostic
+threshold breach does not.
+
+The gate holds no baseline and makes no historical-regression claim, and
+there is no regeneration workflow to run when you change a census test
+(edit the census pin directly). The `test-runtime-ledger check` output is
+authoritative for the exact advisory-report formatting and selection.
+Growing the census to a real multi-crate shard inventory (with a per-shard
+budget) and adding a cross-machine reference baseline for a true
+historical-regression gate is the named deferred follow-up
 `runtime-ledger-full-census-and-real-shards`. If its shape here diverges from
 the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
 authoritative and flag the drift for the integrator.
@@ -1058,6 +1063,10 @@ fields that request panel, agent, or model metadata.
 
 ## Disk hygiene contract
 
+- Put every throwaway probe, one-off crate, parser experiment, and debugging
+  artifact under the gitignored repository-root `.scratch/` directory.
+  Never place an exploratory file beside production code or tests, where a
+  catch-all `git add` can sweep it into a commit.
 - Test eval expressions MUST resolve the flake via `git+file://$ROOT`
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
