@@ -889,12 +889,50 @@ they are load-bearing:
 - commit messages and PR descriptions on in-development feature
   branches (see Commit conventions).
 
-Note the deliberate exception: the consumer-facing
+The ban is mechanically enforced by `scan_process_markers` in
+`tests/tools/tier0-first-pass.sh`, which runs as part of
+`make check-tier0`. That script is authoritative for the governed
+paths, marker patterns, narrow functional exceptions, and exact
+diagnostic wording.
+
+Existing violations are a shrink-only debt ratchet. Both the
+`LEGACY_PROCESS_MARKER_PATHS` allow-list and its exact-count
+`LEGACY_PROCESS_MARKER_PATH_BUDGET` constant live in
+`tests/tools/tier0-first-pass.sh`. Never increase the budget or add a
+path as a general exemption. The only permitted transfer adds a path
+while removing a different violation and its entry in the same change,
+without increasing the budget.
+
+A listed path is exempt only while the scanner still finds a violation
+there. Cleaning that path makes the gate fail with a `STALE:` line;
+delete the path's allow-list entry and lower the budget in the same
+change. Handle the three contributor-facing failure modes as follows:
+
+- For a new violation outside the allow-list, remove or reword the
+  marker. If it is a genuine functional identifier, add a narrowly
+  scoped scanner exception with policy review rather than growing
+  legacy debt.
+- For a stale allow-list entry, delete the entry and lower the budget by
+  one for each cleaned path.
+- For a budget mismatch, complete the intended shrink by removing
+  cleaned entries and/or lowering the budget until the count is exact;
+  never resolve it by raising the budget.
+
+The exact failure text may evolve; `tests/tools/tier0-first-pass.sh`
+remains the authority for it.
+
+There are two deliberate functional exceptions. The consumer-facing
 `d2b.defaultSwitchReadiness.<wave>` option namespace (keys
 `w4Fu`…`p7`), its `readinessWaveSpecs` schema, and the
 `/var/lib/d2b/validated/<wave>.json` evidence contract use
 `wave`/phase tokens as **functional identifiers**. Those are part of
 the public option/schema surface and are not bookkeeping; leave them.
+
+`packages/xtask/src/delivery/` also has a narrow exception for the
+delivery tool's closed `W0` through `W8` namespace. These exact tokens
+identify CLI values and state-path segments rather than development
+bookkeeping. The exception applies only inside that delivery
+implementation; suffixed bookkeeping forms remain violations.
 
 ### Landing changes (PR workflow)
 
