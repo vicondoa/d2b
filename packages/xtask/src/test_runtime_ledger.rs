@@ -21,7 +21,7 @@ use std::{collections::BTreeMap, collections::BTreeSet, fs, path::Path, process:
 
 use serde::{Deserialize, Serialize};
 
-use crate::gen_spec_set::render_json;
+use crate::{diagnostic_redaction::redact_path, gen_spec_set::render_json};
 
 pub const ARTIFACT_KIND: &str = "d2b-test-runtime-ledger";
 pub const SCHEMA_VERSION: u32 = 2;
@@ -613,20 +613,6 @@ fn pair(value: &str, flag: &str) -> Result<(String, u64), String> {
     Ok((id.to_string(), millis))
 }
 
-/// Reduces a filesystem path to its final component so a diagnostic can name
-/// the artifact without disclosing the absolute checkout or work directory.
-///
-/// The Make target passes census, ledger, work, and lint paths as absolute
-/// paths, so an unredacted diagnostic would echo the checkout layout and a
-/// username-bearing directory into CI logs. Naming only the leaf keeps the
-/// message diagnosable while dropping the sensitive directory portion.
-fn redact_path(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<path>".to_owned())
-}
-
 /// Load and validate the pinned closed census from a committed JSON pin.
 fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
     let bytes =
@@ -722,7 +708,7 @@ fn run_record(args: &[String]) -> Result<(), String> {
             "--crate-libtest-json" => {
                 let (crate_id, path) = value
                     .split_once('=')
-                    .ok_or_else(|| format!("{flag} expects `<crate>=<path>`, got `{value}`"))?;
+                    .ok_or_else(|| format!("{flag} expects `<crate>=<path>`"))?;
                 validate_id("crate", crate_id)?;
                 let stream = fs::read_to_string(path).map_err(|error| {
                     format!("cannot read the libtest stream for crate `{crate_id}`: {error}")
@@ -869,8 +855,12 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     }
     let mut findings = Vec::new();
     for path in args {
-        let text = fs::read_to_string(path)
-            .map_err(|error| format!("cannot read lint target `{}`: {error}", redact_path(path)))?;
+        let text = fs::read_to_string(path).map_err(|error| {
+            format!(
+                "cannot read lint target `{}`: {error}",
+                redact_path(Path::new(path))
+            )
+        })?;
         findings.extend(lint_source(path, &text));
     }
     if findings.is_empty() {
@@ -883,7 +873,7 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     for finding in &findings {
         eprintln!(
             "{}:{}: {} - {}",
-            redact_path(&finding.path),
+            redact_path(Path::new(&finding.path)),
             finding.line,
             finding.rule,
             finding.detail
@@ -1387,17 +1377,18 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_lint_target_names_the_leaf_not_the_absolute_directory() {
-        let dir = "/home/redaction-sentinel-lint";
-        let args = vec![format!("{dir}/entrypoint.sh")];
+    fn a_missing_lint_target_keeps_unambiguous_repository_context() {
+        let repo = crate::repo_root().unwrap();
+        let target = repo.join(".scratch/redaction-sentinel-lint/one/entrypoint.sh");
+        let args = vec![target.display().to_string()];
         let error = run_lint(&args).expect_err("a missing lint target must fail");
         assert!(
-            !error.contains(dir),
-            "the lint diagnostic leaked its absolute directory: {error}"
+            !error.contains(repo.to_str().unwrap()),
+            "the lint diagnostic leaked its absolute checkout: {error}"
         );
         assert!(
-            error.contains("entrypoint.sh"),
-            "the lint diagnostic must still name the offending file: {error}"
+            error.contains("<repo>/.scratch/redaction-sentinel-lint/one/entrypoint.sh"),
+            "the lint diagnostic must preserve repository-relative context: {error}"
         );
     }
 }

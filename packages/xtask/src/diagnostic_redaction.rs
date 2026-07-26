@@ -50,6 +50,19 @@ impl DiagnosticRedactor {
     }
 }
 
+pub(crate) fn redact_path(path: &Path) -> String {
+    let Ok(repo_root) = crate::repo_root() else {
+        return "<path>".to_owned();
+    };
+    let Ok(redactor) = DiagnosticRedactor::new(repo_root, None) else {
+        return "<path>".to_owned();
+    };
+    let Some(path) = path.to_str() else {
+        return "<path>".to_owned();
+    };
+    redactor.redact(path)
+}
+
 fn add_sensitive_root(
     roots: &mut Vec<SensitiveRoot>,
     supplied: &Path,
@@ -391,6 +404,19 @@ mod tests {
         let redactor = DiagnosticRedactor::new(&link, None).unwrap();
         let diagnostic = format!("{}/src/lib.rs", real.display());
         assert_eq!(redactor.redact(&diagnostic), "<repo>/src/lib.rs");
+    }
+
+    #[test]
+    fn central_path_redaction_preserves_repository_context() {
+        let repo = crate::repo_root().unwrap();
+        assert_eq!(
+            redact_path(&repo.join("one/shared.rs")),
+            "<repo>/one/shared.rs"
+        );
+        assert_eq!(
+            redact_path(&repo.join("two/shared.rs")),
+            "<repo>/two/shared.rs"
+        );
     }
 
     #[test]
