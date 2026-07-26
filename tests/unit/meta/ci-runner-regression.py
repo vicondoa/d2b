@@ -192,6 +192,26 @@ set -euo pipefail
             workflow,
         )
 
+    def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        diagnostic = f"error:\x1b[31m{ROOT}/private/output\x1b[0m"
+
+        redacted = layer1_jobs.redact_diagnostic_line(diagnostic)
+
+        self.assertIn("<repo>/private/output", redacted)
+        self.assertNotIn(str(ROOT), redacted)
+        self.assertNotIn("\x1b", redacted)
+        self.assertNotIn("[31m", redacted)
+
+    def test_diagnostic_redaction_recognizes_backtick_boundaries(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        diagnostic = f"failed to read `{ROOT}/private/output`"
+
+        redacted = layer1_jobs.redact_diagnostic_line(diagnostic)
+
+        self.assertEqual(redacted, "failed to read `<repo>/private/output`")
+        self.assertNotIn(str(ROOT), redacted)
+
 
 if __name__ == "__main__":
     unittest.main()

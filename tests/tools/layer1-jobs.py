@@ -30,10 +30,10 @@ RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # on PATH; hosted runners provide dash, which does not process Bash startup
 # hooks before the wrapper can scrub them.
 SCRUBBED_BASH = "sh tests/tools/ci-shell {0}"
-PATH_START = r"(?P<prefix>^|[\s'\"(\[{: =])"
-ROOT_END = r"(?=$|[/\s'\"),\]};:])"
+PATH_START = r"(?P<prefix>^|[\s'\"`(\[{: =])"
+ROOT_END = r"(?=$|[/\s'\"`),\]};:])"
 ABSOLUTE_PATH = re.compile(
-    PATH_START + r"/[^ \t\r\n'\"),\]}>;,|]*"
+    PATH_START + r"/[^ \t\r\n'\"`),\]}>;,|]*"
 )
 
 
@@ -484,10 +484,55 @@ def command_self_test(args: argparse.Namespace) -> int:
     return subprocess.run([sys.executable, str(SELF_TEST), *args.tests], cwd=ROOT).returncode
 
 
+def normalize_ansi_escape_sequences(line: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(line):
+        if line[index] != "\x1b":
+            output.append(line[index])
+            index += 1
+            continue
+
+        output.append(" ")
+        index += 1
+        if index >= len(line):
+            continue
+        introducer = line[index]
+        if introducer == "[":
+            index += 1
+            while index < len(line):
+                final = ord(line[index])
+                index += 1
+                if 0x40 <= final <= 0x7E:
+                    break
+        elif introducer in "]PX^_":
+            index += 1
+            while index < len(line):
+                if line[index] == "\x07":
+                    index += 1
+                    break
+                if (
+                    line[index] == "\x1b"
+                    and index + 1 < len(line)
+                    and line[index + 1] == "\\"
+                ):
+                    index += 2
+                    break
+                index += 1
+        elif 0x40 <= ord(introducer) <= 0x5F:
+            index += 1
+    return "".join(output)
+
+
 def redact_diagnostic_line(line: str) -> str:
     # The Rust redactor may not be built when this earliest Layer-1 phase fails.
     # Apply its repo/home placeholders and absolute-path fallback in-process
     # rather than making failure reporting depend on Cargo.
+    line = normalize_ansi_escape_sequences(line)
+    line = "".join(
+        character if character == "\t" or character.isprintable() else " "
+        for character in line
+    )
     sensitive_roots = [
         (str(ROOT.resolve()), "<repo>"),
         (str(ROOT), "<repo>"),
@@ -502,10 +547,6 @@ def redact_diagnostic_line(line: str) -> str:
             lambda match: f"{match.group('prefix')}{replacement}",
             line,
         )
-    line = "".join(
-        character if character == "\t" or character.isprintable() else " "
-        for character in line
-    )
     return ABSOLUTE_PATH.sub(
         lambda match: f"{match.group('prefix')}<path>",
         line,
