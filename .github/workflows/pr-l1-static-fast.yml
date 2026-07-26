@@ -157,10 +157,11 @@ jobs:
         run: make test-rust
 
   test-fixture-contracts:
-    name: "Advisory - non-enforcing - Fixture-dependent Rust contract tests"
     needs: [test-rust]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      D2B_ENABLE_FIXTURE_BUILD: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -537,7 +538,7 @@ jobs:
           require_success test-lint '${{ needs.test-lint.result }}'
           allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'
           require_success test-rust '${{ needs.test-rust.result }}'
-          require_advisory_success test-fixture-contracts '${{ needs.test-fixture-contracts.result }}'
+          require_success test-fixture-contracts '${{ needs.test-fixture-contracts.result }}'
           require_success test-proofs '${{ needs.test-proofs.result }}'
           require_success test-nix-unit '${{ needs.test-nix-unit.result }}'
           require_success test-flake-x86 '${{ needs.test-flake-x86.result }}'
@@ -549,4 +550,4 @@ jobs:
             exit 1
           fi
           echo "All generated enforcing Layer-1 jobs passed."
-          echo "Required advisory jobs completed (not enforcing passes): test-performance-budgets, test-fixture-contracts"
+          echo "Required advisory jobs completed (not enforcing passes): test-performance-budgets"

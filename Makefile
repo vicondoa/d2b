@@ -108,8 +108,8 @@ test-lint:
 test-rust:
 	bash tests/test-rust.sh
 
-## test-fixture-contracts - advisory fixture-backed contract layer. It skips
-## unless D2B_ENABLE_FIXTURE_BUILD=1 because sandbox fixture delivery is pending.
+## test-fixture-contracts - enforcing fixture-backed contract and CLI layer.
+## Layer-1 local and CI orchestration set D2B_ENABLE_FIXTURE_BUILD=1.
 test-fixture-contracts:
 	bash tests/test-rust.sh fixture-contracts
 

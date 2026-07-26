@@ -203,8 +203,9 @@ done < <(
 # Reachability alone is not coverage: a gate wired to a manifest target still
 # contributes a green result while skipping. A wholly skippable gate is
 # advisory. When one subset of a larger enforcing job is skipped, a separate
-# advisory job must name that exact gap with `advisoryForSkip`; demoting the
-# larger job would understate the checks that really execute.
+# job must name that exact gap: `advisoryForSkip` when the gap remains advisory,
+# or `enforcesForSkip` when a companion job executes and enforces the omitted
+# work. Demoting the larger job would understate the checks that really execute.
 # ---------------------------------------------------------------------------
 undeclared_skippable=()
 while IFS= read -r gate; do
@@ -249,14 +250,16 @@ for job_id in "${local_job_ids[@]}"; do
       /^[[:space:]]*"[^"]+":[[:space:]]*\{/ {
         if ($0 ~ /^    "/) {
           in_job = 1
-          linked = 0
+          advisory_link = 0
+          enforcing_link = 0
           advisory = 0
         }
       }
-      in_job && index($0, "\"advisoryForSkip\": \"" declaration "\"") { linked = 1 }
+      in_job && index($0, "\"advisoryForSkip\": \"" declaration "\"") { advisory_link = 1 }
+      in_job && index($0, "\"enforcesForSkip\": \"" declaration "\"") { enforcing_link = 1 }
       in_job && /"enforcement":[[:space:]]*"advisory"/ { advisory = 1 }
       in_job && /^    },/ {
-        if (linked && advisory) {
+        if ((advisory_link && advisory) || (enforcing_link && !advisory)) {
           found = 1
           exit
         }
@@ -278,8 +281,8 @@ if [ ${#undeclared_skippable[@]} -ne 0 ] || [ ${#undeclared_manifest_skips[@]} -
     echo "  manifest skip $declaration has no exact advisory item" >&2
   done
   echo "" >&2
-  echo "Remediation: declare a separate advisory job with advisoryForSkip naming" >&2
-  echo "the exact job:guard gap, or remove the skip guard." >&2
+  echo "Remediation: declare a companion job naming the exact job:guard gap with" >&2
+  echo "advisoryForSkip or enforcesForSkip, or remove the skip guard." >&2
   exit 1
 fi
 

@@ -82,6 +82,21 @@ def needs_line(job: dict[str, Any]) -> str:
     return f"    needs: {yaml_list(needs)}\n" if needs else ""
 
 
+def ci_env_block(job: dict[str, Any], spaces: int) -> str:
+    env = job.get("ciEnv", {})
+    if not env:
+        return ""
+    prefix = " " * spaces
+    lines = [f"{prefix}env:"]
+    for name, value in env.items():
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", name):
+            raise SystemExit(f"{MANIFEST}: invalid CI environment name {name!r}")
+        if not isinstance(value, str):
+            raise SystemExit(f"{MANIFEST}: CI environment value for {name!r} must be a string")
+        lines.append(f"{prefix}  {name}: {json.dumps(value)}")
+    return "\n".join(lines) + "\n"
+
+
 def nix_setup_step() -> str:
     return f"""      - uses: {INSTALL_NIX}
         with:
@@ -94,6 +109,7 @@ def simple_nix_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
+{ci_env_block(job, 4)}\
     steps:
       - uses: {CHECKOUT}
         with:
