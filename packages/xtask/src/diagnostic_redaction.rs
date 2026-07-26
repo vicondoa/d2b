@@ -35,7 +35,7 @@ impl DiagnosticRedactor {
         if let Some(home) = home {
             add_sensitive_root(&mut roots, home, "<home>", "home directory")?;
         }
-        roots.sort_by(|left, right| right.path.len().cmp(&left.path.len()));
+        roots.sort_by_key(|root| std::cmp::Reverse(root.path.len()));
         roots.dedup_by(|left, right| left.path == right.path);
         Ok(Self { roots })
     }
