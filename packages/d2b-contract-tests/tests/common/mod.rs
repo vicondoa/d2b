@@ -205,6 +205,7 @@ const OPAQUE_SENTINEL: &str = "__d2b_opaque__";
 /// through the parser; JSON has no comments and a YAML parser discards them, so
 /// a marker only ever surfaces from a Nix fence.
 pub const LINT_MARKER_KEY: &str = "__d2b_lint_marker__";
+const STRUCTURAL_CHILD_KEY: &str = "__d2b_structural_child__";
 
 /// The `<token>` of a `d2b-lint: <token>` comment, or `None` for any other
 /// comment. Strips a `#` line comment or a `/* ... */` block comment and the
@@ -635,70 +636,138 @@ fn normalize_json(lines: &[&str]) -> String {
     out.join("\n")
 }
 
+// Deserialize through a map visitor instead of serde_json::Value so duplicate
+// keys remain distinct entries. The envelope scanner can then apply the same
+// discriminator-cardinality rule to JSON, YAML, and Nix instead of inheriting
+// serde_json::Map's last-wins collapse.
 fn parse_json(lines: &[&str]) -> Result<Node, ParseError> {
     let text = normalize_json(lines);
     if text.trim().is_empty() {
         return Ok(Node::Null);
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| ParseError(e.to_string()))?;
-    Ok(json_to_node(&v))
+    let mut deserializer = serde_json::Deserializer::from_str(&text);
+    let node = JsonNode::deserialize(&mut deserializer)
+        .map_err(|error| ParseError(error.to_string()))?
+        .0;
+    deserializer
+        .end()
+        .map_err(|error| ParseError(error.to_string()))?;
+    Ok(node)
 }
 
-fn json_to_node(v: &serde_json::Value) -> Node {
-    match v {
-        serde_json::Value::Null => Node::Null,
-        serde_json::Value::Bool(b) => Node::Scalar(b.to_string()),
-        serde_json::Value::Number(n) => Node::Scalar(n.to_string()),
-        serde_json::Value::String(s) => scalar_to_node(s.clone()),
-        serde_json::Value::Array(items) => Node::Seq(items.iter().map(json_to_node).collect()),
-        serde_json::Value::Object(map) => {
-            let mut entries = Vec::new();
-            for (k, val) in map {
-                if k == ELIDE_SENTINEL || k == "..." {
+struct JsonNode(Node);
+
+impl<'de> Deserialize<'de> for JsonNode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct JsonNodeVisitor;
+
+        impl<'de> Visitor<'de> for JsonNodeVisitor {
+            type Value = JsonNode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(JsonNode(scalar_to_node(value.to_string())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(JsonNode(scalar_to_node(value)))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Null))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Null))
+            }
+
+            fn visit_some<D: Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                JsonNode::deserialize(deserializer)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = sequence.next_element::<JsonNode>()? {
+                    items.push(item.0);
+                }
+                Ok(JsonNode(Node::Seq(items)))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut mapping: A) -> Result<Self::Value, A::Error> {
+                let mut entries: Vec<Entry> = Vec::new();
+                while let Some(key) = mapping.next_key::<String>()? {
+                    let key = if key == ELIDE_SENTINEL || key == "..." {
+                        "...".to_string()
+                    } else {
+                        key
+                    };
+                    let value = mapping.next_value::<JsonNode>()?.0;
+                    let value = if key == "..." { Node::Elision } else { value };
                     entries.push(Entry {
-                        key: "...".to_string(),
-                        val: Node::Elision,
+                        key,
+                        val: value,
                         line: 0,
                     });
-                    continue;
                 }
-                entries.push(Entry {
-                    key: k.clone(),
-                    val: json_to_node(val),
-                    line: 0,
-                });
+                Ok(JsonNode(Node::Map(entries)))
             }
-            Node::Map(entries)
         }
+
+        deserializer.deserialize_any(JsonNodeVisitor)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Nix: rnix. Every expression SyntaxKind that can wrap or produce an attribute
-// set in the documented subset has an explicit disposition:
+// Nix: rnix. Every node SyntaxKind has an explicit disposition:
 //
 // * NODE_ATTR_SET covers both `{ ... }` and `rec { ... }`.
-// * NODE_WITH and NODE_LET_IN expose their namespace/bindings as well as their
-//   result body. This deliberately over-approximates evaluation so a body that
-//   returns a literal bound attribute set cannot hide it.
-// * NODE_PAREN exposes its expression.
-// * NODE_IF_ELSE exposes both possible result branches, so either branch can
-//   contribute a violation candidate.
-// * NODE_LIST recursively exposes each item.
-// * NODE_APPLY, NODE_BIN_OP, NODE_LAMBDA, NODE_LEGACY_LET, and NODE_SELECT
-//   over-approximate their structural result by exposing every result-capable
-//   descendant expression or binding, including a select's `or` default. That
-//   finds every literal attribute-set candidate without pretending to evaluate
-//   Nix.
-// * NODE_ASSERT exposes its body; the condition cannot be its result.
+// * NODE_ROOT and NODE_PAREN require and expose their sole expression.
+// * NODE_WITH, NODE_LET_IN, NODE_IF_ELSE, NODE_ASSERT, NODE_LAMBDA, NODE_LIST,
+//   NODE_APPLY, NODE_BIN_OP, NODE_SELECT, NODE_HAS_ATTR, and NODE_UNARY_OP expose
+//   every child expression. Conditions, predicates, lambda parameters/defaults,
+//   namespaces, bindings, operands, sources, defaults, and result bodies are all
+//   visited rather than selected by position.
+// * NODE_ATTRPATH_VALUE, NODE_ATTRPATH, NODE_DYNAMIC, NODE_INHERIT,
+//   NODE_INHERIT_FROM, NODE_INTERPOL, NODE_PATTERN, NODE_PAT_ENTRY, and
+//   NODE_PAT_BIND expose every child. This includes dynamic path expressions,
+//   inherit sources, string/path interpolation, and lambda parameter defaults.
+// * NODE_LEGACY_LET uses the same entry walker as NODE_ATTR_SET, including every
+//   value and inherit source.
 // * Static `inherit` names become opaque entries, preserving the attribute-set
 //   shape; dynamic/interpolated attribute names fail closed because their
 //   semantic key cannot be known without evaluation.
-// * NODE_STRING, including interpolation, is a scalar value. Interpolation
-//   becomes Opaque while the containing attribute set remains traversable.
-// * identifiers, literals, paths, unary operations, attribute-existence tests,
-//   and __curPos are scalar-only here and become concrete or opaque values.
+// * NODE_STRING and NODE_PATH_* are scalar/opaque when childless and expose all
+//   interpolations otherwise. NODE_IDENT, NODE_IDENT_PARAM, NODE_LITERAL, and
+//   NODE_CUR_POS are childless leaves; an unexpected future child is still
+//   visited rather than dropped.
+// * NODE_ERROR always fails. Internal node kinds in expression position are
+//   traversed as above, while semantically unresolvable dynamic attribute names
+//   fail in the attribute-set entry walker.
 //
 // Any future or misplaced structural SyntaxKind also fails closed through the
 // wildcard arm. Angle-bracket placeholders (`<name>`) would otherwise tokenize
@@ -753,11 +822,7 @@ fn parse_nix(lines: &[&str]) -> Result<Node, ParseError> {
         let parse = rnix::Root::parse(attempt);
         let errs = parse.errors();
         if errs.is_empty() {
-            let root = parse.syntax();
-            if let Some(expr) = root.first_child() {
-                return nix_node_to_node(&expr);
-            }
-            return Ok(Node::Null);
+            return nix_node_to_node(&parse.syntax());
         }
         last_err = errs
             .iter()
@@ -768,127 +833,91 @@ fn parse_nix(lines: &[&str]) -> Result<Node, ParseError> {
     Err(ParseError(last_err))
 }
 
+fn nix_children(node: &SyntaxNode) -> Result<Vec<Node>, ParseError> {
+    node.children()
+        .map(|child| nix_node_to_node(&child))
+        .collect()
+}
+
+fn nix_children_seq(node: &SyntaxNode) -> Result<Node, ParseError> {
+    nix_children(node).map(Node::Seq)
+}
+
+fn nix_exact_children_seq(node: &SyntaxNode, expected: usize) -> Result<Node, ParseError> {
+    let children = nix_children(node)?;
+    if children.len() != expected {
+        return Err(ParseError(format!(
+            "{:?} has {} child expressions, expected {expected}; refusing to skip a structural \
+             Nix child",
+            node.kind(),
+            children.len()
+        )));
+    }
+    Ok(Node::Seq(children))
+}
+
+fn nix_single_child(node: &SyntaxNode) -> Result<Node, ParseError> {
+    let mut children = nix_children(node)?;
+    if children.len() != 1 {
+        return Err(ParseError(format!(
+            "{:?} has {} child expressions, expected exactly one; refusing to skip a structural \
+             Nix child",
+            node.kind(),
+            children.len()
+        )));
+    }
+    Ok(children
+        .pop()
+        .expect("length checked before extracting sole child"))
+}
+
+fn nix_leaf_or_children(node: &SyntaxNode, leaf: Node) -> Result<Node, ParseError> {
+    let children = nix_children(node)?;
+    if children.is_empty() {
+        Ok(leaf)
+    } else {
+        Ok(Node::Seq(children))
+    }
+}
+
 fn nix_node_to_node(node: &SyntaxNode) -> Result<Node, ParseError> {
     match node.kind() {
         SyntaxKind::NODE_ATTR_SET => Ok(Node::Map(nix_attrset_entries(node)?)),
-        SyntaxKind::NODE_LIST => node
-            .children()
-            .map(|child| nix_node_to_node(&child))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Node::Seq),
-        SyntaxKind::NODE_STRING => Ok(nix_string_node(node)),
-        SyntaxKind::NODE_LITERAL => Ok(Node::Scalar(node.text().to_string().trim().to_string())),
-        SyntaxKind::NODE_IDENT => Ok(nix_ident_node(node)),
-        SyntaxKind::NODE_WITH => node
-            .children()
-            .map(|child| nix_node_to_node(&child))
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|parts| {
-                if parts.len() < 2 {
-                    Err(ParseError(
-                        "NODE_WITH has no namespace or result body; refusing to skip a structural \
-                         Nix wrapper"
-                            .to_string(),
-                    ))
-                } else {
-                    Ok(Node::Seq(parts))
-                }
-            }),
-        SyntaxKind::NODE_LET_IN => {
-            let parts = node
-                .children()
-                .map(|child| {
-                    if child.kind() == SyntaxKind::NODE_ATTRPATH_VALUE {
-                        nix_attrpath_value(&child)
-                    } else {
-                        nix_node_to_node(&child)
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if parts.is_empty() {
-                return Err(ParseError(
-                    "NODE_LET_IN has no bindings or result body; refusing to skip a structural \
-                     Nix wrapper"
-                        .to_string(),
-                ));
-            }
-            Ok(Node::Seq(parts))
-        }
-        SyntaxKind::NODE_PAREN | SyntaxKind::NODE_ROOT => node
-            .first_child()
-            .ok_or_else(|| {
-                ParseError(format!(
-                    "{:?} has no body; refusing to skip a structural Nix wrapper",
-                    node.kind()
-                ))
-            })
-            .and_then(|body| nix_node_to_node(&body)),
-        SyntaxKind::NODE_IF_ELSE => {
-            let branches = node
-                .children()
-                .skip(1)
-                .map(|branch| nix_node_to_node(&branch))
-                .collect::<Result<Vec<_>, _>>()?;
-            if branches.len() != 2 {
-                return Err(ParseError(
-                    "NODE_IF_ELSE does not have exactly two result branches".to_string(),
-                ));
-            }
-            Ok(Node::Seq(branches))
-        }
-        SyntaxKind::NODE_APPLY | SyntaxKind::NODE_BIN_OP => node
-            .children()
-            .map(|child| nix_node_to_node(&child))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Node::Seq),
-        SyntaxKind::NODE_ASSERT | SyntaxKind::NODE_LAMBDA => node
-            .children()
-            .last()
-            .ok_or_else(|| {
-                ParseError(format!(
-                    "{:?} has no body; refusing to skip a structural Nix expression",
-                    node.kind()
-                ))
-            })
-            .and_then(|body| nix_node_to_node(&body)),
+        SyntaxKind::NODE_LIST => nix_children_seq(node),
+        SyntaxKind::NODE_STRING => nix_string_node(node),
+        SyntaxKind::NODE_LITERAL => nix_leaf_or_children(
+            node,
+            Node::Scalar(node.text().to_string().trim().to_string()),
+        ),
+        SyntaxKind::NODE_IDENT => nix_leaf_or_children(node, nix_ident_node(node)),
+        SyntaxKind::NODE_IDENT_PARAM => nix_leaf_or_children(node, Node::Opaque),
+        SyntaxKind::NODE_WITH => nix_exact_children_seq(node, 2),
+        SyntaxKind::NODE_LET_IN => nix_children_seq(node),
+        SyntaxKind::NODE_PAREN | SyntaxKind::NODE_ROOT => nix_single_child(node),
+        SyntaxKind::NODE_IF_ELSE => nix_exact_children_seq(node, 3),
+        SyntaxKind::NODE_APPLY | SyntaxKind::NODE_BIN_OP => nix_children_seq(node),
+        SyntaxKind::NODE_ASSERT | SyntaxKind::NODE_LAMBDA => nix_exact_children_seq(node, 2),
         SyntaxKind::NODE_LEGACY_LET => Ok(Node::Map(nix_attrset_entries(node)?)),
-        SyntaxKind::NODE_SELECT => {
-            let candidates = node
-                .children()
-                .filter(|child| child.kind() != SyntaxKind::NODE_ATTRPATH)
-                .map(|child| nix_node_to_node(&child))
-                .collect::<Result<Vec<_>, _>>()?;
-            if candidates.is_empty() {
-                return Err(ParseError(
-                    "NODE_SELECT has no source; refusing to skip a structural Nix expression"
-                        .to_string(),
-                ));
-            }
-            Ok(Node::Seq(candidates))
-        }
-        SyntaxKind::NODE_CUR_POS
+        SyntaxKind::NODE_SELECT
         | SyntaxKind::NODE_HAS_ATTR
-        | SyntaxKind::NODE_PATH_ABS
-        | SyntaxKind::NODE_PATH_HOME
-        | SyntaxKind::NODE_PATH_REL
-        | SyntaxKind::NODE_PATH_SEARCH
-        | SyntaxKind::NODE_UNARY_OP => Ok(Node::Opaque),
-        SyntaxKind::NODE_ERROR => Err(ParseError(
-            "rnix produced an error node in a parsed Nix expression".to_string(),
-        )),
-        SyntaxKind::NODE_ATTRPATH
+        | SyntaxKind::NODE_UNARY_OP
+        | SyntaxKind::NODE_ATTRPATH
         | SyntaxKind::NODE_ATTRPATH_VALUE
         | SyntaxKind::NODE_DYNAMIC
-        | SyntaxKind::NODE_IDENT_PARAM
         | SyntaxKind::NODE_INHERIT
         | SyntaxKind::NODE_INHERIT_FROM
         | SyntaxKind::NODE_INTERPOL
         | SyntaxKind::NODE_PAT_BIND
         | SyntaxKind::NODE_PAT_ENTRY
-        | SyntaxKind::NODE_PATTERN => Err(ParseError(format!(
-            "unexpected structural {:?} in Nix expression position",
-            node.kind()
-        ))),
+        | SyntaxKind::NODE_PATTERN => nix_children_seq(node),
+        SyntaxKind::NODE_CUR_POS => nix_leaf_or_children(node, Node::Opaque),
+        SyntaxKind::NODE_PATH_ABS
+        | SyntaxKind::NODE_PATH_HOME
+        | SyntaxKind::NODE_PATH_REL
+        | SyntaxKind::NODE_PATH_SEARCH => nix_leaf_or_children(node, Node::Opaque),
+        SyntaxKind::NODE_ERROR => Err(ParseError(
+            "rnix produced an error node in a parsed Nix expression".to_string(),
+        )),
         _ => Err(ParseError(format!(
             "unsupported Nix syntax {:?}; refusing to skip a possible structural wrapper",
             node.kind()
@@ -907,13 +936,19 @@ fn nix_ident_node(node: &SyntaxNode) -> Node {
     }
 }
 
-fn nix_string_node(node: &SyntaxNode) -> Node {
-    // Interpolation anywhere in the string makes it non-literal.
-    if node
-        .children()
-        .any(|c| c.kind() == SyntaxKind::NODE_INTERPOL)
-    {
-        return Node::Opaque;
+fn nix_string_node(node: &SyntaxNode) -> Result<Node, ParseError> {
+    let children = nix_children(node)?;
+    if !children.is_empty() {
+        return Ok(Node::Seq(children));
+    }
+    Ok(scalar_to_node(nix_static_string(node)?))
+}
+
+fn nix_static_string(node: &SyntaxNode) -> Result<String, ParseError> {
+    if node.children().count() != 0 {
+        return Err(ParseError(
+            "interpolated Nix string is not a static literal".to_string(),
+        ));
     }
     let mut content = String::new();
     for tok in node.children_with_tokens() {
@@ -923,7 +958,7 @@ fn nix_string_node(node: &SyntaxNode) -> Node {
             content.push_str(t.text());
         }
     }
-    scalar_to_node(unescape_nix(&content))
+    Ok(unescape_nix(&content))
 }
 
 fn unescape_nix(s: &str) -> String {
@@ -956,14 +991,18 @@ fn nix_attrset_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
     for child in node.children() {
         match child.kind() {
             SyntaxKind::NODE_ATTRPATH_VALUE => {
-                let Some(path_node) = child
+                let mut path_nodes = child
                     .children()
-                    .find(|candidate| candidate.kind() == SyntaxKind::NODE_ATTRPATH)
-                else {
+                    .filter(|candidate| candidate.kind() == SyntaxKind::NODE_ATTRPATH)
+                    .collect::<Vec<_>>();
+                if path_nodes.len() != 1 {
                     return Err(ParseError(
-                        "Nix attribute value has no attribute path".to_string(),
+                        "Nix attribute value does not have exactly one attribute path".to_string(),
                     ));
-                };
+                }
+                let path_node = path_nodes
+                    .pop()
+                    .expect("length checked before extracting sole attribute path");
                 let segments = nix_attrpath_segments(&path_node)?;
                 if segments.is_empty() {
                     return Err(ParseError("Nix attribute path is empty".to_string()));
@@ -1002,7 +1041,11 @@ fn nix_inherit_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
     let mut entries = Vec::new();
     for attr in node.children() {
         match attr.kind() {
-            SyntaxKind::NODE_INHERIT_FROM => {}
+            SyntaxKind::NODE_INHERIT_FROM => entries.push(Entry {
+                key: STRUCTURAL_CHILD_KEY.to_string(),
+                val: nix_node_to_node(&attr)?,
+                line: 0,
+            }),
             SyntaxKind::NODE_IDENT => entries.push(Entry {
                 key: attr.text().to_string().trim().to_string(),
                 val: Node::Opaque,
@@ -1019,11 +1062,7 @@ fn nix_inherit_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
                             .to_string(),
                     ));
                 }
-                let Node::Scalar(key) = nix_string_node(&attr) else {
-                    return Err(ParseError(
-                        "inherited string attribute name is not a literal".to_string(),
-                    ));
-                };
+                let key = nix_static_string(&attr)?;
                 entries.push(Entry {
                     key,
                     val: Node::Opaque,
@@ -1047,11 +1086,21 @@ fn nix_inherit_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
 }
 
 fn nix_attrpath_value(node: &SyntaxNode) -> Result<Node, ParseError> {
-    node.children()
-        .find(|child| child.kind() != SyntaxKind::NODE_ATTRPATH)
+    let values = node
+        .children()
+        .filter(|child| child.kind() != SyntaxKind::NODE_ATTRPATH)
         .map(|value| nix_node_to_node(&value))
-        .transpose()
-        .map(|value| value.unwrap_or(Node::Opaque))
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.len() != 1 {
+        return Err(ParseError(format!(
+            "Nix attribute value has {} value expressions, expected exactly one",
+            values.len()
+        )));
+    }
+    values
+        .into_iter()
+        .next()
+        .ok_or_else(|| ParseError("Nix attribute value disappeared after validation".to_string()))
 }
 
 fn nix_attrpath_segments(path: &SyntaxNode) -> Result<Vec<String>, ParseError> {
@@ -1069,15 +1118,7 @@ fn nix_attrpath_segments(path: &SyntaxNode) -> Result<Vec<String>, ParseError> {
                             .to_string(),
                     ));
                 }
-                let mut content = String::new();
-                for tok in seg.children_with_tokens() {
-                    if let Some(t) = tok.as_token()
-                        && t.kind() == SyntaxKind::TOKEN_STRING_CONTENT
-                    {
-                        content.push_str(t.text());
-                    }
-                }
-                segs.push(unescape_nix(&content));
+                segs.push(nix_static_string(&seg)?);
             }
             SyntaxKind::NODE_DYNAMIC => {
                 return Err(ParseError(

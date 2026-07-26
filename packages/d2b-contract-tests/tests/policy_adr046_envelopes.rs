@@ -352,19 +352,31 @@ fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
                 if direct_child(m, "apiVersion").is_none() {
                     continue;
                 }
-                let has_type = direct_child(m, "type").is_some();
-                let has_resource_type = direct_child(m, "resourceType").is_some();
-                // Fail closed on an unrecognized envelope: an apiVersion document
-                // that names neither `type` nor `resourceType` is classified as
-                // exactly one thing - unrecognized - and reported, never skipped.
-                if !has_type && !has_resource_type {
+                let type_field_count = m
+                    .iter()
+                    .filter(|entry| entry.key == "type" || entry.key == "resourceType")
+                    .count();
+                let has_type = m.iter().any(|entry| entry.key == "type");
+                let has_resource_type = m.iter().any(|entry| entry.key == "resourceType");
+                // Fail closed unless the envelope has exactly one discriminator.
+                // Counting entries, rather than looking up the first match, also
+                // rejects duplicate type/resourceType keys. All three parsers
+                // preserve discriminator duplicates for this check.
+                if type_field_count != 1 {
+                    let text = if type_field_count == 0 {
+                        "`apiVersion` document carries neither a `type` nor a `resourceType`; a resource envelope must declare exactly one, and an unclassifiable envelope fails closed (D088/D091)"
+                            .to_string()
+                    } else {
+                        format!(
+                            "`apiVersion` document carries {type_field_count} `type`/`resourceType` fields; a resource envelope must declare exactly one (D088/D091)"
+                        )
+                    };
                     out.push(Violation {
                         file: file.to_string(),
                         line: block.body_start
                             + key_line(&block.lines, "apiVersion").unwrap_or(0)
                             + 1,
-                        text: "`apiVersion` document carries neither a `type` nor a `resourceType`; a resource envelope must declare exactly one, and an unclassifiable envelope fails closed (D088/D091)"
-                            .to_string(),
+                        text,
                     });
                     continue;
                 }
@@ -951,6 +963,74 @@ fn universal_status_treats_bundle_envelopes_as_a_distinct_contract() {
 }
 
 #[test]
+fn universal_status_requires_exactly_one_envelope_type_field() {
+    let both = "\
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Widget
+resourceType: Widget
+status:
+  update: { state: Current }
+  resource: { availability: ready }
+```";
+    let violations = scan_universal_status("f.md", both);
+    assert_eq!(
+        violations.len(),
+        1,
+        "an envelope with both discriminator fields must be rejected: {}",
+        report("both-discriminators", &violations)
+    );
+    assert!(
+        violations[0].text.contains("exactly one"),
+        "the diagnostic must identify discriminator cardinality: {}",
+        violations[0].text
+    );
+
+    let duplicate_yaml = "\
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Widget
+type: Widget
+status:
+  update: { state: Current }
+  resource: { availability: ready }
+```";
+    let violations = scan_universal_status("f.md", duplicate_yaml);
+    assert_eq!(
+        violations.len(),
+        1,
+        "duplicate YAML discriminator keys must be rejected: {}",
+        report("duplicate-yaml-discriminator", &violations)
+    );
+    assert!(violations[0].text.contains("exactly one"));
+
+    let duplicate_json = "\
+```json
+{
+  \"apiVersion\": \"resources.d2bus.org/v3\",
+  \"type\": \"Widget\",
+  \"type\": \"Widget\",
+  \"status\": {
+    \"update\": { \"state\": \"Current\" },
+    \"resource\": { \"availability\": \"ready\" }
+  }
+}
+```";
+    let violations = scan_universal_status("f.md", duplicate_json);
+    assert_eq!(
+        violations.len(),
+        1,
+        "duplicate JSON discriminator keys must be rejected: {}",
+        report("duplicate-json-discriminator", &violations)
+    );
+    assert!(
+        violations[0].text.contains("exactly one"),
+        "the preserved JSON duplicates must reach the cardinality check: {}",
+        violations[0].text
+    );
+}
+
+#[test]
 fn universal_status_classifies_each_document_not_the_whole_fence() {
     // Classification is per document, not per fence: a recognized, complete
     // envelope in a fence must never mask an unrecognized sibling in the same
@@ -1160,14 +1240,41 @@ fn parser_backed_scanners_reject_structural_bypasses() {
             "if-else-branch",
             format!("if false then {{}} else {incomplete}"),
         ),
+        (
+            "if-condition",
+            format!("if {incomplete} then {{}} else {{}}"),
+        ),
         ("list-item", format!("[ {incomplete} ]")),
         ("assert-body", format!("assert true; {incomplete}")),
+        ("assert-predicate", format!("assert {incomplete}; {{}}")),
         ("lambda-body", format!("argument: {incomplete}")),
+        (
+            "lambda-parameter-default",
+            format!("{{ argument ? {incomplete} }}: {{}}"),
+        ),
         ("binary-operand", format!("{{}} // {incomplete}")),
+        ("unary-operand", format!("!({incomplete})")),
+        (
+            "attribute-existence-source",
+            format!("({incomplete}) ? type"),
+        ),
+        (
+            "string-interpolation-expression",
+            format!("\"${{{incomplete}}}\""),
+        ),
+        (
+            "path-interpolation-expression",
+            format!("./${{{incomplete}}}"),
+        ),
+        (
+            "inherit-source",
+            format!("{{ inherit ({incomplete}) type; }}"),
+        ),
         (
             "selected-attribute",
             format!("({{ selected = {incomplete}; }}).selected"),
         ),
+        ("dynamic-select-path", format!("source.${{{incomplete}}}")),
         (
             "select-default",
             format!("missing.resource or {incomplete}"),
