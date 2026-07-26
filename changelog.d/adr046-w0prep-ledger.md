@@ -16,16 +16,17 @@
 - Reconciled the remaining ledger prose across `AGENTS.md`, `tests/README.md`,
   the ADR-046 validation-and-delivery, streamline, and feasibility-and-spikes
   specs, and the preparatory changelog fragments, so no surface advertises the
-  removed per-test enforcement, baseline, historical-regression, shard, or
-  regeneration-workflow capabilities (there is no committed baseline file).
+  removed per-test enforcement, baseline, historical-regression, or shard
+  capabilities (there is no committed baseline file).
   Regenerating the census pin after a legitimate test change is a separate,
   supported step: `make runtime-ledger-pin`.
 - Documented the envelope policy lint's D116 negative-example marker in
   `AGENTS.md` beside the existing lint guidance: the `policy_adr046_envelopes`
   lint exempts an intentional teaching block that demonstrates the D116
-  eval-time failure only when it carries a comment naming both `d2b-lint` and
-  `d116`, and the guidance frames it as a narrowly scoped intentional-rejection
-  signal rather than a general suppression switch.
+  eval-time failure only in the pinned documenting file and only when it carries
+  the exact `d2b-lint: expect-d116-eval-error` marker. The guidance frames it as
+  a narrowly scoped intentional-rejection signal rather than a general
+  suppression switch.
 
 ### Fixed
 

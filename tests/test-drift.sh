@@ -28,7 +28,7 @@ for gate in \
   tests/unit/gates/vms-json-parity.sh \
   tests/unit/gates/flake-check-matrix-sync.sh \
   tests/unit/gates/ci-rust-cache-sync.sh; do
-  if [ -x "$ROOT/$gate" ]; then
+  if [ -f "$ROOT/$gate" ]; then
     log "--> $gate"
     if bash "$ROOT/$gate"; then
       ok "$gate"
@@ -37,7 +37,7 @@ for gate in \
       rc=1
     fi
   else
-    log "  SKIP: $gate (not present)"
+    log "  SKIP: $gate (regular file not found)"
   fi
 done
 

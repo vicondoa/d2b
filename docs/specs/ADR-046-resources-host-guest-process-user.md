@@ -1480,7 +1480,7 @@ spec:
 
 `metadata.name` is the canonical Zone-local resource identity used in all
 `userRef: User/<name>` references throughout the API. It must satisfy the
-ResourceName grammar (`^[a-z][a-z0-9-]*$`, max 63 chars).
+ResourceName grammar (`^[a-z][a-z0-9-]*$`, 1 to 63 bytes).
 
 `spec.osUsername` is the actual OS username passed to NSS `getpwnam`. It is
 validated independently by the host OS username rules: bounded string (1..255
@@ -1853,7 +1853,7 @@ d2b.zones.<zone>.resources.<name> = {
 };
 ```
 
-All five ResourceTypes share a single flat `resources` attrset under each Zone. `metadata.name` is derived from the `resources.<name>` attrset key (satisfies `^[a-z][a-z0-9-]*$`, max 63 chars). `metadata.zone` is derived from the enclosing `d2b.zones.<zone>` key. `apiVersion` defaults to `"resources.d2bus.org/v3"`. Because `resources` is a flat attrset, no two entries may share the same `<name>` key regardless of `type`.
+All five ResourceTypes share a single flat `resources` attrset under each Zone. `metadata.name` is derived from the `resources.<name>` attrset key (satisfies `^[a-z][a-z0-9-]*$`, 1 to 63 bytes). `metadata.zone` is derived from the enclosing `d2b.zones.<zone>` key. `apiVersion` defaults to `"resources.d2bus.org/v3"`. Because `resources` is a flat attrset, no two entries may share the same `<name>` key regardless of `type`.
 
 **Author-settable metadata fields** (`metadata` submodule; all optional):
 
@@ -1957,7 +1957,7 @@ Each entry in `d2b.zones.<zone>.resources` is a `types.submodule` with:
 The Nix resource compiler enforces all of the following at `nixos-rebuild build` time. Each violation is a hard eval error with a stable rule code:
 
 1. **ResourceType field**: `type` must be exactly one of the five valid values.
-2. **ResourceName grammar**: every `resources.<name>` key matches `^[a-z][a-z0-9-]*$`, max 63 chars.
+2. **ResourceName grammar**: every `resources.<name>` key matches `^[a-z][a-z0-9-]*$`, 1 to 63 bytes.
 3. **ResourceRef resolution**: every `spec.*Ref` string field and `metadata.ownerRef` that names a resource in the same Zone resolves to a declared resource in `d2b.zones.<zone>.resources`. Cross-Zone refs are rejected. `metadata.ownerRef` may name any existing same-Zone resource subject to the no-self (rule 11) and no-cycle rules; no per-type owner restrictions apply. `spec.systemArtifactId` is a plain bounded string ID (not a ResourceRef) and is validated by rule 17 against the artifact catalog, not by this rule.
 4. **Provider kind check**: `spec.providerRef` for `type="Host"` must be a substrate Provider; for `type="Guest"` must be a runtime Provider; for `type="Process"` or `type="EphemeralProcess"` must be a Process Provider.
 5. **Domain inclusion**: `spec.defaultDomain ∈ spec.allowedDomains`; for Process/EphemeralProcess, `spec.domain ∈ executionRef.spec.allowedDomains`.

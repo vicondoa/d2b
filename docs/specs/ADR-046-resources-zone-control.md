@@ -3295,7 +3295,7 @@ and `status` are filled by the Zone runtime (null in the bundle).
   "apiVersion": "resources.d2bus.org/v3",            // fixed; not per-type versioned
   "resourceType": "<ResourceType>",       // PascalCase registered type name
   "metadata": {
-    "name":                <string>,      // ResourceName; ^[a-z][a-z0-9-]*$; ≤128 chars
+    "name":                <string>,      // ResourceName; ^[a-z][a-z0-9-]*$; 1 to 63 bytes
     "zone":                <string>,      // equals the Zone name this bundle is for
     "uid":                 null,          // null in bundle; set by runtime at first create
     "generation":          <u64>,         // 1 for new resources; compiler-incremented on spec change
@@ -3566,7 +3566,7 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | Check | Mechanism | Failure mode |
 | --- | --- | --- |
 | Resource attrset key (→ `metadata.name`) matches `^[a-z][a-z0-9-]*$` | Nix `assert` | eval error |
-| Name length ≤ 128 chars | Nix `assert` | eval error |
+| Name length is 1 to 63 bytes | Nix `assert` | eval error |
 | `type` is a recognized core ResourceType or a non-empty string (non-core types validated at Phase 2) | Nix `assert` | eval error if empty or non-string |
 | `spec.rules[*].verbs` tokens in closed verb enum (§5.3.2) - Role only | Nix `assert` | eval error |
 | `spec.rules[*].sessionVerbs` tokens in closed session verb enum - Role only | Nix `assert` | eval error |

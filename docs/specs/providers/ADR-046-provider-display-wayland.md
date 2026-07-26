@@ -427,7 +427,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   telemetry:
@@ -487,7 +487,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   telemetry:
@@ -554,7 +554,7 @@ spec:
    class: on-failure
    backoffBase: "1s"
    backoffMax: "60s"
-   backoffMultiplier: 2.0
+   backoffMultiplierMilli: 2000
    maxRestarts: null
    resetAfter: "300s"
   telemetry:
@@ -567,7 +567,7 @@ spec:
 **Process identity and naming:**
 
 The process title is `d2b-<guest-name>-wlproxy` (derived from the authenticated
-Guest resource name, max 63-char constraint). This title is the only
+Guest resource name, 1 to 63 bytes). This title is the only
 diagnostic-visible name for the process; it must not include compositor socket
 names, user identities, or window content.
 
@@ -659,7 +659,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   telemetry:

@@ -205,7 +205,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "3600s"
   adoptionPolicy: adopt-on-restart
@@ -571,7 +571,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "3600s"
   adoptionPolicy: adopt-on-restart

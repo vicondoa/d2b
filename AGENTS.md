@@ -82,25 +82,26 @@ are implementation details unless a target or `tests/AGENTS.md` tells
 you to run one directly.
 
 ```bash
-# Sub-60s syntax + shellcheck loop for docs/shell-only edits.
+# Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
 make check-tier0
-
-# Layer-1 local development umbrella: lint, Rust, proofs, flake,
-# drift, policy, and the hermetic runtime-ledger gate. CI runs these
-# sub-targets in parallel.
-make test-unit
-
-# Focused Layer-1 shards when iterating on one surface.
+make check-inventory
 make test-lint
+make test-changelog
 make test-rust
 make test-proofs
 make test-flake
-make test-drift
+make test-nix-unit
 make test-policy
+make test-drift
 make test-runtime-ledger
+make test-performance-budgets
+
+# Post-preflight Layer-1 development umbrella. This runs the ten test-*
+# jobs above; `make check` also runs check-tier0 and check-inventory.
+make test-unit
 
 # PR-equivalent Layer-1 gate. Uses tests/layer1-jobs.json to run
-# independent make test-* shards locally with bounded parallelism.
+# all twelve jobs locally with bounded parallelism.
 make check
 
 # Legacy/full-static monolithic gate retained for explicit use.
@@ -163,13 +164,16 @@ The slot namespace is fixed at `/run/d2b-heavy-gates/uid-<uid>/`. The root
 and per-uid directory are root-owned and non-writable by unprivileged users;
 the two `slot-*` files are pre-created for the target uid at mode `0600`.
 There is no runtime-directory or temporary-directory fallback. The NixOS
-module provisions the root with systemd-tmpfiles and provisions configured
-lifecycle users' directories and slots after numeric UIDs are available.
-On a host that does not consume the module, run `make
-heavy-gate-provision`. An absent or malformed namespace is an environment
-error with that provisioning remediation, never permission to create a
-weaker pool. In particular, `/run/user/<uid>` is rejected because its owner
-can rename slot names or their parent and create an independent pool.
+module provisions the root with systemd-tmpfiles, then activation provisions
+directories and slots for configured lifecycle users that NSS can resolve.
+An unavailable network-backed user is deferred rather than failing
+activation; after that user logs in, run `make heavy-gate-provision`. Use
+the same target on a host that does not consume the module. Because `/run`
+is a tmpfs, run it once per boot when the gate requests it. An absent or
+malformed namespace is an environment error with that provisioning
+remediation, never permission to create a weaker pool. In particular,
+`/run/user/<uid>` is rejected because its owner can rename slot names or
+their parent and create an independent pool.
 
 The structure is public-lane-plus-guarded-internal:
 
@@ -206,8 +210,9 @@ pick one per command and pass file arguments relative to the directory you
 run from.
 
 Invoking a live script directly is safe but not the documented path: each
-one re-executes itself through the semaphore exactly once when
-`D2B_HEAVY_GATE` is unset, so it cannot bypass the sole-use invariant.
+one verifies the inherited slot and re-executes itself through the semaphore
+exactly once when no genuine slot is held. A bare `D2B_HEAVY_GATE` value is
+not trusted, so it cannot bypass the sole-use invariant.
 **A new live, hardware, or performance entrypoint must carry that same
 self-guard block**, or the fail-closed inventory guard
 (`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.

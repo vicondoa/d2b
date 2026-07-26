@@ -575,7 +575,7 @@ spec:
     class: always
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
   readiness:
     initialDelay: "0s"
     timeout: "10s"
@@ -630,7 +630,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
   readiness:
     initialDelay: "0s"
@@ -833,7 +833,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
   readiness:
     initialDelay: "2s"

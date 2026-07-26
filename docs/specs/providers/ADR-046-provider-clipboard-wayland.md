@@ -323,7 +323,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -411,7 +411,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1116,7 +1116,7 @@ than proceeding without an audit record.
 pub struct ClipboardAuditEvent {
     pub operation_id: Uuid,             // unique per operation
     pub event_type: ClipboardEventType,
-    pub source_zone_id: Option<BoundedId>,  // max 63 chars; no path/payload
+    pub source_zone_id: Option<BoundedId>,  // 1 to 63 bytes; no path/payload
     pub dest_zone_id: Option<BoundedId>,
     pub mime_type: Option<AllowedMime>,     // from MIME allowlist only; null if rejected before check
     pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1-64K, 64K-1M, >1M; never exact size

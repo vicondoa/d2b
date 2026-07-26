@@ -6,9 +6,8 @@
   (`YYYY-MM-DDTHH:MM:SS.sssZ`), qualified ResourceType tokens must use the
   `.d2bus.org.` infix, and the retry delay must be the integer `retryAfterMs`
   scalar rather than a superseded duration-string form. Each rule enforces a
-  frozen decision that a hand enumeration had previously miscounted, and each
-  exempts only an explicitly marked line or the decision-register row that
-  defines the rule.
+  frozen decision that a hand enumeration had previously miscounted, and the
+  only exemption is the exact decision-register row that defines the rule.
 
 ### Changed
 

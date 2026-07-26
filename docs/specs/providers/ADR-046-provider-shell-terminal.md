@@ -230,7 +230,7 @@ status:
 | --- | --- | --- | --- | --- | --- |
 | `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
 | `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellPool` | Exact | Vendor-qualified ResourceType identifier. |
-| `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, max 63 | Pool resource name. |
+| `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, 1 to 63 bytes | Pool resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | No | `Provider/shell-terminal` | Provider or higher-level owner | Default owner is the provider. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
@@ -406,7 +406,7 @@ status:
 | --- | --- | --- | --- | --- | --- |
 | `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
 | `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellSession` | Exact | Vendor-qualified ResourceType identifier. |
-| `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, max 63 | Stable session resource name. |
+| `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, 1 to 63 bytes | Stable session resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | Yes | `shell-terminal.d2bus.org.ShellPool/<name>` | pool reference | Owning pool. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
@@ -600,7 +600,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -680,7 +680,7 @@ d2b.zones.dev.resources.shell-terminal-controller = {
       class = "on-failure";
       backoffBase = "1s";
       backoffMax = "60s";
-      backoffMultiplier = 2.0;
+      backoffMultiplierMilli = 2000;
       maxRestarts = null;
       resetAfter = "300s";
     };

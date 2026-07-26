@@ -2,13 +2,13 @@
 
 - The heavy-lane semaphore now verifies a nested invocation before reusing a
   slot: the inherited descriptor must be an open handle on the real,
-  currently-locked per-uid slot file it names, proven by an independent open
-  file description lock query. A forged, stale, or closed marker no longer
-  skips acquisition; it acquires its own slot or fails closed.
+  per-uid slot file it names, proven by an atomic open file description lock
+  through the inherited descriptor itself. A forged, stale, or closed marker
+  no longer skips acquisition; it acquires its own slot or fails closed.
 - The heavy-lane semaphore namespace is anchored to a verified directory
-  descriptor and refuses a shared parent a peer could rename entries in. An
-  owned parent left group- or world-writable is locked down to `0700` instead
-  of trusted, and a parent owned by another non-root user is rejected.
+  descriptor. Its root and per-uid directory must be root-owned and
+  non-writable by group or other; an unsafe directory is rejected rather than
+  repaired or used as a fallback.
 - Every public heavy lane (`test-integration`, `test-host-integration`,
   `test-hardware`, `perf`, and the umbrellas `test`, `check-ci`, `check-all`
   that invoke them) now acquires a heavy-lane slot itself; the raw work moved
@@ -27,4 +27,4 @@
   descendants holding the slot descriptor so the slot was never released.
   Supervision now drains pending signals before each exit check and once more
   after the child exits while signals are still blocked, then sweeps the group
-  whenever an interruption was seen.
+  before reaping the leader.
