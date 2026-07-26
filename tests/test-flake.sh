@@ -15,6 +15,7 @@
 # large-memory host).
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -218,7 +219,7 @@ if [ "${D2B_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
     exit "$failed"
   fi
   ok "flake local shards (${#shard_checks[@]} checks + outputs)"
-  log "test-flake (local shards) OK"
+  log "test-flake (local shards) OK (duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
 
@@ -273,7 +274,7 @@ if [ -n "${D2B_FLAKE_CHECK:-}" ]; then
     fail "flake check shard: ${D2B_FLAKE_CHECK}"
     exit 1
   fi
-  log "test-flake (shard ${D2B_FLAKE_CHECK}) OK"
+  log "test-flake (shard ${D2B_FLAKE_CHECK}) OK (duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
 
@@ -295,7 +296,7 @@ if [ "${D2B_FLAKE_OUTPUTS:-0}" = 1 ]; then
     fail "flake non-checks outputs: packages.$native"
     exit 1
   fi
-  log "test-flake (outputs) OK"
+  log "test-flake (outputs) OK (duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
 
@@ -315,4 +316,4 @@ else
   exit 1
 fi
 
-log "test-flake OK"
+log "test-flake OK (duration: $((SECONDS - suite_started))s)"

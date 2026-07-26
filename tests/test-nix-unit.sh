@@ -8,6 +8,7 @@
 # the nix-unit check - running both would double the work.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -46,4 +47,4 @@ for check in "${checks[@]}"; do
   fi
 done
 
-log "test-nix-unit OK"
+log "test-nix-unit OK (duration: $((SECONDS - suite_started))s)"

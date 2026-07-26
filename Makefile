@@ -435,6 +435,7 @@ D2B_RUNTIME_EXCEPTIONS   = \
 ## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
+	started_at="$$(date +%s)"; \
 	ledger='$(abspath $(D2B_RUNTIME_LEDGER))'; \
 	census='$(abspath $(D2B_RUNTIME_CENSUS))'; \
 	work='$(abspath packages/target/test-runtime-ledger.work)'; \
@@ -517,4 +518,6 @@ test-runtime-ledger:
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
 	    --output "$$ledger" $(D2B_RUNTIME_EXCEPTIONS) $$args ); \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
-	    --ledger "$$ledger" --expected-census "$$census" )
+	    --ledger "$$ledger" --expected-census "$$census" ); \
+	finished_at="$$(date +%s)"; \
+	echo "test-runtime-ledger: complete (duration: $$((finished_at - started_at))s)"

@@ -10,6 +10,7 @@
 # Intentionally excludes nix eval, cargo fmt/clippy/test, and derivation
 # materialization; those stay in tests/static-fast.sh and tests/static.sh.
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
@@ -504,4 +505,4 @@ fi
 scan_dashes "$ROOT"
 scan_process_markers "$ROOT"
 
-ok "tier0 fast gate complete"
+ok "tier0 fast gate complete (duration: $((SECONDS - suite_started))s)"

@@ -7,6 +7,7 @@
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -261,8 +262,9 @@ CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --manifest-path "$manifest
 ok "cargo clippy"
 
 log "--> cargo test --workspace ${workspace_test_excludes[*]}"
+workspace_test_started=$SECONDS
 CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
-ok "cargo test"
+ok "cargo test (duration: $((SECONDS - workspace_test_started))s)"
 
 # W3 fixture-contract layer: the d2b-contract-tests crate is EXCLUDED
 # from the workspace test above because it reads the Nix-rendered bundle via
@@ -503,3 +505,4 @@ ok "stub-no-socket"
 log "--> tests/tools/assert-pinned-tests.sh"
 bash "$ROOT/tests/tools/assert-pinned-tests.sh"
 ok "assert-pinned-tests"
+log "test-rust OK (duration: $((SECONDS - suite_started))s)"
