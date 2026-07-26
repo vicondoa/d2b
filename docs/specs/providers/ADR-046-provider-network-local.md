@@ -1628,9 +1628,11 @@ release.
 The USBIP backend and proxy processes are **not** owned by the network-local
 controller.  They are owned by `Provider/device-usbip`.
 
-The `UsbipBindFirewallRule` broker operation stays with `Provider/device-usbip`.
-The network-local controller does **not** install USBIP firewall rules and does
-**not** call `UsbipBindFirewallRule`.
+USBIP-owned `ApplyNftablesProjection` requests stay with
+`Provider/device-usbip`. The network-local controller does **not** install USBIP
+firewall rules and does **not** dispatch that shared operation for a
+device-usbip projection. The shipped whole-table `UsbipBindFirewallRule` op is
+not the firewall path.
 
 Network-local emits **no** USBIP or TCP/3240 rule on the host or in the net-VM
 ruleset. `Network.spec` has no `usbipCarveOut` field and must not be mutated by
@@ -1643,10 +1645,11 @@ dependency, watches only identity/readiness/generation, and owns exactly one
 multiplexed relay `Endpoint` authority per Network. Its typed
 `UsbipEffectPort` is the sole semantic path for all TCP/3240 and
 per-Network/per-busid firewall effects. The Core adapter privately resolves the
-Network UID and dispatches the closed `UsbipBindFirewallRule` broker operation;
-raw attachment handles, IfNames, addresses, and rules never enter either
-Provider controller. USBIP drift and status belong exclusively to the owning
-USB Service's strict provider status.
+Network UID and dispatches the shared closed `ApplyNftablesProjection` broker
+operation for the device-usbip-owned projection; raw attachment handles,
+IfNames, addresses, and rules never enter either Provider controller. USBIP
+drift and status belong exclusively to the owning USB Service's strict provider
+status.
 
 ---
 
@@ -2376,7 +2379,7 @@ topology through the resource API surface.
 rule and no TCP/3240 match. Its firewall digest and `FirewallReady` condition
 cover only rules bearing that Network UID's ownership. Device-usbip rules are
 created, observed, reported, and removed only through `UsbipEffectPort` and the
-closed `UsbipBindFirewallRule` broker operation.
+shared closed `ApplyNftablesProjection` broker operation.
 
 **Rationale**: one semantic owner prevents a generic uplink opening from
 outliving a USB claim or bypassing per-Network/per-busid authorization.
@@ -2702,11 +2705,11 @@ On controller binary upgrade:
 ### ADR046-nl-018
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Broker plus device provider boundary; `UsbipBindFirewallRule` remains owned by `Provider/device-usbip`. |
-| Current source | Existing `UsbipBindFirewallRule` owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows. |
+| Dependency/owner | Broker plus device provider boundary; USBIP ownership projections applied through the shared `ApplyNftablesProjection` operation remain owned by `Provider/device-usbip`. |
+| Current source | The shipped whole-table `UsbipBindFirewallRule` op currently owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows; that shipped op is not the v3 firewall path. |
 | Reuse action | adapt |
 | Destination | Device-usbip EffectPort/adapter owns USBIP rules, drift, and strict provider status; network-local host/net-VM renderers and status cover only Network-owned policy. |
-| Detailed design | `UsbipBindFirewallRule` remains the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: preserve the typed closed broker op; remove both generic network-local USBIP allows. |
+| Detailed design | `ApplyNftablesProjection { action: Apply \| Remove }` is the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse the shared projection-scoped broker op; remove both generic network-local USBIP allows and do not extend or dispatch the shipped whole-table `UsbipBindFirewallRule` op. |
 | Integration | `Provider/device-usbip` watches only Network identity/readiness/generation; Core privately resolves the Network attachment for the one relay Endpoint authority and firewall op. Binding proxies receive authorized connected streams through LaunchTickets. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Network-local host and net-VM firewall intent tests assert no TCP/3240/USBIP rule; USBIP rule churn leaves Network digest/`FirewallReady` unchanged; device-usbip tests own exact scoping, drift, status, and release. |

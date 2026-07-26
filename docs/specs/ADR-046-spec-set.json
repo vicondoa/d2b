@@ -74,7 +74,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-current-code-migration-map.md",
-      "sha256" : "a9605829d5f8a09fcfff7d389c761480fb44cb85c13883875acc538c202e0d28",
+      "sha256" : "46c1c93d57c2586e508e0e6efef0349d5e2fb621823d6e7846bc5f0fa9cf26b6",
       "specId" : "ADR-046-current-code-migration-map",
       "status" : "Accepted",
       "supersedes" : null,
@@ -429,7 +429,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-network-local.md",
-      "sha256" : "59d8df2988f85e5cde598f713b1a133f20083cfd2efd103d5f3e79167e0f0d39",
+      "sha256" : "cc5794f06796a784772dec9c3c0f618ecdbd882317adbffd4e2a41faec3693b5",
       "specId" : "ADR-046-provider-network-local",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/network.nix`, `nixos-modules/net.nix`",

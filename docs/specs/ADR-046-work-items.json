@@ -3723,11 +3723,11 @@
       "workItemId" : "ADR046-nl-017"
     },
     {
-      "currentSource" : "Existing `UsbipBindFirewallRule` owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows.",
+      "currentSource" : "The shipped whole-table `UsbipBindFirewallRule` op currently owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows; that shipped op is not the v3 firewall path.",
       "dataMigration" : "Full d2b 3.0 reset; no v2 state/config import.",
-      "dependencyOwner" : "Broker plus device provider boundary; `UsbipBindFirewallRule` remains owned by `Provider/device-usbip`.",
+      "dependencyOwner" : "Broker plus device provider boundary; USBIP ownership projections applied through the shared `ApplyNftablesProjection` operation remain owned by `Provider/device-usbip`.",
       "destination" : "Device-usbip EffectPort/adapter owns USBIP rules, drift, and strict provider status; network-local host/net-VM renderers and status cover only Network-owned policy.",
-      "detailedDesign" : "`UsbipBindFirewallRule` remains the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: preserve the typed closed broker op; remove both generic network-local USBIP allows.",
+      "detailedDesign" : "`ApplyNftablesProjection { action: Apply | Remove }` is the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse the shared projection-scoped broker op; remove both generic network-local USBIP allows and do not extend or dispatch the shipped whole-table `UsbipBindFirewallRule` op.",
       "integration" : "`Provider/device-usbip` watches only Network identity/readiness/generation; Core privately resolves the Network attachment for the one relay Endpoint authority and firewall op. Binding proxies receive authorized connected streams through LaunchTickets.",
       "removalProof" : "Legacy generic `network.nix` and `net.nix` USBIP allow fragments and any golden expectation for them are removed after device-usbip host integration passes.",
       "reuseAction" : "adapt",

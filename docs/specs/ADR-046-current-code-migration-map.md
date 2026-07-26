@@ -597,7 +597,7 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 | `CgroupSubtree` | production-reachable | Per-VM cgroup leaf; `d2b.slice/<vm>/<role>/` | Zone cgroup delegation in `Host` resource | `Provider/system-core` |
 | `SwtpmDir` | production-reachable | Per-VM swtpm state provisioning; marker at `/var/lib/d2b/swtpm-markers/<vm>` | `Volume` resource (swtpm state) per Guest | `Provider/runtime-cloud-hypervisor` |
 | `KeyRotation` | production-reachable | `d2b keys rotate` CLI verb; broker SSH key gen | `EphemeralProcess` invoked by `Provider/system-core` | `Provider/system-core` |
-| `UsbipBindFirewallRule` | production-reachable | USBIP attach; broker firewall carve-out | `Device` resource (USBIP attachment) + Network policy | `Provider/device-usbip` |
+| `UsbipBindFirewallRule` | production-reachable | USBIP attach; broker firewall carve-out | `ApplyNftablesProjection { action: Apply \| Remove }` for the `Device` resource's per-Network/per-busid projection; the shipped whole-table operation is not reused | `Provider/device-usbip` |
 | `OpenPidfd` | production-reachable | Broker returns pidfd after spawn; d2bd adopts | Pidfd is mandatory Process Provider behavior (D022); no ResourceSpec field | Zone runtime |
 | `QemuMediaRegistry` | production-reachable | QEMU media registry write; udev rule | `Device` resource (QEMU media slot) | `Provider/runtime-qemu-media` |
 | `ActivationHelper` | production-reachable | d2bd activation; `host-activation.nix` | Activation as `EphemeralProcess` in `Provider/system-core` | `Provider/system-core` |
