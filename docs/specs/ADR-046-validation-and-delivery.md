@@ -1048,14 +1048,29 @@ arguments relative to `packages/`.
 
 This is adopted by copy/adapt (per D001/D041) from the equivalent tooling
 already proven on this codebase's sibling ADR-0045 lineage: a two-slot
-per-UID OFD-locked semaphore under
-`${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/d2b-heavy-gates`, nonblocking
-acquisition retried every 250 ms for up to 30 minutes, fail-closed (no
-`flock` fallback) on unsupported locking or timeout, with the child process
-receiving a duplicated locked-FD handle and the wrapper retaining
-group-signal/reap ownership exactly as documented. Building this tool (if
-not already present at ADR 0046 implementation time) is work item
-`ADR046-delivery-001` (§17); every wave's `make heavy-check`,
+per-UID OFD-locked semaphore in the fixed, system-provisioned
+`/run/d2b-heavy-gates/uid-<uid>/` namespace. The root and per-uid directory
+are root-owned and non-writable by unprivileged users; the two `slot-*`
+files are pre-created, owned by the target uid, and mode `0600`. Acquisition
+is nonblocking, retried every 250 ms for up to 30 minutes, and fail-closed
+(with no `flock` fallback) on unsupported locking or timeout. The child
+receives a duplicated locked-FD handle and the wrapper retains
+group-signal/reap ownership exactly as documented.
+
+There is no fallback namespace. An absent or malformed root is an
+environment error whose diagnostic names `make heavy-gate-provision` as the
+remediation. The NixOS module uses a systemd-tmpfiles rule for the fixed root
+and provisions configured lifecycle users' root-owned per-uid directories
+and two private slots after numeric UIDs are available; hosts not consuming
+the module use the Make target. A user-owned temporary root was vulnerable
+in two independent ways: a foreign uid could squat it and force the
+foreign-owner check to deny service, while the owning uid could rename it
+and obtain a fresh two-slot pool that defeated the semaphore. A conditional
+`/run/user/<uid>` location is also rejected: it is not always present and
+its uid-owned namespace permits the same rename and split-pool attack.
+
+Building this tool (if not already present at ADR 0046 implementation time)
+is work item `ADR046-delivery-001` (§17); every wave's `make heavy-check`,
 `make heavy-test-integration`, `make heavy-test-host-integration`, and
 `make heavy-test-hardware` targets route through it. "Sole use" means: no
 wave, no Provider crate, and no panel/validator role may create a second
@@ -1390,7 +1405,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask heavy-gate` implementation (per D001/D041 unrestricted-reuse policy) |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/heavy_gate.rs`; `Makefile` targets `heavy-check`, `heavy-test-integration`, `heavy-test-host-integration`, `heavy-test-hardware`, `heavy-cargo-test`, `heavy-flake-check` |
-| Detailed design | Two-slot per-UID OFD-locked semaphore, 250 ms nonblocking retry up to 30 minutes, fail-closed on unsupported locking, duplicated locked-FD handoff to child, wrapper-owned group-signal/reap, as specified in §11 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout. |
+| Detailed design | Two-slot per-UID OFD-locked semaphore in the fixed `/run/d2b-heavy-gates/uid-<uid>/` namespace: root-owned non-writable root and per-uid directories, two pre-created target-uid-owned mode-`0600` slot files, no fallback, and a provisioning error naming `make heavy-gate-provision` when the namespace is absent or malformed. The NixOS module provisions the root through systemd-tmpfiles and the configured lifecycle-user slots after numeric UIDs exist; the Make target provisions hosts that do not consume the module. Acquisition uses a 250 ms nonblocking retry up to 30 minutes, fails closed on unsupported locking, duplicates the locked FD into the child, and retains wrapper-owned group-signal/reap semantics, as specified in §11. Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt paths/crate names to this repository's `packages/xtask` layout. |
 | Integration | Every heavy lane in §10.4/§10.10/§10.11 routes through this one binary; no wave adds a second lock mechanism |
 | Data migration | None - net-new tooling |
 | Validation | Unit tests for slot acquisition/timeout/fail-closed paths; integration test spawning two concurrent heavy-gate invocations and asserting the second blocks until the first releases |

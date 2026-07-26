@@ -751,7 +751,7 @@ Source: `packages/d2b/src/` `NativeCommand` enum + subcommand handlers.
 | `/run/d2b/r-<realm>/broker.sock` | per-realm broker socket | ADAPT | Pre-bound by Zone runtime allocator per ADR 0046; move to Zone runtime directory | `ADR046-core-001` |
 | `/sys/fs/cgroup/d2b.slice/` | broker cgroup delegation | RETAIN | Zone-scoped cgroup leaves; no top-level rename needed | |
 | `${XDG_RUNTIME_DIR}/d2b-runtime-systemd-user.sock` | `d2b-unsafe-local-helper` (user-owned) | ADAPT | user-only `Host` runtime socket; ComponentSession replaces helper protocol per D042/D051; no-isolation posture label preserved in all socket-level audit | |
-| `/tmp/d2b-heavy-gates-$UID/` | `cargo xtask heavy-gate` semaphore | RETAIN | Keep semaphore; not a Zone resource | |
+| `/run/d2b-heavy-gates/uid-<uid>/` | `cargo xtask heavy-gate` semaphore | RETAIN | Fixed system-provisioned namespace: root and per-uid directory are root-owned and non-writable by unprivileged users; two target-uid-owned mode-`0600` slot files; no fallback. The NixOS module provisions it through systemd-tmpfiles plus post-user activation; `make heavy-gate-provision` serves other hosts. Not a Zone resource. | |
 | OFD lock files under `/run/d2b/` | d2b-state | RETAIN | OFD locks are mechanisms; not ResourceSpec fields per D034 | |
 | `/var/lib/d2b/zones/<zone>/bundle/generation-<N>.json` | new Zone bundle emitter (NEW) | NEW | Immutable integrity-pinned Zone resource bundle per generation; `root:d2bd` 0640 | §0.2 bundle/generation emission |
 | `/var/lib/d2b/zones/<zone>/bundle/current-generation` | Zone runtime | NEW | Active generation pointer; updated atomically on activation | §0.2 cleanup contract; prior bundles retained up to `retainedGenerations` count (default 3, range 1..16) |

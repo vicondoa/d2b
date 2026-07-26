@@ -6,11 +6,12 @@
   fresh handle, so a forged nesting marker that supplies an unlocked descriptor
   for a slot another lane happens to hold can no longer run a third concurrent
   lane, and the check-then-use race is removed.
-- Heavy-gate now verifies the runtime root that holds the shared semaphore
-  directory before use, accepting only a current-uid private directory or a
-  mode-verified root-owned sticky directory and rejecting peer-owned roots, so a
-  peer can no longer rename the verified shared directory between invocations to
-  split the semaphore into a second namespace.
+- Heavy-gate now verifies the fixed root-provisioned namespace that holds the
+  shared semaphore before use. It accepts only the root-owned, non-writable
+  root and per-uid directory plus the pre-created target-uid-owned mode-`0600`
+  slot files, and has no user-owned or temporary fallback, so neither a peer nor
+  the target uid can rename a slot name between invocations to split the
+  semaphore into a second namespace.
 - Heavy-gate unconditionally terminates and reaps the supervised process group
   after the leader exits, before restoring the signal mask, closing the window
   where a signal arriving between the post-exit drain and the conditional sweep

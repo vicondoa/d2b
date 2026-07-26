@@ -153,6 +153,18 @@ cannot oversubscribe the shared Nix store, cargo target directory, or KVM
 device. Do not add a second lock file, sleep-and-retry loop, or per-crate
 guard.
 
+The slot namespace is fixed at `/run/d2b-heavy-gates/uid-<uid>/`. The root
+and per-uid directory are root-owned and non-writable by unprivileged users;
+the two `slot-*` files are pre-created for the target uid at mode `0600`.
+There is no runtime-directory or temporary-directory fallback. The NixOS
+module provisions the root with systemd-tmpfiles and provisions configured
+lifecycle users' directories and slots after numeric UIDs are available.
+On a host that does not consume the module, run `make
+heavy-gate-provision`. An absent or malformed namespace is an environment
+error with that provisioning remediation, never permission to create a
+weaker pool. In particular, `/run/user/<uid>` is rejected because its owner
+can rename slot names or their parent and create an independent pool.
+
 The structure is public-lane-plus-guarded-internal:
 
 - **Public lane targets** (`make test-integration`,

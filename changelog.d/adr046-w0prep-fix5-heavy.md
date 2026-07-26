@@ -10,12 +10,13 @@
 
 ### Security
 
-- The heavy-gate semaphore now uses a single canonical per-uid namespace
-  (`/run/user/<uid>`, falling back to `/tmp` only when the runtime directory is
-  unavailable). It no longer honours `XDG_RUNTIME_DIR` or `TMPDIR`, so a caller
-  can no longer point a lane at a private directory to obtain an independent
-  slot pool and defeat the global two-slot concurrency limit while still passing
-  slot verification honestly.
+- The heavy-gate semaphore now uses the single protected
+  `/run/d2b-heavy-gates/uid-<uid>/` namespace. Its root and per-uid directory
+  are root-owned and non-writable by unprivileged users, and its two slot
+  files are pre-created for the target uid at mode `0600`. It never honours
+  `XDG_RUNTIME_DIR` or `TMPDIR` and has no fallback, so neither a foreign uid
+  squatting a temporary name nor the invoking uid renaming a user-owned
+  namespace can deny service or obtain an independent two-slot pool.
 - The container integration lane now holds a heavy-gate slot. The aggregating
   `tests/test-integration.sh` runner and the standalone
   `tests/integration/containers/ubuntu-host-check.sh` entrypoint both prove a
