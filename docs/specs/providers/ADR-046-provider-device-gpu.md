@@ -49,14 +49,14 @@ Crate: `packages/d2b-provider-device-gpu/`
 packages/d2b-provider-device-gpu/
   src/
     lib.rs               Controller entry point; exports controller/worker binaries
-    controller.rs        Async reconcile loop; ResourceClient; spec/status owner
+    controller.rs        Async reconcile loop; ResourceClient; Device spec/status owner
     probe.rs             GpuEffectPort::probe_drm_device call; hotplug observe scheduler; three-strike counter
     arbitration.rs       Exclusive vs shared claim arbitration; conflict detection
     worker_gpu.rs        Full GPU and render-node Process creation/teardown
     worker_video.rs      Video-decoder Process creation/teardown; wire-contract check
     argv.rs              Thin re-export of d2b-host gpu_argv / video_argv generators
     effect_claim.rs      Device claim registration; GpuEffectPort claim state (no execution authority; claim authority is Device resource status + core Operation ledger)
-    status.rs            Status writer; condition builder; phase state machine
+    status.rs            Device status writer; condition builder; phase state machine
     audit.rs             Path-free audit record emitter
     error.rs             Typed error enum; stable closed-set error slugs
   tests/
@@ -139,8 +139,10 @@ spec:
 
 Core aggregates the controller Process status (phase, conditions) into the
 `Provider/device-gpu` status. Per D087, `device-gpu` declares no Provider state
-Volume; bounded non-secret controller operational state lives in Device/Provider
-status and the core Operation ledger, and the controller has no `/state` mount.
+Volume; bounded non-secret controller operational state lives in Device status
+and the core Operation ledger, and the controller has no `/state` mount. The
+Provider resource status remains a core-derived aggregate and is never written
+by the device-gpu controller.
 
 ## Device spec served by this Provider
 
@@ -1477,9 +1479,10 @@ d2b.zones.<zone>.resources."provider-device-gpu" = {
 `spec.config.controllerExecutionRef` declares the execution context for the
 controller Process. The `ProviderStateSet` for `Provider/device-gpu` is empty:
 `device-gpu` declares no Provider state Volume, does not export `Volume` as a
-ResourceType, and has no controller `/state` mount. Device resource status,
-Provider status, and core Operation rows are the authority for bounded
-non-secret operational state.
+ResourceType, and has no controller `/state` mount. Device resource status and
+core Operation rows are the authority for bounded non-secret controller state;
+core derives the separate Provider aggregate from component, dependency, and
+Process health.
 
 The Device spec carries **no** `artifactId` field. Binary paths for crosvm
 (GPU and video) are resolved from the **signed component descriptor** inside the
@@ -1539,7 +1542,7 @@ When a GPU Device resource is removed from the Nix config:
 | `arbitration_conflict.rs` | Second Guest attempts exclusive claim; controller writes `ClaimConflict` condition, sets second Device phase `Degraded` |
 | `video_dependency.rs` | Video Process not created until GPU Process reaches `Ready`; video Process stopped when GPU Process fails |
 | `seccomp_policy_ref.rs` | `sandbox.seccompClass` for gpu/video/render-node Process templates are `w1-gpu`, `w1-video`, `w1-gpu-render-node` (stable regression guard; confirms system-minijail enforces correct class before exec) |
-| `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller and worker Process templates have no `/state` mounts; no GPU Device-payload Volume exists; bounded operational observations are written to Device/Provider status and Operation rows; render-node access remains a Device attachment rather than Provider state |
+| `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller and worker Process templates have no `/state` mounts; no GPU Device-payload Volume exists; bounded controller observations are written to Device status and Operation rows; core alone derives Provider status; render-node access remains a Device attachment rather than Provider state |
 
 ### `integration/` - container/Host/Guest fixtures
 
@@ -1764,7 +1767,7 @@ disposition contract test passes.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-device-gpu/` component descriptor; controller/status tests |
-| Detailed design | Do **not** declare a controller Provider state Volume. The device-gpu component descriptor declares an empty ProviderStateSet; controller and worker Process templates contain no `/state` mount. Bounded non-secret operational state is published to Device/Provider status and the core Operation ledger. GPU has no Device-payload Volume; render-node access remains a Device attachment resolved by LaunchTicket and broker policy. Primary reuse disposition: `create`. Preserved source-plan detail: `new` - status-first state assertions in the component descriptor and controller tests. |
+| Detailed design | Do **not** declare a controller Provider state Volume. The device-gpu component descriptor declares an empty ProviderStateSet; controller and worker Process templates contain no `/state` mount. Bounded non-secret controller state is published to Device status and the core Operation ledger; core alone derives aggregate Provider status from component, dependency, and Process health. GPU has no Device-payload Volume; render-node access remains a Device attachment resolved by LaunchTicket and broker policy. Primary reuse disposition: `create`. Preserved source-plan detail: `new` - status-first state assertions in the component descriptor and controller tests. |
 | Integration | `tests/status_state.rs`; `integration/gpu_worker_start/` verifies controller startup is gated by resource dependencies and status writer authority, not by a Provider state Volume |
 | Data migration | None - no Provider state Volume exists to migrate. |
 | Validation | `cargo test -p d2b-provider-device-gpu --test status_state`; component descriptor golden has no Provider state Volume declaration; controller Process template has no `/state` mount; ProviderStateSet query is empty; status/core-ledger fields carry bounded operational observations |

@@ -879,8 +879,9 @@ spec:
   transfer. `AudioBinding.spec` is the durable desired intent for grants/levels,
   and its AudioService is the backing authority/route; no application state
   file is written. The worker declares no Provider state
-  Volume; bounded non-secret observations are stored in `AudioBinding.status`, the
-  Provider status subresource where applicable, and the core Operation ledger.
+  Volume; bounded non-secret controller observations are stored in
+  `AudioBinding.status` and the core Operation ledger. Core separately derives
+  aggregate Provider status from component, dependency, and Process health.
 - `domain: system` - the worker runs in the system domain. The execution
   principal is a core Process principal from the bounded pool allocated by the
   Process Provider; it is not a controller-created `User` resource and does not
