@@ -337,12 +337,7 @@ spec:
     backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
-  mounts:
-    - volumeRef: Volume/notification-desktop--controller--runtime--<host-short>
-      view: main
-      mountPath: /state
-      access: read-write
-      required: true
+  mounts: []
   drainTimeout: "30s"
 ```
 
@@ -396,12 +391,7 @@ spec:
     backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
-  mounts:
-    - volumeRef: Volume/notification-desktop--host-sink--runtime--<host-short>
-      view: main
-      mountPath: /state
-      access: read-write
-      required: true
+  mounts: []
   drainTimeout: "10s"
 ```
 
@@ -455,12 +445,7 @@ spec:
     backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
-  mounts:
-    - volumeRef: Volume/notification-desktop--guest-source--runtime--<guest-short>
-      view: main
-      mountPath: /state
-      access: read-write
-      required: true
+  mounts: []
   drainTimeout: "5s"
 ```
 

@@ -449,7 +449,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-notification-desktop.md",
-      "sha256" : "a9b25a8ec7ceb4cca83f94a7726f5f69ea2dbfc13db587e464847f46aa80d2fe",
+      "sha256" : "4aae9cd4ebb991575821d7ebd6c09690e0d4da547ec84734a826675cd1dd1fe0",
       "specId" : "ADR-046-provider-notification-desktop",
       "status" : "Accepted",
       "supersedes" : null,
@@ -706,7 +706,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
-      "sha256" : "5dfb7448e31c82f32e2f15c83257990e1129c5600066e11724b1cdd6500c556b",
+      "sha256" : "dbee60de4c2471fe07f76ae86d836cc528e98aec19e7b2bdf9cf59f65ed42541",
       "specId" : "ADR-046-provider-transport-azure-relay",
       "status" : "Accepted",
       "supersedes" : "`d2b-provider-relay` gateway-display relay path (`AcaWorkloadProvider` + `RelayProvider` traits in `d2b-realm-provider`); `d2b-gateway-runtime/src/bin/d2b-gateway-relay.rs`; `packages/d2b-provider-relay/src/lib.rs` as a first-party transport surface",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "5120ee38ebf514b93c257102b3c46410b50984438084bbe0a0a6d54177026d25",
+      "sha256" : "993129d08ee0b937fc7c1028d7e01c34ed839308f0dc05d27faf8c769acfb498",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
