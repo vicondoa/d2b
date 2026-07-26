@@ -281,10 +281,13 @@ in
 
   # Numeric UIDs for normal users may be allocated only when the users
   # activation step runs, so they cannot be embedded in static tmpfiles rules.
-  # Tmpfiles owns the fixed root; this activation step resolves each configured
-  # lifecycle user after account creation and provisions the root-owned per-UID
-  # directory plus its two UID-owned lock files. Existing regular slot inodes
-  # are repaired in place so a switch cannot replace an inode carrying a lock.
+  # Tmpfiles owns the fixed root; this activation step provisions slots for
+  # lifecycle users that NSS can resolve at activation time. Network-backed
+  # users may not resolve until networking and their identity provider are
+  # available, so they are deferred to the explicit post-login
+  # `make heavy-gate-provision` path. The gate remains fail-closed while their
+  # per-UID directory is absent. Existing regular slot inodes are repaired in
+  # place so a switch cannot replace an inode carrying a lock.
   system.activationScripts.d2bHeavyGateProvision = lib.stringAfter [ "users" ] ''
     set -eu
     gate_root=/run/d2b-heavy-gates
@@ -296,15 +299,15 @@ in
     ${pkgs.coreutils}/bin/install -d -m 0755 -o root -g root "$gate_root"
 
     for user in ${lib.escapeShellArgs cfg.site.launcherUsers}; do
-      passwd_record="$(${pkgs.getent}/bin/getent passwd "$user")" || {
-        echo "d2b heavy-gate provisioning: configured lifecycle user is unavailable" >&2
-        exit 1
-      }
+      if ! passwd_record="$(${pkgs.getent}/bin/getent passwd "$user")"; then
+        echo "d2b heavy-gate provisioning: configured lifecycle user is unavailable during activation; skipping; run make heavy-gate-provision as that user after login" >&2
+        continue
+      fi
       uid="$(${pkgs.coreutils}/bin/printf '%s\n' "$passwd_record" | ${pkgs.coreutils}/bin/cut -d: -f3)"
       case "$uid" in
         ""|*[!0-9]*)
-          echo "d2b heavy-gate provisioning: lifecycle user has an invalid uid" >&2
-          exit 1
+          echo "d2b heavy-gate provisioning: lifecycle user has no usable uid during activation; skipping; run make heavy-gate-provision as that user after login" >&2
+          continue
           ;;
       esac
 
@@ -829,7 +832,7 @@ in
               #   audio role         → PipeWire/Pulse only (ACL: rx on dir, rwx on pipewire/pulse, --- on wayland)
               #   all other roles    → deny everything (--- on dir and all sockets)
               ${lib.optionalString (cfg.site.waylandUser != null) ''
-                wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+                wuid=$(${pkgs.coreutils}/bin/id -u ${lib.escapeShellArg cfg.site.waylandUser} 2>/dev/null || true)
                 if [ -n "$wuid" ]; then
                   rdir="/run/user/$wuid"
                   if [ -d "$rdir" ]; then
@@ -948,7 +951,7 @@ in
             # principal without adding it to the broader role ACL loop.
             ${lib.optionalString (cfg.site.waylandUser != null) ''
               stale_video_uid="${toString (d2bLib.stablePrincipalId "d2b-${name}-video")}"
-              wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+              wuid=$(${pkgs.coreutils}/bin/id -u ${lib.escapeShellArg cfg.site.waylandUser} 2>/dev/null || true)
               if [ -n "$wuid" ]; then
                 rdir="/run/user/$wuid"
                 if [ -d "$rdir" ]; then
@@ -978,7 +981,7 @@ in
             if ! echo "$qemu_media_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$stale_qemu_media_uid"; then
               [ -e /dev/kvm ] && ${pkgs.acl}/bin/setfacl -x "u:$stale_qemu_media_uid" /dev/kvm 2>/dev/null || true
               ${lib.optionalString (cfg.site.waylandUser != null) ''
-                wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+                wuid=$(${pkgs.coreutils}/bin/id -u ${lib.escapeShellArg cfg.site.waylandUser} 2>/dev/null || true)
                 if [ -n "$wuid" ]; then
                   rdir="/run/user/$wuid"
                   if [ -d "$rdir" ]; then
@@ -1007,7 +1010,7 @@ in
             # GPU compositor grants so the old surface is closed fail-closed.
             ${lib.optionalString (cfg.site.waylandUser != null) ''
               stale_gpu_uid="${toString (d2bLib.stablePrincipalId "d2b-${name}-gpu")}"
-              wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+              wuid=$(${pkgs.coreutils}/bin/id -u ${lib.escapeShellArg cfg.site.waylandUser} 2>/dev/null || true)
               if [ -n "$wuid" ] && [ -n "$wlproxy_wayland_uids" ]; then
                 rdir="/run/user/$wuid"
                 if [ -d "$rdir" ]; then

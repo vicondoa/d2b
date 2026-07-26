@@ -157,6 +157,24 @@ in
         lib.hasInfix ''install -m 0600 -o "$uid" -g root /dev/null "$slot"'' heavyGateProvisionText;
       slotOwner = lib.hasInfix ''chown "$uid":root "$slot"'' heavyGateProvisionText;
       slotMode = lib.hasInfix ''chmod 0600 "$slot"'' heavyGateProvisionText;
+      unavailableUserIsDeferred =
+        lib.hasInfix ''if ! passwd_record="$('' heavyGateProvisionText
+        && lib.hasInfix
+          "configured lifecycle user is unavailable during activation; skipping; run make heavy-gate-provision as that user after login"
+          heavyGateProvisionText;
+      invalidUidIsDeferred =
+        lib.hasInfix ''""|*[!0-9]*)'' heavyGateProvisionText
+        && lib.hasInfix
+          "lifecycle user has no usable uid during activation; skipping; run make heavy-gate-provision as that user after login"
+          heavyGateProvisionText;
+      resolutionFailuresContinue =
+        builtins.length
+          (builtins.filter
+            (line: lib.hasInfix "continue" line)
+            (lib.splitString "\n" heavyGateProvisionText)) >= 2;
+      unavailableUserDoesNotAbort =
+        !(lib.hasInfix "configured lifecycle user is unavailable\" >&2\n        exit 1"
+          heavyGateProvisionText);
     };
     expected = {
       rootCreate = true;
@@ -166,6 +184,10 @@ in
       slotCreate = true;
       slotOwner = true;
       slotMode = true;
+      unavailableUserIsDeferred = true;
+      invalidUidIsDeferred = true;
+      resolutionFailuresContinue = true;
+      unavailableUserDoesNotAbort = true;
     };
   };
 

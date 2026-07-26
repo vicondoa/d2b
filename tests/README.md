@@ -101,14 +101,18 @@ workspace, so the bare `cargo xtask` alias resolves only when run from
 The semaphore uses a protected, system-provisioned namespace under
 `/run/d2b-heavy-gates`; it never falls back to a user-writable runtime or
 temporary directory. The NixOS module provisions the fixed root at boot and
-creates two private slots for every configured `d2b.site.launcherUsers` member
-after numeric UIDs are available. On a development machine that does not use
-the module, run `make heavy-gate-provision` once after each boot. That target
-uses `sudo` only to create the root-owned namespace and the current user's two
-mode-`0600` slot files. A missing or malformed namespace fails closed with
-stable code `heavy-gate-provisioning-required` and names that Make target as
-the remediation; do not work around it by moving the gate into `/tmp` or
-another user-owned location.
+creates two private slots for each configured `d2b.site.launcherUsers` member
+that NSS can resolve during activation. An unavailable network-backed user is
+deferred rather than failing activation. After that user logs in, or on a
+development machine that does not use the module, run
+`make heavy-gate-provision` once per boot when the gate requests it. The target
+uses the caller's numeric UID without an NSS user-name lookup and uses `sudo`
+only to create the root-owned namespace and the current user's two mode-`0600`
+slot files. This per-boot step is necessary because `/run` is a tmpfs. Until it
+is complete, a missing or malformed namespace fails closed with stable code
+`heavy-gate-provisioning-required` and names that Make target as the
+remediation; do not work around it by moving the gate into `/tmp` or another
+user-owned location.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
