@@ -458,6 +458,7 @@ test-runtime-ledger:
 	echo "test-runtime-ledger: selecting libtest-harness targets per census crate (harness=false custom-main binaries emit no libtest JSON and cannot be timed)"; \
 	meta="$$work/cargo-metadata.json"; \
 	( cd packages && cargo metadata --format-version 1 --no-deps ) > "$$meta" 2>/dev/null; \
+	redactor="$$(jq -r '.target_directory + "/debug/xtask"' "$$meta")"; \
 	for crate in $$crates; do \
 	  manifest="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .manifest_path' "$$meta")"; \
 	  if [ -z "$$manifest" ] || [ ! -f "$$manifest" ]; then \
@@ -487,7 +488,17 @@ test-runtime-ledger:
 	        -Z unstable-options --format=json --report-time ) > "$$json" 2> "$$err" || status=$$?; \
 	    if [ "$$status" -ne 0 ]; then \
 	      echo "test-runtime-ledger: cargo test exited $$status for census crate $$crate; failing closed before recording any measurement" >&2; \
-	      sed -e "s#$(abspath .)#<repo>#g" -e "s#$$HOME#<home>#g" "$$err" 2>/dev/null | tail -n 20 >&2 || true; \
+	      redact_status=0; \
+	      if [ ! -x "$$redactor" ]; then \
+	        echo "test-runtime-ledger: diagnostic redactor unavailable; raw cargo output suppressed" >&2; \
+	      elif [ -n "$${HOME:-}" ]; then \
+	        "$$redactor" redact-diagnostics --repo-root "$(abspath .)" --home "$$HOME" --tail-lines 20 < "$$err" >&2 || redact_status=$$?; \
+	      else \
+	        "$$redactor" redact-diagnostics --repo-root "$(abspath .)" --tail-lines 20 < "$$err" >&2 || redact_status=$$?; \
+	      fi; \
+	      if [ "$$redact_status" -ne 0 ]; then \
+	        echo "test-runtime-ledger: diagnostic redaction failed; raw cargo output suppressed" >&2; \
+	      fi; \
 	      exit 1; \
 	    fi; \
 	    if grep -q '"event": "failed"' "$$json"; then \
@@ -507,4 +518,3 @@ test-runtime-ledger:
 	    --output "$$ledger" $(D2B_RUNTIME_EXCEPTIONS) $$args ); \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
 	    --ledger "$$ledger" --expected-census "$$census" )
-
