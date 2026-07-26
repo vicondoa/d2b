@@ -318,7 +318,11 @@ fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
         if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
-        if !mentions_key(&block.lines, "apiVersion") {
+        // A Nix `inherit apiVersion;` has no `apiVersion =` token for the cheap
+        // textual prefilter, but the structural parser can still expose the
+        // semantic key. Parse every Nix fence; retain the prefilter for the
+        // other syntaxes.
+        if block.lang != "nix" && !mentions_key(&block.lines, "apiVersion") {
             continue;
         }
         let intends_envelope =
@@ -1163,7 +1167,18 @@ fn parser_backed_scanners_reject_structural_bypasses() {
             "selected-attribute",
             format!("({{ selected = {incomplete}; }}).selected"),
         ),
+        (
+            "select-default",
+            format!("missing.resource or {incomplete}"),
+        ),
         ("legacy-let-body", format!("let {{ body = {incomplete}; }}")),
+        (
+            "inherited-attributes",
+            r#"{
+  inherit (source) apiVersion type status;
+}"#
+            .to_string(),
+        ),
         (
             "string-interpolation",
             r#"{
@@ -1205,6 +1220,31 @@ fn parser_backed_scanners_reject_structural_bypasses() {
     assert!(
         v[0].text.contains("universal status base"),
         "application must expose the literal resource argument: {}",
+        v[0].text
+    );
+
+    // Dynamic attribute names cannot be resolved without evaluation. They take
+    // the scanner's explicit parser-gap path instead of becoming a synthetic
+    // key that could hide a D116 violation.
+    let dynamic_attribute = r#"```nix
+{
+  type = "Host";
+  spec = {
+    allowedDomains = [ "system" "user" ];
+    ${"defaultUserRef"} = "User/alice";
+  };
+}
+```"#;
+    let v = scan_d116("f.md", dynamic_attribute);
+    assert_eq!(
+        v.len(),
+        1,
+        "dynamic attribute must fail closed: {}",
+        report("dynamic-attribute", &v)
+    );
+    assert!(
+        v[0].text.contains("structural parser could not model"),
+        "dynamic attribute must take the explicit parser-gap path: {}",
         v[0].text
     );
 

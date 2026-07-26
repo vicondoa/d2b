@@ -687,10 +687,14 @@ fn json_to_node(v: &serde_json::Value) -> Node {
 //   contribute a violation candidate.
 // * NODE_LIST recursively exposes each item.
 // * NODE_APPLY, NODE_BIN_OP, NODE_LAMBDA, NODE_LEGACY_LET, and NODE_SELECT
-//   over-approximate their structural result by exposing every descendant
-//   expression or binding. That finds every literal attribute-set candidate
-//   without pretending to evaluate Nix.
+//   over-approximate their structural result by exposing every result-capable
+//   descendant expression or binding, including a select's `or` default. That
+//   finds every literal attribute-set candidate without pretending to evaluate
+//   Nix.
 // * NODE_ASSERT exposes its body; the condition cannot be its result.
+// * Static `inherit` names become opaque entries, preserving the attribute-set
+//   shape; dynamic/interpolated attribute names fail closed because their
+//   semantic key cannot be known without evaluation.
 // * NODE_STRING, including interpolation, is a scalar value. Interpolation
 //   becomes Opaque while the containing attribute set remains traversable.
 // * identifiers, literals, paths, unary operations, attribute-existence tests,
@@ -848,15 +852,20 @@ fn nix_node_to_node(node: &SyntaxNode) -> Result<Node, ParseError> {
             })
             .and_then(|body| nix_node_to_node(&body)),
         SyntaxKind::NODE_LEGACY_LET => Ok(Node::Map(nix_attrset_entries(node)?)),
-        SyntaxKind::NODE_SELECT => node
-            .first_child()
-            .ok_or_else(|| {
-                ParseError(
+        SyntaxKind::NODE_SELECT => {
+            let candidates = node
+                .children()
+                .filter(|child| child.kind() != SyntaxKind::NODE_ATTRPATH)
+                .map(|child| nix_node_to_node(&child))
+                .collect::<Result<Vec<_>, _>>()?;
+            if candidates.is_empty() {
+                return Err(ParseError(
                     "NODE_SELECT has no source; refusing to skip a structural Nix expression"
                         .to_string(),
-                )
-            })
-            .and_then(|source| nix_node_to_node(&source)),
+                ));
+            }
+            Ok(Node::Seq(candidates))
+        }
         SyntaxKind::NODE_CUR_POS
         | SyntaxKind::NODE_HAS_ATTR
         | SyntaxKind::NODE_PATH_ABS
@@ -945,21 +954,30 @@ fn unescape_nix(s: &str) -> String {
 fn nix_attrset_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
     let mut entries: Vec<Entry> = Vec::new();
     for child in node.children() {
-        if child.kind() != SyntaxKind::NODE_ATTRPATH_VALUE {
-            continue;
+        match child.kind() {
+            SyntaxKind::NODE_ATTRPATH_VALUE => {
+                let Some(path_node) = child
+                    .children()
+                    .find(|candidate| candidate.kind() == SyntaxKind::NODE_ATTRPATH)
+                else {
+                    return Err(ParseError(
+                        "Nix attribute value has no attribute path".to_string(),
+                    ));
+                };
+                let segments = nix_attrpath_segments(&path_node)?;
+                if segments.is_empty() {
+                    return Err(ParseError("Nix attribute path is empty".to_string()));
+                }
+                let value = nix_attrpath_value(&child)?;
+                insert_path(&mut entries, &segments, value);
+            }
+            SyntaxKind::NODE_INHERIT => entries.extend(nix_inherit_entries(&child)?),
+            kind => {
+                return Err(ParseError(format!(
+                    "unexpected {kind:?} inside a Nix attribute set; refusing to skip an entry"
+                )));
+            }
         }
-        let Some(path_node) = child
-            .children()
-            .find(|c| c.kind() == SyntaxKind::NODE_ATTRPATH)
-        else {
-            continue;
-        };
-        let segments = nix_attrpath_segments(&path_node);
-        if segments.is_empty() {
-            continue;
-        }
-        let value = nix_attrpath_value(&child)?;
-        insert_path(&mut entries, &segments, value);
     }
     // Surface any `d2b-lint: <token>` comment that is a direct child of this
     // attrset as a synthetic entry, so a lint can bind an intentional-negative
@@ -980,6 +998,54 @@ fn nix_attrset_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
     Ok(entries)
 }
 
+fn nix_inherit_entries(node: &SyntaxNode) -> Result<Vec<Entry>, ParseError> {
+    let mut entries = Vec::new();
+    for attr in node.children() {
+        match attr.kind() {
+            SyntaxKind::NODE_INHERIT_FROM => {}
+            SyntaxKind::NODE_IDENT => entries.push(Entry {
+                key: attr.text().to_string().trim().to_string(),
+                val: Node::Opaque,
+                line: 0,
+            }),
+            SyntaxKind::NODE_STRING => {
+                if attr
+                    .children()
+                    .any(|child| child.kind() == SyntaxKind::NODE_INTERPOL)
+                {
+                    return Err(ParseError(
+                        "interpolated inherited attribute name cannot be modelled without \
+                         evaluation"
+                            .to_string(),
+                    ));
+                }
+                let Node::Scalar(key) = nix_string_node(&attr) else {
+                    return Err(ParseError(
+                        "inherited string attribute name is not a literal".to_string(),
+                    ));
+                };
+                entries.push(Entry {
+                    key,
+                    val: Node::Opaque,
+                    line: 0,
+                });
+            }
+            SyntaxKind::NODE_DYNAMIC => {
+                return Err(ParseError(
+                    "dynamic inherited attribute name cannot be modelled without evaluation"
+                        .to_string(),
+                ));
+            }
+            kind => {
+                return Err(ParseError(format!(
+                    "unexpected {kind:?} in a Nix inherit expression"
+                )));
+            }
+        }
+    }
+    Ok(entries)
+}
+
 fn nix_attrpath_value(node: &SyntaxNode) -> Result<Node, ParseError> {
     node.children()
         .find(|child| child.kind() != SyntaxKind::NODE_ATTRPATH)
@@ -988,12 +1054,21 @@ fn nix_attrpath_value(node: &SyntaxNode) -> Result<Node, ParseError> {
         .map(|value| value.unwrap_or(Node::Opaque))
 }
 
-fn nix_attrpath_segments(path: &SyntaxNode) -> Vec<String> {
+fn nix_attrpath_segments(path: &SyntaxNode) -> Result<Vec<String>, ParseError> {
     let mut segs = Vec::new();
     for seg in path.children() {
         match seg.kind() {
             SyntaxKind::NODE_IDENT => segs.push(seg.text().to_string().trim().to_string()),
             SyntaxKind::NODE_STRING => {
+                if seg
+                    .children()
+                    .any(|child| child.kind() == SyntaxKind::NODE_INTERPOL)
+                {
+                    return Err(ParseError(
+                        "interpolated Nix attribute name cannot be modelled without evaluation"
+                            .to_string(),
+                    ));
+                }
                 let mut content = String::new();
                 for tok in seg.children_with_tokens() {
                     if let Some(t) = tok.as_token()
@@ -1004,10 +1079,19 @@ fn nix_attrpath_segments(path: &SyntaxNode) -> Vec<String> {
                 }
                 segs.push(unescape_nix(&content));
             }
-            _ => segs.push("__d2b_dynamic__".to_string()),
+            SyntaxKind::NODE_DYNAMIC => {
+                return Err(ParseError(
+                    "dynamic Nix attribute name cannot be modelled without evaluation".to_string(),
+                ));
+            }
+            kind => {
+                return Err(ParseError(format!(
+                    "unexpected {kind:?} in a Nix attribute path"
+                )));
+            }
         }
     }
-    segs
+    Ok(segs)
 }
 
 fn insert_path(entries: &mut Vec<Entry>, segments: &[String], value: Node) {
