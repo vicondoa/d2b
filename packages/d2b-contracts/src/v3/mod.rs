@@ -1,7 +1,10 @@
 //! Canonical d2b v3 resource-plane contracts.
 
 pub mod identity;
+pub mod resource;
 pub mod resource_ref;
+pub mod resource_schema;
+pub mod resource_status;
 
 pub use identity::{
     AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
@@ -11,4 +14,21 @@ pub use identity::{
     ServiceName, SessionBinding, SessionPurpose, Timestamp, TranscriptHash, TransportBinding,
     ZoneId, ZoneRevision,
 };
+pub use resource::{
+    DisruptiveUpdateMode, FinalizerId, ManagedBy, NonDisruptiveUpdateMode, PresentationMetadata,
+    ProviderSpecExtension, ResourceEnvelope, ResourceError, ResourceMetadata, ResourceSpec,
+    UpdatePolicy,
+};
 pub use resource_ref::{ResourceRef, ResourceRefError};
+pub use resource_schema::{
+    BaseSchemaBinding, BaseSchemaIdentity, CANONICAL_JSON_PROFILE, CanonicalJsonError,
+    CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId, ExtensionSchemaLayer,
+    ObjectFieldSchema, ProviderExtensionRegistration, RESOURCE_ENVELOPE_DOMAIN_TAG,
+    RESOURCE_SPEC_DOMAIN_TAG, RESOURCE_STATUS_DOMAIN_TAG, ResourceSchemaContract,
+    ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion, canonical_digest, canonical_json_bytes,
+};
+pub use resource_status::{
+    ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,
+    ResourceOutcome, ResourcePhase, ResourceStatus, ResourceStatusError, ResourceUpdateStatus,
+    StatusCode, StatusMessage, UpdateDisruption, UpdateReason, UpdateState,
+};

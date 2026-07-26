@@ -887,6 +887,18 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "d2b-controller-toolkit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1133,6 +1145,15 @@ dependencies = [
  "d2b-realm-core",
  "d2b-realm-provider",
  "tokio",
+]
+
+[[package]]
+name = "d2b-resource-store-redb"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-controller-toolkit",
+ "redb",
 ]
 
 [[package]]
@@ -2968,6 +2989,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4140,6 +4170,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"
