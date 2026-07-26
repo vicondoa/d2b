@@ -70,6 +70,9 @@ pub const MAX_SAMPLES_PER_ID: usize = 4_096;
 /// than this is rejected before it is parsed so a giant blob cannot be folded
 /// into the ledger or echoed into a violation message.
 pub const MAX_LIBTEST_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum length of the closed malformed-event diagnostic. The parser never
+/// includes the hostile input line in this message.
+const MAX_LIBTEST_PARSE_ERROR_LEN: usize = 128;
 
 static CENSUS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -357,14 +360,27 @@ pub fn parse_libtest_json(stream: &str) -> Result<Vec<(String, u64)>, String> {
         ));
     }
     let mut out = Vec::new();
-    for line in stream.lines() {
+    for (line_index, line) in stream.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || !line.starts_with('{') {
             continue;
         }
         let event: LibtestEvent = match serde_json::from_str(line) {
             Ok(event) => event,
-            Err(error) => return Err(format!("malformed libtest event `{line}`: {error}")),
+            Err(error) => {
+                let reason = match error.classify() {
+                    serde_json::error::Category::Io => "input read error",
+                    serde_json::error::Category::Syntax => "invalid JSON syntax",
+                    serde_json::error::Category::Data => "event fields have invalid types",
+                    serde_json::error::Category::Eof => "truncated JSON object",
+                };
+                let mut diagnostic = format!(
+                    "malformed libtest event at line {}: {reason}",
+                    line_index + 1
+                );
+                diagnostic.truncate(MAX_LIBTEST_PARSE_ERROR_LEN);
+                return Err(diagnostic);
+            }
         };
         if event.kind != "test" {
             continue;
@@ -1203,6 +1219,25 @@ mod tests {
             vec![("a::b".to_string(), 12)]
         );
         assert!(parse_libtest_json("{ \"type\": \"test\" ").is_err());
+    }
+
+    #[test]
+    fn malformed_libtest_events_report_only_a_bounded_sanitized_reason() {
+        let sentinel = "/home/redaction-sentinel-libtest/private";
+        let hostile = format!(
+            "ignored\n{{\"type\":\"test\",\"name\":\"{sentinel}{}\"",
+            "x".repeat(4_096)
+        );
+
+        let error = parse_libtest_json(&hostile).expect_err("malformed event must fail");
+        assert!(error.contains("at line 2"), "{error}");
+        assert!(error.contains("truncated JSON object"), "{error}");
+        assert!(!error.contains(sentinel), "host path leaked: {error}");
+        assert!(
+            error.len() <= MAX_LIBTEST_PARSE_ERROR_LEN,
+            "parse diagnostic is not bounded: {} bytes",
+            error.len()
+        );
     }
 
     #[test]

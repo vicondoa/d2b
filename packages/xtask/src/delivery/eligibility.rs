@@ -551,7 +551,7 @@ pub fn open_sealed_candidate(
 ) -> Result<(CandidateDir, SealRecord)> {
     let (candidate, seal): (CandidateDir, SealRecord) =
         state.open_candidate_artifact(seal_path, SEAL_FILE, "wave seal")?;
-    seal.validate()?;
+    seal.validate(&candidate)?;
     Ok((candidate, seal))
 }
 
@@ -984,5 +984,25 @@ mod tests {
         let mut wrong_kind = target(fixtures::material());
         wrong_kind.artifact_kind = "d2b-delivery/wave-seal".to_owned();
         assert!(capture(&candidate, wrong_kind).is_err());
+    }
+
+    #[test]
+    fn a_seal_copied_to_another_candidate_address_is_rejected() {
+        let scratch = Scratch::new("eligibility-copied-seal");
+        let (_candidate, seal, _snapshot) = sealed(&scratch);
+        let state = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let other_id = CandidateId::parse("e".repeat(64)).expect("candidate id");
+        let other = state
+            .candidate(&seal.wave, &other_id)
+            .expect("second candidate");
+        other.write_json(SEAL_FILE, &seal).expect("copy seal");
+
+        let error = open_sealed_candidate(&state, &other.seal_path())
+            .expect_err("copied seal must not change candidate identity");
+        assert_eq!(error.kind(), DeliveryErrorKind::Invalid);
+        assert!(
+            error.message().contains("delivery-state address"),
+            "{error}"
+        );
     }
 }

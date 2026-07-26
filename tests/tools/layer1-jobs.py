@@ -96,6 +96,8 @@ def simple_nix_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""
@@ -107,6 +109,8 @@ def simple_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""
 
@@ -121,6 +125,8 @@ def tier0_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}{extra}"""
 
@@ -133,6 +139,7 @@ def changelog_job(job: dict[str, Any]) -> str:
     steps:
       - uses: {CHECKOUT}
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""
@@ -159,6 +166,7 @@ def rust_job(job: dict[str, Any]) -> str:
     steps:
       - uses: {CHECKOUT}
         with:
+          persist-credentials: false
           fetch-depth: 0
 {nix_setup_step()}
       - name: Free runner disk for Rust gate
@@ -216,6 +224,8 @@ def flake_discover_job(job: dict[str, Any]) -> str:
       checks: ${{{{ steps.list.outputs.checks }}}}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - id: list
         name: {job["displayName"]}
@@ -237,6 +247,8 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
         check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.checks) }}}}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: Add swap (insurance for the heaviest single check)
         run: |
           # A single check instantiates in its own process and fits a 16 GB
@@ -268,6 +280,8 @@ def flake_x86_outputs_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - name: {job["displayName"]}
         env:
@@ -283,6 +297,8 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: {job["displayName"]}
         run: |
           discover='${{{{ needs.flake-eval-discover.result }}}}'
@@ -303,6 +319,8 @@ def flake_aarch64_smoke_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - name: {job["displayName"]}
         run: |
@@ -324,6 +342,8 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
         "    timeout-minutes: 5",
         "    steps:",
         f"      - uses: {CHECKOUT}",
+        "        with:",
+        "          persist-credentials: false",
         "      - name: Require generated Layer-1 gate graph to pass",
         "        run: |",
         "          failed=0",

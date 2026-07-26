@@ -1064,7 +1064,9 @@ mod tests {
         let record: crate::delivery::seal::SealRecord = candidate
             .read_json(crate::delivery::storage::SEAL_FILE)
             .expect("read the sealed record");
-        record.validate().expect("the sealed record re-validates");
+        record
+            .validate(&candidate)
+            .expect("the sealed record re-validates");
         assert_eq!(record.candidate_id, view.candidate_id);
         assert_eq!(record.evidence.len(), 2);
         assert_eq!(

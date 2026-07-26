@@ -42,11 +42,11 @@ impl DiagnosticRedactor {
     }
 
     fn redact(&self, input: &str) -> String {
-        let mut redacted = input.to_owned();
+        let mut redacted = strip_control_characters(&normalize_ansi_escape_sequences(input));
         for root in &self.roots {
             redacted = replace_sensitive_root(&redacted, &root.path, root.replacement);
         }
-        redact_other_absolute_paths(&strip_control_characters(&redacted))
+        redact_other_absolute_paths(&redacted)
     }
 }
 
@@ -113,7 +113,7 @@ fn is_start_boundary(bytes: &[u8], index: usize) -> bool {
     index == 0
         || matches!(
             bytes[index - 1],
-            b' ' | b'\t' | b'\n' | b'\r' | b'\'' | b'"' | b'(' | b'[' | b'{' | b'=' | b':'
+            b' ' | b'\t' | b'\n' | b'\r' | b'\'' | b'"' | b'`' | b'(' | b'[' | b'{' | b'=' | b':'
         )
 }
 
@@ -127,6 +127,7 @@ fn is_end_boundary(bytes: &[u8], index: usize) -> bool {
                 | b'\r'
                 | b'\''
                 | b'"'
+                | b'`'
                 | b')'
                 | b']'
                 | b'}'
@@ -170,11 +171,56 @@ fn strip_control_characters(input: &str) -> String {
         .collect()
 }
 
+fn normalize_ansi_escape_sequences(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            let character = input[index..].chars().next().expect("valid UTF-8");
+            output.push(character);
+            index += character.len_utf8();
+            continue;
+        }
+
+        output.push(' ');
+        index += 1;
+        match bytes.get(index).copied() {
+            Some(b'[') => {
+                index += 1;
+                while let Some(byte) = bytes.get(index).copied() {
+                    index += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            Some(b']' | b'P' | b'X' | b'^' | b'_') => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == 0x07 {
+                        index += 1;
+                        break;
+                    }
+                    if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+                        index += 2;
+                        break;
+                    }
+                    index += input[index..].chars().next().map_or(1, char::len_utf8);
+                }
+            }
+            Some(0x40..=0x5f) => index += 1,
+            _ => {}
+        }
+    }
+    output
+}
+
 fn is_unquoted_path_terminator(byte: u8) -> bool {
     byte.is_ascii_whitespace()
         || matches!(
             byte,
-            b'\'' | b'"' | b')' | b']' | b'}' | b'<' | b'>' | b',' | b';' | b'|'
+            b'\'' | b'"' | b'`' | b')' | b']' | b'}' | b'<' | b'>' | b',' | b';' | b'|'
         )
 }
 
@@ -416,6 +462,33 @@ mod tests {
             redact_path(&repo.join("two/shared.rs")),
             "<repo>/two/shared.rs"
         );
+    }
+
+    #[test]
+    fn paths_delimited_by_backticks_are_redacted() {
+        let scratch = Scratch::new("backtick-boundary");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let redactor = DiagnosticRedactor::new(&repo, None).unwrap();
+        let diagnostic = format!("failed to read `{}/src/main.rs`", repo.display());
+
+        let output = redactor.redact(&diagnostic);
+        assert_eq!(output, "failed to read `<repo>/src/main.rs`");
+        assert!(!output.contains(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn ansi_color_sequences_are_normalized_before_path_matching() {
+        let scratch = Scratch::new("ansi-boundary");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let redactor = DiagnosticRedactor::new(&repo, None).unwrap();
+        let diagnostic = format!("error:\u{1b}[31m{}/src/main.rs\u{1b}[0m", repo.display());
+
+        let output = redactor.redact(&diagnostic);
+        assert!(output.contains("<repo>/src/main.rs"), "{output}");
+        assert!(!output.contains(repo.to_str().unwrap()));
+        assert!(!output.contains('\u{1b}'));
     }
 
     #[test]

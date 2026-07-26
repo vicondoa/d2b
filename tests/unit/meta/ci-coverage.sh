@@ -25,6 +25,47 @@ for required in "$MANIFEST" "$MAKEFILE"; do
   fi
 done
 
+checkout_credential_errors=()
+while IFS= read -r workflow; do
+  checkout_count=$(grep -Ec 'uses:[[:space:]]*actions/checkout@' "$workflow" || true)
+  secured_count=$(
+    awk '
+      /^[[:space:]]*- uses:[[:space:]]*actions\/checkout@/ {
+        if (getline with_line <= 0) {
+          next
+        }
+        sub(/^[[:space:]]*/, "", with_line)
+        if (with_line != "with:") {
+          next
+        }
+        if (getline credential_line <= 0) {
+          next
+        }
+        sub(/^[[:space:]]*/, "", credential_line)
+        if (credential_line == "persist-credentials: false") {
+          secured += 1
+        }
+      }
+      END { print secured + 0 }
+    ' "$workflow"
+  )
+  if [ "$checkout_count" -ne "$secured_count" ]; then
+    checkout_credential_errors+=(
+      "${workflow#"$ROOT"/}: $secured_count of $checkout_count checkout steps immediately disable credential persistence"
+    )
+  fi
+done < <(
+  find "$WORKFLOW_DIR" -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) -print \
+    | LC_ALL=C sort
+)
+
+if [ "${#checkout_credential_errors[@]}" -gt 0 ]; then
+  echo "FAIL: GitHub Actions checkout credential coverage is incomplete:" >&2
+  printf '  %s\n' "${checkout_credential_errors[@]}" >&2
+  exit 1
+fi
+
 expected_workflow_shell='shell: sh tests/tools/ci-shell {0}'
 workflow_shell_errors=()
 while IFS= read -r workflow; do
