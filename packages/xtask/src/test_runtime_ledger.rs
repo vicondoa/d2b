@@ -17,7 +17,15 @@
 //! `libtest --format=json` stream) and never spawns a test runner itself, so
 //! the ledger stays reproducible and free of host paths.
 
-use std::{collections::BTreeMap, collections::BTreeSet, fs, path::Path, process::ExitCode};
+use std::{
+    collections::BTreeMap,
+    collections::BTreeSet,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +62,60 @@ pub const MAX_SAMPLES_PER_ID: usize = 4_096;
 /// than this is rejected before it is parsed so a giant blob cannot be folded
 /// into the ledger or echoed into a violation message.
 pub const MAX_LIBTEST_BYTES: usize = 8 * 1024 * 1024;
+
+static CENSUS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct CensusTempFile {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl CensusTempFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CensusTempFile {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn write_expected_census_atomic(output: &Path, rendered: &[u8]) -> Result<(), String> {
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let leaf = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "the expected census output has no valid file name".to_string())?;
+    let sequence = CENSUS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = parent.join(format!(".{leaf}.tmp.{}.{sequence}", std::process::id()));
+    let mut temp_guard = CensusTempFile::new(temp_path.clone());
+    let mut temp = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|error| format!("cannot create the expected census temporary file: {error}"))?;
+    temp.write_all(rendered)
+        .and_then(|()| temp.sync_all())
+        .map_err(|error| format!("cannot write the expected census temporary file: {error}"))?;
+    drop(temp);
+    fs::rename(&temp_path, output)
+        .map_err(|error| format!("cannot install the expected census pin: {error}"))?;
+    temp_guard.disarm();
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("cannot sync the expected census output directory: {error}"))
+}
 
 /// Validate the short, closed runner-label grammar.
 ///
@@ -891,8 +953,7 @@ fn run_pin(args: &[String]) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create the census output directory: {error}"))?;
     }
-    fs::write(&output, rendered)
-        .map_err(|error| format!("cannot write the expected census pin: {error}"))?;
+    write_expected_census_atomic(Path::new(&output), rendered.as_bytes())?;
     println!(
         "regenerated runtime census with {} crate(s) and {} test(s)",
         census.crates.len(),
@@ -1299,6 +1360,40 @@ mod tests {
             rendered.contains("\"crates\": ["),
             "regeneration preserves the committed pin's JSON formatting"
         );
+    }
+
+    #[test]
+    fn census_pin_write_replaces_the_target_without_leaving_a_temp_file() {
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .expect("xtask has a workspace parent")
+                    .join("target")
+            });
+        let sequence = CENSUS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let scratch = target
+            .join("test-runtime-ledger-tests")
+            .join(format!("atomic-pin-{}-{sequence}", std::process::id()));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).expect("create census test directory");
+        let output = scratch.join("runtime-ledger-census.json");
+        fs::write(&output, b"old census").expect("seed existing census");
+
+        write_expected_census_atomic(&output, b"new census").expect("atomically replace census");
+
+        assert_eq!(fs::read(&output).unwrap(), b"new census");
+        let names = fs::read_dir(&scratch)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![output.file_name().unwrap()],
+            "the successful rename must not leave a temporary file"
+        );
+        fs::remove_dir_all(scratch).expect("remove census test directory");
     }
 
     #[test]

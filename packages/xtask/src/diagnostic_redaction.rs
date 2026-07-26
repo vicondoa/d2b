@@ -307,9 +307,8 @@ fn filter(
     let (repo_root, home, tail) = parse_args(args)?;
     let redactor = DiagnosticRedactor::new(&repo_root, home.as_deref())?;
     let (bytes, dropped_bytes) = read_diagnostic_tail(input.by_ref())?;
-    let diagnostic =
-        std::str::from_utf8(&bytes).map_err(|_| RedactionError("diagnostic input is not UTF-8"))?;
-    let redacted = tail_lines(&redactor.redact(diagnostic), tail);
+    let diagnostic = String::from_utf8_lossy(&bytes);
+    let redacted = tail_lines(&redactor.redact(&diagnostic), tail);
     if dropped_bytes > 0 {
         writeln!(
             output,
@@ -464,6 +463,61 @@ mod tests {
             output.contains("error: <repo>/src/tail.rs"),
             "the retained tail must remain useful and redacted: {output}"
         );
+        assert!(!output.contains(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn truncation_inside_a_multibyte_character_still_emits_a_redacted_tail() {
+        let scratch = Scratch::new("multibyte-boundary");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let args = vec![
+            "--repo-root".to_owned(),
+            repo.display().to_string(),
+            "--tail-lines".to_owned(),
+            "1".to_owned(),
+        ];
+        let operative = format!("\nerror: {}/src/tail.rs\n", repo.display());
+        let filler_len = MAX_DIAGNOSTIC_BYTES - 1 - operative.len();
+        let mut input = vec![0xc3, 0xa9];
+        input.extend(std::iter::repeat_n(b'x', filler_len));
+        input.extend(operative.bytes());
+        assert_eq!(input.len(), MAX_DIAGNOSTIC_BYTES + 1);
+        let mut output = Vec::new();
+
+        filter(&args, input.as_slice(), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("diagnostic truncated: dropped"),
+            "the split UTF-8 prefix must produce a truncation notice: {output}"
+        );
+        assert!(
+            output.contains("error: <repo>/src/tail.rs"),
+            "the retained tail must survive the split and remain redacted: {output}"
+        );
+        assert!(!output.contains(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn malformed_bytes_in_the_retained_tail_do_not_suppress_redacted_output() {
+        let scratch = Scratch::new("malformed-retained-tail");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let args = vec![
+            "--repo-root".to_owned(),
+            repo.display().to_string(),
+            "--tail-lines".to_owned(),
+            "1".to_owned(),
+        ];
+        let mut input = vec![0xff, b'\n'];
+        input.extend(format!("error: {}/src/tail.rs\n", repo.display()).bytes());
+        let mut output = Vec::new();
+
+        filter(&args, input.as_slice(), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("error: <repo>/src/tail.rs"), "{output}");
         assert!(!output.contains(repo.to_str().unwrap()));
     }
 }

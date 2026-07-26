@@ -910,34 +910,42 @@ they are load-bearing:
 The ban is mechanically enforced by `scan_process_markers` in
 `tests/tools/tier0-first-pass.sh`, which runs as part of
 `make check-tier0`. That script is authoritative for the governed
-paths, marker patterns, narrow functional exceptions, and exact
-diagnostic wording.
+paths, marker patterns, narrow functional exceptions, exact diagnostics,
+and use of the active exemption set. The pin's typed schema and frozen
+universe are independently checked by
+`packages/xtask/src/process_marker_pin.rs`; consult both implementations
+when changing the ratchet.
 
-Existing violations are a shrink-only debt ratchet. Both the
-`LEGACY_PROCESS_MARKER_PATHS` allow-list and its exact-count
-`LEGACY_PROCESS_MARKER_PATH_BUDGET` constant live in
-`tests/tools/tier0-first-pass.sh`. Never increase the budget or add a
-path as a general exemption. The only permitted transfer adds a path
-while removing a different violation and its entry in the same change,
-without increasing the budget.
+Existing violations are recorded in
+`tests/golden/pinned/process-marker-legacy-paths.json`. Its
+`activePaths` array is the current exemption set and `retiredPaths`
+records cleaned paths. Both arrays must be sorted and disjoint, every
+entry must be a normalized relative path, and their combined path
+universe must match the fixed SHA-256 digest embedded in both checkers.
+The digest freezes the combined universe; there is no editable count
+budget and no permitted swap that adds a different path.
 
-A listed path is exempt only while the scanner still finds a violation
-there. Cleaning that path makes the gate fail with a `STALE:` line;
-delete the path's allow-list entry and lower the budget in the same
-change. Handle the three contributor-facing failure modes as follows:
+An active path is exempt only while the scanner still finds a violation
+there. Cleaning that path makes the gate fail with a `STALE:` line; move
+the path from `activePaths` to `retiredPaths` in the same change, preserving
+the frozen universe. A retired path is not exempt, so a marker there is
+reported as a new violation. Handle the contributor-facing failure modes
+as follows:
 
 - For a new violation outside the allow-list, remove or reword the
   marker. If it is a genuine functional identifier, add a narrowly
   scoped scanner exception with policy review rather than growing
   legacy debt.
-- For a stale allow-list entry, delete the entry and lower the budget by
-  one for each cleaned path.
-- For a budget mismatch, complete the intended shrink by removing
-  cleaned entries and/or lowering the budget until the count is exact;
-  never resolve it by raising the budget.
+- For a stale active entry, move it to `retiredPaths`; do not delete it
+  from the frozen universe.
+- For a pin validation failure, restore sorted, unique, normalized arrays
+  whose disjoint union matches the embedded digest. Do not add, delete, or
+  replace a frozen path.
 
-The exact failure text may evolve; `tests/tools/tier0-first-pass.sh`
-remains the authority for it.
+The exact scanner failure text may evolve;
+`tests/tools/tier0-first-pass.sh` remains the authority for it, while
+`packages/xtask/src/process_marker_pin.rs` is authoritative for typed pin
+validation.
 
 There are two deliberate functional exceptions. The consumer-facing
 `d2b.defaultSwitchReadiness.<wave>` option namespace (keys
