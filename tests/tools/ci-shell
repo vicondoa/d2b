@@ -1,0 +1,17 @@
+#!/bin/sh
+# Continuous-integration step shell.
+#
+# Workflows name this as `bash tests/tools/ci-shell {0}`. `bash` is resolved by
+# the Actions runner on PATH, and this script's own path is resolved at run
+# time against the workspace, which is the working directory for every step.
+# Naming the script here rather than inline keeps the workflow shell free of
+# nested quoting, which the runner's argument splitter does not preserve.
+#
+# The step script is run through scrub-shell-environment, so exported shell
+# functions and BASH_ENV cannot reach it.
+
+set -eu
+
+here=$(dirname "$0")
+
+exec "$here/scrub-shell-environment" -c 'exec bash "$@"' d2b-ci "$@"

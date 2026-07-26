@@ -23,14 +23,11 @@ CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # The shell program must be resolvable by the Actions runner itself, which
-# looks the first token up on PATH rather than against the workspace. A
-# repo-relative path therefore fails before any step runs. Naming `bash` keeps
-# the lookup on PATH and defers resolving the scrubber to run time, where the
-# working directory is the workspace.
-SCRUBBED_BASH = (
-    r"""bash -c 'exec ./tests/tools/scrub-shell-environment """
-    r"""-c "exec bash \"\$@\"" d2b-ci "$0"' {0}"""
-)
+# looks the first token up on PATH rather than against the workspace, and whose
+# argument splitter does not preserve nested quoting. Naming `bash` keeps the
+# lookup on PATH, and naming the wrapper as a plain relative argument defers
+# resolving it to run time, where the working directory is the workspace.
+SCRUBBED_BASH = "bash tests/tools/ci-shell {0}"
 
 
 def load_manifest() -> dict[str, Any]:
