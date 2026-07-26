@@ -6,8 +6,9 @@
 - Host inspection and CLI subprocesses now use a fixed root-owned executable
   search path, while the privileged broker invokes udevadm through an absolute
   NixOS system path.
-- Process-marker ratchet failures now identify the gate and exact allow-list
-  controls contributors must shrink, while explicitly rejecting budget raises.
+- Process-marker ratchet failures now identify the gate and require stale
+  exemptions to move from `activePaths` to `retiredPaths`, while explicitly
+  rejecting any change to the frozen path universe.
 - Rust tests that launch Bash or POSIX shell fixtures now route through the
   inherited-function scrubber, including direct Cargo test invocation.
 - The manifest-driven Layer-1 local and CI graphs now run the dedicated
