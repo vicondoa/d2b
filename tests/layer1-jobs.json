@@ -11,7 +11,7 @@
       {
         "id": "parallel",
         "mode": "parallel",
-        "jobs": ["test-lint", "test-rust", "test-proofs", "test-flake", "test-policy"]
+        "jobs": ["test-lint", "test-changelog", "test-rust", "test-proofs", "test-flake", "test-policy"]
       },
       {
         "id": "serial-after-parallel",
@@ -72,6 +72,7 @@
     },
     "test-changelog": {
       "displayName": "Changelog policy gate",
+      "makeTarget": "test-changelog",
       "ciKind": "changelog",
       "ciJobId": "test-changelog",
       "needs": ["tier0"],

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Remove exported Bash functions before Make starts a recipe shell.
+
+set -eu
+
+set -- /bin/sh "$@"
+while IFS= read -r entry; do
+  case "$entry" in
+    BASH_ENV=*)
+      set -- -u BASH_ENV "$@"
+      ;;
+    BASH_FUNC_*=*)
+      name=${entry%%=*}
+      set -- -u "$name" "$@"
+      ;;
+  esac
+done <<EOF
+$(/usr/bin/env)
+EOF
+
+exec /usr/bin/env "$@"

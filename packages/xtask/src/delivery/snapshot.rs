@@ -674,29 +674,84 @@ impl GitFailureReason {
     }
 }
 
-/// Maps git's stderr to a stable reason code without echoing any of it.
+/// Removes quoted caller-controlled values before stderr classification.
 ///
-/// The reason codes carry no path or host detail, so they are always safe to
-/// surface. Ordering is by specificity: ownership and repository-shape
-/// failures are recognized before the broad missing-object class.
+/// Git consistently quotes paths, revisions, URLs, and other arguments in the
+/// diagnostics classified below. Removing those spans ensures a keyword in a
+/// caller-supplied value cannot masquerade as Git's own diagnostic wording.
+fn strip_quoted_git_values(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        if !matches!(character, '\'' | '"' | '`') {
+            output.push(character);
+            continue;
+        }
+        output.push_str("<arg>");
+        let quote = character;
+        let mut escaped = false;
+        for quoted in characters.by_ref() {
+            if escaped {
+                escaped = false;
+            } else if quoted == '\\' {
+                escaped = true;
+            } else if quoted == quote {
+                break;
+            }
+        }
+    }
+    output
+}
+
+/// Maps Git's own stderr wording to a stable reason code without echoing it.
+///
+/// Each predicate is anchored to the diagnostic prefix and phrase shape Git
+/// emits. Bare keywords are deliberately insufficient: paths and revisions are
+/// caller controlled and may contain any of these words.
 fn classify_git_stderr(stderr: &str) -> GitFailureReason {
-    let lower = stderr.to_ascii_lowercase();
-    let has = |needle: &str| lower.contains(needle);
-    if has("dubious ownership") || has("unsafe repository") {
+    let lines: Vec<_> = stderr
+        .lines()
+        .map(|line| strip_quoted_git_values(line).to_ascii_lowercase())
+        .collect();
+    let any = |predicate: fn(&str) -> bool| lines.iter().any(|line| predicate(line));
+
+    if any(|line| {
+        line.starts_with("fatal: detected dubious ownership in repository at ")
+            || line.starts_with("fatal: unsafe repository ")
+    }) {
         GitFailureReason::UnsafeOwnership
-    } else if has("not a git repository") {
+    } else if any(|line| line.starts_with("fatal: not a git repository ")) {
         GitFailureReason::NotARepository
-    } else if has("permission denied") {
+    } else if any(|line| {
+        (line.starts_with("fatal: ") || line.starts_with("error: "))
+            && line.ends_with(": permission denied")
+    }) {
         GitFailureReason::PermissionDenied
-    } else if has("corrupt") || has("loose object") || has("unable to read tree") {
+    } else if any(|line| {
+        ((line.starts_with("error: object file ")
+            || line.starts_with("fatal: loose object ")
+            || line.starts_with("fatal: packed object "))
+            && line.ends_with(" is corrupt"))
+            || line.starts_with("error: corrupt loose object ")
+            || line.starts_with("fatal: corrupted object ")
+            || line.starts_with("error: corrupted object ")
+            || line.starts_with("fatal: pack has bad object at offset ")
+    }) {
         GitFailureReason::CorruptRepository
-    } else if has("does not exist")
-        || has("not a valid object")
-        || has("unknown revision")
-        || has("bad revision")
-        || has("ambiguous argument")
-        || has("no such path")
-    {
+    } else if any(|line| {
+        (line.starts_with("fatal: path ")
+            && (line.contains(" does not exist in ")
+                || line.contains(" exists on disk, but not in ")))
+            || line.starts_with("fatal: not a valid object name ")
+            || line.starts_with("fatal: invalid object name ")
+            || line.starts_with("fatal: bad object ")
+            || line.starts_with("fatal: bad revision ")
+            || (line.starts_with("fatal: ambiguous argument ")
+                && line.contains(": unknown revision or path not in the working tree."))
+            || (line.starts_with("fatal: no such path ") && line.contains(" in "))
+            || line.starts_with("fatal: unable to read tree ")
+            || line.starts_with("fatal: bad tree object ")
+    }) {
         GitFailureReason::MissingObject
     } else {
         GitFailureReason::Unclassified
@@ -948,9 +1003,9 @@ pub(crate) mod tests {
 
     #[test]
     fn git_stderr_classes_map_to_stable_reason_codes() {
-        // Every recognized class collapses to a fixed, path-free reason code so
-        // the identical nonzero git exit status stays diagnosable without ever
-        // echoing the raw stderr.
+        // These are complete lines from real Git failure modes. Every recognized
+        // class collapses to a fixed, path-free reason code so the identical
+        // nonzero exit status stays diagnosable without echoing raw stderr.
         let cases = [
             (
                 "fatal: detected dubious ownership in repository at '/srv/checkout'",
@@ -963,7 +1018,7 @@ pub(crate) mod tests {
                 "not-a-repository",
             ),
             (
-                "error: unable to read tree (deadbeef): Permission denied",
+                "fatal: cannot open '.git/objects/pack/pack-example.idx': Permission denied",
                 GitFailureReason::PermissionDenied,
                 "permission-denied",
             ),
@@ -977,6 +1032,11 @@ pub(crate) mod tests {
                 GitFailureReason::MissingObject,
                 "missing-object",
             ),
+            (
+                "fatal: unable to access 'https://example.invalid/repo': Could not resolve host: example.invalid",
+                GitFailureReason::Unclassified,
+                "unclassified",
+            ),
         ];
         for (stderr, reason, code) in cases {
             assert_eq!(
@@ -986,6 +1046,26 @@ pub(crate) mod tests {
             );
             assert_eq!(reason.code(), code);
         }
+    }
+
+    #[test]
+    fn caller_controlled_keywords_do_not_select_a_git_failure_class() {
+        let stderr = "fatal: unable to access \
+            'https://example.invalid/corrupt/permission denied/does not exist/no such path/ambiguous argument': \
+            Could not resolve host: example.invalid";
+        assert_eq!(
+            classify_git_stderr(stderr),
+            GitFailureReason::Unclassified,
+            "keywords inside Git's quoted caller-controlled value must be ignored"
+        );
+
+        let missing_keyword_path =
+            "fatal: path 'corrupt_data-permission denied.json' does not exist in 'HEAD'";
+        assert_eq!(
+            classify_git_stderr(missing_keyword_path),
+            GitFailureReason::MissingObject,
+            "the fixed Git wording, not keywords in the path, must choose the class"
+        );
     }
 
     #[test]

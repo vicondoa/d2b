@@ -87,6 +87,8 @@ use d2b_realm_core::{
         AuditSinkHealthReason, AuditStreamKind,
     },
 };
+
+mod diagnostic_redaction;
 use schemars::schema::RootSchema;
 
 mod changelog;
@@ -364,6 +366,9 @@ fn main() -> std::process::ExitCode {
         }
         [command, rest @ ..] if command == "changelog-fold" => changelog::run_cli(rest),
         [command, rest @ ..] if command == "delivery" => delivery::run_cli(rest),
+        [command, rest @ ..] if command == "redact-diagnostics" => {
+            diagnostic_redaction::run_cli(rest)
+        }
         [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
         [command] if command == "spec-registry" => {
             run_task("spec-registry", || gen_spec_set::generate(repo_root()?))
@@ -376,7 +381,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|test-runtime-ledger <record|check|lint|help> [options]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }

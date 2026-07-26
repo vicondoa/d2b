@@ -9,6 +9,7 @@
 # Driver script name matches the make target (tests/test-<target>.sh).
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -63,4 +64,4 @@ fi
 shellcheck --severity=warning -x "${sh_files[@]}"
 ok "shellcheck (${#sh_files[@]} scripts)"
 
-log "test-lint OK"
+log "test-lint OK (duration: $((SECONDS - suite_started))s)"

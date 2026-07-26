@@ -3,6 +3,11 @@
 # Maintainer-facing targets only; CI converges on this stable make-target
 # interface incrementally during the test rearchitecture.
 
+# Recipe shells must not inherit exported Bash functions from their caller.
+# Function resolution precedes PATH lookup, so an inherited cargo/nix/jq
+# function could silently redirect a gate that intends to execute a binary.
+SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
+
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
@@ -380,21 +385,22 @@ changelog-fold:
 
 ## test-runtime-ledger - hermetic execution-budget gate. Reads the pinned
 ##   closed census (D2B_RUNTIME_CENSUS) of crates, warm-builds those census
-##   crates so compilation never lands in the timings, then collects repeated
-##   *execution-only* samples at two granularities - per test (from a
-##   crate-qualified libtest JSON stream) and per crate (summed from that
-##   stream's per-test exec_time, so cargo's dependency-freshness overhead never
-##   lands in the timing) - across D2B_RUNTIME_REPETITIONS runs. It records them
-##   into a deterministic, portable ledger carrying an operator-supplied runner
-##   label instead of a hostname, then enforces the absolute per-test /
-##   per-crate budgets, the complete-census audit (non-empty scopes, matching
-##   repetition counts, one sample per repetition), and the closed-census audit
-##   (the crate set reproduces the pin exactly). It also runs the hermetic
-##   placement lint over the census crates' integration tests.
+##   crates with the same compiler flags and selectors used by measurement, then
+##   collects repeated samples at two granularities: per-test libtest wall-clock
+##   values are advisory diagnostics, while each crate is enforced against the
+##   process CPU consumed by its complete cargo test invocation (`time -p`
+##   user+sys). CPU time excludes time descheduled behind unrelated machine
+##   load, so concurrent work cannot manufacture a test regression. The
+##   deterministic ledger labels both timing bases and their enforcement mode,
+##   then enforces the crate CPU budget, the complete-census audit (non-empty
+##   scopes, matching repetition counts, one sample per repetition), and the
+##   closed-census audit (the crate and exact test sets reproduce the pin). It
+##   also runs the hermetic placement lint over integration tests.
 ##
-##   This is an absolute budget gate: every recorded p95 is judged only against
-##   its own frozen budget. It holds no baseline and makes no historical
-##   regression claim - a slower run that still fits the budget passes.
+##   This is an absolute aggregate CPU budget gate. It holds no baseline and
+##   makes no historical regression claim. Per-test wall-clock values never fail
+##   it; they remain visible only to identify likely contributors to a crate CPU
+##   increase.
 ##
 ##   Deferred follow-up (tracked as runtime-ledger-full-census-and-real-shards):
 ##   grow the census beyond the single pinned crate to a real multi-crate shard
@@ -413,28 +419,29 @@ D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
 D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
 D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
 
-## Classified hermetic tests that legitimately exceed the 50 ms per-test
-## micro-budget and therefore declare a bounded higher budget through the
-## sanctioned exception mechanism instead of being dropped from the census:
+## Classified hermetic tests that legitimately exceed the normal 50 ms
+## per-test wall-clock diagnostic threshold. Per-test wall-clock data is
+## advisory because machine contention makes it unsuitable for enforcement;
+## these overrides keep the slow-test report useful without changing the
+## enforced aggregate process-CPU crate budget:
 ##   * the *_bounded_byte_inputs_do_not_panic property harnesses each replay a
 ##     committed corpus and drive RUNS=10000 generated inputs through a parser,
 ##     so hundreds of milliseconds of pure execution is the intended workload;
 ##   * the rejects_tampered_*_artifact cases build and hash a full launcher /
 ##     unsafe-local artifact tree and prove every tamper is refused.
-## Budgets carry several-fold headroom over the observed p95 so reference-runner
-## noise cannot flap them, while still bounding each id to a fixed ceiling.
-D2B_RUNTIME_EXCEPTIONS   = \
-	--exception d2b-core::manifest_v04_bounded_byte_inputs_do_not_panic=1000 \
-	--exception d2b-core::bundle_bounded_byte_inputs_do_not_panic=1000 \
-	--exception d2b-core::host_json_bounded_byte_inputs_do_not_panic=1000 \
-	--exception d2b-core::privileges_json_bounded_byte_inputs_do_not_panic=1000 \
-	--exception d2b-core::rejects_tampered_realm_workloads_launcher_v2_artifact=300 \
-	--exception d2b-core::rejects_tampered_unsafe_local_workloads_artifact=300
+D2B_RUNTIME_ADVISORY_THRESHOLDS = \
+	--advisory-threshold d2b-core::manifest_v04_bounded_byte_inputs_do_not_panic=1000 \
+	--advisory-threshold d2b-core::bundle_bounded_byte_inputs_do_not_panic=1000 \
+	--advisory-threshold d2b-core::host_json_bounded_byte_inputs_do_not_panic=1000 \
+	--advisory-threshold d2b-core::privileges_json_bounded_byte_inputs_do_not_panic=1000 \
+	--advisory-threshold d2b-core::rejects_tampered_realm_workloads_launcher_v2_artifact=300 \
+	--advisory-threshold d2b-core::rejects_tampered_unsafe_local_workloads_artifact=300
 
 
 ## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
+	started_at="$$(date +%s)"; \
 	ledger='$(abspath $(D2B_RUNTIME_LEDGER))'; \
 	census='$(abspath $(D2B_RUNTIME_CENSUS))'; \
 	work='$(abspath packages/target/test-runtime-ledger.work)'; \
@@ -453,11 +460,10 @@ test-runtime-ledger:
 	if [ -n "$$lint_files" ]; then \
 	  ( cd packages && $(D2B_LEDGER_XTASK) lint $$(for f in $$lint_files; do echo "$(abspath .)/$$f"; done) ); \
 	fi; \
-	echo "test-runtime-ledger: warm-building the census crates so compilation is excluded from timings"; \
-	for crate in $$crates; do ( cd packages && cargo test -p "$$crate" --lib --tests --no-run --quiet ); done; \
 	echo "test-runtime-ledger: selecting libtest-harness targets per census crate (harness=false custom-main binaries emit no libtest JSON and cannot be timed)"; \
 	meta="$$work/cargo-metadata.json"; \
 	( cd packages && cargo metadata --format-version 1 --no-deps ) > "$$meta" 2>/dev/null; \
+	redactor="$$(jq -r '.target_directory + "/debug/xtask"' "$$meta")"; \
 	for crate in $$crates; do \
 	  manifest="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .manifest_path' "$$meta")"; \
 	  if [ -z "$$manifest" ] || [ ! -f "$$manifest" ]; then \
@@ -473,6 +479,11 @@ test-runtime-ledger:
 	  printf '%s\n' "$$sel" > "$$work/$$crate.testargs"; \
 	  echo "test-runtime-ledger: $$crate timed selector: $$sel"; \
 	done; \
+	echo "test-runtime-ledger: warm-building the exact timed selectors so compilation is excluded from CPU measurements"; \
+	for crate in $$crates; do \
+	  sel="$$(cat "$$work/$$crate.testargs")"; \
+	  ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --no-run --quiet ); \
+	done; \
 	args=""; \
 	rep=0; \
 	while [ "$$rep" -lt "$$reps" ]; do \
@@ -481,30 +492,52 @@ test-runtime-ledger:
 	  for crate in $$crates; do \
 	    json="$$work/$$crate-$$rep.json"; \
 	    err="$$work/$$crate-$$rep.err"; \
+	    timing="$$work/$$crate-$$rep.time"; \
 	    sel="$$(cat "$$work/$$crate.testargs")"; \
 	    status=0; \
-	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --quiet -- \
-	        -Z unstable-options --format=json --report-time ) > "$$json" 2> "$$err" || status=$$?; \
+	    ( cd packages && \
+	      D2B_LEDGER_JSON="$$json" D2B_LEDGER_ERR="$$err" D2B_LEDGER_TIMING="$$timing" \
+	      /bin/bash -c '{ time -p "$$@" > "$$D2B_LEDGER_JSON" 2> "$$D2B_LEDGER_ERR"; } 2> "$$D2B_LEDGER_TIMING"' \
+	        d2b-runtime-ledger env RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --quiet -- \
+	        -Z unstable-options --format=json --report-time ) || status=$$?; \
 	    if [ "$$status" -ne 0 ]; then \
 	      echo "test-runtime-ledger: cargo test exited $$status for census crate $$crate; failing closed before recording any measurement" >&2; \
-	      sed -e "s#$(abspath .)#<repo>#g" -e "s#$$HOME#<home>#g" "$$err" 2>/dev/null | tail -n 20 >&2 || true; \
+	      redact_status=0; \
+	      if [ ! -x "$$redactor" ]; then \
+	        echo "test-runtime-ledger: diagnostic redactor unavailable; raw cargo output suppressed" >&2; \
+	      elif [ -n "$${HOME:-}" ]; then \
+	        "$$redactor" redact-diagnostics --repo-root "$(abspath .)" --home "$$HOME" --tail-lines 20 < "$$err" >&2 || redact_status=$$?; \
+	      else \
+	        "$$redactor" redact-diagnostics --repo-root "$(abspath .)" --tail-lines 20 < "$$err" >&2 || redact_status=$$?; \
+	      fi; \
+	      if [ "$$redact_status" -ne 0 ]; then \
+	        echo "test-runtime-ledger: diagnostic redaction failed; raw cargo output suppressed" >&2; \
+	      fi; \
 	      exit 1; \
 	    fi; \
 	    if grep -q '"event": "failed"' "$$json"; then \
 	      echo "test-runtime-ledger: a hermetic test reported failure while timing census crate $$crate" >&2; exit 1; fi; \
+	    timed_events="$$(awk '/"type": "test"/ && /"exec_time"/ { count++ } END { print count + 0 }' "$$json")"; \
+	    if [ "$$timed_events" -lt 1 ]; then \
+	      echo "test-runtime-ledger: census crate $$crate emitted no timed test events; refusing to record an empty measurement set" >&2; exit 1; fi; \
 	    started=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "started"' || true); \
 	    passed=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "ok"' || true); \
 	    if [ "$$started" -lt 1 ] || [ "$$started" -ne "$$passed" ]; then \
 	      echo "test-runtime-ledger: census crate $$crate did not emit a matching successful suite-completion event ($$passed/$$started ok); refusing to record a partial stream" >&2; exit 1; fi; \
-	    cdur="$$(grep '"type": "test"' "$$json" | grep '"exec_time"' | \
-	        sed -E 's/.*"exec_time": ([0-9.]+).*/\1/' | \
-	        awk '{ s += $$1 } END { printf "%d", (s * 1000) + 0.5 }')"; \
+	    if ! cdur="$$(awk '\
+	        $$1 == "user" { user = $$2; saw_user = 1 } \
+	        $$1 == "sys" { sys = $$2; saw_sys = 1 } \
+	        END { if (!saw_user || !saw_sys) exit 1; printf "%d", ((user + sys) * 1000) + 0.5 }' \
+	        "$$timing")"; then \
+	      echo "test-runtime-ledger: could not parse process CPU timing for census crate $$crate; refusing to record" >&2; exit 1; \
+	    fi; \
 	    args="$$args --crate $$crate=$$cdur --crate-libtest-json $$crate=$$json"; \
 	  done; \
 	done; \
 	( cd packages && $(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
-	    --output "$$ledger" $(D2B_RUNTIME_EXCEPTIONS) $$args ); \
+	    --output "$$ledger" $(D2B_RUNTIME_ADVISORY_THRESHOLDS) $$args ); \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
-	    --ledger "$$ledger" --expected-census "$$census" )
-
+	    --ledger "$$ledger" --expected-census "$$census" ); \
+	finished_at="$$(date +%s)"; \
+	echo "test-runtime-ledger: complete (duration: $$((finished_at - started_at))s)"

@@ -7,6 +7,7 @@
 # natively. Runs identically on a NixOS host and an ubuntu-latest runner.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -48,4 +49,4 @@ for s in "${scripts[@]}"; do
 done
 
 [ "$rc" -eq 0 ] || exit 1
-log "test-integration OK"
+log "test-integration OK (duration: $((SECONDS - suite_started))s)"

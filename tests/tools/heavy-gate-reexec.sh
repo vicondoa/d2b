@@ -87,10 +87,20 @@ d2b_heavy_gate_reexec() {
   #
   # The build runs in a subshell with the caller's build-affecting Cargo/Rust
   # environment stripped so a planted toolchain cannot inject a substitute
-  # binary, and cargo's own stdout/stderr are discarded rather than forwarded:
-  # on failure we emit only a bounded, path-free label and the exit status, so
-  # the checkout location and any username-bearing path never leak.
-  local rc=0
+  # binary. Cargo stderr is retained in a private checkout-local directory and
+  # passed through xtask's path-safe diagnostic filter if the build fails. A
+  # first build with no usable filter suppresses the raw text explicitly.
+  local rc=0 build_diag_dir build_err redactor_status=0
+  mkdir -p -- "$target" || {
+    echo "heavy-gate self-guard: cannot prepare the pinned build target; failing closed" >&2
+    return 70
+  }
+  build_diag_dir="$target/.heavy-gate-build-$BASHPID-$RANDOM"
+  (umask 077 && mkdir -- "$build_diag_dir") || {
+    echo "heavy-gate self-guard: cannot create private build diagnostics; failing closed" >&2
+    return 70
+  }
+  build_err="$build_diag_dir/cargo.stderr"
   (
     cd -- "$packages" 2>/dev/null \
       && unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
@@ -98,11 +108,25 @@ d2b_heavy_gate_reexec() {
                CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \
                RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS \
       && CARGO_TARGET_DIR="$target" cargo build --quiet -p xtask
-  ) >/dev/null 2>&1 || rc=$?
+  ) >/dev/null 2>"$build_err" || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "heavy-gate self-guard: xtask build failed under the pinned toolchain (exit $rc); failing closed" >&2
+    if [ ! -x "$xtask" ]; then
+      echo "heavy-gate self-guard: diagnostic redactor unavailable; raw cargo output suppressed" >&2
+    elif [ -n "${HOME:-}" ]; then
+      "$xtask" redact-diagnostics --repo-root "$root" --home "$HOME" \
+        --tail-lines 20 <"$build_err" >&2 || redactor_status=$?
+    else
+      "$xtask" redact-diagnostics --repo-root "$root" \
+        --tail-lines 20 <"$build_err" >&2 || redactor_status=$?
+    fi
+    if [ "$redactor_status" -ne 0 ]; then
+      echo "heavy-gate self-guard: diagnostic redaction failed; raw cargo output suppressed" >&2
+    fi
+    rm -rf -- "$build_diag_dir"
     return 70
   fi
+  rm -rf -- "$build_diag_dir"
 
   if [ ! -x "$xtask" ]; then
     echo "heavy-gate self-guard: the freshly built xtask is unavailable; failing closed" >&2

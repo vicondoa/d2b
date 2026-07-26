@@ -75,16 +75,25 @@ impl Drop for Scratch {
 /// of an executable placed first on PATH - exactly the hostile-cargo surface
 /// the guard must survive.
 fn run_reexec_guard_with_stub_cargo(cargo_stub: &str) -> std::process::Output {
-    run_reexec_guard(cargo_stub, &[])
+    run_reexec_guard(cargo_stub, &[], false).0
+}
+
+fn run_reexec_guard_with_redactor(cargo_stub: &str) -> (std::process::Output, String) {
+    run_reexec_guard(cargo_stub, &[], true)
 }
 
 /// As above, but injects `extra_env` onto the child bash after the
 /// inherited-function strip, so a test can plant a hostile `BASH_FUNC_*` entry
 /// and prove the child's function table is still controlled.
-fn run_reexec_guard(cargo_stub: &str, extra_env: &[(&str, &str)]) -> std::process::Output {
+fn run_reexec_guard(
+    cargo_stub: &str,
+    extra_env: &[(&str, &str)],
+    plant_redactor: bool,
+) -> (std::process::Output, String) {
     let _guard = exclusive();
     let scratch = Scratch::new("reexec-guard");
     let base = scratch.path();
+    let checkout = base.display().to_string();
 
     // Reproduce the minimal checkout layout the guard resolves from
     // BASH_SOURCE: <base>/tests/tools/heavy-gate-reexec.sh and <base>/packages/.
@@ -104,8 +113,16 @@ fn run_reexec_guard(cargo_stub: &str, extra_env: &[(&str, &str)]) -> std::proces
     let bin = base.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let cargo = bin.join("cargo");
-    fs::write(&cargo, cargo_stub).unwrap();
+    fs::write(&cargo, cargo_stub.replace("@CHECKOUT@", &checkout)).unwrap();
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+
+    if plant_redactor {
+        let target = base.join("packages/target/debug");
+        fs::create_dir_all(&target).unwrap();
+        let xtask = target.join("xtask");
+        fs::copy(env!("CARGO_BIN_EXE_xtask"), &xtask).unwrap();
+        fs::set_permissions(&xtask, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     let path = match std::env::var("PATH") {
         Ok(existing) => format!("{}:{}", bin.display(), existing),
@@ -152,20 +169,23 @@ fn run_reexec_guard(cargo_stub: &str, extra_env: &[(&str, &str)]) -> std::proces
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    command
+    let output = command
         .stdin(Stdio::null())
         .output()
-        .expect("bash runs the sourced self-guard")
+        .expect("bash runs the sourced self-guard");
+    (output, checkout)
 }
 
 #[test]
 fn reexec_self_guard_fails_closed_and_redacts_when_the_build_fails() {
-    // A stub cargo that fails and prints a checkout-bearing diagnostic to
-    // stderr, standing in for a real build error whose verbatim text would
-    // otherwise disclose the checkout and a username-bearing path.
-    let secret = "/home/someone/leaky-checkout";
-    let stub = format!("#!/bin/sh\necho 'error[E0999]: {secret} build exploded' >&2\nexit 1\n");
-    let out = run_reexec_guard_with_stub_cargo(&stub);
+    // A stub cargo prints the shape of a real compiler error containing this
+    // checkout. The previously built, current xtask is planted where the guard
+    // expects it, just as a normal incremental build leaves the last good
+    // binary available when a subsequent compile fails.
+    let stub = "#!/bin/sh\n\
+        echo 'error[E0999]: @CHECKOUT@/packages/xtask/src/main.rs build exploded' >&2\n\
+        exit 1\n";
+    let (out, checkout) = run_reexec_guard_with_redactor(stub);
     assert_eq!(
         out.status.code(),
         Some(70),
@@ -177,12 +197,12 @@ fn reexec_self_guard_fails_closed_and_redacts_when_the_build_fails() {
         "the guard must emit a bounded build-failure label: {stderr}"
     );
     assert!(
-        !stderr.contains(secret),
-        "cargo's verbatim stderr - and the path it names - must never be forwarded: {stderr}"
+        stderr.contains("error[E0999]: <repo>/packages/xtask/src/main.rs build exploded"),
+        "the redacted compiler diagnostic must remain actionable: {stderr}"
     );
     assert!(
-        !stderr.contains("E0999"),
-        "no raw cargo diagnostic may leak into the guard's output: {stderr}"
+        !stderr.contains(&checkout) && !stderr.contains("/home/"),
+        "the diagnostic must contain no absolute checkout path: {stderr}"
     );
 }
 
@@ -229,7 +249,7 @@ fn an_inherited_cargo_function_does_not_shadow_the_path_stub() {
     let stub = format!("#!/bin/sh\nprintf stub > '{sentinel_display}'\nexit 1\n");
     // Delivered exactly as bash serialises an exported function.
     let func = format!("() {{ printf func > '{sentinel_display}'; exit 1;\n}}");
-    let out = run_reexec_guard(&stub, &[("BASH_FUNC_cargo%%", func.as_str())]);
+    let (out, _) = run_reexec_guard(&stub, &[("BASH_FUNC_cargo%%", func.as_str())], false);
 
     assert_eq!(
         out.status.code(),

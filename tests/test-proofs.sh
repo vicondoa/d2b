@@ -9,6 +9,7 @@
 # job; they now live behind a make target so CI and local runs share one path.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -77,4 +78,4 @@ for proof in chunked-stdio-conformance w0-ch-connect-proof; do
 done
 
 [ "$rc" -eq 0 ] || exit 1
-log "test-proofs OK"
+log "test-proofs OK (duration: $((SECONDS - suite_started))s)"
