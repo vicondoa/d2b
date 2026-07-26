@@ -39,8 +39,8 @@ case "${1:-}" in
 esac
 
 if [ "$fixture_contracts_only" = 1 ] && [ "${D2B_ENABLE_FIXTURE_BUILD:-0}" != 1 ]; then
-  log "  SKIP: fixture-dependent d2b-contract-tests (set D2B_ENABLE_FIXTURE_BUILD=1 to build D2B_FIXTURES; not covered by flake shards)"
-  exit 0
+  fail "fixture-contracts mode requires D2B_ENABLE_FIXTURE_BUILD=1; refusing to report a skipped gate as passing"
+  exit 1
 fi
 
 manifest="$ROOT/packages/Cargo.toml"
@@ -300,13 +300,45 @@ run_fixture_contract_tests() {
   ok "cargo test -p d2b-contract-tests (fixture-contract layer)"
 }
 
+run_cli_contract_tests() {
+  local fixture_path="$1"
+  local d2bd_bin
+
+  # CLI-contract layer: spawn the real `d2b` binary against the rendered
+  # fixture bundle (D2B_FIXTURES) + a synthetic system-state and validate the
+  # JSON envelopes strictly against the committed ListOutputV2/StatusOutputV2
+  # DTOs (deny_unknown_fields). Successor of the cli-rust-native-* bash gates.
+  #
+  # A few CLI-contract cases (audit/host-check daemon-backed paths) spawn a
+  # real, KVM-free `d2bd serve --once --test-listen-on` and talk to it over
+  # AF_UNIX + SO_PEERCRED. Build d2bd and hand its path to the test via
+  # D2B_TEST_D2BD_BIN so those cases run instead of skipping. d2b
+  # does NOT depend on d2bd (the static-rust-dependency-direction gate
+  # forbids it), so the path is delivered out-of-band rather than via a dep edge.
+  log "--> cargo build -p d2bd (CLI-contract daemon-spawn harness binary)"
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo build --manifest-path "$manifest" -p d2bd
+  d2bd_bin="$workspace_target_dir/debug/d2bd"
+  [ -x "$d2bd_bin" ] || {
+    fail "d2bd binary not found at $d2bd_bin"
+    return 1
+  }
+  log "--> cargo test -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
+  D2B_FIXTURES="$fixture_path" \
+  D2B_TEST_D2BD_BIN="$d2bd_bin" \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo test --manifest-path "$manifest" -p d2b --tests
+  ok "cargo test -p d2b --tests (CLI-contract layer)"
+}
+
 if [ "$fixture_contracts_only" = 1 ]; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to build D2B_FIXTURES"
     exit 1
   fi
   run_fixture_contract_tests
-  log "test-fixture-contracts OK (duration: $((SECONDS - suite_started))s)"
+  run_cli_contract_tests "$contract_fixtures"
+  log "test-fixture-contracts OK (fixture and CLI-contract layers; duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
 
@@ -333,29 +365,7 @@ if [ "${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then
   log "  SKIP: fixture-dependent d2b-contract-tests (D2B_SKIP_FIXTURE_BUILD=1; not executed in this lane and not covered by flake shards)"
 elif command -v nix >/dev/null 2>&1; then
   run_fixture_contract_tests
-
-  # CLI-contract layer: spawn the real `d2b` binary against the rendered
-  # fixture bundle (D2B_FIXTURES) + a synthetic system-state and validate the
-  # JSON envelopes strictly against the committed ListOutputV2/StatusOutputV2
-  # DTOs (deny_unknown_fields). Successor of the cli-rust-native-* bash gates.
-  #
-  # A few CLI-contract cases (audit/host-check daemon-backed paths) spawn a
-  # real, KVM-free `d2bd serve --once --test-listen-on` and talk to it over
-  # AF_UNIX + SO_PEERCRED. Build d2bd and hand its path to the test via
-  # D2B_TEST_D2BD_BIN so those cases run instead of skipping. d2b
-  # does NOT depend on d2bd (the static-rust-dependency-direction gate
-  # forbids it), so the path is delivered out-of-band rather than via a dep edge.
-  log "--> cargo build -p d2bd (CLI-contract daemon-spawn harness binary)"
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo build --manifest-path "$manifest" -p d2bd
-  d2bd_bin="$workspace_target_dir/debug/d2bd"
-  [ -x "$d2bd_bin" ] || fail "d2bd binary not found at $d2bd_bin"
-  log "--> cargo test -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
-  D2B_FIXTURES="$contract_fixtures" \
-  D2B_TEST_D2BD_BIN="$d2bd_bin" \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --manifest-path "$manifest" -p d2b --tests
-  ok "cargo test -p d2b --tests (CLI-contract layer)"
+  run_cli_contract_tests "$contract_fixtures"
 else
   log "  SKIP: fixture-dependent d2b-contract-tests (nix unavailable to build fixture-smoke; not covered by flake shards)"
 fi
