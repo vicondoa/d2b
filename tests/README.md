@@ -158,7 +158,9 @@ receive `D2B_FIXTURES`. Promotion requires enabling that variable for the lane,
 delivering the fixture output to its sandbox, and then removing the
 `enforcement` and `advisoryReason` fields from the manifest. That delivery is
 tracked follow-up work. `test-rust` excludes `d2b-contract-tests`, so a green
-Rust job does not validate this contract and policy layer.
+Rust job does not validate its fixture-dependent contract and policy layer.
+Selected hermetic policy files may have separate enforcing entrypoints under
+`test-policy`; inspect that target before citing one.
 
 `.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
 `make layer1-workflow` and checked by `make layer1-workflow-check` during

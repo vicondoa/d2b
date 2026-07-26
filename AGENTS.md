@@ -140,7 +140,9 @@ lane and delivering `D2B_FIXTURES` into its sandbox, then removing the advisory
 classification and reason from the manifest. That sandbox delivery remains
 tracked follow-up work. `test-rust` explicitly excludes the fixture-dependent
 `d2b-contract-tests` crate, so a green `test-rust` does not validate that
-contract and policy layer.
+fixture-dependent contract and policy layer. Selected hermetic policy files
+may still have separate enforcing entrypoints such as `test-policy`; inspect
+the target driver before claiming coverage.
 
 Before opening an agent-owned PR, run the host/manual integration
 targets on the development host; do not rely on the PR pipeline for
@@ -852,7 +854,7 @@ At a glance:
 | `tests/unit/nix/cases/` | Auto-discovered nix-unit eval cases. After adding/removing one, run `make nix-unit-pin`. |
 | `tests/unit/nix/eval-cases/`, `tests/unit/smoke/` | Flake-check and smoke-eval definitions. After adding/removing a flake check, run `make flake-matrix-pin`. |
 | `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
-| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. These are excluded from `test-rust` and currently run only when the advisory fixture-contract lane is enabled. |
+| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. The fixture-dependent crate is excluded from `test-rust`; its fixture-backed tests require the advisory fixture-contract lane, while selected hermetic policy files have separate enforcing entrypoints. |
 | `tests/unit/gates/`, `tests/unit/meta/` | Drift and meta gates; closed set. Regenerate affected artifacts with the matching `xtask gen-*` command instead of adding another gate. |
 | `tests/integration/containers/` | Container integration tests run by `make test-integration`; host/manual pre-PR tier. |
 | `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; local NixOS/KVM pre-PR tier, not the PR pipeline. |
