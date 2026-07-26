@@ -3311,9 +3311,10 @@ mod tests {
 
         // 1. Filesystem entrypoints. Walk every GATED heavy-lane directory
         //    recursively and require an executable self-guard on each script.
-        //    performance-budgets.sh lives outside those directories, so it is
-        //    named explicitly. Optional directories (benchmark, cloud) are
-        //    walked when present and simply contribute nothing when absent.
+        //    performance-budgets.sh and the fixture-contract mode in
+        //    test-rust.sh live outside those directories, so they are named
+        //    explicitly. Optional directories (benchmark, cloud) are walked
+        //    when present and simply contribute nothing when absent.
         let mut entrypoints: Vec<PathBuf> = Vec::new();
         for dir in walked_heavy_dirs {
             entrypoints.extend(collect_heavy_entrypoints(&root.join(dir)));
@@ -3328,6 +3329,13 @@ mod tests {
             perf.display()
         );
         entrypoints.push(perf.clone());
+        let fixture_contracts = root.join("tests/test-rust.sh");
+        assert!(
+            fixture_contracts.is_file(),
+            "expected the fixture-contract entrypoint at {}",
+            fixture_contracts.display()
+        );
+        entrypoints.push(fixture_contracts.clone());
         entrypoints.sort();
         entrypoints.dedup();
 
@@ -3482,6 +3490,11 @@ mod tests {
             entrypoints.contains(&perf),
             "the performance-budgets entrypoint must be in the guarded set so static.sh's direct \
              invocation cannot bypass the semaphore"
+        );
+        assert!(
+            entrypoints.contains(&fixture_contracts),
+            "the fixture-contract entrypoint must be in the guarded set so its Nix and Cargo work \
+             cannot bypass the semaphore"
         );
     }
 

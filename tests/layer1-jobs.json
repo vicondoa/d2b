@@ -126,9 +126,13 @@
     "test-fixture-contracts": {
       "displayName": "Fixture-dependent Rust contract tests",
       "makeTarget": "test-fixture-contracts",
-      "enforcement": "advisory",
-      "advisoryReason": "Skipped unless D2B_ENABLE_FIXTURE_BUILD=1. flake.nix also excludes d2b-contract-tests from sandboxed rust-tests; sandbox D2B_FIXTURES delivery is tracked W1 work.",
-      "advisoryForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
+      "localEnv": {
+        "D2B_ENABLE_FIXTURE_BUILD": "1"
+      },
+      "ciEnv": {
+        "D2B_ENABLE_FIXTURE_BUILD": "1"
+      },
+      "enforcesForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
       "ciKind": "simple-nix",
       "ciJobId": "test-fixture-contracts",
       "needs": ["test-rust"],
