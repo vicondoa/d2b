@@ -277,9 +277,7 @@ fn normalized_runtime_golden(name: &str) -> String {
             "d2b keys rotate-known-host --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
         )
         .replace("Host-prepare", "host-prepare")
-        .replace("v1.1-P2", "v1.1")
-        .replace("dry-run preview retained;", "dry-run preview;")
-        .replace("with socket ACLs", "with socket ACLs")
+        .replace("with the required socket ACLs", "with socket ACLs")
 }
 
 fn build_hermetic_bundle_tree(fixtures: &Path, dir: &Path) {
