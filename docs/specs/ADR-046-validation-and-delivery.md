@@ -442,7 +442,7 @@ the other claimant's worktree opens:
 | `nixos-modules/index.nix`, `nixos-modules/default.nix` | `ADR046-identities-002` (zones/resources), every `ADR-046-provider-*` Nix authoring section (`ADR046-W5`/`ADR046-W6`) | `ADR046-W0` lands the base zones/resources wiring; each `ADR046-W6` Provider slice appends its own resource-type Nix module import as a single line, rebased by the integrator at merge time, never touching another Provider's import line |
 | `packages/d2b-contract-tests/tests/workspace_policy.rs` | every Provider crate-layout assertion (D059/`ADR046-pstate-011`-equivalent gates), one row per Provider | integrator batches one appended assertion per merged `ADR046-W6` slice; a slice's own PR adds only its own assertion function, appended after the current last function, never reordering existing ones |
 | `docs/specs/ADR-046-spec-set.json`, `docs/specs/ADR-046-work-items.json` | regenerated after every spec status/work-item-state change (§8) | integrator-only; regenerated and committed as the last commit of each wave, never inside a slice's own PR |
-| `packages/d2b-core-controller/src/rbac.rs`, `authz_audit.rs` | `resource-api-and-authorization` (W0-adjacent api-002 work item), `resources-zone-control` (Role/RoleBinding schema), `telemetry-audit-and-support` (audit hooks) | `resources-zone-control` (W5) lands the concrete Role/RoleBinding schema atop the W0 `authz.rs` skeleton; `telemetry-audit-and-support` (W5, parallel) adds only its own `authz_audit.rs` audit-emission hooks, a distinct file, so this is a false-positive overlap once split at the file (not module) level - recorded here so the integrator does not accidentally serialize two already-disjoint files under one shared symbol name |
+| `packages/d2b-core-controller/src/rbac.rs`, `authz_audit.rs` | `resource-api-and-authorization` (W0-adjacent api-002 work item), `resources-zone-control` (Role/RoleBinding schema), `telemetry-audit-and-support` (audit hooks) | `resources-zone-control` (W5) lands the concrete Role/RoleBinding schema atop the W0 `rbac.rs` skeleton; `telemetry-audit-and-support` (W5, parallel) adds only its own `authz_audit.rs` audit-emission hooks, a distinct file, so this is a false-positive overlap once split at the file (not module) level - recorded here so the integrator does not accidentally serialize two already-disjoint files under one shared symbol name |
 | `CHANGELOG.md` `## [Unreleased]` block | every slice in every wave (`ADR046-W0`-`ADR046-W8`), because the changelog gate requires release notes for any code change | no slice edits `CHANGELOG.md`; each slice writes one `changelog.d/<branch>.md` fragment carrying standard Keep a Changelog `### <Section>` headings (see `changelog.d/README.md`), which no other slice touches, and the integrator runs `cargo run --manifest-path packages/Cargo.toml -p xtask -- changelog-fold` at wave close to collate every fragment into `## [Unreleased]` by section and delete the consumed fragments. The `test-changelog` gate accepts either a `CHANGELOG.md` entry or a fragment, so slices never need the shared file |
 
 Any newly discovered contention during wave execution is added to this table
@@ -588,6 +588,13 @@ contract, run in `packages/d2b-resource-store-redb/benches/`:
 | Forced crash at every commit boundary | no partial/ambiguous commit observable after recovery |
 | Backup/restore/internal schema upgrade | staged validate → atomic publish → rollback-window retention |
 | Repeated open/close and long-reader rejection | no reader starves the single writer |
+
+The RSS row is not a W0 pass criterion as a whole. W0 records only the resource
+service/store median at the 10,000-resource/100-watch fixture and fails above
+24 MiB. The owning controller waves separately fail above 22 MiB for
+`Provider/system-core` and 12 MiB for `Provider/system-minijail`. W6 alone may
+record the aggregate row as passing, after measuring all three processes live
+and at or below 64 MiB; the unallocated 6 MiB is variance headroom.
 
 Failure to meet a hard target changes the Proposed design (per the spec);
 it is never resolved by weakening durability, authorization, or audit.

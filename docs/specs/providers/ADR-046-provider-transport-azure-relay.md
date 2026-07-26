@@ -607,12 +607,7 @@ spec:
       limit: 64
     fds:
       limit: 256
-  mounts:
-    - volumeRef: Volume/transport-azure-relay--listener--state--work-gateway
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   networkUsage:
     networkRef: <config.networkRef>
     ports: []
@@ -694,12 +689,7 @@ spec:
       limit: 32
     fds:
       limit: 128
-  mounts:
-    - volumeRef: Volume/transport-azure-relay--sender--state--work-gateway
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   networkUsage:
     networkRef: <config.networkRef>
     ports: []

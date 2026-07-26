@@ -229,9 +229,11 @@ contract.
 
 ### Time
 
-Persistent datetimes are RFC 3339 UTC with bounded precision. Wall time never
-extends an already-admitted monotonic deadline. Common metadata/status times
-are described in
+Persistent datetimes are exactly `YYYY-MM-DDTHH:MM:SS.sssZ`: 24 ASCII bytes,
+UTC, uppercase `T` and `Z`, and exactly three fractional digits. Other RFC 3339
+spellings, offsets, leap seconds, and fractional widths fail closed. Wall time
+never extends an already-admitted monotonic deadline. Common metadata/status
+times are described in
 [`ADR-046-resource-object-model`](ADR-046-resource-object-model.md).
 
 ## Canonical process identities
@@ -281,10 +283,10 @@ cgroup/scope, and provider-specific process identity.
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `realm.rs`, `target.rs`, `workload.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/identity.rs`, `packages/d2b-contracts/src/v3/resource_ref.rs` |
-| Detailed design | Add ZoneId, ResourceTypeName, ResourceName, ResourceUid, ResourceRef, generation/revision newtypes, exact parsing/serde/Debug/redaction, and golden vectors Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Add ZoneId, ResourceTypeName, ResourceName, ResourceUid, ResourceRef, generation/revision newtypes, exact parsing/serde/Debug/redaction, and golden vectors. `ResourceUid` is store-generated canonical lowercase UUIDv4 only. ResourceType uses the exact standard/qualified 63-byte segment and 137-byte total bounds; ResourceRef is bounded to 201 bytes. Define `AuthenticatedSubjectContext` and its validated component newtypes/enums exactly as frozen in D109: no `Deserialize`, no public field mutation, whole-struct redacted `Debug`, four closed evidence classes, bounded `SessionPurpose`/`ServiceName`, typed locality/binding digest, nonzero reconnect/controller generations, and redacted transcript hash. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Resource API/store/controllers/SDK/Nix import only these canonical types |
 | Data migration | Destructive d2b 3.0 reset; no RealmRef parser compatibility |
-| Validation | Rust property/vector tests; pure-Nix vector parity; malformed/collision/UID-recreate tests |
+| Validation | Rust property/vector tests; pure-Nix vector parity; malformed/collision/UID-recreate tests; UUIDv4 canonical-form and CSPRNG failure vectors; exact ResourceType/ResourceRef bounds; `AuthenticatedSubjectContext` no-Deserialize/no-public-mutation and redacted-Debug policy tests |
 | Removal proof | Old public Realm target types removed only after all v3 callers consume Zone/ResourceRef |
 
 ### ADR046-identities-002
@@ -295,8 +297,8 @@ cgroup/scope, and provider-specific process identity.
 | Current source | `nixos-modules/options-realms.nix`, `options-realms-workloads.nix`, `index.nix` |
 | Reuse action | adapt |
 | Destination | `nixos-modules/options-zones.nix`, `nixos-modules/resources.nix`, `nixos-modules/index.nix` |
-| Detailed design | Validate Zone names, ResourceTypes/names/refs, shared Host/Guest ExecutionPolicy, and canonical sorted resource identities |
-| Integration | Nix resource objects serialize exactly the Rust contract |
+| Detailed design | Validate Zone names, ResourceTypes/names/refs, the shared Host/Guest ExecutionPolicy option shape, and canonical sorted resource identities. This work item defines no Rust ExecutionPolicy DTO and renders no Host or Guest resource. |
+| Integration | Nix serializes only the W0-owned Zone names, ResourceType names, ResourceNames, ResourceRefs, and canonical `(type, name)` order; Rust-to-Nix ExecutionPolicy parity starts after the Rust type lands in ADR046-W2. |
 | Data migration | Full reset and new Zone declarations |
-| Validation | nix-unit vectors and rendered contract tests |
+| Validation | W0 nix-unit vectors for accepted and rejected option shapes; Rust-to-Nix rendered contract parity is deferred to ADR046-W2 |
 | Removal proof | Realm-facing declarations removed only in the reset/purge wave |

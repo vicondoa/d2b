@@ -531,14 +531,15 @@ dropped.
 
 ## VsockEffectPort - injected interface
 
-`VsockEffectPort` is an async Rust trait injected at Provider startup. It
+`VsockEffectPort` is a native async Rust trait injected as a concrete
+implementation into a controller generic over the port type at Provider
+startup; it uses no trait object or `async-trait` dependency. It
 abstracts all AF_VSOCK syscall access. The Provider never calls
 `socket(AF_VSOCK, …)`, `connect`, or `bind` directly; it delegates every
 vsock operation to this port.
 
 ```rust
 /// Injected by the Zone runtime. Provider never calls AF_VSOCK syscalls directly.
-#[async_trait]
 pub trait VsockEffectPort: Send + Sync + 'static {
     /// Acquire a vsock connection for the given opaque IDs.
     ///

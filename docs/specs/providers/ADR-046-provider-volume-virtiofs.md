@@ -151,13 +151,14 @@ No root config is validated (empty `config: {}`). Every per-attachment option is
 inside the Export spec's `spec.provider.settings` object and validated against the
 Provider's signed spec settings schema at Nix eval time.
 
-Manifest-derived fields (loaded by the Zone runtime from the Provider's signed package
-manifest, never authored in Nix):
-- `spec.exports`: declares `virtiofs.d2bus.org.Export` with its schema fingerprint;
-- `spec.components`: describes the volume-virtiofs-controller component and the
+Manifest-derived fields (loaded by core ProviderDeployment directly from the
+Provider's signed package manifest, never authored in Nix and never copied into
+the Provider resource row):
+- `exports`: declares `virtiofs.d2bus.org.Export` with its schema fingerprint;
+- `components`: describes the volume-virtiofs-controller component and the
   virtiofsd-worker template;
-- `spec.dependencies`: lists required system Provider capabilities;
-- `spec.permissionClaims`: lists required RBAC claims.
+- `dependencies`: lists required system Provider capabilities;
+- `permissionClaims`: lists required RBAC claims.
 
 ### 3.2 Nix artifact catalog entry
 
@@ -286,7 +287,7 @@ status:
     endpointRef: Endpoint/vol-work-state-virtiofsd-work-vm
   provider:
     providerRef: Provider/volume-virtiofs
-    schemaId: volume-virtiofs.d2bus.org/Volume/status
+    schemaId: volume-virtiofs.d2bus.org/Export/status
     schemaVersion: 1.0.0
     observedProviderGeneration: 1
     details:
@@ -960,7 +961,7 @@ consumers is `Volume.status.resource.attachmentStatuses`, identical to sibling
 Volume implementations and written by `volume-local` from aggregated Export
 status. Virtiofs worker/export detail stays in `status.provider.details`
 with `providerRef: Provider/volume-virtiofs`, qualified `schemaId`
-(`volume-virtiofs.d2bus.org/Volume/status`), `schemaVersion`, and
+(`volume-virtiofs.d2bus.org/Export/status`), `schemaVersion`, and
 `observedProviderGeneration`. Any status writer writes all present layers
 atomically in one mutation; shared fields are never duplicated into
 `status.provider`, and the strict, ≤32 KiB, redacted extension schema is
@@ -1373,7 +1374,7 @@ and its owned Exports and Processes; the controller reconciles from the retained
 | --- | --- | --- |
 | `packages/d2b-host/src/virtiofsd_argv.rs`: `VirtiofsdArgvInput`, `generate_virtiofsd_argv`, 14 unit tests, golden `argv.txt` | `implemented-and-reachable` | Extract to `d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`; migrate 14 tests to `tests/argv_golden.rs`; remove `extra_args` field |
 | `nixos-modules/minijail-profiles.nix`: `virtiofsdProfiles`; principals `d2b-<vm>-runner`, `d2b-<vm>-gctlfs`; ADR 0021 user-NS exception | `generated-or-eval-contract` | Becomes `virtiofsd-worker` Process sandbox spec; ADR 0021 invariants fully preserved; principals → typed `User/<name>` ResourceRefs; no numeric form |
-| `nixos-modules/processes-json.nix`: `virtiofsdRunner` shape; `roStoreSharedDir` redirect sentinel `share.source == "/nix/store"` → `store-view/live` | `generated-or-eval-contract` | Replaced by volume-virtiofs controller-owned Process resource (via Export); `store-view/live` redirect preserved in resource compiler |
+| `nixos-modules/processes-json.nix`: `virtiofsdRunner` shape; `roStoreSharedDir` redirect sentinel `share.source == "/nix/store"` → `store-view/live` | `generated-or-eval-contract` | Replaced by an Export-owned Process resource reconciled by volume-virtiofs; `store-view/live` redirect preserved in resource compiler |
 | `packages/d2b-core/src/processes.rs`: `ProcessRole::Virtiofsd`, `VmProcessDag` virtiofsd entry | `generated-or-eval-contract` | Replaced by Process resource template `virtiofsd-worker` owned by virtiofs Export |
 | `packages/d2b-priv-broker/src/ops/spawn_runner.rs`: `SpawnRunnerPlanInput`, `RunnerIsolationSpec`, `adr_carve_out` virtiofsd path | `implemented-and-reachable` | `SpawnRunnerPlanInput` → v3 `LaunchTicket` with typed sandbox spec; `adr_carve_out` field removed; ADR 0021 is no longer a carve-out but the normal path; broker invocation is mediated by system-minijail effect port, not called directly by volume-virtiofs |
 | `packages/d2b-priv-broker/src/sys.rs`: `clone3_spawn_runner` user-NS pre-establishment | `implemented-and-reachable` | Remains in broker; exposed to system-minijail effect port adapter; volume-virtiofs never calls it directly; `user_ns.rs` in volume-virtiofs crate contains conformance kit only |
@@ -1431,7 +1432,7 @@ it does not import session implementation internals directly.
 | Reuse action | extract |
 | Destination | `packages/d2b-provider-volume-virtiofs/src/user_ns.rs` (conformance kit); `packages/d2b-provider-volume-virtiofs/tests/adr021_invariant.rs` |
 | Detailed design | `user_ns.rs` contains only the conformance check and template descriptor assertion: verify that the virtiofsd-worker Process template declares `capabilityClasses: []`, `startRoot: false`, `noNewPrivileges: true`, `readOnlyRoot: true`, and `sandbox.userNamespace.mappingClass: process-principal-root`. `hostUid`/`hostGid` are NOT set by the controller - system-minijail resolves the mapping from the `User/vol-<vol>-vfd` principal when building the LaunchTicket via the effect port. The conformance check rejects any template mutation that adds host capability classes, sets `startRoot: true`, disables `noNewPrivileges`, or disables `readOnlyRoot`. The user-NS pre-establishment code itself remains in `d2b-priv-broker/src/sys.rs` and is invoked via the system-minijail effect port. Primary reuse disposition: `extract`. Preserved source-plan detail: extract conformance kit only; pre-establishment code stays in broker. |
-| Integration | volume-virtiofs controller calls conformance check before emitting any Process Create; effect port adapter in system-minijail invokes broker spawn path |
+| Integration | volume-virtiofs controller calls conformance check before emitting any Process Create; system-minijail requests launch through MinijailProcessEffectPort and the core/ProviderSupervisor adapter invokes the broker spawn path |
 | Data migration | v3.0 reset; current `adr_carve_out` field in `SpawnRunnerPlanInput` removed; ADR 0021 path is now the default |
 | Validation | `tests/adr021_invariant.rs`: `virtiofsd_capability_classes_must_be_empty`, `virtiofsd_start_root_must_be_false`, `virtiofsd_no_new_privileges_must_be_true`, `virtiofsd_read_only_root_must_be_true`, `process_spec_has_no_host_uid_gid`, `sandbox_namespace_never_emitted`, `user_ns_single_entry_single_uid_mapping`, `uid_map_write_ordering_uid_setgroups_gid`, `child_setuid_in_ns_not_host_uid`, `clone_newns_not_in_clone3_flags`, `child_exits_user_ns_sync_on_pipe_eof` |
 | Removal proof | `adr_carve_out` field and virtiofsd-specific branch in current `SpawnRunnerPlanInput` removed only after v3 LaunchTicket covers all virtiofsd spawn cases |
@@ -1541,7 +1542,7 @@ budget.
 | --- | --- | --- |
 | `packages/d2b-host/src/virtiofsd_argv.rs` | ADR046-vvfs-001 parity confirmed; argv-shape gate adapted | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs` |
 | `nixos-modules/minijail-profiles.nix` virtiofsdProfiles block | ADR046-vvfs-006; Process template sandbox spec passes broker-caps gate | `packages/d2b-provider-volume-virtiofs/src/` Process template descriptor |
-| `nixos-modules/processes-json.nix` virtiofsdRunner block and `roStoreSharedDir` sentinel | ADR046-vvfs-005, ADR046-vvfs-006; VmProcessDag parity gate passes | volume-virtiofs controller-owned Process resources (via Export) |
+| `nixos-modules/processes-json.nix` virtiofsdRunner block and `roStoreSharedDir` sentinel | ADR046-vvfs-005, ADR046-vvfs-006; VmProcessDag parity gate passes | Export-owned Process resources reconciled by volume-virtiofs |
 | `packages/d2bd/src/supervisor/dag.rs` `ProcessRole::Virtiofsd` branch | ADR046-vvfs-003; Export controller lifecycle covers all virtiofsd spawn/adopt/stop paths | volume-virtiofs Export lifecycle controller |
 | `packages/d2b-priv-broker/src/ops/spawn_runner.rs` `adr_carve_out` virtiofsd field | ADR046-vvfs-002; v3 LaunchTicket handles all virtiofsd spawn cases without carve-out | Process spec `sandbox.namespaceClasses: [user]` + system-minijail effect port |
 | `packages/d2b-core/src/processes.rs` `ProcessRole::Virtiofsd` enum variant | All volume-virtiofs work items complete; no remaining consumer | Process resource template `virtiofsd-worker` (owned by Export) |

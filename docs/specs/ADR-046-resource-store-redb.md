@@ -123,9 +123,23 @@ Unknown table/encoding/schema versions fail closed.
 
 redb is synchronous. The Zone runtime exposes only async resource APIs.
 
-- one bounded fair async write queue feeds one dedicated blocking store actor;
+`d2b-resource-store` is runtime- and storage-neutral: it depends on neither
+Tokio nor redb, and its native async trait methods return `impl Future + Send`.
+The API holds one concrete store implementation and test fakes are generic
+parameters, so no trait object or `async-trait` dependency is used.
+`d2b-resource-store-redb` alone consumes the exact workspace pin
+`redb = { version = "=4.1.0", default-features = false }`. Tokio is
+workspace-pinned with default features disabled; this crate enables only
+`rt`, `sync`, and `time`, the resource API additionally enables `macros`, and
+only the Zone runtime binary enables `rt-multi-thread`.
+
+- one bounded fair async write queue of 256 requests feeds one dedicated
+  blocking store actor;
+- a group commit contains at most 16 mutations;
 - read requests execute as short-lived blocking MVCC read transactions through
-  a bounded adapter pool;
+  a bounded pool of 4 threads with at most 16 concurrent transactions;
+- each read transaction has a 250 ms lifetime ceiling;
+- the watch-dispatch queue holds at most 1024 entries;
 - async executor threads never call blocking redb/filesystem APIs;
 - read transactions cannot survive an await or watch lifetime;
 - per-principal/controller fair admission prevents one caller monopolizing the
@@ -314,6 +328,14 @@ On the pinned reference host/release profile:
 | p95 durable commit → matching controller handler start | <=5 ms |
 | p95 ready Process commit → launch-attempt start | <=20 ms |
 
+Evidence for the aggregate RSS row is staged. W0 records only the Zone resource
+service/store median at the 10,000-resource/100-watch fixture and must meet
+<=24 MiB; it must not report the aggregate row as passing. The wave that lands
+each fixed controller separately records `Provider/system-core <=22 MiB` and
+`Provider/system-minijail <=12 MiB`. W6 records the first valid all-three-live
+aggregate result, which must remain <=64 MiB. The sub-budgets total 58 MiB; the
+remaining 6 MiB is variance headroom, not an independently spendable budget.
+
 Benchmark fixtures include:
 
 - empty store;
@@ -353,10 +375,10 @@ authorization, or audit cannot be weakened to pass.
 | Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store/src/lib.rs`, `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs` |
-| Detailed design | redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Promote the exact `redb = { version = "=4.1.0", default-features = false }` workspace pin and consume it only from `d2b-resource-store-redb`. Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`, hold one concrete store implementation, and inject generic test fakes without trait objects or `async-trait`. `ResourceStore::commit` accepts only the private-field `AdmittedMutation`, rechecks its captured policy/API-catalog/active-configuration/controller revisions inside the transaction, never evaluates RBAC, and never auto-retries a failed recheck. Implement redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime owns store; resource API is sole caller |
 | Data migration | Full reset; logical backup only for v3 stores |
-| Validation | Unit/property/fault tests and hard benchmark |
+| Validation | Unit/property/fault tests and hard benchmark; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
 | Removal proof | Existing ledgers removed only by owning future work items |
 
 ### ADR046-store-002
@@ -380,8 +402,8 @@ authorization, or audit cannot be weakened to pass.
 | Dependency/owner | ADR046-store-001; storage/broker integrator |
 | Current source | `nixos-modules/storage-json.nix`, `packages/d2b-priv-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; generated v3 storage row |
-| Detailed design | fd-backed provision/open, marker identity, logical backup, staged restore/upgrade, corruption quarantine |
+| Destination | `packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-contract-tests/tests/zone_storage_contract.rs` |
+| Detailed design | fd-backed provision/open, marker identity, logical backup, staged restore/upgrade, corruption quarantine; the closed `ZoneStoreStorageRow` carries only opaque ids and required ownership, filesystem, locking, marker, replacement-detection, fsync, and publication invariants, never a host path |
 | Integration | Broker/Host/Guest storage owner passes File to Zone runtime |
 | Data migration | Destructive v3 bootstrap; v3-to-v3 logical restore |
 | Validation | marker replacement, crash publication, backup/restore/upgrade tests |

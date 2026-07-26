@@ -49,18 +49,18 @@ Crate: `packages/d2b-provider-device-gpu/`
 packages/d2b-provider-device-gpu/
   src/
     lib.rs               Controller entry point; exports controller/worker binaries
-    controller.rs        Async reconcile loop; ResourceClient; spec/status owner
+    controller.rs        Async reconcile loop; ResourceClient; Device spec/status owner
     probe.rs             GpuEffectPort::probe_drm_device call; hotplug observe scheduler; three-strike counter
     arbitration.rs       Exclusive vs shared claim arbitration; conflict detection
     worker_gpu.rs        Full GPU and render-node Process creation/teardown
     worker_video.rs      Video-decoder Process creation/teardown; wire-contract check
     argv.rs              Thin re-export of d2b-host gpu_argv / video_argv generators
-    broker.rs            Device claim registration; GpuEffectPort claim state (no execution authority; claim authority is Device resource status + core Operation ledger)
-    status.rs            Status writer; condition builder; phase state machine
+    effect_claim.rs      Device claim registration; GpuEffectPort claim state (no execution authority; claim authority is Device resource status + core Operation ledger)
+    status.rs            Device status writer; condition builder; phase state machine
     audit.rs             Path-free audit record emitter
     error.rs             Typed error enum; stable closed-set error slugs
   tests/
-    combined_reconcile.rs        GPU+video combined state machine; fake broker/supervisor
+    combined_reconcile.rs        GPU+video combined state machine; fake EffectPort/supervisor
     render_node_enforcement.rs   shared+renderNodeOnly=false spec rejected at controller
     wire_constant_snapshot.rs    Byte-stable wire-contract constants vs video_argv.rs
     conformance.rs               Spec/settings serde round-trip; ResourceTypeSchema; deviceUsage/budget/endpoints/readiness field validation
@@ -68,7 +68,7 @@ packages/d2b-provider-device-gpu/
     video_dependency.rs          Video Process not started until GPU Process is Ready
     seccomp_policy_ref.rs        GPU/video/render-node seccomp policy ref names stable
   integration/
-    gpu_worker_start/            GPU worker Process obtains broker tokens, reaches Ready
+    gpu_worker_start/            GPU worker Process receives LaunchTicket device grants, reaches Ready
     render_node_shared/          Two Guests share same render-node Device simultaneously
     video_dependency/            Video Process starts only after GPU Process is Ready
     README.md                    How to invoke integration fixtures; hardware test note
@@ -139,8 +139,10 @@ spec:
 
 Core aggregates the controller Process status (phase, conditions) into the
 `Provider/device-gpu` status. Per D087, `device-gpu` declares no Provider state
-Volume; bounded non-secret controller operational state lives in Device/Provider
-status and the core Operation ledger, and the controller has no `/state` mount.
+Volume; bounded non-secret controller operational state lives in Device status
+and the core Operation ledger, and the controller has no `/state` mount. The
+Provider resource status remains a core-derived aggregate and is never written
+by the device-gpu controller.
 
 ## Device spec served by this Provider
 
@@ -1477,9 +1479,10 @@ d2b.zones.<zone>.resources."provider-device-gpu" = {
 `spec.config.controllerExecutionRef` declares the execution context for the
 controller Process. The `ProviderStateSet` for `Provider/device-gpu` is empty:
 `device-gpu` declares no Provider state Volume, does not export `Volume` as a
-ResourceType, and has no controller `/state` mount. Device resource status,
-Provider status, and core Operation rows are the authority for bounded
-non-secret operational state.
+ResourceType, and has no controller `/state` mount. Device resource status and
+core Operation rows are the authority for bounded non-secret controller state;
+core derives the separate Provider aggregate from component, dependency, and
+Process health.
 
 The Device spec carries **no** `artifactId` field. Binary paths for crosvm
 (GPU and video) are resolved from the **signed component descriptor** inside the
@@ -1520,10 +1523,10 @@ When a GPU Device resource is removed from the Nix config:
 | `controller.rs` | Async reconcile loop; ResourceClient; `spec-generation-changed`, `deletion-requested`, `dependency-changed`, `scheduled-observe`, `owned-resource-changed` handlers |
 | `probe.rs` | `GpuEffectPort::probe_drm_device(selector)` caller; `observe_interval_secs` scheduler; three-strike failure counter |
 | `arbitration.rs` | Exclusive vs shared claim check; `ClaimConflict` condition; second-claim rejection |
-| `worker_gpu.rs` | Full GPU and render-node Process resource builder; argv construction via `d2b-host::gpu_argv`; broker token set |
+| `worker_gpu.rs` | Full GPU and render-node Process resource builder; argv construction via `d2b-host::gpu_argv`; opaque deviceUsage requests |
 | `worker_video.rs` | Video-decoder Process resource builder; argv construction via `d2b-host::video_argv`; NVIDIA opt-in gating; wire-contract check at startup |
 | `argv.rs` | Re-export `GpuArgvInput`, `VideoArgvInput`, `GpuContextType` from `d2b-host`; no new argv logic |
-| `broker.rs` | Device claim registration; tracks in-memory claim admission state per Device/Guest via `GpuEffectPort`; claim authority is `Device` resource `spec`/`status` (holderRefs, conditions) and the core Operation ledger managed via `ResourceClient` - no file-backed allocation table and no Volume writes; does **not** hold execution authority (Provider/system-minijail sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the privileged broker which executes them) |
+| `effect_claim.rs` | Device claim registration; tracks in-memory claim admission state per Device/Guest via `GpuEffectPort`; claim authority is `Device` resource `spec`/`status` (holderRefs, conditions) and the core Operation ledger managed via `ResourceClient` - no file-backed allocation table and no Volume writes; does **not** hold execution authority (Provider/system-minijail sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the privileged broker which executes them) |
 | `status.rs` | `StatusWriter`; condition builder; phase state machine; bounded `providerDiagnostic` |
 | `audit.rs` | Path-free `GpuAuditRecord` builder; correlation ID threading |
 | `error.rs` | `DeviceGpuError` enum; closed-set slug strings |
@@ -1532,14 +1535,14 @@ When a GPU Device resource is removed from the Nix config:
 
 | File | Coverage |
 | --- | --- |
-| `combined_reconcile.rs` | Full GPU+video state machine: probe → claim → gpu-Process Ready → video-Process Ready; fake broker and supervisor |
+| `combined_reconcile.rs` | Full GPU+video state machine: probe → claim → gpu-Process Ready → video-Process Ready; fake EffectPorts and supervisor |
 | `render_node_enforcement.rs` | `shared + renderNodeOnly=false` spec rejected at controller admission; `exclusive + renderNodeOnly=true` accepted |
 | `wire_constant_snapshot.rs` | `video_argv::wire_contract_snapshot()` byte-matches committed golden string; any constant change surfaces here |
 | `conformance.rs` | `DeviceSpec` and `DeviceGpuSettings` serde round-trip vs ResourceTypeSchema golden; unknown-field denial; `deviceUsage`, `budget`, `endpoints`, `readiness`, and `mounts` field names and structure validated against canonical schema |
 | `arbitration_conflict.rs` | Second Guest attempts exclusive claim; controller writes `ClaimConflict` condition, sets second Device phase `Degraded` |
 | `video_dependency.rs` | Video Process not created until GPU Process reaches `Ready`; video Process stopped when GPU Process fails |
 | `seccomp_policy_ref.rs` | `sandbox.seccompClass` for gpu/video/render-node Process templates are `w1-gpu`, `w1-video`, `w1-gpu-render-node` (stable regression guard; confirms system-minijail enforces correct class before exec) |
-| `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller and worker Process templates have no `/state` mounts; no GPU Device-payload Volume exists; bounded operational observations are written to Device/Provider status and Operation rows; render-node access remains a Device attachment rather than Provider state |
+| `status_state.rs` | Provider descriptor declares no Provider state Volume; ProviderStateSet query is empty; controller and worker Process templates have no `/state` mounts; no GPU Device-payload Volume exists; bounded controller observations are written to Device status and Operation rows; core alone derives Provider status; render-node access remains a Device attachment rather than Provider state |
 
 ### `integration/` - container/Host/Guest fixtures
 
@@ -1764,7 +1767,7 @@ disposition contract test passes.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-device-gpu/` component descriptor; controller/status tests |
-| Detailed design | Do **not** declare a controller Provider state Volume. The device-gpu component descriptor declares an empty ProviderStateSet; controller and worker Process templates contain no `/state` mount. Bounded non-secret operational state is published to Device/Provider status and the core Operation ledger. GPU has no Device-payload Volume; render-node access remains a Device attachment resolved by LaunchTicket and broker policy. Primary reuse disposition: `create`. Preserved source-plan detail: `new` - status-first state assertions in the component descriptor and controller tests. |
+| Detailed design | Do **not** declare a controller Provider state Volume. The device-gpu component descriptor declares an empty ProviderStateSet; controller and worker Process templates contain no `/state` mount. Bounded non-secret controller state is published to Device status and the core Operation ledger; core alone derives aggregate Provider status from component, dependency, and Process health. GPU has no Device-payload Volume; render-node access remains a Device attachment resolved by LaunchTicket and broker policy. Primary reuse disposition: `create`. Preserved source-plan detail: `new` - status-first state assertions in the component descriptor and controller tests. |
 | Integration | `tests/status_state.rs`; `integration/gpu_worker_start/` verifies controller startup is gated by resource dependencies and status writer authority, not by a Provider state Volume |
 | Data migration | None - no Provider state Volume exists to migrate. |
 | Validation | `cargo test -p d2b-provider-device-gpu --test status_state`; component descriptor golden has no Provider state Volume declaration; controller Process template has no `/state` mount; ProviderStateSet query is empty; status/core-ledger fields carry bounded operational observations |
@@ -1797,5 +1800,5 @@ disposition contract test passes.
 | Required delta | `d2b-provider-device-gpu` crate, async reconcile controller, Device ResourceType schema for GPU settings, Provider resource registration, process-name templates from Device UID, wire-contract check at startup, shared render-node arbitration enforcement, generation-based lifecycle via Zone resource plane; D087 status-first state assertion in the component descriptor - no Provider state Volume, empty ProviderStateSet, no controller `/state` mount, bounded operational state in status and Operation rows (ADR046-gpu-008). |
 | Reuse path | Re-export `gpu_argv.rs` and `video_argv.rs` from `d2b-host` unmodified. Adapt device token set constant from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` for `deviceUsage` population. Adapt minijail profile field names to `Process` resource spec fields. uid/gid mapping is resolved privately by core from the signed worker template - the device-gpu controller does not write hostUid/hostGid into any resource spec field. |
 | Replacement/deletion | `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode`, `ProcessRole::Video` in `processes.rs` retained until Provider integration parity. `d2b.vms.<vm>.graphics.*` Nix options deprecated (with warning) until consumer migration window closes. Nix `components/graphics.nix` host-side worker-spawn logic removed after `worker_gpu.rs` is live; CH arg injection and crosvm patches stay in Guest runtime Nix module. `StorageRoot`/`StoragePathSpec` entries for GPU/video roles in `d2b-core/src/storage.rs` removed after status-first Device/Process lifecycle integration passes. |
-| Feasibility proof | GPU worker process broker token set: `packages/d2b-contract-tests/tests/minijail_gpu.rs` (existing, reachable). Video wire-contract constant snapshot: `packages/d2b-host/src/video_argv.rs` `wire_contract_snapshot()` + `tests/video_binary_contract.rs` (existing, reachable). Render-node user-NS propagation: `packages/d2b-core/src/bundle_resolver.rs` test `gpu_render_node_user_namespace_propagates_to_resolved_intent` (existing, reachable). |
+| Feasibility proof | GPU worker device allowlist projection into the core-owned LaunchTicket: `packages/d2b-contract-tests/tests/minijail_gpu.rs` (existing, reachable). Video wire-contract constant snapshot: `packages/d2b-host/src/video_argv.rs` `wire_contract_snapshot()` + `tests/video_binary_contract.rs` (existing, reachable). Render-node user-NS propagation: `packages/d2b-core/src/bundle_resolver.rs` test `gpu_render_node_user_namespace_propagates_to_resolved_intent` (existing, reachable). |
 | Future owner | `packages/d2b-provider-device-gpu/` crate; work items ADR046-gpu-001 through ADR046-gpu-009 |

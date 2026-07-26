@@ -417,7 +417,6 @@ Every method:
 ### 6.4 `Oo7SecretServicePort` trait (injected interface)
 
 ```rust
-#[async_trait]
 pub trait Oo7SecretServicePort: Send + Sync {
     async fn state(&self) -> Result<SecretServiceState, SecretServicePortError>;
 
@@ -674,7 +673,9 @@ an authorized EffectPort/LaunchTicket; unauthorized resolution returns
 
 ### 7.4 Injected port: pre-opened D-Bus FD
 
-The controller is constructed with an injected `Arc<dyn Oo7SecretServicePort>`.
+The controller is generic over `P: Oo7SecretServicePort` and is constructed
+with that concrete injected implementation; there is no trait object or
+`async-trait` dependency.
 The production implementation wraps the pre-opened Secret Service connection
 port delivered by the fixed user supervisor as the user portal FD in the
 LaunchTicket's inherited FD table. The component descriptor for
