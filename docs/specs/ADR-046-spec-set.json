@@ -795,7 +795,7 @@
         "ADR-046-telemetry-audit-and-support"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-volume-virtiofs.md",
-      "sha256" : "e78e8b6a5f805a2d8237afecef5f1e09ec81b4f82ebb7754d03a1405ab71bf53",
+      "sha256" : "af97b5fc868900d98c28a811cd290e88012d81e0b4e6f140516524be4b7a7b0f",
       "specId" : "ADR-046-provider-volume-virtiofs",
       "status" : "Accepted",
       "supersedes" : "`nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/supervisor/dag.rs`",
@@ -1013,7 +1013,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-zone-control.md",
-      "sha256" : "d902d579c983cbd9cbcbccd3c3df669f0f48cfebfdcec46fa12845b2f6321565",
+      "sha256" : "bc4014fd3b63c91c95fc470f2f76507cd349d3999fa62404a18ef6e132d3d99c",
       "specId" : "ADR-046-resources-zone-control",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1080,7 +1080,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-security-and-threat-model.md",
-      "sha256" : "81b42c6477ed3a07de7c28800e7eec36a91cc152fb5dbbbbbd06254df35ddd26",
+      "sha256" : "a6a3ded1a448b1fe7e8863b46c3d03f5cee353bf83123a50de722a0810f5f69c",
       "specId" : "ADR-046-security-and-threat-model",
       "status" : "Accepted",
       "supersedes" : null,

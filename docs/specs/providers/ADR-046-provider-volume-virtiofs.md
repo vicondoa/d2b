@@ -151,13 +151,14 @@ No root config is validated (empty `config: {}`). Every per-attachment option is
 inside the Export spec's `spec.provider.settings` object and validated against the
 Provider's signed spec settings schema at Nix eval time.
 
-Manifest-derived fields (loaded by the Zone runtime from the Provider's signed package
-manifest, never authored in Nix):
-- `spec.exports`: declares `virtiofs.d2bus.org.Export` with its schema fingerprint;
-- `spec.components`: describes the volume-virtiofs-controller component and the
+Manifest-derived fields (loaded by core ProviderDeployment directly from the
+Provider's signed package manifest, never authored in Nix and never copied into
+the Provider resource row):
+- `exports`: declares `virtiofs.d2bus.org.Export` with its schema fingerprint;
+- `components`: describes the volume-virtiofs-controller component and the
   virtiofsd-worker template;
-- `spec.dependencies`: lists required system Provider capabilities;
-- `spec.permissionClaims`: lists required RBAC claims.
+- `dependencies`: lists required system Provider capabilities;
+- `permissionClaims`: lists required RBAC claims.
 
 ### 3.2 Nix artifact catalog entry
 

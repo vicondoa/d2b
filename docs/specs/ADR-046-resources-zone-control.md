@@ -518,18 +518,23 @@ types remain before the Provider resource is removed.
 
 ### 4.3 Spec
 
-Provider.spec carries the complete desired installation. All digests are
-`sha256:` prefixed lowercase hex. An empty or missing digest field is
-rejected at admission.
+Provider.spec is exactly `{ artifactId; config }`. It selects the desired
+installation but never duplicates manifest, package, component, resource,
+status, or generated properties in the Provider resource row.
 
 ```yaml
 spec:
   artifactId: "runtime-cloud-hypervisor"  # bounded ID; references d2b.artifacts catalog
-  # PackageIdentity fields (digest, manifestDigest, configSchemaDigest, signatureId,
-  # trustEpoch, conformanceAttestationDigest, compatibility, support, etc.) are
-  # resolved from the artifact catalog by the resource compiler; they do not appear
-  # in operator-authored spec or in the canonical JSON envelope.
   config: {}                            # root config; validated against catalog's configSchemaDigest schema
+```
+
+The signed manifest/catalog entry selected by `artifactId` carries the
+deployment descriptor below. It is integrity-checked and read directly by
+core ProviderDeployment; it is never copied into Provider.spec or another
+field of the Provider resource row.
+
+```yaml
+manifest:
   exports:
     resourceTypes:
       - name: Host                      # short Zone-unique ResourceType name (or vendor.qualified.Name)
@@ -636,10 +641,11 @@ Rules:
   resources to be drained and replaced;
 - the empty config `{}` is valid for Providers with no config.
 
-#### 4.3.3 Component descriptors
+#### 4.3.3 Signed-manifest component descriptors
 
-A Provider may declare at most one set of each component type (controllers,
-services, workers). Component IDs are unique within the Provider.
+A Provider's signed manifest may declare at most one set of each component
+type (controllers, services, workers). Component IDs are unique within the
+Provider manifest.
 
 The following component bounds are normative and enforced at admission:
 
@@ -703,7 +709,8 @@ The following component bounds are normative and enforced at admission:
 
 #### 4.3.4 Dependencies
 
-`spec.dependencies` is a flat map from alias to Provider ResourceRef:
+The signed manifest's `dependencies` field is a flat map from alias to
+Provider ResourceRef:
 
 ```yaml
 dependencies:
@@ -728,8 +735,8 @@ Rules:
 
 #### 4.3.5 Permission claims
 
-`spec.permissionClaims` is a bounded list of operations the Provider controller
-or service requests. Each claim has:
+The signed manifest's `permissionClaims` field is a bounded list of operations
+the Provider controller or service requests. Each claim has:
 
 ```yaml
 - verb: create               # resource verb or runtime verb
@@ -753,6 +760,9 @@ Rules:
   self-executing grants.
 
 #### 4.3.6 Upgrade and lifecycle policy
+
+These fields belong to the signed manifest's `lifecycle` object, not to
+Provider.spec.
 
 | Field | Values | Default |
 | --- | --- | --- |
@@ -2596,14 +2606,16 @@ The `provider lifecycle` handler reconciles Provider:
    Set `PackageTrusted` and `trustResult`.
 2. **Config validation**: Validate `spec.config` against the JSON Schema
    identified by the artifact catalog's `configSchemaDigest`. Set `ConfigValid`.
-3. **Dependency resolution**: For each alias in `spec.dependencies`, resolve
-   to a Ready Provider; verify service fingerprint compatibility. Set
+3. **Dependency resolution**: For each alias in the signed manifest's
+   `dependencies`, resolve to a Ready Provider; verify service fingerprint
+   compatibility. Set
    `DependenciesReady`.
 4. **API binding**: Pass component descriptors and exported ResourceTypes to
    the API catalog handler; verify no name collisions; intersect permission
    claims with Zone policy; install schemas.
-5. **Component launch**: For each component in `spec.components`, create or
-   update the owned Process resource with the corresponding template/placement.
+5. **Component launch**: For each component in the signed manifest's
+   `components`, create or update the owned Process resource with the
+   corresponding template/placement.
    Bootstrap exception components (`system-core`, `system-minijail`) skip this
    step.
 6. **Readiness**: Once all required component Processes reach `Ready`, write
@@ -3100,11 +3112,10 @@ d2b.zones.dev.resources.runtime-cloud-hypervisor = {
       # apiToken = d2b.zones.dev.credentialRef "api-token";
     };
 
-    # spec.exports, spec.components, spec.dependencies, spec.permissionClaims,
-    # spec.upgradePolicy, spec.restartPolicy: populated from the signed manifest
-    # embedded in the artifact at build time. These are NOT writable Nix options;
-    # the Nix module generator does not emit settable options for them.
-    # Attempting to set them is an eval assertion error.
+    # Signed-manifest fields such as exports, components, dependencies,
+    # permissionClaims, upgradePolicy, and restartPolicy are not Provider spec
+    # fields. The Nix module generator emits no options for them, and attempting
+    # to add any field besides artifactId or config is an eval assertion error.
   };
 };
 ```
@@ -3398,42 +3409,20 @@ it to detect replacement across reconnects.
   },
   "spec": {
     "artifactId": "runtime-cloud-hypervisor",
-    "config": { "defaultCpuCount": 2, "defaultMemoryMib": 1024 },
-    "exports": [
-      { "resourceType": "Guest", "schemaDigest": "sha256:445566..." }
-    ],
-    "components": [
-      {
-        "name": "primary", "role": "controller", "placement": "HostLocal",
-        "processTemplate": {
-          "executableRef": "d2b-provider-runtime-cloud-hypervisor",
-          "args": ["--zone-bus-fd", "3"],
-          "environmentPolicy": "isolated"
-        },
-        "required": true
-      }
-    ],
-    "dependencies": [],
-    "permissionClaims": [
-      { "resourceType": "Guest",
-        "verbs": ["create","update-spec","update-status","delete"],
-        "level": "standard" }
-    ],
-    "upgradePolicy": "drain-then-replace",
-    "restartPolicy": "on-failure"
+    "config": { "defaultCpuCount": 2, "defaultMemoryMib": 1024 }
   },
   "status": null
 }
 ```
 
-`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and
-`restartPolicy` are loaded from the signed manifest embedded in the artifact
-identified by `artifactId`. The operator supplies only `artifactId` (a plain
-bounded ID referencing the `d2b.artifacts.*` catalog) and `config`. The resource
-compiler resolves all manifest-derived fields and PackageIdentity sub-fields from
-the artifact catalog at build time. Store paths and raw closure metadata are
-**private catalog implementation data** and do not appear in the spec, status,
-audit records, or OTEL attributes.
+The operator supplies only `artifactId` (a plain bounded ID referencing the
+`d2b.artifacts.*` catalog) and `config`. Core ProviderDeployment reads
+`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`,
+and `restartPolicy` directly from the signed manifest/catalog entry. The
+resource compiler verifies those properties and all PackageIdentity fields at
+build time but never copies them into the Provider resource envelope. Store
+paths and raw closure metadata are **private catalog implementation data** and
+do not appear in the spec, status, audit records, or OTEL attributes.
 
 #### Role canonical envelope
 
@@ -3591,7 +3580,7 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | `spec.artifactId` format `^[a-z][a-z0-9-]*$`, max 128 chars - Provider only | Nix `assert` | eval error |
 | `type = "Provider"` without a `spec.artifactId` field is rejected | Nix `assert` | eval error |
 | `spec.artifactId` value must name an entry in `d2b.artifacts.*` (attrset key lookup at eval time) with `type = "provider"` - Provider only | Nix `assert` | eval error if ID absent from catalog |
-| Manifest-derived Provider spec fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) not set by operator | Nix `assert` | eval error with message |
+| Provider spec contains no field other than `artifactId` and `config`; signed-manifest fields such as `exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and `restartPolicy` are not resource fields | Strict generated Provider ResourceSpec plus Nix `assert` | eval error with message |
 
 #### Phase 2 - Nix build (impure; runs on `nixos-rebuild build` and `nix build`)
 
@@ -4149,7 +4138,7 @@ Evidence classes:
 | Symbol | File | Evidence class | ADR-0046 mapping |
 | --- | --- | --- | --- |
 | `HostSubstrateProvider`, `RuntimeProvider`, `WorkloadProvider`, `DurableExecutionProvider`, `InfrastructureProvider`, `NodeProvider`, `TransportProvider`, `RelayProvider`, `CredentialProvider`, `PersistentShellProvider`, `DisplayProvider` traits | `d2b-realm-provider/src/provider.rs:31,41,65,89,268,333,197,324,301,137,169` | `implemented-and-reachable` (`WorkloadProvider` is imported in live `d2bd/src/lib.rs:93` for ACA) | Provider trait surface. Each trait axis maps to a Provider component service definition; `WorkloadProvider` is the only one with a live call path (ACA gateway). Remaining traits are reachable via `d2b-realm-provider` dependency but have no live non-ACA call sites |
-| `RuntimeCapabilitySet`, `WorkloadCapabilitySet`, `NodeCapabilitySet` | `d2b-realm-provider/src/capabilities.rs` | `implemented-and-reachable` | Maps to Provider `spec.components[].supportedCapabilities` |
+| `RuntimeCapabilitySet`, `WorkloadCapabilitySet`, `NodeCapabilitySet` | `d2b-realm-provider/src/capabilities.rs` | `implemented-and-reachable` | Maps to signed Provider manifest `components[].supportedCapabilities` |
 | `workload_lists_and_advertises()`, `display_fails_closed_when_unsupported()` | `d2b-realm-provider/src/conformance.rs` | `implemented-and-reachable` | Provider conformance check behavior; reused in Provider trust check (ADR046-zone-control-003) |
 | `ProviderError`, `ErrorKind`, `RetryHint`, `ProviderDiagnostic` | `d2b-realm-provider/src/error.rs` | `implemented-and-reachable` | Provider lifecycle error/retry schema; maps to Provider `status.conditions[].message` and error bounds |
 
@@ -4218,7 +4207,7 @@ None of the following exist in baseline:
 | Baseline symbol | Reuse action | Destination |
 | --- | --- | --- |
 | `is_label()`, `LABEL_PATTERN`, `MAX_ID_LEN`, `IdError` | extract | `d2b-contracts/src/v3/resource_ref.rs` ResourceName validator |
-| `RealmControllerPlacement` label set | adapt (semantics change: process placement → component placement) | Provider `spec.components[].placement` field enum |
+| `RealmControllerPlacement` label set | adapt (semantics change: process placement → component placement) | Signed Provider manifest `components[].placement` field enum |
 | `EntrypointMode::{HostResident,GatewayBacked}` | adapt | ZoneLink transport binding selector |
 | `RealmTransportBinding::{LocalUnixSocket,RemoteRealmTransport,ProviderRealmTransport}` | adapt | ZoneLink `spec.transportProviderRef` + transport settings variants |
 | `SecurePeerSession<C>` (Noise KK) | copy/adapt via main `a1cc0b2d` | Enrolled-steady-state Noise KK handshake primitive within the ZoneLink enrollment-and-session FSM (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`, ADR046-zone-control-018); the one-time IKpsk2 bootstrap primitive is reused separately from d2b-bus (ADR046-zone-control-011) and this KK primitive never replaces or reorders that bootstrap step |
@@ -4549,7 +4538,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `nixos-modules/options-zones.nix`, `nixos-modules/generated/resource-types.nix`, `nixos-modules/generated/options-zones-<ResourceType>.nix`, `nixos-modules/resource-type-validators.nix` |
-| Detailed design | Consume the generator and registry established by ADR046-routing-011 to declare the unified `d2b.zones.<zone>.resources.<name>` option tree plus the Zone-level compiler-only `parentZone` scalar. The generated standard registry is exactly the canonical 19 types (`Zone`, `ZoneLink`, `Provider`, `Host`, `Guest`, `Process`, `EphemeralProcess`, `Network`, `Volume`, `Credential`, `Device`, `Endpoint`, `User`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `ResourceExport`, `ResourceImport`), and every standard type has a strict generated `spec` submodule carrying the schema's Nix types, defaults, bounds, and documentation. Installed Provider artifacts may append only signed qualified ResourceTypes whose strict schema has been verified and generated into the evaluated option set. `type` is selected from that closed combined registry: an unknown standard string, an unqualified extension, or a qualified type without an installed verified schema fails evaluation; there is no unrestricted string or free-form `spec` fallback. Require `parentZone` on every non-root Zone and forbid it on `local-root`; resolve it against declared Zone keys, reject self-parent/conflicting module definitions/cycles, and cap each ancestry path at 16 Zone names. Compile the validated map into sealed allocator bootstrap topology; never emit it into the resource bundle or `Zone.spec`. Declare the global `d2b.artifacts.<id>` catalog with `package` (types.package, required) and `type` (closed enum, required). Provider `spec.artifactId` is a plain catalog ID; the derivation is not a `spec` field. Implement the Phase 1 cross-resource assertions (§14.10 Phase 1 table); retain `credentialRef`, `resourceRef`, and `closedEnum` helpers; reject operator-authored `Zone`; and enforce child-local ZoneLink topology. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to the dedicated Host admission gate. Provider manifest-derived fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) are read-only and setting one is an eval error. |
+| Detailed design | Consume the generator and registry established by ADR046-routing-011 to declare the unified `d2b.zones.<zone>.resources.<name>` option tree plus the Zone-level compiler-only `parentZone` scalar. The generated standard registry is exactly the canonical 19 types (`Zone`, `ZoneLink`, `Provider`, `Host`, `Guest`, `Process`, `EphemeralProcess`, `Network`, `Volume`, `Credential`, `Device`, `Endpoint`, `User`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `ResourceExport`, `ResourceImport`), and every standard type has a strict generated `spec` submodule carrying the schema's Nix types, defaults, bounds, and documentation. Installed Provider artifacts may append only signed qualified ResourceTypes whose strict schema has been verified and generated into the evaluated option set. `type` is selected from that closed combined registry: an unknown standard string, an unqualified extension, or a qualified type without an installed verified schema fails evaluation; there is no unrestricted string or free-form `spec` fallback. Require `parentZone` on every non-root Zone and forbid it on `local-root`; resolve it against declared Zone keys, reject self-parent/conflicting module definitions/cycles, and cap each ancestry path at 16 Zone names. Compile the validated map into sealed allocator bootstrap topology; never emit it into the resource bundle or `Zone.spec`. Declare the global `d2b.artifacts.<id>` catalog with `package` (types.package, required) and `type` (closed enum, required). Provider `spec.artifactId` is a plain catalog ID; the derivation is not a `spec` field. Implement the Phase 1 cross-resource assertions (§14.10 Phase 1 table); retain `credentialRef`, `resourceRef`, and `closedEnum` helpers; reject operator-authored `Zone`; and enforce child-local ZoneLink topology. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to the dedicated Host admission gate. Provider ResourceSpec has exactly `artifactId` and `config`; manifest-derived properties such as `exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and `restartPolicy` are not resource fields, and attempting to set one is an eval error. |
 | Integration | ADR046-routing-011 supplies the one canonical 19-type registry and generated option family; validated `parentZone` feeds the allocator bootstrap sealer; the closed `d2b.zones.<zone>.resources.*` tree is consumed by ADR046-zone-control-015; the Zone controller (ADR046-zone-control-001) reads the resulting bundle; Provider package conventions come from ADR046-zone-control-003 |
 | Data migration | Replace `nixos-modules/options-realms.nix`-derived option trees once Zone controller is live and has reached parity |
 | Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-session-verb-closed-enum`, `nix-eval-relay-session-verb-known`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); Phase 2 runs `nix-build-relay-scope-restricted`; drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema |
@@ -4565,7 +4554,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`; exposed as `pkgs.d2b-resource-compiler`; called from `nixos-modules/resource-compiler.nix` |
-| Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, load manifest-derived fields (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) into the bundle envelope; emit private integrity-pinned artifact catalog (ID → type/digest/closure metadata) as a separate private file (never merged into the public resource bundle); check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; `contentHash` computation over the sorted `resources` array; `artifactCatalogDigest` copy from the site artifact catalog; inline-secret heuristic lint (`--strict-secrets` flag); emit `resource-bundle.json` bundle with all fields per §14.9 |
+| Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, and retain manifest-derived properties (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) only in the private integrity-pinned artifact catalog entry read by core ProviderDeployment, never in the canonical Provider resource envelope; emit that private catalog (ID → type/digest/closure/manifest metadata) as a separate private file, never merged into the public resource bundle; check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; `contentHash` computation over the sorted `resources` array; `artifactCatalogDigest` copy from the site artifact catalog; inline-secret heuristic lint (`--strict-secrets` flag); emit `resource-bundle.json` bundle with all fields per §14.9 |
 | Integration | Reads from `d2b.zones.<zone>.resources.*` (ADR046-zone-control-014); emits bundle consumed by ADR046-zone-control-001 configuration publication handler; generation counter stored as Nix module derivation input hash (hermetic) or in a NixOS state file (impure) - exact mechanism is implementation decision |
 | Data migration | Full reset; no prior bundle state exists to carry forward |
 | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-bundle-digest-stable`, `nix-build-per-resource-digest-correct`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) |

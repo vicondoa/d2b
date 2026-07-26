@@ -1782,10 +1782,11 @@ time rejection, not an operational recommendation.
 - Any Provider claiming a wildcard permission
   (`resourceNames: ["*"]`/empty `executionRefs`) without being a
   core-controller-generated Role (RZC lines 868-997, line 2985).
-- Manifest-derived Provider spec fields set by the operator -
-  `spec.exports`, `spec.components`, `spec.dependencies`,
-  `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy` are
-  resolved only from the signed manifest (RZC lines 2722-2723).
+- Any Provider ResourceSpec field other than `artifactId` and `config`.
+  Properties such as `exports`, `components`, `dependencies`,
+  `permissionClaims`, `upgradePolicy`, and `restartPolicy` exist only in the
+  signed manifest/catalog entry and are never copied into the Provider resource
+  row (RZC section 4.3).
 - Any Provider process importing a broker service/client/DTO, or receiving a
   broker socket, host path, device node, systemd D-Bus connection, or
   compositor socket by ambient discovery (§13, D077).
