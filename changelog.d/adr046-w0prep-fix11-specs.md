@@ -9,3 +9,5 @@
 - Made the drift driver invoke regular gate files through Bash regardless of
   their executable bit, preventing a referenced gate from being silently
   skipped after a mode change.
+- Wired the frozen process-marker universe checker into generated-artifact
+  drift validation so active and retired marker pins are enforced in Layer 1.

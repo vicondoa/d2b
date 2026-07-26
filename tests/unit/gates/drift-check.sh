@@ -57,6 +57,7 @@ run_xtask gen-guest-proto
 run_xtask gen-guest-ttrpc
 run_xtask spec-registry
 run_xtask implementation-graph
+run_xtask process-marker-pin
 
 drift_paths=(
   docs/reference/schemas/
