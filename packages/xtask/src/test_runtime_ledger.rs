@@ -1,13 +1,12 @@
 //! Hermetic test-runtime ledger and timing gate.
 //!
-//! Records execution-only timings for individual tests and Provider crates
-//! into a deterministic machine-readable ledger, then enforces the absolute
-//! hermetic execution budgets against it.
+//! Records advisory per-test wall-clock timings and enforced aggregate crate
+//! CPU timings into a deterministic machine-readable ledger.
 //!
-//! The gate is an absolute per-test / per-crate budget check on a freshly
+//! The gate is an absolute aggregate process-CPU budget check on a freshly
 //! recorded ledger: it makes no historical-regression claim and holds no
-//! baseline. Every run is judged only against the frozen budgets and the
-//! pinned closed census, so there is nothing synthetic to keep in step. A
+//! baseline. Per-test wall-clock values are diagnostic only. Every run is
+//! judged against the frozen crate budgets and the pinned closed census. A
 //! genuine cross-machine reference baseline and a real multi-crate shard
 //! inventory (with a per-shard budget over that inventory) are deferred; see
 //! the `test-runtime-ledger` Makefile target for the named follow-up
@@ -25,16 +24,18 @@ use serde::{Deserialize, Serialize};
 use crate::gen_spec_set::render_json;
 
 pub const ARTIFACT_KIND: &str = "d2b-test-runtime-ledger";
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
-/// Individual normal hermetic test: p95 <= 50 ms, no wall-clock sleep.
-pub const TEST_BUDGET_MS: u64 = 50;
-/// Per Provider crate `--lib --tests` hermetic suite.
+/// Advisory threshold for an individual normal hermetic test.
+///
+/// Libtest reports wall-clock time, which varies with unrelated machine load,
+/// so this threshold ranks diagnostics but never fails the gate.
+pub const TEST_ADVISORY_THRESHOLD_MS: u64 = 50;
+/// Enforced aggregate process-CPU budget for a Provider crate's hermetic suite.
 pub const CRATE_BUDGET_MS: u64 = 2_000;
 /// Minimum execution-only repetitions the ledger must carry before its p95 or
-/// per-crate budgets mean anything. A single wall-clock sample flaps on noise
-/// and can silently fold build work into the timing, so the gate refuses to
-/// draw a conclusion from fewer than this many execution-only repetitions.
+/// per-crate budgets mean anything. A single CPU sample is too thin to support
+/// a stable nearest-rank p95, so the gate refuses fewer repetitions.
 pub const MIN_REPETITIONS: usize = 3;
 
 /// Upper bound on a printable identifier (test id or crate id).
@@ -142,6 +143,17 @@ pub fn validate_ledger(ledger: &Ledger) -> Result<(), String> {
                     sample.samples_ms.len()
                 ));
             }
+            let expected_shape = match scope {
+                "test" => (TimingBasis::WallClock, Enforcement::Advisory),
+                "crate" => (TimingBasis::ProcessCpu, Enforcement::Budget),
+                _ => unreachable!("the scope table is closed"),
+            };
+            if (sample.basis, sample.enforcement) != expected_shape {
+                return Err(format!(
+                    "{scope} id `{}` declares {:?}/{:?}; expected {:?}/{:?}",
+                    sample.id, sample.basis, sample.enforcement, expected_shape.0, expected_shape.1
+                ));
+            }
         }
     }
     Ok(())
@@ -150,10 +162,26 @@ pub fn validate_ledger(ledger: &Ledger) -> Result<(), String> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
-    pub budget_ms: u64,
+    pub basis: TimingBasis,
+    pub enforcement: Enforcement,
     pub id: String,
     pub p95_ms: u64,
     pub samples_ms: Vec<u64>,
+    pub threshold_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimingBasis {
+    ProcessCpu,
+    WallClock,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Enforcement {
+    Advisory,
+    Budget,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,35 +210,51 @@ pub fn p95(samples: &[u64]) -> u64 {
 struct Collector {
     crates: BTreeMap<String, Vec<u64>>,
     tests: BTreeMap<String, Vec<u64>>,
-    exceptions: BTreeMap<String, u64>,
+    advisory_thresholds: BTreeMap<String, u64>,
 }
 
 impl Collector {
     fn into_ledger(self, runner: String, repetitions: usize) -> Ledger {
-        let build = |entries: BTreeMap<String, Vec<u64>>, budget: u64| -> Vec<Sample> {
+        let build = |entries: BTreeMap<String, Vec<u64>>,
+                     budget: u64,
+                     basis: TimingBasis,
+                     enforcement: Enforcement|
+         -> Vec<Sample> {
             entries
                 .into_iter()
                 .map(|(id, mut samples)| {
                     samples.sort_unstable();
                     Sample {
-                        budget_ms: budget,
+                        basis,
+                        enforcement,
                         p95_ms: p95(&samples),
                         id,
                         samples_ms: samples,
+                        threshold_ms: budget,
                     }
                 })
                 .collect()
         };
-        let exceptions = self.exceptions.clone();
-        let mut tests = build(self.tests, TEST_BUDGET_MS);
+        let advisory_thresholds = self.advisory_thresholds.clone();
+        let mut tests = build(
+            self.tests,
+            TEST_ADVISORY_THRESHOLD_MS,
+            TimingBasis::WallClock,
+            Enforcement::Advisory,
+        );
         for test in &mut tests {
-            if let Some(budget) = exceptions.get(&test.id) {
-                test.budget_ms = *budget;
+            if let Some(budget) = advisory_thresholds.get(&test.id) {
+                test.threshold_ms = *budget;
             }
         }
         Ledger {
             artifact_kind: ARTIFACT_KIND.to_string(),
-            crates: build(self.crates, CRATE_BUDGET_MS),
+            crates: build(
+                self.crates,
+                CRATE_BUDGET_MS,
+                TimingBasis::ProcessCpu,
+                Enforcement::Budget,
+            ),
             repetitions,
             runner,
             schema_version: SCHEMA_VERSION,
@@ -275,26 +319,23 @@ pub struct Violation {
     pub detail: String,
 }
 
-/// Enforces the absolute hermetic per-test and per-crate budgets.
+/// Enforces the aggregate process-CPU crate budgets.
 ///
 /// This is a budget gate, not a regression gate: each recorded p95 is judged
-/// only against its own frozen budget, with no historical anchor. A slower run
-/// that still fits the budget passes.
+/// only against its frozen CPU budget, with no historical anchor. Per-test
+/// wall-clock samples are explicitly advisory and never produce a violation.
 pub fn check(ledger: &Ledger) -> Vec<Violation> {
     let mut violations = Vec::new();
-    let scopes: [(&str, &Vec<Sample>); 2] = [("test", &ledger.tests), ("crate", &ledger.crates)];
-    for (scope, samples) in scopes {
-        for sample in samples {
-            if sample.p95_ms > sample.budget_ms {
-                violations.push(Violation {
-                    scope: scope.to_string(),
-                    id: sample.id.clone(),
-                    detail: format!(
-                        "p95 {} ms exceeds the {} ms budget",
-                        sample.p95_ms, sample.budget_ms
-                    ),
-                });
-            }
+    for sample in &ledger.crates {
+        if sample.p95_ms > sample.threshold_ms {
+            violations.push(Violation {
+                scope: "crate".to_string(),
+                id: sample.id.clone(),
+                detail: format!(
+                    "p95 {} ms exceeds the {} ms process-CPU budget",
+                    sample.p95_ms, sample.threshold_ms
+                ),
+            });
         }
     }
     violations.sort_by(|a, b| (&a.scope, &a.id, &a.detail).cmp(&(&b.scope, &b.id, &b.detail)));
@@ -372,6 +413,7 @@ pub fn audit_census(ledger: &Ledger) -> Vec<Violation> {
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedCensus {
     pub crates: Vec<String>,
+    pub tests: Vec<String>,
 }
 
 impl ExpectedCensus {
@@ -388,12 +430,21 @@ impl ExpectedCensus {
         for id in &self.crates {
             validate_id("crate", id)?;
         }
+        if self.tests.is_empty() {
+            return Err(
+                "the expected census pins no tests; a crate name alone cannot prove any test ran"
+                    .to_string(),
+            );
+        }
+        for id in &self.tests {
+            validate_id("test", id)?;
+        }
         Ok(())
     }
 }
 
-/// Enforce that the ledger's crate census reproduces the pinned closed set
-/// *exactly* - no missing pinned id, and no unpinned extra.
+/// Enforce that the ledger's crate and test censuses reproduce the pinned
+/// closed sets *exactly* - no missing pinned id, and no unpinned extra.
 ///
 /// `audit_census` proves the run is complete and repeated; this proves it is
 /// measuring the pinned set and only the pinned set. Together they close the
@@ -402,8 +453,10 @@ impl ExpectedCensus {
 /// the committed census.
 pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Violation> {
     let mut violations = Vec::new();
-    let compared: [(&str, &Vec<String>, &Vec<Sample>); 1] =
-        [("crate", &expected.crates, &ledger.crates)];
+    let compared: [(&str, &Vec<String>, &Vec<Sample>); 2] = [
+        ("crate", &expected.crates, &ledger.crates),
+        ("test", &expected.tests, &ledger.tests),
+    ];
     for (scope, expected_ids, samples) in compared {
         let want: BTreeSet<&str> = expected_ids.iter().map(String::as_str).collect();
         let have: BTreeSet<&str> = samples.iter().map(|s| s.id.as_str()).collect();
@@ -521,7 +574,7 @@ const USAGE: &str = "usage: cargo xtask test-runtime-ledger <command>\n\
        record --runner <label> --output <path> [--repetitions <n>]\n\
               [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
               [--libtest-json <path>]... [--crate-libtest-json <crate>=<path>]...\n\
-              [--exception <test-id>=<ms>]...\n\
+              [--advisory-threshold <test-id>=<ms>]...\n\
        check  --ledger <path> --expected-census <path> [--top <n>]\n\
        census --expected-census <path> --field crates\n\
        lint   <path>...\n\
@@ -646,15 +699,23 @@ fn run_record(args: &[String]) -> Result<(), String> {
                 validate_id("test", &id)?;
                 collector.tests.entry(id).or_default().push(millis);
             }
-            "--exception" => {
+            "--advisory-threshold" => {
                 let (id, millis) = pair(value, flag)?;
                 validate_id("test", &id)?;
-                collector.exceptions.insert(id, millis);
+                collector.advisory_thresholds.insert(id, millis);
             }
             "--libtest-json" => {
                 let stream = fs::read_to_string(value)
                     .map_err(|error| format!("cannot read the libtest stream: {error}"))?;
-                for (id, millis) in parse_libtest_json(&stream)? {
+                let measurements = parse_libtest_json(&stream)?;
+                if measurements.is_empty() {
+                    return Err(
+                        "the libtest stream contains no timed test events; refusing to record an \
+                         empty measurement set"
+                            .to_string(),
+                    );
+                }
+                for (id, millis) in measurements {
                     collector.tests.entry(id).or_default().push(millis);
                 }
             }
@@ -666,7 +727,14 @@ fn run_record(args: &[String]) -> Result<(), String> {
                 let stream = fs::read_to_string(path).map_err(|error| {
                     format!("cannot read the libtest stream for crate `{crate_id}`: {error}")
                 })?;
-                for (name, millis) in parse_libtest_json(&stream)? {
+                let measurements = parse_libtest_json(&stream)?;
+                if measurements.is_empty() {
+                    return Err(format!(
+                        "the libtest stream for crate `{crate_id}` contains no timed test events; \
+                         refusing to record an empty measurement set"
+                    ));
+                }
+                for (name, millis) in measurements {
                     // Crate-qualify the libtest name so `d2b-core::foo::bar`
                     // cannot collide with an identically-named test in another
                     // crate's suite.
@@ -761,8 +829,14 @@ fn run_check(args: &[String]) -> Result<(), String> {
     let expected = load_expected_census(&census_path)?;
     for sample in top_slow_tests(&ledger, top) {
         println!(
-            "slowest: {} p95 {} ms (budget {} ms)",
-            sample.id, sample.p95_ms, sample.budget_ms
+            "advisory wall-clock: {} p95 {} ms (diagnostic threshold {} ms)",
+            sample.id, sample.p95_ms, sample.threshold_ms
+        );
+    }
+    for sample in &ledger.crates {
+        println!(
+            "enforced process CPU: {} p95 {} ms (budget {} ms; samples {:?})",
+            sample.id, sample.p95_ms, sample.threshold_ms, sample.samples_ms
         );
     }
     let mut violations = check(&ledger);
@@ -772,10 +846,11 @@ fn run_check(args: &[String]) -> Result<(), String> {
     violations.dedup();
     if violations.is_empty() {
         println!(
-            "runtime budgets hold for {} test and {} crate measurements on `{}`",
-            ledger.tests.len(),
+            "runtime CPU budgets hold for {} crate measurement(s) on `{}`; \
+             captured {} advisory per-test wall-clock measurement(s)",
             ledger.crates.len(),
-            ledger.runner
+            ledger.runner,
+            ledger.tests.len(),
         );
         return Ok(());
     }
@@ -824,12 +899,25 @@ fn run_lint(args: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn sample(id: &str, budget: u64, samples: &[u64]) -> Sample {
+    fn test_sample(id: &str, budget: u64, samples: &[u64]) -> Sample {
         Sample {
-            budget_ms: budget,
+            basis: TimingBasis::WallClock,
+            enforcement: Enforcement::Advisory,
             id: id.to_string(),
             p95_ms: p95(samples),
             samples_ms: samples.to_vec(),
+            threshold_ms: budget,
+        }
+    }
+
+    fn crate_sample(id: &str, budget: u64, samples: &[u64]) -> Sample {
+        Sample {
+            basis: TimingBasis::ProcessCpu,
+            enforcement: Enforcement::Budget,
+            id: id.to_string(),
+            p95_ms: p95(samples),
+            samples_ms: samples.to_vec(),
+            threshold_ms: budget,
         }
     }
 
@@ -854,16 +942,35 @@ mod tests {
     }
 
     #[test]
-    fn an_over_budget_hermetic_test_fails_the_gate() {
-        let over = ledger(vec![sample("slow::test", TEST_BUDGET_MS, &[10, 20, 90])]);
-        let violations = check(&over);
-        assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].scope, "test");
-        assert!(violations[0].detail.contains("exceeds the 50 ms budget"));
+    fn an_over_threshold_wall_clock_test_is_advisory() {
+        let over = ledger(vec![test_sample(
+            "slow::test",
+            TEST_ADVISORY_THRESHOLD_MS,
+            &[10, 20, 90],
+        )]);
+        assert!(
+            check(&over).is_empty(),
+            "per-test wall-clock contention must not fail a CPU budget gate"
+        );
     }
 
     #[test]
-    fn a_classified_exception_may_declare_a_higher_budget() {
+    fn an_over_budget_crate_cpu_measurement_fails_the_gate() {
+        let mut over = ledger(Vec::new());
+        over.crates
+            .push(crate_sample("d2b-core", CRATE_BUDGET_MS, &[1_000, 2_001]));
+        let violations = check(&over);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].scope, "crate");
+        assert!(
+            violations[0]
+                .detail
+                .contains("exceeds the 2000 ms process-CPU budget")
+        );
+    }
+
+    #[test]
+    fn a_classified_test_may_declare_a_higher_advisory_threshold() {
         let mut collector = Collector::default();
         collector
             .tests
@@ -871,10 +978,11 @@ mod tests {
             .or_default()
             .push(400);
         collector
-            .exceptions
+            .advisory_thresholds
             .insert("crypto::kdf_vectors".to_string(), 500);
         let recorded = collector.into_ledger("reference".to_string(), 1);
-        assert_eq!(recorded.tests[0].budget_ms, 500);
+        assert_eq!(recorded.tests[0].threshold_ms, 500);
+        assert_eq!(recorded.tests[0].enforcement, Enforcement::Advisory);
         assert!(check(&recorded).is_empty());
     }
 
@@ -929,7 +1037,11 @@ mod tests {
 
     #[test]
     fn the_ledger_round_trips_deterministically() {
-        let recorded = ledger(vec![sample("a::b", TEST_BUDGET_MS, &[3, 1, 2])]);
+        let recorded = ledger(vec![test_sample(
+            "a::b",
+            TEST_ADVISORY_THRESHOLD_MS,
+            &[3, 1, 2],
+        )]);
         let rendered = render_json(&recorded).expect("renders");
         let parsed: Ledger = serde_json::from_str(&rendered).expect("parses");
         assert_eq!(parsed, recorded);
@@ -939,8 +1051,8 @@ mod tests {
     #[test]
     fn top_slow_tests_report_the_worst_offenders_first() {
         let recorded = ledger(vec![
-            sample("a::fast", TEST_BUDGET_MS, &[1]),
-            sample("b::slow", TEST_BUDGET_MS, &[40]),
+            test_sample("a::fast", TEST_ADVISORY_THRESHOLD_MS, &[1]),
+            test_sample("b::slow", TEST_ADVISORY_THRESHOLD_MS, &[40]),
         ]);
         let top = top_slow_tests(&recorded, 1);
         assert_eq!(top.len(), 1);
@@ -949,19 +1061,34 @@ mod tests {
 
     /// A complete, three-repetition census across every granularity.
     fn full_ledger(repetitions: usize) -> Ledger {
-        let three = |id: &str, budget: u64| Sample {
-            budget_ms: budget,
-            id: id.to_string(),
-            p95_ms: 1,
-            samples_ms: vec![1; repetitions],
-        };
+        let three =
+            |id: &str, budget: u64, basis: TimingBasis, enforcement: Enforcement| -> Sample {
+                Sample {
+                    basis,
+                    enforcement,
+                    id: id.to_string(),
+                    p95_ms: 1,
+                    samples_ms: vec![1; repetitions],
+                    threshold_ms: budget,
+                }
+            };
         Ledger {
             artifact_kind: ARTIFACT_KIND.to_string(),
-            crates: vec![three("d2b-core", CRATE_BUDGET_MS)],
+            crates: vec![three(
+                "d2b-core",
+                CRATE_BUDGET_MS,
+                TimingBasis::ProcessCpu,
+                Enforcement::Budget,
+            )],
             repetitions,
             runner: "reference".to_string(),
             schema_version: SCHEMA_VERSION,
-            tests: vec![three("a::b", TEST_BUDGET_MS)],
+            tests: vec![three(
+                "a::b",
+                TEST_ADVISORY_THRESHOLD_MS,
+                TimingBasis::WallClock,
+                Enforcement::Advisory,
+            )],
         }
     }
 
@@ -1015,6 +1142,7 @@ mod tests {
     fn expected_census() -> ExpectedCensus {
         ExpectedCensus {
             crates: vec!["d2b-core".to_string()],
+            tests: vec!["a::b".to_string()],
         }
     }
 
@@ -1041,13 +1169,28 @@ mod tests {
     }
 
     #[test]
+    fn closed_census_rejects_a_disappeared_test() {
+        let mut shrunk = full_ledger(MIN_REPETITIONS);
+        shrunk.tests.clear();
+        let violations = audit_closed_census(&shrunk, &expected_census());
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.scope == "test" && v.id == "a::b" && v.detail.contains("missing")),
+            "dropping a pinned test is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
     fn closed_census_rejects_an_unpinned_extra() {
         let mut padded = full_ledger(MIN_REPETITIONS);
         padded.crates.push(Sample {
-            budget_ms: CRATE_BUDGET_MS,
+            basis: TimingBasis::ProcessCpu,
+            enforcement: Enforcement::Budget,
             id: "not-pinned".to_string(),
             p95_ms: 1,
             samples_ms: vec![1; MIN_REPETITIONS],
+            threshold_ms: CRATE_BUDGET_MS,
         });
         let violations = audit_closed_census(&padded, &expected_census());
         assert!(
@@ -1080,10 +1223,25 @@ mod tests {
 
     #[test]
     fn an_empty_census_pin_is_rejected() {
-        let empty = ExpectedCensus { crates: Vec::new() };
+        let empty = ExpectedCensus {
+            crates: Vec::new(),
+            tests: Vec::new(),
+        };
         assert!(
             empty.validate().is_err(),
             "a census with no crates is refused"
+        );
+    }
+
+    #[test]
+    fn a_census_pin_with_no_tests_is_rejected() {
+        let empty = ExpectedCensus {
+            crates: vec!["d2b-core".to_string()],
+            tests: Vec::new(),
+        };
+        assert!(
+            empty.validate().is_err(),
+            "a census with no tests cannot attest that the crate executed tests"
         );
     }
 
@@ -1162,6 +1320,13 @@ mod tests {
         assert!(
             validate_ledger(&bad_runner).is_err(),
             "an invalid runner label is rejected on validation"
+        );
+
+        let mut mislabeled = full_ledger(MIN_REPETITIONS);
+        mislabeled.crates[0].enforcement = Enforcement::Advisory;
+        assert!(
+            validate_ledger(&mislabeled).is_err(),
+            "an enforced crate measurement cannot be relabeled as advisory"
         );
     }
 

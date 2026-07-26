@@ -10,6 +10,7 @@
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -49,4 +50,4 @@ else
 fi
 
 [ "$rc" -eq 0 ] || exit 1
-log "test-drift OK"
+log "test-drift OK (duration: $((SECONDS - suite_started))s)"
