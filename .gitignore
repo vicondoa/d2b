@@ -110,3 +110,4 @@ panel-*/
 # reached the tree this way: a stray src/bin probe that broke the build, and
 # a 21 MB crate complete with its target directory.
 .scratch/
+__pycache__/

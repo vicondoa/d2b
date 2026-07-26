@@ -83,6 +83,8 @@
     "test-performance-budgets": {
       "displayName": "Performance budget gate",
       "makeTarget": "test-performance-budgets",
+      "enforcement": "advisory",
+      "advisoryReason": "Latency budgets need a pinned self-hosted runner. Without D2B_PERF_STABLE=1 the gate skips, so it must not be counted as an enforcing green job.",
       "ciKind": "simple",
       "ciJobId": "test-performance-budgets",
       "needs": ["tier0"],

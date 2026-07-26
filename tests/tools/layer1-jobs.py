@@ -439,7 +439,12 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
             if proc.returncode != 0:
                 break
     if proc.returncode == 0:
-        print(f"ok: {target}", flush=True)
+        # An advisory job may legitimately no-op, so reporting it as `ok`
+        # would let a gate that did nothing count towards a green run.
+        if job.get("enforcement") == "advisory":
+            print(f"advisory: {target} (not an enforcing gate)", flush=True)
+        else:
+            print(f"ok: {target}", flush=True)
         if os.environ.get("D2B_CHECK_KEEP_LOGS") != "1":
             try:
                 log_path.unlink()
@@ -476,7 +481,8 @@ def command_run_local(args: argparse.Namespace) -> int:
         print("D2B_CHECK_JOBS must be >= 1", file=sys.stderr)
         return 2
     include_preflight = not args.skip_preflight
-    for phase in selected_phases(manifest, include_preflight):
+    phases = selected_phases(manifest, include_preflight)
+    for phase in phases:
         mode = phase["mode"]
         phase_jobs = phase["jobs"]
         print(f"==> Layer-1 phase: {phase['id']} ({mode})", flush=True)
@@ -498,7 +504,22 @@ def command_run_local(args: argparse.Namespace) -> int:
         else:
             print(f"unknown phase mode {mode!r}", file=sys.stderr)
             return 2
-    print("Layer-1 manifest runner OK")
+    enforcing = [
+        job_id
+        for phase in phases
+        for job_id in phase["jobs"]
+        if jobs[job_id].get("enforcement") != "advisory"
+    ]
+    advisory = [
+        job_id
+        for phase in phases
+        for job_id in phase["jobs"]
+        if jobs[job_id].get("enforcement") == "advisory"
+    ]
+    summary = f"Layer-1 manifest runner OK: {len(enforcing)} enforcing job(s)"
+    if advisory:
+        summary += f", {len(advisory)} advisory ({', '.join(advisory)})"
+    print(summary)
     return 0
 
 

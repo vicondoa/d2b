@@ -155,6 +155,50 @@ done < <(
 )
 
 # ---------------------------------------------------------------------------
+# A gate that can exit 0 without doing its work must say so in the manifest.
+#
+# Reachability alone is not coverage: a gate wired to a manifest target still
+# contributes a green result while skipping. Every gate guarded by an opt-in
+# environment variable must therefore belong to a job declared
+# "enforcement": "advisory", so no caller can count it as an enforcing pass.
+# ---------------------------------------------------------------------------
+undeclared_skippable=()
+while IFS= read -r gate; do
+  rel=${gate#"$ROOT"/}
+  # A skip guard is an early, unconditional `exit 0` reached when an opt-in
+  # variable is unset. Match the guard shape rather than any particular name.
+  if ! grep -qE '^\s*if \[ "\$\{D2B_[A-Z_]+:-0\}" != 1 \]' "$gate"; then
+    continue
+  fi
+  target=$(basename "$gate" .sh)
+  if ! grep -q "\"makeTarget\": \"test-${target}\"" "$MANIFEST"; then
+    continue
+  fi
+  if ! awk -v t="test-${target}" '
+    $0 ~ "\"makeTarget\": \"" t "\"" { found = 1 }
+    found && /"enforcement": "advisory"/ { ok = 1 }
+    found && /^    },/ { exit }
+    END { exit ok ? 0 : 1 }
+  ' "$MANIFEST"; then
+    undeclared_skippable+=("$rel")
+  fi
+done < <(
+  find "$ROOT/tests/unit/gates" -maxdepth 1 -type f -name '*.sh' -print \
+    | LC_ALL=C sort
+)
+
+if [ ${#undeclared_skippable[@]} -ne 0 ]; then
+  echo "FAIL: gates that can skip are not declared advisory in the manifest:" >&2
+  for g in "${undeclared_skippable[@]}"; do
+    echo "  $g" >&2
+  done
+  echo "" >&2
+  echo "Remediation: give the owning job \"enforcement\": \"advisory\" so a skipped" >&2
+  echo "run is not reported as an enforcing pass, or remove the skip guard." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 if [ ${#orphans[@]} -eq 0 ]; then
