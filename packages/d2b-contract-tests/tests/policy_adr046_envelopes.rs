@@ -1240,14 +1240,41 @@ fn parser_backed_scanners_reject_structural_bypasses() {
             "if-else-branch",
             format!("if false then {{}} else {incomplete}"),
         ),
+        (
+            "if-condition",
+            format!("if {incomplete} then {{}} else {{}}"),
+        ),
         ("list-item", format!("[ {incomplete} ]")),
         ("assert-body", format!("assert true; {incomplete}")),
+        ("assert-predicate", format!("assert {incomplete}; {{}}")),
         ("lambda-body", format!("argument: {incomplete}")),
+        (
+            "lambda-parameter-default",
+            format!("{{ argument ? {incomplete} }}: {{}}"),
+        ),
         ("binary-operand", format!("{{}} // {incomplete}")),
+        ("unary-operand", format!("!({incomplete})")),
+        (
+            "attribute-existence-source",
+            format!("({incomplete}) ? type"),
+        ),
+        (
+            "string-interpolation-expression",
+            format!("\"${{{incomplete}}}\""),
+        ),
+        (
+            "path-interpolation-expression",
+            format!("./${{{incomplete}}}"),
+        ),
+        (
+            "inherit-source",
+            format!("{{ inherit ({incomplete}) type; }}"),
+        ),
         (
             "selected-attribute",
             format!("({{ selected = {incomplete}; }}).selected"),
         ),
+        ("dynamic-select-path", format!("source.${{{incomplete}}}")),
         (
             "select-default",
             format!("missing.resource or {incomplete}"),
