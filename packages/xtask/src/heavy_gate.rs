@@ -242,6 +242,21 @@ impl GateError {
     }
 }
 
+const PROVISIONING_ERROR_CODE: &str = "heavy-gate-provisioning-required";
+const PROVISIONING_ACTION: &str = "make heavy-gate-provision";
+
+/// Build the stable operator-facing diagnostic for an unavailable or malformed
+/// protected namespace.
+///
+/// The observed state and remediation are intentionally path- and uid-free.
+/// Detailed errors may name only the semantic labels in [`gate_label`].
+fn provisioning_error(observed: &str, detail: impl fmt::Display) -> GateError {
+    GateError::environment(format!(
+        "code: {PROVISIONING_ERROR_CODE}; observed: {observed}; remediation: run \
+         `{PROVISIONING_ACTION}`; detail: {detail}; no fallback namespace was used"
+    ))
+}
+
 impl fmt::Display for GateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.message.fmt(formatter)
@@ -435,24 +450,20 @@ impl GateDir {
     /// in the lock identity immutable to the uid that runs heavy work.
     fn open_provisioned(root: &Path, uid: u32) -> Result<Self> {
         let root_dir = open_directory(root, gate_label::ROOT).map_err(|error| {
-            GateError::environment(format!(
-                "{} is unavailable ({error}); provision the fixed root as root-owned and \
-                 non-writable, with a root-owned non-writable uid-$UID directory containing \
-                 uid-owned mode-0600 slot-0 and slot-1 files; no fallback namespace was used",
-                gate_label::ROOT
-            ))
+            provisioning_error(
+                "the protected heavy-gate root is unavailable",
+                error.message(),
+            )
         })?;
         verify_system_directory(&root_dir, gate_label::ROOT)?;
 
         let uid_name = format!("uid-{uid}");
         let dir =
             open_directory_at(&root_dir, &uid_name, gate_label::SLOT_DIR).map_err(|error| {
-                GateError::environment(format!(
-                    "{} is unavailable ({error}); provision a root-owned, non-writable uid-$UID \
-                 directory containing uid-owned mode-0600 slot-0 and slot-1 files; no fallback \
-                 namespace was used",
-                    gate_label::SLOT_DIR
-                ))
+                provisioning_error(
+                    "the protected per-user slot directory is unavailable",
+                    error.message(),
+                )
             })?;
         verify_system_directory(&dir, gate_label::SLOT_DIR)?;
 
@@ -464,11 +475,10 @@ impl GateDir {
         };
         for index in 0..SLOT_COUNT {
             gate.open_slot(index, false)?.ok_or_else(|| {
-                GateError::environment(format!(
-                    "{} is absent from the system-provisioned namespace; provision both private \
-                     slot files and rerun; no fallback namespace was used",
-                    gate_label::slot(index)
-                ))
+                provisioning_error(
+                    "a provisioned slot is unavailable",
+                    format!("{} is absent", gate_label::slot(index)),
+                )
             })?;
         }
         Ok(gate)
@@ -536,17 +546,19 @@ impl GateDir {
                 return Ok(None);
             }
             Err(rustix::io::Errno::NOENT) => {
-                return Err(GateError::environment(format!(
-                    "{} is absent from the system-provisioned namespace; provision both private \
-                     slot files and rerun; no fallback namespace was used",
-                    gate_label::slot(index)
-                )));
+                return Err(provisioning_error(
+                    "a provisioned slot is unavailable",
+                    format!("{} is absent", gate_label::slot(index)),
+                ));
             }
             Err(error) => {
-                return Err(GateError::environment(format!(
-                    "cannot open {} relative to the pinned slot directory: {error}",
-                    gate_label::slot(index)
-                )));
+                return Err(provisioning_error(
+                    "a provisioned slot is unusable",
+                    format!(
+                        "cannot open {} relative to the pinned slot directory: {error}",
+                        gate_label::slot(index)
+                    ),
+                ));
             }
         };
         if self.create_slots {
@@ -797,11 +809,14 @@ fn verify_system_directory(dir: &File, label: &str) -> Result<()> {
     let stat = fstat(dir.as_raw_fd())
         .map_err(|errno| GateError::environment(format!("cannot stat {label}: {errno}")))?;
     if !system_gate_parent_is_trusted(stat.st_uid, stat.st_mode as u32) {
-        return Err(GateError::environment(format!(
-            "{label} must be root-owned and non-writable by group or other; sticky \
-             world-writable and uid-owned directories are refused because their entries can \
-             still be renamed; no fallback namespace was used"
-        )));
+        return Err(provisioning_error(
+            "a protected heavy-gate directory has unsafe ownership or mode",
+            format!(
+                "{label} must be root-owned and non-writable by group or other; sticky \
+                 world-writable and uid-owned directories are refused because their entries can \
+                 still be renamed"
+            ),
+        ));
     }
     Ok(())
 }
@@ -811,22 +826,28 @@ fn verify_slot_file(file: &File, index: usize, uid: u32) -> Result<()> {
         GateError::environment(format!("cannot stat {}: {errno}", gate_label::slot(index)))
     })?;
     if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG {
-        return Err(GateError::environment(format!(
-            "{} is not a regular file",
-            gate_label::slot(index)
-        )));
+        return Err(provisioning_error(
+            "a provisioned slot has an unsafe file type",
+            format!("{} is not a regular file", gate_label::slot(index)),
+        ));
     }
     if stat.st_uid != uid {
-        return Err(GateError::environment(format!(
-            "{} is owned by a different user than the caller",
-            gate_label::slot(index)
-        )));
+        return Err(provisioning_error(
+            "a provisioned slot has the wrong owner",
+            format!(
+                "{} is owned by a different user than the caller",
+                gate_label::slot(index)
+            ),
+        ));
     }
     if stat.st_mode as u32 & 0o777 != 0o600 {
-        return Err(GateError::environment(format!(
-            "{} does not have the required provisioned mode 0600",
-            gate_label::slot(index)
-        )));
+        return Err(provisioning_error(
+            "a provisioned slot has the wrong mode",
+            format!(
+                "{} does not have the required provisioned mode 0600",
+                gate_label::slot(index)
+            ),
+        ));
     }
     Ok(())
 }
@@ -1020,6 +1041,10 @@ const USAGE: &str = "usage: cargo xtask heavy-gate -- <command> [args...]\n\
      ownership, and an atomic F_OFD_SETLK), and exits 3 otherwise. Shell and\n\
      Make guards use it so a bare, forgeable D2B_HEAVY_GATE cannot bypass the\n\
      semaphore.\n\
+     \n\
+     If the protected namespace is unavailable, run `make\n\
+     heavy-gate-provision`; the gate never falls back to a user-writable\n\
+     namespace.\n\
      \n\
      exit codes: 64 usage, 69 open file description locks unsupported,\n\
      71 cannot start the command, 72 gate directory unusable,\n\
@@ -1813,6 +1838,25 @@ mod tests {
     }
 
     #[test]
+    fn provisioning_diagnostic_is_stable_actionable_and_redacted() {
+        let error = provisioning_error(
+            "the protected heavy-gate root is unavailable",
+            "the heavy-gate root directory cannot be opened",
+        );
+        assert_eq!(error.kind(), GateErrorKind::Environment);
+        assert!(error.message().contains(
+            "code: heavy-gate-provisioning-required; observed: the protected heavy-gate root is unavailable"
+        ));
+        assert!(
+            error
+                .message()
+                .contains("remediation: run `make heavy-gate-provision`")
+        );
+        assert!(error.message().contains("no fallback namespace was used"));
+        assert_no_path_or_uid(error.message(), &[]);
+    }
+
+    #[test]
     fn exit_code_reports_signals_and_interruptions() {
         assert_eq!(resolve_exit_code(Some(0), None, None), 0);
         assert_eq!(resolve_exit_code(Some(7), None, None), 7);
@@ -2053,8 +2097,9 @@ mod tests {
             .expect_err("a missing provisioned root must fail closed");
         assert_eq!(error.kind(), GateErrorKind::Environment);
         assert!(error.message().contains("unavailable"));
-        assert!(error.message().contains("root-owned"));
-        assert!(error.message().contains("mode-0600"));
+        assert!(error.message().contains(PROVISIONING_ERROR_CODE));
+        assert!(error.message().contains(PROVISIONING_ACTION));
+        assert!(error.message().contains("observed:"));
         assert!(error.message().contains("no fallback"));
         assert!(
             !missing.exists(),
