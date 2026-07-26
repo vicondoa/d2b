@@ -2977,17 +2977,34 @@ mod tests {
         Path::new(tok).file_name().and_then(|n| n.to_str()) == Some(name)
     }
 
+    /// Filesystem properties shared by the entrypoint collector and the
+    /// sourced-library classifier. Keeping this one classifier prevents the
+    /// two callers from drifting on what "regular", "shell", and "executable"
+    /// mean.
+    #[derive(Clone, Copy)]
+    struct EntrypointProperties {
+        is_shell: bool,
+        is_executable: bool,
+    }
+
+    fn entrypoint_properties(path: &Path, meta: &fs::Metadata) -> Option<EntrypointProperties> {
+        meta.file_type().is_file().then_some(EntrypointProperties {
+            is_shell: path.extension() == Some(OsStr::new("sh")),
+            is_executable: meta.permissions().mode() & 0o111 != 0,
+        })
+    }
+
     /// Whether `candidate` (a non-executable `.sh`) is a genuine shell
-    /// *library*: a sibling file in the same directory pulls it in with a
-    /// `source`/`.` directive, so it only ever runs inside a caller that
-    /// already holds a slot. Matching a same-directory sibling - the
-    /// `. "$HERE/lib.sh"` shape every d2b lane uses - is what makes this a
-    /// per-file *classification* rather than the old `basename == "lib.sh"`
-    /// skip: a stray, unsourced `lib.sh` no longer counts as a library (it is
-    /// treated as an ungated entrypoint and flagged), and a real library under
-    /// any other name is still recognised. It also avoids the basename
-    /// collision with the repo-wide `tests/lib.sh`, because only a sibling in
-    /// the candidate's own directory is consulted.
+    /// *library*: an executable regular `.sh` entrypoint in the same directory
+    /// pulls it in with a `source`/`.` directive. An inert text fixture, data
+    /// file, directory, symlink, or non-executable shell file is not evidence
+    /// that the candidate runs only behind a guarded entrypoint.
+    ///
+    /// Matching a same-directory entrypoint - the `. "$HERE/lib.sh"` shape
+    /// every d2b lane uses - makes this a per-file classification rather than
+    /// the old `basename == "lib.sh"` skip. Both this scan and
+    /// [`heavy_entrypoint`] use [`entrypoint_properties`], so their filesystem
+    /// definition cannot drift apart.
     fn is_sibling_sourced_library(candidate: &Path) -> bool {
         let Some(dir) = candidate.parent() else {
             return false;
@@ -3001,6 +3018,15 @@ mod tests {
         for entry in entries {
             let sibling = entry.expect("a readable dir entry").path();
             if sibling == candidate {
+                continue;
+            }
+            let Ok(meta) = fs::symlink_metadata(&sibling) else {
+                continue;
+            };
+            let Some(properties) = entrypoint_properties(&sibling, &meta) else {
+                continue;
+            };
+            if !properties.is_shell || !properties.is_executable {
                 continue;
             }
             let Ok(text) = fs::read_to_string(&sibling) else {
@@ -3027,15 +3053,11 @@ mod tests {
     /// neither `.sh` nor executable (a `.nix`, `.md`, `.txt`, ...) is inert
     /// data.
     fn heavy_entrypoint(path: &Path, meta: &fs::Metadata) -> Option<PathBuf> {
-        if !meta.file_type().is_file() {
+        let properties = entrypoint_properties(path, meta)?;
+        if !properties.is_shell && !properties.is_executable {
             return None;
         }
-        let is_sh = path.extension() == Some(OsStr::new("sh"));
-        let is_exec = meta.permissions().mode() & 0o111 != 0;
-        if !is_sh && !is_exec {
-            return None;
-        }
-        if !is_exec && is_sh && is_sibling_sourced_library(path) {
+        if !properties.is_executable && properties.is_shell && is_sibling_sourced_library(path) {
             return None;
         }
         Some(path.to_path_buf())
@@ -3467,6 +3489,32 @@ mod tests {
         assert!(
             lane_heavy_work_marker(inert.path()).is_none(),
             "an inert lane performs no heavy work and must scan clean"
+        );
+    }
+
+    #[test]
+    fn inert_source_text_cannot_hide_an_unguarded_heavy_script() {
+        let scratch = Scratch::new("inert-source-decoy");
+        let heavy = scratch.path().join("heavy-work.sh");
+        fs::write(&heavy, "#!/usr/bin/env bash\ncargo build\n").unwrap();
+        fs::set_permissions(&heavy, fs::Permissions::from_mode(0o644)).unwrap();
+
+        // This is the bypass shape: inert sibling text claims to source the
+        // non-executable heavy script. It is not itself a runnable shell
+        // entrypoint, so its content cannot establish that the script runs only
+        // behind a guarded caller.
+        let decoy = scratch.path().join("notes.txt");
+        fs::write(&decoy, "source heavy-work.sh\n").unwrap();
+        fs::set_permissions(&decoy, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            !is_sibling_sourced_library(&heavy),
+            "a non-executable text sibling is not evidence of a sourcing entrypoint"
+        );
+        assert_eq!(
+            collect_heavy_entrypoints(scratch.path()),
+            vec![heavy],
+            "the census must retain the unguarded heavy script and demand its self-guard"
         );
     }
 
