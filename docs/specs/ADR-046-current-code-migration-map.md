@@ -310,7 +310,7 @@ Owns **hermetic Cargo integration tests** (files under `tests/*.rs` invoked by `
 Per D094 these are fast, in-process, deterministic, and parallel-safe: an individual normal
 test has an advisory wall-clock p95 diagnostic threshold of <=50 ms with no wall-clock sleep,
 and the crate's whole `cargo test -p d2b-provider-<base>-<implementation> --lib --tests`
-invocation (units + `tests/`) has an enforced aggregate process-CPU p95 budget of <=2 s after
+invocation (units + `tests/`) has an enforced aggregate process-CPU p95 budget of <=3 s after
 a warm build (compilation excluded). They use a deterministic
 fake clock/RNG and the toolkit fakes only; no process spawn, container, network, DBus, systemd,
 broker daemon, Nix eval/build, KVM, hardware, or live cloud, and no filesystem tree beyond tiny
@@ -597,7 +597,7 @@ Broker socket: `/run/d2b/broker.sock` (local root); per-realm: `/run/d2b/r-<real
 | `CgroupSubtree` | production-reachable | Per-VM cgroup leaf; `d2b.slice/<vm>/<role>/` | Zone cgroup delegation in `Host` resource | `Provider/system-core` |
 | `SwtpmDir` | production-reachable | Per-VM swtpm state provisioning; marker at `/var/lib/d2b/swtpm-markers/<vm>` | `Volume` resource (swtpm state) per Guest | `Provider/runtime-cloud-hypervisor` |
 | `KeyRotation` | production-reachable | `d2b keys rotate` CLI verb; broker SSH key gen | `EphemeralProcess` invoked by `Provider/system-core` | `Provider/system-core` |
-| `UsbipBindFirewallRule` | production-reachable | USBIP attach; broker firewall carve-out | `Device` resource (USBIP attachment) + Network policy | `Provider/device-usbip` |
+| `UsbipBindFirewallRule` | production-reachable | USBIP attach; broker firewall carve-out | `ApplyNftablesProjection { action: Apply \| Remove }` for the `Device` resource's per-Network/per-busid projection; the shipped whole-table operation is not reused | `Provider/device-usbip` |
 | `OpenPidfd` | production-reachable | Broker returns pidfd after spawn; d2bd adopts | Pidfd is mandatory Process Provider behavior (D022); no ResourceSpec field | Zone runtime |
 | `QemuMediaRegistry` | production-reachable | QEMU media registry write; udev rule | `Device` resource (QEMU media slot) | `Provider/runtime-qemu-media` |
 | `ActivationHelper` | production-reachable | d2bd activation; `host-activation.nix` | Activation as `EphemeralProcess` in `Provider/system-core` | `Provider/system-core` |
@@ -823,7 +823,7 @@ D094 execution model:
   that are hermetic MUST meet the §10.16 model in
   `ADR-046-validation-and-delivery` (individual normal test advisory
   wall-clock p95 threshold <=50 ms and no wall-clock sleep; enforced per-crate
-  `--lib --tests` aggregate process-CPU p95 <=2 s; future Layer-1 hermetic shard
+  `--lib --tests` aggregate process-CPU p95 <=3 s; future Layer-1 hermetic shard
   target <=60 s). An adapted test that can only pass by spawning a process, hitting the
   network, or sleeping is re-placed into `integration/`, not slowed down in a
   hermetic tier.

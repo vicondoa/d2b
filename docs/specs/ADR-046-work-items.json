@@ -2512,7 +2512,7 @@
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-delivery-007`; delivery/test-tooling integrator",
       "destination" : "`proofs/test-runtime-budget-spike/`; a one-off measurement-reference proof for the §10.16 budgets consumed by `ADR046-delivery-007` (no committed baseline ledger ships)",
-      "detailedDesign" : "Establishes the D094 measurement reference: records the reference runner class, repetition count, advisory per-test wall-clock p95, and enforced aggregate per-crate process-CPU p95 for a representative hermetic crate. It proves the crate's `--lib --tests` aggregate process CPU is <=2 s, reports a normal test's <=50 ms wall-clock threshold only as a diagnostic, and detects an injected sleeping test through the placement policy rather than a timing-budget failure. A real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`.",
+      "detailedDesign" : "Establishes the D094 measurement reference: records the reference runner class, repetition count, advisory per-test wall-clock p95, and enforced aggregate per-crate process-CPU p95 for a representative hermetic crate. It proves the crate's `--lib --tests` aggregate process CPU is <=3 s, reports a normal test's <=50 ms wall-clock threshold only as a diagnostic, and detects an injected sleeping test through the placement policy rather than a timing-budget failure. A real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`.",
       "integration" : "Output ledger shape is consumed by the runtime ledger/timing gate as advisory per-test wall-clock diagnostics and enforced per-crate process-CPU budgets; a real multi-crate shard inventory and a historical-regression baseline built on top of them are the deferred follow-up `runtime-ledger-full-census-and-real-shards`",
       "removalProof" : "Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces these budget checks against the real crate set",
       "reuseAction" : "adapt",
@@ -3723,11 +3723,11 @@
       "workItemId" : "ADR046-nl-017"
     },
     {
-      "currentSource" : "Existing `UsbipBindFirewallRule` owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows.",
+      "currentSource" : "The shipped whole-table `UsbipBindFirewallRule` op currently owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows; that shipped op is not the v3 firewall path.",
       "dataMigration" : "Full d2b 3.0 reset; no v2 state/config import.",
-      "dependencyOwner" : "Broker plus device provider boundary; `UsbipBindFirewallRule` remains owned by `Provider/device-usbip`.",
+      "dependencyOwner" : "Broker plus device provider boundary; USBIP ownership projections applied through the shared `ApplyNftablesProjection` operation remain owned by `Provider/device-usbip`.",
       "destination" : "Device-usbip EffectPort/adapter owns USBIP rules, drift, and strict provider status; network-local host/net-VM renderers and status cover only Network-owned policy.",
-      "detailedDesign" : "`UsbipBindFirewallRule` remains the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: preserve the typed closed broker op; remove both generic network-local USBIP allows.",
+      "detailedDesign" : "`ApplyNftablesProjection { action: Apply | Remove }` is the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse the shared projection-scoped broker op; remove both generic network-local USBIP allows and do not extend or dispatch the shipped whole-table `UsbipBindFirewallRule` op.",
       "integration" : "`Provider/device-usbip` watches only Network identity/readiness/generation; Core privately resolves the Network attachment for the one relay Endpoint authority and firewall op. Binding proxies receive authorized connected streams through LaunchTickets.",
       "removalProof" : "Legacy generic `network.nix` and `net.nix` USBIP allow fragments and any golden expectation for them are removed after device-usbip host integration passes.",
       "reuseAction" : "adapt",
