@@ -469,6 +469,11 @@ parallelism (it does, until resolved).
    change without a matching `apiVersion`/`schemaVersion` bump fails this
    gate, per the existing manifest-contract convention in `AGENTS.md`
    ("Critical subsystems" → "Manifest contract").
+   For D115's Zone storage row, the implementation slice writes only the Rust
+   DTO and Nix emitter. After that slice merges, the integrator runs the schema
+   generator and owns the rendered-contract parity test under
+   `packages/d2b-contract-tests/tests/`; the implementation slice never writes
+   that forbidden cross-cutting destination.
 3. Generated Nix option types/docs for every `d2b.zones.<zone>.resources.<name>`
    surface are derived from the same `ResourceTypeSchema` and signed Provider
    schema used for build-time validation (per `ADR-046-nix-configuration`);
@@ -569,6 +574,12 @@ name, field name, expected/actual type in the error.
 
 Exact benchmark fixtures from `ADR-046-resource-store-redb`'s performance
 contract, run in `packages/d2b-resource-store-redb/benches/`:
+
+These rows are completion gates, not existing evidence. SPIKE-01 and SPIKE-02
+remain unexecuted, so no production redb backend, watch/dispatcher integration,
+or redb backup/migration work may claim these rows. D128 permits only the
+engine-neutral contract and hermetic small-scale scope it enumerates before
+that evidence exists.
 
 | Fixture | Hard target |
 | --- | --- |

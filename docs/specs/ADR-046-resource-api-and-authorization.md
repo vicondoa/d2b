@@ -549,7 +549,7 @@ per-watch value is only a fairness ceiling.
 | Finalizers per resource | 8 | Unique and canonically sorted for the digest | `resource-schema-invalid` |
 | Finalizer ID | 128 bytes | Admitted forms are `core.<name>` and `<namespace>.d2bus.org/<name>`, each segment 1 to 63 bytes | `resource-schema-invalid` |
 | Labels, annotations | 32 each | Neither participates in authorization | `resource-schema-invalid` |
-| Label or annotation key | 128 bytes | Optional `<namespace>/` prefix, same grammar both sides | `resource-schema-invalid` |
+| Label or annotation key | 64 bytes | Printable ASCII; the optional `<namespace>/` prefix counts toward D101's canonical JSON object-key ceiling | `resource-schema-invalid` |
 | Label value | 256 bytes | UTF-8, control-character free | `resource-schema-invalid` |
 | Annotation value, aggregate annotations | 4 KiB, 16 KiB | Kept well inside the 256 KiB envelope cap | `resource-schema-invalid` |
 
@@ -628,6 +628,15 @@ the current revision but does not return an unauthorized resource body, and
 `revision-expired` and only when the caller is authorized to read that
 revision.
 
+The Rust homes and mapping boundary are frozen by D111.
+`ResourceErrorKind`/`ResourceError` live in
+`packages/d2b-contracts/src/v3/error.rs`;
+`StoreErrorKind`/`StoreError` live in
+`packages/d2b-resource-store/src/error.rs`; and the total one-way store-to-API
+mapping lives in `packages/d2b-resource-api/src/error.rs`. The resource set is
+the exact 31 strings above. The store set adds only
+`store-integrity-failure`, `store-backpressure`, and `store-quarantined`.
+
 ## Audit
 
 Audit records:
@@ -665,7 +674,7 @@ process data, and terminal bytes.
 | Dependency/owner | W0; resource API integrator |
 | Current source | `packages/d2b-contracts/src/public_wire.rs`, `broker_wire.rs`; `d2b-daemon-access/src/lib.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs` |
+| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs`, `error.rs` |
 | Detailed design | Async methods, contexts, preconditions, limits, errors, status/finalizer separation, batch API Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus exact service → Zone auth → redb actor |
 | Data migration | None; v3 clean break |
