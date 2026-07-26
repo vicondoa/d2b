@@ -53,5 +53,5 @@
   self-re-exec self-guard. `AGENTS.md` and `tests/README.md` now document the
   `test-runtime-ledger` Layer-1 job as an aggregate per-crate process-CPU
   budget gate with advisory per-test wall-clock diagnostics, no baseline, and
-  no regeneration workflow, noting that the `Makefile` and
+  no historical-regression claim, noting that the `Makefile` and
   `tests/layer1-jobs.json` are authoritative if the prose diverges.

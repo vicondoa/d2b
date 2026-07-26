@@ -16,8 +16,8 @@
 - Reconciled the remaining ledger prose across `AGENTS.md`, `tests/README.md`,
   the ADR-046 validation-and-delivery, streamline, and feasibility-and-spikes
   specs, and the preparatory changelog fragments, so no surface advertises the
-  removed per-test enforcement, baseline, historical-regression, shard, or
-  regeneration-workflow capabilities (there is no committed baseline file).
+  removed per-test enforcement, baseline, historical-regression, or shard
+  capabilities (there is no committed baseline file).
   Regenerating the census pin after a legitimate test change is a separate,
   supported step: `make runtime-ledger-pin`.
 - Documented the envelope policy lint's D116 negative-example marker in
