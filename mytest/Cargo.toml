@@ -1,6 +1,0 @@
-[package]
-name = "test_rnix"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-rnix = "0.11"
