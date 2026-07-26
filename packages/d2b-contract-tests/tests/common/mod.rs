@@ -635,45 +635,111 @@ fn normalize_json(lines: &[&str]) -> String {
     out.join("\n")
 }
 
+// Deserialize through a map visitor instead of serde_json::Value so duplicate
+// keys remain distinct entries. The envelope scanner can then apply the same
+// discriminator-cardinality rule to JSON, YAML, and Nix instead of inheriting
+// serde_json::Map's last-wins collapse.
 fn parse_json(lines: &[&str]) -> Result<Node, ParseError> {
     let text = normalize_json(lines);
     if text.trim().is_empty() {
         return Ok(Node::Null);
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| ParseError(e.to_string()))?;
-    Ok(json_to_node(&v))
+    let mut deserializer = serde_json::Deserializer::from_str(&text);
+    let node = JsonNode::deserialize(&mut deserializer)
+        .map_err(|error| ParseError(error.to_string()))?
+        .0;
+    deserializer
+        .end()
+        .map_err(|error| ParseError(error.to_string()))?;
+    Ok(node)
 }
 
-fn json_to_node(v: &serde_json::Value) -> Node {
-    match v {
-        serde_json::Value::Null => Node::Null,
-        serde_json::Value::Bool(b) => Node::Scalar(b.to_string()),
-        serde_json::Value::Number(n) => Node::Scalar(n.to_string()),
-        serde_json::Value::String(s) => scalar_to_node(s.clone()),
-        serde_json::Value::Array(items) => Node::Seq(items.iter().map(json_to_node).collect()),
-        serde_json::Value::Object(map) => {
-            let mut entries = Vec::new();
-            for (k, val) in map {
-                if k == ELIDE_SENTINEL || k == "..." {
+struct JsonNode(Node);
+
+impl<'de> Deserialize<'de> for JsonNode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct JsonNodeVisitor;
+
+        impl<'de> Visitor<'de> for JsonNodeVisitor {
+            type Value = JsonNode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Scalar(value.to_string())))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(JsonNode(scalar_to_node(value.to_string())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(JsonNode(scalar_to_node(value)))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Null))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(JsonNode(Node::Null))
+            }
+
+            fn visit_some<D: Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                JsonNode::deserialize(deserializer)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = sequence.next_element::<JsonNode>()? {
+                    items.push(item.0);
+                }
+                Ok(JsonNode(Node::Seq(items)))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut mapping: A) -> Result<Self::Value, A::Error> {
+                let mut entries: Vec<Entry> = Vec::new();
+                while let Some(key) = mapping.next_key::<String>()? {
+                    let key = if key == ELIDE_SENTINEL || key == "..." {
+                        "...".to_string()
+                    } else {
+                        key
+                    };
+                    let value = mapping.next_value::<JsonNode>()?.0;
+                    let value = if key == "..." { Node::Elision } else { value };
                     entries.push(Entry {
-                        key: "...".to_string(),
-                        val: Node::Elision,
+                        key,
+                        val: value,
                         line: 0,
                     });
-                    continue;
                 }
-                entries.push(Entry {
-                    key: k.clone(),
-                    val: json_to_node(val),
-                    line: 0,
-                });
+                Ok(JsonNode(Node::Map(entries)))
             }
-            Node::Map(entries)
         }
+
+        deserializer.deserialize_any(JsonNodeVisitor)
     }
 }
-
 // ---------------------------------------------------------------------------
 // Nix: rnix. Every expression SyntaxKind that can wrap or produce an attribute
 // set in the documented subset has an explicit disposition:
