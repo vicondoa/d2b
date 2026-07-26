@@ -253,7 +253,7 @@ package attempts to make the Zone runtime activate untrusted state.
 
 - **Prevention:** bundle SHA-256 digest computed at eval time and verified
   before any Create/UpdateSpec (`ADR-046-resources-credential` lines
-  1069-1082); `catalogSha256` binds the artifact catalog to the bundle
+  1069-1082); `artifactCatalogDigest` binds the artifact catalog to the bundle
   (`ADR-046-nix-configuration` lines 192-202); schema fingerprints
   (`resourceTypeSchemaDigests`, `providerSchemaFingerprints`) verified before
   any resource of that type/Provider activates (`ADR-046-nix-configuration`
@@ -261,10 +261,13 @@ package attempts to make the Zone runtime activate untrusted state.
 - **Detection:** any mismatch aborts the **entire** bundle
   (`config-bundle-integrity-failed`, `bundle-schema-mismatch`,
   `config-catalog-mismatch`) - never a partial activation.
-- **Recovery:** the prior activated generation remains live; generation
-  counter rejects replay/downgrade (bundle `generation` must be strictly
-  greater than `store_meta.active_configuration_revision`, RZC lines
-  2753-2754).
+- **Recovery:** the prior activated generation remains live. Replay/downgrade is
+  prevented without a bundle-embedded counter: bundles are installed only through
+  trusted Nix activation into the immutable store, the runtime assigns a strictly
+  increasing `configurationGeneration` ordinal at each activation, and a bundle
+  whose `contentHash` equals the active generation's is a no-op. An operator
+  rollback restages a retained prior bundle as a new higher-ordinal generation
+  (RZC section 14.11); there is no path that decrements the active ordinal.
 
 ### AC6: Local same-UID peer abusing ComponentSession/d2b-bus
 
@@ -376,7 +379,7 @@ build host cannot alone forge a trusted artifact:
    against the actual derivation output - any mismatch is a build failure,
    not a runtime warning (RZC lines 2731-2735).
 2. **Runtime** (Zone activation): the activation controller re-verifies
-   `catalogSha256` and all schema fingerprints before applying any bundle
+   `artifactCatalogDigest` and all schema fingerprints before applying any bundle
    (`ADR-046-nix-configuration` lines 126-137, 192-202).
 
 `spec.config` for every Provider/ResourceType is restricted at both layers:
@@ -1485,9 +1488,10 @@ generation receive an async `Delete`; `managedBy: controller` and
 cleanup candidate exceeds `cleanupStuckThreshold` (default 5 minutes), a
 `GenerationCleanupFailed` condition is set - the runtime never force-removes
 finalizers to clear it (`ADR-046-resources-zone-control` lines 2808-2912).
-The generation counter itself rejects replay/downgrade: a bundle
-`generation` must be strictly greater than
-`store_meta.active_configuration_revision` (lines 2753-2754).
+Replay/downgrade is rejected without a bundle-embedded counter: the runtime
+assigns a strictly increasing `configurationGeneration` ordinal at each
+activation and treats a bundle whose `contentHash` equals the active
+generation's as a no-op (`ADR-046-resources-zone-control` section 14.11).
 
 **Provider upgrade policies.** `drain-then-replace` (drain the old component
 before launching new), `rolling` (phased replacement), and `immediate` (stop
@@ -1735,7 +1739,7 @@ section with the full control description.
 | `Process` | pidfd/identity confusion enabling signal-based attack on the wrong process; setsid/PGID escape or reuse during teardown | Eleven pidfd lifecycle/non-exportability invariants; broker-parent-only wait/reap; anchored cgroup.kill for unambiguous teardown; quarantine-not-kill on ambiguity | §15/§22 |
 | `EphemeralProcess` | Terminal-result retention becoming an unbounded secret/output store | Bounded `successfulTtl`/`failedTtl`; forbidden-field list identical to Process | §15 |
 | `Volume` | Identity-marker tamper / silent re-provisioning after tamper or deletion race | HMAC identity marker, fail-closed `missing`/`replaced` status, quarantine on partial destruction | §17 |
-| `Network` | Firewall/IPv6/east-west drift silently reopening isolation | Dual-point IPv6 suppression enforcement; `hostBlocklist` additive-only; `firewallDigest` drift detection | Cross-cutting network invariants (`ADR-046-resources-network`) |
+| `Network` | Firewall/IPv6/east-west drift silently reopening isolation, or a multiplexed physical NIC bridging two Zones onto one L2 domain | Dual-point IPv6 suppression enforcement; `hostBlocklist` additive-only; `firewallDigest` drift detection; external physical-NIC authority binds an isolation domain equal to the claimant Zone UID and rejects cross-Zone `bridge` multiplex (`external-physical-nic-cross-zone-l2`, INV-NET-010) | Cross-cutting network invariants (`ADR-046-resources-network`) |
 | `Device` | Blanket device-path grant / cross-consumer device sharing (e.g. security-key + USBIP on one physical device) | No blanket grant; broker-derived node only; eval preflight plus mandatory Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` claim shared by all USB/security-key Providers before effects | §13 |
 | `User` | Numeric UID/GID leaking into authorization decisions or public surface | `User/<name>` typed refs only; `mappingClass: process-principal-root` never exposes numeric UID/GID publicly | §15 |
 | `Credential` | Secret bytes reaching resource store/audit/telemetry, or a non-enrolled consumer reading a token | Zero-secret invariant; Noise KK-only sensitive delivery; exact `consumerRef` match | §9/§19 |
@@ -1759,7 +1763,7 @@ and [Forbidden designs](#forbidden-designs).
 | Guest runtime | `runtime-cloud-hypervisor`, `runtime-qemu-media`, `runtime-azure-container-apps`, `runtime-azure-virtual-machine` | Host holding cloud/relay credentials; adoption ambiguity re-provisioning a live workload | Mandatory `executionRef: Guest/*` for cloud-facing components (§11); `Degraded`-not-recreate on ambiguity | `provider-runtime-*.md` |
 | Activation | `activation-nixos` | Store-path leakage revealing exact system closure; privilege escalation via `startRoot: true` | Sealed store path never in any public surface; `startRoot: true` paired with `noNewPrivileges: true` + zero host capabilities | `provider-activation-nixos.md` |
 | Volume | `volume-local`, `volume-virtiofs` | Host path leakage; cross-VM store leakage; ADR 0021 capability violation | Opaque `sourcePolicyId`; `store-view/live` never real `/nix/store`; zero host capabilities for virtiofsd (conformance-kit tested) | `provider-volume-{local,virtiofs}.md` |
-| Network | `network-local` | Internal bridge/tap topology (IfName) leakage; firewall/isolation drift | FNV-1a-hashed IfNames never exposed; dual-point IPv6 suppression; `firewallDigest` drift detection | `provider-network-local.md` |
+| Network | `network-local` | Internal bridge/tap topology (IfName) leakage; firewall/isolation drift; cross-Zone L2 sharing via a multiplexed external physical NIC | FNV-1a-hashed IfNames never exposed; dual-point IPv6 suppression; `firewallDigest` drift detection; cross-Zone external-NIC `bridge` multiplex rejected fail closed (INV-NET-011) | `provider-network-local.md` |
 | Device | `device-tpm`, `device-usbip`, `device-security-key`, `device-gpu` | Device-path leakage; cross-consumer device conflict; TPM re-provisioning as clean device | Broker-derived node only; trusted USB identity resolution plus byte-identical `physical-usb-backing` tuple collision before security-key/USB effects; TPM fail-closed marker | `provider-device-*.md` |
 | Credential | `credential-secret-service`, `credential-entra`, `credential-managed-identity` | Secret bytes crossing a process/session/audit boundary | Zero-secret-bytes port boundary; domain-locked Credential type (user vs. system) | `provider-credential-*.md` |
 | Interaction | `display-wayland`, `audio-pipewire`, `clipboard-wayland`, `shell-terminal`, `notification-desktop` | Interactive content (clipboard/terminal/notification) exfiltration via observability surfaces | FD-only content delivery (SCM_RIGHTS); closed content-secrecy table (§20); nonce-bound action replay protection | `provider-{display-wayland,audio-pipewire,clipboard-wayland,shell-terminal,notification-desktop}.md` |

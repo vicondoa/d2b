@@ -5,6 +5,7 @@
 #   * bash -n on tracked shell scripts under tests/, scripts/, harness/ubuntu/
 #   * shellcheck --severity=warning on the same scripts when available
 #   * repository-wide ban on every non-ASCII dash codepoint
+#   * process-marker ban on shipped and operator-facing artifacts
 #
 # Intentionally excludes nix eval, cargo fmt/clippy/test, and derivation
 # materialization; those stay in tests/static-fast.sh and tests/static.sh.
@@ -29,6 +30,100 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 DASHES=(
   $'\u2010' $'\u2011' $'\u2012' $'\u2013' $'\u2014'
   $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
+)
+
+# A process marker is a delimited wave (`W3`, `W4-fu`, `W1fu3`), phase
+# (`P6`, `P2.3`, `ph6`), follow-up (`fu3`), high finding (`H20`),
+# contextual finding/revision (`finding M2`, `revision R5`), or reviewer finding
+# (`(rust-1)`). Alphanumeric and underscore boundaries are deliberately
+# excluded: this does not match W3C, SHA-like text, v3, H264, W3_ROWS, or
+# w4Fu. The last is part of the functional defaultSwitchReadiness contract.
+# A hyphenated marker is accepted only after an identifier character, so
+# v1.1-P2 is caught while the legitimate command option `-W2` is not.
+# Lowercase wave tags are recognized only in path-shaped filenames, such as
+# a lowercase wave prefix followed by a distro name; this avoids treating
+# ordinary prose tokens as process tags.
+PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])H[0-9]{1,2}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
+PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
+
+# Shrink-only legacy debt ratchet. This path set and its budget may only get
+# smaller. Adding a path is permitted only in the same change that removes a
+# different violation and its entry; never increase the budget. Do not attach
+# free-text reasons: membership is the sole exemption, so every change remains
+# an explicit path diff.
+LEGACY_PROCESS_MARKER_PATH_BUDGET=71
+LEGACY_PROCESS_MARKER_PATHS=(
+  docs/reference/broker-w2-dispositions.md
+  docs/reference/schemas/v1/bundle.json
+  docs/reference/schemas/v1/minijail-profile.json
+  docs/reference/schemas/v1/processes.json
+  docs/reference/schemas/v1/wire-protocol.json
+  docs/reference/schemas/v2/minijail-profile.json
+  docs/reference/schemas/v2/processes.json
+  docs/reference/wave-evidence-schema.md
+  nixos-modules/host-activation.nix
+  nixos-modules/host.nix
+  nixos-modules/net.nix
+  packages/Cargo.toml
+  packages/d2b-contract-tests/tests/minijail_gpu.rs
+  packages/d2b-contract-tests/tests/minijail_profiles.rs
+  packages/d2b-contract-tests/tests/minijail_swtpm_video.rs
+  packages/d2b-contract-tests/tests/policy_guest.rs
+  packages/d2b-contract-tests/tests/policy_restart_adoption.rs
+  packages/d2b-contract-tests/tests/privileges_parity.rs
+  packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs
+  packages/d2b-contract-tests/tests/usb_sk_contract.rs
+  packages/d2b-contracts/proto/guest_control.proto
+  packages/d2b-contracts/tests/version_skew.rs
+  packages/d2b-core/Cargo.toml
+  packages/d2b-core/src/bundle_resolver.rs
+  packages/d2b-core/src/host_w3.rs
+  packages/d2b-core/src/minijail_profile.rs
+  packages/d2b-core/src/privileges_w3.rs
+  packages/d2b-core/tests/bundle_resolver_tamper.rs
+  packages/d2b-exec-runner/tests/tty_pty_integration.rs
+  packages/d2b-gateway-runtime/src/aca_workload.rs
+  packages/d2b-gateway-runtime/src/display_listener.rs
+  packages/d2b-gateway-runtime/src/production.rs
+  packages/d2b-gateway-runtime/src/waypipe_display.rs
+  packages/d2b-gateway/Cargo.toml
+  packages/d2b-gateway/src/audit.rs
+  packages/d2b-gateway/src/handshake.rs
+  packages/d2b-gateway/src/ledger.rs
+  packages/d2b-gateway/src/lib.rs
+  packages/d2b-gateway/src/orchestrator.rs
+  packages/d2b-guestd/src/exec_pty.rs
+  packages/d2b-host/Cargo.toml
+  packages/d2b-host/src/hardlink_farm.rs
+  packages/d2b-host/src/runner_shape.rs
+  packages/d2b-priv-broker/Cargo.toml
+  packages/d2b-priv-broker/src/ops/store_sync_audit.rs
+  packages/d2b-priv-broker/src/ops/tap.rs
+  packages/d2b-priv-broker/src/runtime.rs
+  packages/d2b-provider-aca/Cargo.toml
+  packages/d2b-provider-relay/src/bin/d2b-relay.rs
+  packages/d2b-realm-provider/src/credential.rs
+  packages/d2b-realm-router/src/display_transport.rs
+  packages/d2b-realm-router/src/secure_session.rs
+  packages/d2b-realm-router/src/session_lifecycle.rs
+  packages/d2b/src/lib.rs
+  packages/d2b/tests/auth_status_contract.rs
+  packages/d2b/tests/cli_contract.rs
+  packages/d2b/tests/cli_json_contract.rs
+  packages/d2b/tests/host_doctor_contract.rs
+  packages/d2b/tests/status_contract.rs
+  packages/d2b/tests/usb_contract.rs
+  packages/d2b/tests/vm_verbs_contract.rs
+  packages/d2bd/Cargo.toml
+  packages/d2bd/src/guest_control_health.rs
+  packages/d2bd/src/lib.rs
+  packages/d2bd/src/main.rs
+  packages/d2bd/src/supervisor/pidfd_table.rs
+  packages/d2bd/src/workload_target_index.rs
+  tests/fixtures/gen-w3-cli-goldens.py
+  tests/golden/l3-matrix/w3-arch.txt
+  tests/golden/l3-matrix/w3-fedora.txt
+  tests/golden/l3-matrix/w3-ubuntu.txt
 )
 
 log() {
@@ -115,9 +210,269 @@ scan_dashes() {
   ok "no non-ASCII dash in ${#files[@]} files"
 }
 
+# Fail closed on process markers in artifacts governed by AGENTS.md.
+#
+# Path classification is the allow-list. Historical/process-bearing paths
+# (AGENTS.md, docs/adr/**, docs/specs/**, changelog.d/**) never enter the
+# governed set. Shipped prose and CLI goldens are scanned in full. Source trees
+# use comment context plus the CLI crate's string context; workflow and
+# CHANGELOG files use workflow/job/step-name and released-section contexts. A
+# new path exemption therefore requires changing this code, not adding magic
+# prose that the scanner silently accepts.
+#
+# Enumeration is intentionally identical to scan_dashes: git supplies every
+# tracked and non-ignored untracked file, while an isolated fixture uses a
+# pruned find. NUL-safe collection preserves unusual names. Only grep/awk's
+# clean statuses are accepted; unreadable, vanished, or otherwise unclassifiable
+# governed files fail instead of being skipped.
+scan_process_markers() {
+  local root="$1"
+  local -a files=() full_files=() source_files=() filename_files=()
+  local -a workflow_files=() changelog_files=()
+  local -a new_violation_lines=() stale_legacy_paths=()
+  local -A legacy_paths=() violation_paths=()
+  local f hit path hits context_hits toplevel enum_status grep_status awk_status
+  local is_repo_root=0 filename_hits=
+
+  root=$(cd "$root" && pwd -P)
+  toplevel=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)
+
+  local lastpipe_was_set=1
+  shopt -q lastpipe || lastpipe_was_set=0
+  shopt -s lastpipe
+  set +e
+  if [ -n "$toplevel" ] && [ "$(cd "$toplevel" && pwd -P)" = "$root" ]; then
+    is_repo_root=1
+    (cd "$root" && git ls-files -z --cached --others --exclude-standard) \
+      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
+  else
+    (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
+      | { while IFS= read -r -d '' f; do files+=("$f"); done; }
+  fi
+  enum_status=${PIPESTATUS[0]}
+  set -e
+  [ "$lastpipe_was_set" -eq 1 ] || shopt -u lastpipe
+
+  [ "$enum_status" -eq 0 ] \
+    || fail "process-marker scan could not enumerate files under $root (enumerator exited $enum_status)"
+  [ "${#files[@]}" -gt 0 ] || fail "process-marker scan found no files under $root"
+
+  if [ "$is_repo_root" -eq 1 ]; then
+    [ "${#LEGACY_PROCESS_MARKER_PATHS[@]}" -eq "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ] \
+      || fail "process-marker legacy path count (${#LEGACY_PROCESS_MARKER_PATHS[@]}) does not match shrink-only budget $LEGACY_PROCESS_MARKER_PATH_BUDGET"
+    for f in "${LEGACY_PROCESS_MARKER_PATHS[@]}"; do
+      [ -z "${legacy_paths[$f]+present}" ] \
+        || fail "duplicate process-marker legacy path: $f"
+      legacy_paths["$f"]=1
+    done
+  fi
+
+  for f in "${files[@]}"; do
+    if [ "$is_repo_root" -eq 0 ]; then
+      full_files+=("$f")
+      filename_files+=("$f")
+      continue
+    fi
+    case "$f" in
+      AGENTS.md|docs/adr/*|docs/specs/*|changelog.d/*)
+        ;;
+      README.md|SECURITY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
+        full_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      tests/golden/cli-output/*)
+        full_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      tests/golden/l3-matrix/*)
+        filename_files+=("$f")
+        ;;
+      tests/fixtures/gen-w3-cli-goldens.py)
+        full_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      nixos-modules/*|pkgs/*|packages/*)
+        source_files+=("$f")
+        ;;
+      .github/workflows/*)
+        workflow_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      CHANGELOG.md)
+        changelog_files+=("$f")
+        ;;
+    esac
+  done
+
+  [ "$is_repo_root" -eq 0 ] || [ "${#full_files[@]}" -gt 0 ] \
+    || fail "process-marker scan could not classify any governed files under $root"
+
+  for f in "${full_files[@]}" "${source_files[@]}" "${workflow_files[@]}" "${filename_files[@]}"; do
+    [ -r "$root/$f" ] \
+      || fail "process-marker scan cannot read governed file $f"
+  done
+  for f in "${filename_files[@]}"; do
+    if [[ "$(basename "$f")" =~ $PROCESS_MARKER_FILENAME_RE ]]; then
+      filename_hits+="${filename_hits:+$'\n'}$f: filename contains a process marker"
+    fi
+  done
+
+  if [ "${#full_files[@]}" -gt 0 ]; then
+    if hits=$(cd "$root" && grep -nHE -e "$PROCESS_MARKER_RE" -- "${full_files[@]}" 2>&1); then
+      grep_status=0
+    else
+      grep_status=$?
+    fi
+    if [ "$grep_status" -gt 1 ]; then
+      [ -n "$hits" ] && printf '%s\n' "$hits" >&2
+      fail "process-marker scan aborted: grep exited $grep_status (unreadable/vanished file or bad pattern) under $root"
+    fi
+  else
+    hits=
+    grep_status=1
+  fi
+
+  if [ "${#source_files[@]}" -gt 0 ]; then
+    set +e
+    context_hits=$(
+      cd "$root" && awk -v marker="$PROCESS_MARKER_RE" '
+        # W0 through W8 are the closed, validated delivery-wave namespace when
+        # they occur as exact tokens inside the delivery implementation. Strip
+        # only that token shape before applying the process-marker matcher.
+        # Suffixed forms such as W0-prep and W4-fu remain visible to the gate.
+        function strip_delivery_wave_ids(text, i, previous, following) {
+          if (FILENAME !~ /(^|\/)packages\/xtask\/src\/delivery\// ||
+              text !~ /(`W[0-8]`|"W[0-8]"|\/W[0-8]\/|ADR046-W[0-8])/) {
+            return text
+          }
+          for (i = 1; i < length(text); i++) {
+            if (substr(text, i, 1) != "W" ||
+                substr(text, i + 1, 1) !~ /^[0-8]$/) {
+              continue
+            }
+            previous = i == 1 ? "" : substr(text, i - 1, 1)
+            following = i + 2 > length(text) ? "" : substr(text, i + 2, 1)
+            if ((previous == "" || previous !~ /[[:alnum:]_]/) &&
+                (following == "" || following !~ /[[:alnum:]_-]/)) {
+              text = substr(text, 1, i - 1) "X" substr(text, i + 1)
+            }
+          }
+          return text
+        }
+        {
+          candidate = strip_delivery_wave_ids($0)
+          marker_at = match(candidate, marker)
+          if (!marker_at) {
+            next
+          }
+          prefix = substr(candidate, 1, marker_at)
+          comment_at = match(prefix, /(^|[[:space:]])(\/\/[/!]?|#|\/\*|\*)/)
+          cli_string = FILENAME ~ /^packages\/d2b\/src\// &&
+            prefix ~ /["]/
+          nix_string = (FILENAME ~ /^nixos-modules\// ||
+                        FILENAME ~ /^pkgs\//) &&
+            prefix ~ /["]/
+          if (comment_at || cli_string || nix_string) {
+            printf "%s:%d:%s\n", FILENAME, FNR, $0
+          }
+        }
+      ' "${source_files[@]}"
+    )
+    awk_status=$?
+    set -e
+    [ "$awk_status" -eq 0 ] \
+      || fail "process-marker source-context scan aborted (awk exited $awk_status)"
+    [ -z "$context_hits" ] || hits+="${hits:+$'\n'}$context_hits"
+  fi
+
+  for f in "${workflow_files[@]}"; do
+    set +e
+    context_hits=$(
+      cd "$root" && awk -v path="$f" -v marker="$PROCESS_MARKER_RE" '
+        $0 ~ marker &&
+          ($0 ~ /^[[:space:]]*(-[[:space:]]+)?name[[:space:]]*:/ ||
+           $0 ~ /^  [[:alnum:]_.-]+[[:space:]]*:/) {
+          printf "%s:%d:%s\n", path, NR, $0
+        }
+      ' "$f"
+    )
+    awk_status=$?
+    set -e
+    [ "$awk_status" -eq 0 ] \
+      || fail "process-marker workflow scan aborted for $f (awk exited $awk_status)"
+    [ -z "$context_hits" ] || hits+="${hits:+$'\n'}$context_hits"
+  done
+
+  for f in "${changelog_files[@]}"; do
+    [ -r "$root/$f" ] \
+      || fail "process-marker scan cannot read governed file $f"
+    set +e
+    context_hits=$(
+      cd "$root" && awk -v path="$f" -v marker="$PROCESS_MARKER_RE" '
+        /^## \[Unreleased\]/ { released = 0; next }
+        /^## \[[^]]+\]/ { released = 1; next }
+        released && $0 ~ marker {
+          printf "%s:%d:%s\n", path, NR, $0
+        }
+      ' "$f"
+    )
+    awk_status=$?
+    set -e
+    [ "$awk_status" -eq 0 ] \
+      || fail "process-marker CHANGELOG scan aborted for $f (awk exited $awk_status)"
+    [ -z "$context_hits" ] || hits+="${hits:+$'\n'}$context_hits"
+  done
+
+  if [ -n "$filename_hits" ]; then
+    hits+="${hits:+$'\n'}$filename_hits"
+  fi
+  if [ "$grep_status" -eq 0 ] && [ -z "$hits" ]; then
+    fail "process-marker scan matched but produced no classifiable diagnostic under $root"
+  fi
+
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    path=${hit%%:*}
+    [ "$path" != "$hit" ] \
+      || fail "process-marker scan produced an unclassifiable diagnostic: $hit"
+    violation_paths["$path"]=1
+    if [ -z "${legacy_paths[$path]+present}" ]; then
+      new_violation_lines+=("$hit")
+    fi
+  done <<< "$hits"
+
+  if [ "$is_repo_root" -eq 1 ]; then
+    for f in "${LEGACY_PROCESS_MARKER_PATHS[@]}"; do
+      if [ -z "${violation_paths[$f]+present}" ]; then
+        stale_legacy_paths+=("$f")
+      fi
+    done
+  fi
+
+  if [ "${#new_violation_lines[@]}" -gt 0 ]; then
+    printf '%s\n' "${new_violation_lines[@]}" >&2
+    fail "new process-marker violation outside the legacy path allow-list"
+  fi
+  if [ "${#stale_legacy_paths[@]}" -gt 0 ]; then
+    for f in "${stale_legacy_paths[@]}"; do
+      log "  STALE: $f"
+    done
+    fail "legacy process-marker paths no longer violate; delete their entries and lower the budget"
+  fi
+  if [ "$is_repo_root" -eq 1 ]; then
+    ok "process-marker ratchet clean; ${#LEGACY_PROCESS_MARKER_PATHS[@]} legacy paths remain"
+  else
+    ok "no process markers in shipped or operator-facing artifacts"
+  fi
+}
+
 # Exposed so the gate's own test can drive the scan over a fixture tree.
 if [ "${1:-}" = "--scan-dashes" ]; then
   scan_dashes "${2:-$ROOT}"
+  exit 0
+fi
+if [ "${1:-}" = "--scan-process-markers" ]; then
+  scan_process_markers "${2:-$ROOT}"
   exit 0
 fi
 
@@ -145,5 +500,6 @@ else
 fi
 
 scan_dashes "$ROOT"
+scan_process_markers "$ROOT"
 
 ok "tier0 fast gate complete"

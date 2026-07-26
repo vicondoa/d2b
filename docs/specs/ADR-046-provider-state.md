@@ -784,7 +784,7 @@ After eval, the build derivation:
 
 1. Resolves `spec.artifactId` against the `d2b.artifacts` catalog to locate the Provider package; reads the Provider's signed `provider.json` manifest. The artifact catalog (installed root:d2bd 0640) carries the store path and content digests; no store path appears in the emitted ResourceSpec.
 2. Validates the fully rendered `spec` object (including all `spec.config` fields) against the full JSON Schema in the manifest, rejecting any field not present in the Provider's `ResourceTypeSchema` or `configSchema`.
-3. Emits the canonical sorted Zone resource bundle at `/etc/d2b/zones/<zone>/resources.json`.
+3. Emits the canonical sorted Zone resource bundle at `/etc/d2b/zones/<zone>/resource-bundle.json`.
 
 The rendered resource JSON for the example above:
 
@@ -819,16 +819,20 @@ The input bundle contains only `metadata.name`, `metadata.zone`, and `spec`. `me
 
 The Nix `spec` fields map to the JSON `spec` object with **no field renaming and no alternative nesting**: what the user writes under `spec` in Nix appears unchanged in the canonical JSON `spec`. Build validation compares this rendered JSON against the committed `ResourceTypeSchema` for `Provider` before writing the bundle.
 
-Bundle envelope:
+Bundle envelope (the canonical shape is frozen in
+`ADR-046-nix-configuration.md` section "Bundle contract (canonical)" (D119);
+this spec consumes that shape and does not redefine it):
 
 ```json
 {
-  "schemaVersion": "v3",
+  "schemaVersion": 3,
+  "bundleVersion": 1,
   "zone": "dev",
-  "generation": 7,
-  "contentId": "sha256:<hex-of-canonical-sorted-resources-array>",
-  "emittedAt": "2026-07-22T04:00:00.000Z",
-  "resources": [ /* sorted rendered resource objects */ ]
+  "contentHash": "sha256:<hex-of-canonical-sorted-resources-array>",
+  "artifactCatalogDigest": "sha256:<hex>",
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "resources": [ /* sorted rendered resource objects */ ],
+  "providerSchemaDigests": { "Provider/<name>": "sha256:<hex>" }
 }
 ```
 
@@ -837,12 +841,13 @@ Bundle properties:
 | Property | Rules |
 | --- | --- |
 | `resources` order | Lexicographically sorted by `(type, metadata.zone, metadata.name)` |
-| `contentId` | SHA-256 of the canonical-sorted UTF-8 `resources` array alone (no envelope fields); deterministic across independent builds of the same Nix inputs |
+| `contentHash` | The D101 `d2b:v3:resource-bundle` digest over the canonical-sorted UTF-8 `resources` array alone (excluding envelope fields); it is the generation identity (`generationId`) and is deterministic across independent builds of the same Nix inputs |
+| `generatedAt` | Fixed Unix epoch `1970-01-01T00:00:00.000Z` for reproducibility; the Zone daemon records the real activation time in its own generation record, never in the bundle |
 | Resource metadata | Input bundle contains only `metadata.name` and `metadata.zone` per resource; `managedBy`, `configurationGeneration`, `uid`, `generation`, `resourceVersion`, and timestamps are set by the configuration service / core when persisting activated resources, never by the bundle emitter |
 | Credential refs | Remain as `"Credential/<name>"` strings in the bundle; raw key material never appears |
 | Schema validation | Build fails if any rendered resource spec violates the committed `ResourceTypeSchema` for its type |
 
-The build emitter recomputes `contentId` over the final sorted `resources` array and writes it into the envelope. The Zone daemon recomputes `contentId` on load and aborts activation with `bundle-integrity-failure` on mismatch.
+The build emitter recomputes `contentHash` over the final sorted `resources` array and writes it into the envelope. The Zone daemon recomputes `contentHash` on load and aborts activation with `bundle-integrity-failure` on mismatch.
 
 ## Generation-based cleanup contract
 
@@ -861,26 +866,29 @@ The Zone runtime never deletes a `managedBy: controller` resource because it is 
 
 ### Applying a new generation
 
-When the Zone daemon reads a new bundle with a higher `generation` and a different `contentId`:
+When the Zone daemon reads a bundle whose `contentHash` (`generationId`) differs from the active generation:
 
 1. **Integrity check**: recompute SHA-256 of the `resources` array; abort with `bundle-integrity-failure` on mismatch - prior generation is unchanged.
 2. **Diff**: compute `(type, name)` diff between the persisted resource store entries where `managedBy: configuration` and the new canonical configured set.
-3. **Added or changed resources**: create new resources; update spec of existing `managedBy: configuration` resources and set their `configurationGeneration`. If a resource with the same `(type, name)` already exists with `managedBy: controller` or `managedBy: api`, the configuration service records a `configuration-name-conflict` error for that resource, marks that generation activation item `Degraded/name-conflict`, and leaves the existing resource untouched. It never seizes ownership by changing `managedBy`.
-4. **Absent resources**: set `deletionRequestedAt` on every persisted `managedBy: configuration` resource absent from the new configured set. Deletion proceeds through owner-child/finalizer-safe ordering; the Zone runtime does not force-delete or skip finalizers.
-5. **Unchanged resources**: resources whose spec is byte-identical to the persisted spec have their `configurationGeneration` updated to the current generation; no controller reconcile is triggered.
+3. **Atomic durable commit (the sole activation point)**: before any intent is queued, the sole durable writer ADR046-routing-013 atomically commits `/var/lib/d2b/zones/<zone>/configuration/generation.json` (new active `contentHash`, prior `contentHash`, `retainedGenerations`, retention-ring metadata) and stages the outgoing bundle into the retention ring, under the bundle-file OFD lock. The new generation is active only when this commit returns; provider-state does not write `generation.json` itself and defers the durable commit to ADR046-routing-013.
+4. **Added or changed resources**: create new resources; update spec of existing `managedBy: configuration` resources and set their `configurationGeneration`. If a resource with the same `(type, name)` already exists with `managedBy: controller` or `managedBy: api`, the configuration service records a `configuration-name-conflict` error for that resource, marks that generation activation item `Degraded/name-conflict`, and leaves the existing resource untouched. It never seizes ownership by changing `managedBy`.
+5. **Absent resources**: set `deletionRequestedAt` on every persisted `managedBy: configuration` resource absent from the new configured set. Deletion proceeds through owner-child/finalizer-safe ordering; the Zone runtime does not force-delete or skip finalizers.
+6. **Unchanged resources**: resources whose spec is byte-identical to the persisted spec have their `configurationGeneration` updated to the current generation; no controller reconcile is triggered.
 
-### Activation does not block
+Steps 4-6 (intent application) run only after the step-3 commit returns.
 
-New generation activation does **not** wait for cleanup completion:
+### Activation does not block on cleanup
 
-- `Zone.status.observedGeneration` advances to the new bundle generation immediately after the diff is applied.
+New generation activation is complete once the step-3 durable commit returns; it does **not** wait for cleanup completion:
+
+- `Zone.status.observedGeneration` advances to the new bundle generation once the atomic `generation.json` commit returns, not after intent application completes.
 - `Zone.status.phase` transitions to `Degraded` with a `pending-cleanup` condition while any prior-generation `managedBy: configuration` resources are still completing deletion.
 - `Zone.status.phase` returns to its normal steady state once all pending cleanup completes.
 - Providers registered in the new generation start immediately; their controllers may begin creating controller-created children against the new spec without waiting.
 
 ### Prior generation retention
 
-The Zone daemon retains prior bundle files at `/etc/d2b/zones/<zone>/resources.<gen>.json`. The number of retained prior bundles is configurable per Zone in the range 1..16 (default: 3). A prior bundle cannot be pruned while any of the following hold for resources that were removed in the transition from that generation:
+The Zone daemon retains prior bundle files at `/var/lib/d2b/zones/<zone>/configuration/prior/<contentHash>.json`. The number of retained prior bundles is configurable per Zone in the range 1..16 (default: 3). A prior bundle cannot be pruned while any of the following hold for resources that were removed in the transition from that generation:
 
 1. Any removed `managedBy: configuration` resource has not yet reached `phase: Deleted`.
 2. Any `IncidentHold` condition applies to a removed resource.
@@ -912,7 +920,7 @@ The following events extend the audit event table in [Status, audit, and OTEL](#
 | `resource-configuration-delete` | Async delete of a prior-gen `managedBy: configuration` resource | zone, resource-type, resource-name, configuration-generation |
 | `configuration-name-conflict` | Bundle `(type, name)` collides with existing `managedBy: controller` or `managedBy: api` resource | zone, resource-type, resource-name, generation |
 | `provider-finalizer-timeout` | Controller exceeded `maxFinalizerDurationSeconds` | zone, provider-name, elapsed-seconds |
-| `bundle-integrity-failure` | `contentId` mismatch on bundle load | zone, generation |
+| `bundle-integrity-failure` | `contentHash` mismatch on bundle load | zone, generation |
 
 The following metrics extend the OTEL metric table in [Status, audit, and OTEL](#status-audit-and-otel):
 
@@ -929,7 +937,7 @@ Required by ADR046-pstate-010:
 1. **Absent Volume**: new bundle omits a `managedBy: configuration` Volume → Volume receives `deletionRequestedAt`; new generation `status.observedGeneration` advances immediately; `pending-cleanup` condition present; Volume destroyed after mount finalizers clear; `zone-generation-cleanup-complete` audit event.
 2. **Absent Provider, children retained**: new bundle omits a `managedBy: configuration` Provider → Provider controller cleans up controller-created children in order; only `managedBy: configuration` Volumes owned by that Provider receive the generation-diff Delete; unrelated controller-created resources in the same Zone are untouched.
 3. **Incident hold defers cleanup**: absent `managedBy: configuration` Volume has `IncidentHold` → `deletionRequestedAt` set; `pending-cleanup` condition persists until hold is explicitly cleared; prior generation retained per count-based policy (not prunable while this resource is undeleted).
-4. **Bundle integrity failure**: `contentId` in bundle does not match recomputed hash → activation aborts; prior generation unchanged; `bundle-integrity-failure` audit event; no `status.observedGeneration` advance.
+4. **Bundle integrity failure**: `contentHash` in bundle does not match recomputed hash → activation aborts; prior generation unchanged; `bundle-integrity-failure` audit event; no `status.observedGeneration` advance.
 5. **Rollback**: prior generation replayed → diff re-creates absent resources; controller-created children with `ownerRef` pointing to restored Provider are retained without spurious deletion.
 6. **Finalizer timeout**: Provider controller does not remove finalizer within `maxFinalizerDurationSeconds` → `Degraded/finalizer-timeout` condition set; `provider-finalizer-timeout` audit event. Timeout is stall detection only; no finalizer is force-cleared; operator intervention resolves the stall.
 7. **Eval credential-ref guard**: `config` field with `credentialRef: true` receives a raw string → NixOS eval fails with `credential-value-must-be-ref`; no bundle is emitted; build derivation is never entered.
@@ -1171,12 +1179,12 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Dependency/owner | ADR046-pstate-001; Zone resource bundle owner, NixOS module owner, `d2b-core-controller` owner (ADR-046-core-controllers) |
 | Current source | `nixos-modules/manifest.nix` (current `manifest.json` emitter, v3 baseline `fd5b0067`); `packages/d2b-core/src/storage.rs` (`StorageAuthority::NixModule`-owned rows); `packages/xtask/src/main.rs` (`gen-schemas` command, same baseline) |
 | Reuse action | adapt |
-| Destination | `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module); `packages/d2b-core/src/v3/zone_bundle.rs` (shared bundle DTOs: `ZoneResourceBundle`, `BundleResource`, `contentId` computation); `packages/d2b-core-controller/src/configuration.rs` (diff/apply loop, name-conflict detection, `pending-cleanup` Zone status, `maxFinalizerDurationSeconds` stall detection - NOT in `d2b-provider-volume-local`); `packages/d2b-core-controller/tests/configuration.rs` (hermetic bundle diff, absent-resource Delete dispatch, name-conflict `Degraded/name-conflict` item, integrity-failure abort); `packages/d2b-core-controller/integration/configuration.rs` (container-based generation activation with running Providers, absent-resource cleanup, rollback, finalizer-timeout stall detection) |
+| Destination | `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module); `packages/d2b-core/src/v3/zone_bundle.rs` (shared bundle DTOs: `ZoneResourceBundle`, `BundleResource`, `contentHash` computation); `packages/d2b-core-controller/src/configuration.rs` (diff/apply loop, name-conflict detection, `pending-cleanup` Zone status, `maxFinalizerDurationSeconds` stall detection - NOT in `d2b-provider-volume-local`); `packages/d2b-core-controller/tests/configuration.rs` (hermetic bundle diff, absent-resource Delete dispatch, name-conflict `Degraded/name-conflict` item, integrity-failure abort); `packages/d2b-core-controller/integration/configuration.rs` (container-based generation activation with running Providers, absent-resource cleanup, rollback, finalizer-timeout stall detection) |
 | Crate layout | Configuration-publication diff/apply handler and its tests belong in `packages/d2b-core-controller` (ADR-046-core-controllers), not in `d2b-provider-volume-local` and not in the pre-ADR45 `d2bd` binary. `d2b-provider-volume-local` owns only Volume-behavior code (provision, marker, migration, sealing, snapshot, relocation, unclaimed GC). See [Provider crate layout](#provider-crate-layout) for Volume-behavior crate requirements. |
-| Detailed design | Generic `d2b.zones.<zone>.resources.<name> = { type = "…"; spec = { …exact ResourceTypeSpec fields… }; }` attrset; `metadata.name` derived from attr key, `metadata.zone` from Zone key, `apiVersion` defaulted; `status` omitted (read-only); Nix option types for `spec.*` generated from committed `ResourceTypeSchema` for each `type`; Nix option types for `spec.config.*` generated from the Provider artifact's config schema module (resolved at eval time via `spec.artifactId` from `d2b.artifacts`); credential-ref guard (`credentialRef: true` schema fields accept only `Credential/[a-z][a-z0-9-]*`); build-phase full JSON Schema validation of rendered `spec` against Provider manifest; canonical sorted bundle emission with `contentId` (SHA-256 of sorted `resources` array); configuration service sets `metadata.managedBy: configuration` and `configurationGeneration` in the resource store when persisting activated bundle resources (not in the bundle input; user authors only `type` + `spec`); diff compares new configured set against persisted resource store entries where `managedBy: configuration` (not against the prior bundle file); name-conflict detection: `(type, name)` collision with existing `managedBy: controller` or `managedBy: api` resource → `Degraded/name-conflict` activation item, existing resource untouched, `managedBy` never seized; unchanged-spec resources receive updated `configurationGeneration` with no controller reconcile triggered; absent-resource async Delete with owner-child/finalizer ordering; `Degraded/pending-cleanup` Zone status condition; per-Zone prior bundle count retention (range 1..16, default 3; no TTL); `maxFinalizerDurationSeconds` stall detection and `Degraded/finalizer-timeout` condition (no force-clear) |
-| Integration | NixOS build emits `/etc/d2b/zones/<zone>/resources.json`; Zone daemon watches path via systemd path unit; reconcile loop runs generation diff on change; Provider controller receives `deletionRequestedAt` watch event when configuration-owned Provider is absent from new bundle |
+| Detailed design | Generic `d2b.zones.<zone>.resources.<name> = { type = "…"; spec = { …exact ResourceTypeSpec fields… }; }` attrset; `metadata.name` derived from attr key, `metadata.zone` from Zone key, `apiVersion` defaulted; `status` omitted (read-only); Nix option types for `spec.*` generated from committed `ResourceTypeSchema` for each `type`; Nix option types for `spec.config.*` generated from the Provider artifact's config schema module (resolved at eval time via `spec.artifactId` from `d2b.artifacts`); credential-ref guard (`credentialRef: true` schema fields accept only `Credential/[a-z][a-z0-9-]*`); build-phase full JSON Schema validation of rendered `spec` against Provider manifest; canonical sorted bundle emission with `contentHash` (SHA-256 of sorted `resources` array); configuration service sets `metadata.managedBy: configuration` and `configurationGeneration` in the resource store when persisting activated bundle resources (not in the bundle input; user authors only `type` + `spec`); diff compares new configured set against persisted resource store entries where `managedBy: configuration` (not against the prior bundle file); name-conflict detection: `(type, name)` collision with existing `managedBy: controller` or `managedBy: api` resource → `Degraded/name-conflict` activation item, existing resource untouched, `managedBy` never seized; unchanged-spec resources receive updated `configurationGeneration` with no controller reconcile triggered; absent-resource async Delete with owner-child/finalizer ordering; `Degraded/pending-cleanup` Zone status condition; per-Zone prior bundle count retention (range 1..16, default 3; no TTL); `maxFinalizerDurationSeconds` stall detection and `Degraded/finalizer-timeout` condition (no force-clear) |
+| Integration | NixOS build emits `/etc/d2b/zones/<zone>/resource-bundle.json`; the Zone daemon (`d2bd`) watches that path in-process (inotify with a bounded polling fallback) and is also signalled through the activation protocol - `d2b-activation-helper` stages and installs the bundle, commits `generation.json` per D122/ADR046-routing-013, then notifies the daemon (SIGHUP or the activation notify socket). No systemd path unit is introduced, so the framework's three-root-visible-unit contract holds; reconcile loop runs the generation diff on change; Provider controller receives the `deletionRequestedAt` watch event when a configuration-owned Provider is absent from the new bundle |
 | Data migration | `nixos-modules/manifest.nix` provider-registration and storage-authority rows superseded by `zone-resources.nix`; prior `manifest.json` format retired after Zone daemon migration to bundle format |
-| Validation | All eight removed-resource cleanup tests enumerated in [Required tests for removed-resource cleanup](#required-tests-for-removed-resource-cleanup); eval credential-ref guard (test: raw value in `credentialRef` field → NixOS eval error, no bundle emitted); Provider schema conformance golden vector (test: unknown `config` key → build fails); `contentId` determinism (test: two independent builds of identical Nix inputs produce byte-identical bundles) |
+| Validation | All eight removed-resource cleanup tests enumerated in [Required tests for removed-resource cleanup](#required-tests-for-removed-resource-cleanup); eval credential-ref guard (test: raw value in `credentialRef` field → NixOS eval error, no bundle emitted); Provider schema conformance golden vector (test: unknown `config` key → build fails); `contentHash` determinism (test: two independent builds of identical Nix inputs produce byte-identical bundles) |
 | Removal proof | `nixos-modules/manifest.nix` provider-registration rows retired only after all Provider registrations use the bundle format and all consumers (broker, Zone daemon) complete bundle-format migration |
 
 ### ADR046-pstate-011

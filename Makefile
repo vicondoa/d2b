@@ -232,14 +232,37 @@ heavy-lane-perf: heavy-lane-guard
 ## outside the gate. It does not trust the mere presence of D2B_HEAVY_GATE
 ## (any process can export that); instead it asks the wrapper to verify that
 ## this process genuinely holds a slot via its open file description lock.
-## A missing slot means someone ran the raw target directly, which would
-## bypass the sole-use semaphore.
+##
+## verify-slot reports its verdict purely through its exit status, so branch on
+## the typed codes rather than collapsing every nonzero status into one:
+##
+##   0  a genuinely held slot            -> proceed
+##   3  no slot is held                  -> reacquire by running the PUBLIC lane
+##                                          (which acquires a slot and re-runs
+##                                          this lane through the gate). A shared
+##                                          prerequisite cannot exec that itself
+##                                          without double-running the parent
+##                                          recipe, so guide the operator to the
+##                                          acquiring entrypoint and fail closed
+##                                          with the typed unheld code.
+##   *  the verifier itself malfunctioned -> propagate the exact code unchanged
+##                                          and fail closed
+##
+## Collapsing 3 and every malfunction into one "outside the semaphore" exit hid
+## a broken gate behind a slot-bypass message; keeping the codes distinct lets a
+## caller tell "ran the raw target directly" apart from "the verifier is broken".
 heavy-lane-guard: heavy-gate-build
-	@if ! $(HEAVY_GATE_BIN) heavy-gate verify-slot; then \
-	  echo "heavy lane invoked outside the heavy-gate semaphore." >&2; \
-	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot," >&2; \
-	  echo "or 'cargo xtask heavy-gate -- make <lane>'; do not run the internal target directly." >&2; \
-	  exit 2; \
+	@rc=0; $(HEAVY_GATE_BIN) heavy-gate verify-slot || rc=$$?; \
+	if [ "$$rc" -eq 0 ]; then \
+	  exit 0; \
+	elif [ "$$rc" -eq 3 ]; then \
+	  echo "heavy lane invoked outside the heavy-gate semaphore (no slot held)." >&2; \
+	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot" >&2; \
+	  echo "and re-runs this lane through the gate; do not run the internal target directly." >&2; \
+	  exit "$$rc"; \
+	else \
+	  echo "heavy-gate verify-slot failed closed (exit $$rc); refusing to run heavy work unsynchronised." >&2; \
+	  exit "$$rc"; \
 	fi
 
 # ===========================================================================
@@ -255,15 +278,30 @@ heavy-lane-guard: heavy-gate-build
 # might be running; the bare targets stay available for a serial console.
 # ===========================================================================
 
-# Honour an explicit CARGO_TARGET_DIR so the wrapper is found where cargo puts it.
-HEAVY_GATE_TARGET_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/packages/target)
+# Normalize CARGO_TARGET_DIR to an absolute path so the wrapper is built and
+# executed at the same location. cargo runs the build from packages/, so a
+# *relative* CARGO_TARGET_DIR is interpreted relative to packages/ - but
+# HEAVY_GATE is invoked from the repo root, so a bare relative path is looked up
+# in the wrong place (packages/relative/debug/xtask built, relative/debug/xtask
+# executed). Resolve a relative value against packages/ and pass the resolved
+# absolute path back to cargo, so both the build and the execution agree
+# regardless of the caller's value.
+ifeq ($(CARGO_TARGET_DIR),)
+HEAVY_GATE_TARGET_DIR := $(CURDIR)/packages/target
+else ifeq ($(filter /%,$(CARGO_TARGET_DIR)),)
+HEAVY_GATE_TARGET_DIR := $(abspath $(CURDIR)/packages/$(CARGO_TARGET_DIR))
+else
+HEAVY_GATE_TARGET_DIR := $(CARGO_TARGET_DIR)
+endif
 HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
 ## heavy-gate-build - build the semaphore wrapper. Runs from packages/ so the
-## workspace cargo config (and its rustc wrapper) applies.
+## workspace cargo config (and its rustc wrapper) applies. The build target dir
+## is forced to the same absolute HEAVY_GATE_TARGET_DIR the wrapper is executed
+## from, so a relative CARGO_TARGET_DIR cannot split the two.
 heavy-gate-build:
-	@cd packages && cargo build --quiet -p xtask
+	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
 
 ## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
 heavy-check: heavy-gate-build
@@ -375,6 +413,25 @@ D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
 D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
 D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
 
+## Classified hermetic tests that legitimately exceed the 50 ms per-test
+## micro-budget and therefore declare a bounded higher budget through the
+## sanctioned exception mechanism instead of being dropped from the census:
+##   * the *_bounded_byte_inputs_do_not_panic property harnesses each replay a
+##     committed corpus and drive RUNS=10000 generated inputs through a parser,
+##     so hundreds of milliseconds of pure execution is the intended workload;
+##   * the rejects_tampered_*_artifact cases build and hash a full launcher /
+##     unsafe-local artifact tree and prove every tamper is refused.
+## Budgets carry several-fold headroom over the observed p95 so reference-runner
+## noise cannot flap them, while still bounding each id to a fixed ceiling.
+D2B_RUNTIME_EXCEPTIONS   = \
+	--exception d2b-core::manifest_v04_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::bundle_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::host_json_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::privileges_json_bounded_byte_inputs_do_not_panic=1000 \
+	--exception d2b-core::rejects_tampered_realm_workloads_launcher_v2_artifact=300 \
+	--exception d2b-core::rejects_tampered_unsafe_local_workloads_artifact=300
+
+
 ## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
@@ -398,6 +455,24 @@ test-runtime-ledger:
 	fi; \
 	echo "test-runtime-ledger: warm-building the census crates so compilation is excluded from timings"; \
 	for crate in $$crates; do ( cd packages && cargo test -p "$$crate" --lib --tests --no-run --quiet ); done; \
+	echo "test-runtime-ledger: selecting libtest-harness targets per census crate (harness=false custom-main binaries emit no libtest JSON and cannot be timed)"; \
+	meta="$$work/cargo-metadata.json"; \
+	( cd packages && cargo metadata --format-version 1 --no-deps ) > "$$meta" 2>/dev/null; \
+	for crate in $$crates; do \
+	  manifest="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .manifest_path' "$$meta")"; \
+	  if [ -z "$$manifest" ] || [ ! -f "$$manifest" ]; then \
+	    echo "test-runtime-ledger: cannot resolve the Cargo.toml for census crate $$crate; refusing to guess its harness set" >&2; exit 1; fi; \
+	  harnessless="$$(awk '/^\[\[test\]\]/{if(t&&h&&n!="")print n;t=1;n="";h=0;next} /^\[/{if(t&&h&&n!="")print n;t=0} t&&/^[[:space:]]*name[[:space:]]*=/{l=$$0;sub(/.*=[[:space:]]*"/,"",l);sub(/".*/,"",l);n=l} t&&/^[[:space:]]*harness[[:space:]]*=[[:space:]]*false/{h=1} END{if(t&&h&&n!="")print n}' "$$manifest")"; \
+	  tflags="$$(jq -r --arg pkg "$$crate" '.packages[] | select(.name==$$pkg) | .targets[] | select(.kind|index("test")) | select((.["required-features"]//[])|length==0) | .name' "$$meta" | \
+	    while read -r tname; do \
+	      [ -n "$$tname" ] || continue; \
+	      drop=0; for x in $$harnessless; do [ "$$x" = "$$tname" ] && drop=1; done; \
+	      [ "$$drop" -eq 0 ] && printf ' --test %s' "$$tname"; \
+	    done)"; \
+	  sel="--lib$$tflags"; \
+	  printf '%s\n' "$$sel" > "$$work/$$crate.testargs"; \
+	  echo "test-runtime-ledger: $$crate timed selector: $$sel"; \
+	done; \
 	args=""; \
 	rep=0; \
 	while [ "$$rep" -lt "$$reps" ]; do \
@@ -405,10 +480,22 @@ test-runtime-ledger:
 	  echo "test-runtime-ledger: repetition $$rep/$$reps"; \
 	  for crate in $$crates; do \
 	    json="$$work/$$crate-$$rep.json"; \
-	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" --lib --tests --quiet -- \
-	        -Z unstable-options --format=json --report-time ) > "$$json" 2>/dev/null || true; \
+	    err="$$work/$$crate-$$rep.err"; \
+	    sel="$$(cat "$$work/$$crate.testargs")"; \
+	    status=0; \
+	    ( cd packages && RUSTC_BOOTSTRAP=1 cargo test -p "$$crate" $$sel --quiet -- \
+	        -Z unstable-options --format=json --report-time ) > "$$json" 2> "$$err" || status=$$?; \
+	    if [ "$$status" -ne 0 ]; then \
+	      echo "test-runtime-ledger: cargo test exited $$status for census crate $$crate; failing closed before recording any measurement" >&2; \
+	      sed -e "s#$(abspath .)#<repo>#g" -e "s#$$HOME#<home>#g" "$$err" 2>/dev/null | tail -n 20 >&2 || true; \
+	      exit 1; \
+	    fi; \
 	    if grep -q '"event": "failed"' "$$json"; then \
-	      echo "test-runtime-ledger: hermetic test failure while timing $$crate" >&2; exit 1; fi; \
+	      echo "test-runtime-ledger: a hermetic test reported failure while timing census crate $$crate" >&2; exit 1; fi; \
+	    started=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "started"' || true); \
+	    passed=$$(grep '"type": "suite"' "$$json" | grep -c '"event": "ok"' || true); \
+	    if [ "$$started" -lt 1 ] || [ "$$started" -ne "$$passed" ]; then \
+	      echo "test-runtime-ledger: census crate $$crate did not emit a matching successful suite-completion event ($$passed/$$started ok); refusing to record a partial stream" >&2; exit 1; fi; \
 	    cdur="$$(grep '"type": "test"' "$$json" | grep '"exec_time"' | \
 	        sed -E 's/.*"exec_time": ([0-9.]+).*/\1/' | \
 	        awk '{ s += $$1 } END { printf "%d", (s * 1000) + 0.5 }')"; \
@@ -417,7 +504,7 @@ test-runtime-ledger:
 	done; \
 	( cd packages && $(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
-	    --output "$$ledger" $$args ); \
+	    --output "$$ledger" $(D2B_RUNTIME_EXCEPTIONS) $$args ); \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
 	    --ledger "$$ledger" --expected-census "$$census" )
 

@@ -44,6 +44,19 @@ set -euo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-${D2B_REPO:-$(cd "$HERE/../../.." && pwd)}}
 FIXTURES="$HERE/fixtures/ubuntu-2404"
+export ROOT
+
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This Tier-1 harness is a genuinely heavy lane: it requires root (sudo),
+# requires /dev/kvm, and runs `cargo build --release --workspace` plus a second
+# release build of the broker, then boots a VM. It MUST route through the
+# sole-use heavy-gate semaphore rather than trusting the forgeable
+# D2B_HEAVY_GATE marker, so it verifies a genuinely-held slot (re-using an
+# inherited one when an aggregating runner already holds it, acquiring one via
+# re-exec otherwise) before doing any of that work.
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$ROOT/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
 
 DISTRO="ubuntu-24.04"
 ARCH="x86_64-linux"

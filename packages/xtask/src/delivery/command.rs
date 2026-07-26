@@ -50,8 +50,12 @@ A merge-target document (the --target input) is:
 Every required check must read \"success\"; pending, failure, neutral, skipped, \
 cancelled, stale, timed_out, action_required, and startup_failure all fail \
 closed, as does a pull request with no required checks or a sealed repository \
-with no pull request. Every \"number\" is a positive integer identifying the \
-pull request (42 above is an example); 0 is rejected.
+with no pull request. The pull_requests array must name exactly the pull-request \
+set the snapshot bound - every sealed slice at its sealed head, and no \
+unexpected pull request - so a wave of parallel same-repository pull requests \
+cannot be declared eligible with a slice silently missing. Every \"number\" is a \
+positive integer identifying the pull request (42 above is an example); 0 is \
+rejected.
 
 Offline recipe (no network I/O happens inside this stage):
 
@@ -64,7 +68,7 @@ Offline recipe (no network I/O happens inside this stage):
       artifact_kind: \"d2b-delivery/merge-target\",
       schema_version: $s[0].schema_version,
       material: $s[0].material,
-      pull_requests: [ /* one object per repository, shaped as above */ ]
+      pull_requests: [ /* one object per pull request, shaped as above */ ]
     }' > merge-target.json
   cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target \
       --seal \"$SEAL\" --target merge-target.json --repo <logical-id>=<checkout-root>
@@ -171,7 +175,8 @@ impl WaveCommand {
             Self::Snapshot => {
                 "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot --program NAME --wave ID \
                  --repo LOGICAL_ID=CHECKOUT_ROOT --base LOGICAL_ID=REVISION \
-                 [--head LOGICAL_ID=REVISION] [--edge FROM=TO] \
+                 --pull-request LOGICAL_ID=NUMBER:HEAD_REF [--head LOGICAL_ID=REVISION] \
+                 [--edge FROM=TO] \
                  [--generated NAME=LOGICAL_ID:PATH] [--dependency NAME=LOGICAL_ID:PATH] \
                  [--contract NAME=LOGICAL_ID:PATH] [--state-dir DIR]"
             }
@@ -207,7 +212,7 @@ impl WaveCommand {
     pub fn required_options(self) -> &'static [&'static str] {
         match self {
             Self::Help => &[],
-            Self::Snapshot => &["--program", "--wave", "--repo", "--base"],
+            Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
             Self::PanelRequest => &["--snapshot", "--repo"],
             Self::PanelAttest => &["--snapshot", "--records", "--repo"],
@@ -289,21 +294,43 @@ impl Serialize for WaveCommand {
 ///
 /// A successful invocation always reports [`WorkflowStatus::Ok`]; every failure
 /// path returns [`DeliveryError`] and is rendered separately with a nonzero exit
-/// code, so `status` never widens implicitly. Keeping this a typed, single-member
-/// enum (rather than a free `String`) means adding an outcome is a deliberate wire
-/// change that the golden contract test forces to travel with a
+/// code, so `status` never widens implicitly. Keeping this a typed enum (rather
+/// than a free `String`) means adding an outcome is a deliberate wire change
+/// that the golden contract test forces to travel with a
 /// [`DELIVERY_SCHEMA_VERSION`](super::DELIVERY_SCHEMA_VERSION) bump.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorkflowStatus {
-    Ok,
+///
+/// The variants, their wire strings, and the [`ALL`](WorkflowStatus::ALL)
+/// domain are generated from the single [`workflow_status!`] declaration below,
+/// so the enum, its serialization, and the domain the golden contract test
+/// enumerates cannot drift from one another: adding a variant to the macro
+/// input updates all three at once, and forgetting the wire string is a compile
+/// error, not a silent domain gap.
+macro_rules! workflow_status {
+    ($( $(#[$meta:meta])* $variant:ident => $wire:literal ),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum WorkflowStatus {
+            $( $(#[$meta])* $variant, )+
+        }
+
+        impl WorkflowStatus {
+            /// Every status variant, in declaration order, generated from the
+            /// same macro input as the enum and its wire strings. The golden
+            /// contract fingerprint enumerates this array, so the outcome
+            /// domain cannot widen without moving the pinned golden and the
+            /// schema version together.
+            pub const ALL: &'static [WorkflowStatus] = &[ $( WorkflowStatus::$variant ),+ ];
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $wire, )+
+                }
+            }
+        }
+    };
 }
 
-impl WorkflowStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-        }
-    }
+workflow_status! {
+    Ok => "ok",
 }
 
 impl std::fmt::Display for WorkflowStatus {
@@ -902,7 +929,7 @@ mod tests {
         /// to the production constant by [`schema_version_moves_with_the_golden`]
         /// so a version bump without a golden update, or a golden update without
         /// a version bump, fails the build.
-        const GOLDEN_SCHEMA_VERSION: u32 = 1;
+        const GOLDEN_SCHEMA_VERSION: u32 = 2;
 
         fn sorted_keys(value: &Value) -> Vec<String> {
             value
@@ -1005,8 +1032,13 @@ mod tests {
 
         #[test]
         fn status_domain_is_closed_and_pinned() {
-            let domain = [WorkflowStatus::Ok]
-                .into_iter()
+            // Derive the domain from the enumeration itself, not a hand-copied
+            // literal: a hard-coded `[WorkflowStatus::Ok]` here would keep
+            // passing after a variant is added, which is exactly the drift this
+            // golden must catch. `ALL` is kept honest by the exhaustiveness
+            // guard below.
+            let domain = WorkflowStatus::ALL
+                .iter()
                 .map(|status| serde_json::to_value(status).expect("serialize"))
                 .collect::<Vec<_>>();
             assert_eq!(
@@ -1015,6 +1047,58 @@ mod tests {
                 "the status domain drifted; a new outcome must move the schema version and this \
                  golden together"
             );
+        }
+
+        #[test]
+        fn workflow_status_all_enumerates_every_variant() {
+            // Belt-and-suspenders guard over the macro-generated domain. Both
+            // `WorkflowStatus::ALL` and the wire strings come from the single
+            // `workflow_status!` declaration, so they cannot drift; this
+            // wildcard-free match adds a second checkpoint that still fails to
+            // compile if a variant is ever introduced outside that macro,
+            // keeping every variant present in `ALL`, which feeds every
+            // status-domain golden.
+            for status in WorkflowStatus::ALL {
+                let listed = match status {
+                    WorkflowStatus::Ok => WorkflowStatus::ALL.contains(&WorkflowStatus::Ok),
+                };
+                assert!(
+                    listed,
+                    "every WorkflowStatus variant must be listed in WorkflowStatus::ALL"
+                );
+            }
+        }
+
+        #[test]
+        fn wave_commands_enumerates_every_stage() {
+            // The operation domain is `WAVE_COMMANDS`, a hand-maintained array.
+            // This wildcard-free guard makes adding a `WaveCommand` variant a
+            // compile error until an arm is added, and the arm forces the new
+            // stage into `WAVE_COMMANDS`, so the operation-domain golden cannot
+            // silently omit a live stage.
+            fn assert_listed(command: WaveCommand) {
+                let listed = match command {
+                    WaveCommand::Help => WAVE_COMMANDS.contains(&WaveCommand::Help),
+                    WaveCommand::Snapshot => WAVE_COMMANDS.contains(&WaveCommand::Snapshot),
+                    WaveCommand::ValidateImport => {
+                        WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
+                    }
+                    WaveCommand::PanelRequest => WAVE_COMMANDS.contains(&WaveCommand::PanelRequest),
+                    WaveCommand::PanelAttest => WAVE_COMMANDS.contains(&WaveCommand::PanelAttest),
+                    WaveCommand::Seal => WAVE_COMMANDS.contains(&WaveCommand::Seal),
+                    WaveCommand::MergeTarget => WAVE_COMMANDS.contains(&WaveCommand::MergeTarget),
+                    WaveCommand::MergeEligibility => {
+                        WAVE_COMMANDS.contains(&WaveCommand::MergeEligibility)
+                    }
+                };
+                assert!(
+                    listed,
+                    "every WaveCommand variant must be listed in WAVE_COMMANDS"
+                );
+            }
+            for command in WAVE_COMMANDS {
+                assert_listed(command);
+            }
         }
 
         #[test]
@@ -1076,6 +1160,433 @@ mod tests {
                 with_schema,
                 vec!["merge-target"],
                 "only merge-target publishes a hand-authored-input schema"
+            );
+        }
+
+        /// A `WorkflowOutput` with every field populated to a non-omitted
+        /// value, built as an explicit struct literal for `WorkflowOutput`,
+        /// `StateHelp`, and `WorkflowCommandHelp` with NO struct-update
+        /// fallthrough.
+        ///
+        /// This is the field-exhaustiveness guard: adding a field to any of
+        /// those three structs fails to compile here until the author
+        /// populates it. Because a populated optional field then serializes,
+        /// it appears in the fingerprint's field sets, so a new field cannot be
+        /// introduced (and emitted by some stage) without moving the golden and
+        /// forcing a schema-version bump. The placeholder values are
+        /// deliberately prose-free so the fingerprint pins shape, not the
+        /// human-facing help text (whose wording is covered by other tests and
+        /// is not part of the wire contract).
+        fn fully_populated_output(operation: WaveCommand) -> WorkflowOutput {
+            WorkflowOutput {
+                schema_version: DELIVERY_SCHEMA_VERSION,
+                operation,
+                status: WorkflowStatus::Ok,
+                candidate_id: Some("candidate-0000".to_owned()),
+                content_id: Some("content-1111".to_owned()),
+                snapshot_sha256: Some("2222".to_owned()),
+                artifact: Some("w0/candidate-0000/seal.json".to_owned()),
+                state: Some(StateHelp {
+                    default_root: "default-root".to_owned(),
+                    override_flag: "override-flag".to_owned(),
+                    layout: "layout".to_owned(),
+                    chaining: "chaining".to_owned(),
+                }),
+                commands: vec![WorkflowCommandHelp {
+                    name: "name".to_owned(),
+                    purpose: "purpose".to_owned(),
+                    synopsis: "synopsis".to_owned(),
+                    required_options: vec!["--required".to_owned()],
+                    optional_options: vec!["--optional".to_owned()],
+                    schema: Some("schema".to_owned()),
+                    implemented: true,
+                    work_item: "work-item".to_owned(),
+                }],
+            }
+        }
+
+        /// Reduces a JSON value to its structural skeleton: an object becomes
+        /// its sorted keys mapped to child skeletons; an array becomes the
+        /// union of its elements' skeletons (so a heterogeneous wire array such
+        /// as help `commands`, where only `merge-target` carries the optional
+        /// `schema` key, still pins the full field set); a scalar becomes its
+        /// JSON type name. Prose values collapse to `"string"`, so the
+        /// fingerprint captures field presence and nesting without pinning
+        /// help text that is not part of the wire contract.
+        fn shape(value: &Value) -> Value {
+            match value {
+                Value::Object(map) => {
+                    let mut keys = map.keys().cloned().collect::<Vec<_>>();
+                    keys.sort();
+                    let mut out = serde_json::Map::new();
+                    for key in keys {
+                        out.insert(key.clone(), shape(&map[&key]));
+                    }
+                    Value::Object(out)
+                }
+                Value::Array(items) => {
+                    let mut merged = serde_json::Map::new();
+                    let mut scalar = None;
+                    for item in items {
+                        match shape(item) {
+                            Value::Object(map) => {
+                                for (key, child) in map {
+                                    merged.insert(key, child);
+                                }
+                            }
+                            other => scalar = Some(other),
+                        }
+                    }
+                    if !merged.is_empty() {
+                        Value::Array(vec![Value::Object(merged)])
+                    } else if let Some(other) = scalar {
+                        Value::Array(vec![other])
+                    } else {
+                        Value::Array(Vec::new())
+                    }
+                }
+                Value::String(_) => Value::String("string".to_owned()),
+                Value::Number(_) => Value::String("number".to_owned()),
+                Value::Bool(_) => Value::String("bool".to_owned()),
+                Value::Null => Value::String("null".to_owned()),
+            }
+        }
+
+        /// The generated wire fingerprint: every enum domain (serialized from
+        /// the enumerations themselves, not hand-copied literals), the full
+        /// field set of every emitted struct, and the serialized shape of a
+        /// representative output for every wave stage. Any field, domain, or
+        /// per-stage shape change moves this value.
+        fn live_fingerprint() -> Value {
+            let status_domain = WorkflowStatus::ALL
+                .iter()
+                .map(|status| serde_json::to_value(status).expect("serialize status"))
+                .collect::<Vec<_>>();
+            let operation_domain = WAVE_COMMANDS
+                .iter()
+                .map(|command| serde_json::to_value(command).expect("serialize operation"))
+                .collect::<Vec<_>>();
+
+            let template = serde_json::to_value(fully_populated_output(WaveCommand::Seal))
+                .expect("serialize the fully populated template");
+            let workflow_output_fields = sorted_keys(&template);
+            let state_help_fields = sorted_keys(&template["state"]);
+            let command_help_fields = sorted_keys(&template["commands"][0]);
+
+            // Serialize a representative output for every stage: the real
+            // dispatched help envelope for `help`, and the fully populated
+            // template (operation swapped) for the rest. Reducing each to its
+            // shape pins per-stage field presence and nesting.
+            let mut stages = serde_json::Map::new();
+            for command in WAVE_COMMANDS {
+                let output = if command == WaveCommand::Help {
+                    serde_json::to_value(dispatch(&args(&["wave", "help"])).expect("help succeeds"))
+                        .expect("serialize the help output")
+                } else {
+                    serde_json::to_value(fully_populated_output(command))
+                        .expect("serialize a stage output")
+                };
+                stages.insert(command.as_str().to_owned(), shape(&output));
+            }
+
+            json!({
+                "schema_version": DELIVERY_SCHEMA_VERSION,
+                "status_domain": status_domain,
+                "operation_domain": operation_domain,
+                "workflow_output_fields": workflow_output_fields,
+                "state_help_fields": state_help_fields,
+                "command_help_fields": command_help_fields,
+                "stages": Value::Object(stages),
+            })
+        }
+
+        /// The pinned fingerprint for each schema version.
+        ///
+        /// A version bump with no new arm here panics with a clear message, so
+        /// the golden cannot silently follow the code; the author must capture
+        /// `live_fingerprint()` and pin it against the new version.
+        fn golden_fingerprint(version: u32) -> Value {
+            match version {
+                2 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V2)
+                    .expect("the pinned v2 fingerprint is valid JSON"),
+                other => panic!(
+                    "no pinned delivery wire fingerprint golden for schema version {other}; \
+                     capture live_fingerprint() and add a matching arm to golden_fingerprint in \
+                     the same change"
+                ),
+            }
+        }
+
+        const GOLDEN_FINGERPRINT_V2: &str = r#"{
+  "schema_version": 2,
+  "status_domain": ["ok"],
+  "operation_domain": [
+    "snapshot",
+    "validate-import",
+    "panel-request",
+    "panel-attest",
+    "seal",
+    "merge-target",
+    "merge-eligibility",
+    "help"
+  ],
+  "workflow_output_fields": [
+    "artifact",
+    "candidate_id",
+    "commands",
+    "content_id",
+    "operation",
+    "schema_version",
+    "snapshot_sha256",
+    "state",
+    "status"
+  ],
+  "state_help_fields": ["chaining", "default_root", "layout", "override_flag"],
+  "command_help_fields": [
+    "implemented",
+    "name",
+    "optional_options",
+    "purpose",
+    "required_options",
+    "schema",
+    "synopsis",
+    "work_item"
+  ],
+  "stages": {
+    "snapshot": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "validate-import": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "panel-request": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "panel-attest": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "seal": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "merge-target": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "merge-eligibility": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": ["string"],
+          "purpose": "string",
+          "required_options": ["string"],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "help": {
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [],
+          "purpose": "string",
+          "required_options": [],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "operation": "string",
+      "schema_version": "number",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    }
+  }
+}"#;
+
+        #[test]
+        fn generated_fingerprint_matches_the_versioned_golden() {
+            assert_eq!(
+                live_fingerprint(),
+                golden_fingerprint(DELIVERY_SCHEMA_VERSION),
+                "the generated delivery wire fingerprint drifted from its pinned golden; any \
+                 field, status or operation domain, or per-stage shape change must bump \
+                 DELIVERY_SCHEMA_VERSION and add a new golden_fingerprint arm in the same change"
+            );
+        }
+
+        #[test]
+        fn a_version_without_a_pinned_golden_fails_closed() {
+            let unpinned = DELIVERY_SCHEMA_VERSION + 1;
+            let panicked = std::panic::catch_unwind(|| golden_fingerprint(unpinned)).is_err();
+            assert!(
+                panicked,
+                "golden_fingerprint must fail closed for an unpinned schema version so a bump \
+                 cannot land without a matching golden"
             );
         }
     }

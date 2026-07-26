@@ -56,6 +56,10 @@ pub const PANEL_MODEL_POLICY: &str = "gpt-5.6-sol";
 pub const PANEL_REASONING_EFFORT_POLICY: &str = "xhigh";
 
 pub const MAX_REPOSITORIES: usize = 16;
+/// Upper bound on the pull requests a single repository may bind, shared by the
+/// snapshot's expected set and the merge target's declared stack so the two are
+/// compared against the same ceiling.
+pub const MAX_PULL_REQUESTS: usize = 64;
 pub const MAX_DEPENDENCY_EDGES: usize = 512;
 pub const MAX_FINGERPRINTS: usize = 512;
 pub const MAX_STRING_BYTES: usize = 4 * 1024;
@@ -175,6 +179,13 @@ pub struct RepositoryRecord {
     pub head_oid: String,
     /// Tree the wave integrates to. History-only rebases preserve it.
     pub integration_tree_oid: String,
+    /// Complete set of open pull requests the wave binds for this repository,
+    /// one per slice. Merge eligibility requires the merge target to name
+    /// exactly this set, so a wave of parallel same-repository pull requests
+    /// cannot be declared eligible while a slice (and its required checks) is
+    /// silently missing. The topmost pull request's head is
+    /// [`head_oid`](Self::head_oid).
+    pub expected_pull_requests: Vec<ExpectedPullRequest>,
 }
 
 impl RepositoryRecord {
@@ -186,8 +197,73 @@ impl RepositoryRecord {
             &self.integration_tree_oid,
             self.object_format,
             "integration tree",
-        )
+        )?;
+        self.validate_expected_pull_requests()
     }
+
+    /// The expected pull-request set must be non-empty, within the pull-request
+    /// bound, free of repeated numbers or head commits, and must include the
+    /// sealed topmost head. Binding the full set is what lets eligibility
+    /// demand exact equality; a repository with no bound pull request could
+    /// otherwise accept a merge target that omits every slice.
+    fn validate_expected_pull_requests(&self) -> Result<()> {
+        if self.expected_pull_requests.is_empty()
+            || self.expected_pull_requests.len() > MAX_PULL_REQUESTS
+        {
+            return Err(DeliveryError::new(format!(
+                "repository {} must bind between 1 and {MAX_PULL_REQUESTS} expected pull \
+                 requests; binding none would let a merge target silently omit every slice",
+                self.id
+            )));
+        }
+        let mut numbers = BTreeSet::new();
+        let mut heads = BTreeSet::new();
+        for pull_request in &self.expected_pull_requests {
+            if pull_request.number == 0 {
+                return Err(DeliveryError::new(format!(
+                    "repository {} binds an expected pull request numbered 0",
+                    self.id
+                )));
+            }
+            validate_hash_for_format(
+                &pull_request.head_oid,
+                self.object_format,
+                "expected pull request head",
+            )?;
+            if !numbers.insert(pull_request.number) {
+                return Err(DeliveryError::new(format!(
+                    "repository {} binds pull request {} more than once",
+                    self.id, pull_request.number
+                )));
+            }
+            if !heads.insert(pull_request.head_oid.as_str()) {
+                return Err(DeliveryError::new(format!(
+                    "repository {} binds two expected pull requests at the same head commit {}",
+                    self.id, pull_request.head_oid
+                )));
+            }
+        }
+        if !heads.contains(self.head_oid.as_str()) {
+            return Err(DeliveryError::new(format!(
+                "repository {} binds a topmost head commit that is not one of its expected pull \
+                 request heads",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// One open pull request the wave's stack is expected to carry for a
+/// repository, bound by its number and the head commit it pointed at when the
+/// snapshot was taken.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectedPullRequest {
+    /// Positive pull-request number; unique within a repository.
+    pub number: u64,
+    /// Head commit the pull request pointed at when the snapshot was taken.
+    pub head_oid: String,
 }
 
 /// One edge of the wave's dependency graph from spec section 3.4.
@@ -322,6 +398,9 @@ impl CandidateMaterial {
         )?;
         validate_program_wave(&self.program, &self.wave)?;
 
+        for repository in &mut self.repository_set {
+            repository.expected_pull_requests.sort();
+        }
         self.repository_set.sort();
         self.dependency_graph.sort();
         for list in [
@@ -740,6 +819,10 @@ pub(crate) mod fixtures {
                 base_oid: oid(1),
                 head_oid: oid(2),
                 integration_tree_oid: oid(3),
+                expected_pull_requests: vec![ExpectedPullRequest {
+                    number: 1,
+                    head_oid: oid(2),
+                }],
             }],
             dependency_graph: vec![
                 DependencyEdge {
@@ -813,6 +896,7 @@ mod tests {
         let mut rebased = material();
         rebased.repository_set[0].base_oid = oid(5);
         rebased.repository_set[0].head_oid = oid(6);
+        rebased.repository_set[0].expected_pull_requests[0].head_oid = oid(6);
         let rebased = rebased.digests().expect("digests");
         assert_eq!(baseline.content_id, rebased.content_id);
         assert_eq!(baseline.candidate_id, rebased.candidate_id);
@@ -842,6 +926,10 @@ mod tests {
             base_oid: oid(7),
             head_oid: oid(8),
             integration_tree_oid: oid(9),
+            expected_pull_requests: vec![ExpectedPullRequest {
+                number: 1,
+                head_oid: oid(8),
+            }],
         });
         let changed = changed.digests().expect("digests");
         assert_ne!(baseline.candidate_id, changed.candidate_id);

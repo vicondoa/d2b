@@ -9,12 +9,12 @@
 //! Contract, as specified by `docs/specs/ADR-046-validation-and-delivery.md`
 //! section 11:
 //!
-//! * Exactly [`SLOT_COUNT`] slots, scoped to the invoking uid, living under
-//!   the canonical per-uid namespace `/run/user/<uid>/d2b-heavy-gates/uid-<uid>/`
-//!   (falling back to `/tmp` only when the per-user runtime directory is
-//!   genuinely absent). The root is a fixed function of the uid, never a
-//!   caller-selectable environment variable, so two lanes for the same uid
-//!   always contend for the same two slots.
+//! * Exactly [`SLOT_COUNT`] slots, scoped to the invoking uid, living under a
+//!   single fixed per-host root, `/tmp/d2b-heavy-gates/uid-<uid>/`. The root is
+//!   a constant - never a function of runtime-directory existence and never a
+//!   caller-selectable environment variable - so two lanes for the same uid
+//!   always contend for the same two slots even if a login or logout races
+//!   their startup.
 //! * Acquisition is nonblocking (`F_OFD_SETLK`), retried every
 //!   [`RETRY_INTERVAL`] for at most [`ACQUIRE_TIMEOUT`].
 //! * Fail-closed: if the platform or filesystem does not support open file
@@ -104,34 +104,44 @@ const WAIT_NOTICE_INTERVAL: Duration = Duration::from_secs(60);
 /// Directory name holding every uid's slot directory.
 const GATE_DIR_NAME: &str = "d2b-heavy-gates";
 
-/// The canonical per-user runtime root. The per-uid namespace lives at
-/// `{CANONICAL_RUNTIME_ROOT}/<uid>/d2b-heavy-gates/uid-<uid>`. This is the
-/// systemd-managed per-user runtime directory (`/run/user/<uid>`, mode 0700,
-/// owned by the uid); it is a fixed function of the uid, so it cannot be
-/// pointed at a second, independent slot pool the way an environment variable
-/// could.
-const CANONICAL_RUNTIME_ROOT: &str = "/run/user";
-
-/// The fallback root when the per-user runtime directory is genuinely absent
-/// (for example a minimal container with no logind session). It is a fixed,
-/// root-owned, sticky, world-writable location, so - like the runtime root -
-/// every lane for the same uid resolves to the same `d2b-heavy-gates/uid-<uid>`
-/// directory. It is *not* selectable by the caller: the choice between it and
-/// [`CANONICAL_RUNTIME_ROOT`] is made purely on whether the runtime directory
-/// exists.
-const CANONICAL_FALLBACK_ROOT: &str = "/tmp";
+/// The single, fixed per-host root the heavy-gate namespace lives under:
+/// `{CANONICAL_GATE_ROOT}/d2b-heavy-gates/uid-<uid>`.
+///
+/// `/tmp` is chosen because it is the one location that is *always present*
+/// (unlike `/run/user/<uid>`, which pam_systemd creates on login and removes on
+/// last logout) and is root-owned and sticky on every supported host. Both
+/// properties matter:
+///
+/// * *always present* - the root is never selected by whether some other
+///   directory happens to exist, so two lanes for the same uid can never land
+///   in two independent slot pools because one started before and one after the
+///   per-user runtime directory appeared. An earlier form chose
+///   `/run/user/<uid>` when it existed and `/tmp` otherwise; a login (or logout)
+///   between two concurrent lane starts split the pool and defeated the global
+///   two-slot limit without forging anything. Anchoring to a single fixed root
+///   removes that race in both directions.
+/// * *root-owned and sticky* - the root itself cannot be renamed or replaced by
+///   a non-root peer, so a hostile peer cannot swap the whole verified
+///   `d2b-heavy-gates` directory out from under a future invocation. The shared
+///   parent's safe shapes are enumerated in [`shared_parent_is_trusted`]; the
+///   root is held to the same bar.
+///
+/// The root is *not* a function of the caller's uid and *not* selectable by any
+/// environment variable in a released binary: per-uid isolation comes entirely
+/// from the `uid-<uid>` slot directory beneath the shared parent.
+const CANONICAL_GATE_ROOT: &str = "/tmp";
 
 /// Semantic labels for the fixed heavy-gate namespace components.
 ///
 /// Every operator- and CI-facing diagnostic names the directory or file by its
 /// ROLE, never by its absolute path or the caller's uid. The gate paths embed
-/// both the runtime root and the uid (`/run/user/<uid>/d2b-heavy-gates/uid-<uid>`),
-/// and these diagnostics reach stderr and CI logs verbatim, so interpolating
-/// the resolved path or the raw uid would leak them. Naming the role instead
-/// keeps the message actionable without disclosing either. The remediation
-/// text uses the shell-style `$UID` placeholder rather than the literal number.
+/// both the root and the uid (`/tmp/d2b-heavy-gates/uid-<uid>`), and these
+/// diagnostics reach stderr and CI logs verbatim, so interpolating the resolved
+/// path or the raw uid would leak them. Naming the role instead keeps the
+/// message actionable without disclosing either. The remediation text uses the
+/// shell-style `$UID` placeholder rather than the literal number.
 mod gate_label {
-    /// The canonical per-uid runtime root (`/run/user/$UID`, else `/tmp`).
+    /// The single fixed per-host root (`/tmp`).
     pub const ROOT: &str = "the heavy-gate root directory";
     /// The shared `d2b-heavy-gates` parent beneath the root.
     pub const SHARED: &str = "the shared heavy-gate directory";
@@ -339,27 +349,31 @@ fn unlock(file: &File) -> std::result::Result<(), Errno> {
     fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock)).map(drop)
 }
 
-/// The single canonical per-uid namespace root.
+/// The single canonical namespace root.
 ///
-/// Non-overridable: the root is derived only from `uid`, never from `TMPDIR`,
-/// `XDG_RUNTIME_DIR`, or any other environment variable an attacker - or a
-/// well-meaning operator wiring up two lanes - could set differently for two
-/// concurrent invocations. That is the whole point of the semaphore: two
-/// lanes for the same uid on the same host MUST resolve to the same
-/// `d2b-heavy-gates/uid-<uid>` directory so they contend for the same two
-/// slots. An earlier form honoured `XDG_RUNTIME_DIR` then `TMPDIR`, which let
-/// two lanes each pick an independent root and each acquire two slots,
-/// defeating the global limit without forging anything.
+/// Non-overridable and not a function of runtime-directory existence: in a
+/// released binary the root is the constant [`CANONICAL_GATE_ROOT`], never
+/// `TMPDIR`, `XDG_RUNTIME_DIR`, `/run/user/<uid>`, or any other value that an
+/// attacker - or a well-meaning operator wiring up two lanes - could set or
+/// cause to differ between two concurrent invocations. That is the whole point
+/// of the semaphore: two lanes for the same uid on the same host MUST resolve
+/// to the same `d2b-heavy-gates/uid-<uid>` directory so they contend for the
+/// same two slots. An earlier form honoured `XDG_RUNTIME_DIR` then `TMPDIR`,
+/// which let two lanes each pick an independent root; a later form chose
+/// `/run/user/<uid>` when it existed and `/tmp` otherwise, which split the pool
+/// whenever a login or logout raced two lane starts. A single fixed root closes
+/// both, without forging anything. Per-uid isolation comes from the
+/// `uid-<uid>` slot directory, not from the root.
 ///
 /// `test_root` is an injectable seam used *exclusively* by this crate's own
 /// tests, which is why the function stays pure (no environment or filesystem
 /// access) and its precedence is directly unit-testable. The production caller
 /// always passes `None` (see [`GateDir::resolve`]), so a released binary has
 /// no code path that consults a caller-selected root.
-pub fn gate_root_from(uid: u32, test_root: Option<&Path>) -> PathBuf {
+pub fn gate_root_from(_uid: u32, test_root: Option<&Path>) -> PathBuf {
     match test_root {
         Some(root) => root.to_path_buf(),
-        None => PathBuf::from(format!("{CANONICAL_RUNTIME_ROOT}/{uid}")),
+        None => PathBuf::from(CANONICAL_GATE_ROOT),
     }
 }
 
@@ -420,14 +434,17 @@ impl GateDir {
         &self.path
     }
 
-    /// Resolve and prepare the gate directory from the canonical per-uid
-    /// namespace.
+    /// Resolve and prepare the gate directory from the single canonical
+    /// namespace root.
     ///
-    /// The root is a fixed function of the uid, never a caller-selected
-    /// environment variable: `/run/user/<uid>` when that per-user runtime
-    /// directory exists, otherwise the shared root-owned sticky `/tmp`. Both
-    /// are non-overridable, so two lanes for the same uid on the same host
-    /// always contend for the same two slots.
+    /// The root is the constant [`CANONICAL_GATE_ROOT`] (`/tmp`), never a
+    /// caller-selected environment variable and never a function of whether
+    /// `/run/user/<uid>` happens to exist. `/tmp` is always present and is
+    /// root-owned and sticky on every supported host, so two lanes for the same
+    /// uid always contend for the same two slots and the verified shared parent
+    /// cannot be renamed out from under a future invocation by a non-root peer.
+    /// [`GateDir::prepare`] fails closed if the root or the shared parent is not
+    /// in a [`shared_parent_is_trusted`] shape.
     pub fn resolve() -> Result<Self> {
         let uid = getuid().as_raw();
         // Injectable seam: honoured only in this crate's own test build, so a
@@ -435,14 +452,6 @@ impl GateDir {
         // root. See `gate_root_from`.
         let test_root = Self::test_root_override();
         let root = gate_root_from(uid, test_root.as_deref());
-        // `/run/user/<uid>` is the canonical per-user runtime directory; fall
-        // back to the shared, root-owned, sticky `/tmp` only when it is
-        // genuinely absent (a minimal container without logind). The choice is
-        // made solely on existence - never on a caller-supplied value - so it
-        // cannot be steered to mint a second slot pool.
-        if test_root.is_none() && !root.is_dir() {
-            return Self::prepare(Path::new(CANONICAL_FALLBACK_ROOT), uid);
-        }
         Self::prepare(&root, uid)
     }
 
@@ -450,9 +459,9 @@ impl GateDir {
     ///
     /// In the crate's test build the child-mode helpers re-exec this same
     /// binary with `XDG_RUNTIME_DIR` pointed at a per-test scratch directory,
-    /// so tests never touch the real per-user runtime namespace. In a released
-    /// binary this always returns `None`: the production namespace is fixed by
-    /// the uid alone and no environment variable can redirect it.
+    /// so tests never touch the real namespace. In a released binary this
+    /// always returns `None`: the production root is the fixed constant
+    /// [`CANONICAL_GATE_ROOT`] and no environment variable can redirect it.
     #[cfg(test)]
     fn test_root_override() -> Option<PathBuf> {
         std::env::var_os("XDG_RUNTIME_DIR")
@@ -467,18 +476,17 @@ impl GateDir {
 
     /// Create (if needed) and validate `<root>/d2b-heavy-gates/uid-<uid>`.
     ///
-    /// The canonical root (`/run/user/<uid>`, else `/tmp`; see
-    /// [`GateDir::resolve`]) is opened and `fstat`ed *first*. A root a non-root
-    /// peer owns, or an owned-but-loosely-permissioned root, is refused:
-    /// otherwise that peer could rename the whole verified `d2b-heavy-gates`
-    /// directory between invocations, so a later invocation would create a
-    /// *second* semaphore namespace and both would run two lanes each.
-    /// Anchoring within a single invocation (via `/proc/self/fd`) protects
-    /// that invocation's inodes but cannot preserve one namespace across
-    /// invocations; only trusting the root can. A root is trusted when it is
-    /// ours and not group- or world-writable (a per-user runtime directory),
-    /// or root-owned and either locked down or sticky (like `/tmp`) - exactly
-    /// [`shared_parent_is_trusted`].
+    /// The canonical root ([`CANONICAL_GATE_ROOT`]; see [`GateDir::resolve`]) is
+    /// opened and `fstat`ed *first*. A root a non-root peer owns, or an
+    /// owned-but-loosely-permissioned root, is refused: otherwise that peer
+    /// could rename the whole verified `d2b-heavy-gates` directory between
+    /// invocations, so a later invocation would create a *second* semaphore
+    /// namespace and both would run two lanes each. Anchoring within a single
+    /// invocation (via `/proc/self/fd`) protects that invocation's inodes but
+    /// cannot preserve one namespace across invocations; only trusting the root
+    /// can. `/tmp` is root-owned and sticky, so it satisfies
+    /// [`shared_parent_is_trusted`]; the same predicate also accepts an
+    /// owned-and-private root should the injectable test seam point at one.
     ///
     /// The shared `d2b-heavy-gates` parent is then created *relative to that
     /// anchored root descriptor* and private to us (mode `0700`) rather than
@@ -506,10 +514,9 @@ impl GateDir {
         if !shared_parent_is_trusted(root_stat.st_uid, root_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
                 "{} is owned by another user or is group- or world-writable; refusing to create \
-                 a semaphore namespace under a directory a peer could rename. Ensure the \
-                 per-user runtime directory /run/user/$UID exists and is owned by you \
-                 (mode 0700), or - where it is genuinely absent - that /tmp is the usual \
-                 root-owned sticky directory.",
+                 a semaphore namespace under a directory a peer could rename. The heavy-gate \
+                 root must be a root-owned sticky directory (the usual shape of /tmp) so no \
+                 non-root peer can rename the shared namespace out from under a later run.",
                 gate_label::ROOT,
             )));
         }
@@ -546,9 +553,9 @@ impl GateDir {
         if !shared_parent_is_trusted(shared_stat.st_uid, shared_stat.st_mode as u32, uid) {
             return Err(GateError::environment(format!(
                 "{} is owned by another user or is group- or world-writable; refusing to \
-                 share a semaphore namespace a peer could rename. Ensure the per-user runtime \
-                 directory /run/user/$UID is owned by you (mode 0700), or have an administrator \
-                 provision a root-owned (optionally sticky) {GATE_DIR_NAME} directory.",
+                 share a semaphore namespace a peer could rename. Ensure it is owned by you \
+                 (mode 0700), or have an administrator provision a root-owned (optionally \
+                 sticky) {GATE_DIR_NAME} directory.",
                 gate_label::SHARED,
             )));
         }
@@ -646,8 +653,8 @@ impl GateDir {
         GateError::unsupported(format!(
             "open file description locks (F_OFD_SETLK) are unavailable on the filesystem backing \
              {} ({errno}). The heavy gate fails closed rather than falling back to flock or \
-             running unsynchronized; the per-user runtime directory (/run/user/$UID, else /tmp) \
-             must live on a filesystem that supports them.",
+             running unsynchronized; the heavy-gate root (/tmp) must live on a filesystem that \
+             supports them.",
             gate_label::SLOT_DIR
         ))
     }
@@ -1224,6 +1231,20 @@ fn exec_wrapped_command(args: &[String], nesting: NestingMarker) -> Result<u8> {
 }
 
 /// Clear the wrapper's signal mask and become the wrapped command.
+/// Names a wrapped program by its final path component only.
+///
+/// The wrapped program is operator supplied and may be an absolute path, so an
+/// unredacted diagnostic would echo the checkout or a username-bearing
+/// directory into the operator stderr and CI logs that a spawn failure
+/// reaches. Naming only the leaf keeps the failure diagnosable while dropping
+/// the sensitive directory portion.
+fn program_label(program: &OsString) -> String {
+    Path::new(program)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<program>".to_owned())
+}
+
 fn exec_shim(request: &Request) -> Result<u8> {
     let mut mask = SigSet::empty();
     for signal in FORWARDED_SIGNALS {
@@ -1240,7 +1261,7 @@ fn exec_shim(request: &Request) -> Result<u8> {
         GateErrorKind::Spawn,
         format!(
             "cannot start `{}`: {error}",
-            request.program.to_string_lossy()
+            program_label(&request.program)
         ),
     ))
 }
@@ -1338,7 +1359,7 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
             GateErrorKind::Spawn,
             format!(
                 "cannot start the heavy lane for `{}`: {error}",
-                request.program.to_string_lossy()
+                program_label(&request.program)
             ),
         )
     })?;
@@ -1715,12 +1736,16 @@ mod tests {
     // ---- pure contract -------------------------------------------------
 
     #[test]
-    fn gate_root_is_a_fixed_function_of_the_uid() {
-        // Production (no injected override) is always the canonical per-user
-        // runtime directory - a fixed function of the uid, never a
-        // caller-selected environment variable.
-        assert_eq!(gate_root_from(1000, None), PathBuf::from("/run/user/1000"));
-        assert_eq!(gate_root_from(1001, None), PathBuf::from("/run/user/1001"));
+    fn gate_root_is_a_fixed_constant_independent_of_the_uid_and_runtime_dir() {
+        // Production (no injected override) is always the single fixed root,
+        // never a function of the uid and never a function of whether
+        // /run/user/<uid> happens to exist. Two different uids resolve to the
+        // same root; per-uid isolation comes from the uid-<uid> slot directory
+        // beneath it, not from the root. This is what makes two lanes for the
+        // same uid contend for one slot pool even if a login or logout races
+        // their startup.
+        assert_eq!(gate_root_from(1000, None), PathBuf::from("/tmp"));
+        assert_eq!(gate_root_from(1001, None), PathBuf::from("/tmp"));
         // The injectable seam (tests only) wins when present, so the crate's
         // own tests can redirect the namespace to a scratch directory.
         assert_eq!(
@@ -1731,8 +1756,8 @@ mod tests {
 
     #[test]
     fn gate_directory_is_scoped_per_uid() {
-        let first = gate_dir_path(Path::new("/run/user/1000"), 1000);
-        let second = gate_dir_path(Path::new("/run/user/1000"), 1001);
+        let first = gate_dir_path(Path::new("/tmp"), 1000);
+        let second = gate_dir_path(Path::new("/tmp"), 1001);
         assert!(first.ends_with("d2b-heavy-gates/uid-1000"));
         assert!(second.ends_with("d2b-heavy-gates/uid-1001"));
         assert_ne!(first, second);
@@ -2102,6 +2127,37 @@ mod tests {
         let error = exec_shim(&request).expect_err("exec only returns on failure");
         eprintln!("{}", error.message());
         std::process::exit(i32::from(error.kind().exit_code()));
+    }
+
+    #[test]
+    fn a_spawn_failure_names_the_program_leaf_not_its_absolute_directory() {
+        // A wrapped program that does not exist must fail closed while its
+        // diagnostic names only the leaf, never the absolute directory the
+        // operator supplied. `exec_shim` runs the exec in-process, so a missing
+        // program returns the spawn diagnostic directly.
+        let request = Request {
+            program: OsString::from("/home/redaction-sentinel-lane/does-not-exist"),
+            args: Vec::new(),
+        };
+        let error = exec_shim(&request).expect_err("a missing program must fail to exec");
+        let message = error.message();
+        assert!(
+            !message.contains("/home/redaction-sentinel-lane"),
+            "the spawn diagnostic leaked its absolute directory: {message}"
+        );
+        assert!(
+            message.contains("does-not-exist"),
+            "the spawn diagnostic must still name the program leaf: {message}"
+        );
+    }
+
+    #[test]
+    fn program_label_reduces_an_absolute_path_to_its_leaf() {
+        assert_eq!(
+            program_label(&OsString::from("/home/alice/checkout/tests/entrypoint.sh")),
+            "entrypoint.sh"
+        );
+        assert_eq!(program_label(&OsString::from("make")), "make");
     }
 
     fn spawn_child_mode(test_name: &str, root: &Path, env_key: &str) -> std::process::Child {
@@ -2480,7 +2536,7 @@ mod tests {
     // they prove the guard cannot be fooled by a bare `D2B_HEAVY_GATE` export.
     // They run it in a re-exec of *this* test binary rather than the separately
     // built `xtask` binary: the canonical per-uid namespace is non-overridable
-    // in a released binary (Finding 2), so only the crate's own test build
+    // in a released binary by design, so only the crate's own test build
     // honours the `XDG_RUNTIME_DIR` scratch-root seam. The exercised code path
     // (`execute` -> `verify_slot` -> `classify_nesting` ->
     // `descriptor_is_locked_slot`) is byte-for-byte the one the real binary
@@ -2908,13 +2964,163 @@ mod tests {
         None
     }
 
-    /// Recursively collect every heavy-entrypoint candidate under `dir`: a
-    /// shell script (`.sh`) or any executable regular file. A data file that is
-    /// neither is ignored, so a non-`.sh` executable entrypoint cannot slip in
-    /// unguarded. A sourced shell library (`lib.sh`) is NOT an entrypoint - it
-    /// is loaded by an entrypoint that already holds a slot - so it is excluded
-    /// and never required to self-guard. Returns an empty vec when `dir` is
-    /// absent (optional lanes).
+    /// True when a shell line is a `source`/`.` directive whose target basename
+    /// is `name` (for example `. "$HERE/lib.sh"` or `source ./lib.sh`).
+    fn line_sources_basename(line: &str, name: &str) -> bool {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix(". ")
+            .or_else(|| trimmed.strip_prefix("source "))
+        else {
+            return false;
+        };
+        let Some(tok) = rest.split_whitespace().next() else {
+            return false;
+        };
+        let tok = tok.trim_matches(|c| c == '"' || c == '\'');
+        Path::new(tok).file_name().and_then(|n| n.to_str()) == Some(name)
+    }
+
+    /// Whether `candidate` (a non-executable `.sh`) is a genuine shell
+    /// *library*: a sibling file in the same directory pulls it in with a
+    /// `source`/`.` directive, so it only ever runs inside a caller that
+    /// already holds a slot. Matching a same-directory sibling - the
+    /// `. "$HERE/lib.sh"` shape every d2b lane uses - is what makes this a
+    /// per-file *classification* rather than the old `basename == "lib.sh"`
+    /// skip: a stray, unsourced `lib.sh` no longer counts as a library (it is
+    /// treated as an ungated entrypoint and flagged), and a real library under
+    /// any other name is still recognised. It also avoids the basename
+    /// collision with the repo-wide `tests/lib.sh`, because only a sibling in
+    /// the candidate's own directory is consulted.
+    fn is_sibling_sourced_library(candidate: &Path) -> bool {
+        let Some(dir) = candidate.parent() else {
+            return false;
+        };
+        let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in entries {
+            let sibling = entry.expect("a readable dir entry").path();
+            if sibling == candidate {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&sibling) else {
+                continue;
+            };
+            if text.lines().any(|line| line_sources_basename(line, name)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Classify a single regular file. Returns `Some(path)` when it is a heavy
+    /// *entrypoint* (an executable regular file, or a non-executable `.sh` that
+    /// no sibling sources), and `None` when it is inert data or a
+    /// sibling-sourced shell library.
+    ///
+    /// This is the explicit per-file entrypoint-versus-library rule that
+    /// replaces the old `basename == "lib.sh"` heuristic. Executability is the
+    /// primary signal - an executable file is runnable as `./file` and is
+    /// always an entrypoint, even if named `lib.sh` - and a non-executable
+    /// `.sh` is a library only when a sibling actually sources it (otherwise it
+    /// is still runnable as `bash file`, so it must be gated). A file that is
+    /// neither `.sh` nor executable (a `.nix`, `.md`, `.txt`, ...) is inert
+    /// data.
+    fn heavy_entrypoint(path: &Path, meta: &fs::Metadata) -> Option<PathBuf> {
+        if !meta.file_type().is_file() {
+            return None;
+        }
+        let is_sh = path.extension() == Some(OsStr::new("sh"));
+        let is_exec = meta.permissions().mode() & 0o111 != 0;
+        if !is_sh && !is_exec {
+            return None;
+        }
+        if !is_exec && is_sh && is_sibling_sourced_library(path) {
+            return None;
+        }
+        Some(path.to_path_buf())
+    }
+
+    /// Markers of genuinely heavy work: build, container, VM, sudo, or device
+    /// activity. A lane cannot be exempted from the gate (declared
+    /// OUT_OF_SCOPE) while any file in it performs one of these; the exemption
+    /// must be justified by this *checked property*, not by a free-text
+    /// comment. This is what makes the census closed - an exemption the census
+    /// cannot verify is refused - and it is exactly the gap that let the
+    /// genuinely-heavy distro-matrix lane sit exempt behind a comment.
+    const HEAVY_WORK_MARKERS: &[(&str, &str)] = &[
+        ("cargo build", "build"),
+        ("cargo test", "build"),
+        ("cargo run", "build"),
+        ("cargo clippy", "build"),
+        ("nix build", "build"),
+        ("nixos-rebuild", "build"),
+        ("podman", "container"),
+        ("docker", "container"),
+        ("buildah", "container"),
+        ("nerdctl", "container"),
+        ("cloud-hypervisor", "VM"),
+        ("qemu", "VM"),
+        ("virtiofsd", "VM"),
+        ("swtpm", "VM"),
+        ("runNixOSTest", "VM"),
+        ("d2b vm start", "VM"),
+        ("sudo ", "sudo"),
+        ("doas ", "sudo"),
+        ("/dev/kvm", "device"),
+        ("/dev/dri", "device"),
+        ("/dev/vfio", "device"),
+        ("/dev/nvidia", "device"),
+        ("modprobe", "device"),
+        ("usbip", "device"),
+    ];
+
+    /// Scan every regular file under `dir` for a [`HEAVY_WORK_MARKERS`] token,
+    /// returning the first offending `(file, kind)`. Used to verify that a lane
+    /// claimed OUT_OF_SCOPE really performs no heavy work, so the census refuses
+    /// an exemption it cannot check.
+    fn lane_heavy_work_marker(dir: &Path) -> Option<(PathBuf, &'static str)> {
+        let mut stack = vec![dir.to_path_buf()];
+        let mut hits: Vec<(PathBuf, &'static str)> = Vec::new();
+        while let Some(current) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.expect("a readable dir entry").path();
+                let meta = fs::symlink_metadata(&path)
+                    .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
+                if meta.file_type().is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !meta.file_type().is_file() {
+                    continue;
+                }
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                if let Some((_, kind)) = HEAVY_WORK_MARKERS
+                    .iter()
+                    .find(|(marker, _)| text.contains(marker))
+                {
+                    hits.push((path, kind));
+                }
+            }
+        }
+        hits.sort();
+        hits.into_iter().next()
+    }
+
+    /// Recursively collect every heavy-entrypoint candidate under `dir`. A
+    /// sourced shell library is not an entrypoint - it is loaded by an
+    /// entrypoint that already holds a slot - so it is excluded via
+    /// [`heavy_entrypoint`]'s explicit classification and never required to
+    /// self-guard. Returns an empty vec when `dir` is absent (optional lanes).
     fn collect_heavy_entrypoints(dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let Ok(entries) = fs::read_dir(dir) else {
@@ -2928,16 +3134,8 @@ mod tests {
                 out.extend(collect_heavy_entrypoints(&path));
                 continue;
             }
-            if !meta.file_type().is_file() {
-                continue;
-            }
-            if path.file_name() == Some(OsStr::new("lib.sh")) {
-                continue;
-            }
-            let is_sh = path.extension() == Some(OsStr::new("sh"));
-            let is_exec = meta.permissions().mode() & 0o111 != 0;
-            if is_sh || is_exec {
-                out.push(path);
+            if let Some(entrypoint) = heavy_entrypoint(&path, &meta) {
+                out.push(entrypoint);
             }
         }
         out.sort();
@@ -2971,27 +3169,45 @@ mod tests {
         // for four rounds, so every lane directory on disk must be explicitly
         // classified. GATED lanes route through the heavy-gate and every
         // runnable entrypoint they contain must self-guard. OUT_OF_SCOPE lanes
-        // are non-heavy (the Layer-3 distro-pin matrix self-classifies per
-        // script and is owned by another slice) and are named with the reason
-        // they hold no slot. GATED names may sit under different parents
-        // (benchmark lives directly under tests/), so the walked set is spelled
-        // out and the census cross-checks that every GATED directory on disk is
-        // actually walked.
-        const GATED_LANE_DIRS: &[&str] = &["live", "containers", "cloud", "hardware", "benchmark"];
-        const OUT_OF_SCOPE_LANE_DIRS: &[(&str, &str)] = &[(
+        // must additionally prove they hold no slot by a *checked property* -
+        // no file in them performs build, container, VM, sudo, or device work
+        // (see HEAVY_WORK_MARKERS / lane_heavy_work_marker) - rather than by a
+        // free-text comment, which is what let the genuinely-heavy distro-matrix
+        // lane (sudo + /dev/kvm + cargo build --release --workspace) sit exempt.
+        // GATED names may sit under different parents (benchmark lives directly
+        // under tests/), so the walked set is spelled out and the census
+        // cross-checks that every GATED directory on disk is actually walked.
+        const GATED_LANE_DIRS: &[&str] = &[
+            "live",
+            "containers",
+            "cloud",
+            "hardware",
+            "benchmark",
             "distro-matrix",
-            "Layer-3 nightly distro-pin matrix; scripts self-classify and are owned elsewhere",
-        )];
+        ];
+        // Every OUT_OF_SCOPE entry is verified against HEAVY_WORK_MARKERS below,
+        // so an entry that performs heavy work is refused regardless of the
+        // reason string. Empty today: the previously-exempt distro-matrix lane
+        // is now GATED.
+        const OUT_OF_SCOPE_LANE_DIRS: &[(&str, &str)] = &[];
         let walked_heavy_dirs = [
             "tests/integration/live",
             "tests/integration/containers",
             "tests/integration/cloud",
             "tests/host-integration/hardware",
             "tests/benchmark",
+            "tests/integration/distro-matrix",
         ];
 
-        // Census: every subdirectory of the lane parents must be classified
-        // exactly once, and every GATED directory that exists must be walked.
+        // Census: every entry under the lane parents must be classified.
+        // Subdirectories are classified as GATED (walked; every entrypoint must
+        // self-guard) or OUT_OF_SCOPE (verified free of heavy work). Regular
+        // files *directly* under a lane parent are classified too - an earlier
+        // form only descended into subdirectories, so a heavy `.sh` dropped
+        // straight into tests/integration/ escaped the census entirely. A loose
+        // entrypoint is folded into the guarded set; loose data and
+        // sibling-sourced libraries contribute nothing.
+        let mut loose_entrypoints: Vec<PathBuf> = Vec::new();
         for parent_rel in ["tests/integration", "tests/host-integration"] {
             let parent = root.join(parent_rel);
             let Ok(entries) = fs::read_dir(&parent) else {
@@ -3002,6 +3218,12 @@ mod tests {
                 let meta = fs::symlink_metadata(&path)
                     .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
                 if !meta.file_type().is_dir() {
+                    // A file directly under the lane parent. Classify it with
+                    // the same entrypoint-vs-library rule the lane walk uses; a
+                    // heavy entrypoint here must still self-guard.
+                    if let Some(entrypoint) = heavy_entrypoint(&path, &meta) {
+                        loose_entrypoints.push(entrypoint);
+                    }
                     continue;
                 }
                 let name = path
@@ -3016,8 +3238,8 @@ mod tests {
                     "lane directory {parent_rel}/{name} is not classified exactly once: classify \
                      it as GATED (add it to GATED_LANE_DIRS and to the walked heavy set so its \
                      entrypoints self-guard) or OUT_OF_SCOPE (add it to OUT_OF_SCOPE_LANE_DIRS \
-                     with the reason it holds no slot). A new heavy lane must not appear silently \
-                     unguarded."
+                     and ensure it performs no build/container/VM/sudo/device work). A new heavy \
+                     lane must not appear silently unguarded."
                 );
                 if gated {
                     let walked = walked_heavy_dirs.iter().any(|w| root.join(w) == path);
@@ -3026,6 +3248,21 @@ mod tests {
                         "GATED lane directory {parent_rel}/{name} is classified but not in the \
                          walked heavy set; add it so its entrypoints are required to self-guard"
                     );
+                }
+                if out_of_scope {
+                    // The exemption is only honoured if it is *checked*: a lane
+                    // declared out of scope must actually perform no heavy work.
+                    // A comment string is not enough - that is precisely how the
+                    // heavy distro-matrix lane stayed exempt for a round.
+                    if let Some((file, kind)) = lane_heavy_work_marker(&path) {
+                        panic!(
+                            "OUT_OF_SCOPE lane {parent_rel}/{name} is not actually out of scope: \
+                             {} performs {kind} work. An exemption must be justified by a checked \
+                             property, not a comment; gate the lane (move it to GATED_LANE_DIRS \
+                             and the walked set) instead of exempting it.",
+                            file.display()
+                        );
+                    }
                 }
             }
         }
@@ -3039,6 +3276,9 @@ mod tests {
         for dir in walked_heavy_dirs {
             entrypoints.extend(collect_heavy_entrypoints(&root.join(dir)));
         }
+        // Loose entrypoints discovered directly under the lane parents (none
+        // today) must be gated exactly like lane entrypoints.
+        entrypoints.extend(loose_entrypoints);
         let perf = root.join("tests/unit/gates/performance-budgets.sh");
         assert!(
             perf.is_file(),
@@ -3068,6 +3308,19 @@ mod tests {
             container_count >= 1,
             "expected the type-9 container lane entrypoints to be discovered and gated; found \
              {container_count}"
+        );
+
+        // The distro-matrix Tier-1 lane is genuinely heavy (sudo + /dev/kvm +
+        // cargo build --release --workspace). It was exempt by comment for a
+        // round; it must now be discovered and gated like any other lane.
+        let distro_count = entrypoints
+            .iter()
+            .filter(|p| p.starts_with(root.join("tests/integration/distro-matrix")))
+            .count();
+        assert!(
+            distro_count >= 1,
+            "expected the distro-matrix Tier-1 entrypoint to be discovered and gated; found \
+             {distro_count}"
         );
         assert!(
             !entrypoints
@@ -3187,6 +3440,101 @@ mod tests {
             entrypoints.contains(&perf),
             "the performance-budgets entrypoint must be in the guarded set so static.sh's direct \
              invocation cannot bypass the semaphore"
+        );
+    }
+
+    /// The OUT_OF_SCOPE escape hatch must be backed by a *checked property*, not
+    /// a comment. Prove it has teeth: the census's heavy-work scanner would
+    /// refuse to exempt the distro-matrix lane, because that lane genuinely
+    /// performs sudo, device, and build work. If someone re-added distro-matrix
+    /// to OUT_OF_SCOPE_LANE_DIRS, the census's out_of_scope branch would panic
+    /// with exactly this detection.
+    #[test]
+    fn out_of_scope_exemption_is_refused_for_a_lane_that_does_heavy_work() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("packages/xtask resolves to a repo root");
+        let distro = root.join("tests/integration/distro-matrix");
+        let hit = lane_heavy_work_marker(&distro);
+        assert!(
+            hit.is_some(),
+            "the distro-matrix lane must be detected as performing heavy work so it can never be \
+             exempted by comment"
+        );
+        // A genuinely inert lane must scan clean, so the mechanism does not
+        // reject every exemption outright - it rejects only lanes that actually
+        // perform heavy work.
+        let inert = Scratch::new("inert-lane");
+        fs::write(inert.path().join("notes.md"), "just documentation\n").unwrap();
+        fs::write(inert.path().join("data.txt"), "1 2 3\n").unwrap();
+        assert!(
+            lane_heavy_work_marker(inert.path()).is_none(),
+            "an inert lane performs no heavy work and must scan clean"
+        );
+    }
+
+    /// The entrypoint-vs-library classification is per-file and content-based,
+    /// not a `basename == "lib.sh"` skip. A sibling-sourced non-executable
+    /// `lib.sh` is a library; an executable file is always an entrypoint even
+    /// when named `lib.sh`; and a non-executable `.sh` that nobody sources is
+    /// treated as an ungated entrypoint so it cannot bypass the census by name.
+    #[test]
+    fn entrypoint_and_library_are_classified_by_property_not_by_basename() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("packages/xtask resolves to a repo root");
+
+        // The real container lib.sh: non-executable and sourced by a sibling.
+        let container_lib = root.join("tests/integration/containers/lib.sh");
+        let container_meta =
+            fs::symlink_metadata(&container_lib).expect("the container lib.sh exists");
+        assert!(
+            heavy_entrypoint(&container_lib, &container_meta).is_none(),
+            "a sibling-sourced, non-executable lib.sh must classify as a library, not an \
+             entrypoint"
+        );
+        assert!(is_sibling_sourced_library(&container_lib));
+
+        // The line-level source matcher recognises the `. \"$HERE/lib.sh\"`
+        // shape and ignores unrelated lines and mere mentions.
+        assert!(line_sources_basename("  . \"$HERE/lib.sh\"", "lib.sh"));
+        assert!(line_sources_basename("source ./helpers.sh", "helpers.sh"));
+        assert!(!line_sources_basename(
+            "# mentions lib.sh in a comment",
+            "lib.sh"
+        ));
+        assert!(!line_sources_basename("echo lib.sh", "lib.sh"));
+
+        // A scratch tree lets us assert the executable-name and unsourced cases
+        // without depending on fixtures that must not exist in the repo.
+        let scratch = Scratch::new("classify-file");
+        let exec_lib = scratch.path().join("lib.sh");
+        fs::write(&exec_lib, "#!/usr/bin/env bash\n").unwrap();
+        fs::set_permissions(&exec_lib, fs::Permissions::from_mode(0o755)).unwrap();
+        let exec_meta = fs::symlink_metadata(&exec_lib).unwrap();
+        assert!(
+            heavy_entrypoint(&exec_lib, &exec_meta).is_some(),
+            "an executable file named lib.sh is still an entrypoint and must be gated"
+        );
+
+        let orphan = scratch.path().join("orphan.sh");
+        fs::write(&orphan, "#!/usr/bin/env bash\n").unwrap();
+        fs::set_permissions(&orphan, fs::Permissions::from_mode(0o644)).unwrap();
+        let orphan_meta = fs::symlink_metadata(&orphan).unwrap();
+        assert!(
+            heavy_entrypoint(&orphan, &orphan_meta).is_some(),
+            "a non-executable .sh that no sibling sources is not a library; it must be treated as \
+             an ungated entrypoint and flagged"
+        );
+
+        let data = scratch.path().join("fixture.txt");
+        fs::write(&data, "inert\n").unwrap();
+        let data_meta = fs::symlink_metadata(&data).unwrap();
+        assert!(
+            heavy_entrypoint(&data, &data_meta).is_none(),
+            "an inert data file is neither an entrypoint nor a library"
         );
     }
 }

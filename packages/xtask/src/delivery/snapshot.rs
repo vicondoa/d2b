@@ -41,10 +41,11 @@ use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{CliOptions, WaveCommand, WorkflowOutput},
     model::{
-        CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge, Fingerprint,
-        GitObjectFormat, RepositoryRecord, SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema,
-        sha256_bytes, validate_git_ref, validate_identifier, validate_program_wave,
-        validate_repo_relative_path, validate_repository_id,
+        CandidateDigests, CandidateId, CandidateMaterial, ContentId, DependencyEdge,
+        ExpectedPullRequest, Fingerprint, GitObjectFormat, RepositoryRecord,
+        SNAPSHOT_ARTIFACT_KIND, SnapshotSha256, ensure_schema, sha256_bytes, validate_git_ref,
+        validate_identifier, validate_program_wave, validate_repo_relative_path,
+        validate_repository_id,
     },
     storage::{CandidateDir, MAX_ARTIFACT_BYTES, MAX_JSON_BYTES, SNAPSHOT_FILE, StateRoot},
 };
@@ -208,9 +209,22 @@ pub fn rederive(
         })?;
         let root = toplevel(root)?;
         ensure_committed(&root, &repository.id)?;
+        let old_head = repository.head_oid.clone();
         let head = resolve(&root, DEFAULT_HEAD_REF, "^{commit}")?;
         repository.integration_tree_oid = resolve(&root, &head, "^{tree}")?;
         repository.head_oid = head.clone();
+        // The sealed topmost pull request now points at the current head, so
+        // move its expected-set entry with it. Lower pull requests in a stack
+        // are not visible from this checkout and stay as sealed; the moved head
+        // alone re-derives a fresh snapshot digest, which is all rederivation
+        // needs to detect a rebase.
+        if let Some(pull_request) = repository
+            .expected_pull_requests
+            .iter_mut()
+            .find(|pull_request| pull_request.head_oid == old_head)
+        {
+            pull_request.head_oid = head.clone();
+        }
         heads.insert(repository.id.clone(), (root, head));
     }
     for list in [
@@ -237,6 +251,14 @@ struct RepositoryInput {
     id: String,
     checkout: PathBuf,
     base_ref: String,
+    head_ref: String,
+    pull_requests: Vec<PullRequestInput>,
+}
+
+/// One expected pull request as named on the command line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PullRequestInput {
+    number: u64,
     head_ref: String,
 }
 
@@ -269,6 +291,7 @@ impl SnapshotRequest {
         let checkouts = options.repository_roots()?;
         let mut bases = pairs(options.repeated_strings("--base"), "--base")?;
         let mut heads = pairs(options.repeated_strings("--head"), "--head")?;
+        let mut pull_requests = pull_request_inputs(options.repeated_strings("--pull-request"))?;
         let dependency_graph = edges(options.repeated_strings("--edge"))?;
         let generated_artifacts = fingerprints(options.repeated_strings("--generated"))?;
         let dependency_fingerprints = fingerprints(options.repeated_strings("--dependency"))?;
@@ -286,6 +309,14 @@ impl SnapshotRequest {
             let head_ref = heads
                 .remove(&id)
                 .unwrap_or_else(|| DEFAULT_HEAD_REF.to_owned());
+            let requests = pull_requests.remove(&id).unwrap_or_default();
+            if requests.is_empty() {
+                return Err(DeliveryError::usage(format!(
+                    "repository {id} needs at least one --pull-request {id}=NUMBER:HEAD_REF \
+                     mapping; the snapshot binds the complete expected pull-request set so a \
+                     merge target cannot silently omit a slice"
+                )));
+            }
             validate_git_ref(&base_ref, "base revision")?;
             validate_git_ref(&head_ref, "head revision")?;
             repositories.push(RepositoryInput {
@@ -293,6 +324,7 @@ impl SnapshotRequest {
                 checkout,
                 base_ref,
                 head_ref,
+                pull_requests: requests,
             });
         }
         for (option, leftover) in [("--base", bases), ("--head", heads)] {
@@ -301,6 +333,11 @@ impl SnapshotRequest {
                     "{option} names repository {id}, which has no --repo mapping"
                 )));
             }
+        }
+        if let Some(id) = pull_requests.into_keys().next() {
+            return Err(DeliveryError::usage(format!(
+                "--pull-request names repository {id}, which has no --repo mapping"
+            )));
         }
         let request = Self {
             program,
@@ -358,6 +395,25 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
         let base_oid = resolve(&root, &input.base_ref, "^{commit}")?;
         let head_oid = resolve(&root, &input.head_ref, "^{commit}")?;
         let integration_tree_oid = resolve(&root, &head_oid, "^{tree}")?;
+        let mut expected_pull_requests = Vec::with_capacity(input.pull_requests.len());
+        for pull_request in &input.pull_requests {
+            let pr_head = resolve(&root, &pull_request.head_ref, "^{commit}")?;
+            expected_pull_requests.push(ExpectedPullRequest {
+                number: pull_request.number,
+                head_oid: pr_head,
+            });
+        }
+        if !expected_pull_requests
+            .iter()
+            .any(|pull_request| pull_request.head_oid == head_oid)
+        {
+            return Err(DeliveryError::usage(format!(
+                "repository {}: the --head revision resolves to a commit that is not the head of \
+                 any --pull-request entry; the topmost pull request must appear in the expected \
+                 set",
+                input.id
+            )));
+        }
         heads.insert(input.id.clone(), (root, head_oid.clone()));
         repository_set.push(RepositoryRecord {
             id: input.id.clone(),
@@ -365,6 +421,7 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
             base_oid,
             head_oid,
             integration_tree_oid,
+            expected_pull_requests,
         });
     }
     let resolve_all = |inputs: &[FingerprintInput]| -> Result<Vec<Fingerprint>> {
@@ -392,6 +449,36 @@ fn discover(request: &SnapshotRequest) -> Result<CandidateMaterial> {
         dependency_fingerprints: resolve_all(&request.dependency_fingerprints)?,
         contract_fingerprints: resolve_all(&request.contract_fingerprints)?,
     })
+}
+
+fn pull_request_inputs(values: Vec<String>) -> Result<BTreeMap<String, Vec<PullRequestInput>>> {
+    let mut mapped: BTreeMap<String, Vec<PullRequestInput>> = BTreeMap::new();
+    for value in values {
+        let (id, rest) = value.split_once('=').ok_or_else(|| {
+            DeliveryError::usage("--pull-request must use LOGICAL_ID=NUMBER:HEAD_REF")
+        })?;
+        validate_repository_id(id)?;
+        let (number, head_ref) = rest.split_once(':').ok_or_else(|| {
+            DeliveryError::usage("--pull-request must use LOGICAL_ID=NUMBER:HEAD_REF")
+        })?;
+        let number: u64 = number.parse().map_err(|_| {
+            DeliveryError::usage("--pull-request number must be a positive integer")
+        })?;
+        if number == 0 {
+            return Err(DeliveryError::usage(
+                "--pull-request number must be a positive integer",
+            ));
+        }
+        validate_git_ref(head_ref, "pull request head revision")?;
+        mapped
+            .entry(id.to_owned())
+            .or_default()
+            .push(PullRequestInput {
+                number,
+                head_ref: head_ref.to_owned(),
+            });
+    }
+    Ok(mapped)
 }
 
 fn pairs(values: Vec<String>, option: &str) -> Result<BTreeMap<String, String>> {
@@ -536,19 +623,124 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
             ))
         })?;
     if !output.status.success() {
-        // Report the git operation and its exit status, never the checkout path
-        // or the raw subprocess stderr (git error text routinely interpolates
-        // absolute paths).
+        // git returns the same nonzero status for a missing object, dubious
+        // ownership, a permission error, corruption, and not-a-repository, so a
+        // bare exit status is undiagnosable. Map the well-known stderr classes
+        // to stable, path-free reason codes; for anything unrecognized emit a
+        // bounded sanitized cause with the checkout root, every path token, and
+        // control characters redacted. The raw subprocess stderr, which
+        // routinely interpolates absolute paths, is never forwarded verbatim.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = classify_git_stderr(&stderr);
+        let status = match output.status.code() {
+            Some(code) => format!("exit status {code}"),
+            None => "terminated by signal".to_owned(),
+        };
+        let cause = if reason == GitFailureReason::Unclassified {
+            format!("; cause: {}", sanitize_git_cause(&stderr))
+        } else {
+            String::new()
+        };
         return Err(DeliveryError::new(format!(
-            "git {} failed in the repository checkout{}",
+            "git {} failed in the repository checkout ({status}; reason: {}{cause})",
             args.join(" "),
-            match output.status.code() {
-                Some(code) => format!(" (exit status {code})"),
-                None => String::new(),
-            }
+            reason.code()
         )));
     }
     Ok(output.stdout)
+}
+
+/// A git failure mapped to a safe, path-free reason code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitFailureReason {
+    MissingObject,
+    NotARepository,
+    UnsafeOwnership,
+    PermissionDenied,
+    CorruptRepository,
+    Unclassified,
+}
+
+impl GitFailureReason {
+    fn code(self) -> &'static str {
+        match self {
+            Self::MissingObject => "missing-object",
+            Self::NotARepository => "not-a-repository",
+            Self::UnsafeOwnership => "unsafe-ownership",
+            Self::PermissionDenied => "permission-denied",
+            Self::CorruptRepository => "corrupt-repository",
+            Self::Unclassified => "unclassified",
+        }
+    }
+}
+
+/// Maps git's stderr to a stable reason code without echoing any of it.
+///
+/// The reason codes carry no path or host detail, so they are always safe to
+/// surface. Ordering is by specificity: ownership and repository-shape
+/// failures are recognized before the broad missing-object class.
+fn classify_git_stderr(stderr: &str) -> GitFailureReason {
+    let lower = stderr.to_ascii_lowercase();
+    let has = |needle: &str| lower.contains(needle);
+    if has("dubious ownership") || has("unsafe repository") {
+        GitFailureReason::UnsafeOwnership
+    } else if has("not a git repository") {
+        GitFailureReason::NotARepository
+    } else if has("permission denied") {
+        GitFailureReason::PermissionDenied
+    } else if has("corrupt") || has("loose object") || has("unable to read tree") {
+        GitFailureReason::CorruptRepository
+    } else if has("does not exist")
+        || has("not a valid object")
+        || has("unknown revision")
+        || has("bad revision")
+        || has("ambiguous argument")
+        || has("no such path")
+    {
+        GitFailureReason::MissingObject
+    } else {
+        GitFailureReason::Unclassified
+    }
+}
+
+/// Reduces an unrecognized git stderr to a bounded, path-free snippet.
+///
+/// The first non-empty line is kept; every whitespace-separated token that
+/// carries a `/` (an absolute or relative filesystem path, or a URL) is
+/// replaced with `<path>`, control characters are dropped, and the result is
+/// truncated on a character boundary. This keeps git's phrasing diagnosable
+/// while never disclosing the checkout layout, a username-bearing path, or a
+/// terminal-control escape.
+fn sanitize_git_cause(stderr: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let line = stderr
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let mut cleaned = String::new();
+    for (index, raw) in line.split_whitespace().enumerate() {
+        if index > 0 {
+            cleaned.push(' ');
+        }
+        if raw.contains('/') {
+            cleaned.push_str("<path>");
+        } else {
+            for character in raw.chars() {
+                cleaned.push(if character.is_control() {
+                    ' '
+                } else {
+                    character
+                });
+            }
+        }
+    }
+    let cleaned = cleaned.trim();
+    if cleaned.chars().count() > MAX_CHARS {
+        let truncated: String = cleaned.chars().take(MAX_CHARS).collect();
+        format!("{truncated}...")
+    } else {
+        cleaned.to_owned()
+    }
 }
 
 fn git_text(root: &Path, args: &[&str]) -> Result<String> {
@@ -684,6 +876,8 @@ pub(crate) mod tests {
                 &format!("github.com/example/d2b={}", self.repo().display()),
                 "--base",
                 "github.com/example/d2b=HEAD",
+                "--pull-request",
+                "github.com/example/d2b=1:HEAD",
                 "--edge",
                 "adr046-w0=adr046-w1",
                 "--generated",
@@ -745,6 +939,90 @@ pub(crate) mod tests {
         assert!(
             !message.contains("fatal:") && !message.to_ascii_lowercase().contains("not a git"),
             "the diagnostic must not echo raw git stderr: {message}"
+        );
+        assert!(
+            message.contains("reason: missing-object"),
+            "a missing object must surface a stable reason code: {message}"
+        );
+    }
+
+    #[test]
+    fn git_stderr_classes_map_to_stable_reason_codes() {
+        // Every recognized class collapses to a fixed, path-free reason code so
+        // the identical nonzero git exit status stays diagnosable without ever
+        // echoing the raw stderr.
+        let cases = [
+            (
+                "fatal: detected dubious ownership in repository at '/srv/checkout'",
+                GitFailureReason::UnsafeOwnership,
+                "unsafe-ownership",
+            ),
+            (
+                "fatal: not a git repository (or any of the parent directories): .git",
+                GitFailureReason::NotARepository,
+                "not-a-repository",
+            ),
+            (
+                "error: unable to read tree (deadbeef): Permission denied",
+                GitFailureReason::PermissionDenied,
+                "permission-denied",
+            ),
+            (
+                "error: object file .git/objects/ab/cd is corrupt",
+                GitFailureReason::CorruptRepository,
+                "corrupt-repository",
+            ),
+            (
+                "fatal: path 'no/such/file' does not exist in 'HEAD'",
+                GitFailureReason::MissingObject,
+                "missing-object",
+            ),
+        ];
+        for (stderr, reason, code) in cases {
+            assert_eq!(
+                classify_git_stderr(stderr),
+                reason,
+                "unexpected classification for {stderr:?}"
+            );
+            assert_eq!(reason.code(), code);
+        }
+    }
+
+    #[test]
+    fn an_unclassified_git_failure_emits_a_bounded_sanitized_cause() {
+        // A stderr line that matches no known class must still be diagnosable,
+        // but every path token, the checkout layout, and control characters are
+        // redacted before the cause reaches operator stderr.
+        let stderr =
+            "warning: unusual failure at /home/alice/projects/d2b/checkout\twith\x07control";
+        assert_eq!(classify_git_stderr(stderr), GitFailureReason::Unclassified);
+        let cause = sanitize_git_cause(stderr);
+        assert!(
+            !cause.contains("/home/alice"),
+            "the sanitized cause must not disclose the checkout path: {cause}"
+        );
+        assert!(
+            cause.contains("<path>"),
+            "the sanitized cause must mark the redacted path: {cause}"
+        );
+        assert!(
+            !cause.chars().any(|character| character.is_control()),
+            "the sanitized cause must drop control characters: {cause:?}"
+        );
+        assert!(
+            cause.contains("unusual failure"),
+            "the sanitized cause must keep the diagnosable phrasing: {cause}"
+        );
+    }
+
+    #[test]
+    fn a_sanitized_git_cause_is_bounded() {
+        let stderr = "x".repeat(4096);
+        let cause = sanitize_git_cause(&stderr);
+        assert!(
+            cause.chars().count() <= 163,
+            "the sanitized cause must stay bounded: {} chars",
+            cause.chars().count()
         );
     }
 
@@ -1031,6 +1309,67 @@ pub(crate) mod tests {
             baseline,
             "an untracked file is not integrated content"
         );
+    }
+
+    #[test]
+    fn a_repository_without_a_pull_request_is_a_usage_error() {
+        let fixture = GitFixture::new("snapshot-no-pr");
+        let args = fixture
+            .snapshot_args()
+            .into_iter()
+            .filter(|value| value != "--pull-request" && !value.ends_with("d2b=1:HEAD"))
+            .collect::<Vec<_>>();
+        let error = SnapshotRequest::parse(&args)
+            .expect_err("a repository with no pull request is refused");
+        assert_eq!(error.kind(), DeliveryErrorKind::Usage);
+        assert!(error.message().contains("--pull-request"), "{error}");
+    }
+
+    #[test]
+    fn a_head_outside_the_expected_pull_requests_is_refused() {
+        let fixture = GitFixture::new("snapshot-head-outside");
+        fixture.write("docs/spec.json", "{\"wave\":\"W0-2\"}\n");
+        fixture.commit("second slice");
+        // Drop the default `--pull-request` flag and its value together, then
+        // bind the expected set to the parent commit only while pointing
+        // --head at the tip: the topmost pull request is not in the set.
+        let mut args = Vec::new();
+        let mut base = fixture.snapshot_args().into_iter();
+        while let Some(value) = base.next() {
+            if value == "--pull-request" {
+                base.next();
+                continue;
+            }
+            args.push(value);
+        }
+        args.push("--pull-request".to_owned());
+        args.push("github.com/example/d2b=1:HEAD~1".to_owned());
+        args.push("--head".to_owned());
+        args.push("github.com/example/d2b=HEAD".to_owned());
+        let request = SnapshotRequest::parse(&args).expect("parse");
+        let error = discover(&request).expect_err("a head outside the expected set is refused");
+        assert!(
+            error.message().contains("topmost pull request must appear"),
+            "unexpected message: {error}"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_binds_every_expected_pull_request() {
+        let fixture = GitFixture::new("snapshot-multi-pr");
+        fixture.write("docs/spec.json", "{\"wave\":\"W0-2\"}\n");
+        fixture.commit("second slice");
+        let mut args = fixture.snapshot_args();
+        // The tip is the topmost pull request; the parent commit is a second
+        // parallel slice. Both must be bound in the expected set.
+        args.push("--pull-request".to_owned());
+        args.push("github.com/example/d2b=2:HEAD~1".to_owned());
+        let request = SnapshotRequest::parse(&args).expect("parse");
+        let material = discover(&request).expect("discover");
+        let expected = &material.repository_set[0].expected_pull_requests;
+        assert_eq!(expected.len(), 2, "both slices must be bound");
+        let numbers = expected.iter().map(|pr| pr.number).collect::<Vec<_>>();
+        assert!(numbers.contains(&1) && numbers.contains(&2));
     }
 
     #[test]

@@ -69,10 +69,11 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
 | `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
-| `cargo xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
+| `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
-All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, `cargo
-xtask heavy-gate` (two slots per uid via open file description locks), so
+All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, invoked
+from the repository root as `cargo run --manifest-path packages/Cargo.toml
+-p xtask -- heavy-gate` (two slots per uid via open file description locks), so
 concurrent heavy lanes cannot oversubscribe the shared Nix store, cargo
 target directory, or KVM device. The public lane targets above
 (`make test-integration`, `make test-host-integration`, `make test-hardware`,
@@ -83,13 +84,18 @@ public targets, not the internal ones. `make heavy-check`,
 aliases run a Layer-1 gate, the Rust suite, the building flake check, or a
 public lane under the same semaphore. Live-host and hardware scripts obey the
 same rule: use the gated `make pre-tag` / `make smoke-lite` live-VM smoke
-entrypoints, or wrap a raw live script as `cargo xtask heavy-gate -- env
+entrypoints, or wrap a raw live script as `cargo run --manifest-path
+packages/Cargo.toml -p xtask -- heavy-gate -- env
 D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
 tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
 each live/hardware/perf entrypoint re-executes itself through the gate
 exactly once when `D2B_HEAVY_GATE` is unset, so the shared Nix store,
 cargo target directory, and KVM device cannot be oversubscribed. The
-gated targets remain the documented path.
+gated targets remain the documented path. The `cargo run --manifest-path
+packages/Cargo.toml` spelling is required because there is no root cargo
+workspace, so the bare `cargo xtask` alias resolves only when run from
+`packages/`; see AGENTS.md for the `sccache` tradeoff and the `cd packages
+&& cargo xtask <command>` alternative.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across

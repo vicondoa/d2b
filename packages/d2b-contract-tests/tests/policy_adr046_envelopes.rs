@@ -18,12 +18,15 @@
 //! resource envelope (it carries both an `apiVersion` key and a type field) but
 //! that the parser cannot model is reported, never skipped.
 //!
-//! The parser is deliberately small and covers the block-mapping subset the
-//! ADR-046 specs actually use: JSON and Nix attribute sets share a brace
-//! tokenizer; YAML is parsed by indentation. Comments (`#`, `//`, `/* */`) are
-//! stripped before structural parsing so a commented-out key can never satisfy
-//! a rule, and flow collections (`[ ... ]`, `{ ... }`) embedded in YAML values
-//! are delegated to the brace parser.
+//! The parsing itself is delegated to real parsers behind the shared `common`
+//! module: `serde_json` for JSON, `serde_yaml_ng` for YAML, and `rnix` for Nix.
+//! Every parse returns a `Result` with an explicit error channel, and both
+//! scanners treat a parse error on a block that intends an envelope as a
+//! violation (fail closed), never as "nothing to check". Comments, documented
+//! `...` elision, and authored `<placeholder>` tokens are recognized as
+//! first-class conventions and normalized into distinct `Node` variants rather
+//! than skipped, so a commented-out key can never satisfy a rule and an elision
+//! is honoured only where the contract allows it.
 //!
 //! Distinctions the grammar draws:
 //!
@@ -71,723 +74,12 @@ impl std::fmt::Display for Violation {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fenced-code-block model.
-//
-// Both scanners read only fenced code blocks; prose and Markdown tables are
-// never a resource-authoring context. A block carries its language tag (so each
-// scanner can restrict to the formats it parses) and the absolute 0-based index
-// of its first body line (so a violation can be reported at a real file line).
-// ---------------------------------------------------------------------------
+mod common;
 
-struct Block<'a> {
-    lang: String,
-    body_start: usize,
-    lines: Vec<&'a str>,
-}
-
-fn fenced_blocks(content: &str) -> Vec<Block<'_>> {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut blocks = Vec::new();
-    let mut idx = 0;
-    while idx < lines.len() {
-        let trimmed = lines[idx].trim_start();
-        if let Some(rest) = trimmed.strip_prefix("```") {
-            let lang = rest.trim().to_string();
-            let body_start = idx + 1;
-            let mut end = body_start;
-            while end < lines.len() && !lines[end].trim_start().starts_with("```") {
-                end += 1;
-            }
-            blocks.push(Block {
-                lang,
-                body_start,
-                lines: lines[body_start..end.min(lines.len())].to_vec(),
-            });
-            idx = end + 1;
-        } else {
-            idx += 1;
-        }
-    }
-    blocks
-}
-
-/// The count of leading ASCII spaces on `line`.
-fn indent(line: &str) -> usize {
-    line.len() - line.trim_start_matches(' ').len()
-}
-
-// ---------------------------------------------------------------------------
-// Structural document model.
-//
-// A `Node` is the parsed shape of a fenced block. `Map` preserves author order
-// and the block-relative line of each key so a violation can be reported at a
-// real file line. `Elision` is the `...` / `"..."` abbreviation marker the
-// specs use to say "more fields, deliberately not shown here".
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-enum Node {
-    Map(Vec<Entry>),
-    Seq(Vec<Node>),
-    Scalar(String),
-    Null,
-    Elision,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Entry {
-    key: String,
-    val: Node,
-    /// Block-relative 0-based line index of the key.
-    line: usize,
-}
-
-/// A direct child of a mapping, by key. No recursion: this is used where the
-/// contract is about a map's own direct children (status base keys, type).
-fn direct_child<'a>(map: &'a [Entry], key: &str) -> Option<&'a Entry> {
-    map.iter().find(|e| e.key == key)
-}
-
-/// Collect every mapping in the document tree (the node itself and every
-/// descendant), so a scanner can locate every envelope regardless of nesting.
-fn collect_maps<'a>(node: &'a Node, out: &mut Vec<&'a [Entry]>) {
-    match node {
-        Node::Map(entries) => {
-            out.push(entries.as_slice());
-            for e in entries {
-                collect_maps(&e.val, out);
-            }
-        }
-        Node::Seq(items) => {
-            for it in items {
-                collect_maps(it, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Comment stripping.
-// ---------------------------------------------------------------------------
-
-/// Strip `#`, `//`, and `/* */` comments from brace-structured text (JSON, Nix,
-/// and YAML flow scalars), preserving newlines so token line numbers stay
-/// aligned with the source. Comment characters inside a double-quoted string
-/// are preserved.
-fn strip_comments_brace(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut in_str = false;
-    let mut in_line = false;
-    let mut in_block = false;
-    let mut escaped = false;
-    while let Some(c) = chars.next() {
-        if in_line {
-            if c == '\n' {
-                in_line = false;
-                out.push(c);
-            }
-            continue;
-        }
-        if in_block {
-            if c == '*' && chars.peek() == Some(&'/') {
-                chars.next();
-                in_block = false;
-            } else if c == '\n' {
-                out.push('\n');
-            }
-            continue;
-        }
-        if in_str {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match c {
-            '"' => {
-                in_str = true;
-                out.push(c);
-            }
-            '#' => in_line = true,
-            '/' if chars.peek() == Some(&'/') => {
-                chars.next();
-                in_line = true;
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                in_block = true;
-            }
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Strip a trailing YAML `#` comment from a single line, respecting quotes and
-/// the YAML rule that `#` starts a comment only at line start or after
-/// whitespace.
-fn strip_yaml_comment(line: &str) -> String {
-    let bytes = line.as_bytes();
-    let mut in_s = false;
-    let mut in_d = false;
-    let mut prev_ws = true;
-    for (idx, &b) in bytes.iter().enumerate() {
-        match b {
-            b'\'' if !in_d => {
-                in_s = !in_s;
-                prev_ws = false;
-            }
-            b'"' if !in_s => {
-                in_d = !in_d;
-                prev_ws = false;
-            }
-            b'#' if !in_s && !in_d && prev_ws => {
-                return line[..idx].to_string();
-            }
-            b' ' | b'\t' => prev_ws = true,
-            _ => prev_ws = false,
-        }
-    }
-    line.to_string()
-}
-
-// ---------------------------------------------------------------------------
-// Brace tokenizer + parser (JSON, Nix attribute sets, YAML flow collections).
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-enum TokKind {
-    LBrace,
-    RBrace,
-    LBrack,
-    RBrack,
-    Colon,
-    Sep,
-    Str(String),
-    Word(String),
-}
-
-struct Tok {
-    kind: TokKind,
-    line: usize,
-}
-
-fn tokenize_brace(text: &str) -> Vec<Tok> {
-    let mut toks = Vec::new();
-    let mut line = 0usize;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\n' => line += 1,
-            c if c.is_whitespace() => {}
-            '{' => toks.push(Tok {
-                kind: TokKind::LBrace,
-                line,
-            }),
-            '}' => toks.push(Tok {
-                kind: TokKind::RBrace,
-                line,
-            }),
-            '[' => toks.push(Tok {
-                kind: TokKind::LBrack,
-                line,
-            }),
-            ']' => toks.push(Tok {
-                kind: TokKind::RBrack,
-                line,
-            }),
-            ':' | '=' => toks.push(Tok {
-                kind: TokKind::Colon,
-                line,
-            }),
-            ',' | ';' => toks.push(Tok {
-                kind: TokKind::Sep,
-                line,
-            }),
-            '"' => {
-                let mut s = String::new();
-                let mut escaped = false;
-                for ch in chars.by_ref() {
-                    if escaped {
-                        s.push(ch);
-                        escaped = false;
-                    } else if ch == '\\' {
-                        escaped = true;
-                    } else if ch == '"' {
-                        break;
-                    } else {
-                        if ch == '\n' {
-                            line += 1;
-                        }
-                        s.push(ch);
-                    }
-                }
-                toks.push(Tok {
-                    kind: TokKind::Str(s),
-                    line,
-                });
-            }
-            _ => {
-                let mut w = String::new();
-                w.push(c);
-                while let Some(&nc) = chars.peek() {
-                    if nc.is_whitespace()
-                        || matches!(nc, '{' | '}' | '[' | ']' | ':' | '=' | ',' | ';' | '"')
-                    {
-                        break;
-                    }
-                    w.push(nc);
-                    chars.next();
-                }
-                toks.push(Tok {
-                    kind: TokKind::Word(w),
-                    line,
-                });
-            }
-        }
-    }
-    toks
-}
-
-fn scalar_or_special(s: String) -> Node {
-    if s == "..." {
-        Node::Elision
-    } else if s == "null" || s == "~" {
-        Node::Null
-    } else {
-        Node::Scalar(s)
-    }
-}
-
-fn parse_brace_block(lines: &[&str]) -> Vec<Node> {
-    let text = strip_comments_brace(&lines.join("\n"));
-    let toks = tokenize_brace(&text);
-    let mut cur = 0;
-    while cur < toks.len() && matches!(toks[cur].kind, TokKind::Sep) {
-        cur += 1;
-    }
-    if cur >= toks.len() {
-        return vec![Node::Map(Vec::new())];
-    }
-    let node = match toks[cur].kind {
-        TokKind::LBrace | TokKind::LBrack => parse_brace_value(&toks, &mut cur),
-        _ => Node::Map(parse_brace_map_body(&toks, &mut cur, false)),
-    };
-    vec![node]
-}
-
-fn parse_brace_value(toks: &[Tok], cur: &mut usize) -> Node {
-    if *cur >= toks.len() {
-        return Node::Null;
-    }
-    match &toks[*cur].kind {
-        TokKind::LBrace => {
-            *cur += 1;
-            Node::Map(parse_brace_map_body(toks, cur, true))
-        }
-        TokKind::LBrack => {
-            *cur += 1;
-            Node::Seq(parse_brace_seq(toks, cur))
-        }
-        TokKind::Str(s) | TokKind::Word(s) => {
-            let v = s.clone();
-            *cur += 1;
-            scalar_or_special(v)
-        }
-        _ => {
-            *cur += 1;
-            Node::Null
-        }
-    }
-}
-
-fn parse_brace_map_body(toks: &[Tok], cur: &mut usize, expect_rbrace: bool) -> Vec<Entry> {
-    let mut entries = Vec::new();
-    loop {
-        while *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Sep) {
-            *cur += 1;
-        }
-        if *cur >= toks.len() {
-            break;
-        }
-        match &toks[*cur].kind {
-            TokKind::RBrace => {
-                if expect_rbrace {
-                    *cur += 1;
-                }
-                break;
-            }
-            TokKind::RBrack => break,
-            TokKind::LBrace | TokKind::LBrack => {
-                let _ = parse_brace_value(toks, cur);
-            }
-            TokKind::Colon | TokKind::Sep => *cur += 1,
-            TokKind::Str(s) | TokKind::Word(s) => {
-                let key = s.clone();
-                let kline = toks[*cur].line;
-                *cur += 1;
-                if key == "..." {
-                    // Consume a `"...": "..."` form fully; a bare `"..."` has no
-                    // colon. Either way it is an elision marker.
-                    if *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Colon) {
-                        *cur += 1;
-                        let _ = parse_brace_value(toks, cur);
-                    }
-                    entries.push(Entry {
-                        key,
-                        val: Node::Elision,
-                        line: kline,
-                    });
-                    continue;
-                }
-                if *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Colon) {
-                    *cur += 1;
-                    let val = parse_brace_value(toks, cur);
-                    entries.push(Entry {
-                        key,
-                        val,
-                        line: kline,
-                    });
-                } else {
-                    entries.push(Entry {
-                        key,
-                        val: Node::Null,
-                        line: kline,
-                    });
-                }
-            }
-        }
-    }
-    entries
-}
-
-fn parse_brace_seq(toks: &[Tok], cur: &mut usize) -> Vec<Node> {
-    let mut items = Vec::new();
-    loop {
-        while *cur < toks.len() && matches!(toks[*cur].kind, TokKind::Sep) {
-            *cur += 1;
-        }
-        if *cur >= toks.len() {
-            break;
-        }
-        if matches!(toks[*cur].kind, TokKind::RBrack) {
-            *cur += 1;
-            break;
-        }
-        if matches!(toks[*cur].kind, TokKind::RBrace) {
-            break;
-        }
-        items.push(parse_brace_value(toks, cur));
-    }
-    items
-}
-
-// ---------------------------------------------------------------------------
-// YAML indentation parser.
-// ---------------------------------------------------------------------------
-
-/// Index of the first `:` in `t` that separates a mapping key from its value:
-/// not inside quotes, and followed by a space or end-of-line.
-fn find_yaml_colon(t: &str) -> Option<usize> {
-    let bytes = t.as_bytes();
-    let mut in_s = false;
-    let mut in_d = false;
-    for (idx, &b) in bytes.iter().enumerate() {
-        match b {
-            b'\'' if !in_d => in_s = !in_s,
-            b'"' if !in_s => in_d = !in_d,
-            b':' if !in_s && !in_d => {
-                let next = bytes.get(idx + 1);
-                if next.is_none() || next == Some(&b' ') {
-                    return Some(idx);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn parse_yaml_scalar_or_flow(s: &str) -> Node {
-    let st = s.trim();
-    if st.starts_with('{') || st.starts_with('[') {
-        let text = strip_comments_brace(st);
-        let toks = tokenize_brace(&text);
-        let mut cur = 0;
-        return parse_brace_value(&toks, &mut cur);
-    }
-    let unq = st.trim_matches('"').trim_matches('\'');
-    if unq == "..." {
-        Node::Elision
-    } else if unq == "null" || unq == "~" || unq.is_empty() {
-        Node::Null
-    } else {
-        Node::Scalar(unq.to_string())
-    }
-}
-
-/// Indentation of the next non-blank, non-`---` line at or after `i`.
-fn peek_next_indent(refs: &[&str], i: usize) -> Option<usize> {
-    let mut j = i;
-    while j < refs.len() {
-        let t = refs[j].trim();
-        if t.is_empty() {
-            j += 1;
-            continue;
-        }
-        if t == "---" {
-            return None;
-        }
-        return Some(indent(refs[j]));
-    }
-    None
-}
-
-/// Whether the next content line at exactly `indent_level` is a sequence item.
-fn next_is_sequence(refs: &[&str], i: usize, indent_level: usize) -> bool {
-    let mut j = i;
-    while j < refs.len() {
-        let t = refs[j].trim();
-        if t.is_empty() {
-            j += 1;
-            continue;
-        }
-        if indent(refs[j]) != indent_level {
-            return false;
-        }
-        return t == "-" || t.starts_with("- ");
-    }
-    false
-}
-
-fn parse_yaml_child(refs: &[&str], i: &mut usize, child_indent: usize) -> Node {
-    if next_is_sequence(refs, *i, child_indent) {
-        Node::Seq(parse_yaml_sequence(refs, i, child_indent))
-    } else {
-        Node::Map(parse_yaml_mapping(refs, i, child_indent))
-    }
-}
-
-fn parse_yaml_mapping(refs: &[&str], i: &mut usize, indent_level: usize) -> Vec<Entry> {
-    let mut entries = Vec::new();
-    while *i < refs.len() {
-        let raw = refs[*i];
-        let t = raw.trim();
-        if t.is_empty() {
-            *i += 1;
-            continue;
-        }
-        if t == "---" {
-            break;
-        }
-        let ind = indent(raw);
-        if ind < indent_level {
-            break;
-        }
-        if ind > indent_level {
-            *i += 1;
-            continue;
-        }
-        if t == "..." {
-            entries.push(Entry {
-                key: "...".to_string(),
-                val: Node::Elision,
-                line: *i,
-            });
-            *i += 1;
-            continue;
-        }
-        if t == "-" || t.starts_with("- ") {
-            // A sequence at this level is not a mapping; hand back to the caller.
-            break;
-        }
-        let Some(colon) = find_yaml_colon(t) else {
-            *i += 1;
-            continue;
-        };
-        let key = t[..colon]
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
-        let after = t[colon + 1..].trim();
-        let kline = *i;
-        *i += 1;
-        if after.is_empty() {
-            match peek_next_indent(refs, *i) {
-                Some(ci) if ci > indent_level => {
-                    let val = parse_yaml_child(refs, i, ci);
-                    entries.push(Entry {
-                        key,
-                        val,
-                        line: kline,
-                    });
-                }
-                _ => entries.push(Entry {
-                    key,
-                    val: Node::Null,
-                    line: kline,
-                }),
-            }
-        } else {
-            entries.push(Entry {
-                key,
-                val: parse_yaml_scalar_or_flow(after),
-                line: kline,
-            });
-        }
-    }
-    entries
-}
-
-fn parse_yaml_sequence(refs: &[&str], i: &mut usize, indent_level: usize) -> Vec<Node> {
-    let mut items = Vec::new();
-    while *i < refs.len() {
-        let raw = refs[*i];
-        let t = raw.trim();
-        if t.is_empty() {
-            *i += 1;
-            continue;
-        }
-        if t == "---" {
-            break;
-        }
-        let ind = indent(raw);
-        if ind < indent_level {
-            break;
-        }
-        if ind > indent_level {
-            *i += 1;
-            continue;
-        }
-        let rest = if t == "-" {
-            Some("")
-        } else {
-            t.strip_prefix("- ")
-        };
-        let Some(rest) = rest else {
-            break;
-        };
-        let rest = rest.trim();
-        if rest.is_empty() {
-            *i += 1;
-            match peek_next_indent(refs, *i) {
-                Some(ci) if ci > indent_level => items.push(parse_yaml_child(refs, i, ci)),
-                _ => items.push(Node::Null),
-            }
-        } else if let Some(colon) = find_yaml_colon(rest) {
-            // Inline first key of a map item; further keys sit one level deeper
-            // than the dash (dash column + 2).
-            let key = rest[..colon].trim().trim_matches('"').to_string();
-            let after = rest[colon + 1..].trim();
-            let kline = *i;
-            let mut item_entries = Vec::new();
-            *i += 1;
-            if after.is_empty() {
-                match peek_next_indent(refs, *i) {
-                    Some(ci) if ci > ind + 1 => {
-                        let val = parse_yaml_child(refs, i, ci);
-                        item_entries.push(Entry {
-                            key,
-                            val,
-                            line: kline,
-                        });
-                    }
-                    _ => item_entries.push(Entry {
-                        key,
-                        val: Node::Null,
-                        line: kline,
-                    }),
-                }
-            } else {
-                item_entries.push(Entry {
-                    key,
-                    val: parse_yaml_scalar_or_flow(after),
-                    line: kline,
-                });
-            }
-            let more = parse_yaml_mapping(refs, i, ind + 2);
-            item_entries.extend(more);
-            items.push(Node::Map(item_entries));
-        } else {
-            items.push(parse_yaml_scalar_or_flow(rest));
-            *i += 1;
-        }
-    }
-    items
-}
-
-fn parse_yaml_block(lines: &[&str]) -> Vec<Node> {
-    let stripped: Vec<String> = lines.iter().map(|l| strip_yaml_comment(l)).collect();
-    let refs: Vec<&str> = stripped.iter().map(|s| s.as_str()).collect();
-    let mut docs = Vec::new();
-    let mut i = 0;
-    while i < refs.len() {
-        while i < refs.len() {
-            let t = refs[i].trim();
-            if t.is_empty() || t == "---" {
-                i += 1;
-            } else {
-                break;
-            }
-        }
-        if i >= refs.len() {
-            break;
-        }
-        let base = indent(refs[i]);
-        let node = if next_is_sequence(&refs, i, base) {
-            Node::Seq(parse_yaml_sequence(&refs, &mut i, base))
-        } else {
-            Node::Map(parse_yaml_mapping(&refs, &mut i, base))
-        };
-        docs.push(node);
-    }
-    docs
-}
-
-/// Parse a fenced block into one or more top-level documents. JSON and Nix use
-/// the brace parser; YAML uses the indentation parser; an untagged fence is
-/// sniffed by its first non-comment character.
-fn parse_block_docs(lang: &str, lines: &[&str]) -> Vec<Node> {
-    match lang {
-        "json" | "nix" => parse_brace_block(lines),
-        "yaml" | "yml" => parse_yaml_block(lines),
-        "" => {
-            let stripped = strip_comments_brace(&lines.join("\n"));
-            match stripped.trim_start().chars().next() {
-                Some('{') | Some('[') => parse_brace_block(lines),
-                _ => parse_yaml_block(lines),
-            }
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Whether a line carries `key` (optionally quoted) followed by `:` or `=`,
-/// anywhere on the line. Used only to detect that a block clearly intends an
-/// envelope so the scanner can fail closed if the parser cannot model it.
-fn mentions_key(lines: &[&str], key: &str) -> bool {
-    lines.iter().any(|l| {
-        let mut hay = *l;
-        while let Some(pos) = hay.find(key) {
-            let after = &hay[pos + key.len()..];
-            let after = after.trim_start_matches('"').trim_start();
-            if after.starts_with(':') || after.starts_with('=') {
-                return true;
-            }
-            hay = &hay[pos + key.len()..];
-        }
-        false
-    })
-}
+use common::{
+    Entry, LINT_MARKER_KEY, Node, collect_maps, direct_child, fenced_blocks, key_line,
+    mentions_key, parse_block_docs, rel_display,
+};
 
 // ---------------------------------------------------------------------------
 // D116 - a Host or Guest admitting the `user` domain must name a defaultUserRef.
@@ -809,23 +101,40 @@ fn mentions_key(lines: &[&str], key: &str) -> bool {
 // A spec may also show an *intentional negative example* - an authored shape
 // meant to be rejected, e.g. the block that demonstrates the D116 eval-time
 // failure by deliberately omitting `defaultUserRef`. That exemption is pinned to
-// exactly one file and one marker: it applies only in
-// `docs/specs/ADR-046-nix-configuration.md`, only to a block carrying the exact
-// comment `d2b-lint: expect-d116-eval-error`, and only when that marker occurs
-// exactly once in the file. The same marker in any other file, or a duplicated
-// marker, does not suppress anything - it fails closed.
+// exactly one file, one marker, and one resource: it applies only in
+// `docs/specs/ADR-046-nix-configuration.md`, only when the exact comment
+// `d2b-lint: expect-d116-eval-error` occurs exactly once in the file, and then
+// only to the single parsed resource that lexically contains that marker. The
+// marker is read from the parsed document (a synthetic child surfaced by the Nix
+// parser), so a second unmarked resource in the same fence is still reported.
+// The same marker in any other file, or a duplicated marker, does not suppress
+// anything - it fails closed.
 // ---------------------------------------------------------------------------
 
 const D116_EXEMPT_FILE: &str = "docs/specs/ADR-046-nix-configuration.md";
 const D116_EXEMPT_MARKER: &str = "d2b-lint: expect-d116-eval-error";
+const D116_EXEMPT_MARKER_TOKEN: &str = "expect-d116-eval-error";
 
 /// Whether `line` is exactly the pinned D116 negative-example marker comment.
 /// Only a comment line (`#` or `//`) carrying exactly the marker text qualifies,
 /// so a stray mention in prose or a string value cannot suppress a violation.
+/// Used only to count markers across the file for the exactly-once file guard;
+/// the per-resource binding reads the parsed marker instead.
 fn is_d116_marker_line(line: &str) -> bool {
     let t = line.trim();
     let t = t.trim_start_matches(['#', '/']).trim();
     t == D116_EXEMPT_MARKER
+}
+
+/// Whether this exact resource map is the pinned D116 negative example: it
+/// carries the parsed `d2b-lint: expect-d116-eval-error` marker as a direct
+/// child or one level down under its `spec`. Binding to the parsed marker rather
+/// than to any marker line in the fence keeps the exemption scoped to one
+/// resource, so an unmarked violating sibling in the same fence is still flagged.
+fn resource_carries_d116_marker(map: &[Entry]) -> bool {
+    resource_entry(map, LINT_MARKER_KEY)
+        .map(|e| matches!(&e.val, Node::Scalar(s) if s == D116_EXEMPT_MARKER_TOKEN))
+        .unwrap_or(false)
 }
 
 /// The Host/Guest type of a mapping, if it declares one as a direct child.
@@ -863,24 +172,66 @@ fn seq_has_scalar(node: &Node, want: &str) -> bool {
 }
 
 /// Whether a `defaultUserRef` value is a real reference: a present, non-empty,
-/// non-null scalar.
+/// non-null scalar. A `<placeholder>` ref or a Nix variable/interpolation
+/// (`Opaque`) is a present, deliberately-abstract ref and satisfies the
+/// invariant; only a missing key, `null`, or an empty string does not.
 fn ref_is_set(node: Option<&Node>) -> bool {
-    matches!(node, Some(Node::Scalar(s)) if !s.is_empty() && s != "null")
+    match node {
+        Some(Node::Scalar(s)) => !s.is_empty() && s != "null",
+        Some(Node::Placeholder) | Some(Node::Opaque) => true,
+        _ => false,
+    }
+}
+
+/// Whether a block clearly intends a Host/Guest execution-policy authoring
+/// context that admits the `user` domain. Used only to decide whether an
+/// unparseable block must fail closed: a block the real parser cannot model,
+/// but that plainly names a Host/Guest `type`, an `allowedDomains` list, and
+/// the `user` domain, is a parser gap the lint reports rather than skips.
+fn intends_user_domain_host_guest(lines: &[&str]) -> bool {
+    let names_type = (mentions_key(lines, "type") || mentions_key(lines, "resourceType"))
+        && lines
+            .iter()
+            .any(|l| l.contains("Host") || l.contains("Guest"));
+    let names_domains = mentions_key(lines, "allowedDomains");
+    let names_user = lines.iter().any(|l| l.contains("user"));
+    names_type && names_domains && names_user
 }
 
 fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
     let marker_count = content.lines().filter(|l| is_d116_marker_line(l)).count();
+    let exemption_active = file == D116_EXEMPT_FILE && marker_count == 1;
     let mut out = Vec::new();
     for block in fenced_blocks(content) {
         if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
-        let exempt = file == D116_EXEMPT_FILE
-            && marker_count == 1
-            && block.lines.iter().any(|l| is_d116_marker_line(l));
-        for doc in parse_block_docs(&block.lang, &block.lines) {
+        let docs = match parse_block_docs(&block.lang, &block.lines) {
+            Ok(docs) => docs,
+            Err(_) => {
+                // Fail closed: a block the real parser cannot model but that
+                // plainly declares a user-domain Host/Guest is a parser gap, not
+                // a pass. The one exception is the pinned negative example: when
+                // the exemption is active and this unparseable block carries the
+                // marker line, it is the deliberate teaching block and is not
+                // flagged. A per-resource decision is impossible without a parse
+                // tree, so this fallback is intentionally coarse.
+                if intends_user_domain_host_guest(&block.lines)
+                    && !(exemption_active && block.lines.iter().any(|l| is_d116_marker_line(l)))
+                {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start + 1,
+                        text: "block declares a user-domain Host/Guest the structural parser could not model; a lint must fail closed on an unparseable execution-policy block, not skip it (D116)"
+                            .to_string(),
+                    });
+                }
+                continue;
+            }
+        };
+        for doc in &docs {
             let mut maps = Vec::new();
-            collect_maps(&doc, &mut maps);
+            collect_maps(doc, &mut maps);
             for m in &maps {
                 if host_guest_type(m).is_none() {
                     continue;
@@ -894,12 +245,16 @@ fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
                 if ref_is_set(resource_entry(m, "defaultUserRef").map(|e| &e.val)) {
                     continue;
                 }
-                if exempt {
+                // Per-resource exemption: suppress only the single parsed
+                // resource that carries the pinned marker, never a sibling.
+                if exemption_active && resource_carries_d116_marker(m) {
                     continue;
                 }
+                let line =
+                    block.body_start + key_line(&block.lines, "allowedDomains").unwrap_or(0) + 1;
                 out.push(Violation {
                     file: file.to_string(),
-                    line: block.body_start + ad.line + 1,
+                    line,
                     text: "Host/Guest with `user` in allowedDomains is missing a non-null `defaultUserRef` (D116)"
                         .to_string(),
                 });
@@ -913,25 +268,30 @@ fn scan_d116(file: &str, content: &str) -> Vec<Violation> {
 // Universal status contract - every live envelope carries the D088 base plus
 // `status.update` (D091) and `status.resource` (D088 Layer 2).
 //
-// A live envelope is any fenced YAML/JSON document that carries an `apiVersion`
-// key and a `type` scalar. When it also shows a `status`, that status subtree
-// must carry both `update` and `resource` as direct children. A subtree that
-// carries `credential`, `device`, or any other ResourceType-specific key in
-// place of `resource` is a violation: the Layer-2 key is frozen as `resource`.
+// A live envelope is any fenced YAML/JSON/Nix document that carries an
+// `apiVersion` key and a `type` scalar. When it also shows a `status`, that
+// status subtree must carry both `update` and `resource` as direct children. A
+// subtree that carries `credential`, `device`, or any other
+// ResourceType-specific key in place of `resource` is a violation: the Layer-2
+// key is frozen as `resource`.
 //
-// Elision is honoured narrowly: only a `...` (or `"...": "..."`) elision that is
-// a direct child of `status` abbreviates the status body. A `...` nested deeper
-// (inside `conditions`, `update`, etc.) does not, and an inline `status: {}` or
-// `status: null` on a live envelope is incomplete rather than abbreviated.
+// Elision is honoured narrowly: only a bare `...` marker key that is a direct
+// child of `status`, or an inline `status: ...`, abbreviates the status body. A
+// `...` that is the VALUE of some other key (`conditions: ...`) does not, nor
+// does a `...` nested deeper. An inline `status: {}` or `status: null` on a live
+// envelope is incomplete rather than abbreviated.
 //
 // A bundle envelope (an `apiVersion` document whose type field is `resourceType`
 // rather than `type`) is the compiler-emitted contract that deliberately carries
 // `status: null`; it is recognized as distinct and is not required to carry a
 // status base.
 //
-// The scanner fails closed: a block that carries both an `apiVersion` key and a
-// type field but that the parser cannot model into an envelope is reported, not
-// skipped.
+// The scanner classifies per document, not per fence, and fails closed twice
+// over: (1) a block that carries an `apiVersion` key plus a type field but that
+// the real parser cannot model is reported, not skipped; (2) an `apiVersion`
+// document carrying neither `type` nor `resourceType` is an unrecognized shape
+// that is reported, never silently classified as nothing. Nix fences are scanned
+// too, so a Nix-authored envelope is judged identically to a YAML or JSON one.
 // ---------------------------------------------------------------------------
 
 fn status_violation(file: &str, line: usize, missing: &[&str]) -> Violation {
@@ -945,29 +305,64 @@ fn status_violation(file: &str, line: usize, missing: &[&str]) -> Violation {
     }
 }
 
+/// Whether a status mapping is abbreviated by a bare `...` elision marker that
+/// is a DIRECT child of `status`. A `...` that is the value of some other key
+/// (e.g. `conditions: ...`) is not whole-status elision and does not qualify.
+fn status_is_elided(entries: &[Entry]) -> bool {
+    entries.iter().any(|e| e.key == "...")
+}
+
 fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
     let mut out = Vec::new();
     for block in fenced_blocks(content) {
-        if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "") {
+        if !matches!(block.lang.as_str(), "yaml" | "yml" | "json" | "nix" | "") {
             continue;
         }
         if !mentions_key(&block.lines, "apiVersion") {
             continue;
         }
-        let mut found_envelope = false;
-        for doc in parse_block_docs(&block.lang, &block.lines) {
+        let intends_envelope =
+            mentions_key(&block.lines, "type") || mentions_key(&block.lines, "resourceType");
+        let docs = match parse_block_docs(&block.lang, &block.lines) {
+            Ok(docs) => docs,
+            Err(_) => {
+                // Fail closed: a block that clearly intends an envelope (an
+                // apiVersion key plus a type field) but that the real parser
+                // cannot model is a parser gap, not a pass.
+                if intends_envelope {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start + 1,
+                        text: "block declares an `apiVersion` resource envelope the structural parser could not model; a lint must fail closed on an unparseable envelope, not skip it (D088/D091)"
+                            .to_string(),
+                    });
+                }
+                continue;
+            }
+        };
+        for doc in &docs {
             let mut maps = Vec::new();
-            collect_maps(&doc, &mut maps);
+            collect_maps(doc, &mut maps);
             for m in &maps {
                 if direct_child(m, "apiVersion").is_none() {
                     continue;
                 }
                 let has_type = direct_child(m, "type").is_some();
                 let has_resource_type = direct_child(m, "resourceType").is_some();
+                // Fail closed on an unrecognized envelope: an apiVersion document
+                // that names neither `type` nor `resourceType` is classified as
+                // exactly one thing - unrecognized - and reported, never skipped.
                 if !has_type && !has_resource_type {
+                    out.push(Violation {
+                        file: file.to_string(),
+                        line: block.body_start
+                            + key_line(&block.lines, "apiVersion").unwrap_or(0)
+                            + 1,
+                        text: "`apiVersion` document carries neither a `type` nor a `resourceType`; a resource envelope must declare exactly one, and an unclassifiable envelope fails closed (D088/D091)"
+                            .to_string(),
+                    });
                     continue;
                 }
-                found_envelope = true;
                 // A bundle envelope (resourceType, no type) is the compiler
                 // contract with a deliberately null status: a distinct contract.
                 if !has_type && has_resource_type {
@@ -976,21 +371,12 @@ fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
                 let Some(status) = direct_child(m, "status") else {
                     continue; // spec-only fragment: no status shown.
                 };
-                let line = block.body_start + status.line + 1;
+                let line = block.body_start + key_line(&block.lines, "status").unwrap_or(0) + 1;
                 match &status.val {
                     // status: ... (inline elision) is a deliberate abbreviation.
                     Node::Elision => {}
-                    // status: null / status: {} on a live envelope is incomplete.
-                    Node::Null => out.push(status_violation(
-                        file,
-                        line,
-                        &["status.update", "status.resource"],
-                    )),
                     Node::Map(entries) => {
-                        let elided = entries
-                            .iter()
-                            .any(|e| e.key == "..." || matches!(e.val, Node::Elision));
-                        if elided {
+                        if status_is_elided(entries) {
                             continue;
                         }
                         let mut missing = Vec::new();
@@ -1004,27 +390,20 @@ fn scan_universal_status(file: &str, content: &str) -> Vec<Violation> {
                             out.push(status_violation(file, line, &missing));
                         }
                     }
-                    Node::Scalar(_) | Node::Seq(_) => out.push(status_violation(
+                    // status: null / {} / a scalar / a sequence / a placeholder
+                    // / a Nix expression on a live envelope is incomplete, not
+                    // abbreviated.
+                    Node::Null
+                    | Node::Scalar(_)
+                    | Node::Seq(_)
+                    | Node::Placeholder
+                    | Node::Opaque => out.push(status_violation(
                         file,
                         line,
                         &["status.update", "status.resource"],
                     )),
                 }
             }
-        }
-        // Fail closed: a block that clearly intends an envelope (an apiVersion
-        // key plus a type field) but that produced no envelope map is a parser
-        // gap, not a pass.
-        if !found_envelope
-            && mentions_key(&block.lines, "apiVersion")
-            && (mentions_key(&block.lines, "type") || mentions_key(&block.lines, "resourceType"))
-        {
-            out.push(Violation {
-                file: file.to_string(),
-                line: block.body_start + 1,
-                text: "block declares an `apiVersion` resource envelope the structural parser could not model; a lint must fail closed on an unparseable envelope, not skip it (D088/D091)"
-                    .to_string(),
-            });
         }
     }
     out
@@ -1044,7 +423,7 @@ fn spec_markdown_files() -> Vec<PathBuf> {
 
 fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", dir.display()));
+        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(dir)));
     for entry in entries {
         let entry = entry.expect("dir entry");
         let path = entry.path();
@@ -1058,16 +437,11 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn scan_spec_tree(scanner: fn(&str, &str) -> Vec<Violation>) -> Vec<Violation> {
-    let root = repo_root();
     let mut out = Vec::new();
     for path in spec_markdown_files() {
-        let rel = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
+        let rel = rel_display(&path);
         let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", path.display()));
+            .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(&path)));
         out.extend(scanner(&rel, &content));
     }
     out
@@ -1305,6 +679,86 @@ d2b.zones.dev.resources.host-system = {
     );
 }
 
+#[test]
+fn d116_exemption_binds_to_one_resource_not_the_whole_fence() {
+    // The exemption must suppress only the single parsed resource that carries
+    // the marker, never every violating resource in the same fence. Here one
+    // fence declares the marked negative example beside an unmarked, genuinely
+    // violating sibling; only the sibling must be reported.
+    let marked_plus_sibling = "\
+```nix
+d2b.zones.dev.resources.host-teaching = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+    # defaultUserRef intentionally omitted -> eval error
+    # d2b-lint: expect-d116-eval-error
+  };
+};
+d2b.zones.dev.resources.host-real = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+```";
+    assert_eq!(
+        scan_d116(D116_EXEMPT_FILE, marked_plus_sibling).len(),
+        1,
+        "the unmarked violating sibling must still be reported"
+    );
+
+    // Moving the marker onto the OTHER resource keeps exactly one report: the
+    // suppression follows the marked resource, not a fixed position in the
+    // fence. Combined with the both-unmarked case below (two reports), this
+    // proves the binding is per-resource, not fence-wide.
+    let sibling_first = "\
+```nix
+d2b.zones.dev.resources.host-real = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+d2b.zones.dev.resources.host-teaching = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+    # defaultUserRef intentionally omitted -> eval error
+    # d2b-lint: expect-d116-eval-error
+  };
+};
+```";
+    assert_eq!(
+        scan_d116(D116_EXEMPT_FILE, sibling_first).len(),
+        1,
+        "suppression follows the marked resource regardless of order"
+    );
+
+    // With no marker at all, both violating resources are reported: the marker
+    // is doing the suppression, and it suppresses exactly one.
+    let both_unmarked = "\
+```nix
+d2b.zones.dev.resources.host-a = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+d2b.zones.dev.resources.host-b = {
+  type = \"Host\";
+  spec = {
+    allowedDomains = [\"system\" \"user\"];
+  };
+};
+```";
+    assert_eq!(
+        scan_d116(D116_EXEMPT_FILE, both_unmarked).len(),
+        2,
+        "with no marker both violating resources are reported"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Universal-status fixtures.
 // ---------------------------------------------------------------------------
@@ -1492,6 +946,94 @@ fn universal_status_treats_bundle_envelopes_as_a_distinct_contract() {
 }
 
 #[test]
+fn universal_status_classifies_each_document_not_the_whole_fence() {
+    // Classification is per document, not per fence: a recognized, complete
+    // envelope in a fence must never mask an unrecognized sibling in the same
+    // fence. Here a valid live envelope precedes a sibling that carries an
+    // `apiVersion` but neither `type` nor `resourceType`; the sibling must
+    // still be reported as unclassifiable.
+    let recognized_then_unrecognized = "\
+```yaml
+apiVersion: resources.d2bus.org/v3
+type: Widget
+status:
+  phase: Ready
+  update:
+    state: Current
+  resource:
+    availability: ready
+---
+apiVersion: resources.d2bus.org/v3
+metadata:
+  name: mystery
+```";
+    let v = scan_universal_status("f.md", recognized_then_unrecognized);
+    assert_eq!(
+        v.len(),
+        1,
+        "the unrecognized sibling must still be reported: {}",
+        report("dbg", &v)
+    );
+    assert!(
+        v[0].text.contains("neither a `type` nor a `resourceType`"),
+        "the report must name the unclassifiable-envelope reason: {}",
+        report("dbg", &v)
+    );
+
+    // A recognized bundle envelope (resourceType) must likewise not mask an
+    // unrecognized live sibling that omits its status base.
+    let bundle_then_incomplete = "\
+```yaml
+apiVersion: resources.d2bus.org/v3
+resourceType: Role
+metadata:
+  name: process-controller
+status: null
+---
+apiVersion: resources.d2bus.org/v3
+type: Widget
+status:
+  phase: Ready
+```";
+    let v = scan_universal_status("f.md", bundle_then_incomplete);
+    assert_eq!(
+        v.len(),
+        1,
+        "the incomplete live sibling behind a bundle must be reported: {}",
+        report("dbg", &v)
+    );
+    assert!(v[0].text.contains("status.update") || v[0].text.contains("status.resource"));
+
+    // Nix fences carrying an `apiVersion` are scanned too, and each attrset is
+    // classified independently. Here a complete live envelope sits beside an
+    // unrecognized sibling; only the sibling is reported.
+    let nix_mixed = "\
+```nix
+d2b.docs.recognized = {
+  apiVersion = \"resources.d2bus.org/v3\";
+  type = \"Widget\";
+  status = {
+    phase = \"Ready\";
+    update = { state = \"Current\"; };
+    resource = { availability = \"ready\"; };
+  };
+};
+d2b.docs.unrecognized = {
+  apiVersion = \"resources.d2bus.org/v3\";
+  metadata = { name = \"mystery\"; };
+};
+```";
+    let v = scan_universal_status("f.md", nix_mixed);
+    assert_eq!(
+        v.len(),
+        1,
+        "a Nix fence must be scanned and classified per attrset: {}",
+        report("dbg", &v)
+    );
+    assert!(v[0].text.contains("neither a `type` nor a `resourceType`"));
+}
+
+#[test]
 fn universal_status_accepts_fragment_and_abbreviated_shapes() {
     // A complete envelope carrying both keys is clean.
     let clean = envelope_with_status(COMPLETE_STATUS);
@@ -1553,6 +1095,81 @@ A caller reads Credential.status.credential.leaseState the same way.";
 // surfacing a real docs violation is the correct outcome, and the failure names
 // every offending block for the author to fix.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn parser_backed_scanners_reject_structural_bypasses() {
+    // Each structural counterexample below is asserted rejected (or accepted)
+    // through the public scanner, so a regression that reopens a bypass fails
+    // here.
+
+    // 1. An escaped JSON key `"ty\u0070e"` decodes to `type`, so the document is
+    //    classified as a LIVE envelope and its incomplete status is flagged. The
+    //    proof is the message: a status-base violation, NOT the
+    //    neither-type-nor-resourceType message - i.e. the key decoded rather
+    //    than staying the literal `tyu0070e` (which would misclassify).
+    let escaped_key = "```json\n{\n  \"apiVersion\": \"resources.d2bus.org/v3\",\n  \"ty\\u0070e\": \"Widget\",\n  \"status\": { \"phase\": \"Ready\" }\n}\n```";
+    let v = scan_universal_status("f.md", escaped_key);
+    assert_eq!(v.len(), 1, "{}", report("escaped-key", &v));
+    assert!(
+        v[0].text.contains("universal status base"),
+        "the escaped `ty\\u0070e` key must decode to `type` and classify a LIVE envelope: {}",
+        v[0].text
+    );
+
+    // 2. A Nix `rec { ... }` resource is parsed, not discarded. A rec-set live
+    //    envelope with an incomplete status is flagged.
+    let rec_nix = "```nix\nrec {\n  apiVersion = \"resources.d2bus.org/v3\";\n  type = \"Widget\";\n  status = { phase = \"Ready\"; };\n}\n```";
+    let v = scan_universal_status("f.md", rec_nix);
+    assert_eq!(v.len(), 1, "{}", report("rec-nix", &v));
+    assert!(v[0].text.contains("universal status base"));
+
+    // 3. A YAML anchor + `<<` merge is folded. A status assembled from a merge
+    //    that supplies only `phase` is still missing update/resource (flagged);
+    //    a merge that supplies the whole base is clean (proving the merge is
+    //    modeled, not mishandled or dropped).
+    let merge_incomplete = "```yaml\napiVersion: resources.d2bus.org/v3\ntype: Widget\n_base: &b\n  phase: Ready\nstatus:\n  <<: *b\n```";
+    assert!(
+        !scan_universal_status("f.md", merge_incomplete).is_empty(),
+        "a status whose merged base lacks update/resource must be flagged"
+    );
+    let merge_complete = "```yaml\napiVersion: resources.d2bus.org/v3\ntype: Widget\n_base: &b\n  phase: Ready\n  update: { state: Current }\n  resource: { availability: ready }\nstatus:\n  <<: *b\n```";
+    assert!(
+        scan_universal_status("f.md", merge_complete).is_empty(),
+        "a status whose complete base is merged in must be accepted: {}",
+        report(
+            "merge-complete",
+            &scan_universal_status("f.md", merge_complete)
+        )
+    );
+
+    // 4. An apiVersion document carrying NEITHER type NOR resourceType is
+    //    classified as exactly one thing - unrecognized - and fails closed.
+    let neither = "```yaml\napiVersion: resources.d2bus.org/v3\nmetadata:\n  name: x\nstatus:\n  phase: Ready\n```";
+    let v = scan_universal_status("f.md", neither);
+    assert_eq!(v.len(), 1, "{}", report("neither", &v));
+    assert!(v[0].text.contains("neither a `type` nor a `resourceType`"));
+
+    // 5. Two envelopes in ONE fence, only the second invalid: classification is
+    //    per document, so exactly the second is flagged - no block-wide flag
+    //    masks a sibling.
+    let two_docs = "```yaml\napiVersion: resources.d2bus.org/v3\ntype: Widget\nstatus:\n  phase: Ready\n  update: { state: Current }\n  resource: { availability: ready }\n---\napiVersion: resources.d2bus.org/v3\ntype: Gadget\nstatus:\n  phase: Ready\n```";
+    let v = scan_universal_status("f.md", two_docs);
+    assert_eq!(
+        v.len(),
+        1,
+        "only the second (incomplete) envelope is flagged: {}",
+        report("two-docs", &v)
+    );
+    assert!(v[0].text.contains("universal status base"));
+
+    // 6. `conditions: ...` nested under status is a `...` VALUE on some other
+    //    key, not a direct `...` marker child of status, so it does NOT
+    //    abbreviate the whole status; the missing base is still flagged.
+    let nested_value_elision = envelope_with_status("  phase: Ready\n  conditions: ...");
+    let v = scan_universal_status("f.md", &nested_value_elision);
+    assert_eq!(v.len(), 1, "{}", report("nested-value-elision", &v));
+    assert!(v[0].text.contains("universal status base"));
+}
 
 #[test]
 fn docs_specs_host_guest_declare_a_default_user_ref_for_user_domain() {

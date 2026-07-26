@@ -395,8 +395,14 @@ Before the child-local ZoneLink becomes Ready, the child controller and the
 selected parent allocator's sealed route endpoint complete a one-time IKpsk2
 bootstrap enrollment. The child consumes the allocator-issued single-use PSK
 exactly once in a `Noise_IKpsk2_25519_ChaChaPoly_SHA256` handshake, atomically
-persists the enrolled static-key identity, and terminates or rekeys that
-bootstrap session. Enrollment establishes:
+persists the enrolled static-key identity, and terminates that bootstrap
+session; the IKpsk2 bootstrap session is never rekeyed or continued into steady
+state. Enrollment is committed only when the child atomically persists durable
+`EnrollmentCommitted` state recording the enrolled static-key identities. A
+distinct enrolled KK handshake (a fresh `Noise_KK` handshake from
+`EnrollmentCommitted`, never a rekey of the IKpsk2 bootstrap session) MUST then
+complete before the ZoneLink becomes Ready, and no continuation or resource
+traffic ever rides IKpsk2-derived transport keys. Enrollment establishes:
 
 - **Selected parent route endpoint**: the parent allocator binds its route
   principal's static 25519 public-key fingerprint into the sealed allocation
@@ -1407,7 +1413,7 @@ download, or PATH scan.
 | Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process - only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | The child Zone's core ZoneLink controller calls its same-Zone selected Provider's `OpenTransport(spec.transportSettings, roleCredentialRef)` using the role ref selected from `spec.transportCredentials` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream; the parent has only sealed allocator/route state |
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
-| Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; enrolled Noise KK binding (established after the one-time IKpsk2 bootstrap enrollment); relay identity exclusion |
+| Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; enrolled Noise KK binding (established after the one-time IKpsk2 bootstrap enrollment); relay identity exclusion; enrollment-transition rejection: a rekey or continuation of the IKpsk2 bootstrap session is rejected, and any continuation or resource-API traffic offered on IKpsk2-derived transport keys (before durable `EnrollmentCommitted` and a distinct enrolled KK handshake reach `Ready`) fails closed |
 | Removal proof | `d2b-provider-relay/src/lib.rs` relay plumbing retained until ACA display migration completes |
 
 ### ADR046-transport-relay-002
