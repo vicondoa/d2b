@@ -187,18 +187,19 @@ where
     }
 
     pub async fn list(&self, trusted: TrustedRequest<wire::ListRequest>) -> wire::ListResponse {
-        let targets = match parse_collection_targets(
+        let parsed = match parse_collection_request(
             &trusted.request.resource_types,
             &trusted.request.filters,
-            ResourceVerb::List,
+            MAX_LIST_RESOURCE_TYPES,
+            MAX_LIST_FILTERS,
         ) {
-            Ok(targets) => targets,
+            Ok(parsed) => parsed,
             Err(error) => return list_error(error),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::List,
             zone: subject_zone(&trusted),
-            targets,
+            targets: collection_targets(&parsed, ResourceVerb::List),
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return list_error(error);
@@ -212,15 +213,6 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return list_error(error),
-        };
-        let parsed = match parse_collection_request(
-            &trusted.request.resource_types,
-            &trusted.request.filters,
-            MAX_LIST_RESOURCE_TYPES,
-            MAX_LIST_FILTERS,
-        ) {
-            Ok(parsed) => parsed,
             Err(error) => return list_error(error),
         };
         let page_size = if trusted.request.page_size == 0 {
@@ -284,18 +276,19 @@ where
     }
 
     pub async fn watch(&self, trusted: TrustedRequest<wire::WatchRequest>) -> wire::WatchResponse {
-        let targets = match parse_collection_targets(
+        let parsed = match parse_collection_request(
             &trusted.request.resource_types,
             &trusted.request.filters,
-            ResourceVerb::Watch,
+            MAX_WATCH_RESOURCE_TYPES,
+            MAX_WATCH_FILTERS,
         ) {
-            Ok(targets) => targets,
+            Ok(parsed) => parsed,
             Err(error) => return watch_error(error),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::Watch,
             zone: subject_zone(&trusted),
-            targets,
+            targets: collection_targets(&parsed, ResourceVerb::Watch),
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return watch_error(error);
@@ -309,15 +302,6 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return watch_error(error),
-        };
-        let parsed = match parse_collection_request(
-            &trusted.request.resource_types,
-            &trusted.request.filters,
-            MAX_WATCH_RESOURCE_TYPES,
-            MAX_WATCH_FILTERS,
-        ) {
-            Ok(parsed) => parsed,
             Err(error) => return watch_error(error),
         };
         let credits = trusted
@@ -562,7 +546,14 @@ where
                 let mut response = wire::CommitBatchResponse::new();
                 response.resources = result.resources.into_iter().map(to_wire_resource).collect();
                 response.revision = result.revision.get();
-                response
+                if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
+                    let mut limited =
+                        batch_error(schema_error("batch response exceeds its byte bound"));
+                    limited.revision = response.revision;
+                    limited
+                } else {
+                    response
+                }
             }
             Err(error) => batch_error(map_store_error_with_revision_visibility(
                 error,
@@ -667,7 +658,11 @@ where
                 body.payload_digest = schema.payload_digest;
                 let mut response = wire::InspectSchemaResponse::new();
                 response.schema = MessageField::some(body);
-                response
+                if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
+                    inspect_error(schema_error("schema response exceeds its byte bound"))
+                } else {
+                    response
+                }
             }
             Err(error) => inspect_error(map_store_error(error)),
         }
@@ -728,7 +723,14 @@ where
                     .map(to_wire_resolved_identity)
                     .collect();
                 response.revision = result.revision.get();
-                response
+                if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
+                    let mut limited =
+                        upgrade_error(schema_error("upgrade response exceeds its byte bound"));
+                    limited.revision = response.revision;
+                    limited
+                } else {
+                    response
+                }
             }
             Err(error) => upgrade_error(error),
         }
@@ -1367,38 +1369,28 @@ struct ParsedCollection {
     filters: Vec<StoreFilter>,
 }
 
-fn parse_collection_targets(
-    resource_types: &[String],
-    filters: &[wire::ListFilter],
-    verb: ResourceVerb,
-) -> Result<Vec<AuthorizationTarget>, ResourceError> {
-    if resource_types.is_empty() {
-        return Err(schema_error("at least one ResourceType is required"));
-    }
-    let resource_types = resource_types
-        .iter()
-        .map(ResourceTypeName::parse)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ref_error("ResourceType is invalid"))?;
-    let resource_names = filters
-        .iter()
-        .filter(|filter| filter.field == "metadata.name")
-        .flat_map(|filter| filter.values.iter())
-        .map(ResourceName::parse)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ref_error("resource-name filter is invalid"))?;
-    let mut targets = Vec::new();
-    for resource_type in resource_types {
-        if resource_names.is_empty() {
+fn collection_targets(parsed: &ParsedCollection, verb: ResourceVerb) -> Vec<AuthorizationTarget> {
+    let target_count = if parsed.resource_names.is_empty() {
+        parsed.resource_types.len()
+    } else {
+        parsed
+            .resource_types
+            .len()
+            .checked_mul(parsed.resource_names.len())
+            .expect("validated collection bounds cannot overflow")
+    };
+    let mut targets = Vec::with_capacity(target_count);
+    for resource_type in &parsed.resource_types {
+        if parsed.resource_names.is_empty() {
             targets.push(AuthorizationTarget {
-                resource_type,
+                resource_type: resource_type.clone(),
                 resource_name: None,
                 verb,
                 subresource: None,
                 execution_ref: None,
             });
         } else {
-            targets.extend(resource_names.iter().cloned().map(|resource_name| {
+            targets.extend(parsed.resource_names.iter().cloned().map(|resource_name| {
                 AuthorizationTarget {
                     resource_type: resource_type.clone(),
                     resource_name: Some(resource_name),
@@ -1409,7 +1401,7 @@ fn parse_collection_targets(
             }));
         }
     }
-    Ok(targets)
+    targets
 }
 
 fn parse_collection_request(
@@ -1679,6 +1671,8 @@ mod tests {
         commits: AtomicUsize,
         mutation_count: AtomicUsize,
         configuration_revision: AtomicU64,
+        commit_resources: Mutex<Vec<StoredResource>>,
+        schema_response: Mutex<Option<StoredSchema>>,
     }
 
     impl FakeStore {
@@ -1688,6 +1682,8 @@ mod tests {
                 commits: AtomicUsize::new(0),
                 mutation_count: AtomicUsize::new(0),
                 configuration_revision: AtomicU64::new(0),
+                commit_resources: Mutex::new(Vec::new()),
+                schema_response: Mutex::new(None),
             }
         }
 
@@ -1729,7 +1725,11 @@ mod tests {
             &self,
             _request: StoreInspectSchemaRequest,
         ) -> Result<StoredSchema, StoreError> {
-            Err(Self::unavailable())
+            self.schema_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(Self::unavailable)
         }
 
         async fn commit(
@@ -1748,7 +1748,7 @@ mod tests {
             );
             match *self.mode.lock().unwrap() {
                 CommitMode::Success => Ok(StoreCommitResult {
-                    resources: Vec::new(),
+                    resources: self.commit_resources.lock().unwrap().clone(),
                     revision: ZoneRevision::new(9),
                 }),
                 CommitMode::Conflict => Err(StoreError::new(
@@ -1850,6 +1850,45 @@ mod tests {
         )
     }
 
+    fn authorizer_for_subresource(verb: ResourceVerb, subresource: &str) -> Arc<NativeAuthorizer> {
+        let context = subject(None);
+        let catalog = ApiCatalog::standard();
+        let role = CompiledRole::new(
+            ResourceRef::parse("Role/test").unwrap(),
+            vec![
+                PolicyRule::new(
+                    &catalog,
+                    [ResourceTypeName::parse("Host").unwrap()],
+                    [verb],
+                    [],
+                    [subresource.to_owned()],
+                    [],
+                    [ZoneId::parse("dev").unwrap()],
+                    [],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [BoundSubject {
+                subject_ref: context.subject_ref().clone(),
+                subject_uid: context.subject_uid().clone(),
+            }],
+            BindingScope::default(),
+            RelayGrantAuthority::None,
+        )
+        .unwrap();
+        Arc::new(
+            NativeAuthorizer::new(
+                catalog.clone(),
+                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+            )
+            .unwrap(),
+        )
+    }
+
     fn request_meta() -> MessageField<wire::RequestMeta> {
         let mut meta = wire::RequestMeta::new();
         meta.operation_id = "operation-1".to_owned();
@@ -1890,6 +1929,18 @@ mod tests {
         body.payload_digest = envelope.digest().unwrap();
         body.canonical_json = bytes;
         MessageField::some(body)
+    }
+
+    fn stored_resource(bytes: usize) -> StoredResource {
+        StoredResource {
+            resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            zone: ZoneId::parse("dev").unwrap(),
+            uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(9),
+            canonical_json: vec![b'x'; bytes],
+            payload_digest: format!("sha256:{}", "1".repeat(64)),
+        }
     }
 
     fn trusted<T>(request: T, controller_generation: Option<u64>) -> TrustedRequest<T> {
@@ -2165,6 +2216,116 @@ mod tests {
             wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED
         );
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn list_and_watch_validate_bounds_before_target_expansion() {
+        let mut filters = Vec::new();
+        let mut name_filter = wire::ListFilter::new();
+        name_filter.field = "metadata.name".to_owned();
+        name_filter.values = vec!["host-system".to_owned(); MAX_FILTER_VALUES.saturating_add(1)];
+        filters.push(name_filter);
+        assert!(
+            parse_collection_request(
+                &vec!["Host".to_owned(); MAX_LIST_RESOURCE_TYPES],
+                &filters,
+                MAX_LIST_RESOURCE_TYPES,
+                MAX_LIST_FILTERS,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_collection_request(
+                &vec!["Host".to_owned(); MAX_WATCH_RESOURCE_TYPES + 1],
+                &[],
+                MAX_WATCH_RESOURCE_TYPES,
+                MAX_WATCH_FILTERS,
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_and_schema_responses_enforce_the_byte_limit() {
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        store
+            .commit_resources
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| stored_resource(MAX_RESPONSE_CANONICAL_BYTES / 2)));
+        let batch_service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Delete]));
+        let mut batch = wire::CommitBatchRequest::new();
+        batch.meta = request_meta();
+        batch
+            .mutations
+            .push(mutation(wire::MutationKind::MUTATION_KIND_DELETE));
+        let response = batch_service.commit_batch(trusted(batch, None)).await;
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+        );
+        assert!(response.resources.is_empty());
+
+        *store.schema_response.lock().unwrap() = Some(StoredSchema {
+            resource_type: ResourceTypeName::parse("Host").unwrap(),
+            canonical_json: vec![b'x'; MAX_RESPONSE_CANONICAL_BYTES],
+            payload_digest: format!("sha256:{}", "1".repeat(64)),
+        });
+        let schema_service = ResourceService::new(
+            Arc::clone(&store),
+            authorizer_for_subresource(ResourceVerb::Get, "schema"),
+        );
+        let mut request = wire::InspectSchemaRequest::new();
+        request.meta = request_meta();
+        request.resource_type = "Host".to_owned();
+        let response = schema_service.inspect_schema(trusted(request, None)).await;
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+        );
+        assert!(response.schema.is_none());
+    }
+
+    #[tokio::test]
+    async fn upgrade_response_enforces_the_byte_limit() {
+        #[derive(Debug)]
+        struct OversizeUpgrade;
+
+        impl UpgradeDispatcher for OversizeUpgrade {
+            async fn dispatch(
+                &self,
+                _request: AuthorizedUpgrade,
+            ) -> Result<UpgradeResult, ResourceError> {
+                Ok(UpgradeResult {
+                    resource: stored_resource(MAX_RESPONSE_CANONICAL_BYTES),
+                    plan: Vec::new(),
+                    revision: ZoneRevision::new(9),
+                })
+            }
+        }
+
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        let service = ResourceService::with_upgrade(
+            store,
+            authorizer([ResourceVerb::UpdateSpec]),
+            Arc::new(OversizeUpgrade),
+        );
+        let mut request = wire::UpgradeRequest::new();
+        request.meta = request_meta();
+        request.target = identity();
+        request.action = EnumOrUnknown::new(wire::UpgradeAction::UPGRADE_ACTION_ASSESS);
+        let mut precondition = wire::Precondition::new();
+        precondition.kind =
+            EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+        precondition.expected_revision = Some(1);
+        request.precondition = MessageField::some(precondition);
+        let response = service.upgrade(trusted(request, None)).await;
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+        );
+        assert!(response.resource.is_none());
     }
 
     #[test]
