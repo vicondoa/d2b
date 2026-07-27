@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "4535013560811b6fe84f91eed80060292536ba4b16da04e2d5d3fd819a53d5de",
+      "sha256" : "e5ff455cbc38e17469f0613b16f391ce765f75ef6e5f062dbe0724cf18599000",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "4a36162b9fc4f03fb0cbb73567f237e351e8ff651df26325dc9e4d3d763758a0",
+      "sha256" : "02f99a2b41280a3d19c0e47fee34459f91e0284a49d754c5863493aac4fc4a20",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
