@@ -613,10 +613,13 @@ mod tests {
         )
     }
 
-    fn recording_adapter() -> (
+    /// A recording adapter paired with the observation log it appends to.
+    type RecordingAdapter = (
         Arc<UnregisteredBusAdapter<RecordingStore, RecordingUpgrade>>,
         Arc<Mutex<Vec<DispatchObservation>>>,
-    ) {
+    );
+
+    fn recording_adapter() -> RecordingAdapter {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
         let catalog = ApiCatalog::standard();

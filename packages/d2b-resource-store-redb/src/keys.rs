@@ -309,12 +309,16 @@ mod tests {
 
     #[test]
     fn independent_literal_golden_vectors_pin_every_key_space() {
-        let vectors: Vec<(
+        /// One golden vector: key space, components, expected bytes, and the
+        /// independently specified components the decoder must return.
+        type GoldenKeyVector<'a> = (
             KeySpace,
-            &[KeyComponent<'_>],
-            &[u8],
+            &'a [KeyComponent<'a>],
+            &'a [u8],
             Vec<DecodedKeyComponent>,
-        )> = vec![
+        );
+
+        let vectors: Vec<GoldenKeyVector<'_>> = vec![
             (
                 KeySpace::StoreMeta,
                 &[KeyComponent::Text("zone_name")],
