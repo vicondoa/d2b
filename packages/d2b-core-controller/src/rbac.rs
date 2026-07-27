@@ -169,7 +169,14 @@ mod tests {
 
         let subject_ref = ResourceRef::parse(&format!("Provider/{SUBJECT_NAME_SENTINEL}")).unwrap();
         let subject_uid = ResourceUid::parse(SUBJECT_UID_SENTINEL).unwrap();
-        assert!(format!("{subject_ref:?}").contains(SUBJECT_NAME_SENTINEL));
+        // The contracts crate redacts `ResourceRef`'s own diagnostics, so assert
+        // the sentinel is carried through an explicit accessor rather than
+        // through formatting, which would make this precondition vacuous.
+        assert!(
+            subject_ref
+                .to_canonical_string()
+                .contains(SUBJECT_NAME_SENTINEL)
+        );
         assert_eq!(subject_uid.as_str(), SUBJECT_UID_SENTINEL);
 
         let key = AuthorizationCacheKey::new(subject_ref, subject_uid, [DIGEST_BYTE_SENTINEL; 32]);
