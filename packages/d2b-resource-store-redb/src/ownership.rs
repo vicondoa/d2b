@@ -11,7 +11,7 @@ use d2b_controller_toolkit::owner_hints::{
 pub const MAX_OWNER_CHAIN_DEPTH: usize = MAX_OWNER_HINT_DEPTH;
 
 /// Immutable UID binding stored alongside a child's singular ownerRef.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OwnerBinding {
     owner_ref: ResourceRef,
     owner_uid: ResourceUid,
@@ -29,12 +29,31 @@ impl OwnerBinding {
     }
 }
 
+impl core::fmt::Debug for OwnerBinding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnerBinding")
+            .field("owner_kind", self.owner_ref.resource_type())
+            .field("has_owner_uid", &true)
+            .finish()
+    }
+}
+
 /// Reverse-index value for one owned child.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ReverseOwnerEntry {
     child_ref: ResourceRef,
     child_uid: ResourceUid,
     latest_revision: ZoneRevision,
+}
+
+impl core::fmt::Debug for ReverseOwnerEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReverseOwnerEntry")
+            .field("child_kind", self.child_ref.resource_type())
+            .field("has_child_uid", &true)
+            .field("latest_revision", &self.latest_revision)
+            .finish()
+    }
 }
 
 impl ReverseOwnerEntry {
@@ -65,11 +84,44 @@ impl ReverseOwnerEntry {
 ///
 /// let _forged_dispatch = OwnerIndexMutation::dispatch;
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OwnerIndexMutation {
     previous_owner: Option<OwnerBinding>,
     current_owner: Option<OwnerBinding>,
     hints: Vec<OwnedResourceChangedHint>,
+}
+
+impl core::fmt::Debug for OwnerIndexMutation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let previous_owner_kind = self
+            .previous_owner
+            .as_ref()
+            .map(|binding| binding.owner_ref.resource_type());
+        let current_owner_kind = self
+            .current_owner
+            .as_ref()
+            .map(|binding| binding.owner_ref.resource_type());
+        let hint_events = self
+            .hints
+            .iter()
+            .map(|hint| hint.event())
+            .collect::<Vec<_>>();
+        let hint_revisions = self
+            .hints
+            .iter()
+            .map(|hint| hint.revision())
+            .collect::<Vec<_>>();
+
+        f.debug_struct("OwnerIndexMutation")
+            .field("has_previous_owner", &self.previous_owner.is_some())
+            .field("previous_owner_kind", &previous_owner_kind)
+            .field("has_current_owner", &self.current_owner.is_some())
+            .field("current_owner_kind", &current_owner_kind)
+            .field("hint_count", &self.hints.len())
+            .field("hint_events", &hint_events)
+            .field("hint_revisions", &hint_revisions)
+            .finish()
+    }
 }
 
 impl OwnerIndexMutation {
@@ -89,12 +141,44 @@ impl OwnerIndexMutation {
 /// Methods validate all fallible graph conditions before changing any map. The
 /// returned mutation contains the hint records that the enclosing redb write
 /// transaction stores in its change batch before commit.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct OwnerIndex {
     current_uid_by_ref: BTreeMap<ResourceRef, ResourceUid>,
     reference_by_uid: BTreeMap<ResourceUid, ResourceRef>,
     owner_by_child: BTreeMap<ResourceUid, OwnerBinding>,
     children_by_owner: BTreeMap<ResourceUid, BTreeMap<ResourceUid, ReverseOwnerEntry>>,
+}
+
+impl core::fmt::Debug for OwnerIndex {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut resource_kind_counts = BTreeMap::new();
+        for resource_ref in self.reference_by_uid.values() {
+            *resource_kind_counts
+                .entry(resource_ref.resource_type())
+                .or_insert(0usize) += 1;
+        }
+        let reverse_entry_count = self
+            .children_by_owner
+            .values()
+            .map(BTreeMap::len)
+            .sum::<usize>();
+        let latest_revisions = self
+            .children_by_owner
+            .values()
+            .flat_map(BTreeMap::values)
+            .map(ReverseOwnerEntry::latest_revision)
+            .collect::<BTreeSet<_>>();
+
+        f.debug_struct("OwnerIndex")
+            .field("resource_kind_counts", &resource_kind_counts)
+            .field("current_reference_count", &self.current_uid_by_ref.len())
+            .field("resource_count", &self.reference_by_uid.len())
+            .field("owned_child_count", &self.owner_by_child.len())
+            .field("owner_count", &self.children_by_owner.len())
+            .field("reverse_entry_count", &reverse_entry_count)
+            .field("latest_revisions", &latest_revisions)
+            .finish()
+    }
 }
 
 impl OwnerIndex {
