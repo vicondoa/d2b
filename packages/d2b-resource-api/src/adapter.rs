@@ -202,26 +202,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, sync::Mutex};
 
     use d2b_contracts::v3::{
-        BindingDigest, ConfigurationGeneration, EvidenceClass, Locality, ReconnectGeneration,
-        ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName,
-        SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
+        BindingDigest, CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+        EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG, ReconnectGeneration,
+        ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
+        ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
+        TranscriptHash, TransportBinding, ZoneId, ZoneRevision, canonical_digest,
     };
     use d2b_resource_store::{
-        AdmissionIssuer, AdmissionVerifier, PolicySnapshot, ResourceStoreBackend,
-        StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
-        StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
-        StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema, VerifiedMutation,
-        admission_pair,
+        AdmissionIssuer, AdmissionVerifier, AdmittedVerb, PolicySnapshot, ResourceMutationKind,
+        ResourceStoreBackend, StoreCommitResult, StoreError, StoreGetRequest,
+        StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreResolveRequest,
+        StoreResolvedIdentity, StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
+        VerifiedMutation, admission_pair,
     };
     use protobuf::{EnumOrUnknown, MessageField};
 
     use crate::authz::{
-        ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
-        NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, ResourceVerb,
+        ApiCatalog, ApiMethod, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
+        CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
+        ResourceVerb,
     };
+    use crate::service::{AuthorizedUpgrade, UpgradeResult};
+
+    const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
     #[derive(Debug)]
     struct UnreachableStore {
@@ -274,24 +280,283 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ObservedTarget {
+        resource_type: String,
+        resource_name: Option<String>,
+        verb: ResourceVerb,
+        subresource: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct DispatchObservation {
+        method: ApiMethod,
+        operation_id: String,
+        zone: String,
+        targets: Vec<ObservedTarget>,
+    }
+
+    impl DispatchObservation {
+        fn one(
+            method: ApiMethod,
+            operation_id: &str,
+            zone: &ZoneId,
+            resource_type: &ResourceTypeName,
+            resource_name: Option<&ResourceName>,
+            verb: ResourceVerb,
+            subresource: Option<&str>,
+        ) -> Self {
+            Self {
+                method,
+                operation_id: operation_id.to_owned(),
+                zone: zone.to_string(),
+                targets: vec![ObservedTarget {
+                    resource_type: resource_type.to_string(),
+                    resource_name: resource_name.map(ToString::to_string),
+                    verb,
+                    subresource: subresource.map(str::to_owned),
+                }],
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordingStore {
+        admission_verifier: AdmissionVerifier,
+        calls: Arc<Mutex<Vec<DispatchObservation>>>,
+    }
+
+    impl RecordingStore {
+        fn paired(calls: Arc<Mutex<Vec<DispatchObservation>>>) -> (Arc<Self>, AdmissionIssuer) {
+            let (issuer, admission_verifier) = admission_pair();
+            (
+                Arc::new(Self {
+                    admission_verifier,
+                    calls,
+                }),
+                issuer,
+            )
+        }
+
+        fn record(&self, observation: DispatchObservation) {
+            self.calls.lock().unwrap().push(observation);
+        }
+    }
+
+    impl ResourceStoreBackend for RecordingStore {
+        fn admission_verifier(&self) -> &AdmissionVerifier {
+            &self.admission_verifier
+        }
+
+        async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
+            self.record(DispatchObservation::one(
+                ApiMethod::Get,
+                &request.operation.operation_id,
+                &request.zone,
+                request.target.resource_type(),
+                Some(request.target.name()),
+                ResourceVerb::Get,
+                None,
+            ));
+            Ok(stored_resource(101))
+        }
+
+        async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
+            self.record(DispatchObservation {
+                method: ApiMethod::List,
+                operation_id: request.operation.operation_id,
+                zone: request.zone.to_string(),
+                targets: request
+                    .resource_types
+                    .iter()
+                    .map(|resource_type| ObservedTarget {
+                        resource_type: resource_type.to_string(),
+                        resource_name: None,
+                        verb: ResourceVerb::List,
+                        subresource: None,
+                    })
+                    .collect(),
+            });
+            Ok(StoreListResult {
+                resources: Vec::new(),
+                snapshot_revision: ZoneRevision::new(102),
+                next_cursor: None,
+                truncated: false,
+            })
+        }
+
+        async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+            self.record(DispatchObservation {
+                method: ApiMethod::Watch,
+                operation_id: request.operation.operation_id,
+                zone: request.zone.to_string(),
+                targets: request
+                    .resource_types
+                    .iter()
+                    .map(|resource_type| ObservedTarget {
+                        resource_type: resource_type.to_string(),
+                        resource_name: None,
+                        verb: ResourceVerb::Watch,
+                        subresource: None,
+                    })
+                    .collect(),
+            });
+            Ok(StoreWatchReceipt {
+                stream_name: "watch-sentinel-103".to_owned(),
+                snapshot_revision: ZoneRevision::new(103),
+            })
+        }
+
+        async fn resolve_ref(
+            &self,
+            request: StoreResolveRequest,
+        ) -> Result<StoreResolvedIdentity, StoreError> {
+            self.record(DispatchObservation::one(
+                ApiMethod::ResolveRef,
+                &request.operation.operation_id,
+                &request.zone,
+                request.target.resource_type(),
+                Some(request.target.name()),
+                ResourceVerb::Get,
+                None,
+            ));
+            Ok(StoreResolvedIdentity {
+                zone: ZoneId::parse("dev").unwrap(),
+                resource_ref: ResourceRef::parse("Host/resolve-sentinel").unwrap(),
+                uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                generation: ResourceGeneration::new(1).unwrap(),
+                revision: ZoneRevision::new(111),
+            })
+        }
+
+        async fn inspect_schema(
+            &self,
+            request: StoreInspectSchemaRequest,
+        ) -> Result<StoredSchema, StoreError> {
+            self.record(DispatchObservation::one(
+                ApiMethod::InspectSchema,
+                &request.operation.operation_id,
+                &request.zone,
+                &request.resource_type,
+                None,
+                ResourceVerb::Get,
+                Some("schema"),
+            ));
+            Ok(StoredSchema {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                canonical_json: b"inspect-schema-sentinel-112".to_vec(),
+                payload_digest: format!("sha256:{}", "1".repeat(64)),
+            })
+        }
+
+        async fn commit_verified(
+            &self,
+            mutation: VerifiedMutation,
+        ) -> Result<StoreCommitResult, StoreError> {
+            let operation_id = mutation
+                .operation(&self.admission_verifier)?
+                .operation_id
+                .clone();
+            let authorization = mutation.authorization(&self.admission_verifier)?;
+            let mutations = mutation.mutations(&self.admission_verifier)?;
+            let (method, revision) = if mutations.len() > 1 {
+                (ApiMethod::CommitBatch, 110)
+            } else {
+                match mutations[0].mutation().kind {
+                    ResourceMutationKind::Create => (ApiMethod::Create, 104),
+                    ResourceMutationKind::UpdateSpec => (ApiMethod::UpdateSpec, 105),
+                    ResourceMutationKind::UpdateStatus => (ApiMethod::UpdateStatus, 106),
+                    ResourceMutationKind::UpdateMetadata => (ApiMethod::UpdateMetadata, 107),
+                    ResourceMutationKind::UpdateFinalizers => (ApiMethod::UpdateFinalizers, 108),
+                    ResourceMutationKind::Delete => (ApiMethod::Delete, 109),
+                }
+            };
+            self.record(DispatchObservation {
+                method,
+                operation_id,
+                zone: authorization.zone.to_string(),
+                targets: authorization
+                    .targets
+                    .iter()
+                    .map(|target| ObservedTarget {
+                        resource_type: target.resource_type.to_string(),
+                        resource_name: target.resource_name.as_ref().map(ToString::to_string),
+                        verb: admitted_verb(target.verb),
+                        subresource: target.subresource.clone(),
+                    })
+                    .collect(),
+            });
+            Ok(StoreCommitResult {
+                resources: Vec::new(),
+                revision: ZoneRevision::new(revision),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordingUpgrade {
+        calls: Arc<Mutex<Vec<DispatchObservation>>>,
+    }
+
+    impl UpgradeDispatcher for RecordingUpgrade {
+        async fn dispatch(
+            &self,
+            request: AuthorizedUpgrade,
+        ) -> Result<UpgradeResult, d2b_contracts::v3::ResourceError> {
+            self.calls.lock().unwrap().push(DispatchObservation::one(
+                ApiMethod::Upgrade,
+                &request.operation.operation_id,
+                &request.zone,
+                request.target.resource_type(),
+                Some(request.target.name()),
+                ResourceVerb::UpdateSpec,
+                None,
+            ));
+            Ok(UpgradeResult {
+                resource: stored_resource(113),
+                plan: Vec::new(),
+                revision: ZoneRevision::new(113),
+            })
+        }
+    }
+
+    const fn admitted_verb(verb: AdmittedVerb) -> ResourceVerb {
+        match verb {
+            AdmittedVerb::Get => ResourceVerb::Get,
+            AdmittedVerb::List => ResourceVerb::List,
+            AdmittedVerb::Watch => ResourceVerb::Watch,
+            AdmittedVerb::Create => ResourceVerb::Create,
+            AdmittedVerb::UpdateSpec => ResourceVerb::UpdateSpec,
+            AdmittedVerb::UpdateStatus => ResourceVerb::UpdateStatus,
+            AdmittedVerb::UpdateMetadata => ResourceVerb::UpdateMetadata,
+            AdmittedVerb::UpdateFinalizers => ResourceVerb::UpdateFinalizers,
+            AdmittedVerb::Delete => ResourceVerb::Delete,
+            AdmittedVerb::UseCredential => ResourceVerb::UseCredential,
+            AdmittedVerb::AdminCredential => ResourceVerb::AdminCredential,
+        }
+    }
+
     fn subject(locality: Locality, evidence: EvidenceClass) -> Arc<AuthenticatedSubjectContext> {
-        Arc::new(AuthenticatedSubjectContext::new(
-            ResourceRef::parse("User/alice").unwrap(),
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-            ResourceRef::parse("Zone/dev").unwrap(),
-            evidence,
-            SessionPurpose::parse("resource-api").unwrap(),
-            ServiceName::parse("d2b.resource.v3").unwrap(),
-            SessionBinding::new(
-                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
-                TransportBinding::new(
-                    locality,
-                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+        Arc::new(
+            AuthenticatedSubjectContext::new(
+                ResourceRef::parse("User/alice").unwrap(),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceRef::parse("Zone/dev").unwrap(),
+                evidence,
+                SessionPurpose::parse("resource-api").unwrap(),
+                ServiceName::parse("d2b.resource.v3").unwrap(),
+                SessionBinding::new(
+                    SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                    TransportBinding::new(
+                        locality,
+                        BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                    ),
+                    ReconnectGeneration::new(1).unwrap(),
+                    TranscriptHash::from_bytes([3; 32]),
                 ),
-                ReconnectGeneration::new(1).unwrap(),
-                TranscriptHash::from_bytes([3; 32]),
-            ),
-        ))
+            )
+            .with_controller_generation(ControllerGeneration::new(8).unwrap()),
+        )
     }
 
     fn state() -> AuthorizationState {
@@ -300,7 +565,7 @@ mod tests {
                 policy_revision: 4,
                 api_catalog_revision: 5,
                 active_configuration_revision: ConfigurationGeneration::new(6).unwrap(),
-                controller_generation: None,
+                controller_generation: Some(ControllerGeneration::new(8).unwrap()),
             },
             zone_policy_revision: ZoneRevision::new(7),
             bootstrap_phase: BootstrapPhase::Disabled,
@@ -326,13 +591,12 @@ mod tests {
         )
     }
 
-    fn adapter_for(
-        verb: ResourceVerb,
-        named: bool,
-        subresource: Option<&str>,
-    ) -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
-    {
-        let (store, issuer) = UnreachableStore::paired();
+    fn recording_adapter() -> (
+        Arc<AuthenticatedBusAdapter<RecordingStore, RecordingUpgrade>>,
+        Arc<Mutex<Vec<DispatchObservation>>>,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (store, issuer) = RecordingStore::paired(Arc::clone(&calls));
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -341,12 +605,51 @@ mod tests {
                 PolicyRule::new(
                     &catalog,
                     [ResourceTypeName::parse("Host").unwrap()],
-                    [verb],
+                    [
+                        ResourceVerb::Get,
+                        ResourceVerb::List,
+                        ResourceVerb::Watch,
+                        ResourceVerb::Create,
+                        ResourceVerb::UpdateSpec,
+                        ResourceVerb::UpdateMetadata,
+                        ResourceVerb::Delete,
+                    ],
                     [],
-                    subresource.into_iter().map(str::to_owned),
-                    named
-                        .then(|| ResourceName::parse("host-system").unwrap())
-                        .into_iter(),
+                    [],
+                    [],
+                    [ZoneId::parse("dev").unwrap()],
+                    [],
+                )
+                .unwrap(),
+                PolicyRule::new(
+                    &catalog,
+                    [ResourceTypeName::parse("Host").unwrap()],
+                    [ResourceVerb::UpdateStatus],
+                    [],
+                    ["status".to_owned()],
+                    [],
+                    [ZoneId::parse("dev").unwrap()],
+                    [],
+                )
+                .unwrap(),
+                PolicyRule::new(
+                    &catalog,
+                    [ResourceTypeName::parse("Host").unwrap()],
+                    [ResourceVerb::UpdateFinalizers],
+                    [],
+                    ["finalizers".to_owned()],
+                    [],
+                    [ZoneId::parse("dev").unwrap()],
+                    [],
+                )
+                .unwrap(),
+                PolicyRule::new(
+                    &catalog,
+                    [ResourceTypeName::parse("Host").unwrap()],
+                    [ResourceVerb::Get],
+                    [],
+                    ["schema".to_owned()],
+                    [],
                     [ZoneId::parse("dev").unwrap()],
                     [],
                 )
@@ -364,7 +667,10 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let service = Arc::new(ResourceService::new(
+        let upgrade = Arc::new(RecordingUpgrade {
+            calls: Arc::clone(&calls),
+        });
+        let service = Arc::new(ResourceService::with_upgrade(
             store,
             Arc::new(
                 NativeAuthorizer::new(
@@ -374,9 +680,14 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            upgrade,
         ));
-        Arc::new(
-            AuthenticatedBusAdapter::bind_authenticated_session(service, context, state()).unwrap(),
+        (
+            Arc::new(
+                AuthenticatedBusAdapter::bind_authenticated_session(service, context, state())
+                    .unwrap(),
+            ),
+            calls,
         )
     }
 
@@ -396,11 +707,90 @@ mod tests {
         MessageField::some(identity)
     }
 
+    fn request_meta(method: &str) -> MessageField<wire::RequestMeta> {
+        let mut meta = wire::RequestMeta::new();
+        meta.operation_id = method.to_owned();
+        meta.idempotency_key = format!("{method}-idempotency");
+        meta.correlation_id = format!("{method}-correlation");
+        MessageField::some(meta)
+    }
+
+    fn full_projection() -> MessageField<wire::Projection> {
+        let mut projection = wire::Projection::new();
+        projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+        MessageField::some(projection)
+    }
+
     fn mutation(kind: wire::MutationKind) -> wire::Mutation {
         let mut mutation = wire::Mutation::new();
         mutation.kind = EnumOrUnknown::new(kind);
         mutation.target = identity();
+        let mut precondition = wire::Precondition::new();
+        if kind == wire::MutationKind::MUTATION_KIND_CREATE {
+            precondition.kind =
+                EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT);
+        } else {
+            precondition.kind =
+                EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+            precondition.expected_revision = Some(1);
+        }
+        mutation.precondition = MessageField::some(precondition);
+        if matches!(
+            kind,
+            wire::MutationKind::MUTATION_KIND_CREATE
+                | wire::MutationKind::MUTATION_KIND_UPDATE_SPEC
+                | wire::MutationKind::MUTATION_KIND_UPDATE_STATUS
+                | wire::MutationKind::MUTATION_KIND_UPDATE_METADATA
+        ) {
+            mutation.resource = resource_body(kind == wire::MutationKind::MUTATION_KIND_CREATE);
+        }
+        if kind == wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS {
+            mutation
+                .add_finalizers
+                .push("resources.d2bus.org/dispatch-test".to_owned());
+        }
         mutation
+    }
+
+    fn resource_body(create: bool) -> MessageField<wire::ResourceEnvelopeBytes> {
+        let canonical_json = if create {
+            let mut value = CanonicalJsonValue::parse(GOLDEN_HOST).unwrap();
+            let CanonicalJsonValue::Object(root) = &mut value else {
+                unreachable!()
+            };
+            let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+                unreachable!()
+            };
+            metadata.remove("uid");
+            value.to_canonical_bytes()
+        } else {
+            GOLDEN_HOST.to_vec()
+        };
+        let payload_digest = if create {
+            canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_json)
+        } else {
+            ResourceEnvelope::from_json(&canonical_json)
+                .unwrap()
+                .digest()
+                .unwrap()
+        };
+        let mut body = wire::ResourceEnvelopeBytes::new();
+        body.identity = identity();
+        body.canonical_json = canonical_json;
+        body.payload_digest = payload_digest;
+        MessageField::some(body)
+    }
+
+    fn stored_resource(revision: u64) -> StoredResource {
+        StoredResource {
+            resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            zone: ZoneId::parse("dev").unwrap(),
+            uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(revision),
+            canonical_json: format!("response-sentinel-{revision}").into_bytes(),
+            payload_digest: format!("sha256:{revision:064x}"),
+        }
     }
 
     #[test]
@@ -431,127 +821,288 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thirteen_method_adapter_pins_authorization_targets_and_errors() {
+    async fn thirteen_method_adapter_pins_dispatch_targets_counts_and_sentinels() {
         let ctx = context();
-        let mut dispatched = 0;
-        macro_rules! schema_rejected {
-            ($call:expr) => {{
-                let response = $call.await.unwrap();
-                assert_eq!(
-                    response.error.as_ref().unwrap().kind.enum_value().unwrap(),
-                    wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
-                );
-                dispatched += 1;
-            }};
-        }
+        let (adapter, calls) = recording_adapter();
 
-        let adapter = adapter_for(ResourceVerb::Get, true, None);
         let mut get = wire::GetRequest::new();
+        get.meta = request_meta("get");
         get.target = identity();
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::get(
-            &*adapter, &ctx, get
-        ));
+        get.projection = full_projection();
+        let get = d2b_resource_v3_ttrpc::ResourceService::get(&*adapter, &ctx, get)
+            .await
+            .unwrap();
+        assert!(get.error.is_none(), "{get:?}");
+        assert_eq!(
+            get.resource
+                .as_ref()
+                .unwrap()
+                .identity
+                .as_ref()
+                .unwrap()
+                .revision,
+            Some(101)
+        );
 
-        let adapter = adapter_for(ResourceVerb::List, false, None);
         let mut list = wire::ListRequest::new();
+        list.meta = request_meta("list");
         list.resource_types.push("Host".to_owned());
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::list(
-            &*adapter, &ctx, list
-        ));
+        list.projection = full_projection();
+        let list = d2b_resource_v3_ttrpc::ResourceService::list(&*adapter, &ctx, list)
+            .await
+            .unwrap();
+        assert_eq!(list.snapshot_revision, 102);
 
-        let adapter = adapter_for(ResourceVerb::Watch, false, None);
         let mut watch = wire::WatchRequest::new();
+        watch.meta = request_meta("watch");
         watch.resource_types.push("Host".to_owned());
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::watch(
-            &*adapter, &ctx, watch
-        ));
+        watch.projection = full_projection();
+        let watch = d2b_resource_v3_ttrpc::ResourceService::watch(&*adapter, &ctx, watch)
+            .await
+            .unwrap();
+        assert_eq!(watch.stream_name, "watch-sentinel-103");
+        assert_eq!(watch.snapshot_revision, 103);
 
-        let adapter = adapter_for(ResourceVerb::Create, true, None);
         let mut create = wire::CreateRequest::new();
+        create.meta = request_meta("create");
         create.mutation = MessageField::some(mutation(wire::MutationKind::MUTATION_KIND_CREATE));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::create(
-            &*adapter, &ctx, create
-        ));
+        let create = d2b_resource_v3_ttrpc::ResourceService::create(&*adapter, &ctx, create)
+            .await
+            .unwrap();
+        assert_eq!(create.revision, 104);
 
-        let adapter = adapter_for(ResourceVerb::UpdateSpec, true, None);
         let mut update_spec = wire::UpdateSpecRequest::new();
+        update_spec.meta = request_meta("update-spec");
         update_spec.mutation =
             MessageField::some(mutation(wire::MutationKind::MUTATION_KIND_UPDATE_SPEC));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::update_spec(
-            &*adapter,
-            &ctx,
-            update_spec
-        ));
+        let update_spec =
+            d2b_resource_v3_ttrpc::ResourceService::update_spec(&*adapter, &ctx, update_spec)
+                .await
+                .unwrap();
+        assert_eq!(update_spec.revision, 105);
 
-        let adapter = adapter_for(ResourceVerb::UpdateStatus, true, Some("status"));
         let mut update_status = wire::UpdateStatusRequest::new();
+        update_status.meta = request_meta("update-status");
         update_status.mutation =
             MessageField::some(mutation(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::update_status(
-            &*adapter,
-            &ctx,
-            update_status
-        ));
+        let update_status =
+            d2b_resource_v3_ttrpc::ResourceService::update_status(&*adapter, &ctx, update_status)
+                .await
+                .unwrap();
+        assert_eq!(update_status.revision, 106);
 
-        let adapter = adapter_for(ResourceVerb::UpdateMetadata, true, None);
         let mut update_metadata = wire::UpdateMetadataRequest::new();
+        update_metadata.meta = request_meta("update-metadata");
         update_metadata.mutation =
             MessageField::some(mutation(wire::MutationKind::MUTATION_KIND_UPDATE_METADATA));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::update_metadata(
+        let update_metadata = d2b_resource_v3_ttrpc::ResourceService::update_metadata(
             &*adapter,
             &ctx,
-            update_metadata
-        ));
+            update_metadata,
+        )
+        .await
+        .unwrap();
+        assert_eq!(update_metadata.revision, 107);
 
-        let adapter = adapter_for(ResourceVerb::UpdateFinalizers, true, Some("finalizers"));
         let mut update_finalizers = wire::UpdateFinalizersRequest::new();
+        update_finalizers.meta = request_meta("update-finalizers");
         update_finalizers.mutation = MessageField::some(mutation(
             wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS,
         ));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::update_finalizers(
+        let update_finalizers = d2b_resource_v3_ttrpc::ResourceService::update_finalizers(
             &*adapter,
             &ctx,
-            update_finalizers
-        ));
+            update_finalizers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(update_finalizers.revision, 108);
 
-        let adapter = adapter_for(ResourceVerb::Delete, true, None);
         let mut delete = wire::DeleteRequest::new();
+        delete.meta = request_meta("delete");
         delete.mutation = MessageField::some(mutation(wire::MutationKind::MUTATION_KIND_DELETE));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::delete(
-            &*adapter, &ctx, delete
-        ));
+        let delete = d2b_resource_v3_ttrpc::ResourceService::delete(&*adapter, &ctx, delete)
+            .await
+            .unwrap();
+        assert_eq!(delete.revision, 109);
 
-        let adapter = adapter_for(ResourceVerb::Delete, true, None);
         let mut batch = wire::CommitBatchRequest::new();
-        batch
-            .mutations
-            .push(mutation(wire::MutationKind::MUTATION_KIND_DELETE));
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::commit_batch(
-            &*adapter, &ctx, batch
-        ));
+        batch.meta = request_meta("commit-batch");
+        batch.mutations = vec![
+            mutation(wire::MutationKind::MUTATION_KIND_DELETE),
+            mutation(wire::MutationKind::MUTATION_KIND_DELETE),
+        ];
+        let batch = d2b_resource_v3_ttrpc::ResourceService::commit_batch(&*adapter, &ctx, batch)
+            .await
+            .unwrap();
+        assert_eq!(batch.revision, 110);
 
-        let adapter = adapter_for(ResourceVerb::Get, true, None);
         let mut resolve = wire::ResolveRefRequest::new();
+        resolve.meta = request_meta("resolve-ref");
         resolve.target = identity();
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::resolve_ref(
-            &*adapter, &ctx, resolve
-        ));
+        let resolve = d2b_resource_v3_ttrpc::ResourceService::resolve_ref(&*adapter, &ctx, resolve)
+            .await
+            .unwrap();
+        assert_eq!(resolve.resource.as_ref().unwrap().revision, Some(111));
 
-        let adapter = adapter_for(ResourceVerb::Get, false, Some("schema"));
         let mut inspect = wire::InspectSchemaRequest::new();
+        inspect.meta = request_meta("inspect-schema");
         inspect.resource_type = "Host".to_owned();
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::inspect_schema(
-            &*adapter, &ctx, inspect
-        ));
+        let inspect =
+            d2b_resource_v3_ttrpc::ResourceService::inspect_schema(&*adapter, &ctx, inspect)
+                .await
+                .unwrap();
+        assert_eq!(
+            inspect.schema.as_ref().unwrap().canonical_json,
+            b"inspect-schema-sentinel-112"
+        );
 
-        let adapter = adapter_for(ResourceVerb::UpdateSpec, true, None);
         let mut upgrade = wire::UpgradeRequest::new();
+        upgrade.meta = request_meta("upgrade");
         upgrade.target = identity();
-        schema_rejected!(d2b_resource_v3_ttrpc::ResourceService::upgrade(
-            &*adapter, &ctx, upgrade
-        ));
+        upgrade.action = EnumOrUnknown::new(wire::UpgradeAction::UPGRADE_ACTION_ASSESS);
+        let mut precondition = wire::Precondition::new();
+        precondition.kind =
+            EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+        precondition.expected_revision = Some(1);
+        upgrade.precondition = MessageField::some(precondition);
+        let upgrade = d2b_resource_v3_ttrpc::ResourceService::upgrade(&*adapter, &ctx, upgrade)
+            .await
+            .unwrap();
+        assert_eq!(upgrade.revision, 113);
 
-        assert_eq!(dispatched, 13);
+        let host = || ResourceTypeName::parse("Host").unwrap();
+        let name = || ResourceName::parse("host-system").unwrap();
+        let expected = vec![
+            DispatchObservation::one(
+                ApiMethod::Get,
+                "get",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::Get,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::List,
+                "list",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                None,
+                ResourceVerb::List,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::Watch,
+                "watch",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                None,
+                ResourceVerb::Watch,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::Create,
+                "create",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::Create,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::UpdateSpec,
+                "update-spec",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::UpdateSpec,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::UpdateStatus,
+                "update-status",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::UpdateStatus,
+                Some("status"),
+            ),
+            DispatchObservation::one(
+                ApiMethod::UpdateMetadata,
+                "update-metadata",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::UpdateMetadata,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::UpdateFinalizers,
+                "update-finalizers",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::UpdateFinalizers,
+                Some("finalizers"),
+            ),
+            DispatchObservation::one(
+                ApiMethod::Delete,
+                "delete",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::Delete,
+                None,
+            ),
+            DispatchObservation {
+                method: ApiMethod::CommitBatch,
+                operation_id: "commit-batch".to_owned(),
+                zone: "dev".to_owned(),
+                targets: vec![
+                    ObservedTarget {
+                        resource_type: "Host".to_owned(),
+                        resource_name: Some("host-system".to_owned()),
+                        verb: ResourceVerb::Delete,
+                        subresource: None,
+                    },
+                    ObservedTarget {
+                        resource_type: "Host".to_owned(),
+                        resource_name: Some("host-system".to_owned()),
+                        verb: ResourceVerb::Delete,
+                        subresource: None,
+                    },
+                ],
+            },
+            DispatchObservation::one(
+                ApiMethod::ResolveRef,
+                "resolve-ref",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::Get,
+                None,
+            ),
+            DispatchObservation::one(
+                ApiMethod::InspectSchema,
+                "inspect-schema",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                None,
+                ResourceVerb::Get,
+                Some("schema"),
+            ),
+            DispatchObservation::one(
+                ApiMethod::Upgrade,
+                "upgrade",
+                &ZoneId::parse("dev").unwrap(),
+                &host(),
+                Some(&name()),
+                ResourceVerb::UpdateSpec,
+                None,
+            ),
+        ];
+        assert_eq!(*calls.lock().unwrap(), expected);
     }
 
     #[test]
